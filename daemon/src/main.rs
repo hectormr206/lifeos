@@ -22,6 +22,7 @@ mod health;
 mod updates;
 mod api;
 mod models;
+mod permissions;
 
 use system::SystemMonitor;
 use health::HealthMonitor;
@@ -58,11 +59,11 @@ impl Default for DaemonConfig {
 #[allow(dead_code)]
 pub struct DaemonState {
     pub config: DaemonConfig,
-    pub system_monitor: RwLock<SystemMonitor>,
-    pub health_monitor: HealthMonitor,
-    pub update_checker: RwLock<UpdateChecker>,
-    pub notification_manager: NotificationManager,
-    pub ai_manager: RwLock<ai::AiManager>,
+    pub system_monitor: Arc<RwLock<SystemMonitor>>,
+    pub health_monitor: Arc<HealthMonitor>,
+    pub update_checker: Arc<RwLock<UpdateChecker>>,
+    pub notification_manager: Arc<NotificationManager>,
+    pub ai_manager: Arc<RwLock<ai::AiManager>>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
 }
@@ -87,11 +88,11 @@ async fn main() -> anyhow::Result<()> {
     // Initialize state
     let state = Arc::new(DaemonState {
         config: config.clone(),
-        system_monitor: RwLock::new(SystemMonitor::new()),
-        health_monitor: HealthMonitor::new(),
-        update_checker: RwLock::new(UpdateChecker::new()),
-        notification_manager: NotificationManager::new(config.enable_notifications),
-        ai_manager: RwLock::new(ai::AiManager::new()),
+        system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
+        health_monitor: Arc::new(HealthMonitor::new()),
+        update_checker: Arc::new(RwLock::new(UpdateChecker::new())),
+        notification_manager: Arc::new(NotificationManager::new(config.enable_notifications)),
+        ai_manager: Arc::new(RwLock::new(ai::AiManager::new())),
         last_health_check: RwLock::new(None),
         last_update_check: RwLock::new(None),
     });
@@ -106,7 +107,15 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Start D-Bus service
-    let dbus_handle = tokio::spawn(start_dbus_service(state.clone()));
+    let dbus_handle = tokio::spawn(async move {
+        if let Err(e) = permissions::start_broker().await {
+            error!("Fail to start D-Bus Permission Broker: {}", e);
+        } else {
+            // Keep the task alive while the broker serves requests
+            log::info!("Permission Broker running on D-Bus Session.");
+            futures_lite::future::pending::<()>().await;
+        }
+    });
 
     // Start background tasks
     let health_handle = tokio::spawn(run_health_checks(state.clone()));
@@ -149,9 +158,9 @@ async fn main() -> anyhow::Result<()> {
 async fn start_api_server(state: Arc<DaemonState>) {
     let api_state = api::ApiState {
         system_monitor: state.system_monitor.clone(),
-        health_monitor: Arc::new(state.health_monitor.clone()),
+        health_monitor: state.health_monitor.clone(),
         ai_manager: state.ai_manager.clone(),
-        notification_manager: Arc::new(state.notification_manager.clone()),
+        notification_manager: state.notification_manager.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,
             api_key: None,
@@ -329,19 +338,3 @@ async fn run_metrics_collection(state: Arc<DaemonState>) {
     }
 }
 
-/// Start D-Bus service for system integration
-async fn start_dbus_service(state: Arc<DaemonState>) {
-    info!("Starting D-Bus service...");
-    
-    // For now, this is a placeholder for the D-Bus interface
-    // In a full implementation, this would expose methods for:
-    // - Getting system status
-    // - Triggering health checks
-    // - Checking for updates
-    // - Managing notifications
-    
-    loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        debug!("D-Bus service heartbeat");
-    }
-}

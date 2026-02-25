@@ -25,7 +25,10 @@ axum = { version = "0.7", features = ["tokio"], optional = true }
 sysinfo = "0.30"
 zbus = { version = "4", default-features = false, features = ["tokio"], optional = true }
 async-trait = "0.1"
-
+futures-lite = "2.3.0"
+utoipa = { version = "4", features = ["axum_extras", "chrono"] }
+utoipa-swagger-ui = { version = "6", features = ["axum"] }
+num_cpus = "1.16"
 [features]
 default = ["dbus", "http-api"]
 dbus = ["zbus"]

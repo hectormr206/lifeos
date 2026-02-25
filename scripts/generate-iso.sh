@@ -205,27 +205,19 @@ generate_iso() {
         bib_opts+=("--target-arch" "aarch64")
     fi
     
-    # Run bootc-image-builder
-    echo "Running bootc-image-builder..."
-    podman run \
-        --rm \
-        --privileged \
-        --pull=newer \
-        --security-opt label=type:unconfined_t \
-        -v "$(pwd)/$OUTPUT_DIR:/output" \
-        -v /var/lib/containers/storage:/var/lib/containers/storage \
-        "$bib_image" \
-        "${bib_opts[@]}" \
-        "--config" "/dev/stdin" \
-        "$IMAGE_TAG" \
-        << CONFIG
+    # Generar un hash válido para la contraseña 'lifeos' usando Python
+    local pass_hash=$(python3 -c "import crypt; print(crypt.crypt('lifeos', crypt.mksalt(crypt.METHOD_SHA512)))")
+
+    # Escribir la configuración a un archivo temporal local
+    local tmp_config=$(mktemp config-XXXXXX.json)
+    cat << CONFIG > "$tmp_config"
 {
   "blueprint": {
     "customizations": {
       "user": [
         {
           "name": "lifeos",
-          "password": "lifeos",
+          "password": "${pass_hash}",
           "key": "",
           "groups": ["wheel"]
         }
@@ -234,13 +226,32 @@ generate_iso() {
         "append": "quiet rhgb"
       },
       "services": {
-        "enabled": ["sshd", "chronyd", "gdm"]
+        "enabled": ["sshd", "chronyd", "cosmic-greeter"]
       }
     }
   }
 }
 CONFIG
+
+    # Run bootc-image-builder
+    echo "Running bootc-image-builder..."
+    if ! podman run \
+        --rm \
+        --privileged \
+        --pull=newer \
+        --security-opt label=type:unconfined_t \
+        -v "$(pwd)/$OUTPUT_DIR:/output" \
+        -v /var/lib/containers/storage:/var/lib/containers/storage \
+        -v "$(pwd)/$tmp_config:/config.json:ro" \
+        "$bib_image" \
+        "${bib_opts[@]}" \
+        "--config" "/config.json" \
+        "$IMAGE_TAG"; then
+        rm -f "$tmp_config"
+        exit 1
+    fi
     
+    rm -f "$tmp_config"
     # Rename output based on type
     case "$BUILD_TYPE" in
         iso)

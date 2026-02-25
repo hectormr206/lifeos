@@ -7,7 +7,7 @@ use std::process::Command;
 /// AI service status
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiStatus {
-    pub ollama_running: bool,
+    pub server_running: bool,
     pub models: Vec<ModelInfo>,
     pub default_model: String,
     pub gpu_acceleration: bool,
@@ -29,55 +29,42 @@ impl AiManager {
         Self
     }
 
-    /// Check Ollama service status
+    /// Check AI Server status
     pub async fn check_status(&self) -> anyhow::Result<AiStatus> {
-        // Check if Ollama is running
-        let service_check = Command::new("systemctl")
-            .args(["is-active", "ollama"])
-            .output()?;
-        
-        let ollama_running = service_check.status.success();
+        let server_running = self.is_running().await;
 
-        // Get list of models
-        let models = if ollama_running {
-            self.list_models().await.unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-
-        // Check GPU acceleration
+        let models = self.list_models().await.unwrap_or_default();
+        let default_model = models.first().map(|m| m.name.clone()).unwrap_or_else(|| "none".to_string());
         let gpu_acceleration = self.check_gpu_acceleration().await;
 
         Ok(AiStatus {
-            ollama_running,
+            server_running,
             models,
-            default_model: "qwen3:8b".to_string(),
+            default_model,
             gpu_acceleration,
         })
     }
 
-    /// List available models
+    /// List available models (.gguf files in the model directory)
     pub async fn list_models(&self) -> anyhow::Result<Vec<ModelInfo>> {
-        let output = Command::new("ollama")
-            .args(["list"])
-            .output()?;
-
-        if !output.status.success() {
-            anyhow::bail!("Failed to list models");
-        }
-
-        let output_str = String::from_utf8_lossy(&output.stdout);
         let mut models = Vec::new();
-
-        // Skip header line
-        for line in output_str.lines().skip(1) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 {
-                models.push(ModelInfo {
-                    name: parts[0].to_string(),
-                    size_mb: parse_size(parts[1]),
-                    modified: parts[2..].join(" "),
-                });
+        let model_dir = std::path::Path::new("/var/lib/lifeos/models");
+        
+        if model_dir.exists() {
+            let mut entries = tokio::fs::read_dir(model_dir).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                if path.is_file() && path.extension().unwrap_or_default() == "gguf" {
+                    let metadata = entry.metadata().await?;
+                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    let size_mb = metadata.len() / (1024 * 1024);
+                    
+                    models.push(ModelInfo {
+                        name,
+                        size_mb,
+                        modified: "local".to_string(),
+                    });
+                }
             }
         }
 
@@ -109,38 +96,38 @@ impl AiManager {
         false
     }
 
-    /// Start Ollama service
-    pub async fn start_ollama(&self) -> anyhow::Result<()> {
-        let output = Command::new("systemctl")
-            .args(["start", "ollama"])
-            .output()?;
-
-        if !output.status.success() {
-            anyhow::bail!("Failed to start Ollama service");
-        }
+    /// Start llama-server 
+    pub async fn start_server(&self) -> anyhow::Result<()> {
+        let models = self.list_models().await?;
+        let first_model = match models.first() {
+            Some(m) => m.name.clone(),
+            None => anyhow::bail!("No models found in /var/lib/lifeos/models"),
+        };
+        
+        let model_path = format!("/var/lib/lifeos/models/{}", first_model);
+        
+        Command::new("llama-server")
+            .args(["-m", &model_path, "--port", "11434", "-c", "4096"])
+            .spawn()?;
 
         Ok(())
     }
 
-    /// Stop Ollama service
-    pub async fn stop_ollama(&self) -> anyhow::Result<()> {
-        let output = Command::new("systemctl")
-            .args(["stop", "ollama"])
+    /// Stop llama-server
+    pub async fn stop_server(&self) -> anyhow::Result<()> {
+        Command::new("killall")
+            .args(["llama-server"])
             .output()?;
-
-        if !output.status.success() {
-            anyhow::bail!("Failed to stop Ollama service");
-        }
 
         Ok(())
     }
 
     // ==================== API-Required Methods ====================
 
-    /// Check if Ollama is running
+    /// Check if llama-server is running
     pub async fn is_running(&self) -> bool {
-        Command::new("systemctl")
-            .args(["is-active", "ollama"])
+        Command::new("killall")
+            .args(["-0", "llama-server"])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -197,24 +184,3 @@ impl Default for AiManager {
     }
 }
 
-fn parse_size(size_str: &str) -> u64 {
-    let size_str = size_str.to_uppercase();
-    let multiplier = if size_str.ends_with("GB") {
-        1024
-    } else if size_str.ends_with("MB") {
-        1
-    } else if size_str.ends_with("TB") {
-        1024 * 1024
-    } else {
-        1
-    };
-
-    size_str
-        .trim_end_matches("GB")
-        .trim_end_matches("MB")
-        .trim_end_matches("TB")
-        .trim()
-        .parse::<f64>()
-        .map(|v| (v * multiplier as f64) as u64)
-        .unwrap_or(0)
-}
