@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LifeOS Intent Result v1",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "status"],
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "intents.lifeos.dev/v1"
+    },
+    "kind": {
+      "type": "string",
+      "const": "Result"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["intent_name"],
+      "properties": {
+        "intent_name": {
+          "type": "string",
+          "description": "The name of the intent this result corresponds to"
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "failure", "requires_auth", "pending"],
+      "description": "The final execution state of the intent"
+    },
+    "data": {
+      "type": "object",
+      "description": "Execution artifacts or output data on success"
+    },
+    "error": {
+      "type": "object",
+      "description": "Error details on failure",
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}
