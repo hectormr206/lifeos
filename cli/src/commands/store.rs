@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::Subcommand;
 use colored::Colorize;
 use std::process::Command;
 
@@ -455,7 +455,7 @@ async fn update_apps(app: Option<&str>, yes: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn list_installed(detailed: bool, category: Option<&str>) -> anyhow::Result<()> {
+async fn list_installed(detailed: bool, _category: Option<&str>) -> anyhow::Result<()> {
     println!("{}", "📋 Installed Applications".bold().blue());
     println!();
 
@@ -750,11 +750,11 @@ async fn get_app_info(app_id: &str) -> anyhow::Result<AppInfo> {
         .output();
 
     let mut name = app_id.to_string();
-    let mut description = String::new();
+    let description = String::new();
     let mut version = "unknown".to_string();
     let mut size = "unknown".to_string();
-    let mut license: Option<String> = None;
-    let mut homepage: Option<String> = None;
+    let license: Option<String> = None;
+    let homepage: Option<String> = None;
 
     if let Ok(o) = output {
         if o.status.success() {

@@ -138,6 +138,7 @@ impl HealthMonitor {
 
 /// Health check trait
 #[async_trait]
+#[allow(dead_code)]
 trait HealthCheck: Send + Sync {
     fn name(&self) -> &str;
     async fn check(&self) -> anyhow::Result<CheckOutput>;
@@ -166,7 +167,7 @@ async fn check_bootc() -> anyhow::Result<(bool, String)> {
 async fn check_disk_space() -> anyhow::Result<(bool, String)> {
     use std::fs;
     
-    let metadata = fs::metadata("/")?;
+    let _metadata = fs::metadata("/")?;
     // Simplified check - just verify root is accessible
     Ok((true, "Disk accessible".to_string()))
 }

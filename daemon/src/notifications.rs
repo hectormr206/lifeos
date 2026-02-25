@@ -2,13 +2,13 @@
 //! Handles desktop notifications for system events
 
 use notify_rust::Notification;
-use log::{info, error};
+use log::info;
 
 #[cfg(test)]
 mod notifications_tests;
 
 /// Notification manager
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NotificationManager {
     enabled: bool,
     app_name: String,

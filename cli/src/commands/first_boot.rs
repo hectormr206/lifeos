@@ -31,6 +31,7 @@ pub struct FirstBootArgs {
 
 /// First boot wizard state
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FirstBootState {
     pub hostname: String,
     pub username: String,
@@ -331,6 +332,7 @@ pub struct SystemVerification {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CheckResult {
     pub passed: bool,
     pub message: String,

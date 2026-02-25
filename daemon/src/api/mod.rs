@@ -7,7 +7,7 @@
 //! - System management
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::Json,
     routing::{get, post, put},
@@ -30,6 +30,7 @@ use crate::notifications::NotificationManager;
 
 /// Shared API state
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ApiState {
     pub system_monitor: Arc<RwLock<SystemMonitor>>,
     pub health_monitor: Arc<HealthMonitor>,
@@ -39,6 +40,7 @@ pub struct ApiState {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct ApiConfig {
     pub bind_address: SocketAddr,
     pub api_key: Option<String>,
@@ -278,7 +280,7 @@ pub fn create_router(state: ApiState) -> Router {
     tag = "system"
 )]
 async fn get_system_status(State(state): State<ApiState>) -> Result<Json<SystemStatus>, (StatusCode, Json<ApiError>)> {
-    let system_monitor = state.system_monitor.read().await;
+    let _system_monitor = state.system_monitor.read().await;
     
     let uptime = std::time::Duration::from_secs(
         std::fs::read_to_string("/proc/uptime")
@@ -312,7 +314,7 @@ async fn get_system_status(State(state): State<ApiState>) -> Result<Json<SystemS
     tag = "system"
 )]
 async fn get_system_resources(State(state): State<ApiState>) -> Result<Json<ResourceUsage>, (StatusCode, Json<ApiError>)> {
-    let system_monitor = state.system_monitor.read().await;
+    let _system_monitor = state.system_monitor.read().await;
     
     // This would call the actual system monitor methods
     let usage = ResourceUsage {
@@ -340,7 +342,7 @@ async fn get_system_resources(State(state): State<ApiState>) -> Result<Json<Reso
     ),
     tag = "system"
 )]
-async fn get_system_info(State(state): State<ApiState>) -> Result<Json<SystemInfo>, (StatusCode, Json<ApiError>)> {
+async fn get_system_info(State(_state): State<ApiState>) -> Result<Json<SystemInfo>, (StatusCode, Json<ApiError>)> {
     let info = SystemInfo {
         hostname: get_hostname(),
         os_name: "LifeOS".to_string(),
@@ -371,7 +373,7 @@ async fn get_system_info(State(state): State<ApiState>) -> Result<Json<SystemInf
     tag = "system"
 )]
 async fn post_system_command(
-    State(state): State<ApiState>,
+    State(_state): State<ApiState>,
     Json(request): Json<CommandRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
     // Validate command (only allow safe commands)
@@ -403,27 +405,48 @@ async fn post_system_command(
     tag = "health"
 )]
 async fn get_health_status(State(state): State<ApiState>) -> Result<Json<HealthReport>, (StatusCode, Json<ApiError>)> {
-    let report = state.health_monitor.check_all().await;
-    
+    let report = state
+        .health_monitor
+        .check_all()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: format!("Failed to collect health status: {e}"),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    let total_checks = report.checks.len() as u32;
+    let passed_checks = report.checks.iter().filter(|check| check.passed).count() as u32;
+    let score = if total_checks == 0 {
+        100
+    } else {
+        ((passed_checks * 100) / total_checks) as u8
+    };
+
     let checks: Vec<HealthCheck> = report
-        .issues
+        .checks
         .iter()
-        .map(|issue| HealthCheck {
-            name: issue.component.clone(),
-            status: if issue.severity == crate::health::Severity::Critical {
-                "critical".to_string()
+        .map(|check| HealthCheck {
+            name: check.name.clone(),
+            status: if check.passed {
+                "ok".to_string()
             } else {
                 "warning".to_string()
             },
-            message: Some(issue.message.clone()),
+            message: Some(check.message.clone()),
         })
         .collect();
     
     let response = HealthReport {
         healthy: report.healthy,
-        score: report.score,
+        score,
         checks,
-        timestamp: chrono::Local::now().to_rfc3339(),
+        timestamp: report.timestamp.to_rfc3339(),
     };
     
     Ok(Json(response))
@@ -466,16 +489,28 @@ async fn get_ai_status(State(state): State<ApiState>) -> Result<Json<AiStatus>, 
 )]
 async fn get_ai_models(State(state): State<ApiState>) -> Result<Json<Vec<ModelInfo>>, (StatusCode, Json<ApiError>)> {
     let ai_manager = state.ai_manager.read().await;
-    
-    let models: Vec<ModelInfo> = ai_manager
+
+    let models = ai_manager
         .list_models()
         .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: format!("Failed to list AI models: {e}"),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    let models: Vec<ModelInfo> = models
         .into_iter()
         .map(|m| ModelInfo {
-            id: m.id,
+            id: m.name.clone(),
             name: m.name,
-            size: m.size,
-            parameter_count: m.parameter_size,
+            size: format!("{} MB", m.size_mb),
+            parameter_count: "unknown".to_string(),
             modified_at: m.modified,
         })
         .collect();
@@ -535,7 +570,7 @@ async fn post_ai_chat(
     ),
     tag = "notifications"
 )]
-async fn get_notifications(State(state): State<ApiState>) -> Result<Json<Vec<Notification>>, (StatusCode, Json<ApiError>)> {
+async fn get_notifications(State(_state): State<ApiState>) -> Result<Json<Vec<Notification>>, (StatusCode, Json<ApiError>)> {
     let notifications = vec![
         Notification {
             id: "1".to_string(),
@@ -564,8 +599,8 @@ async fn get_notifications(State(state): State<ApiState>) -> Result<Json<Vec<Not
     tag = "notifications"
 )]
 async fn post_notification(
-    State(state): State<ApiState>,
-    Json(notification): Json<Notification>,
+    State(_state): State<ApiState>,
+    Json(_notification): Json<Notification>,
 ) -> StatusCode {
     // Send notification via notification manager
     StatusCode::CREATED
@@ -582,8 +617,8 @@ async fn post_notification(
     tag = "notifications"
 )]
 async fn mark_notification_read(
-    Path(id): Path<String>,
-    State(state): State<ApiState>,
+    Path(_id): Path<String>,
+    State(_state): State<ApiState>,
 ) -> StatusCode {
     StatusCode::OK
 }
@@ -642,7 +677,7 @@ fn get_gpu_model() -> Option<String> {
 // ==================== SERVER STARTUP ====================
 
 pub async fn start_api_server(state: ApiState) -> anyhow::Result<()> {
-    let router = create_router(state);
+    let router = create_router(state.clone());
     
     let addr = state.config.bind_address;
     

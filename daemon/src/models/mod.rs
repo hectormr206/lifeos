@@ -2,6 +2,7 @@
 //!
 //! Provides support for multiple Ollama models with hardware-aware
 //! recommendations and automatic model selection.
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -657,7 +658,7 @@ fn detect_gpu() -> (Option<u32>, Option<String>) {
     }
     
     // Try rocm-smi for AMD
-    if let Ok(output) = std::process::Command::new("rocm-smi")
+    if let Ok(_output) = std::process::Command::new("rocm-smi")
         .args(["--showmeminfo", "vram"])
         .output()
     {

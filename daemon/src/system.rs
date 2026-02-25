@@ -2,7 +2,6 @@
 //! Collects system metrics and provides health information
 
 use sysinfo::System;
-use std::collections::HashMap;
 
 /// System metrics snapshot
 #[derive(Debug, Clone)]

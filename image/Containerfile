@@ -1,8 +1,8 @@
 # image/Containerfile
 # LifeOS: construido directamente sobre Fedora bootc
-# Compila el CLI dentro del build para CI/CD
+# Incorpora COSMIC Desktop, Nvidia Optimus + Gaming (Steam/Proton) y Ollama Seguro
 
-# Stage 1: Build CLI
+# Stage 1: Build CLI (Rust)
 FROM fedora:42 AS builder
 
 RUN dnf -y install \
@@ -14,56 +14,199 @@ RUN dnf -y install \
     && dnf clean all
 
 WORKDIR /build
-COPY cli/Cargo.toml cli/Cargo.lock ./
-COPY cli/src ./src
-RUN cargo build --release
+# Copy both CLI and Daemon projects
+COPY cli/Cargo.toml cli/Cargo.lock* cli/
+COPY cli/src cli/src/
+COPY daemon/Cargo.toml daemon/
+COPY daemon/src daemon/src/
 
-# Stage 2: imagen final
+# We need a workspace Cargo.toml to build them together, or build them sequentially
+RUN cd cli && cargo build --release
+RUN cd daemon && cargo build --release
+
+# Stage 2: Imagen Final (Sistema)
 FROM quay.io/fedora/fedora-bootc:42
 
-# Desktop
-RUN dnf -y install \
-    @gnome-desktop \
-    gnome-terminal \
-    nautilus \
-    gedit \
-    xdg-user-dirs \
-    NetworkManager \
-    bluez \
-    pipewire \
-    wireplumber \
+# --- Repositorios adicionales (COSMIC y RPMFusion) ---
+RUN dnf -y install dnf5-plugins && \
+    dnf -y copr enable ryanabx/cosmic-epoch && \
+    dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
+                   https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+
+# --- Escritorio COSMIC y Base ---
+RUN dnf -y install --skip-unavailable \
+    cosmic-desktop cosmic-files cosmic-term cosmic-edit cosmic-store \
+    xdg-desktop-portal-cosmic xdg-user-dirs \
+    NetworkManager bluez pipewire wireplumber \
     && dnf clean all
 
-# Tools
+# --- Soporte Nvidia Optimus y Gaming ---
+# akmod-nvidia compila el módulo de kernel gráfico en el build (requiere kernel-devel)
+RUN dnf -y install \
+    kernel-devel \
+    akmod-nvidia xorg-x11-drv-nvidia-cuda supergfxctl \
+    && akmods --force || true \
+    && dnf clean all
+
+# --- Herramientas del Sistema ---
 RUN dnf -y install \
     toolbox btrfs-progs smartmontools podman buildah flatpak \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite \
     pciutils usbutils curl ca-certificates openssl-libs \
+    glibc-langpack-es \
     && dnf clean all
 
-# CLI
-COPY --from=builder /build/target/release/life /usr/local/bin/life
-RUN chmod +x /usr/local/bin/life
+# --- CLI Life y Daemon (binarios compilados) ---
+COPY --from=builder /build/cli/target/release/life /usr/bin/life
+COPY --from=builder /build/daemon/target/release/lifeosd /usr/bin/lifeosd
+RUN chmod +x /usr/bin/life /usr/bin/lifeosd && life --version
 
-# Scripts
-RUN echo '#!/bin/bash\necho "Ollama setup"' > /usr/local/bin/ollama-install.sh && \
-    chmod +x /usr/local/bin/ollama-install.sh
-RUN echo '#!/bin/bash\ntouch /var/lib/lifeos/.first-boot-complete' > /usr/local/bin/lifeos-first-boot.sh && \
+# --- AI Runtime (llama.cpp / llama-server) ---
+# 1) Intentar descargar binario oficial pre-compilado (x86_64 Linux/Ubuntu).
+# 2) Si no existe asset compatible, compilar `llama-server` desde código fuente.
+RUN set -eux && \
+    dnf install -y unzip jq cmake make gcc-c++ git openssl-devel && \
+    RELEASE_URL="$( \
+        curl -fsSL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | \
+        jq -r '.assets[]? | select(.name | test("(?i)(linux|ubuntu).*x64.*\\.zip$")) | .browser_download_url' | \
+        head -n 1 \
+    )" && \
+    if [ -n "${RELEASE_URL}" ] && [ "${RELEASE_URL}" != "null" ]; then \
+        curl -fsSL -o /tmp/llama.zip "${RELEASE_URL}" && \
+        unzip /tmp/llama.zip -d /tmp/llama || true; \
+    fi && \
+    LLAMA_BIN="$(find /tmp/llama -name llama-server -type f 2>/dev/null | head -n 1 || true)" && \
+    if [ -n "${LLAMA_BIN}" ]; then \
+        install -m 0755 "${LLAMA_BIN}" /usr/bin/llama-server; \
+    fi && \
+    if [ ! -x /usr/bin/llama-server ]; then \
+        git clone --depth=1 https://github.com/ggerganov/llama.cpp /tmp/llama.cpp && \
+        cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON && \
+        cmake --build /tmp/llama.cpp/build -j"$(nproc)" --target llama-server && \
+        install -m 0755 /tmp/llama.cpp/build/bin/llama-server /usr/bin/llama-server; \
+    fi && \
+    rm -rf /tmp/llama /tmp/llama.zip /tmp/llama.cpp && \
+    dnf remove -y unzip cmake make gcc-c++ git openssl-devel && \
+    dnf clean all
+
+# Creamos el directorio nativo donde LifeOS guardará los modelos locales
+RUN mkdir -p /var/lib/lifeos/models
+
+# --- Directorios LifeOS y Scripts Iniciales ---
+RUN mkdir -p /var/lib/lifeos /var/log/lifeos /etc/lifeos
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo' \
+    'touch /var/lib/lifeos/.first-boot-complete' \
+    > /usr/local/bin/lifeos-first-boot.sh && \
     chmod +x /usr/local/bin/lifeos-first-boot.sh
 
-# Ollama user
-RUN useradd -r -s /bin/false -m -d /var/lib/ollama ollama 2>/dev/null || true && \
-    mkdir -p /var/lib/ollama/models /etc/ollama && \
-    chown -R ollama:ollama /var/lib/ollama
-
-# Directories
-RUN mkdir -p /var/lib/lifeos /var/log/lifeos /etc/lifeos
-
-# Systemd
-RUN ln -sf /usr/lib/systemd/system/gdm.service /etc/systemd/system/display-manager.service && \
+# --- Reemplazar Display Manager predeterminado a COSMIC ---
+# systemctl enable cosmic-greeter (El manejador de login de COSMIC)
+RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/display-manager.service && \
     mkdir -p /etc/systemd/system/graphical.target.wants && \
-    ln -sf /usr/lib/systemd/system/gdm.service /etc/systemd/system/graphical.target.wants/gdm.service && \
-    ln -sf /usr/lib/systemd/system/NetworkManager.service /etc/systemd/system/multi-user.target.wants/NetworkManager.service && \
-    ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service
+    ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/graphical.target.wants/cosmic-greeter.service
 
-RUN dnf clean all && bootc container lint
+# Activar servicios al arranque
+# NOTA: lifeosd.service debería existir en /etc/systemd/system/ (lo creamos ahora)
+RUN printf '%s\n' \
+    '[Unit]' \
+    'Description=LifeOS System Daemon' \
+    'After=network.target' \
+    '' \
+    '[Service]' \
+    'Type=simple' \
+    'ExecStart=/usr/bin/lifeosd' \
+    'Restart=on-failure' \
+    '' \
+    '[Install]' \
+    'WantedBy=multi-user.target' \
+    > /etc/systemd/system/lifeosd.service && \
+    systemctl enable bluetooth.service && \
+    systemctl enable NetworkManager.service && \
+    systemctl enable lifeosd.service
+
+# --- (Retirada la máscara de systemd-remount-fs que rompía el arranque) ---
+
+# --- Branding y Personalización del Instalador ---
+# Cambiar el nombre del sistema (leído por Anaconda y Fastfetch)
+RUN rm -f /usr/lib/os-release && \
+    printf '%s\n' \
+    'NAME="LifeOS"' \
+    'VERSION="0.1 Aegis"' \
+    'ID=lifeos' \
+    'ID_LIKE=fedora' \
+    'VERSION_ID="42"' \
+    'PLATFORM_ID="platform:f42"' \
+    'PRETTY_NAME="LifeOS 0.1 Aegis"' \
+    'ANSI_COLOR="0;36"' \
+    'LOGO="fedora-logo-icon"' \
+    'CPE_NAME="cpe:/o:fedoraproject:fedora:42"' \
+    'HOME_URL="https://lifeos.dev"' \
+    'DOCUMENTATION_URL="https://lifeos.dev/docs"' \
+    'SUPPORT_URL="https://lifeos.dev/support"' \
+    'BUG_REPORT_URL="https://lifeos.dev/bugs"' \
+    'REDHAT_BUGZILLA_PRODUCT="Fedora"' \
+    'REDHAT_BUGZILLA_PRODUCT_VERSION="42"' \
+    'REDHAT_SUPPORT_PRODUCT="Fedora"' \
+    'REDHAT_SUPPORT_PRODUCT_VERSION="42"' \
+    'SUPPORT_END="2026-05-18"' \
+    > /usr/lib/os-release
+
+# Crear placeholders de imagen oscuros para tapar los logos azules de Fedora en el instalador
+# Anaconda lee estas imágenes directamente en la ISO
+RUN mkdir -p /usr/share/anaconda/pixmaps/ && \
+    echo 'P3 1 1 255 30 30 30' | grep -v 'P3' > /tmp/dark.ppm || true && \
+    dnf install -y ImageMagick && \
+    magick -size 400x1200 xc:#1A1B26 /usr/share/anaconda/pixmaps/sidebar-logo.png && \
+    magick -size 400x200 xc:#1A1B26 /usr/share/anaconda/pixmaps/sidebar-bg.png && \
+    magick -size 1920x100 xc:#1A1B26 /usr/share/anaconda/pixmaps/topbar-bg.png && \
+    dnf remove -y ImageMagick && \
+    dnf clean all
+
+RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
+    printf '%s\n' \
+    'g wsdd -' \
+    'u wsdd - "WSDD Service User" /var/lib/wsdd -' \
+    > /usr/lib/sysusers.d/wsdd.conf && \
+    printf '%s\n' \
+    'L /var/lib/greetd/.config/systemd/user/xdg-desktop-portal.service - - - - /dev/null' \
+    'd /var/cache/PackageKit 0755 root root - -' \
+    'd /var/cache/app-info 0755 root root - -' \
+    'd /var/cache/app-info/icons 0755 root root - -' \
+    'd /var/cache/app-info/xmls 0755 root root - -' \
+    'd /var/cache/libX11 0755 root root - -' \
+    'd /var/cache/libX11/compose 0755 root root - -' \
+    'd /var/cache/libdnf5 0755 root root - -' \
+    'd /var/cache/swcatalog 0755 root root - -' \
+    'd /var/cache/swcatalog/cache 0755 root root - -' \
+    'd /var/cache/swcatalog/gv 0755 root root - -' \
+    'd /var/cache/swcatalog/icons 0755 root root - -' \
+    'd /var/cache/swcatalog/xml 0755 root root - -' \
+    'd /var/lib/AccountsService 0775 root root - -' \
+    'd /var/lib/AccountsService/icons 0775 root root - -' \
+    'd /var/lib/AccountsService/users 0700 root root - -' \
+    'd /var/lib/PackageKit 0755 root root - -' \
+    'd /var/lib/dnf 0755 root root - -' \
+    'd /var/lib/dnf/repos 0755 root root - -' \
+    'd /var/lib/dnf/repos/fedora-f8e7c8bda68a349e 0755 root root - -' \
+    'd /var/lib/dnf/repos/updates-79babcf8637033ce 0755 root root - -' \
+    'd /var/lib/flatpak 0755 root root - -' \
+    'd /var/lib/fprint 0700 root root - -' \
+    'd /var/lib/geoclue 0755 geoclue geoclue - -' \
+    'd /var/lib/greetd/.config 0755 greetd greetd - -' \
+    'd /var/lib/greetd/.config/systemd 0755 greetd greetd - -' \
+    'd /var/lib/greetd/.config/systemd/user 0755 greetd greetd - -' \
+    'd /var/lib/lifeos 0755 root root - -' \
+    'd /var/lib/lifeos/models 0755 root root - -' \
+    'd /var/lib/smartmontools 0755 root root - -' \
+    'd /var/lib/tuned 0755 root root - -' \
+    'd /var/log/lifeos 0755 root root - -' \
+    'd /var/log/tuned 0755 root root - -' \
+    > /usr/lib/tmpfiles.d/lifeos-var.conf && \
+    rm -f /var/lib/dnf/repos/*/countme && \
+    rm -f /var/log/dnf5.log* && \
+    rm -f /var/cache/ldconfig/aux-cache && \
+    rm -f /var/cache/swcatalog/cache/C-local-metainfo.xb /var/cache/swcatalog/cache/C-os-catalog.xb
+
+RUN dnf clean all && rm -f /var/log/dnf5.log* && bootc container lint

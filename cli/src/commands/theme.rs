@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Subcommand, ValueEnum};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -408,6 +408,10 @@ async fn manage_wallpaper(cmd: WallpaperCommands) -> anyhow::Result<()> {
         WallpaperCommands::Cycle { interval, directory } => {
             println!("{}", format!("🔄 Wallpaper cycling every {} seconds", interval).bold().blue());
             println!();
+            if let Some(dir) = directory {
+                println!("Directory: {}", dir.display().to_string().cyan());
+                println!();
+            }
             println!("To set up automatic cycling, add this to your crontab:");
             println!("  {} {}", 
                 format!("*/{} * * * *", interval / 60).cyan(),
@@ -506,7 +510,14 @@ async fn set_appearance(dark: bool, light: bool, auto: bool) -> anyhow::Result<(
         return Ok(());
     };
 
-    set_mode(if dark_mode { ModeCommands::Dark } else { ModeCommands::Light }).await
+    set_mode(if follow_system {
+        ModeCommands::Auto
+    } else if dark_mode {
+        ModeCommands::Dark
+    } else {
+        ModeCommands::Light
+    })
+    .await
 }
 
 async fn list_themes() -> anyhow::Result<()> {
