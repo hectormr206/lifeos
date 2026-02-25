@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to LifeOS</title>
+    <style>
+        :root {
+            --lifeos-primary: #00d4aa;
+            --lifeos-secondary: #6366f1;
+            --lifeos-dark: #0f172a;
+            --lifeos-light: #f8fafc;
+            --lifeos-gray: #64748b;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, var(--lifeos-dark) 0%, #1e293b 100%);
+            color: var(--lifeos-light);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 800px;
+            width: 100%;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 4rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--lifeos-primary) 0%, var(--lifeos-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.05em;
+        }
+
+        .tagline {
+            font-size: 1.25rem;
+            color: var(--lifeos-gray);
+            margin-bottom: 3rem;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 1rem;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            text-align: left;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 40px rgba(0, 212, 170, 0.1);
+        }
+
+        .card h2 {
+            color: var(--lifeos-primary);
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card p {
+            color: var(--lifeos-gray);
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }
+
+        .card code {
+            background: rgba(0, 212, 170, 0.1);
+            color: var(--lifeos-primary);
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9em;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.875rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: none;
+            font-size: 1rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--lifeos-primary) 0%, var(--lifeos-secondary) 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--lifeos-light);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 2rem;
+        }
+
+        .feature-list {
+            list-style: none;
+            text-align: left;
+        }
+
+        .feature-list li {
+            padding: 0.5rem 0;
+            color: var(--lifeos-gray);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .feature-list li::before {
+            content: "✓";
+            color: var(--lifeos-primary);
+            font-weight: bold;
+        }
+
+        footer {
+            margin-top: 3rem;
+            color: var(--lifeos-gray);
+            font-size: 0.875rem;
+        }
+
+        footer a {
+            color: var(--lifeos-primary);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 600px) {
+            .logo {
+                font-size: 2.5rem;
+            }
+            
+            .grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .buttons {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="logo">LifeOS</h1>
+        <p class="tagline">Your AI-First Linux Distribution</p>
+
+        <div class="grid">
+            <div class="card">
+                <h2>🚀 Quick Start</h2>
+                <p>Your system is ready! Here are the essential commands:</p>
+                <ul class="feature-list">
+                    <li><code>life status</code> - Check system status</li>
+                    <li><code>life ai chat</code> - Start AI assistant</li>
+                    <li><code>life update</code> - Update system</li>
+                    <li><code>life config show</code> - View configuration</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2>🤖 AI Assistant</h2>
+                <p>LifeOS includes a local AI assistant powered by Ollama. All processing happens on your machine - no data leaves your computer.</p>
+                <ul class="feature-list">
+                    <li>Chat with AI locally</li>
+                    <li>Code assistance</li>
+                    <li>Document analysis</li>
+                    <li>Privacy-first design</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2>🔄 Atomic Updates</h2>
+                <p>LifeOS uses bootc for reliable, atomic system updates. If something goes wrong, you can always roll back.</p>
+                <ul class="feature-list">
+                    <li>Safe, atomic updates</li>
+                    <li>Automatic rollback on failure</li>
+                    <li>Multiple boot entries</li>
+                    <li>No "dependency hell"</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2>📚 Learn More</h2>
+                <p>Explore the documentation to get the most out of LifeOS:</p>
+                <ul class="feature-list">
+                    <li>User Guide - Complete documentation</li>
+                    <li>Keyboard Shortcuts - Work efficiently</li>
+                    <li>Privacy Settings - Control your data</li>
+                    <li>Community - Get help and share</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="buttons">
+            <a href="file:///usr/share/doc/lifeos/USER_GUIDE.html" class="btn btn-primary">
+                📖 Read User Guide
+            </a>
+            <a href="https://docs.lifeos.io" class="btn btn-secondary">
+                🌐 Online Documentation
+            </a>
+            <a href="https://community.lifeos.io" class="btn btn-secondary">
+                💬 Community Forum
+            </a>
+        </div>
+
+        <footer>
+            <p>LifeOS v0.1.0-alpha | Built with ❤️ for the AI age</p>
+            <p>
+                <a href="https://github.com/lifeos/lifeos">GitHub</a> |
+                <a href="https://docs.lifeos.io">Documentation</a> |
+                <a href="https://discord.lifeos.io">Discord</a>
+            </p>
+        </footer>
+    </div>
+</body>
+</html>

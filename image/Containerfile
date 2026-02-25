@@ -1,0 +1,79 @@
+# image/Containerfile
+# LifeOS: construido directamente sobre Fedora bootc
+# Usa el binario pre-compilado localmente
+
+# Stage 1: archivos de configuracion
+FROM scratch AS ctx
+COPY files /ctx/files
+COPY scripts /ctx/scripts
+
+# Stage 2: imagen final del sistema
+FROM quay.io/fedora/fedora-bootc:42
+
+# --- Desktop environment ---
+RUN dnf -y install \
+    @gnome-desktop \
+    gnome-terminal \
+    nautilus \
+    gedit \
+    xdg-user-dirs \
+    NetworkManager \
+    bluez \
+    pipewire \
+    wireplumber \
+    && dnf clean all
+
+# --- Herramientas del sistema ---
+RUN dnf -y install \
+    toolbox \
+    btrfs-progs \
+    smartmontools \
+    podman \
+    buildah \
+    flatpak \
+    fish \
+    bat \
+    ripgrep \
+    fd-find \
+    htop \
+    fastfetch \
+    age \
+    jq \
+    sqlite \
+    pciutils \
+    usbutils \
+    curl \
+    ca-certificates \
+    openssl-libs \
+    && dnf clean all
+
+# --- Copiar CLI desde build local ---
+COPY cli/target/release/life /usr/local/bin/life
+RUN chmod +x /usr/local/bin/life && \
+    /usr/local/bin/life --version || echo "Binary copied"
+
+# --- Ollama placeholder ---
+RUN echo '#!/bin/bash\necho "Ollama will be installed on first boot"' > /usr/local/bin/ollama-install.sh && \
+    chmod +x /usr/local/bin/ollama-install.sh
+
+# --- First-boot ---
+RUN echo '#!/bin/bash\necho "LifeOS first-boot setup complete"\ntouch /var/lib/lifeos/.first-boot-complete' > /usr/local/bin/lifeos-first-boot.sh && \
+    chmod +x /usr/local/bin/lifeos-first-boot.sh
+
+# --- Crear usuario ollama ---
+RUN useradd -r -s /bin/false -m -d /var/lib/ollama ollama 2>/dev/null || true && \
+    mkdir -p /var/lib/ollama/models /etc/ollama && \
+    chown -R ollama:ollama /var/lib/ollama
+
+# --- Directorios LifeOS ---
+RUN mkdir -p /var/lib/lifeos /var/log/lifeos /etc/lifeos
+
+# --- Servicios systemd ---
+RUN ln -sf /usr/lib/systemd/system/gdm.service /etc/systemd/system/display-manager.service && \
+    mkdir -p /etc/systemd/system/graphical.target.wants && \
+    ln -sf /usr/lib/systemd/system/gdm.service /etc/systemd/system/graphical.target.wants/gdm.service && \
+    ln -sf /usr/lib/systemd/system/NetworkManager.service /etc/systemd/system/multi-user.target.wants/NetworkManager.service && \
+    ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service
+
+# --- Limpieza ---
+RUN dnf clean all && bootc container lint

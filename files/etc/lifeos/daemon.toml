@@ -1,0 +1,17 @@
+# LifeOS Daemon Configuration
+# Place this file at /etc/lifeos/daemon.toml
+
+# Health check interval in seconds (default: 300 = 5 minutes)
+health_check_interval_secs = 300
+
+# Update check interval in seconds (default: 3600 = 1 hour)
+update_check_interval_secs = 3600
+
+# Metrics collection interval in seconds (default: 60 = 1 minute)
+metrics_collection_interval_secs = 60
+
+# Enable desktop notifications
+enable_notifications = true
+
+# Enable automatic updates (download and stage, not apply)
+enable_auto_updates = false

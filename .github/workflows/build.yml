@@ -1,0 +1,30 @@
+# DEPRECATED: Build First-IA Image
+
+# This workflow has been replaced by:
+# - ci.yml       - Build and test all components
+# - docker.yml   - Build and push container images
+# - release.yml  - Create releases with binaries
+
+# Please update your bookmarks and CI references.
+# This file is kept for backwards compatibility and will be removed in a future release.
+
+name: Build First-IA Image (DEPRECATED)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deprecation-notice:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deprecation Notice
+        run: |
+          echo "⚠️  This workflow is deprecated!"
+          echo ""
+          echo "Please use the new workflows instead:"
+          echo "  - .github/workflows/ci.yml       - For builds and tests"
+          echo "  - .github/workflows/docker.yml   - For container images"
+          echo "  - .github/workflows/release.yml  - For releases"
+          echo ""
+          echo "See docs/CI_CD.md for more information."
+          exit 1

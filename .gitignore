@@ -1,0 +1,41 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.so
+*.a
+*.dll
+*.exe
+
+# Docker
+*.tar
+*.iso
+
+# Output
+output/
+dist/
+build/
+
+# Testing
+*.log
+*.tmp
+
+# Secrets
+.env
+.env.local
+*.pem
+*.key

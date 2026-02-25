@@ -1,0 +1,17 @@
+[system]
+channel = "stable"
+mode = "personal"
+locale = "en_US.UTF-8"
+timezone = "UTC"
+
+[ai]
+enabled = true
+provider = "ollama"
+model = "qwen3:8b"
+ollama_host = "http://localhost:11434"
+
+[security]
+encryption = true
+secure_boot = true
+auto_lock = true
+auto_lock_timeout = 300

@@ -1,0 +1,11 @@
+[Unit]
+Description=LifeOS Health Check Timer
+Documentation=man:lifeosd(8)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

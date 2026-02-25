@@ -1,0 +1,112 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+
+repos:
+  # ============================================================================
+  # General File Checks
+  # ============================================================================
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+        exclude: \.md$
+      - id: check-yaml
+        exclude: ^files/
+      - id: check-toml
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+
+  # ============================================================================
+  # Rust Formatting and Linting
+  # ============================================================================
+  - repo: local
+    hooks:
+      - id: rustfmt-cli
+        name: rustfmt (CLI)
+        entry: bash -c 'cd cli && cargo fmt -- --check'
+        language: system
+        files: ^cli/.*\.rs$
+        pass_filenames: false
+
+      - id: rustfmt-daemon
+        name: rustfmt (Daemon)
+        entry: bash -c 'cd daemon && cargo fmt -- --check'
+        language: system
+        files: ^daemon/.*\.rs$
+        pass_filenames: false
+
+      - id: clippy-cli
+        name: clippy (CLI)
+        entry: bash -c 'cd cli && cargo clippy --all-features -- -D warnings'
+        language: system
+        files: ^cli/.*\.rs$
+        pass_filenames: false
+
+      - id: clippy-daemon
+        name: clippy (Daemon)
+        entry: bash -c 'cd daemon && cargo clippy --all-features -- -D warnings'
+        language: system
+        files: ^daemon/.*\.rs$
+        pass_filenames: false
+
+  # ============================================================================
+  # Rust Testing
+  # ============================================================================
+  - repo: local
+    hooks:
+      - id: cargo-test-cli
+        name: cargo test (CLI)
+        entry: bash -c 'cd cli && cargo test'
+        language: system
+        files: ^cli/.*\.rs$
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: cargo-test-daemon
+        name: cargo test (Daemon)
+        entry: bash -c 'cd daemon && cargo test'
+        language: system
+        files: ^daemon/.*\.rs$
+        pass_filenames: false
+        stages: [pre-push]
+
+  # ============================================================================
+  # Security Auditing
+  # ============================================================================
+  - repo: local
+    hooks:
+      - id: cargo-audit-cli
+        name: cargo audit (CLI)
+        entry: bash -c 'cd cli && cargo audit'
+        language: system
+        files: ^cli/Cargo\.(lock|toml)$
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: cargo-audit-daemon
+        name: cargo audit (Daemon)
+        entry: bash -c 'cd daemon && cargo audit'
+        language: system
+        files: ^daemon/Cargo\.(lock|toml)$
+        pass_filenames: false
+        stages: [pre-push]
+
+  # ============================================================================
+  # Containerfile Linting
+  # ============================================================================
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint-docker
+        name: Lint Containerfile
+        entry: hadolint
+        files: (Containerfile|Dockerfile)
+        language: docker_image
+        types: [file]
+        args: ['--ignore', 'DL3041', '--ignore', 'DL3008']

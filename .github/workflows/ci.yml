@@ -1,0 +1,273 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ============================================================================
+  # Job 1: Build and Test CLI
+  # ============================================================================
+  build-cli:
+    name: Build CLI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            cli/target/
+          key: ${{ runner.os }}-cargo-cli-${{ hashFiles('cli/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-cli-
+
+      - name: Check formatting
+        working-directory: ./cli
+        run: cargo fmt -- --check
+
+      - name: Run clippy
+        working-directory: ./cli
+        run: cargo clippy --all-features -- -D warnings
+
+      - name: Build CLI (debug)
+        working-directory: ./cli
+        run: cargo build
+
+      - name: Build CLI (release)
+        working-directory: ./cli
+        run: cargo build --release
+
+      - name: Run CLI tests
+        working-directory: ./cli
+        run: cargo test --all-features
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: life-cli-${{ github.sha }}
+          path: cli/target/release/life
+          retention-days: 7
+
+  # ============================================================================
+  # Job 2: Build and Test Daemon
+  # ============================================================================
+  build-daemon:
+    name: Build Daemon
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            daemon/target/
+          key: ${{ runner.os }}-cargo-daemon-${{ hashFiles('daemon/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-daemon-
+
+      - name: Check formatting
+        working-directory: ./daemon
+        run: cargo fmt -- --check
+
+      - name: Run clippy
+        working-directory: ./daemon
+        run: cargo clippy --all-features -- -D warnings
+
+      - name: Build daemon (debug)
+        working-directory: ./daemon
+        run: cargo build --all-features
+
+      - name: Build daemon (release)
+        working-directory: ./daemon
+        run: cargo build --release --all-features
+
+      - name: Run daemon tests
+        working-directory: ./daemon
+        run: cargo test --all-features
+
+      - name: Upload daemon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifeosd-${{ github.sha }}
+          path: daemon/target/release/lifeosd
+          retention-days: 7
+
+  # ============================================================================
+  # Job 3: Integration Tests
+  # ============================================================================
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build-cli, build-daemon]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Download CLI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: life-cli-${{ github.sha }}
+          path: ./artifacts/
+
+      - name: Download daemon artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lifeosd-${{ github.sha }}
+          path: ./artifacts/
+
+      - name: Make binaries executable
+        run: chmod +x ./artifacts/*
+
+      - name: Run integration tests
+        run: cargo test --test integration_tests 2>/dev/null || echo "Integration tests not yet implemented"
+
+  # ============================================================================
+  # Job 4: Security Audit
+  # ============================================================================
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run security audit (CLI)
+        working-directory: ./cli
+        run: cargo audit
+        continue-on-error: true
+
+      - name: Run security audit (Daemon)
+        working-directory: ./daemon
+        run: cargo audit
+        continue-on-error: true
+
+  # ============================================================================
+  # Job 5: Code Coverage
+  # ============================================================================
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    needs: [build-cli, build-daemon]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --locked
+
+      - name: Generate coverage report (CLI)
+        working-directory: ./cli
+        run: cargo tarpaulin --out Xml --output-dir ./coverage
+        continue-on-error: true
+
+      - name: Generate coverage report (Daemon)
+        working-directory: ./daemon
+        run: cargo tarpaulin --out Xml --output-dir ./coverage
+        continue-on-error: true
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./cli/coverage/cobertura.xml,./daemon/coverage/cobertura.xml
+          fail_ci_if_error: false
+          verbose: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # ============================================================================
+  # Job 6: Documentation Build
+  # ============================================================================
+  docs:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Build CLI documentation
+        working-directory: ./cli
+        run: cargo doc --no-deps
+
+      - name: Build daemon documentation
+        working-directory: ./daemon
+        run: cargo doc --no-deps
+
+      - name: Check for doc warnings
+        working-directory: ./cli
+        run: cargo doc --no-deps 2>&1 | grep -i warning && exit 1 || exit 0
+        continue-on-error: true

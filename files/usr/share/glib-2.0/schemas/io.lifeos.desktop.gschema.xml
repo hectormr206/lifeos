@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.lifeos.desktop" path="/io/lifeos/desktop/">
+    <key name="theme-variant" type="s">
+      <default>'simple'</default>
+      <summary>LifeOS Theme Variant</summary>
+      <description>The theme variant to use: simple or pro</description>
+    </key>
+    
+    <key name="first-boot-complete" type="b">
+      <default>false</default>
+      <summary>First Boot Complete</summary>
+      <description>Whether the first boot wizard has been completed</description>
+    </key>
+    
+    <key name="show-welcome-on-login" type="b">
+      <default>true</default>
+      <summary>Show Welcome on Login</summary>
+      <description>Show the welcome dialog on each login</description>
+    </key>
+    
+    <key name="dock-position" type="s">
+      <default>'left'</default>
+      <summary>Dock Position</summary>
+      <description>Position of the dock: left, right, or bottom</description>
+    </key>
+    
+    <key name="ai-assistant-enabled" type="b">
+      <default>true</default>
+      <summary>AI Assistant Enabled</summary>
+      <description>Whether the AI assistant is enabled</description>
+    </key>
+    
+    <key name="privacy-analytics" type="b">
+      <default>false</default>
+      <summary>Privacy Analytics</summary>
+      <description>Share anonymous usage analytics</description>
+    </key>
+    
+    <key name="privacy-telemetry" type="b">
+      <default>false</default>
+      <summary>Privacy Telemetry</summary>
+      <description>Allow system telemetry for crash reports</description>
+    </key>
+  </schema>
+</schemalist>

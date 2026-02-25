@@ -1,0 +1,9 @@
+[Unit]
+Description=LifeOS Health Check Service
+Documentation=man:lifeosd(8)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/life osd health-check
+StandardOutput=journal
+StandardError=journal

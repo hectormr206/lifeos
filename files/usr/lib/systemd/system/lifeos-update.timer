@@ -1,0 +1,11 @@
+[Unit]
+Description=LifeOS Update Check Timer
+Documentation=man:lifeosd(8)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

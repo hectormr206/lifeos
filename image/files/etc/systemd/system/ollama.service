@@ -1,0 +1,52 @@
+[Unit]
+Description=Ollama AI Service
+Documentation=https://github.com/ollama/ollama
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ollama
+Group=ollama
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EnvironmentFile=-/etc/ollama/environment
+ExecStart=/usr/local/bin/ollama serve
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=3
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ollama
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ollama
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# GPU device access (conditional)
+DeviceAllow=/dev/nvidia* rw
+DeviceAllow=/dev/kfd rw
+DeviceAllow=/dev/dri/* rw
+DeviceAllow=/dev/dxg rw
+
+[Install]
+WantedBy=multi-user.target

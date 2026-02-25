@@ -1,0 +1,227 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v0.1.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ============================================================================
+  # Job 1: Create Release Draft
+  # ============================================================================
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          configuration: .github/changelog-config.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name || inputs.version }}
+          release_name: LifeOS ${{ github.ref_name || inputs.version }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: true
+          prerelease: ${{ contains(github.ref_name || inputs.version, 'alpha') || contains(github.ref_name || inputs.version, 'beta') || contains(github.ref_name || inputs.version, 'rc') }}
+
+  # ============================================================================
+  # Job 2: Build Release Binaries
+  # ============================================================================
+  build-binaries:
+    name: Build Binaries (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: create-release
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: life-linux-x86_64
+            daemon_name: lifeosd-linux-x86_64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: life-linux-aarch64
+            daemon_name: lifeosd-linux-aarch64
+          # macOS builds (for development/testing on Mac)
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: life-macos-x86_64
+            daemon_name: lifeosd-macos-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: life-macos-aarch64
+            daemon_name: lifeosd-macos-aarch64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
+
+      - name: Build CLI (Release)
+        working-directory: ./cli
+        run: |
+          if [ "${{ matrix.target }}" != "x86_64-unknown-linux-gnu" ] && [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            cargo build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Build Daemon (Release)
+        working-directory: ./daemon
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          
+          # Package CLI
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp cli/target/${{ matrix.target }}/release/life.exe dist/${{ matrix.name }}.exe
+          else
+            cp cli/target/${{ matrix.target }}/release/life dist/${{ matrix.name }}
+            chmod +x dist/${{ matrix.name }}
+          fi
+          
+          # Package Daemon
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp daemon/target/${{ matrix.target }}/release/lifeosd.exe dist/${{ matrix.daemon_name }}.exe
+          else
+            cp daemon/target/${{ matrix.target }}/release/lifeosd dist/${{ matrix.daemon_name }}
+            chmod +x dist/${{ matrix.daemon_name }}
+          fi
+          
+          # Create archive
+          cd dist
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            7z a ../${{ matrix.name }}.zip *
+          else
+            tar -czvf ../${{ matrix.name }}.tar.gz *
+          fi
+          cd ..
+
+      - name: Upload CLI binary to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./${{ matrix.name }}.tar.gz
+          asset_name: ${{ matrix.name }}.tar.gz
+          asset_content_type: application/gzip
+        continue-on-error: true
+
+  # ============================================================================
+  # Job 3: Publish to Crates.io (optional)
+  # ============================================================================
+  publish-crates:
+    name: Publish to Crates.io
+    runs-on: ubuntu-latest
+    needs: [create-release, build-binaries]
+    if: false  # Disabled until ready for crates.io
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Publish CLI
+        working-directory: ./cli
+        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
+        continue-on-error: true
+
+      - name: Publish Daemon
+        working-directory: ./daemon
+        run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
+        continue-on-error: true
+
+  # ============================================================================
+  # Job 4: Update Documentation
+  # ============================================================================
+  update-docs:
+    name: Update Documentation
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Build documentation
+        run: |
+          cd cli && cargo doc --no-deps --document-private-items
+          cd ../daemon && cargo doc --no-deps --document-private-items
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/doc
+        continue-on-error: true
+
+  # ============================================================================
+  # Job 5: Finalize Release
+  # ============================================================================
+  finalize-release:
+    name: Finalize Release
+    runs-on: ubuntu-latest
+    needs: [build-binaries, update-docs]
+    steps:
+      - name: Publish release
+        uses: eregon/publish-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          release_id: ${{ needs.create-release.outputs.release_id }}
+        continue-on-error: true

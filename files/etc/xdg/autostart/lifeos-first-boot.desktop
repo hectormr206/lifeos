@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=LifeOS First Boot Wizard
+Comment=Set up your LifeOS system
+Exec=/usr/bin/life first-boot
+Type=Application
+Terminal=true
+Icon=lifeos-welcome
+Categories=System;Settings;
+OnlyShowIn=GNOME;KDE;XFCE;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Phase=Initialization
+Hidden=false
+NoDisplay=false

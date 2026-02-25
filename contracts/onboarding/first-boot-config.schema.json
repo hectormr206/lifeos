@@ -1,0 +1,146 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LifeOS Onboarding Configuration",
+  "description": "Configuration schema for LifeOS first-boot onboarding",
+  "type": "object",
+  "required": ["version", "user", "system"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "enum": ["1.0"]
+    },
+    "user": {
+      "type": "object",
+      "required": ["username", "fullname"],
+      "properties": {
+        "username": {
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_-]*$",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "System username"
+        },
+        "fullname": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Full display name"
+        },
+        "password_hash": {
+          "type": "string",
+          "description": "Pre-hashed password (optional)"
+        }
+      }
+    },
+    "system": {
+      "type": "object",
+      "properties": {
+        "hostname": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$",
+          "description": "System hostname"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone identifier",
+          "examples": ["America/New_York", "Europe/London", "Asia/Tokyo"]
+        },
+        "locale": {
+          "type": "string",
+          "pattern": "^[a-z]{2}_[A-Z]{2}\\.UTF-8$",
+          "description": "System locale",
+          "examples": ["en_US.UTF-8", "es_ES.UTF-8"]
+        },
+        "keyboard": {
+          "type": "string",
+          "description": "Keyboard layout",
+          "examples": ["us", "es", "de", "fr"]
+        }
+      }
+    },
+    "theme": {
+      "type": "object",
+      "properties": {
+        "variant": {
+          "type": "string",
+          "enum": ["simple", "pro"],
+          "description": "UI theme variant"
+        },
+        "accent_color": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}$",
+          "description": "Accent color hex code"
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "properties": {
+        "analytics": {
+          "type": "boolean",
+          "default": false,
+          "description": "Share anonymous usage analytics"
+        },
+        "telemetry": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow crash telemetry"
+        },
+        "ai_local_only": {
+          "type": "boolean",
+          "default": true,
+          "description": "Keep AI processing local only"
+        }
+      }
+    },
+    "ai": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable AI assistant"
+        },
+        "default_model": {
+          "type": "string",
+          "description": "Default Ollama model",
+          "examples": ["llama3.2", "mistral", "codellama"]
+        },
+        "pull_models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Models to pull during setup"
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "configure_manually": {
+          "type": "boolean",
+          "default": false
+        },
+        "wifi_ssid": {
+          "type": "string"
+        },
+        "wifi_security": {
+          "type": "string",
+          "enum": ["WPA2", "WPA3", "open"]
+        }
+      }
+    },
+    "first_boot_completed": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether first boot has been completed"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the configuration was created"
+    }
+  }
+}

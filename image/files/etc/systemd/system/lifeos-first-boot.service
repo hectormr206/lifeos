@@ -1,0 +1,17 @@
+[Unit]
+Description=LifeOS First Boot Setup
+After=network-online.target
+Wants=network-online.target
+Before=gdm.service
+ConditionPathExists=!/var/lib/lifeos/.first-boot-complete
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lifeos-first-boot.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeos-first-boot
+
+[Install]
+WantedBy=graphical.target

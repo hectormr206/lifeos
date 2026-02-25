@@ -1,0 +1,9 @@
+[Unit]
+Description=LifeOS Update Check Service
+Documentation=man:lifeosd(8)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/life osd check-updates
+StandardOutput=journal
+StandardError=journal

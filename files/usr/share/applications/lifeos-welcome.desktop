@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=LifeOS Welcome
+Comment=Welcome to LifeOS
+Exec=/usr/bin/lifeos-welcome
+Type=Application
+Icon=lifeos-welcome
+Categories=System;Settings;

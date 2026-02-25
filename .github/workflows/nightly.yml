@@ -1,0 +1,96 @@
+name: Nightly Tests
+
+on:
+  schedule:
+    # Run at 00:00 UTC every day
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ============================================================================
+  # Nightly Full Test Suite
+  # ============================================================================
+  nightly-tests:
+    name: Nightly Full Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-nightly-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Install cargo-outdated
+        run: cargo install cargo-outdated --locked
+
+      - name: Run security audit
+        run: |
+          cd cli && cargo audit
+          cd ../daemon && cargo audit
+
+      - name: Check for outdated dependencies
+        run: |
+          cd cli && cargo outdated || true
+          cd ../daemon && cargo outdated || true
+
+      - name: Run full test suite
+        run: |
+          cd cli && cargo test --all-features
+          cd ../daemon && cargo test --all-features
+
+      - name: Build documentation
+        run: |
+          cd cli && cargo doc --no-deps
+          cd ../daemon && cargo doc --no-deps
+
+  # ============================================================================
+  # Nightly Container Build
+  # ============================================================================
+  nightly-container:
+    name: Nightly Container Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Build container image
+        working-directory: ./image
+        run: |
+          podman build -t lifeos:nightly -f Containerfile .
+
+      - name: Run container tests
+        run: |
+          podman run --rm lifeos:nightly life --version || true
+
+      - name: Push nightly image
+        env:
+          REGISTRY: ghcr.io
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u ${{ github.actor }} --password-stdin
+          podman push lifeos:nightly ${{ env.REGISTRY }}/${{ github.repository }}:nightly

@@ -1,0 +1,31 @@
+[package]
+name = "life"
+version = "0.1.0"
+edition = "2021"
+description = "LifeOS system CLI"
+authors = ["LifeOS Team"]
+license = "Apache-2.0"
+
+[[bin]]
+name = "life"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+anyhow = "1"
+colored = "3"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+dirs = "6"
+chrono = "0.4"
+log = "0.4"
+futures = "0.3"
+dialoguer = "0.11"
+shellexpand = "3"
+
+[dev-dependencies]
+tempfile = "3"
+mockall = "0.12"

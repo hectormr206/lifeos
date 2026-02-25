@@ -1,0 +1,320 @@
+# LifeOS User Guide
+
+Welcome to LifeOS - Your AI-First Linux Distribution!
+
+## Quick Start
+
+### First Boot
+
+When you start LifeOS for the first time, the **First Boot Wizard** will automatically launch. This wizard helps you:
+
+1. **Create your user account** - Set up your username, password, and full name
+2. **Configure system settings** - Set your timezone, locale, and hostname
+3. **Choose your theme** - Select between "Simple" (clean, minimal) or "Pro" (power user, advanced)
+4. **Set privacy preferences** - Control analytics and telemetry
+5. **Configure AI** - Enable the local AI assistant and select your default model
+6. **Review and apply** - Confirm your settings before they're applied
+
+### Manual First Boot
+
+If you need to run the first boot wizard manually:
+
+```bash
+# Interactive wizard
+life first-boot
+
+# Automatic setup with defaults
+life first-boot --auto
+
+# Specify options
+life first-boot --username myuser --hostname mypc --theme pro
+```
+
+## Daily Usage
+
+### System Status
+
+Check your system status at any time:
+
+```bash
+life status
+```
+
+This shows:
+- System health
+- bootc status
+- Available updates
+- AI service status
+- Resource usage
+
+### AI Assistant
+
+LifeOS includes a local AI assistant powered by Ollama:
+
+```bash
+# Start AI chat
+life ai chat
+
+# List available models
+life ai list
+
+# Pull a new model
+life ai pull mistral
+
+# Start/stop Ollama service
+life ai start
+life ai stop
+```
+
+### System Updates
+
+LifeOS uses atomic updates via bootc:
+
+```bash
+# Check for updates
+life update --check
+
+# Apply updates (requires reboot)
+life update
+
+# See what would change (dry run)
+life update --dry-run
+```
+
+### Rollback
+
+If something goes wrong after an update:
+
+```bash
+# Rollback to previous version
+life rollback
+
+# Then reboot
+sudo reboot
+```
+
+## Configuration
+
+### System Configuration
+
+View and modify your configuration:
+
+```bash
+# Show current config
+life config show
+
+# Get a specific value
+life config get ai.model
+
+# Set a value
+life config set ai.model llama3.2
+```
+
+### GNOME Settings
+
+LifeOS configures GNOME automatically, but you can customize:
+
+```bash
+# Change theme
+gsettings set io.lifeos.desktop theme-variant pro
+
+# Toggle welcome on login
+gsettings set io.lifeos.desktop show-welcome-on-login true
+
+# Change dock position
+gsettings set io.lifeos.desktop dock-position right
+```
+
+## Privacy
+
+### Your Data
+
+LifeOS respects your privacy:
+
+- **Anonymous analytics** - Optional, off by default
+- **Crash telemetry** - Optional, off by default
+- **Local AI only** - All AI processing happens on your machine
+- **No cloud dependency** - Works completely offline
+
+### Managing Privacy Settings
+
+```bash
+# Check current settings
+gsettings get io.lifeos.desktop privacy-analytics
+gsettings get io.lifeos.desktop privacy-telemetry
+
+# Enable/disable
+gsettings set io.lifeos.desktop privacy-analytics false
+gsettings set io.lifeos.desktop privacy-telemetry false
+```
+
+## Troubleshooting
+
+### First Boot Issues
+
+If the first boot wizard doesn't start:
+
+```bash
+# Check if first boot was completed
+cat /var/lib/lifeos/.first-boot-complete
+
+# Force re-run
+life first-boot --force
+```
+
+### AI Not Working
+
+```bash
+# Check Ollama status
+systemctl status ollama
+
+# Start Ollama
+life ai start
+
+# Check GPU acceleration
+nvidia-smi  # For NVIDIA
+rocminfo    # For AMD
+```
+
+### Update Issues
+
+```bash
+# Check bootc status
+bootc status
+
+# Manual recovery
+life recover
+
+# View logs
+journalctl -u lifeosd -f
+```
+
+### Network Issues
+
+```bash
+# Check connectivity
+ping 1.1.1.1
+
+# Check network manager
+systemctl status NetworkManager
+
+# Restart networking
+sudo systemctl restart NetworkManager
+```
+
+## Tips and Tricks
+
+### Keyboard Shortcuts
+
+LifeOS provides convenient keyboard shortcuts:
+
+- `Super` - Open activities overview
+- `Super + /` - AI assistant quick access (configurable)
+- `Super + T` - Terminal
+- `Super + B` - Web browser
+- `Super + F` - File manager
+- `Alt + F2` - Run command
+- `Ctrl + Alt + T` - Terminal (classic)
+
+### Capsules
+
+Save and restore your system state:
+
+```bash
+# Create a capsule (backup)
+life capsule create my-backup
+
+# List capsules
+life capsule list
+
+# Restore from capsule
+life capsule restore my-backup
+```
+
+### Intents
+
+Use intents for common tasks:
+
+```bash
+# Create a work session intent
+life intents create work-session --description "Focus time for deep work"
+
+# List intents
+life intents list
+
+# Activate an intent
+life intents activate work-session
+```
+
+## Getting Help
+
+### In-System Help
+
+```bash
+# Get help for any command
+life --help
+life first-boot --help
+life ai --help
+```
+
+### Online Resources
+
+- **Documentation**: https://docs.lifeos.io
+- **Community Forum**: https://community.lifeos.io
+- **GitHub**: https://github.com/lifeos/lifeos
+
+### Support
+
+For technical support:
+- Check this guide first
+- Search the community forum
+- Open an issue on GitHub
+- Join our Discord: https://discord.lifeos.io
+
+## Advanced Topics
+
+### System Services
+
+LifeOS runs several background services:
+
+```bash
+# Check daemon status
+systemctl status lifeosd
+
+# View service logs
+journalctl -u lifeosd -f
+
+# Check timers
+systemctl list-timers lifeos-*
+```
+
+### Customizing the Boot Process
+
+```bash
+# Edit daemon config
+sudo nano /etc/lifeos/daemon.toml
+
+# Reload daemon
+sudo systemctl restart lifeosd
+```
+
+### Development Mode
+
+For development and testing:
+
+```bash
+# Enter lab mode
+life lab start
+
+# Run tests
+life lab test
+
+# Generate report
+life lab report
+```
+
+---
+
+**Welcome to LifeOS!** 🚀
+
+*The first Linux distribution built for the AI age.*
