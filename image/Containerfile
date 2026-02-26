@@ -61,7 +61,30 @@ COPY --from=builder /build/cli/target/release/life /usr/bin/life
 COPY --from=builder /build/daemon/target/release/lifeosd /usr/bin/lifeosd
 RUN chmod +x /usr/bin/life /usr/bin/lifeosd && life --version
 
-# --- AI Runtime (llama.cpp / llama-server) ---
+# --- AI Runtime (Ollama + llama.cpp / llama-server) ---
+# Ollama is required by Phase 0 and by `life ai` commands.
+RUN set -eux && \
+    dnf install -y zstd && \
+    arch="$(uname -m)" && \
+    case "$arch" in \
+        x86_64) ASSET_RE='ollama-linux-amd64\.tar\.zst' ;; \
+        aarch64) ASSET_RE='ollama-linux-arm64\.tar\.zst' ;; \
+        *) echo "Unsupported architecture for Ollama: ${arch}"; exit 1 ;; \
+    esac && \
+    OLLAMA_URL="$( \
+        curl -fsSL https://api.github.com/repos/ollama/ollama/releases/latest | \
+        jq -r --arg re "$ASSET_RE" '.assets[]? | select(.name | test($re)) | .browser_download_url' | \
+        head -n 1 \
+    )" && \
+    test -n "$OLLAMA_URL" && [ "$OLLAMA_URL" != "null" ] && \
+    curl -fL "$OLLAMA_URL" -o /tmp/ollama.tar.zst && \
+    tar --zstd -xf /tmp/ollama.tar.zst -C /usr && \
+    test -x /usr/bin/ollama && \
+    ln -sf /usr/bin/ollama /usr/local/bin/ollama && \
+    rm -f /tmp/ollama.tar.zst && \
+    dnf remove -y zstd && \
+    dnf clean all
+
 # 1) Intentar descargar binario oficial pre-compilado (x86_64 Linux/Ubuntu).
 # 2) Si no existe asset compatible, compilar `llama-server` desde código fuente.
 RUN set -eux && \
@@ -90,7 +113,17 @@ RUN set -eux && \
     dnf clean all
 
 # Creamos el directorio nativo donde LifeOS guardará los modelos locales
-RUN mkdir -p /var/lib/lifeos/models
+RUN useradd -r -s /usr/sbin/nologin -d /var/lib/ollama ollama || true && \
+    mkdir -p /var/lib/lifeos/models /var/lib/ollama/models /etc/ollama && \
+    chown -R ollama:ollama /var/lib/ollama && \
+    rm -f /var/lib/ollama/.bash_profile /var/lib/ollama/.bashrc /var/lib/ollama/.bash_logout && \
+    printf '%s\n' \
+    'OLLAMA_MODELS=/var/lib/ollama/models' \
+    'OLLAMA_HOST=0.0.0.0:11434' \
+    'OLLAMA_ORIGINS=*' \
+    'OLLAMA_NUM_PARALLEL=1' \
+    'OLLAMA_MAX_LOADED_MODELS=1' \
+    > /etc/ollama/environment
 
 # --- Directorios LifeOS y Scripts Iniciales ---
 RUN mkdir -p /var/lib/lifeos /var/log/lifeos /etc/lifeos
@@ -108,11 +141,12 @@ RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/di
     ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/graphical.target.wants/cosmic-greeter.service
 
 # Activar servicios al arranque
-# NOTA: lifeosd.service debería existir en /etc/systemd/system/ (lo creamos ahora)
-RUN printf '%s\n' \
+RUN mkdir -p /usr/lib/systemd/system /usr/lib/systemd/system/multi-user.target.wants && \
+    printf '%s\n' \
     '[Unit]' \
     'Description=LifeOS System Daemon' \
-    'After=network.target' \
+    'After=network-online.target' \
+    'Wants=network-online.target' \
     '' \
     '[Service]' \
     'Type=simple' \
@@ -121,10 +155,31 @@ RUN printf '%s\n' \
     '' \
     '[Install]' \
     'WantedBy=multi-user.target' \
-    > /etc/systemd/system/lifeosd.service && \
-    systemctl enable bluetooth.service && \
-    systemctl enable NetworkManager.service && \
-    systemctl enable lifeosd.service
+    > /usr/lib/systemd/system/lifeosd.service && \
+    printf '%s\n' \
+    '[Unit]' \
+    'Description=Ollama AI Service' \
+    'Documentation=https://github.com/ollama/ollama' \
+    'After=network-online.target' \
+    'Wants=network-online.target' \
+    '' \
+    '[Service]' \
+    'Type=simple' \
+    'User=ollama' \
+    'Group=ollama' \
+    'EnvironmentFile=-/etc/ollama/environment' \
+    'ExecStart=/usr/bin/ollama serve' \
+    'Restart=always' \
+    'RestartSec=3' \
+    '' \
+    '[Install]' \
+    'WantedBy=multi-user.target' \
+    > /usr/lib/systemd/system/ollama.service && \
+    ln -sf /usr/lib/systemd/system/lifeosd.service /usr/lib/systemd/system/lifeisd.service && \
+    ln -sf /usr/lib/systemd/system/bluetooth.service /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \
+    ln -sf /usr/lib/systemd/system/NetworkManager.service /usr/lib/systemd/system/multi-user.target.wants/NetworkManager.service && \
+    ln -sf /usr/lib/systemd/system/lifeosd.service /usr/lib/systemd/system/multi-user.target.wants/lifeosd.service && \
+    ln -sf /usr/lib/systemd/system/ollama.service /usr/lib/systemd/system/multi-user.target.wants/ollama.service
 
 # --- (Retirada la máscara de systemd-remount-fs que rompía el arranque) ---
 
@@ -166,6 +221,8 @@ RUN mkdir -p /usr/share/anaconda/pixmaps/ && \
 
 RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     printf '%s\n' \
+    'g ollama -' \
+    'u ollama - "Ollama Service User" /var/lib/ollama -' \
     'g wsdd -' \
     'u wsdd - "WSDD Service User" /var/lib/wsdd -' \
     > /usr/lib/sysusers.d/wsdd.conf && \
@@ -199,6 +256,8 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     'd /var/lib/greetd/.config/systemd/user 0755 greetd greetd - -' \
     'd /var/lib/lifeos 0755 root root - -' \
     'd /var/lib/lifeos/models 0755 root root - -' \
+    'd /var/lib/ollama 0700 ollama ollama - -' \
+    'd /var/lib/ollama/models 0755 ollama ollama - -' \
     'd /var/lib/smartmontools 0755 root root - -' \
     'd /var/lib/tuned 0755 root root - -' \
     'd /var/log/lifeos 0755 root root - -' \
@@ -208,5 +267,12 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     rm -f /var/log/dnf5.log* && \
     rm -f /var/cache/ldconfig/aux-cache && \
     rm -f /var/cache/swcatalog/cache/C-local-metainfo.xb /var/cache/swcatalog/cache/C-os-catalog.xb
+
+RUN test -x /usr/bin/life && \
+    test -x /usr/bin/lifeosd && \
+    test -x /usr/bin/ollama && \
+    test -x /usr/bin/llama-server && \
+    test -f /usr/lib/systemd/system/lifeosd.service && \
+    test -f /usr/lib/systemd/system/ollama.service
 
 RUN dnf clean all && rm -f /var/log/dnf5.log* && bootc container lint

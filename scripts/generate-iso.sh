@@ -19,7 +19,9 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Default values
-IMAGE_TAG="${LIFEOS_IMAGE:-ghcr.io/hectormr/lifeos:latest}"
+DEFAULT_LOCAL_IMAGE="localhost/lifeos:latest"
+DEFAULT_REMOTE_IMAGE="ghcr.io/hectormr/lifeos:latest"
+IMAGE_TAG="${LIFEOS_IMAGE:-}"
 OUTPUT_DIR="${LIFEOS_OUTPUT:-./output}"
 ISO_NAME="${LIFEOS_ISO_NAME:-lifeos}"
 ISO_VERSION="${LIFEOS_VERSION:-$(date +%Y%m%d)}"
@@ -38,7 +40,7 @@ USAGE:
     $(basename "$0") [OPTIONS]
 
 OPTIONS:
-    -i, --image TAG         Container image to use (default: $IMAGE_TAG)
+    -i, --image TAG         Container image to use (default: auto-detected)
     -o, --output DIR        Output directory (default: $OUTPUT_DIR)
     -n, --name NAME         ISO name prefix (default: $ISO_NAME)
     -v, --version VER       Version string (default: $ISO_VERSION)
@@ -68,6 +70,25 @@ ENVIRONMENT:
     LIFEOS_OUTPUT           Default output directory
     LIFEOS_VERSION          Default version string
 EOF
+}
+
+resolve_image_tag() {
+    if [[ -n "$IMAGE_TAG" ]]; then
+        return
+    fi
+
+    if [[ "${USE_LOCAL_IMAGE:-false}" == true ]]; then
+        IMAGE_TAG="$DEFAULT_LOCAL_IMAGE"
+        return
+    fi
+
+    if podman image exists "$DEFAULT_LOCAL_IMAGE"; then
+        IMAGE_TAG="$DEFAULT_LOCAL_IMAGE"
+        USE_LOCAL_IMAGE=true
+        echo -e "${YELLOW}Auto-selected local image: $IMAGE_TAG${NC}"
+    else
+        IMAGE_TAG="$DEFAULT_REMOTE_IMAGE"
+    fi
 }
 
 # Parse arguments
@@ -405,6 +426,7 @@ main() {
     echo
     
     parse_args "$@"
+    resolve_image_tag
     
     echo "Configuration:"
     echo "  Image:      $IMAGE_TAG"
