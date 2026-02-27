@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn test_update_checker_creation() {
-        let checker = UpdateChecker::new();
+        let _checker = UpdateChecker::new();
         // Just verify it doesn't panic
         assert!(true);
     }

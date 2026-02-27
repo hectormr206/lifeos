@@ -60,16 +60,16 @@ pub struct AiConfig {
     #[serde(default)]
     pub model: String,
     #[serde(default)]
-    pub ollama_host: String,
+    pub llama_server_host: String,
 }
 
 impl Default for AiConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            provider: "ollama".to_string(),
-            model: "llama3.2".to_string(),
-            ollama_host: "http://localhost:11434".to_string(),
+            provider: "llama-server".to_string(),
+            model: "qwen3-8b-q4_k_m.gguf".to_string(),
+            llama_server_host: "http://localhost:8080".to_string(),
         }
     }
 }
@@ -216,7 +216,7 @@ pub fn set_config_value(config: &mut LifeConfig, key: &str, value: &str) -> anyh
         ["system", "locale"] => config.system.locale = value.to_string(),
         ["ai", "enabled"] => config.ai.enabled = value.parse()?,        ["ai", "provider"] => config.ai.provider = value.to_string(),
         ["ai", "model"] => config.ai.model = value.to_string(),
-        ["ai", "ollama_host"] => config.ai.ollama_host = value.to_string(),
+        ["ai", "llama_server_host"] => config.ai.llama_server_host = value.to_string(),
         ["security", "encryption"] => config.security.encryption = value.parse()?,
         ["security", "secure_boot"] => config.security.secure_boot = value.parse()?,
         ["security", "auto_lock"] => config.security.auto_lock = value.parse()?,
@@ -244,6 +244,7 @@ pub fn get_config_value(config: &LifeConfig, key: &str) -> anyhow::Result<String
         ["ai", "enabled"] => config.ai.enabled.to_string(),
         ["ai", "provider"] => config.ai.provider.clone(),
         ["ai", "model"] => config.ai.model.clone(),
+        ["ai", "llama_server_host"] => config.ai.llama_server_host.clone(),
         ["security", "encryption"] => config.security.encryption.to_string(),
         ["security", "secure_boot"] => config.security.secure_boot.to_string(),
         ["updates", "channel"] => config.updates.channel.clone(),

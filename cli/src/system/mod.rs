@@ -222,6 +222,10 @@ pub async fn perform_update(_channel: &str, dry_run: bool) -> anyhow::Result<Upd
     // 2. Pull the new image from the channel
     // 3. Stage it with bootc
     // 4. Mark it for next boot
+
+    if let Err(e) = create_pre_update_snapshot() {
+        log::warn!("Pre-update snapshot failed: {}. Continuing update.", e);
+    }
     
     let output = Command::new("bootc")
         .args(["upgrade", "--apply"])
@@ -238,6 +242,32 @@ pub async fn perform_update(_channel: &str, dry_run: bool) -> anyhow::Result<Upd
         to_version: "updated".to_string(),
         changes: vec!["System updated".to_string()],
     })
+}
+
+/// Create a readonly Btrfs snapshot before attempting an update.
+fn create_pre_update_snapshot() -> anyhow::Result<()> {
+    let snapshot_script = "/usr/local/bin/lifeos-btrfs-snapshot.sh";
+    if !std::path::Path::new(snapshot_script).exists() {
+        return Ok(());
+    }
+
+    let output = Command::new(snapshot_script)
+        .arg("pre-update")
+        .output()?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "{}",
+            String::from_utf8_lossy(&output.stderr).trim().to_string()
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.trim().is_empty() {
+        log::info!("{}", stdout.trim());
+    }
+
+    Ok(())
 }
 
 /// Update result

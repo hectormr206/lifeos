@@ -207,7 +207,37 @@ jobs:
         continue-on-error: true
 
   # ============================================================================
-  # Job 5: Code Coverage
+  # Job 5: Runtime Security Regression
+  # ============================================================================
+  runtime-security:
+    name: Runtime Security Tests
+    runs-on: ubuntu-latest
+    needs: [build-daemon]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download daemon artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lifeosd-${{ github.sha }}
+          path: ./artifacts/
+
+      - name: Ensure runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl dbus libdbus-1-3
+
+      - name: Make daemon binary executable
+        run: chmod +x ./artifacts/lifeosd
+
+      - name: Run runtime security tests
+        env:
+          LIFEOS_DAEMON_BIN: ${{ github.workspace }}/artifacts/lifeosd
+        run: bash tests/security_tests.sh
+
+  # ============================================================================
+  # Job 6: Code Coverage
   # ============================================================================
   coverage:
     name: Code Coverage
@@ -245,7 +275,7 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   # ============================================================================
-  # Job 6: Documentation Build
+  # Job 7: Documentation Build
   # ============================================================================
   docs:
     name: Build Documentation

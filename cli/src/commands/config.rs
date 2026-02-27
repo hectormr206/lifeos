@@ -53,7 +53,7 @@ async fn show_config() -> anyhow::Result<()> {
             println!("  enabled: {}", cfg.ai.enabled);
             println!("  provider: {}", cfg.ai.provider);
             println!("  model: {}", cfg.ai.model);
-            println!("  ollama_host: {}", cfg.ai.ollama_host);
+            println!("  llama_server_host: {}", cfg.ai.llama_server_host);
             println!();
             
             println!("{}", "Security:".bold());

@@ -156,33 +156,33 @@ async fn check_system_requirements() {
 }
 
 async fn setup_ai() -> anyhow::Result<()> {
-    // Check if Ollama is installed
-    let ollama_check = std::process::Command::new("which")
-        .arg("ollama")
+    // Check if llama-server is installed
+    let server_check = std::process::Command::new("which")
+        .arg("llama-server")
         .output();
 
-    match ollama_check {
+    match server_check {
         Ok(output) if output.status.success() => {
-            println!("  {} Ollama: {}", "✓".green(), "installed");
-            
-            // Check if Ollama service is running
+            println!("  {} llama-server: {}", "✓".green(), "installed");
+
+            // Check if llama-server service is running
             let service_check = std::process::Command::new("systemctl")
-                .args(["is-active", "ollama"])
+                .args(["is-active", "llama-server"])
                 .output();
-            
+
             match service_check {
                 Ok(output) if output.status.success() => {
-                    println!("  {} Ollama service: {}", "✓".green(), "running");
+                    println!("  {} llama-server service: {}", "✓".green(), "running");
                 }
                 _ => {
-                    println!("  {} Ollama service: {}", "⚠".yellow(), "not running");
+                    println!("  {} llama-server service: {}", "⚠".yellow(), "not running");
                     println!("    Run {} to start it", "life ai start".cyan());
                 }
             }
         }
         _ => {
-            println!("  {} Ollama: {}", "⚠".yellow(), "not installed");
-            println!("    Install with: {}", "curl -fsSL https://ollama.com/install.sh | sh".dimmed());
+            println!("  {} llama-server: {}", "⚠".yellow(), "not installed");
+            println!("    Should be bundled with LifeOS image");
         }
     }
 

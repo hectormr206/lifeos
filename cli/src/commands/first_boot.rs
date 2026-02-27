@@ -21,9 +21,9 @@ pub struct FirstBootArgs {
     /// Hostname
     #[arg(long)]
     pub hostname: Option<String>,
-    /// Skip Ollama setup
+    /// Skip AI setup (llama-server)
     #[arg(long)]
-    pub skip_ollama: bool,
+    pub skip_ai: bool,
     /// Force re-run first boot
     #[arg(long)]
     pub force: bool,
@@ -101,10 +101,10 @@ pub async fn execute(args: FirstBootArgs) -> anyhow::Result<()> {
     println!("\n{}", "⚙️  Applying configuration...".bold().blue());
     apply_configuration(&state).await?;
 
-    // Setup Ollama if enabled
-    if state.ai_enabled && !args.skip_ollama {
+    // Setup AI runtime if enabled
+    if state.ai_enabled && !args.skip_ai {
         println!("\n{}", "🤖 Setting up AI...".bold().blue());
-        setup_ollama(&state).await?;
+        setup_ai(&state).await?;
     }
 
     // Configure desktop environment
@@ -189,7 +189,7 @@ async fn run_auto_setup(args: &FirstBootArgs) -> anyhow::Result<FirstBootState> 
         privacy_analytics: false,
         privacy_telemetry: false,
         ai_enabled: true,
-        ai_model: "llama3.2".to_string(),
+        ai_model: "qwen3-8b-q4_k_m.gguf".to_string(),
         network_configured: true,
     })
 }
@@ -270,8 +270,8 @@ async fn run_interactive_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBoo
         .default(true)
         .interact()?;
 
-    let ai_model = if ai_enabled && !args.skip_ollama {
-        let models = vec!["llama3.2", "mistral", "codellama", "mixtral"];
+    let ai_model = if ai_enabled && !args.skip_ai {
+        let models = vec!["qwen3-8b-q4_k_m.gguf", "qwen3-1.7b-q4_k_m.gguf", "llama-3.2-3b-instruct-q4_k_m.gguf", "mistral-7b-instruct-v0.3-q4_k_m.gguf"];
         let model_idx = Select::with_theme(&theme)
             .with_prompt("Select default AI model")
             .items(&models)
@@ -279,7 +279,7 @@ async fn run_interactive_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBoo
             .interact()?;
         models[model_idx].to_string()
     } else {
-        "llama3.2".to_string()
+        "qwen3-8b-q4_k_m.gguf".to_string()
     };
 
     // Step 6: Review
@@ -609,53 +609,48 @@ fn user_exists(username: &str) -> bool {
         .unwrap_or(false)
 }
 
-async fn setup_ollama(state: &FirstBootState) -> anyhow::Result<()> {
-    // Check if Ollama is installed
-    let ollama_installed = Command::new("which")
-        .arg("ollama")
+async fn setup_ai(state: &FirstBootState) -> anyhow::Result<()> {
+    // Check if llama-server is installed
+    let installed = Command::new("which")
+        .arg("llama-server")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
 
-    if !ollama_installed {
-        println!("  {} Ollama not installed, installing...", "→".yellow());
-        
-        // Download and install Ollama
-        let install_script = reqwest::get("https://ollama.com/install.sh").await?.text().await?;
-        
-        // Execute install script
-        let mut child = std::process::Command::new("sh")
-            .stdin(std::process::Stdio::piped())
-            .spawn()?;
-        
-        if let Some(stdin) = child.stdin.take() {
-            use std::io::Write;
-            let mut stdin = stdin;
-            stdin.write_all(install_script.as_bytes())?;
-        }
-        
-        let _ = child.wait();
+    if !installed {
+        println!("  {} llama-server not found (should be bundled with LifeOS)", "!".yellow());
+        return Ok(());
     }
 
-    // Start Ollama service
-    print!("  Starting Ollama service... ");
-    let _ = Command::new("systemctl")
-        .args(["enable", "--now", "ollama"])
-        .output();
-    println!("{}", "✓".green());
+    println!("  {} llama-server installed", "OK".green());
 
-    // Pull default model
-    print!("  Pulling {} model (this may take a while)... ", state.ai_model.cyan());
-    let output = Command::new("ollama")
-        .args(["pull", &state.ai_model])
-        .output()?;
-    
-    if output.status.success() {
-        println!("{}", "✓".green());
+    // Determine optimal GPU offload
+    let gpu_info = check_gpu();
+    let gpu_layers = if gpu_info.message.contains("NVIDIA") || gpu_info.message.contains("AMD") || gpu_info.message.contains("Apple") {
+        "99" // Offload all layers to GPU
     } else {
-        println!("{}", "⚠".yellow());
-        println!("    Model pull may continue in background");
-    }
+        "0"  // CPU only
+    };
+
+    // Update model and layers in env file
+    print!("  Configuring AI model: {} (GPU layers: {}) ... ", state.ai_model.cyan(), gpu_layers);
+    let _ = Command::new("sudo")
+        .args(["sed", "-i", &format!("s/^LIFEOS_AI_MODEL=.*/LIFEOS_AI_MODEL={}/", state.ai_model), "/etc/lifeos/llama-server.env"])
+        .output();
+        
+    let _ = Command::new("sudo")
+        .args(["sed", "-i", &format!("s/^LLAMA_N_GPU_LAYERS=.*/LLAMA_N_GPU_LAYERS={}/", gpu_layers), "/etc/lifeos/llama-server.env"])
+        .output();
+    println!("{}", "OK".green());
+
+    // Enable and start llama-server service
+    print!("  Starting AI service... ");
+    let _ = Command::new("systemctl")
+        .args(["enable", "--now", "llama-server"])
+        .output();
+    println!("{}", "OK".green());
+
+    println!("  {} Model will be downloaded on first service start if not present", "->".dimmed());
 
     Ok(())
 }

@@ -3,6 +3,7 @@
 
 use serde::{Serialize, Deserialize};
 use std::process::Command;
+use std::path::PathBuf;
 
 #[cfg(test)]
 mod updates_tests;
@@ -21,17 +22,34 @@ pub struct UpdateResult {
 #[derive(Debug)]
 pub struct UpdateChecker {
     current_image: Option<String>,
+    tuf_metadata_dir: PathBuf,
+    tuf_state_path: PathBuf,
+    require_tuf: bool,
 }
 
 impl UpdateChecker {
     pub fn new() -> Self {
+        let tuf_metadata_dir = std::env::var("LIFEOS_TUF_METADATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/etc/lifeos/tuf"));
+        let tuf_state_path = std::env::var("LIFEOS_TUF_STATE_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/var/lib/lifeos/tuf-state.json"));
+        let require_tuf_default = crate::tuf::metadata_exists(&tuf_metadata_dir);
+        let require_tuf = parse_env_bool("LIFEOS_TUF_REQUIRED", require_tuf_default);
+
         Self {
             current_image: None,
+            tuf_metadata_dir,
+            tuf_state_path,
+            require_tuf,
         }
     }
 
     /// Check for available updates
     pub async fn check_for_updates(&mut self) -> anyhow::Result<UpdateResult> {
+        self.enforce_tuf_policy()?;
+
         // Get current bootc status to determine current image
         let output = Command::new("bootc")
             .args(["status", "--json"])
@@ -101,6 +119,8 @@ impl UpdateChecker {
 
     /// Stage an update (download but don't apply yet)
     pub async fn stage_update(&self) -> anyhow::Result<()> {
+        self.enforce_tuf_policy()?;
+
         let output = Command::new("bootc")
             .arg("upgrade")
             .output()?;
@@ -115,6 +135,8 @@ impl UpdateChecker {
 
     /// Apply staged update (reboot required)
     pub async fn apply_update(&self) -> anyhow::Result<()> {
+        self.enforce_tuf_policy()?;
+
         let output = Command::new("bootc")
             .args(["upgrade", "--apply"])
             .output()?;
@@ -132,6 +154,31 @@ impl UpdateChecker {
         // This would typically read from a log file or database
         // For now, return empty
         Ok(Vec::new())
+    }
+
+    fn enforce_tuf_policy(&self) -> anyhow::Result<()> {
+        let result = crate::tuf::validate_tuf_metadata(
+            &self.tuf_metadata_dir,
+            &self.tuf_state_path,
+        );
+
+        match result {
+            Ok(versions) => {
+                log::info!(
+                    "TUF metadata validated (root={}, timestamp={}, snapshot={}, targets={})",
+                    versions.root,
+                    versions.timestamp,
+                    versions.snapshot,
+                    versions.targets
+                );
+                Ok(())
+            }
+            Err(err) if !self.require_tuf => {
+                log::warn!("TUF metadata validation failed but enforcement is disabled: {}", err);
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -165,4 +212,11 @@ fn parse_version_from_output(output: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn parse_env_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(v) => matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        Err(_) => default,
+    }
 }

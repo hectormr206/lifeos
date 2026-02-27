@@ -1,0 +1,14 @@
+{
+  "signed": {
+    "_type": "snapshot",
+    "spec_version": "1.0.31",
+    "version": 1,
+    "expires": "2030-01-01T00:00:00Z",
+    "meta": {
+      "targets.json": {
+        "version": 1
+      }
+    }
+  },
+  "signatures": []
+}

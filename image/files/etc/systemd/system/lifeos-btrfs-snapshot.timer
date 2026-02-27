@@ -1,0 +1,12 @@
+[Unit]
+Description=LifeOS periodic Btrfs snapshot
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+RandomizedDelaySec=5min
+Unit=lifeos-btrfs-snapshot.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

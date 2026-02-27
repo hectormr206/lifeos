@@ -226,8 +226,10 @@ generate_iso() {
         bib_opts+=("--target-arch" "aarch64")
     fi
     
-    # Generar un hash válido para la contraseña 'lifeos' usando Python
-    local pass_hash=$(python3 -c "import crypt; print(crypt.crypt('lifeos', crypt.mksalt(crypt.METHOD_SHA512)))")
+    # Generar un hash válido para la contraseña 'lifeos'
+    local pass_hash
+    pass_hash=$(python3 -c "import crypt; print(crypt.crypt('lifeos', crypt.mksalt(crypt.METHOD_SHA512)))" 2>/dev/null || \
+                openssl passwd -6 lifeos)
 
     # Escribir la configuración a un archivo temporal local
     local tmp_config=$(mktemp config-XXXXXX.json)
@@ -408,7 +410,10 @@ create_metadata() {
     "min_memory_gb": 4,
     "min_disk_gb": $ROOTFS_SIZE,
     "recommended_memory_gb": 8,
-    "recommended_disk_gb": 50
+    "recommended_disk_gb": 50,
+    "secure_boot_required": true,
+    "luks2_required": true,
+    "tpm2_recommended": true
   }
 }
 EOF
@@ -457,9 +462,25 @@ main() {
     ls -lh "$OUTPUT_DIR/${ISO_NAME}-${ISO_VERSION}-${TARGET_ARCH}"* 2>/dev/null || true
     echo
     echo "Next steps:"
-    echo "  1. Write to USB: dd if=${OUTPUT_DIR}/${ISO_NAME}-${ISO_VERSION}-${TARGET_ARCH}.iso of=/dev/sdX bs=4M status=progress"
-    echo "  2. Or use: sudo dd if=${OUTPUT_DIR}/${ISO_NAME}-${ISO_VERSION}-${TARGET_ARCH}.iso of=/dev/sdX bs=4M conv=fsync status=progress"
-    echo "  3. Boot from USB and install LifeOS"
+    case "$BUILD_TYPE" in
+        iso)
+            echo "  For USB:        sudo dd if=${OUTPUT_DIR}/${ISO_NAME}-${ISO_VERSION}-${TARGET_ARCH}.iso of=/dev/sdX bs=4M status=progress"
+            echo "  For VirtualBox: Create VM (Fedora 64-bit, 4GB RAM, 40GB disk) and mount the ISO"
+            ;;
+        vmdk)
+            echo "  For VirtualBox: Create VM and attach the .vmdk as existing disk"
+            ;;
+        qcow2)
+            echo "  For QEMU/KVM:   qemu-system-x86_64 -m 4G -drive file=<file>,format=qcow2 -enable-kvm"
+            ;;
+        raw)
+            echo "  For USB:        sudo dd if=<file> of=/dev/sdX bs=4M status=progress"
+            ;;
+    esac
+    echo ""
+    echo "  Default login: lifeos / lifeos"
+    echo "  Security baseline: Secure Boot + LUKS2 enforced at runtime"
+    echo "  (create /etc/lifeos/allow-insecure-platform only for lab/dev bypass)"
 }
 
 # Run main function

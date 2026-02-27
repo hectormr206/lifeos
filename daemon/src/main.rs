@@ -20,6 +20,7 @@ mod ai;
 mod notifications;
 mod health;
 mod updates;
+mod tuf;
 mod api;
 mod models;
 mod permissions;
@@ -50,9 +51,39 @@ impl Default for DaemonConfig {
             enable_notifications: true,
             enable_auto_updates: false,
             enable_api: true,
-            api_bind_address: "0.0.0.0:8080".parse().unwrap(),
+            api_bind_address: "127.0.0.1:8081".parse().unwrap(),
         }
     }
+}
+
+/// Helper to generate and save bootstrap token
+fn generate_bootstrap_token() -> std::io::Result<String> {
+    use std::io::Read;
+    use std::fs::File;
+    use std::os::unix::fs::PermissionsExt;
+    
+    let mut buf = [0u8; 16];
+    let mut f = File::open("/dev/urandom")?;
+    f.read_exact(&mut buf)?;
+    let token = buf.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    
+    let runtime_dir = std::env::var("LIFEOS_RUNTIME_DIR")
+        .unwrap_or_else(|_| "/run/lifeos".to_string());
+    let dir = std::path::Path::new(&runtime_dir);
+    let path = dir.join("bootstrap.token");
+    std::fs::create_dir_all(dir)?;
+    let mut dir_perms = std::fs::metadata(dir)?.permissions();
+    dir_perms.set_mode(0o700);
+    std::fs::set_permissions(dir, dir_perms)?;
+
+    std::fs::write(&path, &token)?;
+    
+    let mut perms = std::fs::metadata(&path)?.permissions();
+    perms.set_mode(0o600); // Only owner can read/write
+    std::fs::set_permissions(&path, perms)?;
+    
+    log::info!("Bootstrap token generated at {}", path.display());
+    Ok(token)
 }
 
 /// Daemon state shared across tasks
@@ -64,6 +95,7 @@ pub struct DaemonState {
     pub update_checker: Arc<RwLock<UpdateChecker>>,
     pub notification_manager: Arc<NotificationManager>,
     pub ai_manager: Arc<RwLock<ai::AiManager>>,
+    pub bootstrap_token: Option<String>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
 }
@@ -84,6 +116,15 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration
     let config = load_config().await?;
     info!("Configuration loaded: {:?}", config);
+    
+    // Generate bootstrap token for initial restricted IPC
+    let bootstrap_token = match generate_bootstrap_token() {
+        Ok(token) => Some(token),
+        Err(e) => {
+            warn!("Failed to generate bootstrap token: {}", e);
+            None
+        }
+    };
 
     // Initialize state
     let state = Arc::new(DaemonState {
@@ -93,6 +134,7 @@ async fn main() -> anyhow::Result<()> {
         update_checker: Arc::new(RwLock::new(UpdateChecker::new())),
         notification_manager: Arc::new(NotificationManager::new(config.enable_notifications)),
         ai_manager: Arc::new(RwLock::new(ai::AiManager::new())),
+        bootstrap_token,
         last_health_check: RwLock::new(None),
         last_update_check: RwLock::new(None),
     });
@@ -163,7 +205,7 @@ async fn start_api_server(state: Arc<DaemonState>) {
         notification_manager: state.notification_manager.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,
-            api_key: None,
+            api_key: state.bootstrap_token.clone(),
             enable_cors: true,
             max_request_size: 10 * 1024 * 1024,
         },
@@ -183,7 +225,7 @@ async fn load_config() -> anyhow::Result<DaemonConfig> {
         let config: DaemonConfigFile = toml::from_str(&contents)?;
         
         let api_bind = config.api_bind_address.parse()
-            .unwrap_or_else(|_| "0.0.0.0:8080".parse().unwrap());
+            .unwrap_or_else(|_| "127.0.0.1:8081".parse().unwrap());
         
         return Ok(DaemonConfig {
             health_check_interval: Duration::from_secs(config.health_check_interval_secs),
@@ -222,7 +264,7 @@ fn default_health_interval() -> u64 { 300 }
 fn default_update_interval() -> u64 { 3600 }
 fn default_metrics_interval() -> u64 { 60 }
 fn default_true() -> bool { true }
-fn default_api_bind() -> String { "0.0.0.0:8080".to_string() }
+fn default_api_bind() -> String { "127.0.0.1:8081".to_string() }
 
 /// Run periodic health checks
 async fn run_health_checks(state: Arc<DaemonState>) {
@@ -337,4 +379,3 @@ async fn run_metrics_collection(state: Arc<DaemonState>) {
         }
     }
 }
-

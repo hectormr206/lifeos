@@ -1,0 +1,53 @@
+[Unit]
+Description=LifeOS AI Inference Server (llama.cpp)
+Documentation=https://github.com/ggerganov/llama.cpp
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/lifeos/llama-server.env
+ExecStartPre=/usr/local/bin/lifeos-ai-setup.sh
+ExecStart=/usr/bin/llama-server \
+    --model /var/lib/lifeos/models/${LIFEOS_AI_MODEL} \
+    --host ${LIFEOS_AI_HOST:-127.0.0.1} \
+    --port ${LIFEOS_AI_PORT:-8080} \
+    --ctx-size ${LIFEOS_AI_CTX_SIZE:-4096} \
+    --threads ${LIFEOS_AI_THREADS:-4} \
+    --n-gpu-layers ${LIFEOS_AI_GPU_LAYERS:-0}
+Restart=on-failure
+RestartSec=5
+StartLimitInterval=300
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=llama-server
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateUsers=true
+ReadWritePaths=/var/lib/lifeos
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=16G
+
+# GPU device access (conditional)
+DeviceAllow=/dev/nvidia* rw
+DeviceAllow=/dev/kfd rw
+DeviceAllow=/dev/dri/* rw
+DeviceAllow=/dev/dxg rw
+
+[Install]
+WantedBy=multi-user.target

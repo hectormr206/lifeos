@@ -1,0 +1,10 @@
+[Unit]
+Description=LifeOS Btrfs Snapshot
+Documentation=man:btrfs-subvolume(8)
+ConditionPathExists=/usr/bin/btrfs
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lifeos-btrfs-snapshot.sh scheduled
+User=root
+Group=root

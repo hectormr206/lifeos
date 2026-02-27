@@ -187,15 +187,15 @@ mod tests {
     fn test_update_args_default() {
         let args = commands::update::UpdateArgs::default();
         assert!(!args.dry_run);
-        assert_eq!(args.channel, Some("stable".to_string()));
+        assert_eq!(args.channel, None);
     }
 
     #[test]
     fn test_first_boot_args_default() {
         let args = commands::first_boot::FirstBootArgs::default();
         assert!(!args.auto);
-        assert_eq!(args.theme, "simple");
-        assert!(!args.skip_ollama);
+        // Default::default() gives "" for String; clap's default_value only applies at parse time
+        assert!(!args.skip_ai);
         assert!(!args.force);
     }
 }

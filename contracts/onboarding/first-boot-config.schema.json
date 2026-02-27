@@ -104,15 +104,15 @@
         },
         "default_model": {
           "type": "string",
-          "description": "Default Ollama model",
-          "examples": ["llama3.2", "mistral", "codellama"]
+          "description": "Default GGUF model filename for llama-server",
+          "examples": ["qwen3-8b-q4_k_m.gguf", "qwen3-1.7b-q4_k_m.gguf", "llama-3.2-3b-q4_k_m.gguf"]
         },
         "pull_models": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Models to pull during setup"
+          "description": "GGUF models to download during setup"
         }
       }
     },

@@ -7,9 +7,11 @@
 //! - System management
 
 use axum::{
+    body::Body,
     extract::{Path, State},
-    http::StatusCode,
-    response::Json,
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{Json, Response},
     routing::{get, post, put},
     Router,
 };
@@ -51,7 +53,7 @@ pub struct ApiConfig {
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
-            bind_address: "0.0.0.0:8080".parse().unwrap(),
+            bind_address: "127.0.0.1:8081".parse().unwrap(),
             api_key: None,
             enable_cors: true,
             max_request_size: 10 * 1024 * 1024, // 10MB
@@ -241,30 +243,68 @@ pub struct ApiError {
 // ==================== API ROUTES ====================
 
 pub fn create_router(state: ApiState) -> Router {
-    Router::new()
+    let api_v1 = Router::new()
         // System endpoints
-        .route("/api/v1/system/status", get(get_system_status))
-        .route("/api/v1/system/resources", get(get_system_resources))
-        .route("/api/v1/system/info", get(get_system_info))
-        .route("/api/v1/system/command", post(post_system_command))
-        
+        .route("/system/status", get(get_system_status))
+        .route("/system/resources", get(get_system_resources))
+        .route("/system/info", get(get_system_info))
+        .route("/system/command", post(post_system_command))
         // Health endpoints
-        .route("/api/v1/health", get(get_health_status))
-        
+        .route("/health", get(get_health_status))
         // AI endpoints
-        .route("/api/v1/ai/status", get(get_ai_status))
-        .route("/api/v1/ai/models", get(get_ai_models))
-        .route("/api/v1/ai/chat", post(post_ai_chat))
-        
+        .route("/ai/status", get(get_ai_status))
+        .route("/ai/models", get(get_ai_models))
+        .route("/ai/chat", post(post_ai_chat))
         // Notification endpoints
-        .route("/api/v1/notifications", get(get_notifications))
-        .route("/api/v1/notifications", post(post_notification))
-        .route("/api/v1/notifications/:id/read", put(mark_notification_read))
-        
-        // Swagger UI
+        .route("/notifications", get(get_notifications))
+        .route("/notifications", post(post_notification))
+        .route("/notifications/:id/read", put(mark_notification_read))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_bootstrap_token,
+        ));
+
+    Router::new()
+        .nest("/api/v1", api_v1)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        
         .with_state(state)
+}
+
+async fn require_bootstrap_token(
+    State(state): State<ApiState>,
+    request: Request<Body>,
+    next: Next,
+) -> Result<Response, (StatusCode, Json<ApiError>)> {
+    let expected = state.config.api_key.as_deref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "Service Unavailable".to_string(),
+                message: "Bootstrap token not configured".to_string(),
+                code: 503,
+            }),
+        )
+    })?;
+
+    let provided = request
+        .headers()
+        .get("x-bootstrap-token")
+        .or_else(|| request.headers().get("x-api-key"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+
+    if provided != expected {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "Unauthorized".to_string(),
+                message: "Missing or invalid bootstrap token".to_string(),
+                code: 401,
+            }),
+        ));
+    }
+
+    Ok(next.run(request).await)
 }
 
 // ==================== HANDLERS ====================
@@ -314,19 +354,28 @@ async fn get_system_status(State(state): State<ApiState>) -> Result<Json<SystemS
     tag = "system"
 )]
 async fn get_system_resources(State(state): State<ApiState>) -> Result<Json<ResourceUsage>, (StatusCode, Json<ApiError>)> {
-    let _system_monitor = state.system_monitor.read().await;
-    
-    // This would call the actual system monitor methods
+    let mut system_monitor = state.system_monitor.write().await;
+    let metrics = system_monitor.collect_metrics().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to collect system metrics: {e}"),
+                code: 500,
+            }),
+        )
+    })?;
+
     let usage = ResourceUsage {
-        cpu_percent: 25.5,
-        memory_used_gb: 8.2,
-        memory_total_gb: 16.0,
-        memory_percent: 51.3,
-        disk_used_gb: 256.0,
-        disk_total_gb: 512.0,
-        disk_percent: 50.0,
-        network_rx_mbps: 1.5,
-        network_tx_mbps: 0.8,
+        cpu_percent: metrics.cpu_usage,
+        memory_used_gb: metrics.memory_used_mb as f32 / 1024.0,
+        memory_total_gb: metrics.memory_total_mb as f32 / 1024.0,
+        memory_percent: metrics.memory_usage,
+        disk_used_gb: metrics.disk_used_gb as f32,
+        disk_total_gb: metrics.disk_total_gb as f32,
+        disk_percent: metrics.disk_usage,
+        network_rx_mbps: metrics.network_rx_mbps,
+        network_tx_mbps: metrics.network_tx_mbps,
     };
     
     Ok(Json(usage))
@@ -548,12 +597,34 @@ async fn post_ai_chat(
     }
     
     let start = std::time::Instant::now();
-    
-    // This would call the actual AI chat method
+
+    let mut messages: Vec<(String, String)> = request
+        .context
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| !m.content.trim().is_empty())
+        .map(|m| (m.role, m.content))
+        .collect();
+    messages.push(("user".to_string(), request.message));
+
+    let chat = ai_manager
+        .chat(request.model.as_deref(), messages)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "Bad Gateway".to_string(),
+                    message: format!("llama-server request failed: {e}"),
+                    code: 502,
+                }),
+            )
+        })?;
+
     let response = ChatResponse {
-        response: "This is a placeholder response.".to_string(),
-        model: request.model.unwrap_or_else(|| "qwen3:8b".to_string()),
-        tokens_used: Some(42),
+        response: chat.response,
+        model: chat.model,
+        tokens_used: chat.tokens_used,
         duration_ms: start.elapsed().as_millis() as u64,
     };
     

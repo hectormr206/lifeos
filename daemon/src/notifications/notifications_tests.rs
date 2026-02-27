@@ -6,14 +6,14 @@ mod tests {
 
     #[test]
     fn test_notification_manager_creation() {
-        let manager = NotificationManager::new(true);
+        let _manager = NotificationManager::new(true);
         // Just verify it doesn't panic
         assert!(true);
     }
 
     #[test]
     fn test_notification_manager_disabled() {
-        let manager = NotificationManager::new(false);
+        let _manager = NotificationManager::new(false);
         // Just verify it doesn't panic
         assert!(true);
     }

@@ -2,7 +2,7 @@
 Description=LifeOS First Boot Setup
 After=network-online.target
 Wants=network-online.target
-Before=gdm.service
+Before=cosmic-greeter.service
 ConditionPathExists=!/var/lib/lifeos/.first-boot-complete
 
 [Service]

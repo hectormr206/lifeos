@@ -1,8 +1,13 @@
 # image/Containerfile
 # LifeOS: construido directamente sobre Fedora bootc
-# Incorpora COSMIC Desktop, Nvidia Optimus + Gaming (Steam/Proton) y Ollama Seguro
+# Incorpora COSMIC Desktop, Nvidia Optimus + Gaming (Steam/Proton) y llama-server (AI local)
+#
+# Build context must be the repo root:
+#   podman build -t lifeos:latest -f image/Containerfile .
 
-# Stage 1: Build CLI (Rust)
+# ============================================================================
+# Stage 1: Build CLI + Daemon (Rust)
+# ============================================================================
 FROM fedora:42 AS builder
 
 RUN dnf -y install \
@@ -14,24 +19,30 @@ RUN dnf -y install \
     && dnf clean all
 
 WORKDIR /build
-# Copy both CLI and Daemon projects
+
+# Copy CLI source
 COPY cli/Cargo.toml cli/Cargo.lock* cli/
 COPY cli/src cli/src/
+
+# Copy Daemon source
 COPY daemon/Cargo.toml daemon/
 COPY daemon/src daemon/src/
 
-# We need a workspace Cargo.toml to build them together, or build them sequentially
+# Build both sequentially (they don't share a workspace in the container)
 RUN cd cli && cargo build --release
 RUN cd daemon && cargo build --release
 
-# Stage 2: Imagen Final (Sistema)
+# ============================================================================
+# Stage 2: Sistema Final
+# ============================================================================
 FROM quay.io/fedora/fedora-bootc:42
 
 # --- Repositorios adicionales (COSMIC y RPMFusion) ---
 RUN dnf -y install dnf5-plugins && \
     dnf -y copr enable ryanabx/cosmic-epoch && \
-    dnf install -y https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
-                   https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+    dnf install -y \
+        https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
+        https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
 
 # --- Escritorio COSMIC y Base ---
 RUN dnf -y install --skip-unavailable \
@@ -41,7 +52,6 @@ RUN dnf -y install --skip-unavailable \
     && dnf clean all
 
 # --- Soporte Nvidia Optimus y Gaming ---
-# akmod-nvidia compila el módulo de kernel gráfico en el build (requiere kernel-devel)
 RUN dnf -y install \
     kernel-devel \
     akmod-nvidia xorg-x11-drv-nvidia-cuda supergfxctl \
@@ -52,7 +62,7 @@ RUN dnf -y install \
 RUN dnf -y install \
     toolbox btrfs-progs smartmontools podman buildah flatpak \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite \
-    pciutils usbutils curl ca-certificates openssl-libs \
+    pciutils usbutils curl ca-certificates openssl-libs cryptsetup \
     glibc-langpack-es \
     && dnf clean all
 
@@ -61,32 +71,10 @@ COPY --from=builder /build/cli/target/release/life /usr/bin/life
 COPY --from=builder /build/daemon/target/release/lifeosd /usr/bin/lifeosd
 RUN chmod +x /usr/bin/life /usr/bin/lifeosd && life --version
 
-# --- AI Runtime (Ollama + llama.cpp / llama-server) ---
-# Ollama is required by Phase 0 and by `life ai` commands.
-RUN set -eux && \
-    dnf install -y zstd && \
-    arch="$(uname -m)" && \
-    case "$arch" in \
-        x86_64) ASSET_RE='ollama-linux-amd64\.tar\.zst' ;; \
-        aarch64) ASSET_RE='ollama-linux-arm64\.tar\.zst' ;; \
-        *) echo "Unsupported architecture for Ollama: ${arch}"; exit 1 ;; \
-    esac && \
-    OLLAMA_URL="$( \
-        curl -fsSL https://api.github.com/repos/ollama/ollama/releases/latest | \
-        jq -r --arg re "$ASSET_RE" '.assets[]? | select(.name | test($re)) | .browser_download_url' | \
-        head -n 1 \
-    )" && \
-    test -n "$OLLAMA_URL" && [ "$OLLAMA_URL" != "null" ] && \
-    curl -fL "$OLLAMA_URL" -o /tmp/ollama.tar.zst && \
-    tar --zstd -xf /tmp/ollama.tar.zst -C /usr && \
-    test -x /usr/bin/ollama && \
-    ln -sf /usr/bin/ollama /usr/local/bin/ollama && \
-    rm -f /tmp/ollama.tar.zst && \
-    dnf remove -y zstd && \
-    dnf clean all
-
-# 1) Intentar descargar binario oficial pre-compilado (x86_64 Linux/Ubuntu).
-# 2) Si no existe asset compatible, compilar `llama-server` desde código fuente.
+# --- AI Runtime (llama.cpp / llama-server) ---
+# llama-server provides OpenAI-compatible API for local AI inference.
+# 1) Try to download pre-compiled binary from latest release.
+# 2) Fall back to source compilation if binary unavailable.
 RUN set -eux && \
     dnf install -y unzip jq cmake make gcc-c++ git openssl-devel && \
     RELEASE_URL="$( \
@@ -104,7 +92,8 @@ RUN set -eux && \
     fi && \
     if [ ! -x /usr/bin/llama-server ]; then \
         git clone --depth=1 https://github.com/ggerganov/llama.cpp /tmp/llama.cpp && \
-        cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON && \
+        cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
+            -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON && \
         cmake --build /tmp/llama.cpp/build -j"$(nproc)" --target llama-server && \
         install -m 0755 /tmp/llama.cpp/build/bin/llama-server /usr/bin/llama-server; \
     fi && \
@@ -112,79 +101,80 @@ RUN set -eux && \
     dnf remove -y unzip cmake make gcc-c++ git openssl-devel && \
     dnf clean all
 
-# Creamos el directorio nativo donde LifeOS guardará los modelos locales
-RUN useradd -r -s /usr/sbin/nologin -d /var/lib/ollama ollama || true && \
-    mkdir -p /var/lib/lifeos/models /var/lib/ollama/models /etc/ollama && \
-    chown -R ollama:ollama /var/lib/ollama && \
-    rm -f /var/lib/ollama/.bash_profile /var/lib/ollama/.bashrc /var/lib/ollama/.bash_logout && \
-    printf '%s\n' \
-    'OLLAMA_MODELS=/var/lib/ollama/models' \
-    'OLLAMA_HOST=0.0.0.0:11434' \
-    'OLLAMA_ORIGINS=*' \
-    'OLLAMA_NUM_PARALLEL=1' \
-    'OLLAMA_MAX_LOADED_MODELS=1' \
-    > /etc/ollama/environment
+# --- Directorios LifeOS ---
+RUN mkdir -p /var/lib/lifeos/models /var/log/lifeos /etc/lifeos
 
-# --- Directorios LifeOS y Scripts Iniciales ---
-RUN mkdir -p /var/lib/lifeos /var/log/lifeos /etc/lifeos
-RUN printf '%s\n' \
-    '#!/bin/bash' \
-    'flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo' \
-    'touch /var/lib/lifeos/.first-boot-complete' \
-    > /usr/local/bin/lifeos-first-boot.sh && \
-    chmod +x /usr/local/bin/lifeos-first-boot.sh
+# --- Copiar archivos de configuración y scripts desde el repo ---
+# Configuración de LifeOS
+COPY image/files/etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml.default
+COPY image/files/etc/lifeos/llama-server.env    /etc/lifeos/llama-server.env
+COPY image/files/etc/lifeos/tuf/root.json       /etc/lifeos/tuf/root.json
+COPY image/files/etc/lifeos/tuf/timestamp.json  /etc/lifeos/tuf/timestamp.json
+COPY image/files/etc/lifeos/tuf/snapshot.json   /etc/lifeos/tuf/snapshot.json
+COPY image/files/etc/lifeos/tuf/targets.json    /etc/lifeos/tuf/targets.json
 
-# --- Reemplazar Display Manager predeterminado a COSMIC ---
-# systemctl enable cosmic-greeter (El manejador de login de COSMIC)
+# Scripts de LifeOS
+COPY image/files/usr/local/bin/lifeos-first-boot.sh       /usr/local/bin/lifeos-first-boot.sh
+COPY image/files/usr/local/bin/lifeos-ai-setup.sh          /usr/local/bin/lifeos-ai-setup.sh
+COPY image/files/usr/local/bin/llama-server-health-check.sh /usr/local/bin/llama-server-health-check.sh
+COPY image/files/usr/local/bin/lifeos-btrfs-snapshot.sh    /usr/local/bin/lifeos-btrfs-snapshot.sh
+COPY image/files/usr/local/bin/lifeos-integrity-check.sh   /usr/local/bin/lifeos-integrity-check.sh
+COPY image/files/usr/local/bin/lifeos-security-baseline-check.sh /usr/local/bin/lifeos-security-baseline-check.sh
+RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
+             /usr/local/bin/lifeos-ai-setup.sh \
+             /usr/local/bin/llama-server-health-check.sh \
+             /usr/local/bin/lifeos-btrfs-snapshot.sh \
+             /usr/local/bin/lifeos-integrity-check.sh \
+             /usr/local/bin/lifeos-security-baseline-check.sh
+
+# Copiar configuración inicial si no existe
+RUN cp -n /etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml || true
+
+# --- Display Manager: COSMIC Greeter ---
 RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/display-manager.service && \
     mkdir -p /etc/systemd/system/graphical.target.wants && \
     ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/graphical.target.wants/cosmic-greeter.service
 
-# Activar servicios al arranque
-RUN mkdir -p /usr/lib/systemd/system /usr/lib/systemd/system/multi-user.target.wants && \
-    printf '%s\n' \
+# --- Servicios systemd ---
+# Copiar unit files desde el repo
+COPY image/files/etc/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/lifeos-first-boot.service
+COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
+COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.service /usr/lib/systemd/system/lifeos-btrfs-snapshot.service
+COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.timer   /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer
+COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
+
+# lifeosd.service (inline - es simple)
+RUN printf '%s\n' \
     '[Unit]' \
     'Description=LifeOS System Daemon' \
-    'After=network-online.target' \
+    'After=network-online.target lifeos-security-baseline.service' \
+    'Requires=lifeos-security-baseline.service' \
     'Wants=network-online.target' \
     '' \
     '[Service]' \
     'Type=simple' \
     'ExecStart=/usr/bin/lifeosd' \
     'Restart=on-failure' \
+    'RestartSec=5' \
     '' \
     '[Install]' \
     'WantedBy=multi-user.target' \
-    > /usr/lib/systemd/system/lifeosd.service && \
-    printf '%s\n' \
-    '[Unit]' \
-    'Description=Ollama AI Service' \
-    'Documentation=https://github.com/ollama/ollama' \
-    'After=network-online.target' \
-    'Wants=network-online.target' \
-    '' \
-    '[Service]' \
-    'Type=simple' \
-    'User=ollama' \
-    'Group=ollama' \
-    'EnvironmentFile=-/etc/ollama/environment' \
-    'ExecStart=/usr/bin/ollama serve' \
-    'Restart=always' \
-    'RestartSec=3' \
-    '' \
-    '[Install]' \
-    'WantedBy=multi-user.target' \
-    > /usr/lib/systemd/system/ollama.service && \
-    ln -sf /usr/lib/systemd/system/lifeosd.service /usr/lib/systemd/system/lifeisd.service && \
-    ln -sf /usr/lib/systemd/system/bluetooth.service /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \
+    > /usr/lib/systemd/system/lifeosd.service
+
+# Habilitar servicios via symlinks
+RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
+             /usr/lib/systemd/system/graphical.target.wants \
+             /usr/lib/systemd/system/timers.target.wants && \
+    ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
+    ln -sf /usr/lib/systemd/system/lifeosd.service       /usr/lib/systemd/system/multi-user.target.wants/lifeosd.service && \
+    ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
+    ln -sf /usr/lib/systemd/system/bluetooth.service      /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \
     ln -sf /usr/lib/systemd/system/NetworkManager.service /usr/lib/systemd/system/multi-user.target.wants/NetworkManager.service && \
-    ln -sf /usr/lib/systemd/system/lifeosd.service /usr/lib/systemd/system/multi-user.target.wants/lifeosd.service && \
-    ln -sf /usr/lib/systemd/system/ollama.service /usr/lib/systemd/system/multi-user.target.wants/ollama.service
+    ln -sf /usr/lib/systemd/system/lifeosd.service        /usr/lib/systemd/system/lifeisd.service
 
-# --- (Retirada la máscara de systemd-remount-fs que rompía el arranque) ---
-
-# --- Branding y Personalización del Instalador ---
-# Cambiar el nombre del sistema (leído por Anaconda y Fastfetch)
+# --- Branding y Personalización ---
 RUN rm -f /usr/lib/os-release && \
     printf '%s\n' \
     'NAME="LifeOS"' \
@@ -208,10 +198,8 @@ RUN rm -f /usr/lib/os-release && \
     'SUPPORT_END="2026-05-18"' \
     > /usr/lib/os-release
 
-# Crear placeholders de imagen oscuros para tapar los logos azules de Fedora en el instalador
-# Anaconda lee estas imágenes directamente en la ISO
+# Placeholders de imagen oscuros para el instalador Anaconda
 RUN mkdir -p /usr/share/anaconda/pixmaps/ && \
-    echo 'P3 1 1 255 30 30 30' | grep -v 'P3' > /tmp/dark.ppm || true && \
     dnf install -y ImageMagick && \
     magick -size 400x1200 xc:#1A1B26 /usr/share/anaconda/pixmaps/sidebar-logo.png && \
     magick -size 400x200 xc:#1A1B26 /usr/share/anaconda/pixmaps/sidebar-bg.png && \
@@ -219,10 +207,9 @@ RUN mkdir -p /usr/share/anaconda/pixmaps/ && \
     dnf remove -y ImageMagick && \
     dnf clean all
 
+# --- sysusers + tmpfiles ---
 RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     printf '%s\n' \
-    'g ollama -' \
-    'u ollama - "Ollama Service User" /var/lib/ollama -' \
     'g wsdd -' \
     'u wsdd - "WSDD Service User" /var/lib/wsdd -' \
     > /usr/lib/sysusers.d/wsdd.conf && \
@@ -256,8 +243,6 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     'd /var/lib/greetd/.config/systemd/user 0755 greetd greetd - -' \
     'd /var/lib/lifeos 0755 root root - -' \
     'd /var/lib/lifeos/models 0755 root root - -' \
-    'd /var/lib/ollama 0700 ollama ollama - -' \
-    'd /var/lib/ollama/models 0755 ollama ollama - -' \
     'd /var/lib/smartmontools 0755 root root - -' \
     'd /var/lib/tuned 0755 root root - -' \
     'd /var/log/lifeos 0755 root root - -' \
@@ -268,11 +253,27 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     rm -f /var/cache/ldconfig/aux-cache && \
     rm -f /var/cache/swcatalog/cache/C-local-metainfo.xb /var/cache/swcatalog/cache/C-os-catalog.xb
 
+# --- Verificación final ---
 RUN test -x /usr/bin/life && \
     test -x /usr/bin/lifeosd && \
-    test -x /usr/bin/ollama && \
     test -x /usr/bin/llama-server && \
     test -f /usr/lib/systemd/system/lifeosd.service && \
-    test -f /usr/lib/systemd/system/ollama.service
+    test -f /usr/lib/systemd/system/llama-server.service && \
+    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service && \
+    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer && \
+    test -f /usr/lib/systemd/system/lifeos-security-baseline.service && \
+    test -f /usr/lib/systemd/system/lifeos-first-boot.service && \
+    test -f /etc/lifeos/llama-server.env && \
+    test -f /etc/lifeos/tuf/root.json && \
+    test -f /etc/lifeos/tuf/timestamp.json && \
+    test -f /etc/lifeos/tuf/snapshot.json && \
+    test -f /etc/lifeos/tuf/targets.json && \
+    test -f /etc/lifeos/lifeos.toml.default && \
+    test -x /usr/local/bin/lifeos-first-boot.sh && \
+    test -x /usr/local/bin/lifeos-ai-setup.sh && \
+    test -x /usr/local/bin/llama-server-health-check.sh && \
+    test -x /usr/local/bin/lifeos-btrfs-snapshot.sh && \
+    test -x /usr/local/bin/lifeos-integrity-check.sh && \
+    test -x /usr/local/bin/lifeos-security-baseline-check.sh
 
 RUN dnf clean all && rm -f /var/log/dnf5.log* && bootc container lint

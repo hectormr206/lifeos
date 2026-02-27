@@ -1,5 +1,5 @@
 //! AI module for daemon
-//! Manages Ollama integration and AI-related system tasks
+//! Manages llama-server integration and AI-related system tasks
 
 use serde::{Serialize, Deserialize};
 use std::process::Command;
@@ -19,6 +19,14 @@ pub struct ModelInfo {
     pub name: String,
     pub size_mb: u64,
     pub modified: String,
+}
+
+/// AI chat response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiChatResponse {
+    pub response: String,
+    pub model: String,
+    pub tokens_used: Option<u32>,
 }
 
 /// AI manager
@@ -107,7 +115,7 @@ impl AiManager {
         let model_path = format!("/var/lib/lifeos/models/{}", first_model);
         
         Command::new("llama-server")
-            .args(["-m", &model_path, "--port", "11434", "-c", "4096"])
+            .args(["-m", &model_path, "--port", "8080", "-c", "4096"])
             .spawn()?;
 
         Ok(())
@@ -135,8 +143,15 @@ impl AiManager {
 
     /// Get the currently active model
     pub async fn active_model(&self) -> Option<String> {
-        // For now, return the default model
-        Some("qwen3:8b".to_string())
+        // Read from env file if available
+        if let Ok(content) = std::fs::read_to_string("/etc/lifeos/llama-server.env") {
+            for line in content.lines() {
+                if let Some(model) = line.strip_prefix("LIFEOS_AI_MODEL=") {
+                    return Some(model.to_string());
+                }
+            }
+        }
+        Some("qwen3-8b-q4_k_m.gguf".to_string())
     }
 
     /// Get list of loaded models
@@ -176,6 +191,77 @@ impl AiManager {
 
         None
     }
+
+    /// Send a chat completion request to llama-server (OpenAI-compatible API)
+    pub async fn chat(
+        &self,
+        model: Option<&str>,
+        messages: Vec<(String, String)>,
+    ) -> anyhow::Result<AiChatResponse> {
+        if messages.is_empty() {
+            anyhow::bail!("No chat messages provided");
+        }
+
+        let model_name = if let Some(m) = model {
+            m.to_string()
+        } else {
+            self.active_model()
+                .await
+                .unwrap_or_else(|| "qwen3-8b-q4_k_m.gguf".to_string())
+        };
+
+        let payload_messages: Vec<serde_json::Value> = messages
+            .into_iter()
+            .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
+            .collect();
+
+        let payload = serde_json::json!({
+            "model": model_name,
+            "messages": payload_messages,
+            "stream": false,
+        });
+
+        let response = reqwest::Client::new()
+            .post("http://127.0.0.1:8080/v1/chat/completions")
+            .json(&payload)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("llama-server returned {}", response.status());
+        }
+
+        let body: serde_json::Value = response.json().await?;
+
+        let response_text = body
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("content"))
+            .and_then(|content| content.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        let response_model = body
+            .get("model")
+            .and_then(|m| m.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| payload.get("model").and_then(|m| m.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let tokens_used = body
+            .get("usage")
+            .and_then(|u| u.get("total_tokens"))
+            .and_then(|t| t.as_u64())
+            .and_then(|t| u32::try_from(t).ok());
+
+        Ok(AiChatResponse {
+            response: response_text,
+            model: response_model,
+            tokens_used,
+        })
+    }
 }
 
 impl Default for AiManager {
@@ -183,4 +269,3 @@ impl Default for AiManager {
         Self::new()
     }
 }
-

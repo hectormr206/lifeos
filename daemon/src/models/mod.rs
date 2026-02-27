@@ -1,6 +1,6 @@
 //! Extended AI Model Management
 //!
-//! Provides support for multiple Ollama models with hardware-aware
+//! Provides support for GGUF models with hardware-aware
 //! recommendations and automatic model selection.
 #![allow(dead_code)]
 
@@ -63,9 +63,9 @@ impl Default for ModelRegistry {
 
         // === QWEN MODELS ===
         models.insert(
-            "qwen3:8b".to_string(),
+            "qwen3-8b-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "qwen3:8b".to_string(),
+                id: "qwen3-8b-q4_k_m.gguf".to_string(),
                 name: "Qwen3 8B".to_string(),
                 description: "Alibaba's latest multilingual model with excellent reasoning".to_string(),
                 parameter_size: "8B".to_string(),
@@ -98,9 +98,9 @@ impl Default for ModelRegistry {
         );
 
         models.insert(
-            "qwen3:14b".to_string(),
+            "qwen3-14b-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "qwen3:14b".to_string(),
+                id: "qwen3-14b-q4_k_m.gguf".to_string(),
                 name: "Qwen3 14B".to_string(),
                 description: "Larger Qwen3 with improved reasoning capabilities".to_string(),
                 parameter_size: "14B".to_string(),
@@ -133,9 +133,9 @@ impl Default for ModelRegistry {
 
         // === LLAMA MODELS ===
         models.insert(
-            "llama3.2:3b".to_string(),
+            "llama-3.2-3b-instruct-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "llama3.2:3b".to_string(),
+                id: "llama-3.2-3b-instruct-q4_k_m.gguf".to_string(),
                 name: "Llama 3.2 3B".to_string(),
                 description: "Lightweight, fast model for quick tasks".to_string(),
                 parameter_size: "3B".to_string(),
@@ -167,9 +167,9 @@ impl Default for ModelRegistry {
         );
 
         models.insert(
-            "llama3.2:1b".to_string(),
+            "llama-3.2-1b-instruct-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "llama3.2:1b".to_string(),
+                id: "llama-3.2-1b-instruct-q4_k_m.gguf".to_string(),
                 name: "Llama 3.2 1B".to_string(),
                 description: "Ultra-lightweight for resource-constrained devices".to_string(),
                 parameter_size: "1B".to_string(),
@@ -201,9 +201,9 @@ impl Default for ModelRegistry {
         );
 
         models.insert(
-            "llama3.1:8b".to_string(),
+            "llama-3.1-8b-instruct-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "llama3.1:8b".to_string(),
+                id: "llama-3.1-8b-instruct-q4_k_m.gguf".to_string(),
                 name: "Llama 3.1 8B".to_string(),
                 description: "Meta's powerful general-purpose model".to_string(),
                 parameter_size: "8B".to_string(),
@@ -236,9 +236,9 @@ impl Default for ModelRegistry {
 
         // === CODE MODELS ===
         models.insert(
-            "codellama:7b".to_string(),
+            "codellama-7b-instruct-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "codellama:7b".to_string(),
+                id: "codellama-7b-instruct-q4_k_m.gguf".to_string(),
                 name: "CodeLlama 7B".to_string(),
                 description: "Optimized for code generation and programming tasks".to_string(),
                 parameter_size: "7B".to_string(),
@@ -270,9 +270,9 @@ impl Default for ModelRegistry {
         );
 
         models.insert(
-            "deepseek-coder:6.7b".to_string(),
+            "deepseek-coder-6.7b-instruct-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "deepseek-coder:6.7b".to_string(),
+                id: "deepseek-coder-6.7b-instruct-q4_k_m.gguf".to_string(),
                 name: "DeepSeek Coder 6.7B".to_string(),
                 description: "Excellent coding assistant with fill-in-the-middle support".to_string(),
                 parameter_size: "6.7B".to_string(),
@@ -305,9 +305,9 @@ impl Default for ModelRegistry {
 
         // === MISTRAL MODELS ===
         models.insert(
-            "mistral:7b".to_string(),
+            "mistral-7b-instruct-v0.3-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "mistral:7b".to_string(),
+                id: "mistral-7b-instruct-v0.3-q4_k_m.gguf".to_string(),
                 name: "Mistral 7B".to_string(),
                 description: "Strong general-purpose model with excellent performance".to_string(),
                 parameter_size: "7B".to_string(),
@@ -340,9 +340,9 @@ impl Default for ModelRegistry {
 
         // === GEMMA MODELS ===
         models.insert(
-            "gemma2:2b".to_string(),
+            "gemma-2-2b-it-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "gemma2:2b".to_string(),
+                id: "gemma-2-2b-it-q4_k_m.gguf".to_string(),
                 name: "Gemma 2 2B".to_string(),
                 description: "Google's efficient small model".to_string(),
                 parameter_size: "2B".to_string(),
@@ -374,9 +374,9 @@ impl Default for ModelRegistry {
 
         // === PHI MODELS ===
         models.insert(
-            "phi3:medium".to_string(),
+            "phi-3-medium-128k-instruct-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "phi3:medium".to_string(),
+                id: "phi-3-medium-128k-instruct-q4_k_m.gguf".to_string(),
                 name: "Phi-3 Medium".to_string(),
                 description: "Microsoft's capable model with excellent quality".to_string(),
                 parameter_size: "14B".to_string(),
@@ -408,9 +408,9 @@ impl Default for ModelRegistry {
 
         // === VISION MODELS ===
         models.insert(
-            "llava:7b".to_string(),
+            "llava-v1.5-7b-q4_k_m.gguf".to_string(),
             ModelInfo {
-                id: "llava:7b".to_string(),
+                id: "llava-v1.5-7b-q4_k_m.gguf".to_string(),
                 name: "LLaVA 7B".to_string(),
                 description: "Vision-language model for image understanding".to_string(),
                 parameter_size: "7B".to_string(),
@@ -565,8 +565,8 @@ pub fn recommend_model(hardware: &SystemHardware, use_case: Option<&str>) -> Mod
 
     if candidates.is_empty() {
         return ModelRecommendation {
-            recommended: "qwen3:8b".to_string(),
-            alternatives: vec!["llama3.2:3b".to_string()],
+            recommended: "qwen3-8b-q4_k_m.gguf".to_string(),
+            alternatives: vec!["llama-3.2-3b-instruct-q4_k_m.gguf".to_string()],
             reasoning: "No fully compatible models found. Using default with reduced performance.".to_string(),
             hardware_friendly: false,
         };

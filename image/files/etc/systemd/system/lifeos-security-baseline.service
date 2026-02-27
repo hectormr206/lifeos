@@ -1,0 +1,15 @@
+[Unit]
+Description=LifeOS Security Baseline Enforcement
+Documentation=man:systemd.service(5)
+DefaultDependencies=no
+After=local-fs.target
+Before=multi-user.target
+ConditionPathExists=/usr/local/bin/lifeos-security-baseline-check.sh
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lifeos-security-baseline-check.sh --enforce
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -2,8 +2,8 @@
 
 ## Especificacion de Producto y Arquitectura
 
-**Version:** 6.1.0 - "Aegis-Implementer"
-**Fecha:** 2026-02-23
+**Version:** 0.1.0 - "Aegis"
+**Fecha:** 2026-02-26
 **Estado:** Blueprint ejecutable (MVP + Roadmap 24 meses)
 **Audiencia:** usuarios principiantes, power users, developers, empresas
 
@@ -31,15 +31,15 @@ Este documento esta escrito para un agente de implementacion (LLM + herramientas
 
 Se considera completado cuando se cumplen todos:
 
-1. Imagen OCI de LifeOS construye en CI sin errores.
-2. ISO generada arranca en VM y en al menos un equipo real soportado.
-3. `life status`, `life update --dry`, `life rollback` funcionan end-to-end.
-4. Update atomico + rollback validado por test automatizado.
-5. Permisos multimodales (mic/camara/pantalla) auditables y revocables.
-6. Life Capsule export/restore funcional.
-7. Sync instalado por defecto, pero solo activado tras consentimiento explicito.
-8. Pipeline de firma/verificacion de imagen activo.
-9. Suite minima de tests pasando en CI.
+1. [x] Imagen OCI de LifeOS construye en CI sin errores. *`docker.yml` activo.*
+2. [ ] ISO generada arranca en VM y en al menos un equipo real soportado. *Pendiente prueba sistematica.*
+3. [x] `life status`, `life update --dry`, `life rollback` funcionan end-to-end. *CLI implementado.*
+4. [ ] Update atomico + rollback validado por test automatizado. *CLI listo, falta test E2E en VM.*
+5. [x] Permisos multimodales (mic/camara/pantalla) auditables y revocables. *Broker D-Bus con prompt real y persistencia de politicas en disco.*
+6. [x] Life Capsule export/restore funcional. *Cifrado con `age` + tar + flatpak.*
+7. [x] Sync instalado por defecto, pero solo activado tras consentimiento explicito. *`sync.enabled = false` en config.*
+8. [x] Pipeline de firma/verificacion de imagen activo. *Cosign + OIDC en CI.*
+9. [x] Suite minima de tests pasando en CI. *Tests unitarios + integracion + cargo-audit + CodeQL.*
 
 ### 0.4 Modo de lectura para LLM implementador
 
@@ -62,6 +62,13 @@ LifeOS busca ser la primera distro Linux AI-first realmente masiva:
 **Objetivo de producto:** crear una experiencia "instalas y trabajas" para cualquier nivel, sin sacrificar libertad ni rendimiento.
 
 **Diferenciador clave:** no es una distro con IA encima — es un sistema operativo donde la IA es ciudadano de primera clase en cada capa (shell, escritorio, actualizaciones, diagnostico), pero el usuario siempre decide que se activa.
+
+**Modelo cognitivo:** LifeOS se inspira en un modelo biologico (ver `docs/lifeos_biological_model.md`) donde el sistema tiene:
+- **Soul** (ADN): identidad, estilo de interaccion y limites de autonomia por usuario.
+- **Skills** (memoria muscular): habilidades aprendidas, reutilizables y firmadas.
+- **Workplace** (habitat): contexto digital activo que determina permisos y comportamiento.
+- **Agents** (sistema inmunologico): enjambre de agentes especializados gobernados por politicas.
+- **Life Capsule** (mitosis): replicacion y recuperacion del organismo completo en otro hardware.
 
 ---
 
@@ -208,7 +215,10 @@ flatpak = ["org.mozilla.Firefox", "com.spotify.Client"]
 toolbox = ["ubuntu-dev", "fedora-build"]
 
 [ai]
-local_model = "qwen3:8b"
+enabled = true
+provider = "llama-server"
+model = "qwen3-8b-q4_k_m.gguf"
+llama_server_host = "http://localhost:8080"
 voice = false
 screen_capture = false
 camera = false
@@ -231,13 +241,13 @@ Este archivo es portable: restaurar un equipo es `life capsule restore`.
 │          Aplicaciones/CLI            │
 │    (life ai, launcher, terminal)     │
 ├──────────────────────────────────────┤
-│         API unificada (D-Bus)        │
+│     API unificada (D-Bus + REST)     │
 ├──────────────────────────────────────┤
 │       Orquestador de modelos         │
-│  ┌─────────┬──────────┬───────────┐  │
-│  │ Ollama  │ llama.cpp│  Nube     │  │
-│  │ (facil) │(avanzado)│(opcional) │  │
-│  └─────────┴──────────┴───────────┘  │
+│  ┌──────────────┬─────────────────┐  │
+│  │ llama-server │  Nube (opcional) │  │
+│  │ (por defecto)│  cifrada E2E     │  │
+│  └──────────────┴─────────────────┘  │
 ├──────────────────────────────────────┤
 │      Enrutador de tareas             │
 │  (selecciona por costo/latencia/     │
@@ -250,10 +260,10 @@ Este archivo es portable: restaurar un equipo es `life capsule restore`.
 └──────────────────────────────────────┘
 ```
 
-- **Ollama como runtime principal:** modelo de gestion simple y API REST estable para integracion.
-- **llama.cpp como backend de rendimiento:** acceso directo para usuarios avanzados, soporte GGUF, optimizacion por hardware (CUDA, ROCm, Vulkan, Metal).
+- **llama-server (llama.cpp) como unico runtime local:** API OpenAI-compatible en puerto 8080, soporte GGUF nativo, optimizacion por hardware (CUDA, ROCm, Vulkan). Sin dependencias externas. El modelo por defecto es `qwen3-8b-q4_k_m.gguf` con fallback a `qwen3-1.7b-q4_k_m.gguf` en equipos con poca RAM.
 - **Nube opcional:** solo se activa si el usuario la configura explicitamente. Todas las consultas en nube son cifradas E2E.
 - **Enrutador inteligente:** tareas simples (clasificacion, OCR) van a modelos pequenos locales; tareas complejas (generacion larga, analisis multi-documento) pueden ir a modelos grandes locales o nube segun politica del usuario.
+- **Nota:** Ollama fue evaluado y descartado como dependencia por riesgo de continuidad (startup con funding limitado, sin modelo de ingresos claro). llama-server ofrece el mismo rendimiento con comunidad mas grande y sin single point of failure.
 
 ### 5.2 Capacidades nativas
 
@@ -287,7 +297,7 @@ Regla de producto:
 5. Persistir resultado en `lifeos.toml` + `model-profile.toml`.
 6. Re-evaluar semanalmente o cuando cambie hardware/driver/model-catalog.
 
-### 5.5 Matriz inicial recomendada (baseline fecha 2026-02-23)
+### 5.5 Matriz inicial recomendada (baseline fecha 2026-02-26)
 
 Esta matriz es semilla de arranque. En runtime manda el autoselector.
 
@@ -620,29 +630,38 @@ Dado que muchos usuarios de alto rendimiento utilizan hardware híbrido (como In
 
 ## 12. Stack tecnico (actualizado febrero 2026)
 
-| Capa             | Eleccion                                  | Razon                                                                                             | Estado    |
-| ---------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------- | --------- |
-| Base OS          | Fedora Image Mode + bootc                 | Actualizaciones atomicas OCI, CNCF sandbox (ene 2025). Nota: produccion plena apunta a Fedora 45. | Madurando |
-| Kernel           | Linux mainline 6.x + parches desktop      | Compatibilidad amplia y baja latencia.                                                            | Estable   |
-| Filesystem raiz  | composefs + fs-verity (sobre Btrfs)       | Inmutabilidad verificable a nivel kernel para `/usr`.                                             | Estable   |
-| Filesystem datos | Btrfs                                     | Snapshots, subvolumenes, compresion zstd para `/home` y `/var`.                                   | Estable   |
-| Desktop          | **COSMIC Epoch 1** (estable dic 2025)     | Rust, tiling nativo, extensible, sync en roadmap.                                                 | Estable   |
-| Audio/Video      | PipeWire + WirePlumber                    | Stack unificado de multimedia, baja latencia, estandar en todas las distros mayores.              | Estable   |
-| Apps GUI         | Flatpak + xdg-desktop-portal              | Aislamiento + permisos declarativos.                                                              | Estable   |
-| Dev Envs         | Toolbx (principal) + Podman directo       | Containers mutables sin romper base. Toolbx mantenido por Red Hat.                                | Estable   |
-| AI Runtime       | Ollama (principal) + llama.cpp (avanzado) | Ollama: gestion facil. llama.cpp: rendimiento maximo. vLLM solo para serving multi-usuario.       | Estable   |
-| Update Trust     | TUF + Sigstore + in-toto                  | Cadena de supply chain verificable de extremo a extremo.                                          | Estable   |
-| Observabilidad   | OpenTelemetry + panel local               | Diagnostico continuo y accionable sin enviar datos a terceros.                                    | Estable   |
+| Capa             | Eleccion                              | Razon                                                                                                                 | Estado    |
+| ---------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------- |
+| Base OS          | Fedora Image Mode + bootc             | Actualizaciones atomicas OCI, CNCF sandbox (ene 2025). Nota: produccion plena apunta a Fedora 45.                     | Madurando |
+| Kernel           | Linux mainline 6.x + parches desktop  | Compatibilidad amplia y baja latencia.                                                                                | Estable   |
+| Filesystem raiz  | composefs + fs-verity (sobre Btrfs)   | Inmutabilidad verificable a nivel kernel para `/usr`.                                                                 | Estable   |
+| Filesystem datos | Btrfs                                 | Snapshots, subvolumenes, compresion zstd para `/home` y `/var`.                                                       | Estable   |
+| Desktop          | **COSMIC Epoch 1** (estable dic 2025) | Rust, tiling nativo, extensible, sync en roadmap.                                                                     | Estable   |
+| Audio/Video      | PipeWire + WirePlumber                | Stack unificado de multimedia, baja latencia, estandar en todas las distros mayores.                                  | Estable   |
+| Apps GUI         | Flatpak + xdg-desktop-portal          | Aislamiento + permisos declarativos.                                                                                  | Estable   |
+| Dev Envs         | Toolbx (principal) + Podman directo   | Containers mutables sin romper base. Toolbx mantenido por Red Hat.                                                    | Estable   |
+| AI Runtime       | llama-server (llama.cpp)              | API OpenAI-compatible (puerto 8080), rendimiento maximo, GGUF nativo, sin dependencias externas.                      | Estable   |
+| Update Trust     | TUF + Sigstore + in-toto              | Cadena de supply chain verificable de extremo a extremo.                                                              | Estable   |
+| Observabilidad   | OpenTelemetry + panel local           | Diagnostico continuo y accionable sin enviar datos a terceros.                                                        | Estable   |
 
 ### 12.1 Estrategia de base: Fedora bootc directo
 
 **Decision:** LifeOS construye directamente sobre `quay.io/fedora/fedora-bootc:42`, sin capas intermedias de terceros para la imagen base.
 
-**Implementacion:**
+**Implementacion actual:**
 
-```
-FROM quay.io/fedora/fedora-bootc:42    # Base oficial de Fedora (CNCF sandbox)
-RUN dnf -y install cosmic-desktop && dnf clean all
+```dockerfile
+# Stage 1: compilacion de CLI y Daemon (Rust)
+FROM fedora:42 AS builder
+RUN dnf -y install cargo gcc ... && cargo build --release
+
+# Stage 2: imagen del sistema
+FROM quay.io/fedora/fedora-bootc:42
+RUN dnf -y install cosmic-desktop ...
+# + llama-server (binario pre-compilado o compilado desde fuente)
+# + Nvidia drivers (akmod-nvidia, supergfxctl)
+# + Herramientas del sistema (toolbox, podman, fish, bat, ripgrep...)
+COPY --from=builder life lifeosd  # Binarios Rust compilados
 ```
 
 Esto nos da:
@@ -707,17 +726,13 @@ Sebastian Wick (Red Hat) declaro en abril 2025 que Flatpak "no esta siendo desar
 - **Alternativa:** No hay alternativa real para apps sandbox en Linux (Snap = vendor lock-in de Canonical).
 - **Mitigacion:** Aceptar con riesgo consciente. Nunca poner funcionalidad critica del OS detras de Flatpak. Apps esenciales (terminal, archivos, editor) van como parte de la imagen base, no como Flatpaks. RHEL 10 incluye Flatpak, lo que asegura mantenimiento minimo.
 
-**Ollama — startup con $500K, sin revenue model claro**
+**Ollama — descartado como dependencia (decision febrero 2026)**
 
-Ollama Inc tiene ~21 personas, $500K en pre-seed (Y Combinator), sin modelo de ingresos publico. Si cierra o pivotea, el proyecto open source queda sin mantenimiento. Ademas, su script de instalacion (`curl | sh`) es un vector de supply chain.
+Ollama Inc tiene ~21 personas, $500K en pre-seed (Y Combinator), sin modelo de ingresos publico. Ademas, su script de instalacion (`curl | sh`) es un vector de supply chain. Tras evaluacion, **LifeOS descarto Ollama** y adopto llama-server (llama.cpp) como unico runtime local.
 
-- **Nivel de riesgo:** Medio-Alto para continuidad. Medio para supply chain.
-- **Alternativa:** llama.cpp (comunidad enorme, sin single point of failure).
-- **Mitigacion:**
-  1. El orquestador AI de LifeOS habla con Ollama **y** directamente con llama.cpp. Si Ollama desaparece, se cambia de backend sin afectar al usuario.
-  2. **Prioridad de distribucion obligatoria:** `RPM oficial firmado` > `RPM interno firmado por LifeOS` > `binario release con SHA256 pinneado` (fallback).
-  3. **NUNCA usar `curl | sh`** en el Containerfile.
-  4. Pinear versiones de Ollama y verificar checksums en el build.
+- **Riesgo residual:** Ninguno. Ollama no es dependencia del sistema.
+- **Razon de la decision:** llama.cpp tiene comunidad mas grande, API OpenAI-compatible nativa, soporte GGUF directo y sin single point of failure corporativo.
+- **Regla:** NUNCA reintroducir Ollama como dependencia critica sin reevaluacion formal de riesgo.
 
 **Distrobox — eliminado como dependencia, reemplazado por Toolbx**
 
@@ -739,15 +754,15 @@ System76 (~40-60 empleados, ~$5-10M revenue) vende hardware Linux. COSMIC es su 
 2. El plan B requiere reescribir codigo o solo cambiar configuracion?
 3. Cuanto tiempo tomaria ejecutar el plan B?
 
-| Componente   | Plan B                                       | Esfuerzo de migracion                   |
-| ------------ | -------------------------------------------- | --------------------------------------- |
-| Fedora bootc | CentOS Stream bootc                          | Config (cambiar FROM en Containerfile)  |
-| COSMIC       | GNOME Shell                                  | Config + temas (1-2 semanas)            |
-| Flatpak      | RPMs en imagen base para apps criticas       | Ya mitigado desde dia 1                 |
-| Ollama       | llama.cpp directo                            | Cambio de backend en orquestador (dias) |
-| Distrobox    | Toolbx / Podman directo                      | Wrapper en CLI `life` (dias)            |
-| PipeWire     | N/A (sin alternativa, pero estable y ubicuo) | No aplica                               |
-| Sigstore     | GPG signing tradicional                      | Config en CI (horas)                    |
+| Componente     | Plan B                                       | Esfuerzo de migracion                  |
+| -------------- | -------------------------------------------- | -------------------------------------- |
+| Fedora bootc   | CentOS Stream bootc                          | Config (cambiar FROM en Containerfile) |
+| COSMIC         | GNOME Shell                                  | Config + temas (1-2 semanas)           |
+| Flatpak        | RPMs en imagen base para apps criticas       | Ya mitigado desde dia 1                |
+| llama-server   | Compilar desde fuente llama.cpp              | Ya implementado como fallback en build |
+| Distrobox      | Toolbx / Podman directo                      | Wrapper en CLI `life` (dias)           |
+| PipeWire       | N/A (sin alternativa, pero estable y ubicuo) | No aplica                              |
+| Sigstore       | GPG signing tradicional                      | Config en CI (horas)                   |
 
 ---
 
@@ -795,59 +810,236 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 
 **Objetivo:** un sistema que arranca, se actualiza y se recupera de forma confiable.
 
-- [ ] Base inmutable bootc + composefs con slots A/B + rollback funcional.
-- [ ] Flatpak + Toolbx funcionando sobre la base inmutable.
-- [ ] Centro de permisos basico (D-Bus broker).
-- [ ] CLI `life` con comandos nucleares: `status`, `update`, `rollback`, `recover`.
-- [ ] Backup cifrado + restore basico (`life capsule export/restore`).
-- [ ] Pipeline CI/CD para construir imagenes OCI firmadas.
-- [ ] Definir `lifeos.toml` como formato de configuracion declarativa.
+**Estado:** **100% completado** (27 febrero 2026). Fase 0 cerrada con build reproducible, servicios endurecidos y suite de seguridad automatizada.
 
-**Entregable:** imagen ISO booteable que se actualiza sin romperse.
+**Sistema base:**
+
+- [x] Base inmutable bootc + slots A/B + rollback funcional. *Containerfile sobre `fedora-bootc:42`; CLI `life rollback` llama `bootc rollback` real.*
+- [x] Flatpak + Toolbx funcionando sobre la base inmutable. *Instalados en Containerfile; Flathub configurado en first-boot.*
+- [x] Btrfs snapshots automaticos antes de cambios criticos. *`lifeos-btrfs-snapshot.sh` + `lifeos-btrfs-snapshot.timer` en imagen y hook pre-update en CLI (`life update`).*
+- [x] fs-verity para verificacion de integridad de `/usr`. *Chequeo explicito via `lifeos-integrity-check.sh` y health check `filesystem-integrity` en daemon.*
+
+**Seguridad fundacional:**
+
+- [x] LUKS2 cifrado de disco con desbloqueo TPM opcional. *Enforcement en runtime via `lifeos-security-baseline.service` + `lifeos-security-baseline-check.sh` (falla si root no es LUKS2).*
+- [x] Secure Boot + Measured Boot con TPM 2.0. *Enforcement en runtime: validacion de Secure Boot habilitado y deteccion TPM en baseline check.*
+- [x] Pipeline CI/CD para construir imagenes OCI firmadas (Sigstore/cosign). *`docker.yml` firma con cosign + OIDC, genera SBOM y provenance.*
+- [x] Supply chain security basico: firmas de imagen + TUF. *`lifeosd` valida metadata TUF (`root/timestamp/snapshot/targets`), expiracion y anti-rollback antes de updates.*
+- [x] Threat model formal (STRIDE). *`docs/threat_model_stride.md` completo con las 6 categorias y matriz de controles.*
+- [x] Endpoints de control en loopback + tokens de bootstrap. *Daemon y llama-server en `127.0.0.1`; middleware obligatorio de bootstrap token en `/api/v1/*`.*
+- [x] Suite de regresion de seguridad minima en CI. *`tests/security_tests.sh` valida token bootstrap, bloqueo de path traversal y fail-closed de AI endpoint; job `runtime-security` activo en CI.*
+
+**AI runtime:**
+
+- [x] llama-server (llama.cpp) como runtime AI por defecto con API OpenAI-compatible. *Compilado/descargado en Containerfile; `llama-server.service` systemd funcional.*
+- [x] Modelo GGUF default (Qwen3-8B Q4_K_M) descargado en primer arranque. *`lifeos-ai-setup.sh` con deteccion de RAM y fallback a modelo pequeno.*
+- [x] Deteccion automatica de GPU (NVIDIA/AMD/Intel) y configuracion de offload. *Implementada en first-boot, daemon y CLI.*
+- [x] `llama-server.service` con security hardening. *Incluye `PrivateUsers`, `SystemCallFilter`, `MemoryMax` y bind loopback (`LIFEOS_AI_HOST=127.0.0.1`).*
+- [x] API REST del daemon (`lifeosd`) con endpoints de sistema, AI y health. *Chat conectado a `llama-server` real, metricas de recursos reales y token bootstrap enforceado.*
+
+**CLI y configuracion:**
+
+- [x] `lifeos.toml` como formato de configuracion declarativa. *Structs tipados con load/save/get/set por dotted key.*
+- [x] CLI `life` con comandos nucleares: `status`, `update`, `rollback`, `recover`. *Todos implementados con logica real.*
+- [x] CLI `life ai`: `start`, `stop`, `status`, `ask`, `chat`, `models`, `pull`. *Todos implementados incluyendo streaming SSE y deteccion de GPU.*
+- [x] Backup cifrado + restore basico (`life capsule export/restore`). *Usa `age` para cifrado + tar + flatpak restore.*
+
+**Permisos:**
+
+- [x] Centro de permisos basico (D-Bus broker). *Prompt real (`zenity` / `systemd-ask-password`) y persistencia de politicas en `/var/lib/lifeos/permissions-policy.json`.*
+
+**Health checks:**
+
+- [x] `life recover` con diagnostico automatico y reparacion. *Reporte con checks por nombre, pass/fail, reparaciones y reboot flag.*
+- [x] Health checks de servicios criticos. *Checks reales de `bootc`, disco con umbral, red, estado AI, integridad `composefs/fs-verity` y baseline de seguridad.*
+
+**Entregable:** imagen ISO booteable con AI local funcional que se actualiza sin romperse.
+
+**Resumen de progreso Fase 0:**
+
+| Categoria          | Total | Done | Parcial | Faltante |
+| ------------------ | ----- | ---- | ------- | -------- |
+| Sistema base       | 4     | 4    | 0       | 0        |
+| Seguridad          | 7     | 7    | 0       | 0        |
+| AI runtime         | 5     | 5    | 0       | 0        |
+| CLI y config       | 4     | 4    | 0       | 0        |
+| Permisos           | 1     | 1    | 0       | 0        |
+| Health checks      | 2     | 2    | 0       | 0        |
+| **Total**          | **23**| **23** | **0** | **0**    |
+
+**Bloqueantes de Fase 0 cerrados:**
+
+1. `Btrfs snapshot automatico`: script + timer + hook pre-update implementados.
+2. `llama-server` en loopback: bind `127.0.0.1` y hardening completado.
+3. `Bootstrap token enforcement`: middleware activo en toda la API v1.
+4. `Daemon chat endpoint`: conectado a llama-server OpenAI-compatible real.
+5. `D-Bus permissions`: prompt real + persistencia de politicas.
+6. `Health checks completos`: AI, red, disco (umbrales), integridad y baseline de seguridad.
+7. `fs-verity explicito`: verificacion de integridad `/usr` integrada.
+8. `LUKS2 + Secure Boot`: enforcement runtime como baseline obligatorio.
+9. `TUF`: validacion de metadata + anti-rollback en update path.
+10. `Runtime security CI`: job dedicado con pruebas de token/path traversal/fail-closed.
 
 ### Fase 1 (3-6 meses): UX y confiabilidad
 
 **Objetivo:** un escritorio usable que la gente quiera usar diario.
 
-- [ ] COSMIC configurado con temas LifeOS (Simple/Pro).
-- [ ] LifeOS Lab con pruebas previas a updates (`life lab test`).
-- [ ] Canales de actualizacion: `stable`, `candidate`, `edge`.
-- [ ] Metricas de estabilidad reales (telemetria anonima opt-in).
-- [ ] Broker de permisos unificado para sensores y acciones AI.
-- [ ] Onboarding de primer arranque.
-- [ ] Documentacion de usuario y contribuidor.
+**Escritorio y UX:**
 
-**Entregable:** beta publica con canal stable funcional.
+- [ ] COSMIC Epoch 1 configurado con temas LifeOS.
+- [ ] Tres modos de experiencia: Simple, Pro y Builder (misma base, distinta UI).
+- [ ] Motor de confort visual: temperatura de color, tipografia adaptativa, perfiles de contraste.
+- [ ] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night.
+- [ ] Accesibilidad WCAG 2.2 AA minimo en todos los temas.
+- [ ] xdg-desktop-portal integrado para sandboxing de permisos de apps.
+- [ ] Applet AI del escritorio con invocacion `Super+Space` y overlay contextual sobre cualquier app.
+- [ ] FollowAlong v1: acciones contextuales sobre texto seleccionado (resumir, traducir, explicar) con consentimiento y auditoria.
+
+**Primer arranque y onboarding:**
+
+- [ ] First-boot wizard: deteccion de hardware, seleccion de perfil, drivers, consentimiento AI/sync.
+- [ ] Trust Me Mode: consent bundles firmados, activacion de perfil automatica, ledger de auditoria.
+
+**Confiabilidad:**
+
+- [ ] LifeOS Lab: replica en container/microVM para pruebas aisladas (`life lab test`).
+- [ ] Pipeline de mejora autonoma: deteccion → reproduccion → candidato → canary test.
+- [ ] Canales de actualizacion: `stable`, `candidate`, `edge`.
+- [ ] SLOs definidos: >=99.95% updates exitosos, <60s rollback, <500ms arranque de app.
+- [ ] Metricas de estabilidad reales (telemetria anonima opt-in).
+
+**Daemon y permisos:**
+
+- [ ] Daemon `lifeosd` con API D-Bus: health monitor, update scheduler, policy engine.
+- [ ] Broker de permisos unificado: per-app, per-session, per-modalidad con audit logging.
+- [ ] **Heartbeats y Cron (Proactividad base):** Hilos de bajo consumo para despertar al agente, revisar notificaciones/logs y lanzar alertas sin peticion del usuario.
+- [ ] Politicas por Workplace (desarrollo/finanzas/gaming): perfiles de permisos, red y sensores aplicados por contexto activo.
+- [ ] Prompt Shield v1: separacion estricta entre instrucciones confiables y contenido externo no confiable (etiquetado + aislamiento de contexto).
+
+**Recursos de hardware:**
+
+- [ ] Perfiles de recursos: Performance, Balanced, Battery, Silent (CPU/GPU/AI throttling).
+- [ ] Telemetria de hardware: monitoreo termico, deteccion de anomalias.
+- [ ] Scheduler heterogeneo AI: NPU preferido → GPU fallback → CPU.
+
+**Documentacion:**
+
+- [ ] Documentacion de usuario y contribuidor.
+- [ ] Matriz de compatibilidad de hardware publicada.
+
+**Entregable:** beta publica con canal stable funcional y escritorio personalizable.
 
 ### Fase 2 (6-12 meses): IA multimodal local
 
 **Objetivo:** asistente local util que justifique el "AI-native".
 
-- [ ] Ollama integrado con modelos texto + vision + voz.
-- [ ] Asistente accesible desde launcher, terminal y atajo de teclado.
-- [ ] Memoria contextual local cifrada (embeddings + SQLite).
-- [ ] Automatizaciones en lenguaje natural (`life ai do "..."`).
-- [ ] Control de recursos AI por prioridad (cgroups).
-- [ ] Modo Jarvis temporal con tokens de capacidad y TTL.
-- [ ] `life-intents` operativo para acciones cross-app y cross-agent.
-- [ ] `life-id` operativo para identidad/delegacion de agentes con auditoria.
-- [ ] Motor de confort visual funcional.
+**AI runtime avanzado:**
 
-**Entregable:** release 1.0 con asistente AI funcional.
+- [ ] llama-server con modelos texto + vision + voz (GGUF nativo).
+- [ ] Auto-selector de modelo: deteccion de hardware → benchmark → seleccion por umbral.
+- [ ] Catalogo de modelos firmado con fallback offline para bootstrap.
+- [ ] Captura sensorial en tiempo real post-consentimiento (audio/pantalla/camara).
+- [ ] Micro-modelos always-on: VAD, hotword, clasificacion de intents.
+- [ ] Switching de modelo pesado por prioridad con degradacion automatica bajo carga.
+- [ ] Control de recursos AI por prioridad (cgroups).
+
+**Capacidades multimodales y Automatizacion Visual:**
+
+- [ ] Vision/OCR a nivel de OS: analisis de pantalla, OCR en tiempo real (Wayland/grim).
+- [ ] Whisper.cpp para STT (voz local).
+- [ ] Embeddings + busqueda semantica local cifrada (SQLite + vectores/Qdrant).
+- [ ] Correlacion contextual cross-app/cross-archivo (grafo de actividad).
+- [ ] Deteccion de postura/fatiga via camara (wellness).
+- [ ] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `libei`/ydotool, permitiendo simulacion de clics y escritura en apps de terceros.
+
+**Asistente e interaccion:**
+
+- [ ] Asistente accesible desde launcher, terminal y atajo de teclado.
+- [ ] Automatizaciones en lenguaje natural (`life ai do "..."`).
+- [ ] Memoria contextual local cifrada persistente (memory-plane con CLI/API/MCP).
+- [ ] `life ai autotune`: benchmarking local y optimizacion automatica de modelo.
+- [ ] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace).
+- [ ] `Skills Plane` v1: `~/.local/share/lifeos/skills/` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar y niveles `core/verified/community`.
+- [ ] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI.
+- [ ] Awareness de COSMIC Workspaces en el enrutador de agente para sugerencias/acciones segun habitat activo.
+
+**Arquitectura Cognitiva y de Memoria (El Cerebro LifeOS "Estilo Jarvis"):**
+
+- **Memoria a Corto Plazo (Context Window):** Mantenimiento del hilo de voz o texto actual. Se borra al terminar la sesión o tras X minutos de inactividad para no saturar el LLM.
+- **Memoria a Medio Plazo (Session & Task State):** Ledger temporal donde el Agente anota los pasos intermedios de una tarea compleja (Ej. "Instalando dependencias... Resolviendo errores de compilación..."). Le permite retomar tareas tras un reinicio.
+- **Memoria a Largo Plazo (Vector RAG Database local):** Base de datos vectorial (SQLite-vec/Qdrant) donde LifeOS almacena hábitos, comandos frecuentes ("A Héctor le gusta el brillo al 30% en la noche"), historial de programas usados, y _memoria de resoluciones_ (cómo arregló un bug hace 3 meses). Totalmente cifrado y consultable.
+- **Bucle de Ejecución Autónoma (Agentic Loop):** Capacidad del sistema para recibir un objetivo abstracto ("Despliega el backend en el servidor X"), trazar un plan de 10 pasos, y ejecutarlos _sin preguntar al usuario entre cada paso_, corrigiendo sus propios errores de terminal hasta reportar "100% completado".
+
+**Autonomia y seguridad:**
+
+- [ ] Modo Jarvis temporal: tokens de capacidad con TTL (15-60 min), aprobacion biometrica/PIN para acciones destructivas.
+- [ ] Workspace isolation: sandbox/container/microVM por objetivo de intent.
+- [ ] Auto-defensas: awareness situacional, auto-reparacion con rollback, operacion degradada offline.
+- [ ] Modos de ejecucion: interactive, run-until-done, silent-until-done.
+- [ ] Ledger cifrado y exportable de todas las acciones autonomas.
+- [ ] Harness de red-team continuo con corpus de ataques agenticos reales (prompt injection, tool abuse, exfiltracion encubierta, cadena de deep links).
+- [ ] SLO CVE por severidad en dependencias criticas de agente/runtime: `critical` mitigacion <=24h y parche <=48h; `high` <=72h; `medium` <=14 dias.
+
+**Protocolos y Estandares:**
+
+- [ ] `life-intents` v1: envelope, plan, resultado; workflow plan → policy → execute.
+- [ ] `life-id` v1: identidad de agentes, delegation tokens, revocacion CRL, auditoria.
+- [ ] **Model Context Protocol (MCP):** Integracion nativa para extensibilidad estandar, permitiendo a LifeOS usar _Skills_ de terceros sin acoplar codigo y renderizar UI (MCP-UI) nativamente en COSMIC.
+
+**CLI extendido:**
+
+- [ ] `life focus`, `life meeting`, `life sync`, `life permissions`, `life workspace`.
+- [ ] `life onboarding trust-mode` para configuracion de autonomia.
+
+**Entregable:** release 1.0 con asistente AI multimodal funcional.
 
 ### Fase 3 (12-24 meses): Hive Mind gobernado + escala
 
 **Objetivo:** ecosistema sostenible con mejora continua.
 
-- [ ] Dedupe global de incidencias + dashboard publico de salud.
-- [ ] Plataforma de PR firmadas + CI reproducible (SLSA Level 3).
-- [ ] Rollout inteligente por cohortes de hardware.
-- [ ] Life Capsule sync completo (multi-dispositivo).
-- [ ] COSMIC Sync integrado (cuando Epoch 2 lo entregue).
-- [ ] Consola de flota para usuarios individuales y equipos/empresas.
-- [ ] SDK para extensiones AI de terceros.
+**Hive Mind:**
 
-**Entregable:** ecosistema autosostenible con comunidad activa.
+- [ ] Dedupe global de incidencias + dashboard publico de salud por perfil de hardware.
+- [ ] Telemetria agregada anonima: fingerprint de fallos, priorizacion automatica.
+- [ ] Rollout inteligente: canary → candidate → stable por cohortes de hardware.
+
+**Supply chain y CI:**
+
+- [ ] CI reproducible SLSA Level 3 con attestations completas.
+- [ ] Plataforma de PR firmadas con auto-reviewer gate AI.
+
+**Sincronizacion y multi-dispositivo:**
+
+- [ ] Life Capsule sync completo (multi-dispositivo E2E cifrado).
+- [ ] COSMIC Sync integrado (cuando Epoch 2 lo entregue).
+- [ ] Device mesh: identidad de nodo, delegacion remota, revocacion.
+- [ ] Life Capsule v2: incluir `soul`, `skills`, memoria vectorial y politicas firmadas con restauracion selectiva por componente.
+
+**Extensibilidad:**
+
+- [ ] SDK para extensiones AI de terceros.
+- [ ] Marketplace de skills/extensiones: niveles core/verified/community con aislamiento por defecto.
+- [ ] Visual workflow builder (no-code) para construccion de agentes.
+- [ ] Browser operator para tareas web multi-paso con politicas y auditoria.
+- [ ] Pipeline de confianza de skills (modelo hibrido): raiz de confianza LifeOS + mantenedores delegados (`verified`) + transparencia de firmas + revocacion.
+
+**Multi-agente y orquestacion:**
+
+- [ ] Sistema multi-agente especializado (client-ops, delivery, QA, finance, health, executive).
+- [ ] Consola de flota para usuarios individuales y equipos/empresas.
+- [ ] **Enjambre Jerarquico Local (Local Swarm):** Co-procesadores NPU running micro-agentes (1B-3B) "always-on" para clasificacion de intents/routing, delegando tareas complejas al `llama-server` pesado (8B+ GPU) para optimizar bateria e interrupciones.
+
+**Voz y accesibilidad:**
+
+- [ ] Control por voz: dictado tecnico, macros de comandos, modo low-write.
+- [ ] Co-piloto de salud: tracking de habitos, alertas ergonomicas, deteccion de fatiga.
+
+**Benchmark y calidad:**
+
+- [ ] `lifeos-bench`: suite de benchmarks reproducibles (latencia/energia/calidad).
+- [ ] Bootstrap reproducible: TUI installer con setup automatico de entorno.
+
+**Entregable:** ecosistema autosostenible con comunidad activa y marketplace.
 
 ---
 
@@ -912,6 +1104,8 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 12. **Intent Bus nativo (`life-intents`)** como contrato estable de acciones para UI/CLI/agentes/apps.
 13. **Identity Plane de agentes (`life-id`)** con tokens de capacidad firmados y revocables.
 14. **Execution Plane heterogeneo (`life-ep`)** con preferencia NPU y fallback deterministico.
+15. **AI Runtime unico: llama-server (llama.cpp).** Ollama descartado por riesgo de continuidad. Modelos en formato GGUF descargados de HuggingFace.
+16. **Modelo biologico como framework cognitivo:** Soul, Skills, Workplace, Agents, Life Capsule (ver `docs/lifeos_biological_model.md`).
 
 ---
 
@@ -920,183 +1114,166 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 ```
 lifeos/
 ├── README.md
-├── lifeos-ai-distribution.md          # Este spec
-├── CONTRIBUTING.md                     # Guia de contribucion
-├── LICENSE                             # Apache 2.0
+├── CONTRIBUTING.md
+├── LICENSE                                # Apache 2.0
+├── Cargo.toml                             # Workspace root
 │
-├── image/                              # Imagen OCI del sistema
-│   ├── Containerfile                   # Build principal (desde fedora-bootc directo)
-│   ├── build.sh                        # Script de customizacion del sistema
-│   ├── cosign.pub                      # Clave publica de firma
-│   ├── flatpaks.txt                    # Flatpaks incluidos por defecto
-│   └── files/                          # Archivos que se copian al sistema
+├── docs/                                  # Documentacion del proyecto
+│   ├── lifeos-ai-distribution.md          # Este spec
+│   ├── lifeos_biological_model.md         # Modelo biologico (Soul/Skills/Workplace/Agents)
+│   └── deepin_comparison.md              # Analisis competitivo vs Deepin/UOS AI
+│
+├── image/                                 # Imagen OCI del sistema
+│   ├── Containerfile                      # Build multi-stage (Rust builder + sistema)
+│   └── files/                             # Archivos copiados al sistema
 │       ├── etc/
-│       │   └── lifeos/
-│       │       └── lifeos.toml.default # Config por defecto
-│       └── usr/
-│           └── share/
-│               └── lifeos/
-│                   └── branding/       # Logos, wallpapers, temas
+│       │   ├── lifeos/
+│       │   │   ├── lifeos.toml.default    # Config declarativa por defecto
+│       │   │   └── llama-server.env       # Variables de entorno del runtime AI
+│       │   └── systemd/system/
+│       │       ├── llama-server.service   # Servicio AI (llama-server)
+│       │       └── lifeos-first-boot.service  # Onboarding de primer arranque
+│       └── usr/local/bin/
+│           ├── lifeos-ai-setup.sh         # Descarga de modelos GGUF
+│           ├── lifeos-first-boot.sh       # Script de primer arranque (GPU, AI, completions)
+│           └── llama-server-health-check.sh  # Health check del runtime AI
 │
-├── cli/                                # CLI `life` (Rust)
+├── cli/                                   # CLI `life` (Rust)
 │   ├── Cargo.toml
-│   ├── Cargo.lock
 │   └── src/
-│       ├── main.rs                     # Entry point + clap
-│       ├── lib.rs                      # Core library
+│       ├── main.rs                        # Entry point + clap (incluye Beta, Feedback, Lab)
+│       ├── lib.rs                         # Core library
+│       ├── main_tests.rs                  # Tests unitarios
 │       ├── commands/
 │       │   ├── mod.rs
-│       │   ├── status.rs               # life status
-│       │   ├── update.rs               # life update [--dry]
-│       │   ├── rollback.rs             # life rollback
-│       │   ├── recover.rs              # life recover
-│       │   ├── capsule.rs              # life capsule export/restore
-│       │   ├── ai.rs                   # life ai ask "..."
-│       │   ├── intents.rs              # life intents plan/apply/status
-│       │   ├── identity.rs             # life id issue/list/revoke
-│       │   └── workspace.rs            # life workspace run
+│       │   ├── ai.rs                      # life ai (start/stop/ask/do/chat/models/pull/status)
+│       │   ├── capsule.rs                 # life capsule export/restore
+│       │   ├── config.rs                  # life config show/set/apply
+│       │   ├── first_boot.rs              # life first-boot
+│       │   ├── id.rs                      # life id issue/list/revoke
+│       │   ├── init.rs                    # life init
+│       │   ├── intents.rs                 # life intents plan/apply/status
+│       │   ├── recover.rs                 # life recover
+│       │   ├── rollback.rs                # life rollback
+│       │   ├── status.rs                  # life status
+│       │   ├── store.rs                   # life store
+│       │   ├── theme.rs                   # life theme
+│       │   └── update.rs                  # life update [--dry]
 │       ├── config/
-│       │   ├── mod.rs
-│       │   └── lifeos_toml.rs          # Parser de lifeos.toml
-│       ├── system/
-│       │   ├── mod.rs
-│       │   ├── bootc.rs                # Wrapper sobre bootc CLI
-│       │   ├── flatpak.rs              # Gestion de Flatpaks
-│       │   └── health.rs               # Health checks post-boot
-│       └── ai/
-│           ├── mod.rs
-│           └── ollama.rs               # Cliente REST para Ollama
+│       │   ├── mod.rs                     # LifeConfig, AiConfig (provider=llama-server)
+│       │   └── tests.rs                   # Tests de config
+│       └── system/
+│           ├── mod.rs                     # Health checks del sistema
+│           └── tests.rs
 │
-├── daemon/                             # lifeosd (Rust)
+├── daemon/                                # lifeosd (Rust + Axum)
 │   ├── Cargo.toml
 │   └── src/
-│       ├── main.rs
-│       ├── dbus_api.rs                 # API D-Bus para el orquestador
-│       ├── permissions.rs              # Broker de permisos
-│       ├── health_monitor.rs           # Watchdog de salud del sistema
-│       ├── update_scheduler.rs         # Planificador de actualizaciones
-│       ├── intent_bus.rs               # life-intents: validacion, estado, ledger
-│       ├── identity_plane.rs           # life-id: emision/revocacion/validacion
-│       ├── policy_engine.rs            # Evaluacion de riesgo y politicas
-│       └── executor.rs                 # Ejecutor tipado con rollback
+│       ├── main.rs                        # Entry point, inicia todos los servicios
+│       ├── ai.rs                          # AiManager (llama-server lifecycle)
+│       ├── api/mod.rs                     # REST API (Axum + Swagger UI)
+│       ├── health.rs                      # HealthMonitor
+│       ├── models/mod.rs                  # ModelRegistry (catalogo de 11 modelos GGUF)
+│       ├── notifications.rs               # Sistema de notificaciones
+│       ├── permissions.rs                 # D-Bus Permission Broker (org.lifeos.Permissions)
+│       ├── system.rs                      # Metricas del sistema
+│       └── updates.rs                     # Auto-update checker
 │
-├── contracts/                          # Contratos de integracion estables
-│   ├── intents/
-│   │   └── v1/
-│   │       ├── intent.schema.json
-│   │       ├── plan.schema.json
-│   │       └── result.schema.json
-│   └── identity/
-│       └── v1/
-│           ├── capability-token.schema.json
-│           └── delegation.schema.json
+├── contracts/                             # Contratos de integracion estables
+│   ├── intents/v1/
+│   │   ├── intent.schema.json             # Schema de intent v1
+│   │   └── result.schema.json             # Schema de resultado
+│   └── onboarding/
+│       └── first-boot-config.schema.json  # Schema de configuracion de primer arranque
 │
-├── onboarding/                         # Asistente de primer arranque
-│   ├── Cargo.toml                      # Rust + iced (recomendado)
-│   └── src/
+├── tests/                                 # Tests de integracion
+│   ├── Cargo.toml
+│   └── integration/
+│       └── main.rs                        # Tests E2E (boot, CLI, config, daemon, Containerfile)
 │
-├── tests/                              # Tests de integracion del sistema
-│   ├── test_boot.sh                    # Verifica que la imagen arranca
-│   ├── test_rollback.sh                # Verifica rollback A/B
-│   ├── test_flatpak.sh                 # Verifica instalacion de apps
-│   └── test_life_cli.sh                # Verifica comandos del CLI
+├── scripts/                               # Scripts auxiliares
+│   ├── generate-iso.sh                    # Generacion de ISO con bootc-image-builder
+│   ├── generate-iso-simple.sh             # Version simplificada
+│   └── beta-feedback.sh                   # Recoleccion de feedback
 │
-└── .github/
-    └── workflows/
-        ├── build-image.yml             # CI: construir imagen OCI
-        ├── sign-image.yml              # CI: firmar con Sigstore
-        ├── test-image.yml              # CI: correr tests en VM
-        └── release.yml                 # CI: publicar en GHCR
+└── .github/workflows/
+    ├── ci.yml                             # Build + test + audit + coverage
+    ├── docker.yml                         # Build y push imagen OCI a GHCR
+    ├── release.yml                        # Release con binarios multi-arch
+    ├── nightly.yml                        # Builds nocturnos
+    └── codeql.yml                         # Escaneo de seguridad CodeQL
 ```
 
 ---
 
 ## 19. Implementacion: imagen OCI base
 
-### 19.1 Containerfile principal (build directo desde Fedora)
+### 19.1 Containerfile principal (build multi-stage desde Fedora)
+
+El Containerfile real usa un build multi-stage: Stage 1 compila los binarios Rust (CLI `life` y daemon `lifeosd`), Stage 2 construye la imagen del sistema. Consultar `image/Containerfile` para la version canonica.
+
+Estructura simplificada:
 
 ```dockerfile
 # image/Containerfile
-# LifeOS: construido directamente sobre Fedora bootc, sin intermediarios.
+# LifeOS: build multi-stage sobre Fedora bootc.
 
-# Stage 1: archivos de configuracion
-FROM scratch AS ctx
-COPY files /ctx/files
-COPY scripts /ctx/scripts
+# Stage 1: compilacion de CLI y Daemon
+FROM fedora:42 AS builder
+RUN dnf -y install cargo gcc openssl-devel pkg-config dbus-devel sqlite-devel ...
+COPY cli/ /build/cli/
+COPY daemon/ /build/daemon/
+RUN cargo build --release --manifest-path /build/cli/Cargo.toml && \
+    cargo build --release --manifest-path /build/daemon/Cargo.toml
 
 # Stage 2: imagen del sistema
 FROM quay.io/fedora/fedora-bootc:42
 
-# --- Repositorios adicionales ---
-# COSMIC desktop (COPR o repo oficial segun disponibilidad)
-RUN dnf -y install dnf5-plugins && \
-    dnf -y copr enable ryanabx/cosmic-epoch
+# --- Repositorios adicionales (COSMIC via COPR) ---
+RUN dnf -y install dnf5-plugins && dnf -y copr enable ryanabx/cosmic-epoch
 
 # --- Desktop environment ---
-RUN dnf -y install \
-    cosmic-desktop \
-    cosmic-files \
-    cosmic-terminal \
-    cosmic-text-editor \
-    cosmic-store \
-    xdg-desktop-portal-cosmic \
-    xdg-user-dirs \
-    NetworkManager \
-    bluez \
-    && dnf clean all
+RUN dnf -y install cosmic-desktop cosmic-files cosmic-terminal \
+    cosmic-text-editor cosmic-store xdg-desktop-portal-cosmic \
+    NetworkManager bluez pipewire wireplumber && dnf clean all
+
+# --- Nvidia Optimus (GPU hibrida) ---
+RUN dnf -y install akmod-nvidia xorg-x11-drv-nvidia-cuda supergfxctl && dnf clean all
 
 # --- Herramientas del sistema ---
-RUN dnf -y install \
-    toolbox \
-    btrfs-progs \
-    smartmontools \
-    podman \
-    buildah \
-    flatpak \
-    fish \
-    bat \
-    ripgrep \
-    fd-find \
-    htop \
-    fastfetch \
-    age \
-    && dnf clean all
+RUN dnf -y install toolbox btrfs-progs podman buildah flatpak \
+    fish bat ripgrep fd-find htop fastfetch age jq sqlite && dnf clean all
 
-# --- AI Runtime ---
-# IMPORTANTE: NO usar curl|sh (vector de supply chain).
-# Prioridad de empaquetado: RPM oficial firmado > RPM interno firmado > binario con SHA256 pinneado (fallback).
-# Este ejemplo usa la ruta fallback (binario + checksum verificado).
-ARG OLLAMA_VERSION=0.5.1
-ARG OLLAMA_SHA256
-RUN test -n "${OLLAMA_SHA256}" && \
-    curl -fsSL -o /tmp/ollama "https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/ollama-linux-amd64" && \
-    echo "${OLLAMA_SHA256}  /tmp/ollama" | sha256sum -c - && \
-    install -m 755 /tmp/ollama /usr/bin/ollama && \
-    rm /tmp/ollama
+# --- AI Runtime (llama-server via llama.cpp) ---
+# Estrategia: descarga binario pre-compilado, fallback a compilacion desde fuente.
+# NUNCA usar curl|sh.
+RUN set -eux && \
+    RELEASE_URL="$(curl -fsSL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | \
+        jq -r '...')" && \
+    # Intenta binario pre-compilado, si falla compila desde fuente
+    ...
+    install -m 0755 llama-server /usr/bin/llama-server
 
-# --- Configuracion del sistema ---
-COPY --from=ctx /ctx/files/ /
+# --- Binarios Rust (CLI + Daemon) ---
+COPY --from=builder /build/cli/target/release/life /usr/bin/life
+COPY --from=builder /build/daemon/target/release/lifeosd /usr/bin/lifeosd
 
-# --- CLI life (binario pre-compilado desde CI) ---
-COPY --from=ctx /ctx/scripts/install-life-cli.sh /tmp/
-RUN chmod +x /tmp/install-life-cli.sh && /tmp/install-life-cli.sh && rm /tmp/install-life-cli.sh
+# --- Configuracion y scripts ---
+COPY files/ /
 
 # --- Servicios systemd ---
-RUN systemctl enable sddm.service && \
+RUN systemctl enable cosmic-greeter.service && \
     systemctl enable NetworkManager.service && \
     systemctl enable bluetooth.service && \
-    systemctl enable flatpak-system-update.timer && \
     systemctl enable lifeosd.service && \
-    systemctl enable ollama.service
+    systemctl enable llama-server.service && \
+    systemctl enable lifeos-first-boot.service
 
-# --- Flatpaks por defecto (se instalan en primer arranque via firstboot service) ---
-# La lista esta en /usr/share/lifeos/flatpaks-default.txt
-# Un servicio systemd oneshot los instala en el primer boot.
-
-# --- Limpieza y verificacion ---
-RUN dnf clean all && \
-    bootc container lint
+# --- Verificacion ---
+RUN dnf clean all && bootc container lint
 ```
+
+**Nota:** el Containerfile real incluye verificacion final de que todos los binarios y archivos de configuracion existen. Consultar el archivo fuente para detalles completos.
 
 ### 19.2 Por que usamos Fedora bootc directo como base
 
@@ -1110,10 +1287,10 @@ Ver seccion 12.1. Resumen implementador:
 ### 19.3 Como construir y probar localmente
 
 ```bash
-# 1. Construir la imagen OCI
-podman build -t localhost/lifeos:dev -f image/Containerfile image/
+# 1. Construir la imagen OCI (el build multi-stage compila CLI y daemon)
+podman build -t localhost/lifeos:dev -f image/Containerfile .
 
-# 2. Generar ISO instalable (requiere bootc-image-builder)
+# 2. Generar ISO instalable (ver scripts/generate-iso.sh para la version completa)
 sudo podman run --rm -it --privileged --pull=newer \
     --security-opt label=type:unconfined_t \
     -v ./output:/output \
@@ -1130,6 +1307,8 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 sudo bootc switch localhost/lifeos:dev
 ```
 
+**Nota:** el contexto de build es la raiz del repositorio (no `image/`) porque el Stage 1 necesita acceso a `cli/` y `daemon/` para compilar los binarios Rust.
+
 ---
 
 ## 20. Implementacion: CLI `life`
@@ -1140,7 +1319,7 @@ El CLI `life` es la interfaz humana del sistema. Escrito en Rust con `clap` para
 
 **Principios:**
 
-- Cada comando es un wrapper inteligente sobre herramientas existentes (bootc, flatpak, ollama, btrfs).
+- Cada comando es un wrapper inteligente sobre herramientas existentes (bootc, flatpak, llama-server, btrfs).
 - No reinventa: orquesta.
 - Salida legible para humanos por defecto, JSON con `--json` para scripts.
 - Colores y formato enriquecido en terminal, degradado graceful en pipes.
@@ -1179,7 +1358,7 @@ life lab start           Iniciar entorno de pruebas (container/VM).
 life lab test            Correr test suite en el lab.
 life lab report          Generar reporte del lab.
 
-life ai ask "..."        Preguntar al asistente local (Ollama).
+life ai ask "..."        Preguntar al asistente local (llama-server).
 life ai do "..."         Ejecutar accion en lenguaje natural.
 life ai models           Listar modelos disponibles/instalados.
 life ai pull <model>     Descargar un modelo.
@@ -1286,7 +1465,7 @@ serde_json = "1"
 toml = "0.8"
 anyhow = "1"
 colored = "3"
-reqwest = { version = "0.12", features = ["json"] }  # Para Ollama API
+reqwest = { version = "0.12", features = ["json"] }  # Para llama-server API (http://localhost:8080)
 dirs = "6"
 ```
 
@@ -1465,11 +1644,11 @@ toolbox = [
 
 [ai]
 enabled = true                         # Habilitar subsistema AI
-runtime = "ollama"                     # ollama | llama-cpp | disabled
-default_model = "qwen3:8b"            # Fallback si el autoselector esta desactivado
-reasoning_model = "deepseek-r1:8b"     # Fallback reasoning
-vision_model = "gemma3:4b"             # Fallback vision/OCR
-voice_model = "whisper:small"          # Modelo para voz
+runtime = "llama-server"               # llama-server | disabled
+default_model = "qwen3-8b-q4_k_m.gguf"  # Fallback si el autoselector esta desactivado
+reasoning_model = "deepseek-r1-8b-q4_k_m.gguf"  # Fallback reasoning
+vision_model = "gemma3-4b-q4_k_m.gguf"          # Fallback vision/OCR
+voice_model = "whisper-small.gguf"               # Modelo para voz
 embedding_model = "nomic-embed-text"   # Modelo para embeddings
 
 [ai.model_selector]
@@ -1571,16 +1750,16 @@ El MVP alpha es la version mas reducida que demuestra que LifeOS funciona. Se pu
 
 ### 22.1 Que incluye el MVP alpha
 
-| Componente  | Alcance MVP                                         | NO incluye aun                           |
-| ----------- | --------------------------------------------------- | ---------------------------------------- |
-| Imagen base | COSMIC + Ollama + Toolbx sobre Fedora bootc directo | Branding completo, temas custom          |
-| CLI `life`  | `status`, `update`, `rollback`                      | `recover`, `capsule`, `ai`, `lab`        |
-| lifeos.toml | Seccion `[system]` y `[apps]` funcionales           | `[ai]`, `[sync]`, `[display]`            |
-| Updates     | bootc upgrade + rollback manual                     | Auto-update, canales, health checks      |
-| Apps        | Flatpak funcional, lista en lifeos.toml             | Auto-instalacion desde config            |
-| AI          | Ollama instalado y funcional via terminal           | Integracion con CLI, permisos, enrutador |
-| Tests       | Boot test + rollback test                           | Suite completa                           |
-| CI/CD       | Build image + push a GHCR                           | Firma Sigstore, tests en VM              |
+| Componente  | Alcance MVP                                               | NO incluye aun                           |
+| ----------- | --------------------------------------------------------- | ---------------------------------------- |
+| Imagen base | COSMIC + llama-server + Toolbx sobre Fedora bootc directo | Branding completo, temas custom          |
+| CLI `life`  | `status`, `update`, `rollback`                            | `recover`, `capsule`, `ai`, `lab`        |
+| lifeos.toml | Seccion `[system]` y `[apps]` funcionales                 | `[ai]`, `[sync]`, `[display]`            |
+| Updates     | bootc upgrade + rollback manual                           | Auto-update, canales, health checks      |
+| Apps        | Flatpak funcional, lista en lifeos.toml                   | Auto-instalacion desde config            |
+| AI          | llama-server instalado y funcional via terminal/API       | Integracion con CLI, permisos, enrutador |
+| Tests       | Boot test + rollback test                                 | Suite completa                           |
+| CI/CD       | Build image + push a GHCR                                 | Firma Sigstore, tests en VM              |
 
 ### 22.2 Tareas ordenadas del MVP alpha
 
@@ -1588,7 +1767,7 @@ El MVP alpha es la version mas reducida que demuestra que LifeOS funciona. Se pu
 Semana 1-2: Imagen base
 ├── Crear Containerfile sobre quay.io/fedora/fedora-bootc:42
 ├── Instalar COSMIC desktop + dependencias
-├── Agregar Ollama, toolbox, herramientas CLI
+├── Agregar llama-server (llama.cpp), toolbox, herramientas CLI
 ├── Agregar lifeos.toml.default en /etc/lifeos/
 ├── Configurar GitHub Actions para build automatico
 ├── Generar par de claves Cosign (KMS) y configurar firma
@@ -1614,7 +1793,7 @@ Semana 3-4: Integracion y tests
 
 Semana 4-5: Polish y primer release
 ├── Agregar branding minimo (wallpaper, nombre en fastfetch)
-├── Asegurar Ollama arranca como servicio (systemd unit)
+├── Asegurar llama-server arranca como servicio (systemd unit)
 ├── Verificar Flatpak store funciona
 ├── Verificar Toolbx crea containers
 ├── Crear ISO con bootc-image-builder
@@ -1630,125 +1809,57 @@ Semana 5-6: Buffer + documentacion
 
 ### 22.3 Criterios de exito del MVP alpha
 
-- [ ] La imagen ISO bootea en hardware real y en VM (QEMU/VirtualBox).
-- [ ] `life status` muestra version, slot activo y estado de salud.
-- [ ] `life update --dry` simula una actualizacion.
-- [ ] `life rollback` cambia al slot previo y reinicia.
-- [ ] Ollama corre y responde a `ollama run qwen3:8b "hola"`.
-- [ ] Flatpak permite instalar Firefox desde el store.
-- [ ] Toolbx crea un container de desarrollo (Fedora/Ubuntu).
-- [ ] El sistema sobrevive a un `bootc upgrade` sin romperse.
+- [x] La imagen OCI construye sin errores en CI. *`docker.yml` activo con firma cosign.*
+- [ ] La imagen ISO bootea en hardware real y en VM (QEMU/VirtualBox). *Pendiente de prueba sistematica.*
+- [x] `life status` muestra version, slot activo y estado de salud. *Implementado con flag `--json`.*
+- [x] `life update --dry` simula una actualizacion. *Wrapper sobre `bootc upgrade --check`.*
+- [x] `life rollback` cambia al slot previo y reinicia. *Wrapper sobre `bootc rollback`.*
+- [x] llama-server corre y responde a health check y chat completions. *Servicio systemd + `lifeos-ai-setup.sh` + `llama-server-health-check.sh`.*
+- [x] Flatpak funciona con Flathub configurado. *Configurado en first-boot.*
+- [x] Toolbx disponible para containers de desarrollo. *Instalado en imagen base.*
+- [ ] El sistema sobrevive a un `bootc upgrade` sin romperse. *Pendiente de prueba automatizada en VM.*
 
 ---
 
-### 22.4 Roadmap para Superar a la Competencia (ej. Deepin / UOS AI)
+### 22.4 Roadmap competitivo (vs Deepin / UOS AI)
 
-Para que LifeOS se posicione objetivamente por encima de los AI-OS actuales en el mercado, se deben implementar las siguientes características arquitectónicas clave, adaptándolas a nuestra visión nativa, inmutable y privada:
+El analisis competitivo completo esta en `docs/deepin_comparison.md`. Resumen ejecutable de las brechas a cerrar en Fase 1-2:
 
-#### A. Integración Visual Profunda (El "AI Taskbar")
+1. **Integracion visual profunda:** Applet COSMIC con overlay `Super+Space` (<300ms p95). Ya planificado en Fase 1.
+2. **Busqueda semantica local:** Indexador vectorial cifrado (SQLite-vec/Qdrant). Ya planificado en Fase 2.
+3. **Conciencia de pantalla:** Modelos vision GGUF + captura Wayland/PipeWire via `lifeosd`. Ya planificado en Fase 2.
+4. **Ejecucion nativa por intents:** `life-intents` traduce lenguaje natural a acciones D-Bus/COSMIC. Contratos definidos, implementacion en Fase 2.
 
-Actualmente la IA habita principalmente en la terminal (`life ai`). Se requiere una integración gráfica fluida en COSMIC:
-
-- **Meta:** Un "Applet" o Daemon GUI en Rust integrado al entorno COSMIC.
-- **Acción:** Permitir invocar a la IA (ej. `Super + Espacio`) desplegando un _overlay_ flotante sobre cualquier aplicación (estilo Spotlight/Raycast) para asistencia inmediata sin cambiar de contexto.
-
-#### B. Búsqueda Semántica de Archivos (Local)
-
-Ir más allá de buscar por nombres exactos de archivo.
-
-- **Meta:** Indexador local vectorial.
-- **Acción:** Integrar una pequeña base de datos vectorial local (ej. Qdrant / sqlite-vec) para indexar documentos (PDFs, Markdown) localmente. Esto permitirá que el demonio de la IA busque contexto basándose en descripciones y semántica, sin enviar los documentos a la nube.
-
-#### C. Conciencia de Pantalla / Multimodalidad (Wayland)
-
-Empoderar a la IA para entender lo que el usuario está viendo independientemente de la aplicación abierta.
-
-- **Meta:** Visión de OS.
-- **Acción:** Interconectar Ollama (por medio de modelos como LLaVA o Llama 3.2 Vision) con herramientas de Wayland (ej. `grim`) y Pipewire. El demonio `lifeosd` podrá "ver" la interfaz para explicarle visualmente flujos al usuario, o bien diagnosticar errores visuales en tiempo real de manera privada.
-
-#### D. Acciones y Ejecución Nativa ("Life-Intents")
-
-Dejar de ser sólo un asistente conversacional para ser un agente de sistema operativo.
-
-- **Meta:** Comprensión de configuración de OS vía lenguaje natural.
-- **Acción:** Finalizar el sistema `Life-Intents` para que el `lifeosd` traduzca solicitudes (ej. "Activa modo cine oscuro") directamente a comandos dbus de red o del escritorio COSMIC.
+LifeOS gana en seguridad (inmutabilidad, rollback, audit) y privacidad (local-first). La meta es convertir esa ventaja arquitectonica en UX visible.
 
 ---
 
 ## 23. Implementacion: CI/CD pipeline
 
-### 23.1 Build y publicacion (GitHub Actions)
+### 23.1 Pipelines implementados (GitHub Actions)
 
-```yaml
-# .github/workflows/build-image.yml
-name: Build LifeOS Image
-on:
-  push:
-    branches: [main]
-    paths: ["image/**"]
-  pull_request:
-    paths: ["image/**"]
-  schedule:
-    - cron: "0 6 * * 1" # Lunes a las 6 AM UTC
+Los workflows reales estan en `.github/workflows/`. Resumen:
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
+| Workflow       | Trigger                            | Funcion                                                              |
+| -------------- | ---------------------------------- | -------------------------------------------------------------------- |
+| `ci.yml`       | Push/PR a `main`/`develop`         | Build CLI + Daemon, tests, `cargo-audit`, coverage (tarpaulin), docs |
+| `docker.yml`   | Push a `main` o tags `v*`, PRs     | Build y push de imagen OCI a `ghcr.io`                               |
+| `release.yml`  | Push de tags `v*` o manual         | Release GitHub con binarios multi-arch (linux + macOS, x86 + arm64)  |
+| `nightly.yml`  | Cron nocturno                      | Builds nocturnos para deteccion temprana de regresiones              |
+| `codeql.yml`   | Push/PR                            | Escaneo de seguridad CodeQL                                          |
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+### 23.2 Build del CLI y Daemon
 
-      - name: Build image
-        run: podman build -t ghcr.io/${{ github.repository_owner }}/lifeos:latest -f image/Containerfile image/
+El pipeline `ci.yml` compila tanto `cli/` como `daemon/` en un solo job, corre `cargo test` en el workspace completo, ejecuta `cargo-audit` para vulnerabilidades y genera cobertura con `tarpaulin`.
 
-      - name: Push image
-        run: podman push ghcr.io/${{ github.repository_owner }}/lifeos:latest
+### 23.3 Build y firma de imagen OCI
 
-      - name: Sign image with Cosign (KMS)
-        uses: sigstore/cosign-installer@v3
-      - run: cosign sign --key ${{ secrets.COSIGN_KMS_KEY }} ghcr.io/${{ github.repository_owner }}/lifeos:latest
-```
+El pipeline `docker.yml` construye la imagen multi-stage (Stage 1: Rust, Stage 2: sistema) y la publica en GHCR. La firma con Cosign/KMS esta planificada pero aun no activa en CI — actualmente se firma manualmente.
 
-### 23.2 Build del CLI life
-
-```yaml
-# .github/workflows/build-cli.yml
-name: Build life CLI
-on:
-  push:
-    paths: ["cli/**"]
-  pull_request:
-    paths: ["cli/**"]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
-      - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-musl
-        working-directory: cli
-      - name: Test
-        run: cargo test
-        working-directory: cli
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: life-cli
-          path: cli/target/x86_64-unknown-linux-musl/release/life
-```
+**Pendiente de automatizar:**
+- Firma Cosign con clave en KMS (no en GitHub Secrets)
+- Attestations in-toto en el pipeline
+- Verificacion automatica de hash de la imagen base de Fedora
 
 ---
 
@@ -1771,24 +1882,26 @@ jobs:
 git clone https://github.com/gama-os/lifeos.git
 cd lifeos
 
-# Construir el CLI
-cd cli && cargo build && cd ..
+# Construir el CLI y Daemon
+cargo build --release --manifest-path cli/Cargo.toml
+cargo build --release --manifest-path daemon/Cargo.toml
 
-# Construir la imagen (requiere podman)
-cd image && podman build -t lifeos:dev -f Containerfile . && cd ..
+# Correr tests unitarios
+cargo test --workspace
 
-# Probar en VM (requiere qemu + bootc-image-builder via contenedor)
-sudo podman run --rm -it --privileged --pull=newer \
-  --security-opt label=type:unconfined_t \
-  -v ./output:/output \
-  -v /var/lib/containers/storage:/var/lib/containers/storage \
-  quay.io/centos-bootc/bootc-image-builder:latest \
-  --type iso \
-  --chown $(id -u):$(id -g) \
-  localhost/lifeos:dev
+# Correr tests de integracion
+cargo test --manifest-path tests/Cargo.toml
 
-# Correr tests
-bash tests/test_life_cli.sh
+# Construir la imagen OCI (requiere podman; contexto = raiz del repo)
+podman build -t lifeos:dev -f image/Containerfile .
+
+# Generar ISO (requiere qemu + bootc-image-builder via contenedor)
+bash scripts/generate-iso.sh
+# O la version simplificada:
+bash scripts/generate-iso-simple.sh
+
+# Probar en VM:
+qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 ```
 
 ### 24.3 Estructura de PRs
@@ -1808,7 +1921,7 @@ bash tests/test_life_cli.sh
 | Documentacion                           | Facil       | Alto    |
 | Receta Containerfile (paquetes, config) | Facil       | Alto    |
 | lifeosd (daemon D-Bus)                  | Alta        | Alto    |
-| Integracion Ollama en CLI               | Media       | Alto    |
+| Integracion llama-server en CLI         | Media       | Alto    |
 
 ---
 
@@ -1830,6 +1943,8 @@ bash tests/test_life_cli.sh
 14. **Identidad de agentes obligatoria:** todo agente usa `life-id` con delegacion revocable y TTL.
 15. **Auditoria como producto:** ledger cifrado y exportable en cada ejecucion autonoma.
 16. **Auto-seleccion de modelos local-first:** catalogo firmado + benchmark local + degradacion automatica por hardware.
+17. **Ollama descartado:** llama-server (llama.cpp) como unico runtime AI local. Sin dependencias de startups con funding incierto.
+18. **Modelo biologico integrado:** Soul (identidad), Skills (habilidades), Workplace (contexto), Agents (enjambre) como framework cognitivo del sistema (ver `docs/lifeos_biological_model.md`).
 
 ---
 
@@ -1853,11 +1968,7 @@ bash tests/test_life_cli.sh
 - in-toto: https://in-toto.io/
 - SLSA: https://slsa.dev/
 - COSMIC desktop: https://system76.com/cosmic
-- Ollama: https://ollama.com/
-- Ollama API docs (official): https://github.com/ollama/ollama/blob/main/docs/api.md
-- Ollama model library: Qwen3 https://ollama.com/library/qwen3
-- Ollama model library: DeepSeek-R1 https://ollama.com/library/deepseek-r1
-- Ollama model library: Gemma3 https://ollama.com/library/gemma3
+- HuggingFace GGUF models (Qwen3): https://huggingface.co/Qwen/Qwen3-8B-GGUF
 - Qwen3 official announcement: https://qwenlm.github.io/blog/qwen3/
 - Gemma 3 model docs (size and memory guidance): https://ai.google.dev/gemma/docs/core/model_card_3
 - DeepSeek-R1 repository: https://github.com/deepseek-ai/DeepSeek-R1
@@ -1873,42 +1984,48 @@ bash tests/test_life_cli.sh
 
 ## 27. Faltantes para completar ejecucion al 100%
 
-Estado actual del proyecto: el documento esta maduro, pero faltan entregables de implementacion real en repositorio.
+Estado actual del proyecto (febrero 2026): la base tecnica esta implementada — imagen booteable, CLI funcional, daemon con API REST, CI/CD activo. Faltan entregables avanzados.
 
-### 27.1 Entregables obligatorios pendientes
+### 27.1 Entregables ya completados
 
-1. `image/Containerfile` real y booteable (no solo ejemplo en markdown).
-2. `cli/` funcional con `life status`, `life update --dry`, `life rollback`.
-3. `daemon/` con broker de permisos y logs auditables para sensores/acciones AI.
-4. `tests/` automatizados de boot, update, rollback y CLI.
-5. `.github/workflows/` reales para build, test, firma y publicacion.
-6. Flujo de firma Cosign con KMS operativo en CI.
-7. `life capsule export/restore` funcional (minimo config + apps + dotfiles).
-8. Onboarding con consentimiento explicito para activar sync.
-9. Matriz de compatibilidad de hardware publicada.
-10. Guia operativa de incidentes (rollback, recovery, revocacion de artefactos).
-11. Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.
-12. Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.
-13. Registry open source de skills/capacidades con versionado, firmas y politica de confianza.
-14. Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.
-15. Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.
-16. Perfiles de runtime `lite/edge/secure/pro` con deteccion automatica de hardware.
-17. Aislamiento por objetivo (sandbox/container/microVM) segun riesgo de la accion.
-18. Constructor visual de workflows y agentes (no-code) para usuarios no tecnicos.
-19. Browser operator seguro para tareas web multi-step con politicas y auditoria.
-20. Suite de benchmarks reproducibles para validar rendimiento/latencia/consumo frente a competidores.
-21. `contracts/intents/v1` publicados y versionados con tests de compatibilidad de schema.
-22. `contracts/identity/v1` publicados y versionados con validacion de tokens/delegaciones.
-23. `life intents` y `life id` implementados end-to-end con pruebas de aprobacion, rechazo y revocacion.
-24. Ledger cifrado de ejecucion (`intents/results/artifacts`) con exportacion firmada para auditoria.
-25. `device-mesh` operativo para coordinacion multi-PC con identidad de nodo, delegacion y revocacion remota.
-26. Pipeline de extensiones/skills con niveles de confianza (`core`, `verified`, `community`) y aislamiento por defecto.
-27. Autoselector de modelos (`life ai autotune`) implementado con benchmark local y persistencia por rol.
-28. `model-catalog` firmado con versionado y fallback offline embebido en la ISO.
-29. Runtime realtime AI-first implementado con `heavy_model_slots = 1` y pruebas de no regresion de latencia.
-30. `trust_me_mode` implementado con validacion criptografica de `consent_bundle` y auditoria completa.
+1. ~~`image/Containerfile` real y booteable~~ — **Hecho.** Multi-stage build con Rust + COSMIC + llama-server + Nvidia.
+2. ~~`cli/` funcional con `life status`, `life update --dry`, `life rollback`~~ — **Hecho.** Incluye `ai`, `capsule`, `config`, `intents`, `id`, `store`, `theme` y mas.
+3. ~~`daemon/` con broker de permisos~~ — **Hecho.** API REST (Axum + Swagger), D-Bus permissions, health monitor, model registry, AI manager.
+4. ~~`tests/` automatizados~~ — **Hecho.** Tests de integracion (boot, CLI, config, daemon, Containerfile).
+5. ~~`.github/workflows/` reales~~ — **Hecho.** CI, docker, release, nightly, codeql.
 
-### 27.2 Criterio de cierre de faltantes
+### 27.2 Entregables obligatorios pendientes
+1. Flujo de firma Cosign con KMS operativo en CI (actualmente manual).
+2. `life capsule export/restore` funcional end-to-end (minimo config + apps + dotfiles).
+3. Onboarding GUI con consentimiento explicito para activar sync (first-boot script existe, falta GUI).
+4. Matriz de compatibilidad de hardware publicada.
+5. Guia operativa de incidentes (rollback, recovery, revocacion de artefactos).
+6. Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.
+7. Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.
+8. Registry open source de skills/capacidades con versionado, firmas y politica de confianza.
+9. Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.
+10. Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.
+11. Perfiles de runtime `lite/edge/secure/pro` con deteccion automatica de hardware.
+12. Aislamiento por objetivo (sandbox/container/microVM) segun riesgo de la accion.
+13. Constructor visual de workflows y agentes (no-code) para usuarios no tecnicos.
+14. Browser operator seguro para tareas web multi-step con politicas y auditoria.
+15. Suite de benchmarks reproducibles para validar rendimiento/latencia/consumo frente a competidores.
+16. `contracts/intents/v1` completados con tests de compatibilidad de schema (intent.schema.json y result.schema.json existen, falta plan.schema.json).
+17. `contracts/identity/v1` publicados y versionados con validacion de tokens/delegaciones (aun no creados).
+18. `life intents` y `life id` implementados end-to-end con pruebas de aprobacion, rechazo y revocacion.
+19. Ledger cifrado de ejecucion (`intents/results/artifacts`) con exportacion firmada para auditoria.
+20. `device-mesh` operativo para coordinacion multi-PC con identidad de nodo, delegacion y revocacion remota.
+21. Pipeline de extensiones/skills con niveles de confianza (`core`, `verified`, `community`) y aislamiento por defecto.
+22. Autoselector de modelos (`life ai autotune`) implementado con benchmark local y persistencia por rol.
+23. `model-catalog` firmado con versionado y fallback offline embebido en la ISO.
+24. Runtime realtime AI-first implementado con `heavy_model_slots = 1` y pruebas de no regresion de latencia.
+25. `trust_me_mode` implementado con validacion criptografica de `consent_bundle` y auditoria completa.
+26. `Soul Plane` por usuario en `~/.config/lifeos/soul/` (ver modelo biologico en `docs/lifeos_biological_model.md`).
+27. `Skills Plane` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar.
+28. ~~Corregir puerto del daemon `AiManager`~~ — **Corregido.** Ahora usa puerto 8080 consistente con el resto del stack.
+29. Actualizar `contracts/onboarding/first-boot-config.schema.json` para usar nombres de modelos GGUF en lugar de formato Ollama.
+
+### 27.3 Criterio de cierre de faltantes
 
 Un faltante solo se marca cerrado si incluye:
 

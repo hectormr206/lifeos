@@ -11,7 +11,7 @@ mod tests {
         let config = LifeConfig::default();
         assert_eq!(config.version, "1");
         assert!(config.ai.enabled);
-        assert_eq!(config.ai.provider, "ollama");
+        assert_eq!(config.ai.provider, "llama-server");
         assert_eq!(config.security.encryption, true);
     }
 
@@ -28,9 +28,9 @@ mod tests {
     fn test_ai_config_default() {
         let ai = AiConfig::default();
         assert!(ai.enabled);
-        assert_eq!(ai.provider, "ollama");
-        assert_eq!(ai.model, "llama3.2");
-        assert_eq!(ai.ollama_host, "http://localhost:11434");
+        assert_eq!(ai.provider, "llama-server");
+        assert_eq!(ai.model, "qwen3-8b-q4_k_m.gguf");
+        assert_eq!(ai.llama_server_host, "http://localhost:8080");
     }
 
     #[test]
@@ -118,7 +118,7 @@ schedule = "weekly"
                 enabled: true,
                 provider: "anthropic".to_string(),
                 model: "claude-3".to_string(),
-                ollama_host: "http://localhost:11434".to_string(),
+                llama_server_host: "http://localhost:8080".to_string(),
             },
             security: SecurityConfig::default(),
             updates: UpdateConfig::default(),
