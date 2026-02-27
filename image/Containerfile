@@ -62,9 +62,18 @@ RUN dnf -y install \
 RUN dnf -y install \
     toolbox btrfs-progs smartmontools podman buildah flatpak \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite \
-    pciutils usbutils curl ca-certificates openssl-libs cryptsetup \
+    pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
+    python3-mako \
+    anaconda-core anaconda-dracut \
+    lorax-templates-generic \
+    shim-x64 grub2-efi-x64 grub2-efi-x64-modules grub2-efi-x64-cdboot \
     glibc-langpack-es \
     && dnf clean all
+
+# bootc-image-builder expects EFI binaries under /boot/efi/EFI/fedora when producing installer ISOs.
+# On bootc images these live under /usr/lib/bootupd/updates/EFI/fedora, so we mirror them explicitly.
+RUN mkdir -p /boot/efi/EFI/fedora && \
+    cp -a /usr/lib/bootupd/updates/EFI/fedora/. /boot/efi/EFI/fedora/
 
 # --- CLI Life y Daemon (binarios compilados) ---
 COPY --from=builder /build/cli/target/release/life /usr/bin/life
@@ -73,36 +82,79 @@ RUN chmod +x /usr/bin/life /usr/bin/lifeosd && life --version
 
 # --- AI Runtime (llama.cpp / llama-server) ---
 # llama-server provides OpenAI-compatible API for local AI inference.
-# 1) Try to download pre-compiled binary from latest release.
-# 2) Fall back to source compilation if binary unavailable.
+# Strategy: 1) Try pre-compiled binary from ggml-org 2) Fall back to static source compilation.
+# Note: llama.cpp moved from ggerganov → ggml-org. Linux assets are .tar.gz (not .zip).
+# Pre-compiled binaries need their shared libs (.so) installed alongside them.
+# The final `test -x` ensures the build FAILS if neither method works.
 RUN set -eux && \
-    dnf install -y unzip jq cmake make gcc-c++ git openssl-devel && \
+    dnf install -y jq cmake make gcc-c++ git openssl-devel curl tar gzip && \
+    echo ">>> Attempting to download pre-compiled llama-server..." && \
+    RELEASE_JSON="$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest)" && \
+    echo ">>> Latest release: $(echo "${RELEASE_JSON}" | jq -r '.tag_name')" && \
     RELEASE_URL="$( \
-        curl -fsSL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | \
-        jq -r '.assets[]? | select(.name | test("(?i)(linux|ubuntu).*x64.*\\.zip$")) | .browser_download_url' | \
-        head -n 1 \
+        echo "${RELEASE_JSON}" | \
+        jq -r '[.assets[]? | select(.name | test("^llama-.*-bin-ubuntu-x64\\.tar\\.gz$"))] | first | .browser_download_url // empty' \
     )" && \
-    if [ -n "${RELEASE_URL}" ] && [ "${RELEASE_URL}" != "null" ]; then \
-        curl -fsSL -o /tmp/llama.zip "${RELEASE_URL}" && \
-        unzip /tmp/llama.zip -d /tmp/llama || true; \
+    if [ -z "${RELEASE_URL}" ]; then \
+        echo ">>> No ubuntu-x64 tar.gz found, trying broader pattern..." && \
+        RELEASE_URL="$( \
+            echo "${RELEASE_JSON}" | \
+            jq -r '[.assets[]? | select(.name | test("(?i)ubuntu.*x64.*\\.(tar\\.gz|zip)$"))] | first | .browser_download_url // empty' \
+        )"; \
     fi && \
-    LLAMA_BIN="$(find /tmp/llama -name llama-server -type f 2>/dev/null | head -n 1 || true)" && \
-    if [ -n "${LLAMA_BIN}" ]; then \
-        install -m 0755 "${LLAMA_BIN}" /usr/bin/llama-server; \
+    if [ -n "${RELEASE_URL}" ]; then \
+        echo ">>> Downloading: ${RELEASE_URL}" && \
+        ASSET_FILE="/tmp/llama-asset" && \
+        curl -fsSL -o "${ASSET_FILE}" "${RELEASE_URL}" && \
+        mkdir -p /tmp/llama && \
+        if echo "${RELEASE_URL}" | grep -q '\.tar\.gz$'; then \
+            tar -xzf "${ASSET_FILE}" -C /tmp/llama; \
+        else \
+            dnf install -y unzip && \
+            unzip -o "${ASSET_FILE}" -d /tmp/llama; \
+        fi && \
+        LLAMA_BIN="$(find /tmp/llama -name 'llama-server' -type f 2>/dev/null | head -n 1 || true)" && \
+        if [ -n "${LLAMA_BIN}" ]; then \
+            LLAMA_DIR="$(dirname "${LLAMA_BIN}")" && \
+            echo ">>> Found binary: ${LLAMA_BIN}" && \
+            echo ">>> Installing binary + shared libraries..." && \
+            install -m 0755 "${LLAMA_BIN}" /usr/bin/llama-server && \
+            find "${LLAMA_DIR}" -name '*.so*' -exec install -m 0755 {} /usr/lib64/ \; && \
+            ldconfig && \
+            if /usr/bin/llama-server --version 2>/dev/null; then \
+                echo ">>> Pre-compiled binary works!"; \
+            else \
+                echo ">>> Pre-compiled binary has missing deps, removing..." && \
+                rm -f /usr/bin/llama-server; \
+            fi; \
+        else \
+            echo ">>> Binary not found in archive, listing contents:" && \
+            find /tmp/llama -type f | head -20; \
+        fi; \
+        rm -f "${ASSET_FILE}"; \
+    else \
+        echo ">>> No matching release asset found, available assets:" && \
+        echo "${RELEASE_JSON}" | jq -r '.assets[]?.name' | head -20; \
     fi && \
     if [ ! -x /usr/bin/llama-server ]; then \
-        git clone --depth=1 https://github.com/ggerganov/llama.cpp /tmp/llama.cpp && \
+        echo ">>> Falling back to static source compilation..." && \
+        git clone --depth=1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
         cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
             -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON && \
         cmake --build /tmp/llama.cpp/build -j"$(nproc)" --target llama-server && \
         install -m 0755 /tmp/llama.cpp/build/bin/llama-server /usr/bin/llama-server; \
     fi && \
-    rm -rf /tmp/llama /tmp/llama.zip /tmp/llama.cpp && \
-    dnf remove -y unzip cmake make gcc-c++ git openssl-devel && \
-    dnf clean all
+    rm -rf /tmp/llama /tmp/llama.cpp && \
+    dnf remove -y cmake make gcc-c++ git openssl-devel && \
+    dnf clean all && \
+    test -x /usr/bin/llama-server && \
+    echo ">>> llama-server installed at: /usr/bin/llama-server" && \
+    llama-server --version
 
 # --- Directorios LifeOS ---
-RUN mkdir -p /var/lib/lifeos/models /var/log/lifeos /etc/lifeos
+# bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
+RUN mkdir -p /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
+    chmod 0700 /var/roothome
 
 # --- Copiar archivos de configuración y scripts desde el repo ---
 # Configuración de LifeOS
@@ -148,8 +200,7 @@ RUN printf '%s\n' \
     '[Unit]' \
     'Description=LifeOS System Daemon' \
     'After=network-online.target lifeos-security-baseline.service' \
-    'Requires=lifeos-security-baseline.service' \
-    'Wants=network-online.target' \
+    'Wants=network-online.target lifeos-security-baseline.service' \
     '' \
     '[Service]' \
     'Type=simple' \
@@ -179,11 +230,12 @@ RUN rm -f /usr/lib/os-release && \
     printf '%s\n' \
     'NAME="LifeOS"' \
     'VERSION="0.1 Aegis"' \
-    'ID=lifeos' \
-    'ID_LIKE=fedora' \
+    'ID=fedora' \
+    'VARIANT_ID=lifeos' \
+    'VARIANT="LifeOS"' \
     'VERSION_ID="42"' \
     'PLATFORM_ID="platform:f42"' \
-    'PRETTY_NAME="LifeOS 0.1 Aegis"' \
+    'PRETTY_NAME="LifeOS 0.1 Aegis (Fedora 42)"' \
     'ANSI_COLOR="0;36"' \
     'LOGO="fedora-logo-icon"' \
     'CPE_NAME="cpe:/o:fedoraproject:fedora:42"' \

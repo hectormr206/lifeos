@@ -58,13 +58,13 @@ The first-boot experience is the user's initial interaction with LifeOS. It must
 │             │                                                      │
 │             ▼                                                      │
 │  ┌─────────────────────┐                                          │
-│  │  Setup Ollama       │  Install if needed, start service,       │
-│  │                     │  pull default model                       │
+│  │  Setup AI Runtime   │  Start llama-server, download             │
+│  │                     │  default GGUF model                       │
 │  └──────────┬──────────┘                                          │
 │             │                                                      │
 │             ▼                                                      │
 │  ┌─────────────────────┐                                          │
-│  │ Configure Desktop   │  GNOME settings, wallpaper, dock         │
+│  │ Configure Desktop   │  COSMIC settings, wallpaper, dock        │
 │  └──────────┬──────────┘                                          │
 │             │                                                      │
 │             ▼                                                      │
@@ -127,9 +127,9 @@ Performs checks:
 - GPU detection (NVIDIA, AMD, Intel, Apple)
 - Storage space check
 
-### 5. GNOME Integration
+### 5. COSMIC Desktop Integration
 
-Applies settings via `gsettings`:
+Applies desktop settings:
 - Theme variant (Simple/Pro)
 - Wallpaper
 - Dock position
@@ -165,15 +165,15 @@ life first-boot --auto --username dev --hostname workstation --theme pro
 | Verification | No network | Prompt to configure or continue offline |
 | Verification | Low disk space | Warning, suggest cleanup |
 | User Creation | User already exists | Skip with warning |
-| Ollama Setup | Install fails | Continue without AI, notify user |
-| Ollama Setup | Model pull fails | Continue, background download |
+| AI Setup | llama-server fails | Continue without AI, notify user |
+| AI Setup | Model download fails | Continue, background download |
 | Desktop Config | gsettings fails | Log warning, continue |
 
 ## Security Considerations
 
 1. **Password handling** - Written to temp file only during setup, deleted immediately after
 2. **Root execution** - Wizard prompts for elevation when needed
-3. **Network** - No external calls except for Ollama install (user-triggered)
+3. **Network** - No external calls except for AI model download (user-triggered)
 4. **Privacy** - Analytics and telemetry default to OFF
 
 ## Files and Locations

@@ -60,7 +60,9 @@ for attempt in 1 2 3; do
     sleep 5
 done
 
-echo "WARNING: Could not download AI model. AI service will not start until a model is available."
+echo "WARNING: Could not download AI model. llama-server will start but won't serve requests until a model is available."
 echo "Download manually: curl -L -o $MODEL_DIR/$MODEL $MODEL_URL"
 rm -f "$MODEL_DIR/$MODEL.tmp"
-exit 1
+# Exit 0 so llama-server.service is not blocked — the service will fail on its own
+# if no model file exists, but systemd won't mark ExecStartPre as failed.
+exit 0

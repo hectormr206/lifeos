@@ -13,7 +13,7 @@ This guide is for system administrators managing LifeOS deployments.
 │  User Space                                                  │
 │  ├── life CLI           - User interface                     │
 │  ├── lifeosd            - System daemon                      │
-│  └── Ollama             - AI inference engine                │
+│  └── llama-server       - AI inference engine (llama.cpp)    │
 ├─────────────────────────────────────────────────────────────┤
 │  System Services                                             │
 │  ├── lifeosd.service    - Main daemon                        │
@@ -88,16 +88,16 @@ journalctl -u lifeos-update
 journalctl -u lifeos-health
 ```
 
-### Ollama Service
+### llama-server Service
 
 ```bash
-# Manage Ollama
-systemctl start ollama
-systemctl stop ollama
-systemctl enable ollama
+# Manage llama-server (AI inference)
+sudo systemctl start llama-server
+sudo systemctl stop llama-server
+sudo systemctl restart llama-server
 
-# View Ollama logs
-journalctl -u ollama -f
+# View llama-server logs
+journalctl -u llama-server -f
 ```
 
 ## Configuration Reference
@@ -138,9 +138,10 @@ keyboard = "us"
 
 [ai]
 enabled = true
-provider = "ollama"
-model = "llama3.2"
-ollama_host = "http://localhost:11434"
+provider = "llama-server"
+model = "qwen3-8b-q4_k_m.gguf"
+host = "127.0.0.1"
+port = 8080
 
 [security]
 encryption = true
@@ -439,14 +440,19 @@ bootc cleanup
 ### AI Service Issues
 
 ```bash
-# Check Ollama status
-systemctl status ollama
+# Check llama-server status
+systemctl status llama-server
 
-# Verify models
-ollama list
+# View AI service logs
+journalctl -u llama-server -n 50
 
 # Test inference
-ollama run llama3.2 "Hello"
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"default","messages":[{"role":"user","content":"Hello"}]}'
+
+# Check health
+curl http://127.0.0.1:8080/health
 ```
 
 ## API Reference

@@ -1,3 +1,5 @@
+> **DEPRECADO:** Este documento es un snapshot historico del 24-feb-2026. La documentacion vigente esta en [`docs/lifeos-ai-distribution.md`](docs/lifeos-ai-distribution.md). Nota: las referencias a Ollama y GNOME en este archivo estan desactualizadas — LifeOS ahora usa llama-server (llama.cpp) y COSMIC desktop.
+
 # LifeOS - Estado Final del Proyecto
 
 **Fecha:** 2026-02-24  

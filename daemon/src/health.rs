@@ -270,8 +270,10 @@ async fn check_bootc() -> anyhow::Result<(bool, String)> {
 }
 
 async fn check_disk_space() -> anyhow::Result<(bool, String)> {
+    // Use /var instead of / because on bootc systems the root (/) is a composefs
+    // overlay that always reports 100% usage. /var is the real mutable storage.
     let output = Command::new("df")
-        .args(["-Pk", "/"])
+        .args(["-Pk", "/var"])
         .output()?;
 
     if !output.status.success() {

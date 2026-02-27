@@ -1,3 +1,5 @@
+> **DEPRECADO:** Este roadmap es un borrador inicial. El roadmap vigente esta en la seccion 14 de [`docs/lifeos-ai-distribution.md`](docs/lifeos-ai-distribution.md). Las referencias a Ollama estan desactualizadas — LifeOS ahora usa llama-server (llama.cpp).
+
 # First-IA Roadmap
 
 ## Fase 0: Fundación Técnica (0-3 meses) 🏗️

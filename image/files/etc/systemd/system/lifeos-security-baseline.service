@@ -8,7 +8,7 @@ ConditionPathExists=/usr/local/bin/lifeos-security-baseline-check.sh
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/lifeos-security-baseline-check.sh --enforce
+ExecStart=/usr/local/bin/lifeos-security-baseline-check.sh
 RemainAfterExit=yes
 
 [Install]

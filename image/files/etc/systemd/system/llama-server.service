@@ -1,8 +1,9 @@
 [Unit]
 Description=LifeOS AI Inference Server (llama.cpp)
-Documentation=https://github.com/ggerganov/llama.cpp
+Documentation=https://github.com/ggml-org/llama.cpp
 After=network.target
 Wants=network.target
+ConditionPathExists=/etc/lifeos/llama-server.env
 
 [Service]
 Type=simple

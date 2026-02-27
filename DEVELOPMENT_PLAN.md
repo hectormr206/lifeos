@@ -1,3 +1,5 @@
+> **DEPRECADO:** Este plan es un borrador inicial. La documentacion vigente esta en [`docs/lifeos-ai-distribution.md`](docs/lifeos-ai-distribution.md). Las referencias a Ollama y GNOME estan desactualizadas — LifeOS ahora usa llama-server (llama.cpp) y COSMIC desktop.
+
 # LifeOS Test Results & Development Plan
 
 ## Step 1: Docker Image Test Results ✅

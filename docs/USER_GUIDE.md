@@ -49,19 +49,19 @@ This shows:
 
 ### AI Assistant
 
-LifeOS includes a local AI assistant powered by Ollama:
+LifeOS includes a local AI assistant powered by llama-server (llama.cpp):
 
 ```bash
 # Start AI chat
 life ai chat
 
 # List available models
-life ai list
+life ai models
 
 # Pull a new model
-life ai pull mistral
+life ai pull qwen3-8b-q4_k_m.gguf
 
-# Start/stop Ollama service
+# Start/stop AI service
 life ai start
 life ai stop
 ```
@@ -107,12 +107,12 @@ life config show
 life config get ai.model
 
 # Set a value
-life config set ai.model llama3.2
+life config set ai.model qwen3-8b-q4_k_m.gguf
 ```
 
-### GNOME Settings
+### COSMIC Desktop Settings
 
-LifeOS configures GNOME automatically, but you can customize:
+LifeOS configures COSMIC desktop automatically, but you can customize:
 
 ```bash
 # Change theme
@@ -165,10 +165,10 @@ life first-boot --force
 ### AI Not Working
 
 ```bash
-# Check Ollama status
-systemctl status ollama
+# Check llama-server status
+systemctl status llama-server
 
-# Start Ollama
+# Start AI service
 life ai start
 
 # Check GPU acceleration

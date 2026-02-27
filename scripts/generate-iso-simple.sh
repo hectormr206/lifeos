@@ -11,7 +11,7 @@
 #
 # Requisitos:
 #   - Podman instalado (sudo apt install podman  o  sudo dnf install podman)
-#   - Ejecutar como root o con sudo (bootc-image-builder requiere --privileged)
+#   - Root o rootless (este script detecta y usa el storage adecuado)
 #
 # Desde Windows (WSL2):
 #   wsl -d Ubuntu -- sudo bash /ruta/al/proyecto/scripts/generate-iso-simple.sh
@@ -22,7 +22,7 @@ set -euo pipefail
 # --- Configuración ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-OUTPUT_DIR="${PROJECT_ROOT}/output"
+OUTPUT_DIR="${LIFEOS_OUTPUT_DIR:-${PROJECT_ROOT}/output}"
 IMAGE_NAME="localhost/lifeos:latest"
 BUILD_TYPE="${1:-iso}"
 BIB_IMAGE="quay.io/centos-bootc/bootc-image-builder:latest"
@@ -77,8 +77,16 @@ if ! command -v podman &>/dev/null; then
     error "Podman no está instalado. Instálalo con: sudo apt install podman (Ubuntu) o sudo dnf install podman (Fedora)"
 fi
 
-if [[ $EUID -ne 0 ]]; then
-    error "Este script necesita ejecutarse como root. Usa: sudo $0"
+if [[ $EUID -eq 0 ]]; then
+    CONTAINERS_STORAGE="/var/lib/containers/storage"
+    log "Ejecutando como root"
+else
+    CONTAINERS_STORAGE="${HOME}/.local/share/containers/storage"
+    warn "Ejecutando en modo rootless (sin sudo)"
+fi
+
+if [[ ! -d "$CONTAINERS_STORAGE" ]]; then
+    error "No se encontró el storage de podman en: $CONTAINERS_STORAGE"
 fi
 
 # Verificar que BUILD_TYPE es válido
@@ -87,13 +95,39 @@ case "$BUILD_TYPE" in
     *) error "Tipo de build inválido: $BUILD_TYPE. Usa: iso, vmdk, qcow2 o raw" ;;
 esac
 
+# ISO necesita loop devices para crear efiboot.img (mkfs.fat en osbuild).
+# En rootless sin permiso a /dev/loop-control fallará al final tras varios minutos.
+if [[ "$BUILD_TYPE" == "iso" ]] && [[ $EUID -ne 0 ]] && [[ ! -w /dev/loop-control ]]; then
+    error "No hay permisos de escritura sobre /dev/loop-control. Para generar ISO usa:
+  1) sudo ./scripts/generate-iso-simple.sh --type iso --image \"$IMAGE_NAME\"
+  2) o agrega tu usuario al grupo disk y reinicia sesión:
+     sudo usermod -aG disk $USER"
+fi
+
 success "Prerequisitos OK"
+log "Directorio de salida: $OUTPUT_DIR"
 
 # --- Paso 1: Construir la imagen si no existe ---
 log "Verificando imagen del contenedor..."
 
+NEEDS_BUILD=0
 if ! podman image exists "$IMAGE_NAME" 2>/dev/null; then
-    log "Imagen '$IMAGE_NAME' no encontrada. Construyendo..."
+    NEEDS_BUILD=1
+else
+    success "Imagen encontrada: $IMAGE_NAME"
+    # Validación extra para ISO: algunas imágenes antiguas no traen shimx64.efi
+    # en /boot/efi/EFI/fedora y fallan en org.osbuild.grub2.iso.
+    if [[ "$BUILD_TYPE" == "iso" ]]; then
+        if ! podman run --rm "$IMAGE_NAME" test -f /boot/efi/EFI/fedora/shimx64.efi >/dev/null 2>&1; then
+            warn "La imagen existe pero no incluye /boot/efi/EFI/fedora/shimx64.efi"
+            warn "Se reconstruirá automáticamente para evitar fallo en grub2.iso"
+            NEEDS_BUILD=1
+        fi
+    fi
+fi
+
+if [[ "$NEEDS_BUILD" -eq 1 ]]; then
+    log "Construyendo imagen '$IMAGE_NAME'..."
     log "Esto puede tomar 15-30 minutos la primera vez..."
     echo ""
 
@@ -107,14 +141,32 @@ if ! podman image exists "$IMAGE_NAME" 2>/dev/null; then
         "$PROJECT_ROOT"
 
     success "Imagen construida: $IMAGE_NAME"
-else
-    success "Imagen encontrada: $IMAGE_NAME"
 fi
 
 # --- Paso 2: Generar config para bootc-image-builder ---
 log "Preparando configuración de instalación..."
 
-mkdir -p "$OUTPUT_DIR"
+if ! mkdir -p "$OUTPUT_DIR" 2>/dev/null; then
+    if [[ -z "${LIFEOS_OUTPUT_DIR:-}" ]]; then
+        OUTPUT_DIR="/tmp/lifeos-output-${USER}"
+        warn "Sin permisos en output del proyecto. Usando fallback: $OUTPUT_DIR"
+        mkdir -p "$OUTPUT_DIR" || error "No se pudo crear el directorio fallback: $OUTPUT_DIR"
+    else
+        error "No se pudo crear/escribir en LIFEOS_OUTPUT_DIR: $OUTPUT_DIR"
+    fi
+fi
+
+if [[ ! -w "$OUTPUT_DIR" ]]; then
+    if [[ -z "${LIFEOS_OUTPUT_DIR:-}" ]]; then
+        OUTPUT_DIR="/tmp/lifeos-output-${USER}"
+        warn "Directorio no escribible. Usando fallback: $OUTPUT_DIR"
+        mkdir -p "$OUTPUT_DIR" || error "No se pudo crear el directorio fallback: $OUTPUT_DIR"
+    else
+        error "LIFEOS_OUTPUT_DIR no es escribible: $OUTPUT_DIR"
+    fi
+fi
+
+log "Output efectivo: $OUTPUT_DIR"
 
 # Generar hash de contraseña para el usuario default
 PASS_HASH=$(python3 -c "import crypt; print(crypt.crypt('lifeos', crypt.mksalt(crypt.METHOD_SHA512)))" 2>/dev/null || \
@@ -150,54 +202,95 @@ log "Esto puede tomar 10-20 minutos..."
 echo ""
 
 # Limpiar output previo
-rm -rf "$OUTPUT_DIR/bootiso" "$OUTPUT_DIR/disk.*" "$OUTPUT_DIR/image"
+rm -rf "$OUTPUT_DIR/bootiso" "$OUTPUT_DIR/image"
+rm -f "$OUTPUT_DIR/disk.raw" "$OUTPUT_DIR/disk.qcow2" "$OUTPUT_DIR/disk.vmdk"
+
+# bootc-image-builder usa --type anaconda-iso para generar ISOs instalables.
+# Esto produce un ISO con Anaconda + kickstart automatizado que escribe la imagen
+# bootc al disco. No usar bootc-installer/--in-vm (experimental, rompe Anaconda).
+BIB_TYPE="$BUILD_TYPE"
+BIB_EXTRA_ARGS=()
+if [[ "$BUILD_TYPE" == "iso" ]]; then
+    BIB_TYPE="anaconda-iso"
+fi
+
+PODMAN_RUN_ARGS=(
+    --rm
+    --privileged
+    --pull=newer
+    --security-opt
+    label=type:unconfined_t
+    -v
+    "$OUTPUT_DIR:/output"
+    -v
+    "$CONTAINERS_STORAGE:/var/lib/containers/storage"
+    -v
+    "$CONFIG_FILE:/config.json:ro"
+)
+
+# Rootless + ISO: osbuild necesita acceso explícito a loop devices en algunos hosts.
+if [[ "$BUILD_TYPE" == "iso" ]] && [[ $EUID -ne 0 ]]; then
+    PODMAN_RUN_ARGS+=(--group-add keep-groups)
+    PODMAN_RUN_ARGS+=(--device /dev/loop-control:/dev/loop-control)
+    for loopdev in /dev/loop[0-9]*; do
+        [[ -b "$loopdev" ]] || continue
+        PODMAN_RUN_ARGS+=(--device "$loopdev:$loopdev")
+    done
+fi
 
 podman run \
-    --rm \
-    --privileged \
-    --pull=newer \
-    --security-opt label=type:unconfined_t \
-    -v "$OUTPUT_DIR:/output" \
-    -v /var/lib/containers/storage:/var/lib/containers/storage \
-    -v "$CONFIG_FILE:/config.json:ro" \
+    "${PODMAN_RUN_ARGS[@]}" \
     "$BIB_IMAGE" \
-    --type "$BUILD_TYPE" \
+    --type "$BIB_TYPE" \
     --rootfs btrfs \
-    --local \
+    "${BIB_EXTRA_ARGS[@]}" \
     --config /config.json \
     "$IMAGE_NAME"
 
 # --- Paso 4: Renombrar y verificar output ---
-TIMESTAMP=$(date +%Y%m%d)
+TIMESTAMP_DATE=$(date +%Y%m%d)
+TIMESTAMP_FULL=$(date +%Y%m%d-%H%M%S)
 FINAL_FILE=""
 
 case "$BUILD_TYPE" in
     iso)
-        SRC=$(find "$OUTPUT_DIR" -name "*.iso" -type f 2>/dev/null | head -1)
-        if [[ -n "$SRC" ]]; then
-            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP}.iso"
+        SRC="$OUTPUT_DIR/bootiso/install.iso"
+        if [[ -f "$SRC" ]]; then
+            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_DATE}.iso"
+            if [[ -f "$FINAL_FILE" ]]; then
+                FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_FULL}.iso"
+            fi
             mv "$SRC" "$FINAL_FILE"
             rm -rf "$OUTPUT_DIR/bootiso"
         fi
         ;;
     vmdk)
-        SRC=$(find "$OUTPUT_DIR" -name "*.vmdk" -type f 2>/dev/null | head -1)
-        if [[ -n "$SRC" ]]; then
-            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP}.vmdk"
+        SRC="$OUTPUT_DIR/disk.vmdk"
+        if [[ -f "$SRC" ]]; then
+            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_DATE}.vmdk"
+            if [[ -f "$FINAL_FILE" ]]; then
+                FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_FULL}.vmdk"
+            fi
             mv "$SRC" "$FINAL_FILE"
         fi
         ;;
     qcow2)
-        SRC=$(find "$OUTPUT_DIR" -name "*.qcow2" -type f 2>/dev/null | head -1)
-        if [[ -n "$SRC" ]]; then
-            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP}.qcow2"
+        SRC="$OUTPUT_DIR/disk.qcow2"
+        if [[ -f "$SRC" ]]; then
+            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_DATE}.qcow2"
+            if [[ -f "$FINAL_FILE" ]]; then
+                FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_FULL}.qcow2"
+            fi
             mv "$SRC" "$FINAL_FILE"
         fi
         ;;
     raw)
-        SRC=$(find "$OUTPUT_DIR" -name "*.raw" -type f 2>/dev/null | head -1)
-        if [[ -n "$SRC" ]]; then
-            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP}.raw"
+        SRC="$OUTPUT_DIR/disk.raw"
+        if [[ -f "$SRC" ]]; then
+            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_DATE}.raw"
+            if [[ -f "$FINAL_FILE" ]]; then
+                FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_FULL}.raw"
+            fi
             mv "$SRC" "$FINAL_FILE"
         fi
         ;;

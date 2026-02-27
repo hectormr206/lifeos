@@ -648,6 +648,9 @@ Dado que muchos usuarios de alto rendimiento utilizan hardware híbrido (como In
 
 **Decision:** LifeOS construye directamente sobre `quay.io/fedora/fedora-bootc:42`, sin capas intermedias de terceros para la imagen base.
 
+**Guia complementaria recomendada para implementacion:** `docs/BOOTC_LIFEOS_PLAYBOOK.md`  
+**SOP operativo por fases (0/1/2):** `docs/LIFEOS_PHASE_SOP.md`
+
 **Implementacion actual:**
 
 ```dockerfile
@@ -810,7 +813,7 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 
 **Objetivo:** un sistema que arranca, se actualiza y se recupera de forma confiable.
 
-**Estado:** **100% completado** (27 febrero 2026). Fase 0 cerrada con build reproducible, servicios endurecidos y suite de seguridad automatizada.
+**Estado:** **~95% completado** (febrero 2026). Codigo implementado y corregido tras pruebas en VM. Todos los stubs reemplazados con logica real. Pendiente: prueba end-to-end en VM limpia con imagen reconstruida.
 
 **Sistema base:**
 
@@ -821,8 +824,8 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 
 **Seguridad fundacional:**
 
-- [x] LUKS2 cifrado de disco con desbloqueo TPM opcional. *Enforcement en runtime via `lifeos-security-baseline.service` + `lifeos-security-baseline-check.sh` (falla si root no es LUKS2).*
-- [x] Secure Boot + Measured Boot con TPM 2.0. *Enforcement en runtime: validacion de Secure Boot habilitado y deteccion TPM en baseline check.*
+- [x] LUKS2 cifrado de disco con desbloqueo TPM opcional. *Enforcement en runtime via `lifeos-security-baseline-check.sh`. **BUG CORREGIDO:** el servicio corria con `--enforce` por defecto, causando fallo en cascada de `lifeosd` y `llama-server` en VMs sin LUKS. Fix: enforcement ahora es opt-in, no default.*
+- [x] Secure Boot + Measured Boot con TPM 2.0. *Validacion runtime de Secure Boot habilitado y deteccion TPM. Warning-only si no hay Secure Boot (no bloquea boot).*
 - [x] Pipeline CI/CD para construir imagenes OCI firmadas (Sigstore/cosign). *`docker.yml` firma con cosign + OIDC, genera SBOM y provenance.*
 - [x] Supply chain security basico: firmas de imagen + TUF. *`lifeosd` valida metadata TUF (`root/timestamp/snapshot/targets`), expiracion y anti-rollback antes de updates.*
 - [x] Threat model formal (STRIDE). *`docs/threat_model_stride.md` completo con las 6 categorias y matriz de controles.*
@@ -831,7 +834,7 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 
 **AI runtime:**
 
-- [x] llama-server (llama.cpp) como runtime AI por defecto con API OpenAI-compatible. *Compilado/descargado en Containerfile; `llama-server.service` systemd funcional.*
+- [x] llama-server (llama.cpp) como runtime AI por defecto con API OpenAI-compatible. *Compilado/descargado en Containerfile con fallback a compilacion desde fuente. **BUG CORREGIDO:** regex de asset matching mejorado para robustez contra cambios de naming en releases de llama.cpp.*
 - [x] Modelo GGUF default (Qwen3-8B Q4_K_M) descargado en primer arranque. *`lifeos-ai-setup.sh` con deteccion de RAM y fallback a modelo pequeno.*
 - [x] Deteccion automatica de GPU (NVIDIA/AMD/Intel) y configuracion de offload. *Implementada en first-boot, daemon y CLI.*
 - [x] `llama-server.service` con security hardening. *Incluye `PrivateUsers`, `SystemCallFilter`, `MemoryMax` y bind loopback (`LIFEOS_AI_HOST=127.0.0.1`).*
@@ -857,15 +860,43 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 
 **Resumen de progreso Fase 0:**
 
-| Categoria          | Total | Done | Parcial | Faltante |
-| ------------------ | ----- | ---- | ------- | -------- |
-| Sistema base       | 4     | 4    | 0       | 0        |
-| Seguridad          | 7     | 7    | 0       | 0        |
-| AI runtime         | 5     | 5    | 0       | 0        |
-| CLI y config       | 4     | 4    | 0       | 0        |
-| Permisos           | 1     | 1    | 0       | 0        |
-| Health checks      | 2     | 2    | 0       | 0        |
-| **Total**          | **23**| **23** | **0** | **0**    |
+| Categoria          | Total | Codigo | Probado en VM | Bugs |
+| ------------------ | ----- | ------ | ------------- | ---- |
+| Sistema base       | 4     | 4      | 2             | 0    |
+| Seguridad          | 7     | 7      | 4             | 2 corregidos |
+| AI runtime         | 5     | 5      | 3             | 1 corregido  |
+| CLI y config       | 4     | 4      | 4             | 0    |
+| Permisos           | 1     | 1      | 0             | 0    |
+| Health checks      | 2     | 2      | 1             | 1 corregido  |
+| **Total**          | **23**| **23** | **14**        | **4 corregidos** |
+
+**Bugs conocidos (descubiertos en prueba VirtualBox, 26 febrero 2026):**
+
+1. **[CORREGIDO] `lifeosd` no arrancaba por cadena de dependencias:** tenia `Requires=lifeos-security-baseline.service` que causaba fallo en cascada si no habia LUKS/SecureBoot. Fix: cambiado a `Wants=` (dependencia suave).
+2. **[CORREGIDO] `lifeos-security-baseline.service` corria con `--enforce` por defecto:** esto hacia `exit 1` en cualquier VM sin LUKS, matando toda la cadena. Fix: ahora corre sin `--enforce` por defecto (warning-only). Enforcement es opt-in.
+3. **[CORREGIDO] `llama-server` binario no encontrado en VM:** el regex de asset matching para releases de llama.cpp no matcheaba los nombres actuales de assets. Fix: regex mejorado con fallback mas agresivo y logs de debug.
+4. **[PENDIENTE] `systemd-remount-fs.service` failed:** problema conocido de Fedora bootc en VirtualBox con filesystem inmutable. No bloquea el uso pero reporta error.
+5. **[CORREGIDO] `life recover` necesita root para `bootc status`:** el CLI ahora detecta si no es root y usa `sudo` como fallback automatico para comandos bootc (`status`, `upgrade`, `rollback`).
+
+**Para probar la imagen corregida en VirtualBox:**
+
+```bash
+# 1. Reconstruir la imagen con los fixes
+podman build -t lifeos:dev -f image/Containerfile .
+
+# 2. Generar ISO
+bash scripts/generate-iso-simple.sh
+
+# 3. Instalar en VirtualBox (no requiere UEFI ni LUKS para funcionar)
+#    El sistema degradara gracefully: security-baseline reporta warnings
+#    pero lifeosd, llama-server y life CLI funcionan normalmente.
+
+# 4. Si ya tienes una instalacion rota, en la VM ejecutar:
+sudo touch /etc/lifeos/allow-insecure-platform
+sudo systemctl restart lifeos-security-baseline.service
+sudo systemctl restart lifeosd.service
+sudo systemctl restart llama-server.service
+```
 
 **Bloqueantes de Fase 0 cerrados:**
 
@@ -874,11 +905,20 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 3. `Bootstrap token enforcement`: middleware activo en toda la API v1.
 4. `Daemon chat endpoint`: conectado a llama-server OpenAI-compatible real.
 5. `D-Bus permissions`: prompt real + persistencia de politicas.
+6. `life recover` sin root: fallback automatico a `sudo` para comandos bootc.
+7. `check_disk_space()` real: parseo de `df` con umbral de 90%.
+8. `check_updates()` real: usa `bootc upgrade --check` en vez de stub.
+9. `ConditionPathExists` en `llama-server.service`: previene fallo silencioso sin env file.
 6. `Health checks completos`: AI, red, disco (umbrales), integridad y baseline de seguridad.
 7. `fs-verity explicito`: verificacion de integridad `/usr` integrada.
-8. `LUKS2 + Secure Boot`: enforcement runtime como baseline obligatorio.
+8. `LUKS2 + Secure Boot`: baseline check implementado (warning-only por defecto, enforce opt-in).
 9. `TUF`: validacion de metadata + anti-rollback en update path.
 10. `Runtime security CI`: job dedicado con pruebas de token/path traversal/fail-closed.
+
+**Bloqueantes pendientes para declarar Fase 0 al 100%:**
+
+1. **Prueba ISO end-to-end en VM** que demuestre boot limpio con todos los servicios activos.
+2. **Prueba de `bootc upgrade` + rollback** en VM automatizada.
 
 ### Fase 1 (3-6 meses): UX y confiabilidad
 
@@ -1248,7 +1288,7 @@ RUN dnf -y install toolbox btrfs-progs podman buildah flatpak \
 # Estrategia: descarga binario pre-compilado, fallback a compilacion desde fuente.
 # NUNCA usar curl|sh.
 RUN set -eux && \
-    RELEASE_URL="$(curl -fsSL https://api.github.com/repos/ggerganov/llama.cpp/releases/latest | \
+    RELEASE_URL="$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest | \
         jq -r '...')" && \
     # Intenta binario pre-compilado, si falla compila desde fuente
     ...
@@ -1950,6 +1990,10 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 
 ## 26. Referencias tecnicas
 
+- Playbook interno Bootc aplicado a LifeOS: `docs/BOOTC_LIFEOS_PLAYBOOK.md`
+- SOP por fases para ejecucion y cierre (0/1/2): `docs/LIFEOS_PHASE_SOP.md`
+- Fedora Bootc docs (sitio Fedora): https://fedora-projects.github.io/bootc/
+- CentOS SIG Bootc guide (arquitectura detallada): https://sigs.centos.org/automotive/bootc/
 - Fedora bootc/image mode: https://docs.fedoraproject.org/en-US/bootc/
 - bootc project (CNCF): https://bootc-dev.github.io/bootc/
 - composefs (CNCF): https://github.com/composefs/composefs
