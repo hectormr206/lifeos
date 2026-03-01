@@ -8,7 +8,7 @@ timezone = "UTC"
 enabled = true
 provider = "llama-server"
 model = "qwen3-8b-q4_k_m.gguf"
-llama_server_host = "http://localhost:8080"
+llama_server_host = "http://localhost:8082"
 
 [security]
 encryption = true

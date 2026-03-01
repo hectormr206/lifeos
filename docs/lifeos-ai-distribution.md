@@ -31,15 +31,15 @@ Este documento esta escrito para un agente de implementacion (LLM + herramientas
 
 Se considera completado cuando se cumplen todos:
 
-1. [x] Imagen OCI de LifeOS construye en CI sin errores. *`docker.yml` activo.*
-2. [ ] ISO generada arranca en VM y en al menos un equipo real soportado. *Pendiente prueba sistematica.*
-3. [x] `life status`, `life update --dry`, `life rollback` funcionan end-to-end. *CLI implementado.*
-4. [ ] Update atomico + rollback validado por test automatizado. *CLI listo, falta test E2E en VM.*
-5. [x] Permisos multimodales (mic/camara/pantalla) auditables y revocables. *Broker D-Bus con prompt real y persistencia de politicas en disco.*
-6. [x] Life Capsule export/restore funcional. *Cifrado con `age` + tar + flatpak.*
-7. [x] Sync instalado por defecto, pero solo activado tras consentimiento explicito. *`sync.enabled = false` en config.*
-8. [x] Pipeline de firma/verificacion de imagen activo. *Cosign + OIDC en CI.*
-9. [x] Suite minima de tests pasando en CI. *Tests unitarios + integracion + cargo-audit + CodeQL.*
+1. [x] Imagen OCI de LifeOS construye en CI sin errores. _`docker.yml` activo._
+2. [ ] ISO generada arranca en VM y en al menos un equipo real soportado. _Pendiente prueba sistematica._
+3. [x] `life status`, `life update --dry`, `life rollback` funcionan end-to-end. _CLI implementado._
+4. [ ] Update atomico + rollback validado por test automatizado. _CLI listo, falta test E2E en VM._
+5. [x] Permisos multimodales (mic/camara/pantalla) auditables y revocables. _Broker D-Bus con prompt real y persistencia de politicas en disco._
+6. [x] Life Capsule export/restore funcional. _Cifrado con `age` + tar + flatpak._
+7. [x] Sync instalado por defecto, pero solo activado tras consentimiento explicito. _`sync.enabled = false` en config._
+8. [x] Pipeline de firma/verificacion de imagen activo. _Cosign + OIDC en CI._
+9. [x] Suite minima de tests pasando en CI. _Tests unitarios + integracion + cargo-audit + CodeQL._
 
 ### 0.4 Modo de lectura para LLM implementador
 
@@ -64,6 +64,7 @@ LifeOS busca ser la primera distro Linux AI-first realmente masiva:
 **Diferenciador clave:** no es una distro con IA encima — es un sistema operativo donde la IA es ciudadano de primera clase en cada capa (shell, escritorio, actualizaciones, diagnostico), pero el usuario siempre decide que se activa.
 
 **Modelo cognitivo:** LifeOS se inspira en un modelo biologico (ver `docs/lifeos_biological_model.md`) donde el sistema tiene:
+
 - **Soul** (ADN): identidad, estilo de interaccion y limites de autonomia por usuario.
 - **Skills** (memoria muscular): habilidades aprendidas, reutilizables y firmadas.
 - **Workplace** (habitat): contexto digital activo que determina permisos y comportamiento.
@@ -218,7 +219,7 @@ toolbox = ["ubuntu-dev", "fedora-build"]
 enabled = true
 provider = "llama-server"
 model = "qwen3-8b-q4_k_m.gguf"
-llama_server_host = "http://localhost:8080"
+llama_server_host = "http://localhost:8082"
 voice = false
 screen_capture = false
 camera = false
@@ -260,7 +261,7 @@ Este archivo es portable: restaurar un equipo es `life capsule restore`.
 └──────────────────────────────────────┘
 ```
 
-- **llama-server (llama.cpp) como unico runtime local:** API OpenAI-compatible en puerto 8080, soporte GGUF nativo, optimizacion por hardware (CUDA, ROCm, Vulkan). Sin dependencias externas. El modelo por defecto es `qwen3-8b-q4_k_m.gguf` con fallback a `qwen3-1.7b-q4_k_m.gguf` en equipos con poca RAM.
+- **llama-server (llama.cpp) como unico runtime local:** API OpenAI-compatible en puerto 8082, soporte GGUF nativo, optimizacion por hardware (CUDA, ROCm, Vulkan). Sin dependencias externas. El modelo por defecto es `qwen3-8b-q4_k_m.gguf` con fallback a `qwen3-1.7b-q4_k_m.gguf` en equipos con poca RAM.
 - **Nube opcional:** solo se activa si el usuario la configura explicitamente. Todas las consultas en nube son cifradas E2E.
 - **Enrutador inteligente:** tareas simples (clasificacion, OCR) van a modelos pequenos locales; tareas complejas (generacion larga, analisis multi-documento) pueden ir a modelos grandes locales o nube segun politica del usuario.
 - **Nota:** Ollama fue evaluado y descartado como dependencia por riesgo de continuidad (startup con funding limitado, sin modelo de ingresos claro). llama-server ofrece el mismo rendimiento con comunidad mas grande y sin single point of failure.
@@ -630,26 +631,27 @@ Dado que muchos usuarios de alto rendimiento utilizan hardware híbrido (como In
 
 ## 12. Stack tecnico (actualizado febrero 2026)
 
-| Capa             | Eleccion                              | Razon                                                                                                                 | Estado    |
-| ---------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------- |
-| Base OS          | Fedora Image Mode + bootc             | Actualizaciones atomicas OCI, CNCF sandbox (ene 2025). Nota: produccion plena apunta a Fedora 45.                     | Madurando |
-| Kernel           | Linux mainline 6.x + parches desktop  | Compatibilidad amplia y baja latencia.                                                                                | Estable   |
-| Filesystem raiz  | composefs + fs-verity (sobre Btrfs)   | Inmutabilidad verificable a nivel kernel para `/usr`.                                                                 | Estable   |
-| Filesystem datos | Btrfs                                 | Snapshots, subvolumenes, compresion zstd para `/home` y `/var`.                                                       | Estable   |
-| Desktop          | **COSMIC Epoch 1** (estable dic 2025) | Rust, tiling nativo, extensible, sync en roadmap.                                                                     | Estable   |
-| Audio/Video      | PipeWire + WirePlumber                | Stack unificado de multimedia, baja latencia, estandar en todas las distros mayores.                                  | Estable   |
-| Apps GUI         | Flatpak + xdg-desktop-portal          | Aislamiento + permisos declarativos.                                                                                  | Estable   |
-| Dev Envs         | Toolbx (principal) + Podman directo   | Containers mutables sin romper base. Toolbx mantenido por Red Hat.                                                    | Estable   |
-| AI Runtime       | llama-server (llama.cpp)              | API OpenAI-compatible (puerto 8080), rendimiento maximo, GGUF nativo, sin dependencias externas.                      | Estable   |
-| Update Trust     | TUF + Sigstore + in-toto              | Cadena de supply chain verificable de extremo a extremo.                                                              | Estable   |
-| Observabilidad   | OpenTelemetry + panel local           | Diagnostico continuo y accionable sin enviar datos a terceros.                                                        | Estable   |
+| Capa             | Eleccion                              | Razon                                                                                             | Estado    |
+| ---------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------- | --------- |
+| Base OS          | Fedora Image Mode + bootc             | Actualizaciones atomicas OCI, CNCF sandbox (ene 2025). Nota: produccion plena apunta a Fedora 45. | Madurando |
+| Kernel           | Linux mainline 6.x + parches desktop  | Compatibilidad amplia y baja latencia.                                                            | Estable   |
+| Filesystem raiz  | composefs + fs-verity (sobre Btrfs)   | Inmutabilidad verificable a nivel kernel para `/usr`.                                             | Estable   |
+| Filesystem datos | Btrfs                                 | Snapshots, subvolumenes, compresion zstd para `/home` y `/var`.                                   | Estable   |
+| Desktop          | **COSMIC Epoch 1** (estable dic 2025) | Rust, tiling nativo, extensible, sync en roadmap.                                                 | Estable   |
+| Audio/Video      | PipeWire + WirePlumber                | Stack unificado de multimedia, baja latencia, estandar en todas las distros mayores.              | Estable   |
+| Apps GUI         | Flatpak + xdg-desktop-portal          | Aislamiento + permisos declarativos.                                                              | Estable   |
+| Dev Envs         | Toolbx (principal) + Podman directo   | Containers mutables sin romper base. Toolbx mantenido por Red Hat.                                | Estable   |
+| AI Runtime       | llama-server (llama.cpp)              | API OpenAI-compatible (puerto 8082), rendimiento maximo, GGUF nativo, sin dependencias externas.  | Estable   |
+| Update Trust     | TUF + Sigstore + in-toto              | Cadena de supply chain verificable de extremo a extremo.                                          | Estable   |
+| Observabilidad   | OpenTelemetry + panel local           | Diagnostico continuo y accionable sin enviar datos a terceros.                                    | Estable   |
 
 ### 12.1 Estrategia de base: Fedora bootc directo
 
 **Decision:** LifeOS construye directamente sobre `quay.io/fedora/fedora-bootc:42`, sin capas intermedias de terceros para la imagen base.
 
-**Guia complementaria recomendada para implementacion:** `docs/BOOTC_LIFEOS_PLAYBOOK.md`  
+**Guia complementaria recomendada para implementacion:** `docs/BOOTC_LIFEOS_PLAYBOOK.md`
 **SOP operativo por fases (0/1/2):** `docs/LIFEOS_PHASE_SOP.md`
+**Seleccion y justificacion del modelo fundacional de IA:** `docs/AI_MODEL_SELECTION.md`
 
 **Implementacion actual:**
 
@@ -757,15 +759,15 @@ System76 (~40-60 empleados, ~$5-10M revenue) vende hardware Linux. COSMIC es su 
 2. El plan B requiere reescribir codigo o solo cambiar configuracion?
 3. Cuanto tiempo tomaria ejecutar el plan B?
 
-| Componente     | Plan B                                       | Esfuerzo de migracion                  |
-| -------------- | -------------------------------------------- | -------------------------------------- |
-| Fedora bootc   | CentOS Stream bootc                          | Config (cambiar FROM en Containerfile) |
-| COSMIC         | GNOME Shell                                  | Config + temas (1-2 semanas)           |
-| Flatpak        | RPMs en imagen base para apps criticas       | Ya mitigado desde dia 1                |
-| llama-server   | Compilar desde fuente llama.cpp              | Ya implementado como fallback en build |
-| Distrobox      | Toolbx / Podman directo                      | Wrapper en CLI `life` (dias)           |
-| PipeWire       | N/A (sin alternativa, pero estable y ubicuo) | No aplica                              |
-| Sigstore       | GPG signing tradicional                      | Config en CI (horas)                   |
+| Componente   | Plan B                                       | Esfuerzo de migracion                  |
+| ------------ | -------------------------------------------- | -------------------------------------- |
+| Fedora bootc | CentOS Stream bootc                          | Config (cambiar FROM en Containerfile) |
+| COSMIC       | GNOME Shell                                  | Config + temas (1-2 semanas)           |
+| Flatpak      | RPMs en imagen base para apps criticas       | Ya mitigado desde dia 1                |
+| llama-server | Compilar desde fuente llama.cpp              | Ya implementado como fallback en build |
+| Distrobox    | Toolbx / Podman directo                      | Wrapper en CLI `life` (dias)           |
+| PipeWire     | N/A (sin alternativa, pero estable y ubicuo) | No aplica                              |
+| Sigstore     | GPG signing tradicional                      | Config en CI (horas)                   |
 
 ---
 
@@ -817,58 +819,58 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 
 **Sistema base:**
 
-- [x] Base inmutable bootc + slots A/B + rollback funcional. *Containerfile sobre `fedora-bootc:42`; CLI `life rollback` llama `bootc rollback` real.*
-- [x] Flatpak + Toolbx funcionando sobre la base inmutable. *Instalados en Containerfile; Flathub configurado en first-boot.*
-- [x] Btrfs snapshots automaticos antes de cambios criticos. *`lifeos-btrfs-snapshot.sh` + `lifeos-btrfs-snapshot.timer` en imagen y hook pre-update en CLI (`life update`).*
-- [x] fs-verity para verificacion de integridad de `/usr`. *Chequeo explicito via `lifeos-integrity-check.sh` y health check `filesystem-integrity` en daemon.*
+- [x] Base inmutable bootc + slots A/B + rollback funcional. _Containerfile sobre `fedora-bootc:42`; CLI `life rollback` llama `bootc rollback` real._
+- [x] Flatpak + Toolbx funcionando sobre la base inmutable. _Instalados en Containerfile; Flathub configurado en first-boot._
+- [x] Btrfs snapshots automaticos antes de cambios criticos. _`lifeos-btrfs-snapshot.sh` + `lifeos-btrfs-snapshot.timer` en imagen y hook pre-update en CLI (`life update`)._
+- [x] fs-verity para verificacion de integridad de `/usr`. _Chequeo explicito via `lifeos-integrity-check.sh` y health check `filesystem-integrity` en daemon._
 
 **Seguridad fundacional:**
 
-- [x] LUKS2 cifrado de disco con desbloqueo TPM opcional. *Enforcement en runtime via `lifeos-security-baseline-check.sh`. **BUG CORREGIDO:** el servicio corria con `--enforce` por defecto, causando fallo en cascada de `lifeosd` y `llama-server` en VMs sin LUKS. Fix: enforcement ahora es opt-in, no default.*
-- [x] Secure Boot + Measured Boot con TPM 2.0. *Validacion runtime de Secure Boot habilitado y deteccion TPM. Warning-only si no hay Secure Boot (no bloquea boot).*
-- [x] Pipeline CI/CD para construir imagenes OCI firmadas (Sigstore/cosign). *`docker.yml` firma con cosign + OIDC, genera SBOM y provenance.*
-- [x] Supply chain security basico: firmas de imagen + TUF. *`lifeosd` valida metadata TUF (`root/timestamp/snapshot/targets`), expiracion y anti-rollback antes de updates.*
-- [x] Threat model formal (STRIDE). *`docs/threat_model_stride.md` completo con las 6 categorias y matriz de controles.*
-- [x] Endpoints de control en loopback + tokens de bootstrap. *Daemon y llama-server en `127.0.0.1`; middleware obligatorio de bootstrap token en `/api/v1/*`.*
-- [x] Suite de regresion de seguridad minima en CI. *`tests/security_tests.sh` valida token bootstrap, bloqueo de path traversal y fail-closed de AI endpoint; job `runtime-security` activo en CI.*
+- [x] LUKS2 cifrado de disco con desbloqueo TPM opcional. _Enforcement en runtime via `lifeos-security-baseline-check.sh`. **BUG CORREGIDO:** el servicio corria con `--enforce` por defecto, causando fallo en cascada de `lifeosd` y `llama-server` en VMs sin LUKS. Fix: enforcement ahora es opt-in, no default._
+- [x] Secure Boot + Measured Boot con TPM 2.0. _Validacion runtime de Secure Boot habilitado y deteccion TPM. Warning-only si no hay Secure Boot (no bloquea boot)._
+- [x] Pipeline CI/CD para construir imagenes OCI firmadas (Sigstore/cosign). _`docker.yml` firma con cosign + OIDC, genera SBOM y provenance._
+- [x] Supply chain security basico: firmas de imagen + TUF. _`lifeosd` valida metadata TUF (`root/timestamp/snapshot/targets`), expiracion y anti-rollback antes de updates._
+- [x] Threat model formal (STRIDE). _`docs/threat_model_stride.md` completo con las 6 categorias y matriz de controles._
+- [x] Endpoints de control en loopback + tokens de bootstrap. _Daemon y llama-server en `127.0.0.1`; middleware obligatorio de bootstrap token en `/api/v1/_`.\*
+- [x] Suite de regresion de seguridad minima en CI. _`tests/security_tests.sh` valida token bootstrap, bloqueo de path traversal y fail-closed de AI endpoint; job `runtime-security` activo en CI._
 
 **AI runtime:**
 
-- [x] llama-server (llama.cpp) como runtime AI por defecto con API OpenAI-compatible. *Compilado/descargado en Containerfile con fallback a compilacion desde fuente. **BUG CORREGIDO:** regex de asset matching mejorado para robustez contra cambios de naming en releases de llama.cpp.*
-- [x] Modelo GGUF default (Qwen3-8B Q4_K_M) descargado en primer arranque. *`lifeos-ai-setup.sh` con deteccion de RAM y fallback a modelo pequeno.*
-- [x] Deteccion automatica de GPU (NVIDIA/AMD/Intel) y configuracion de offload. *Implementada en first-boot, daemon y CLI.*
-- [x] `llama-server.service` con security hardening. *Incluye `PrivateUsers`, `SystemCallFilter`, `MemoryMax` y bind loopback (`LIFEOS_AI_HOST=127.0.0.1`).*
-- [x] API REST del daemon (`lifeosd`) con endpoints de sistema, AI y health. *Chat conectado a `llama-server` real, metricas de recursos reales y token bootstrap enforceado.*
+- [x] llama-server (llama.cpp) como runtime AI por defecto con API OpenAI-compatible. _Compilado/descargado en Containerfile con fallback a compilacion desde fuente. **BUG CORREGIDO:** regex de asset matching mejorado para robustez contra cambios de naming en releases de llama.cpp._
+- [x] Modelo GGUF default (Qwen3-8B Q4_K_M) descargado en primer arranque. _`lifeos-ai-setup.sh` con deteccion de RAM y fallback a modelo pequeno._
+- [x] Deteccion automatica de GPU (NVIDIA/AMD/Intel) y configuracion de offload. _Implementada en first-boot, daemon y CLI._
+- [x] `llama-server.service` con security hardening. _Incluye `PrivateUsers`, `SystemCallFilter`, `MemoryMax` y bind loopback (`LIFEOS_AI_HOST=127.0.0.1`)._
+- [x] API REST del daemon (`lifeosd`) con endpoints de sistema, AI y health. _Chat conectado a `llama-server` real, metricas de recursos reales y token bootstrap enforceado._
 
 **CLI y configuracion:**
 
-- [x] `lifeos.toml` como formato de configuracion declarativa. *Structs tipados con load/save/get/set por dotted key.*
-- [x] CLI `life` con comandos nucleares: `status`, `update`, `rollback`, `recover`. *Todos implementados con logica real.*
-- [x] CLI `life ai`: `start`, `stop`, `status`, `ask`, `chat`, `models`, `pull`. *Todos implementados incluyendo streaming SSE y deteccion de GPU.*
-- [x] Backup cifrado + restore basico (`life capsule export/restore`). *Usa `age` para cifrado + tar + flatpak restore.*
+- [x] `lifeos.toml` como formato de configuracion declarativa. _Structs tipados con load/save/get/set por dotted key._
+- [x] CLI `life` con comandos nucleares: `status`, `update`, `rollback`, `recover`. _Todos implementados con logica real._
+- [x] CLI `life ai`: `start`, `stop`, `status`, `ask`, `chat`, `models`, `pull`. _Todos implementados incluyendo streaming SSE y deteccion de GPU._
+- [x] Backup cifrado + restore basico (`life capsule export/restore`). _Usa `age` para cifrado + tar + flatpak restore._
 
 **Permisos:**
 
-- [x] Centro de permisos basico (D-Bus broker). *Prompt real (`zenity` / `systemd-ask-password`) y persistencia de politicas en `/var/lib/lifeos/permissions-policy.json`.*
+- [x] Centro de permisos basico (D-Bus broker). _Prompt real (`zenity` / `systemd-ask-password`) y persistencia de politicas en `/var/lib/lifeos/permissions-policy.json`._
 
 **Health checks:**
 
-- [x] `life recover` con diagnostico automatico y reparacion. *Reporte con checks por nombre, pass/fail, reparaciones y reboot flag.*
-- [x] Health checks de servicios criticos. *Checks reales de `bootc`, disco con umbral, red, estado AI, integridad `composefs/fs-verity` y baseline de seguridad.*
+- [x] `life recover` con diagnostico automatico y reparacion. _Reporte con checks por nombre, pass/fail, reparaciones y reboot flag._
+- [x] Health checks de servicios criticos. _Checks reales de `bootc`, disco con umbral, red, estado AI, integridad `composefs/fs-verity` y baseline de seguridad._
 
 **Entregable:** imagen ISO booteable con AI local funcional que se actualiza sin romperse.
 
 **Resumen de progreso Fase 0:**
 
-| Categoria          | Total | Codigo | Probado en VM | Bugs |
-| ------------------ | ----- | ------ | ------------- | ---- |
-| Sistema base       | 4     | 4      | 2             | 0    |
-| Seguridad          | 7     | 7      | 4             | 2 corregidos |
-| AI runtime         | 5     | 5      | 3             | 1 corregido  |
-| CLI y config       | 4     | 4      | 4             | 0    |
-| Permisos           | 1     | 1      | 0             | 0    |
-| Health checks      | 2     | 2      | 1             | 1 corregido  |
-| **Total**          | **23**| **23** | **14**        | **4 corregidos** |
+| Categoria     | Total  | Codigo | Probado en VM | Bugs             |
+| ------------- | ------ | ------ | ------------- | ---------------- |
+| Sistema base  | 4      | 4      | 2             | 0                |
+| Seguridad     | 7      | 7      | 4             | 2 corregidos     |
+| AI runtime    | 5      | 5      | 3             | 1 corregido      |
+| CLI y config  | 4      | 4      | 4             | 0                |
+| Permisos      | 1      | 1      | 0             | 0                |
+| Health checks | 2      | 2      | 1             | 1 corregido      |
+| **Total**     | **23** | **23** | **14**        | **4 corregidos** |
 
 **Bugs conocidos (descubiertos en prueba VirtualBox, 26 febrero 2026):**
 
@@ -909,11 +911,11 @@ sudo systemctl restart llama-server.service
 7. `check_disk_space()` real: parseo de `df` con umbral de 90%.
 8. `check_updates()` real: usa `bootc upgrade --check` en vez de stub.
 9. `ConditionPathExists` en `llama-server.service`: previene fallo silencioso sin env file.
-6. `Health checks completos`: AI, red, disco (umbrales), integridad y baseline de seguridad.
-7. `fs-verity explicito`: verificacion de integridad `/usr` integrada.
-8. `LUKS2 + Secure Boot`: baseline check implementado (warning-only por defecto, enforce opt-in).
-9. `TUF`: validacion de metadata + anti-rollback en update path.
-10. `Runtime security CI`: job dedicado con pruebas de token/path traversal/fail-closed.
+10. `Health checks completos`: AI, red, disco (umbrales), integridad y baseline de seguridad.
+11. `fs-verity explicito`: verificacion de integridad `/usr` integrada.
+12. `LUKS2 + Secure Boot`: baseline check implementado (warning-only por defecto, enforce opt-in).
+13. `TUF`: validacion de metadata + anti-rollback en update path.
+14. `Runtime security CI`: job dedicado con pruebas de token/path traversal/fail-closed.
 
 **Bloqueantes pendientes para declarar Fase 0 al 100%:**
 
@@ -1505,7 +1507,7 @@ serde_json = "1"
 toml = "0.8"
 anyhow = "1"
 colored = "3"
-reqwest = { version = "0.12", features = ["json"] }  # Para llama-server API (http://localhost:8080)
+reqwest = { version = "0.12", features = ["json"] }  # Para llama-server API (http://localhost:8082)
 dirs = "6"
 ```
 
@@ -1849,15 +1851,15 @@ Semana 5-6: Buffer + documentacion
 
 ### 22.3 Criterios de exito del MVP alpha
 
-- [x] La imagen OCI construye sin errores en CI. *`docker.yml` activo con firma cosign.*
-- [ ] La imagen ISO bootea en hardware real y en VM (QEMU/VirtualBox). *Pendiente de prueba sistematica.*
-- [x] `life status` muestra version, slot activo y estado de salud. *Implementado con flag `--json`.*
-- [x] `life update --dry` simula una actualizacion. *Wrapper sobre `bootc upgrade --check`.*
-- [x] `life rollback` cambia al slot previo y reinicia. *Wrapper sobre `bootc rollback`.*
-- [x] llama-server corre y responde a health check y chat completions. *Servicio systemd + `lifeos-ai-setup.sh` + `llama-server-health-check.sh`.*
-- [x] Flatpak funciona con Flathub configurado. *Configurado en first-boot.*
-- [x] Toolbx disponible para containers de desarrollo. *Instalado en imagen base.*
-- [ ] El sistema sobrevive a un `bootc upgrade` sin romperse. *Pendiente de prueba automatizada en VM.*
+- [x] La imagen OCI construye sin errores en CI. _`docker.yml` activo con firma cosign._
+- [ ] La imagen ISO bootea en hardware real y en VM (QEMU/VirtualBox). _Pendiente de prueba sistematica._
+- [x] `life status` muestra version, slot activo y estado de salud. _Implementado con flag `--json`._
+- [x] `life update --dry` simula una actualizacion. _Wrapper sobre `bootc upgrade --check`._
+- [x] `life rollback` cambia al slot previo y reinicia. _Wrapper sobre `bootc rollback`._
+- [x] llama-server corre y responde a health check y chat completions. _Servicio systemd + `lifeos-ai-setup.sh` + `llama-server-health-check.sh`._
+- [x] Flatpak funciona con Flathub configurado. _Configurado en first-boot._
+- [x] Toolbx disponible para containers de desarrollo. _Instalado en imagen base._
+- [ ] El sistema sobrevive a un `bootc upgrade` sin romperse. _Pendiente de prueba automatizada en VM._
 
 ---
 
@@ -1880,13 +1882,13 @@ LifeOS gana en seguridad (inmutabilidad, rollback, audit) y privacidad (local-fi
 
 Los workflows reales estan en `.github/workflows/`. Resumen:
 
-| Workflow       | Trigger                            | Funcion                                                              |
-| -------------- | ---------------------------------- | -------------------------------------------------------------------- |
-| `ci.yml`       | Push/PR a `main`/`develop`         | Build CLI + Daemon, tests, `cargo-audit`, coverage (tarpaulin), docs |
-| `docker.yml`   | Push a `main` o tags `v*`, PRs     | Build y push de imagen OCI a `ghcr.io`                               |
-| `release.yml`  | Push de tags `v*` o manual         | Release GitHub con binarios multi-arch (linux + macOS, x86 + arm64)  |
-| `nightly.yml`  | Cron nocturno                      | Builds nocturnos para deteccion temprana de regresiones              |
-| `codeql.yml`   | Push/PR                            | Escaneo de seguridad CodeQL                                          |
+| Workflow      | Trigger                        | Funcion                                                              |
+| ------------- | ------------------------------ | -------------------------------------------------------------------- |
+| `ci.yml`      | Push/PR a `main`/`develop`     | Build CLI + Daemon, tests, `cargo-audit`, coverage (tarpaulin), docs |
+| `docker.yml`  | Push a `main` o tags `v*`, PRs | Build y push de imagen OCI a `ghcr.io`                               |
+| `release.yml` | Push de tags `v*` o manual     | Release GitHub con binarios multi-arch (linux + macOS, x86 + arm64)  |
+| `nightly.yml` | Cron nocturno                  | Builds nocturnos para deteccion temprana de regresiones              |
+| `codeql.yml`  | Push/PR                        | Escaneo de seguridad CodeQL                                          |
 
 ### 23.2 Build del CLI y Daemon
 
@@ -1897,6 +1899,7 @@ El pipeline `ci.yml` compila tanto `cli/` como `daemon/` en un solo job, corre `
 El pipeline `docker.yml` construye la imagen multi-stage (Stage 1: Rust, Stage 2: sistema) y la publica en GHCR. La firma con Cosign/KMS esta planificada pero aun no activa en CI — actualmente se firma manualmente.
 
 **Pendiente de automatizar:**
+
 - Firma Cosign con clave en KMS (no en GitHub Secrets)
 - Attestations in-toto en el pipeline
 - Verificacion automatica de hash de la imagen base de Fedora
@@ -1992,6 +1995,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 
 - Playbook interno Bootc aplicado a LifeOS: `docs/BOOTC_LIFEOS_PLAYBOOK.md`
 - SOP por fases para ejecucion y cierre (0/1/2): `docs/LIFEOS_PHASE_SOP.md`
+- Seleccion y justificacion del modelo fundacional de IA: `docs/AI_MODEL_SELECTION.md`
 - Fedora Bootc docs (sitio Fedora): https://fedora-projects.github.io/bootc/
 - CentOS SIG Bootc guide (arquitectura detallada): https://sigs.centos.org/automotive/bootc/
 - Fedora bootc/image mode: https://docs.fedoraproject.org/en-US/bootc/
@@ -2039,6 +2043,7 @@ Estado actual del proyecto (febrero 2026): la base tecnica esta implementada —
 5. ~~`.github/workflows/` reales~~ — **Hecho.** CI, docker, release, nightly, codeql.
 
 ### 27.2 Entregables obligatorios pendientes
+
 1. Flujo de firma Cosign con KMS operativo en CI (actualmente manual).
 2. `life capsule export/restore` funcional end-to-end (minimo config + apps + dotfiles).
 3. Onboarding GUI con consentimiento explicito para activar sync (first-boot script existe, falta GUI).

@@ -38,6 +38,8 @@ enum Commands {
     Rollback,
     /// Recover from failures
     Recover,
+    /// Run full system verification
+    Check,
     /// Manage system configuration
     #[command(subcommand)]
     Config(commands::config::ConfigCommands),
@@ -119,6 +121,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Update(args) => commands::update::execute(args).await,
         Commands::Rollback => commands::rollback::execute().await,
         Commands::Recover => commands::recover::execute().await,
+        Commands::Check => {
+            let status = std::process::Command::new("lifeos-check")
+                .status()
+                .map_err(|e| anyhow::anyhow!("Failed to run lifeos-check: {}", e))?;
+            std::process::exit(status.code().unwrap_or(1));
+        }
         Commands::Config(args) => commands::config::execute(args).await,
         Commands::Capsule(args) => commands::capsule::execute(args).await,
         Commands::Ai(args) => commands::ai::execute(args).await,

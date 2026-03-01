@@ -142,19 +142,59 @@ RUN set -eux && \
         cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
             -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON && \
         cmake --build /tmp/llama.cpp/build -j"$(nproc)" --target llama-server && \
-        install -m 0755 /tmp/llama.cpp/build/bin/llama-server /usr/bin/llama-server; \
+        BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
+        echo ">>> Source binary found at: ${BUILD_BIN}" && \
+        install -m 0755 "${BUILD_BIN}" /usr/bin/llama-server; \
     fi && \
     rm -rf /tmp/llama /tmp/llama.cpp && \
     dnf remove -y cmake make gcc-c++ git openssl-devel && \
     dnf clean all && \
-    test -x /usr/bin/llama-server && \
-    echo ">>> llama-server installed at: /usr/bin/llama-server" && \
-    llama-server --version
+    # Verify llama-server is reachable. It may end up at /usr/bin or /usr/sbin
+    # depending on how the pre-compiled release was laid out or how cmake installed it.
+    LLAMA_BIN="" && \
+    for p in /usr/bin/llama-server /usr/sbin/llama-server /usr/local/bin/llama-server; do \
+        if [ -x "$p" ]; then LLAMA_BIN="$p"; break; fi; \
+    done && \
+    if [ -z "${LLAMA_BIN}" ]; then \
+        LLAMA_BIN="$(find /usr -name 'llama-server' -type f 2>/dev/null | head -1)"; \
+    fi && \
+    test -n "${LLAMA_BIN}" || { echo "FATAL: llama-server not found anywhere"; exit 1; } && \
+    echo ">>> llama-server found at: ${LLAMA_BIN}" && \
+    "${LLAMA_BIN}" --version && \
+    # Ensure it exists at BOTH /usr/bin and /usr/sbin so the service always finds it.
+    # On bootc, /usr is immutable at runtime, so we must set this up at build time.
+    # Use ln -f to create hardlinks (avoids "same file" error if they're already linked).
+    for dest in /usr/sbin/llama-server /usr/bin/llama-server; do \
+        if [ ! -x "$dest" ]; then \
+            ln -f "${LLAMA_BIN}" "$dest" 2>/dev/null || cp -f "${LLAMA_BIN}" "$dest" && \
+            chmod 0755 "$dest"; \
+        fi; \
+    done && \
+    echo ">>> llama-server available at /usr/bin and /usr/sbin" && \
+    ls -la /usr/bin/llama-server /usr/sbin/llama-server
 
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
 RUN mkdir -p /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
     chmod 0700 /var/roothome
+
+# --- AI Model (pre-bundled) ---
+# Qwen3-VL-4B-Instruct: multimodal vision-language model optimized for GUI automation.
+# Q4_K_M quantization (~2.5GB) + Q8_0 vision projector (~454MB) = ~3GB total.
+# See docs/AI_MODEL_SELECTION.md for technical justification.
+RUN set -eux && \
+    MODEL_URL="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf" && \
+    MODEL_FILE="/var/lib/lifeos/models/Qwen3VL-4B-Instruct-Q4_K_M.gguf" && \
+    MMPROJ_URL="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf" && \
+    MMPROJ_FILE="/var/lib/lifeos/models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf" && \
+    echo ">>> Downloading Qwen3-VL-4B-Instruct Q4_K_M (~2.5GB)..." && \
+    curl -fSL --retry 3 --connect-timeout 60 -o "${MODEL_FILE}" "${MODEL_URL}" && \
+    echo ">>> Model size: $(du -h "${MODEL_FILE}" | cut -f1)" && \
+    test -s "${MODEL_FILE}" || { echo "ERROR: Model file is empty"; exit 1; } && \
+    echo ">>> Downloading vision projector mmproj Q8_0 (~454MB)..." && \
+    curl -fSL --retry 3 --connect-timeout 60 -o "${MMPROJ_FILE}" "${MMPROJ_URL}" && \
+    echo ">>> mmproj size: $(du -h "${MMPROJ_FILE}" | cut -f1)" && \
+    test -s "${MMPROJ_FILE}" || { echo "ERROR: mmproj file is empty"; exit 1; }
 
 # --- Copiar archivos de configuración y scripts desde el repo ---
 # Configuración de LifeOS
@@ -172,12 +212,14 @@ COPY image/files/usr/local/bin/llama-server-health-check.sh /usr/local/bin/llama
 COPY image/files/usr/local/bin/lifeos-btrfs-snapshot.sh    /usr/local/bin/lifeos-btrfs-snapshot.sh
 COPY image/files/usr/local/bin/lifeos-integrity-check.sh   /usr/local/bin/lifeos-integrity-check.sh
 COPY image/files/usr/local/bin/lifeos-security-baseline-check.sh /usr/local/bin/lifeos-security-baseline-check.sh
+COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
              /usr/local/bin/llama-server-health-check.sh \
              /usr/local/bin/lifeos-btrfs-snapshot.sh \
              /usr/local/bin/lifeos-integrity-check.sh \
-             /usr/local/bin/lifeos-security-baseline-check.sh
+             /usr/local/bin/lifeos-security-baseline-check.sh \
+             /usr/local/bin/lifeos-check
 
 # Copiar configuración inicial si no existe
 RUN cp -n /etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml || true
@@ -304,6 +346,20 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     rm -f /var/log/dnf5.log* && \
     rm -f /var/cache/ldconfig/aux-cache && \
     rm -f /var/cache/swcatalog/cache/C-local-metainfo.xb /var/cache/swcatalog/cache/C-os-catalog.xb
+
+# --- Ensure llama-server is at /usr/sbin (where bootc/rpm consistently places it) ---
+# This runs in its own layer AFTER all dnf operations to catch any binary relocation.
+RUN LLAMA_BIN="$(command -v llama-server 2>/dev/null || find /usr -name llama-server -type f 2>/dev/null | head -1)" && \
+    echo ">>> Final check: llama-server at ${LLAMA_BIN:-NOT FOUND}" && \
+    test -n "${LLAMA_BIN}" || { echo "FATAL: llama-server disappeared"; exit 1; } && \
+    for dest in /usr/bin/llama-server /usr/sbin/llama-server; do \
+        if [ ! -x "$dest" ]; then \
+            ln -f "${LLAMA_BIN}" "$dest" 2>/dev/null || cp -f "${LLAMA_BIN}" "$dest" && \
+            chmod 0755 "$dest" && \
+            echo ">>> Linked to $dest"; \
+        fi; \
+    done && \
+    ls -la /usr/bin/llama-server /usr/sbin/llama-server
 
 # --- Verificación final ---
 RUN test -x /usr/bin/life && \

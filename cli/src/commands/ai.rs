@@ -4,7 +4,7 @@ use std::process::Command;
 use std::io::{self, Write};
 
 /// Default llama-server host
-const LLAMA_SERVER_HOST: &str = "http://localhost:8080";
+const LLAMA_SERVER_HOST: &str = "http://localhost:8082";
 /// Default model directory
 const MODEL_DIR: &str = "/var/lib/lifeos/models";
 
@@ -769,13 +769,13 @@ async fn is_server_running() -> bool {
         }
     }
 
-    // Check if port 8080 is listening
+    // Check if port 8082 is listening
     if let Ok(output) = Command::new("ss")
         .args(["-tlnp"])
         .output()
     {
         let output_str = String::from_utf8_lossy(&output.stdout);
-        if output_str.contains(":8080") {
+        if output_str.contains(":8082") {
             return true;
         }
     }

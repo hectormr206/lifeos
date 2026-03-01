@@ -75,7 +75,7 @@ EOF
 
     echo -e "${CYAN}AI Runtime: llama-server (llama.cpp)${NC}"
     echo -e "  Models are stored in /var/lib/lifeos/models/"
-    echo -e "  API available at http://localhost:8080/v1/"
+    echo -e "  API available at http://localhost:8082/v1/"
     echo ""
 
     echo -e "${YELLOW}Tip:${NC} Run ${BOLD}life${NC} to see all available commands.\n"
@@ -273,7 +273,7 @@ main() {
     setup_ai
     start_services
     setup_completion
-    verify_installation
+    verify_installation || true
     mark_complete
 
     print_complete

@@ -9,13 +9,17 @@ ConditionPathExists=/etc/lifeos/llama-server.env
 Type=simple
 EnvironmentFile=-/etc/lifeos/llama-server.env
 ExecStartPre=/usr/local/bin/lifeos-ai-setup.sh
-ExecStart=/usr/bin/llama-server \
+ExecStart=/usr/sbin/llama-server \
     --model /var/lib/lifeos/models/${LIFEOS_AI_MODEL} \
-    --host ${LIFEOS_AI_HOST:-127.0.0.1} \
-    --port ${LIFEOS_AI_PORT:-8080} \
-    --ctx-size ${LIFEOS_AI_CTX_SIZE:-4096} \
-    --threads ${LIFEOS_AI_THREADS:-4} \
-    --n-gpu-layers ${LIFEOS_AI_GPU_LAYERS:-0}
+    --mmproj /var/lib/lifeos/models/${LIFEOS_AI_MMPROJ} \
+    --host ${LIFEOS_AI_HOST} \
+    --port ${LIFEOS_AI_PORT} \
+    --ctx-size ${LIFEOS_AI_CTX_SIZE} \
+    --cache-type-k ${LIFEOS_AI_CACHE_TYPE_K} \
+    --cache-type-v ${LIFEOS_AI_CACHE_TYPE_V} \
+    --flash-attn \
+    --threads ${LIFEOS_AI_THREADS} \
+    --n-gpu-layers ${LIFEOS_AI_GPU_LAYERS}
 Restart=on-failure
 RestartSec=5
 StartLimitInterval=300
@@ -31,7 +35,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateUsers=true
-ReadWritePaths=/var/lib/lifeos
+ReadWritePaths=/var/lib/lifeos /etc/lifeos
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

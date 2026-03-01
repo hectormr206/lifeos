@@ -30,7 +30,7 @@ mod tests {
         assert!(ai.enabled);
         assert_eq!(ai.provider, "llama-server");
         assert_eq!(ai.model, "qwen3-8b-q4_k_m.gguf");
-        assert_eq!(ai.llama_server_host, "http://localhost:8080");
+        assert_eq!(ai.llama_server_host, "http://localhost:8082");
     }
 
     #[test]
@@ -118,7 +118,7 @@ schedule = "weekly"
                 enabled: true,
                 provider: "anthropic".to_string(),
                 model: "claude-3".to_string(),
-                llama_server_host: "http://localhost:8080".to_string(),
+                llama_server_host: "http://localhost:8082".to_string(),
             },
             security: SecurityConfig::default(),
             updates: UpdateConfig::default(),

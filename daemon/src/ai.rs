@@ -115,7 +115,7 @@ impl AiManager {
         let model_path = format!("/var/lib/lifeos/models/{}", first_model);
         
         Command::new("llama-server")
-            .args(["-m", &model_path, "--port", "8080", "-c", "4096"])
+            .args(["-m", &model_path, "--port", "8082", "-c", "4096"])
             .spawn()?;
 
         Ok(())
@@ -222,7 +222,7 @@ impl AiManager {
         });
 
         let response = reqwest::Client::new()
-            .post("http://127.0.0.1:8080/v1/chat/completions")
+            .post("http://127.0.0.1:8082/v1/chat/completions")
             .json(&payload)
             .send()
             .await?;

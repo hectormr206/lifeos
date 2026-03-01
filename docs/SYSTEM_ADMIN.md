@@ -34,20 +34,21 @@ This guide is for system administrators managing LifeOS deployments.
 
 ### File System Layout
 
-| Path | Purpose | Persistence |
-|------|---------|-------------|
-| `/usr` | System binaries and libraries | Immutable (composefs) |
-| `/etc` | Configuration files | Persistent |
-| `/var` | Variable data, logs, caches | Persistent |
-| `/home` | User home directories | Persistent |
-| `/boot` | Bootloader and kernel | Managed by bootc |
-| `/root` | Root user home | Persistent |
+| Path    | Purpose                       | Persistence           |
+| ------- | ----------------------------- | --------------------- |
+| `/usr`  | System binaries and libraries | Immutable (composefs) |
+| `/etc`  | Configuration files           | Persistent            |
+| `/var`  | Variable data, logs, caches   | Persistent            |
+| `/home` | User home directories         | Persistent            |
+| `/boot` | Bootloader and kernel         | Managed by bootc      |
+| `/root` | Root user home                | Persistent            |
 
 ## Service Management
 
 ### lifeosd (LifeOS Daemon)
 
 The system daemon provides:
+
 - Health monitoring
 - Update checking
 - Metrics collection
@@ -141,7 +142,7 @@ enabled = true
 provider = "llama-server"
 model = "qwen3-8b-q4_k_m.gguf"
 host = "127.0.0.1"
-port = 8080
+port = 8082
 
 [security]
 encryption = true
@@ -200,11 +201,11 @@ bootc switch ghcr.io/lifeos/lifeos:testing
 
 ### Update Channels
 
-| Channel | Purpose | Stability |
-|---------|---------|-----------|
-| `stable` | Production use | High |
-| `testing` | Pre-release testing | Medium |
-| `nightly` | Latest development | Low |
+| Channel   | Purpose             | Stability |
+| --------- | ------------------- | --------- |
+| `stable`  | Production use      | High      |
+| `testing` | Pre-release testing | Medium    |
+| `nightly` | Latest development  | Low       |
 
 ### Custom Update Server
 
@@ -230,10 +231,10 @@ The daemon performs these checks:
 
 ### Alert Thresholds
 
-| Check | Warning | Critical |
-|-------|---------|----------|
-| Disk usage | > 80% | > 90% |
-| Memory usage | > 85% | > 95% |
+| Check        | Warning  | Critical |
+| ------------ | -------- | -------- |
+| Disk usage   | > 80%    | > 90%    |
+| Memory usage | > 85%    | > 95%    |
 | Load average | > CPUs×2 | > CPUs×4 |
 
 ### Manual Health Check
@@ -263,6 +264,7 @@ touch /usr/test  # Will fail
 ### Service Hardening
 
 The `lifeosd.service` includes:
+
 - `NoNewPrivileges=true`
 - `ProtectSystem=strict`
 - `ProtectHome=true`
@@ -353,7 +355,7 @@ The daemon collects metrics:
 
 ```bash
 # View current metrics (if exposed)
-curl http://localhost:8080/metrics
+curl http://localhost:8082/metrics
 
 # Or check logs
 journalctl -u lifeosd | grep "metrics"
@@ -447,12 +449,12 @@ systemctl status llama-server
 journalctl -u llama-server -n 50
 
 # Test inference
-curl http://127.0.0.1:8080/v1/chat/completions \
+curl http://127.0.0.1:8082/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"default","messages":[{"role":"user","content":"Hello"}]}'
 
 # Check health
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8082/health
 ```
 
 ## API Reference
@@ -471,12 +473,12 @@ dbus-send --system --print-reply \
 
 ### HTTP API (if enabled)
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/status` | GET | System status |
-| `/metrics` | GET | Prometheus metrics |
-| `/update/check` | POST | Trigger update check |
+| Endpoint        | Method | Description          |
+| --------------- | ------ | -------------------- |
+| `/health`       | GET    | Health check         |
+| `/status`       | GET    | System status        |
+| `/metrics`      | GET    | Prometheus metrics   |
+| `/update/check` | POST   | Trigger update check |
 
 ## Maintenance Tasks
 
@@ -507,4 +509,4 @@ dbus-send --system --print-reply \
 
 ---
 
-*LifeOS System Administration Guide v0.1.0*
+_LifeOS System Administration Guide v0.1.0_

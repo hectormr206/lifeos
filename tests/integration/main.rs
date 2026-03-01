@@ -164,7 +164,7 @@ fn test_config_serialization_roundtrip() {
             enabled: true,
             provider: "llama-server".to_string(),
             model: "qwen3-8b-q4_k_m.gguf".to_string(),
-            llama_server_host: "http://localhost:8080".to_string(),
+            llama_server_host: "http://localhost:8082".to_string(),
         },
         security: SecurityConfig {
             encryption: true,

@@ -5,7 +5,7 @@ Este documento formaliza el modelo de amenazas de **LifeOS** aplicable a los com
 ## 1. Superficies de Ataque Identificadas
 
 1.  **LifeOS Daemon (`lifeosd`):** API REST local (puerto 8081) y API D-Bus.
-2.  **AI Runtime (`llama-server`):** API compatible con OpenAI (puerto 8080).
+2.  **AI Runtime (`llama-server`):** API compatible con OpenAI (puerto 8082).
 3.  **Sistema de Intents:** El mecanismo de comunicación entre comandos de usuario y ejecución de agente.
 4.  **CLI `life`:** Comandos invocados localmente por el usuario.
 

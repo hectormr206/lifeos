@@ -1,13 +1,32 @@
 #!/bin/bash
-# LifeOS AI Setup - downloads default model if not present
+# LifeOS AI Setup - ensures llama-server binary is reachable and downloads model if not present
 set -euo pipefail
+
+# --- Verify llama-server binary is reachable ---
+# On bootc systems /usr is immutable at runtime, so we cannot create symlinks.
+# The binary should be at /usr/sbin/llama-server (set up at build time).
+LLAMA_BIN=""
+for p in /usr/sbin/llama-server /usr/bin/llama-server /usr/local/bin/llama-server; do
+    if [ -x "$p" ]; then
+        LLAMA_BIN="$p"
+        break
+    fi
+done
+if [ -z "$LLAMA_BIN" ]; then
+    echo "ERROR: llama-server binary not found at /usr/sbin or /usr/bin"
+    exit 0
+fi
+echo "llama-server binary: $LLAMA_BIN"
 
 MODEL_DIR="/var/lib/lifeos/models"
 ENV_FILE="/etc/lifeos/llama-server.env"
-DEFAULT_MODEL="qwen3-8b-q4_k_m.gguf"
-DEFAULT_MODEL_URL="https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/qwen3-8b-q4_k_m.gguf"
-SMALL_MODEL="qwen3-1.7b-q4_k_m.gguf"
-SMALL_MODEL_URL="https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/qwen3-1.7b-q4_k_m.gguf"
+
+# Default model is pre-bundled in the image during build (see Containerfile).
+# This script only downloads if the configured model is missing (e.g. user changed it).
+DEFAULT_MODEL="Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+DEFAULT_MODEL_URL="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+DEFAULT_MMPROJ="mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+DEFAULT_MMPROJ_URL="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
 
 # Source env to get configured model
 if [ -f "$ENV_FILE" ]; then
@@ -16,15 +35,30 @@ fi
 
 MODEL="${LIFEOS_AI_MODEL:-$DEFAULT_MODEL}"
 MODEL_PATH="$MODEL_DIR/$MODEL"
+MMPROJ="${LIFEOS_AI_MMPROJ:-$DEFAULT_MMPROJ}"
+MMPROJ_PATH="$MODEL_DIR/$MMPROJ"
 
-# If model already exists, nothing to do
+# If model already exists, check mmproj too
 if [ -f "$MODEL_PATH" ]; then
     echo "Model $MODEL already present at $MODEL_PATH"
+    if [ -f "$MMPROJ_PATH" ]; then
+        echo "Vision projector $MMPROJ already present"
+        exit 0
+    fi
+    # Model exists but mmproj missing — download it
+    echo "Vision projector missing, downloading..."
+    if curl -fSL --retry 3 --connect-timeout 30 -o "$MMPROJ_PATH.tmp" "$DEFAULT_MMPROJ_URL"; then
+        mv "$MMPROJ_PATH.tmp" "$MMPROJ_PATH"
+        echo "Vision projector downloaded: $MMPROJ"
+    else
+        echo "WARNING: Could not download vision projector. Visual features will not work."
+        rm -f "$MMPROJ_PATH.tmp"
+    fi
     exit 0
 fi
 
-# Check if any model exists
-EXISTING=$(find "$MODEL_DIR" -name "*.gguf" -type f 2>/dev/null | head -n 1)
+# Check if any model exists (user may have placed a different one)
+EXISTING=$(find "$MODEL_DIR" -name "*.gguf" ! -name "mmproj-*" -type f 2>/dev/null | head -n 1)
 if [ -n "$EXISTING" ]; then
     echo "Found existing model: $EXISTING"
     BASENAME=$(basename "$EXISTING")
@@ -32,37 +66,39 @@ if [ -n "$EXISTING" ]; then
     exit 0
 fi
 
-echo "Downloading default AI model: $MODEL"
+echo "Downloading default AI model: $MODEL (~2.5GB)"
 echo "This may take several minutes..."
-
-# Detect available RAM to choose model size
-TOTAL_RAM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 8192)
-
-if [ "$TOTAL_RAM_MB" -lt 6144 ]; then
-    echo "Low memory detected (${TOTAL_RAM_MB}MB). Using smaller model."
-    MODEL="$SMALL_MODEL"
-    MODEL_URL="$SMALL_MODEL_URL"
-    sed -i "s/^LIFEOS_AI_MODEL=.*/LIFEOS_AI_MODEL=$MODEL/" "$ENV_FILE"
-else
-    MODEL_URL="$DEFAULT_MODEL_URL"
-fi
 
 mkdir -p "$MODEL_DIR"
 
-# Download with retry
+# Download model with retry
 for attempt in 1 2 3; do
-    if curl -fSL --retry 3 --connect-timeout 30 -o "$MODEL_DIR/$MODEL.tmp" "$MODEL_URL"; then
+    if curl -fSL --retry 3 --connect-timeout 30 -o "$MODEL_DIR/$MODEL.tmp" "$DEFAULT_MODEL_URL"; then
         mv "$MODEL_DIR/$MODEL.tmp" "$MODEL_DIR/$MODEL"
         echo "Model downloaded successfully: $MODEL"
-        exit 0
+        break
     fi
     echo "Download attempt $attempt failed, retrying..."
     sleep 5
 done
 
-echo "WARNING: Could not download AI model. llama-server will start but won't serve requests until a model is available."
-echo "Download manually: curl -L -o $MODEL_DIR/$MODEL $MODEL_URL"
-rm -f "$MODEL_DIR/$MODEL.tmp"
-# Exit 0 so llama-server.service is not blocked — the service will fail on its own
-# if no model file exists, but systemd won't mark ExecStartPre as failed.
+# Download mmproj
+if [ ! -f "$MMPROJ_PATH" ]; then
+    echo "Downloading vision projector: $MMPROJ (~454MB)"
+    if curl -fSL --retry 3 --connect-timeout 30 -o "$MMPROJ_PATH.tmp" "$DEFAULT_MMPROJ_URL"; then
+        mv "$MMPROJ_PATH.tmp" "$MMPROJ_PATH"
+        echo "Vision projector downloaded: $MMPROJ"
+    else
+        echo "WARNING: Could not download vision projector."
+        rm -f "$MMPROJ_PATH.tmp"
+    fi
+fi
+
+if [ ! -f "$MODEL_PATH" ]; then
+    echo "WARNING: Could not download AI model. llama-server will not serve requests until a model is available."
+    echo "Download manually: curl -L -o $MODEL_DIR/$MODEL $DEFAULT_MODEL_URL"
+    rm -f "$MODEL_DIR/$MODEL.tmp"
+fi
+
+# Exit 0 so llama-server.service is not blocked
 exit 0

@@ -2,7 +2,7 @@
 # llama-server health check for LifeOS
 set -e
 
-LLAMA_URL="${LLAMA_URL:-http://localhost:8080}"
+LLAMA_URL="${LLAMA_URL:-http://localhost:8082}"
 TIMEOUT="${TIMEOUT:-5}"
 
 if ! curl -fsSL --max-time "$TIMEOUT" "${LLAMA_URL}/health" > /dev/null 2>&1; then
