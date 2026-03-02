@@ -147,9 +147,9 @@ bash "$PROJECT_ROOT/scripts/generate-iso-simple.sh" --type iso --image "$IMAGE_N
 echo
 
 # --- Localizar ISO generado ---
-ISO_FILE=$(find "$OUTPUT_DIR" -name "lifeos-*.iso" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
+ISO_FILE="$OUTPUT_DIR/lifeos-latest.iso"
 
-if [[ -z "$ISO_FILE" ]]; then
+if [[ ! -f "$ISO_FILE" ]]; then
     error "No se encontró el ISO generado en $OUTPUT_DIR"
 fi
 

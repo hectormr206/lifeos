@@ -115,6 +115,7 @@ impl AiManager {
         let model_path = format!("/var/lib/lifeos/models/{}", first_model);
         
         Command::new("llama-server")
+            .env("GGML_BACKEND_PATH", "/usr/lib64")
             .args(["-m", &model_path, "--port", "8082", "-c", "4096"])
             .spawn()?;
 
@@ -151,7 +152,7 @@ impl AiManager {
                 }
             }
         }
-        Some("qwen3-8b-q4_k_m.gguf".to_string())
+        Some("Qwen3.5-4B-Q4_K_M.gguf".to_string())
     }
 
     /// Get list of loaded models
@@ -207,7 +208,7 @@ impl AiManager {
         } else {
             self.active_model()
                 .await
-                .unwrap_or_else(|| "qwen3-8b-q4_k_m.gguf".to_string())
+                .unwrap_or_else(|| "Qwen3.5-4B-Q4_K_M.gguf".to_string())
         };
 
         let payload_messages: Vec<serde_json::Value> = messages

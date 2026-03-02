@@ -68,7 +68,7 @@ impl Default for AiConfig {
         Self {
             enabled: true,
             provider: "llama-server".to_string(),
-            model: "qwen3-8b-q4_k_m.gguf".to_string(),
+            model: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
             llama_server_host: "http://localhost:8082".to_string(),
         }
     }

@@ -140,7 +140,7 @@ keyboard = "us"
 [ai]
 enabled = true
 provider = "llama-server"
-model = "qwen3-8b-q4_k_m.gguf"
+model = "Qwen3.5-4B-Q4_K_M.gguf"
 host = "127.0.0.1"
 port = 8082
 

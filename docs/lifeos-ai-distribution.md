@@ -218,7 +218,7 @@ toolbox = ["ubuntu-dev", "fedora-build"]
 [ai]
 enabled = true
 provider = "llama-server"
-model = "qwen3-8b-q4_k_m.gguf"
+model = "Qwen3.5-4B-Q4_K_M.gguf"
 llama_server_host = "http://localhost:8082"
 voice = false
 screen_capture = false
@@ -261,7 +261,7 @@ Este archivo es portable: restaurar un equipo es `life capsule restore`.
 └──────────────────────────────────────┘
 ```
 
-- **llama-server (llama.cpp) como unico runtime local:** API OpenAI-compatible en puerto 8082, soporte GGUF nativo, optimizacion por hardware (CUDA, ROCm, Vulkan). Sin dependencias externas. El modelo por defecto es `qwen3-8b-q4_k_m.gguf` con fallback a `qwen3-1.7b-q4_k_m.gguf` en equipos con poca RAM.
+- **llama-server (llama.cpp) como unico runtime local:** API OpenAI-compatible en puerto 8082, soporte GGUF nativo, optimizacion por hardware (CUDA, ROCm, Vulkan). Sin dependencias externas. El modelo por defecto es `Qwen3.5-4B-Q4_K_M.gguf` (ver `docs/AI_MODEL_SELECTION.md`).
 - **Nube opcional:** solo se activa si el usuario la configura explicitamente. Todas las consultas en nube son cifradas E2E.
 - **Enrutador inteligente:** tareas simples (clasificacion, OCR) van a modelos pequenos locales; tareas complejas (generacion larga, analisis multi-documento) pueden ir a modelos grandes locales o nube segun politica del usuario.
 - **Nota:** Ollama fue evaluado y descartado como dependencia por riesgo de continuidad (startup con funding limitado, sin modelo de ingresos claro). llama-server ofrece el mismo rendimiento con comunidad mas grande y sin single point of failure.
@@ -304,10 +304,10 @@ Esta matriz es semilla de arranque. En runtime manda el autoselector.
 
 | Clase de hardware                          | General (chat/codigo)                | Reasoning                     | Vision/OCR             | Embeddings         |
 | ------------------------------------------ | ------------------------------------ | ----------------------------- | ---------------------- | ------------------ |
-| `lite` (8-16 GB RAM, sin GPU dedicada)     | `qwen3:4b` (o `qwen3:0.6b` fallback) | `deepseek-r1:1.5b` (opcional) | `gemma3:4b`            | `nomic-embed-text` |
-| `balanced` (16-32 GB RAM, iGPU o GPU 8 GB) | `qwen3:8b`                           | `deepseek-r1:8b`              | `gemma3:4b`            | `nomic-embed-text` |
-| `pro` (32-64 GB RAM, GPU 12-24 GB)         | `qwen3:14b`                          | `deepseek-r1:14b`             | `gemma3:12b`           | `nomic-embed-text` |
-| `workstation` (>=64 GB RAM o GPU >=24 GB)  | `qwen3:30b`                          | `deepseek-r1:32b`             | `gemma3:27b` (si cabe) | `nomic-embed-text` |
+| `lite` (8-16 GB RAM, sin GPU dedicada)     | `qwen3.5:4b` Q4_K_M (default)        | `deepseek-r1:1.5b` (opcional) | integrado en qwen3.5   | `nomic-embed-text` |
+| `balanced` (16-32 GB RAM, iGPU o GPU 8 GB) | `qwen3.5:9b` Q4_K_M                  | `deepseek-r1:8b`              | integrado en qwen3.5   | `nomic-embed-text` |
+| `pro` (32-64 GB RAM, GPU 12-24 GB)         | `qwen3.5:27b` Q4_K_M                 | `deepseek-r1:14b`             | integrado en qwen3.5   | `nomic-embed-text` |
+| `workstation` (>=64 GB RAM o GPU >=24 GB)  | `qwen3.5:27b` Q8_0                   | `deepseek-r1:32b`             | integrado en qwen3.5   | `nomic-embed-text` |
 
 Notas operativas:
 
@@ -837,7 +837,7 @@ Regla: `high/critical` siempre solicita aprobacion humana o politica firmada.
 **AI runtime:**
 
 - [x] llama-server (llama.cpp) como runtime AI por defecto con API OpenAI-compatible. _Compilado/descargado en Containerfile con fallback a compilacion desde fuente. **BUG CORREGIDO:** regex de asset matching mejorado para robustez contra cambios de naming en releases de llama.cpp._
-- [x] Modelo GGUF default (Qwen3-8B Q4_K_M) descargado en primer arranque. _`lifeos-ai-setup.sh` con deteccion de RAM y fallback a modelo pequeno._
+- [x] Modelo GGUF default (Qwen3.5-4B Q4_K_M) pre-bundled en la imagen. _`lifeos-ai-setup.sh` con fallback de descarga si el modelo no esta presente._
 - [x] Deteccion automatica de GPU (NVIDIA/AMD/Intel) y configuracion de offload. _Implementada en first-boot, daemon y CLI._
 - [x] `llama-server.service` con security hardening. _Incluye `PrivateUsers`, `SystemCallFilter`, `MemoryMax` y bind loopback (`LIFEOS_AI_HOST=127.0.0.1`)._
 - [x] API REST del daemon (`lifeosd`) con endpoints de sistema, AI y health. _Chat conectado a `llama-server` real, metricas de recursos reales y token bootstrap enforceado._
@@ -1687,9 +1687,9 @@ toolbox = [
 [ai]
 enabled = true                         # Habilitar subsistema AI
 runtime = "llama-server"               # llama-server | disabled
-default_model = "qwen3-8b-q4_k_m.gguf"  # Fallback si el autoselector esta desactivado
+default_model = "Qwen3.5-4B-Q4_K_M.gguf"  # Modelo fundacional multimodal (texto + vision)
 reasoning_model = "deepseek-r1-8b-q4_k_m.gguf"  # Fallback reasoning
-vision_model = "gemma3-4b-q4_k_m.gguf"          # Fallback vision/OCR
+vision_model = ""                                # Integrado en Qwen3.5 (no requiere modelo separado)
 voice_model = "whisper-small.gguf"               # Modelo para voz
 embedding_model = "nomic-embed-text"   # Modelo para embeddings
 
@@ -2016,8 +2016,8 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 - in-toto: https://in-toto.io/
 - SLSA: https://slsa.dev/
 - COSMIC desktop: https://system76.com/cosmic
-- HuggingFace GGUF models (Qwen3): https://huggingface.co/Qwen/Qwen3-8B-GGUF
-- Qwen3 official announcement: https://qwenlm.github.io/blog/qwen3/
+- HuggingFace GGUF models (Qwen3.5): https://huggingface.co/unsloth/Qwen3.5-4B-GGUF
+- Qwen3.5 official repo: https://github.com/QwenLM/Qwen3.5
 - Gemma 3 model docs (size and memory guidance): https://ai.google.dev/gemma/docs/core/model_card_3
 - DeepSeek-R1 repository: https://github.com/deepseek-ai/DeepSeek-R1
 - llama.cpp: https://github.com/ggml-org/llama.cpp

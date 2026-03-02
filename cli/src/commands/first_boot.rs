@@ -189,7 +189,7 @@ async fn run_auto_setup(args: &FirstBootArgs) -> anyhow::Result<FirstBootState> 
         privacy_analytics: false,
         privacy_telemetry: false,
         ai_enabled: true,
-        ai_model: "qwen3-8b-q4_k_m.gguf".to_string(),
+        ai_model: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
         network_configured: true,
     })
 }
@@ -271,7 +271,7 @@ async fn run_interactive_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBoo
         .interact()?;
 
     let ai_model = if ai_enabled && !args.skip_ai {
-        let models = vec!["qwen3-8b-q4_k_m.gguf", "qwen3-1.7b-q4_k_m.gguf", "llama-3.2-3b-instruct-q4_k_m.gguf", "mistral-7b-instruct-v0.3-q4_k_m.gguf"];
+        let models = vec!["Qwen3.5-4B-Q4_K_M.gguf", "Qwen3.5-9B-Q4_K_M.gguf", "llama-3.2-3b-instruct-q4_k_m.gguf", "mistral-7b-instruct-v0.3-q4_k_m.gguf"];
         let model_idx = Select::with_theme(&theme)
             .with_prompt("Select default AI model")
             .items(&models)
@@ -279,7 +279,7 @@ async fn run_interactive_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBoo
             .interact()?;
         models[model_idx].to_string()
     } else {
-        "qwen3-8b-q4_k_m.gguf".to_string()
+        "Qwen3.5-4B-Q4_K_M.gguf".to_string()
     };
 
     // Step 6: Review

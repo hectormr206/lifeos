@@ -12,16 +12,16 @@ ExecStartPre=/usr/local/bin/lifeos-ai-setup.sh
 ExecStart=/usr/sbin/llama-server \
     --model /var/lib/lifeos/models/${LIFEOS_AI_MODEL} \
     --mmproj /var/lib/lifeos/models/${LIFEOS_AI_MMPROJ} \
+    --alias ${LIFEOS_AI_ALIAS} \
     --host ${LIFEOS_AI_HOST} \
     --port ${LIFEOS_AI_PORT} \
     --ctx-size ${LIFEOS_AI_CTX_SIZE} \
-    --cache-type-k ${LIFEOS_AI_CACHE_TYPE_K} \
-    --cache-type-v ${LIFEOS_AI_CACHE_TYPE_V} \
-    --flash-attn \
     --threads ${LIFEOS_AI_THREADS} \
-    --n-gpu-layers ${LIFEOS_AI_GPU_LAYERS}
+    --n-gpu-layers ${LIFEOS_AI_GPU_LAYERS} \
+    --jinja
 Restart=on-failure
-RestartSec=5
+RestartSec=10
+TimeoutStartSec=120
 StartLimitInterval=300
 StartLimitBurst=3
 

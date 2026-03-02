@@ -59,7 +59,7 @@ life ai chat
 life ai models
 
 # Pull a new model
-life ai pull qwen3-8b-q4_k_m.gguf
+life ai pull qwen3.5-4b
 
 # Start/stop AI service
 life ai start
@@ -107,7 +107,7 @@ life config show
 life config get ai.model
 
 # Set a value
-life config set ai.model qwen3-8b-q4_k_m.gguf
+life config set ai.model Qwen3.5-4B-Q4_K_M.gguf
 ```
 
 ### COSMIC Desktop Settings

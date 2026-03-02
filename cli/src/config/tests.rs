@@ -29,7 +29,7 @@ mod tests {
         let ai = AiConfig::default();
         assert!(ai.enabled);
         assert_eq!(ai.provider, "llama-server");
-        assert_eq!(ai.model, "qwen3-8b-q4_k_m.gguf");
+        assert_eq!(ai.model, "Qwen3.5-4B-Q4_K_M.gguf");
         assert_eq!(ai.llama_server_host, "http://localhost:8082");
     }
 

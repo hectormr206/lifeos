@@ -256,10 +256,8 @@ case "$BUILD_TYPE" in
     iso)
         SRC="$OUTPUT_DIR/bootiso/install.iso"
         if [[ -f "$SRC" ]]; then
-            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_DATE}.iso"
-            if [[ -f "$FINAL_FILE" ]]; then
-                FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_FULL}.iso"
-            fi
+            rm -f "$OUTPUT_DIR"/lifeos-*.iso
+            FINAL_FILE="$OUTPUT_DIR/lifeos-latest.iso"
             mv "$SRC" "$FINAL_FILE"
             rm -rf "$OUTPUT_DIR/bootiso"
         fi
@@ -267,30 +265,24 @@ case "$BUILD_TYPE" in
     vmdk)
         SRC="$OUTPUT_DIR/disk.vmdk"
         if [[ -f "$SRC" ]]; then
-            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_DATE}.vmdk"
-            if [[ -f "$FINAL_FILE" ]]; then
-                FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_FULL}.vmdk"
-            fi
+            rm -f "$OUTPUT_DIR"/lifeos-*.vmdk
+            FINAL_FILE="$OUTPUT_DIR/lifeos-latest.vmdk"
             mv "$SRC" "$FINAL_FILE"
         fi
         ;;
     qcow2)
         SRC="$OUTPUT_DIR/disk.qcow2"
         if [[ -f "$SRC" ]]; then
-            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_DATE}.qcow2"
-            if [[ -f "$FINAL_FILE" ]]; then
-                FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_FULL}.qcow2"
-            fi
+            rm -f "$OUTPUT_DIR"/lifeos-*.qcow2
+            FINAL_FILE="$OUTPUT_DIR/lifeos-latest.qcow2"
             mv "$SRC" "$FINAL_FILE"
         fi
         ;;
     raw)
         SRC="$OUTPUT_DIR/disk.raw"
         if [[ -f "$SRC" ]]; then
-            FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_DATE}.raw"
-            if [[ -f "$FINAL_FILE" ]]; then
-                FINAL_FILE="$OUTPUT_DIR/lifeos-${TIMESTAMP_FULL}.raw"
-            fi
+            rm -f "$OUTPUT_DIR"/lifeos-*.raw
+            FINAL_FILE="$OUTPUT_DIR/lifeos-latest.raw"
             mv "$SRC" "$FINAL_FILE"
         fi
         ;;

@@ -49,13 +49,31 @@ echo
 
 # --- Servicios ---
 echo -e "${BOLD}Servicios${NC}"
-for svc in lifeosd llama-server lifeos-security-baseline; do
+for svc in lifeosd lifeos-security-baseline; do
     STATE=$(systemctl is-active "$svc" 2>/dev/null)
     case "$STATE" in
         active)  ok "$svc: active" ;;
         *)       fail "$svc: $STATE" ;;
     esac
 done
+
+# llama-server es especial - puede tardar en cargar el modelo
+LLAMA_STATE=$(systemctl is-active llama-server 2>/dev/null)
+LLAMA_ENABLED=$(systemctl is-enabled llama-server 2>/dev/null)
+case "$LLAMA_STATE" in
+    active)
+        ok "llama-server: active"
+        ;;
+    activating|inactive)
+        warn "llama-server: $LLAMA_STATE (puede estar iniciando)"
+        ;;
+    failed)
+        warn "llama-server: failed (ejecuta 'journalctl -u llama-server' para ver logs)"
+        ;;
+    *)
+        fail "llama-server: $LLAMA_STATE"
+        ;;
+esac
 echo
 
 # --- AI Runtime ---

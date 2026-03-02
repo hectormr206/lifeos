@@ -82,96 +82,33 @@ RUN chmod +x /usr/bin/life /usr/bin/lifeosd && life --version
 
 # --- AI Runtime (llama.cpp / llama-server) ---
 # llama-server provides OpenAI-compatible API for local AI inference.
-# Strategy: 1) Try pre-compiled binary from ggml-org 2) Fall back to static source compilation.
-# Note: llama.cpp moved from ggerganov → ggml-org. Linux assets are .tar.gz (not .zip).
-# Pre-compiled binaries need their shared libs (.so) installed alongside them.
-# The final `test -x` ensures the build FAILS if neither method works.
+# Strategy: Build from source with static linking (-DBUILD_SHARED_LIBS=OFF).
+# This avoids all shared library / backend loading issues on bootc (immutable /usr).
+# Pre-compiled binaries from ggml-org use dynamic backends (.so) that break when
+# installed outside their original directory structure.
 RUN set -eux && \
-    dnf install -y jq cmake make gcc-c++ git openssl-devel curl tar gzip && \
-    echo ">>> Attempting to download pre-compiled llama-server..." && \
-    RELEASE_JSON="$(curl -fsSL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest)" && \
-    echo ">>> Latest release: $(echo "${RELEASE_JSON}" | jq -r '.tag_name')" && \
-    RELEASE_URL="$( \
-        echo "${RELEASE_JSON}" | \
-        jq -r '[.assets[]? | select(.name | test("^llama-.*-bin-ubuntu-x64\\.tar\\.gz$"))] | first | .browser_download_url // empty' \
-    )" && \
-    if [ -z "${RELEASE_URL}" ]; then \
-        echo ">>> No ubuntu-x64 tar.gz found, trying broader pattern..." && \
-        RELEASE_URL="$( \
-            echo "${RELEASE_JSON}" | \
-            jq -r '[.assets[]? | select(.name | test("(?i)ubuntu.*x64.*\\.(tar\\.gz|zip)$"))] | first | .browser_download_url // empty' \
-        )"; \
-    fi && \
-    if [ -n "${RELEASE_URL}" ]; then \
-        echo ">>> Downloading: ${RELEASE_URL}" && \
-        ASSET_FILE="/tmp/llama-asset" && \
-        curl -fsSL -o "${ASSET_FILE}" "${RELEASE_URL}" && \
-        mkdir -p /tmp/llama && \
-        if echo "${RELEASE_URL}" | grep -q '\.tar\.gz$'; then \
-            tar -xzf "${ASSET_FILE}" -C /tmp/llama; \
-        else \
-            dnf install -y unzip && \
-            unzip -o "${ASSET_FILE}" -d /tmp/llama; \
-        fi && \
-        LLAMA_BIN="$(find /tmp/llama -name 'llama-server' -type f 2>/dev/null | head -n 1 || true)" && \
-        if [ -n "${LLAMA_BIN}" ]; then \
-            LLAMA_DIR="$(dirname "${LLAMA_BIN}")" && \
-            echo ">>> Found binary: ${LLAMA_BIN}" && \
-            echo ">>> Installing binary + shared libraries..." && \
-            install -m 0755 "${LLAMA_BIN}" /usr/bin/llama-server && \
-            find "${LLAMA_DIR}" -name '*.so*' -exec install -m 0755 {} /usr/lib64/ \; && \
-            ldconfig && \
-            if /usr/bin/llama-server --version 2>/dev/null; then \
-                echo ">>> Pre-compiled binary works!"; \
-            else \
-                echo ">>> Pre-compiled binary has missing deps, removing..." && \
-                rm -f /usr/bin/llama-server; \
-            fi; \
-        else \
-            echo ">>> Binary not found in archive, listing contents:" && \
-            find /tmp/llama -type f | head -20; \
-        fi; \
-        rm -f "${ASSET_FILE}"; \
-    else \
-        echo ">>> No matching release asset found, available assets:" && \
-        echo "${RELEASE_JSON}" | jq -r '.assets[]?.name' | head -20; \
-    fi && \
-    if [ ! -x /usr/bin/llama-server ]; then \
-        echo ">>> Falling back to static source compilation..." && \
-        git clone --depth=1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
-        cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
-            -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=ON && \
-        cmake --build /tmp/llama.cpp/build -j"$(nproc)" --target llama-server && \
-        BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
-        echo ">>> Source binary found at: ${BUILD_BIN}" && \
-        install -m 0755 "${BUILD_BIN}" /usr/bin/llama-server; \
-    fi && \
-    rm -rf /tmp/llama /tmp/llama.cpp && \
+    dnf install -y cmake make gcc-c++ git openssl-devel curl tar gzip && \
+    echo ">>> Building llama-server from source (static, CPU-only)..." && \
+    git clone --depth=1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
+    cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DGGML_STATIC=ON \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_SERVER=ON && \
+    cmake --build /tmp/llama.cpp/build -j"$(nproc)" --target llama-server && \
+    BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
+    echo ">>> Binary found at: ${BUILD_BIN}" && \
+    install -m 0755 "${BUILD_BIN}" /usr/sbin/llama-server && \
+    ln -f /usr/sbin/llama-server /usr/bin/llama-server 2>/dev/null || true && \
+    echo ">>> Verifying static binary..." && \
+    /usr/sbin/llama-server --version && \
+    rm -rf /tmp/llama.cpp && \
     dnf remove -y cmake make gcc-c++ git openssl-devel && \
     dnf clean all && \
-    # Verify llama-server is reachable. It may end up at /usr/bin or /usr/sbin
-    # depending on how the pre-compiled release was laid out or how cmake installed it.
-    LLAMA_BIN="" && \
-    for p in /usr/bin/llama-server /usr/sbin/llama-server /usr/local/bin/llama-server; do \
-        if [ -x "$p" ]; then LLAMA_BIN="$p"; break; fi; \
-    done && \
-    if [ -z "${LLAMA_BIN}" ]; then \
-        LLAMA_BIN="$(find /usr -name 'llama-server' -type f 2>/dev/null | head -1)"; \
-    fi && \
-    test -n "${LLAMA_BIN}" || { echo "FATAL: llama-server not found anywhere"; exit 1; } && \
-    echo ">>> llama-server found at: ${LLAMA_BIN}" && \
-    "${LLAMA_BIN}" --version && \
-    # Ensure it exists at BOTH /usr/bin and /usr/sbin so the service always finds it.
-    # On bootc, /usr is immutable at runtime, so we must set this up at build time.
-    # Use ln -f to create hardlinks (avoids "same file" error if they're already linked).
-    for dest in /usr/sbin/llama-server /usr/bin/llama-server; do \
-        if [ ! -x "$dest" ]; then \
-            ln -f "${LLAMA_BIN}" "$dest" 2>/dev/null || cp -f "${LLAMA_BIN}" "$dest" && \
-            chmod 0755 "$dest"; \
-        fi; \
-    done && \
-    echo ">>> llama-server available at /usr/bin and /usr/sbin" && \
-    ls -la /usr/bin/llama-server /usr/sbin/llama-server
+    echo ">>> llama-server installed (static build) at /usr/sbin and /usr/bin" && \
+    ls -la /usr/sbin/llama-server /usr/bin/llama-server
 
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
@@ -179,19 +116,19 @@ RUN mkdir -p /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/ro
     chmod 0700 /var/roothome
 
 # --- AI Model (pre-bundled) ---
-# Qwen3-VL-4B-Instruct: multimodal vision-language model optimized for GUI automation.
-# Q4_K_M quantization (~2.5GB) + Q8_0 vision projector (~454MB) = ~3GB total.
+# Qwen3.5-4B: multimodal vision-language model with hybrid DeltaNet architecture.
+# Q4_K_M quantization (~2.74GB) + F16 vision projector (~672MB) = ~3.4GB total.
 # See docs/AI_MODEL_SELECTION.md for technical justification.
 RUN set -eux && \
-    MODEL_URL="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf" && \
-    MODEL_FILE="/var/lib/lifeos/models/Qwen3VL-4B-Instruct-Q4_K_M.gguf" && \
-    MMPROJ_URL="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf" && \
-    MMPROJ_FILE="/var/lib/lifeos/models/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf" && \
-    echo ">>> Downloading Qwen3-VL-4B-Instruct Q4_K_M (~2.5GB)..." && \
+    MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf" && \
+    MODEL_FILE="/var/lib/lifeos/models/Qwen3.5-4B-Q4_K_M.gguf" && \
+    MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf" && \
+    MMPROJ_FILE="/var/lib/lifeos/models/mmproj-F16.gguf" && \
+    echo ">>> Downloading Qwen3.5-4B Q4_K_M (~2.74GB)..." && \
     curl -fSL --retry 3 --connect-timeout 60 -o "${MODEL_FILE}" "${MODEL_URL}" && \
     echo ">>> Model size: $(du -h "${MODEL_FILE}" | cut -f1)" && \
     test -s "${MODEL_FILE}" || { echo "ERROR: Model file is empty"; exit 1; } && \
-    echo ">>> Downloading vision projector mmproj Q8_0 (~454MB)..." && \
+    echo ">>> Downloading vision projector mmproj F16 (~672MB)..." && \
     curl -fSL --retry 3 --connect-timeout 60 -o "${MMPROJ_FILE}" "${MMPROJ_URL}" && \
     echo ">>> mmproj size: $(du -h "${MMPROJ_FILE}" | cut -f1)" && \
     test -s "${MMPROJ_FILE}" || { echo "ERROR: mmproj file is empty"; exit 1; }
@@ -347,9 +284,13 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     rm -f /var/cache/ldconfig/aux-cache && \
     rm -f /var/cache/swcatalog/cache/C-local-metainfo.xb /var/cache/swcatalog/cache/C-os-catalog.xb
 
-# --- Ensure llama-server is at /usr/sbin (where bootc/rpm consistently places it) ---
-# This runs in its own layer AFTER all dnf operations to catch any binary relocation.
-RUN LLAMA_BIN="$(command -v llama-server 2>/dev/null || find /usr -name llama-server -type f 2>/dev/null | head -1)" && \
+# --- Final llama-server verification ---
+# Belt-and-suspenders: verify the static binary survived all dnf operations.
+# Also clean up any stale .so files from previous pre-compiled builds.
+RUN set -eux && \
+    rm -f /usr/lib64/libllama.so* /usr/lib64/libggml*.so* /usr/lib64/libmtmd.so* && \
+    ldconfig && \
+    LLAMA_BIN="$(command -v llama-server 2>/dev/null || find /usr -name llama-server -type f 2>/dev/null | head -1)" && \
     echo ">>> Final check: llama-server at ${LLAMA_BIN:-NOT FOUND}" && \
     test -n "${LLAMA_BIN}" || { echo "FATAL: llama-server disappeared"; exit 1; } && \
     for dest in /usr/bin/llama-server /usr/sbin/llama-server; do \
@@ -359,12 +300,14 @@ RUN LLAMA_BIN="$(command -v llama-server 2>/dev/null || find /usr -name llama-se
             echo ">>> Linked to $dest"; \
         fi; \
     done && \
-    ls -la /usr/bin/llama-server /usr/sbin/llama-server
+    ls -la /usr/bin/llama-server /usr/sbin/llama-server && \
+    /usr/sbin/llama-server --version
 
 # --- Verificación final ---
 RUN test -x /usr/bin/life && \
     test -x /usr/bin/lifeosd && \
     test -x /usr/bin/llama-server && \
+    test -x /usr/sbin/llama-server && \
     test -f /usr/lib/systemd/system/lifeosd.service && \
     test -f /usr/lib/systemd/system/llama-server.service && \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service && \

@@ -328,7 +328,7 @@ async fn list_models(all: bool) -> anyhow::Result<()> {
         println!("{}", "  No models installed".dimmed());
         println!();
         println!("Download a model with:");
-        println!("  {}", "life ai pull qwen3-8b".cyan());
+        println!("  {}", "life ai pull qwen3.5-4b".cyan());
     } else {
         println!("{}", "Installed Models:".bold());
         println!("{:<40} {:>10}", "Name", "Size");
@@ -347,12 +347,11 @@ async fn list_models(all: bool) -> anyhow::Result<()> {
         println!();
         println!("{}", "Available to Download:".bold());
         let available = vec![
-            ("qwen3-8b-q4_k_m.gguf", "~5.0GB", "Qwen3 8B - Fast general assistant"),
-            ("qwen3-1.7b-q4_k_m.gguf", "~1.2GB", "Qwen3 1.7B - Ultra-lightweight"),
-            ("llama-3.2-3b-instruct-q4_k_m.gguf", "~2.0GB", "Llama 3.2 3B - Lightweight"),
+            ("Qwen3.5-4B-Q4_K_M.gguf", "~2.7GB", "Qwen3.5 4B - Multimodal vision+text (default)"),
+            ("Qwen3.5-9B-Q4_K_M.gguf", "~5.5GB", "Qwen3.5 9B - Larger multimodal"),
+            ("llama-3.2-3b-instruct-q4_k_m.gguf", "~2.0GB", "Llama 3.2 3B - Lightweight text-only"),
             ("llama-3.2-1b-instruct-q4_k_m.gguf", "~0.8GB", "Llama 3.2 1B - Minimal"),
             ("mistral-7b-instruct-v0.3-q4_k_m.gguf", "~4.1GB", "Mistral 7B - General purpose"),
-            ("codellama-7b-instruct-q4_k_m.gguf", "~3.8GB", "CodeLlama 7B - Code generation"),
         ];
 
         for (name, size, desc) in available {
@@ -630,7 +629,7 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
     let models = list_gguf_models();
     if models.is_empty() {
         println!("  {} No models installed", "->".dimmed());
-        println!("  Download with: {}", "life ai pull qwen3-8b".cyan());
+        println!("  Download with: {}", "life ai pull qwen3.5-4b".cyan());
     } else {
         for model in &models {
             let path = format!("{}/{}", MODEL_DIR, model);
@@ -835,19 +834,19 @@ fn resolve_model_url(model: &str) -> (String, String) {
 
     // If it ends with .gguf, assume it's a filename - check known models
     if model.ends_with(".gguf") {
-        let url = format!("https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/{}", model);
+        let url = format!("https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/{}", model);
         return (url, model.to_string());
     }
 
     // Map common short names to HuggingFace URLs
     match model.to_lowercase().as_str() {
-        "qwen3-8b" | "qwen3:8b" | "qwen3" => (
-            "https://huggingface.co/Qwen/Qwen3-8B-GGUF/resolve/main/qwen3-8b-q4_k_m.gguf".to_string(),
-            "qwen3-8b-q4_k_m.gguf".to_string(),
+        "qwen3.5-4b" | "qwen3.5:4b" | "qwen3.5" => (
+            "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+            "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
         ),
-        "qwen3-1.7b" | "qwen3:1.7b" | "qwen3-small" => (
-            "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/qwen3-1.7b-q4_k_m.gguf".to_string(),
-            "qwen3-1.7b-q4_k_m.gguf".to_string(),
+        "qwen3.5-9b" | "qwen3.5:9b" => (
+            "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf".to_string(),
+            "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
         ),
         "llama3.2-3b" | "llama3.2:3b" => (
             "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf".to_string(),

@@ -63,19 +63,19 @@ impl Default for ModelRegistry {
 
         // === QWEN MODELS ===
         models.insert(
-            "qwen3-8b-q4_k_m.gguf".to_string(),
+            "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
             ModelInfo {
-                id: "qwen3-8b-q4_k_m.gguf".to_string(),
-                name: "Qwen3 8B".to_string(),
-                description: "Alibaba's latest multilingual model with excellent reasoning".to_string(),
-                parameter_size: "8B".to_string(),
-                size_gb: 4.8,
-                tags: vec!["multilingual".to_string(), "reasoning".to_string(), "recommended".to_string()],
+                id: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+                name: "Qwen3.5 4B".to_string(),
+                description: "Multimodal vision-language model with hybrid DeltaNet architecture".to_string(),
+                parameter_size: "4B".to_string(),
+                size_gb: 2.74,
+                tags: vec!["multimodal".to_string(), "vision".to_string(), "reasoning".to_string(), "recommended".to_string()],
                 capabilities: ModelCapabilities {
                     chat: true,
                     code_generation: true,
                     reasoning: true,
-                    vision: false,
+                    vision: true,
                     multilingual: true,
                     function_calling: true,
                 },
@@ -85,7 +85,7 @@ impl Default for ModelRegistry {
                     min_vram_gb: Some(4),
                     recommended_vram_gb: Some(8),
                     gpu_required: false,
-                    quantization: vec!["q4_0".to_string(), "q5_0".to_string()],
+                    quantization: vec!["q4_k_m".to_string(), "q8_0".to_string()],
                 },
                 recommended_use: vec![
                     "general_chat".to_string(),
@@ -565,7 +565,7 @@ pub fn recommend_model(hardware: &SystemHardware, use_case: Option<&str>) -> Mod
 
     if candidates.is_empty() {
         return ModelRecommendation {
-            recommended: "qwen3-8b-q4_k_m.gguf".to_string(),
+            recommended: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
             alternatives: vec!["llama-3.2-3b-instruct-q4_k_m.gguf".to_string()],
             reasoning: "No fully compatible models found. Using default with reduced performance.".to_string(),
             hardware_friendly: false,

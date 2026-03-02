@@ -23,10 +23,10 @@ ENV_FILE="/etc/lifeos/llama-server.env"
 
 # Default model is pre-bundled in the image during build (see Containerfile).
 # This script only downloads if the configured model is missing (e.g. user changed it).
-DEFAULT_MODEL="Qwen3VL-4B-Instruct-Q4_K_M.gguf"
-DEFAULT_MODEL_URL="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf"
-DEFAULT_MMPROJ="mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
-DEFAULT_MMPROJ_URL="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+DEFAULT_MODEL="Qwen3.5-4B-Q4_K_M.gguf"
+DEFAULT_MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
+DEFAULT_MMPROJ="mmproj-F16.gguf"
+DEFAULT_MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"
 
 # Source env to get configured model
 if [ -f "$ENV_FILE" ]; then
@@ -66,7 +66,7 @@ if [ -n "$EXISTING" ]; then
     exit 0
 fi
 
-echo "Downloading default AI model: $MODEL (~2.5GB)"
+echo "Downloading default AI model: $MODEL (~2.74GB)"
 echo "This may take several minutes..."
 
 mkdir -p "$MODEL_DIR"
@@ -84,7 +84,7 @@ done
 
 # Download mmproj
 if [ ! -f "$MMPROJ_PATH" ]; then
-    echo "Downloading vision projector: $MMPROJ (~454MB)"
+    echo "Downloading vision projector: $MMPROJ (~672MB)"
     if curl -fSL --retry 3 --connect-timeout 30 -o "$MMPROJ_PATH.tmp" "$DEFAULT_MMPROJ_URL"; then
         mv "$MMPROJ_PATH.tmp" "$MMPROJ_PATH"
         echo "Vision projector downloaded: $MMPROJ"
