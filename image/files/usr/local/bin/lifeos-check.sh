@@ -17,6 +17,7 @@ WARN=0
 ok()   { echo -e "  ${GREEN}[OK]${NC}   $1"; ((PASS++)); }
 fail() { echo -e "  ${RED}[FAIL]${NC} $1"; ((FAIL++)); }
 warn() { echo -e "  ${YELLOW}[WARN]${NC} $1"; ((WARN++)); }
+info() { echo -e "  ${BLUE}[INFO]${NC} $1"; }
 check_life_cmd() {
     local label="$1"
     shift
@@ -107,7 +108,7 @@ else
     fi
 
     if echo "$FAILED_UNITS" | grep -q "systemd-remount-fs.service"; then
-        warn "systemd-remount-fs.service falló (conocido en Fedora bootc + VirtualBox)"
+        info "systemd-remount-fs.service falló (conocido en Fedora bootc + VirtualBox)"
     fi
 
     OTHER_FAILED=$(echo "$FAILED_UNITS" | grep -Ev '^(lifeos-first-boot\.service|systemd-remount-fs\.service)$' || true)
