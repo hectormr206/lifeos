@@ -17,6 +17,24 @@ WARN=0
 ok()   { echo -e "  ${GREEN}[OK]${NC}   $1"; ((PASS++)); }
 fail() { echo -e "  ${RED}[FAIL]${NC} $1"; ((FAIL++)); }
 warn() { echo -e "  ${YELLOW}[WARN]${NC} $1"; ((WARN++)); }
+check_life_cmd() {
+    local label="$1"
+    shift
+
+    local output
+    output="$(life "$@" 2>&1)"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        ok "$label"
+        return 0
+    fi
+
+    if echo "$output" | grep -Eqi "401|unauthorized"; then
+        fail "$label (401 Unauthorized)"
+    else
+        fail "$label (exit ${rc})"
+    fi
+}
 
 echo -e "${BLUE}${BOLD}"
 echo "  LifeOS System Check"
@@ -74,6 +92,29 @@ case "$LLAMA_STATE" in
         fail "llama-server: $LLAMA_STATE"
         ;;
 esac
+echo
+
+# --- Unidades fallidas ---
+echo -e "${BOLD}Unidades fallidas${NC}"
+FAILED_UNITS=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}')
+if [[ -z "$FAILED_UNITS" ]]; then
+    ok "Sin unidades fallidas en systemd"
+else
+    if echo "$FAILED_UNITS" | grep -qx "lifeos-first-boot.service"; then
+        fail "lifeos-first-boot.service falló"
+    elif echo "$FAILED_UNITS" | grep -q "lifeos-first-boot.service"; then
+        fail "lifeos-first-boot.service falló"
+    fi
+
+    if echo "$FAILED_UNITS" | grep -q "systemd-remount-fs.service"; then
+        warn "systemd-remount-fs.service falló (conocido en Fedora bootc + VirtualBox)"
+    fi
+
+    OTHER_FAILED=$(echo "$FAILED_UNITS" | grep -Ev '^(lifeos-first-boot\.service|systemd-remount-fs\.service)$' || true)
+    if [[ -n "$OTHER_FAILED" ]]; then
+        warn "Otras unidades fallidas detectadas: $(echo "$OTHER_FAILED" | tr '\n' ' ')"
+    fi
+fi
 echo
 
 # --- AI Runtime ---
@@ -141,6 +182,22 @@ if [[ -n "$TOKEN" ]]; then
 else
     warn "Bootstrap token: no disponible (necesita sudo)"
 fi
+echo
+
+# --- CLI Fase 0/1 ---
+echo -e "${BOLD}CLI Fase 0/1${NC}"
+check_life_cmd "help" --help
+check_life_cmd "status" status
+check_life_cmd "mode list" mode list
+check_life_cmd "mode show" mode show
+check_life_cmd "context status" context status
+check_life_cmd "context list" context list
+check_life_cmd "telemetry stats" telemetry stats
+check_life_cmd "telemetry consent" telemetry consent
+check_life_cmd "overlay status" overlay status
+check_life_cmd "follow-along status" follow-along status
+check_life_cmd "ai status" ai status
+check_life_cmd "update status" update status
 echo
 
 # --- Disco ---

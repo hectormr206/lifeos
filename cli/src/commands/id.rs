@@ -20,7 +20,10 @@ pub enum IdCommands {
 pub async fn execute(args: IdCommands) -> anyhow::Result<()> {
     match args {
         IdCommands::Issue { agent, cap, ttl } => {
-            println!("Issuing token for {} with cap {} (TTL: {}m)", agent, cap, ttl);
+            println!(
+                "Issuing token for {} with cap {} (TTL: {}m)",
+                agent, cap, ttl
+            );
             // TODO: Implement token generation
         }
         IdCommands::List => {

@@ -1,6 +1,6 @@
 //! Configuration management for LifeOS
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[cfg(test)]
 mod tests;
@@ -132,9 +132,8 @@ impl Default for UpdateConfig {
 
 /// Load configuration from file
 pub fn load_config() -> anyhow::Result<LifeConfig> {
-    let path = find_config_file()
-        .ok_or_else(|| anyhow::anyhow!("No configuration file found"))?;
-    
+    let path = find_config_file().ok_or_else(|| anyhow::anyhow!("No configuration file found"))?;
+
     load_config_from(&path)
 }
 
@@ -190,7 +189,7 @@ pub fn ensure_config_dir() -> anyhow::Result<PathBuf> {
     let config_dir = dirs::config_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not find config directory"))?
         .join("lifeos");
-    
+
     std::fs::create_dir_all(&config_dir)?;
     Ok(config_dir)
 }
@@ -199,22 +198,23 @@ pub fn ensure_config_dir() -> anyhow::Result<PathBuf> {
 pub fn create_default_config() -> anyhow::Result<PathBuf> {
     let config_dir = ensure_config_dir()?;
     let config_path = config_dir.join("lifeos.toml");
-    
+
     let config = LifeConfig::default();
     save_config(&config, &config_path)?;
-    
+
     Ok(config_path)
 }
 
 /// Set a configuration value by key path
 pub fn set_config_value(config: &mut LifeConfig, key: &str, value: &str) -> anyhow::Result<()> {
     let parts: Vec<&str> = key.split('.').collect();
-    
+
     match parts.as_slice() {
         ["system", "hostname"] => config.system.hostname = value.to_string(),
         ["system", "timezone"] => config.system.timezone = value.to_string(),
         ["system", "locale"] => config.system.locale = value.to_string(),
-        ["ai", "enabled"] => config.ai.enabled = value.parse()?,        ["ai", "provider"] => config.ai.provider = value.to_string(),
+        ["ai", "enabled"] => config.ai.enabled = value.parse()?,
+        ["ai", "provider"] => config.ai.provider = value.to_string(),
         ["ai", "model"] => config.ai.model = value.to_string(),
         ["ai", "llama_server_host"] => config.ai.llama_server_host = value.to_string(),
         ["security", "encryption"] => config.security.encryption = value.parse()?,
@@ -229,14 +229,14 @@ pub fn set_config_value(config: &mut LifeConfig, key: &str, value: &str) -> anyh
         ["updates", "schedule"] => config.updates.schedule = value.to_string(),
         _ => anyhow::bail!("Unknown configuration key: {}", key),
     }
-    
+
     Ok(())
 }
 
 /// Get a configuration value by key path
 pub fn get_config_value(config: &LifeConfig, key: &str) -> anyhow::Result<String> {
     let parts: Vec<&str> = key.split('.').collect();
-    
+
     let value = match parts.as_slice() {
         ["system", "hostname"] => config.system.hostname.clone(),
         ["system", "timezone"] => config.system.timezone.clone(),
@@ -252,6 +252,6 @@ pub fn get_config_value(config: &LifeConfig, key: &str) -> anyhow::Result<String
         ["updates", "auto_apply"] => config.updates.auto_apply.to_string(),
         _ => anyhow::bail!("Unknown configuration key: {}", key),
     };
-    
+
     Ok(value)
 }

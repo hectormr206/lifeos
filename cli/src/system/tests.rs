@@ -43,7 +43,10 @@ mod tests {
         let status = parse_bootc_status(json).unwrap();
         assert_eq!(status.booted_slot, "ghcr.io/example/lifeos:latest");
         assert_eq!(status.slots[0].version, "v0.1.0");
-        assert_eq!(status.rollback_slot, Some("ghcr.io/example/lifeos:previous".to_string()));
+        assert_eq!(
+            status.rollback_slot,
+            Some("ghcr.io/example/lifeos:previous".to_string())
+        );
     }
 
     #[test]
@@ -140,9 +143,7 @@ mod tests {
         let health = check_health();
         // Just verify it returns a valid status
         match health {
-            HealthStatus::Healthy |
-            HealthStatus::Degraded(_) |
-            HealthStatus::Unhealthy(_) => (), // Pass
+            HealthStatus::Healthy | HealthStatus::Degraded(_) | HealthStatus::Unhealthy(_) => (), // Pass
         }
     }
 

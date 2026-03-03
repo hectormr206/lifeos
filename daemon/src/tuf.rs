@@ -56,11 +56,15 @@ struct MetaFile {
     version: u64,
 }
 
-pub fn validate_tuf_metadata(metadata_dir: &Path, state_path: &Path) -> anyhow::Result<TufVersions> {
+pub fn validate_tuf_metadata(
+    metadata_dir: &Path,
+    state_path: &Path,
+) -> anyhow::Result<TufVersions> {
     ensure_required_files(metadata_dir)?;
 
     let root: Envelope<RootMetadata> = read_metadata(metadata_dir.join("root.json"))?;
-    let timestamp: Envelope<TimestampMetadata> = read_metadata(metadata_dir.join("timestamp.json"))?;
+    let timestamp: Envelope<TimestampMetadata> =
+        read_metadata(metadata_dir.join("timestamp.json"))?;
     let snapshot: Envelope<SnapshotMetadata> = read_metadata(metadata_dir.join("snapshot.json"))?;
     let targets: Envelope<TargetsMetadata> = read_metadata(metadata_dir.join("targets.json"))?;
 
@@ -114,16 +118,29 @@ pub fn validate_tuf_metadata(metadata_dir: &Path, state_path: &Path) -> anyhow::
 }
 
 pub fn metadata_exists(metadata_dir: &Path) -> bool {
-    ["root.json", "timestamp.json", "snapshot.json", "targets.json"]
-        .iter()
-        .all(|name| metadata_dir.join(name).exists())
+    [
+        "root.json",
+        "timestamp.json",
+        "snapshot.json",
+        "targets.json",
+    ]
+    .iter()
+    .all(|name| metadata_dir.join(name).exists())
 }
 
 fn ensure_required_files(metadata_dir: &Path) -> anyhow::Result<()> {
-    let required = ["root.json", "timestamp.json", "snapshot.json", "targets.json"];
+    let required = [
+        "root.json",
+        "timestamp.json",
+        "snapshot.json",
+        "targets.json",
+    ];
     for name in required {
         if !metadata_dir.join(name).exists() {
-            anyhow::bail!("missing TUF metadata file: {}", metadata_dir.join(name).display());
+            anyhow::bail!(
+                "missing TUF metadata file: {}",
+                metadata_dir.join(name).display()
+            );
         }
     }
     Ok(())

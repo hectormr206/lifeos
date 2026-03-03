@@ -1,0 +1,497 @@
+//! Context Policies CLI commands
+//!
+//! Manage workplace/context profiles that automatically apply rules
+//! based on current activity, time, network, or manual selection.
+
+use clap::Subcommand;
+use colored::Colorize;
+
+use crate::daemon_client;
+
+fn daemon_url() -> String {
+    daemon_client::daemon_url()
+}
+
+#[derive(Subcommand)]
+pub enum ContextCommands {
+    /// Show current context and active profile
+    Status,
+    /// Switch to a specific context
+    Set {
+        /// Context name (home, work, gaming, development, creative, learning, travel)
+        context: String,
+    },
+    /// List all context profiles
+    List,
+    /// Show details of a specific profile
+    Show {
+        /// Context name
+        context: String,
+    },
+    /// Auto-detect and switch to best matching context
+    Detect,
+    /// Show rules that would be applied for a context
+    Rules {
+        /// Context name (or "current" for active context)
+        #[arg(default_value = "current")]
+        context: String,
+    },
+    /// Show context statistics
+    Stats,
+    /// Create a new custom context profile
+    Create {
+        /// Context name
+        name: String,
+        /// Description
+        #[arg(short, long, default_value = "Custom context")]
+        description: String,
+    },
+    /// Delete a context profile
+    Delete {
+        /// Context name
+        context: String,
+    },
+    /// Add a rule to a context profile
+    AddRule {
+        /// Context name
+        context: String,
+        /// Rule type: mode, model, notifications, capture, channel, block-app, privacy
+        rule_type: String,
+        /// Rule value
+        value: String,
+    },
+}
+
+pub async fn execute(cmd: ContextCommands) -> anyhow::Result<()> {
+    match cmd {
+        ContextCommands::Status => cmd_status().await,
+        ContextCommands::Set { context } => cmd_set(&context).await,
+        ContextCommands::List => cmd_list().await,
+        ContextCommands::Show { context } => cmd_show(&context).await,
+        ContextCommands::Detect => cmd_detect().await,
+        ContextCommands::Rules { context } => cmd_rules(&context).await,
+        ContextCommands::Stats => cmd_stats().await,
+        ContextCommands::Create { name, description } => cmd_create(&name, &description).await,
+        ContextCommands::Delete { context } => cmd_delete(&context).await,
+        ContextCommands::AddRule {
+            context,
+            rule_type,
+            value,
+        } => cmd_add_rule(&context, &rule_type, &value).await,
+    }
+}
+
+async fn cmd_status() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/context/status", daemon_url()))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Context Status".bold().blue());
+            println!();
+            println!(
+                "  Current:    {}",
+                body["current_context"].as_str().unwrap_or("unknown").cyan()
+            );
+            println!(
+                "  Profile:    {}",
+                body["active_profile"].as_str().unwrap_or("none")
+            );
+            println!(
+                "  Detection:  {:?}",
+                body["detection_method"].as_str().unwrap_or("manual")
+            );
+            if let Some(last) = body["last_switch"].as_str() {
+                println!("  Last switch: {}", last.dimmed());
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let status = r.status();
+            anyhow::bail!("Daemon returned {}", status);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            println!("  Try: {}", "sudo systemctl start lifeosd".cyan());
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_set(context: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/context/set", daemon_url()))
+        .json(&serde_json::json!({ "context": context }))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            println!(
+                "{} Context switched to: {}",
+                "OK".green().bold(),
+                context.cyan()
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to set context: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_list() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/context/profiles", daemon_url()))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Context Profiles".bold().blue());
+            println!();
+            if let Some(profiles) = body["profiles"].as_array() {
+                for p in profiles {
+                    let name = p["name"].as_str().unwrap_or("?");
+                    let ctx = p["context"].as_str().unwrap_or("?");
+                    let desc = p["description"].as_str().unwrap_or("");
+                    let rules_count = p["rules"].as_array().map(|r| r.len()).unwrap_or(0);
+                    println!("  {} ({}) — {} rules", name.cyan().bold(), ctx, rules_count);
+                    if !desc.is_empty() {
+                        println!("    {}", desc.dimmed());
+                    }
+                }
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let status = r.status();
+            anyhow::bail!("Daemon returned {}", status);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_show(context: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!(
+            "{}/api/v1/context/profile/{}",
+            daemon_url(),
+            context
+        ))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", format!("Profile: {}", context).bold().blue());
+            println!();
+            println!("  Name:       {}", body["name"].as_str().unwrap_or("?"));
+            println!(
+                "  Description: {}",
+                body["description"].as_str().unwrap_or("")
+            );
+            println!(
+                "  Detection:  {}",
+                format!("{:?}", body["detection_method"]).dimmed()
+            );
+            println!("  Priority:   {}", body["priority"].as_u64().unwrap_or(0));
+
+            if let Some(rules) = body["rules"].as_array() {
+                println!();
+                println!("  {}:", "Rules".bold());
+                for rule in rules {
+                    let enabled = rule["enabled"].as_bool().unwrap_or(false);
+                    let icon = if enabled { "ON ".green() } else { "OFF".red() };
+                    println!(
+                        "    [{}] {} — {}",
+                        icon,
+                        rule["name"].as_str().unwrap_or("?"),
+                        rule["description"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            Ok(())
+        }
+        Ok(r) if r.status().as_u16() == 404 => {
+            println!("{}", format!("Profile '{}' not found.", context).yellow());
+            Ok(())
+        }
+        Ok(r) => {
+            anyhow::bail!("Daemon returned {}", r.status());
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_detect() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/context/detect", daemon_url()))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            if let Some(detected) = body["detected_context"].as_str() {
+                println!(
+                    "{} Detected context: {}",
+                    "OK".green().bold(),
+                    detected.cyan()
+                );
+                if body["switched"].as_bool().unwrap_or(false) {
+                    println!("  Context switched automatically.");
+                }
+            } else {
+                println!("{}", "No matching context detected.".yellow());
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            anyhow::bail!("Daemon returned {}", r.status());
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_rules(context: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/context/rules/{}", daemon_url(), context))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!(
+                "{}",
+                format!("Rules for context: {}", context).bold().blue()
+            );
+            println!();
+            if let Some(rules) = body["applied_rules"].as_array() {
+                for rule in rules {
+                    let status = rule["status"].as_str().unwrap_or("?");
+                    let icon = match status {
+                        "Applied" => "APPLIED".green(),
+                        "Failed" => "FAILED ".red(),
+                        _ => "SKIPPED".yellow(),
+                    };
+                    println!(
+                        "  [{}] {} — {}",
+                        icon,
+                        rule["rule_name"].as_str().unwrap_or("?"),
+                        rule["action"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            anyhow::bail!("Daemon returned {}", r.status());
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_stats() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/context/stats", daemon_url()))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Context Statistics".bold().blue());
+            println!();
+            println!(
+                "  Current context:  {}",
+                body["current_context"].as_str().unwrap_or("unknown").cyan()
+            );
+            println!(
+                "  Active profile:   {}",
+                body["active_profile"].as_str().unwrap_or("none")
+            );
+            println!(
+                "  Total profiles:   {}",
+                body["total_profiles"].as_u64().unwrap_or(0)
+            );
+            println!(
+                "  Detection method: {}",
+                format!("{:?}", body["detection_method"]).dimmed()
+            );
+            if let Some(last) = body["last_switch"].as_str() {
+                println!("  Last switch:      {}", last.dimmed());
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            anyhow::bail!("Daemon returned {}", r.status());
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_create(name: &str, description: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/context/profile", daemon_url()))
+        .json(&serde_json::json!({
+            "name": name,
+            "description": description,
+            "detection_method": "Manual",
+            "rules": [],
+            "priority": 5,
+        }))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            println!(
+                "{} Created context profile: {}",
+                "OK".green().bold(),
+                name.cyan()
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to create profile: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_delete(context: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .delete(format!(
+            "{}/api/v1/context/profile/{}",
+            daemon_url(),
+            context
+        ))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            println!(
+                "{} Deleted context profile: {}",
+                "OK".green().bold(),
+                context.cyan()
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to delete profile: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_add_rule(context: &str, rule_type: &str, value: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!(
+            "{}/api/v1/context/profile/{}/rule",
+            daemon_url(),
+            context
+        ))
+        .json(&serde_json::json!({
+            "rule_type": rule_type,
+            "value": value,
+        }))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            println!(
+                "{} Added rule to {}: {} = {}",
+                "OK".green().bold(),
+                context.cyan(),
+                rule_type,
+                value
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to add rule: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}

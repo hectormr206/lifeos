@@ -1,7 +1,7 @@
 //! AI module for daemon
 //! Manages llama-server integration and AI-related system tasks
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 /// AI service status
@@ -42,7 +42,10 @@ impl AiManager {
         let server_running = self.is_running().await;
 
         let models = self.list_models().await.unwrap_or_default();
-        let default_model = models.first().map(|m| m.name.clone()).unwrap_or_else(|| "none".to_string());
+        let default_model = models
+            .first()
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| "none".to_string());
         let gpu_acceleration = self.check_gpu_acceleration().await;
 
         Ok(AiStatus {
@@ -57,16 +60,20 @@ impl AiManager {
     pub async fn list_models(&self) -> anyhow::Result<Vec<ModelInfo>> {
         let mut models = Vec::new();
         let model_dir = std::path::Path::new("/var/lib/lifeos/models");
-        
+
         if model_dir.exists() {
             let mut entries = tokio::fs::read_dir(model_dir).await?;
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
                 if path.is_file() && path.extension().unwrap_or_default() == "gguf" {
                     let metadata = entry.metadata().await?;
-                    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
                     let size_mb = metadata.len() / (1024 * 1024);
-                    
+
                     models.push(ModelInfo {
                         name,
                         size_mb,
@@ -104,16 +111,16 @@ impl AiManager {
         false
     }
 
-    /// Start llama-server 
+    /// Start llama-server
     pub async fn start_server(&self) -> anyhow::Result<()> {
         let models = self.list_models().await?;
         let first_model = match models.first() {
             Some(m) => m.name.clone(),
             None => anyhow::bail!("No models found in /var/lib/lifeos/models"),
         };
-        
+
         let model_path = format!("/var/lib/lifeos/models/{}", first_model);
-        
+
         Command::new("llama-server")
             .env("GGML_BACKEND_PATH", "/usr/lib64")
             .args(["-m", &model_path, "--port", "8082", "-c", "4096"])
@@ -124,9 +131,7 @@ impl AiManager {
 
     /// Stop llama-server
     pub async fn stop_server(&self) -> anyhow::Result<()> {
-        Command::new("killall")
-            .args(["llama-server"])
-            .output()?;
+        Command::new("killall").args(["llama-server"]).output()?;
 
         Ok(())
     }
@@ -248,7 +253,12 @@ impl AiManager {
             .get("model")
             .and_then(|m| m.as_str())
             .map(|s| s.to_string())
-            .or_else(|| payload.get("model").and_then(|m| m.as_str()).map(|s| s.to_string()))
+            .or_else(|| {
+                payload
+                    .get("model")
+                    .and_then(|m| m.as_str())
+                    .map(|s| s.to_string())
+            })
             .unwrap_or_else(|| "unknown".to_string());
 
         let tokens_used = body

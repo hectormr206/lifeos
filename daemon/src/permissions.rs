@@ -157,7 +157,9 @@ fn prompt_user_approval(app_id: &str, resource: &str) -> bool {
 
         if let Ok(output) = output {
             if output.status.success() {
-                let answer = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+                let answer = String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .to_lowercase();
                 return answer == "yes" || answer == "y";
             }
         }

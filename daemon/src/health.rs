@@ -1,10 +1,10 @@
 //! Health monitoring module
 //! Monitors system health and reports issues
 
-use std::process::Command;
-use std::path::Path;
-use serde::{Serialize, Deserialize};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::process::Command;
 
 #[cfg(test)]
 mod health_tests;
@@ -59,13 +59,11 @@ impl std::fmt::Debug for HealthMonitor {
 
 impl HealthMonitor {
     pub fn new() -> Self {
-        let monitor = Self {
-            checks: Vec::new(),
-        };
-        
+        let monitor = Self { checks: Vec::new() };
+
         // Note: Health checks disabled due to async trait complexity
         // Can be re-enabled with proper async_trait implementation
-        
+
         monitor
     }
 
@@ -108,7 +106,9 @@ impl HealthMonitor {
                         severity: Severity::Critical,
                         component: "filesystem-integrity".to_string(),
                         message: msg.clone(),
-                        suggestion: Some("Verify composefs/fs-verity configuration for /usr".to_string()),
+                        suggestion: Some(
+                            "Verify composefs/fs-verity configuration for /usr".to_string(),
+                        ),
                     });
                 }
                 check_results.push(CheckResult {
@@ -134,7 +134,9 @@ impl HealthMonitor {
                         severity: Severity::Critical,
                         component: "security-baseline".to_string(),
                         message: msg.clone(),
-                        suggestion: Some("Enable Secure Boot and install on LUKS2-encrypted root".to_string()),
+                        suggestion: Some(
+                            "Enable Secure Boot and install on LUKS2-encrypted root".to_string(),
+                        ),
                     });
                 }
                 check_results.push(CheckResult {
@@ -186,7 +188,10 @@ impl HealthMonitor {
                         severity: Severity::Warning,
                         component: "network".to_string(),
                         message: msg.clone(),
-                        suggestion: Some("Ensure NetworkManager is active and a default route exists".to_string()),
+                        suggestion: Some(
+                            "Ensure NetworkManager is active and a default route exists"
+                                .to_string(),
+                        ),
                     });
                 }
                 check_results.push(CheckResult {
@@ -258,9 +263,7 @@ struct CheckOutput {
 }
 
 async fn check_bootc() -> anyhow::Result<(bool, String)> {
-    let output = Command::new("bootc")
-        .args(["status", "--json"])
-        .output()?;
+    let output = Command::new("bootc").args(["status", "--json"]).output()?;
 
     if !output.status.success() {
         return Ok((false, "bootc status check failed".to_string()));
@@ -272,9 +275,7 @@ async fn check_bootc() -> anyhow::Result<(bool, String)> {
 async fn check_disk_space() -> anyhow::Result<(bool, String)> {
     // Use /var instead of / because on bootc systems the root (/) is a composefs
     // overlay that always reports 100% usage. /var is the real mutable storage.
-    let output = Command::new("df")
-        .args(["-Pk", "/var"])
-        .output()?;
+    let output = Command::new("df").args(["-Pk", "/var"]).output()?;
 
     if !output.status.success() {
         return Ok((false, "df command failed".to_string()));
@@ -288,8 +289,14 @@ async fn check_disk_space() -> anyhow::Result<(bool, String)> {
         return Ok((false, "Could not parse disk usage".to_string()));
     }
 
-    let total = cols.get(1).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
-    let available = cols.get(3).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+    let total = cols
+        .get(1)
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let available = cols
+        .get(3)
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0);
 
     if total <= 0.0 {
         return Ok((false, "Disk size reported as zero".to_string()));
@@ -356,7 +363,10 @@ async fn check_filesystem_integrity() -> anyhow::Result<(bool, String)> {
         .trim()
         .to_string();
     if fstype != "composefs" {
-        return Ok((false, format!("/usr filesystem is '{fstype}', expected composefs")));
+        return Ok((
+            false,
+            format!("/usr filesystem is '{fstype}', expected composefs"),
+        ));
     }
 
     let options_output = Command::new("findmnt")
@@ -375,7 +385,10 @@ async fn check_filesystem_integrity() -> anyhow::Result<(bool, String)> {
         ));
     }
 
-    Ok((true, "/usr is mounted with composefs and verity hints".to_string()))
+    Ok((
+        true,
+        "/usr is mounted with composefs and verity hints".to_string(),
+    ))
 }
 
 async fn check_network() -> anyhow::Result<(bool, String)> {

@@ -49,12 +49,12 @@ pub struct HardwareRequirements {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum PerformanceTier {
-    UltraFast,  // 1-3B parameters
-    Fast,       // 4-8B parameters
-    Balanced,   // 8-14B parameters
-    Capable,    // 14-32B parameters
-    Powerful,   // 32-70B parameters
-    Maximum,    // 70B+ parameters
+    UltraFast, // 1-3B parameters
+    Fast,      // 4-8B parameters
+    Balanced,  // 8-14B parameters
+    Capable,   // 14-32B parameters
+    Powerful,  // 32-70B parameters
+    Maximum,   // 70B+ parameters
 }
 
 impl Default for ModelRegistry {
@@ -67,10 +67,16 @@ impl Default for ModelRegistry {
             ModelInfo {
                 id: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
                 name: "Qwen3.5 4B".to_string(),
-                description: "Multimodal vision-language model with hybrid DeltaNet architecture".to_string(),
+                description: "Multimodal vision-language model with hybrid DeltaNet architecture"
+                    .to_string(),
                 parameter_size: "4B".to_string(),
                 size_gb: 2.74,
-                tags: vec!["multimodal".to_string(), "vision".to_string(), "reasoning".to_string(), "recommended".to_string()],
+                tags: vec![
+                    "multimodal".to_string(),
+                    "vision".to_string(),
+                    "reasoning".to_string(),
+                    "recommended".to_string(),
+                ],
                 capabilities: ModelCapabilities {
                     chat: true,
                     code_generation: true,
@@ -105,7 +111,11 @@ impl Default for ModelRegistry {
                 description: "Larger Qwen3 with improved reasoning capabilities".to_string(),
                 parameter_size: "14B".to_string(),
                 size_gb: 8.5,
-                tags: vec!["multilingual".to_string(), "reasoning".to_string(), "advanced".to_string()],
+                tags: vec![
+                    "multilingual".to_string(),
+                    "reasoning".to_string(),
+                    "advanced".to_string(),
+                ],
                 capabilities: ModelCapabilities {
                     chat: true,
                     code_generation: true,
@@ -140,7 +150,11 @@ impl Default for ModelRegistry {
                 description: "Lightweight, fast model for quick tasks".to_string(),
                 parameter_size: "3B".to_string(),
                 size_gb: 2.0,
-                tags: vec!["fast".to_string(), "efficient".to_string(), "edge".to_string()],
+                tags: vec![
+                    "fast".to_string(),
+                    "efficient".to_string(),
+                    "edge".to_string(),
+                ],
                 capabilities: ModelCapabilities {
                     chat: true,
                     code_generation: true,
@@ -274,7 +288,8 @@ impl Default for ModelRegistry {
             ModelInfo {
                 id: "deepseek-coder-6.7b-instruct-q4_k_m.gguf".to_string(),
                 name: "DeepSeek Coder 6.7B".to_string(),
-                description: "Excellent coding assistant with fill-in-the-middle support".to_string(),
+                description: "Excellent coding assistant with fill-in-the-middle support"
+                    .to_string(),
                 parameter_size: "6.7B".to_string(),
                 size_gb: 3.8,
                 tags: vec!["coding".to_string(), "fill-in-middle".to_string()],
@@ -364,10 +379,7 @@ impl Default for ModelRegistry {
                     gpu_required: false,
                     quantization: vec!["q4_0".to_string()],
                 },
-                recommended_use: vec![
-                    "quick_tasks".to_string(),
-                    "simple_chat".to_string(),
-                ],
+                recommended_use: vec!["quick_tasks".to_string(), "simple_chat".to_string()],
                 performance_tier: PerformanceTier::Fast,
             },
         );
@@ -475,11 +487,7 @@ impl ModelRegistry {
     }
 
     /// Get recommended models for given hardware
-    pub fn recommended_for_hardware(
-        &self,
-        ram_gb: u32,
-        vram_gb: Option<u32>,
-    ) -> Vec<&ModelInfo> {
+    pub fn recommended_for_hardware(&self, ram_gb: u32, vram_gb: Option<u32>) -> Vec<&ModelInfo> {
         self.models
             .values()
             .filter(|m| {
@@ -495,11 +503,7 @@ impl ModelRegistry {
     }
 
     /// Get the best default model for given hardware
-    pub fn default_for_hardware(
-        &self,
-        ram_gb: u32,
-        vram_gb: Option<u32>,
-    ) -> Option<&ModelInfo> {
+    pub fn default_for_hardware(&self, ram_gb: u32, vram_gb: Option<u32>) -> Option<&ModelInfo> {
         self.recommended_for_hardware(ram_gb, vram_gb)
             .into_iter()
             .find(|m| m.tags.contains(&"recommended".to_string()))
@@ -520,7 +524,9 @@ impl ModelRegistry {
                 m.id.to_lowercase().contains(&query_lower)
                     || m.name.to_lowercase().contains(&query_lower)
                     || m.description.to_lowercase().contains(&query_lower)
-                    || m.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                    || m.tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query_lower))
             })
             .collect()
     }
@@ -548,18 +554,25 @@ pub struct ModelRecommendation {
 /// Get model recommendation based on system hardware
 pub fn recommend_model(hardware: &SystemHardware, use_case: Option<&str>) -> ModelRecommendation {
     let registry = ModelRegistry::default();
-    
+
     // Find compatible models
-    let compatible = registry.recommended_for_hardware(
-        hardware.total_ram_gb,
-        hardware.total_vram_gb,
-    );
+    let compatible =
+        registry.recommended_for_hardware(hardware.total_ram_gb, hardware.total_vram_gb);
 
     // Filter by use case if specified
     let candidates: Vec<&ModelInfo> = match use_case {
-        Some("chat") => compatible.into_iter().filter(|m| m.capabilities.chat).collect(),
-        Some("code") | Some("coding") => compatible.into_iter().filter(|m| m.capabilities.code_generation).collect(),
-        Some("vision") => compatible.into_iter().filter(|m| m.capabilities.vision).collect(),
+        Some("chat") => compatible
+            .into_iter()
+            .filter(|m| m.capabilities.chat)
+            .collect(),
+        Some("code") | Some("coding") => compatible
+            .into_iter()
+            .filter(|m| m.capabilities.code_generation)
+            .collect(),
+        Some("vision") => compatible
+            .into_iter()
+            .filter(|m| m.capabilities.vision)
+            .collect(),
         _ => compatible,
     };
 
@@ -567,7 +580,8 @@ pub fn recommend_model(hardware: &SystemHardware, use_case: Option<&str>) -> Mod
         return ModelRecommendation {
             recommended: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
             alternatives: vec!["llama-3.2-3b-instruct-q4_k_m.gguf".to_string()],
-            reasoning: "No fully compatible models found. Using default with reduced performance.".to_string(),
+            reasoning: "No fully compatible models found. Using default with reduced performance."
+                .to_string(),
             hardware_friendly: false,
         };
     }
@@ -607,10 +621,10 @@ pub fn recommend_model(hardware: &SystemHardware, use_case: Option<&str>) -> Mod
 pub fn detect_hardware() -> SystemHardware {
     // This would read actual system information
     // For now, provide a default implementation
-    
+
     let total_ram_gb = detect_ram_gb();
     let (total_vram_gb, gpu_name) = detect_gpu();
-    
+
     SystemHardware {
         total_ram_gb,
         available_ram_gb: total_ram_gb / 2, // Conservative estimate
@@ -634,7 +648,7 @@ fn detect_ram_gb() -> u32 {
             }
         }
     }
-    
+
     // Default fallback
     8
 }
@@ -642,7 +656,10 @@ fn detect_ram_gb() -> u32 {
 fn detect_gpu() -> (Option<u32>, Option<String>) {
     // Try nvidia-smi first
     if let Ok(output) = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
     {
         if output.status.success() {
@@ -656,7 +673,7 @@ fn detect_gpu() -> (Option<u32>, Option<String>) {
             }
         }
     }
-    
+
     // Try rocm-smi for AMD
     if let Ok(_output) = std::process::Command::new("rocm-smi")
         .args(["--showmeminfo", "vram"])
@@ -665,6 +682,6 @@ fn detect_gpu() -> (Option<u32>, Option<String>) {
         // Parse ROCm output
         // Simplified for now
     }
-    
+
     (None, None)
 }

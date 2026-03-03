@@ -82,7 +82,10 @@ pub async fn execute(args: InitArgs) -> anyhow::Result<()> {
     println!("Config directory: {}", config_dir.display());
     println!();
     println!("Next steps:");
-    println!("  • Run {} to view your configuration", "life config show".cyan());
+    println!(
+        "  • Run {} to view your configuration",
+        "life config show".cyan()
+    );
     println!("  • Run {} to check system status", "life status".cyan());
     println!("  • Run {} to start AI services", "life ai start".cyan());
 
@@ -114,14 +117,18 @@ async fn check_system_requirements() {
     let bootc_check = std::process::Command::new("bootc")
         .arg("--version")
         .output();
-    
+
     match bootc_check {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout);
             println!("  {} bootc: {}", "✓".green(), version.trim());
         }
         _ => {
-            println!("  {} bootc: {}", "✗".red(), "not found (optional for container installs)");
+            println!(
+                "  {} bootc: {}",
+                "✗".red(),
+                "not found (optional for container installs)"
+            );
         }
     }
 
@@ -129,13 +136,17 @@ async fn check_system_requirements() {
     let systemd_check = std::process::Command::new("systemctl")
         .arg("--version")
         .output();
-    
+
     match systemd_check {
         Ok(output) if output.status.success() => {
             println!("  {} systemd: {}", "✓".green(), "available");
         }
         _ => {
-            println!("  {} systemd: {}", "⚠".yellow(), "not available (some features disabled)");
+            println!(
+                "  {} systemd: {}",
+                "⚠".yellow(),
+                "not available (some features disabled)"
+            );
         }
     }
 
@@ -143,14 +154,18 @@ async fn check_system_requirements() {
     let podman_check = std::process::Command::new("podman")
         .arg("--version")
         .output();
-    
+
     match podman_check {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout);
             println!("  {} podman: {}", "✓".green(), version.trim());
         }
         _ => {
-            println!("  {} podman: {}", "⚠".yellow(), "not found (container features disabled)");
+            println!(
+                "  {} podman: {}",
+                "⚠".yellow(),
+                "not found (container features disabled)"
+            );
         }
     }
 }
@@ -187,17 +202,15 @@ async fn setup_ai() -> anyhow::Result<()> {
     }
 
     // Check for GPU
-    let nvidia_check = std::process::Command::new("nvidia-smi")
-        .output();
-    
+    let nvidia_check = std::process::Command::new("nvidia-smi").output();
+
     match nvidia_check {
         Ok(output) if output.status.success() => {
             println!("  {} GPU (NVIDIA): {}", "✓".green(), "available");
         }
         _ => {
-            let amd_check = std::process::Command::new("lspci")
-                .output();
-            
+            let amd_check = std::process::Command::new("lspci").output();
+
             if let Ok(output) = amd_check {
                 let output_str = String::from_utf8_lossy(&output.stdout);
                 if output_str.contains("AMD") && output_str.contains("VGA") {

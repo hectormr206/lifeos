@@ -70,6 +70,20 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_update_status_subcommand() {
+        let cli = Cli::parse_from(["life", "update", "status"]);
+        match cli.command {
+            Commands::Update(args) => {
+                assert!(matches!(
+                    args.command,
+                    Some(commands::update::UpdateSubcommand::Status)
+                ));
+            }
+            _ => panic!("Expected Update command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_rollback_command() {
         let cli = Cli::parse_from(["life", "rollback"]);
         match cli.command {
@@ -186,6 +200,7 @@ mod tests {
     #[test]
     fn test_update_args_default() {
         let args = commands::update::UpdateArgs::default();
+        assert!(args.command.is_none());
         assert!(!args.dry_run);
         assert_eq!(args.channel, None);
     }

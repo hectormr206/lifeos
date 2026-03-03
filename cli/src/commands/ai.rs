@@ -1,7 +1,7 @@
 use clap::Subcommand;
 use colored::Colorize;
-use std::process::Command;
 use std::io::{self, Write};
+use std::process::Command;
 
 /// Default llama-server host
 const LLAMA_SERVER_HOST: &str = "http://localhost:8082";
@@ -121,7 +121,10 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
     let models = list_gguf_models();
     if models.is_empty() {
         println!("{}", "none found".yellow());
-        println!("  {} Downloading default model on service start...", "->".dimmed());
+        println!(
+            "  {} Downloading default model on service start...",
+            "->".dimmed()
+        );
     } else {
         println!("{} ({} model(s))", "OK".green(), models.len());
         for m in &models {
@@ -135,11 +138,21 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
         if std::path::Path::new(&model_path).exists() {
             // Update the env file
             let _ = Command::new("sudo")
-                .args(["sed", "-i", &format!("s/^LIFEOS_AI_MODEL=.*/LIFEOS_AI_MODEL={}/", model_name), "/etc/lifeos/llama-server.env"])
+                .args([
+                    "sed",
+                    "-i",
+                    &format!("s/^LIFEOS_AI_MODEL=.*/LIFEOS_AI_MODEL={}/", model_name),
+                    "/etc/lifeos/llama-server.env",
+                ])
                 .output();
             println!("  {} Model set to: {}", "->".dimmed(), model_name.cyan());
         } else {
-            println!("  {} Model {} not found in {}", "!".yellow(), model_name, MODEL_DIR);
+            println!(
+                "  {} Model {} not found in {}",
+                "!".yellow(),
+                model_name,
+                MODEL_DIR
+            );
         }
     }
 
@@ -162,7 +175,10 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
             _ => {
                 println!("{}", "FAILED".red());
                 println!();
-                println!("Check logs with: {}", "journalctl -u llama-server -n 50".cyan());
+                println!(
+                    "Check logs with: {}",
+                    "journalctl -u llama-server -n 50".cyan()
+                );
                 anyhow::bail!("Could not start llama-server service");
             }
         }
@@ -193,7 +209,8 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
     println!();
     println!("{}", "AI services ready".green().bold());
     println!();
-    println!("Try: {} or {}",
+    println!(
+        "Try: {} or {}",
         "life ai chat".cyan(),
         "life ai ask 'hello'".cyan()
     );
@@ -302,10 +319,7 @@ async fn do_action(action: &str) -> anyhow::Result<()> {
 
             if input.trim().is_empty() || input.trim().eq_ignore_ascii_case("y") {
                 println!("\nExecuting...\n");
-                let output = Command::new("sh")
-                    .arg("-c")
-                    .arg(cmd)
-                    .output()?;
+                let output = Command::new("sh").arg("-c").arg(cmd).output()?;
 
                 print!("{}", String::from_utf8_lossy(&output.stdout));
                 eprint!("{}", String::from_utf8_lossy(&output.stderr));
@@ -347,23 +361,42 @@ async fn list_models(all: bool) -> anyhow::Result<()> {
         println!();
         println!("{}", "Available to Download:".bold());
         let available = vec![
-            ("Qwen3.5-4B-Q4_K_M.gguf", "~2.7GB", "Qwen3.5 4B - Multimodal vision+text (default)"),
-            ("Qwen3.5-9B-Q4_K_M.gguf", "~5.5GB", "Qwen3.5 9B - Larger multimodal"),
-            ("llama-3.2-3b-instruct-q4_k_m.gguf", "~2.0GB", "Llama 3.2 3B - Lightweight text-only"),
-            ("llama-3.2-1b-instruct-q4_k_m.gguf", "~0.8GB", "Llama 3.2 1B - Minimal"),
-            ("mistral-7b-instruct-v0.3-q4_k_m.gguf", "~4.1GB", "Mistral 7B - General purpose"),
+            (
+                "Qwen3.5-4B-Q4_K_M.gguf",
+                "~2.7GB",
+                "Qwen3.5 4B - Multimodal vision+text (default)",
+            ),
+            (
+                "Qwen3.5-9B-Q4_K_M.gguf",
+                "~5.5GB",
+                "Qwen3.5 9B - Larger multimodal",
+            ),
+            (
+                "llama-3.2-3b-instruct-q4_k_m.gguf",
+                "~2.0GB",
+                "Llama 3.2 3B - Lightweight text-only",
+            ),
+            (
+                "llama-3.2-1b-instruct-q4_k_m.gguf",
+                "~0.8GB",
+                "Llama 3.2 1B - Minimal",
+            ),
+            (
+                "mistral-7b-instruct-v0.3-q4_k_m.gguf",
+                "~4.1GB",
+                "Mistral 7B - General purpose",
+            ),
         ];
 
         for (name, size, desc) in available {
-            println!("  {:<45} {:>8}  {}",
-                name.cyan(),
-                size.dimmed(),
-                desc
-            );
+            println!("  {:<45} {:>8}  {}", name.cyan(), size.dimmed(), desc);
         }
         println!();
         println!("Or download any GGUF model directly:");
-        println!("  {}", "life ai pull https://huggingface.co/.../model.gguf".cyan());
+        println!(
+            "  {}",
+            "life ai pull https://huggingface.co/.../model.gguf".cyan()
+        );
     }
 
     println!();
@@ -395,7 +428,9 @@ async fn pull_model(model: &str, force: bool) -> anyhow::Result<()> {
     let tmp_path = format!("{}.tmp", dest_path);
 
     // Ensure directory exists
-    let _ = Command::new("sudo").args(["mkdir", "-p", MODEL_DIR]).output();
+    let _ = Command::new("sudo")
+        .args(["mkdir", "-p", MODEL_DIR])
+        .output();
 
     let status = Command::new("sudo")
         .args(["curl", "-fSL", "--progress-bar", "-o", &tmp_path, &url])
@@ -405,9 +440,14 @@ async fn pull_model(model: &str, force: bool) -> anyhow::Result<()> {
         .status()?;
 
     if status.success() {
-        let _ = Command::new("sudo").args(["mv", &tmp_path, &dest_path]).output();
+        let _ = Command::new("sudo")
+            .args(["mv", &tmp_path, &dest_path])
+            .output();
         println!();
-        println!("{}", format!("Model {} downloaded successfully", filename).green());
+        println!(
+            "{}",
+            format!("Model {} downloaded successfully", filename).green()
+        );
 
         // Show file size
         if let Ok(meta) = std::fs::metadata(&dest_path) {
@@ -433,7 +473,12 @@ async fn remove_model(model: &str, yes: bool) -> anyhow::Result<()> {
         .map(|m| format_size(m.len()))
         .unwrap_or_else(|_| "?".to_string());
 
-    println!("{}", format!("Removing model: {} ({})", model, size).bold().yellow());
+    println!(
+        "{}",
+        format!("Removing model: {} ({})", model, size)
+            .bold()
+            .yellow()
+    );
 
     if !yes {
         print!("\nAre you sure? This will free disk space. [y/N] ");
@@ -448,7 +493,10 @@ async fn remove_model(model: &str, yes: bool) -> anyhow::Result<()> {
         }
     }
 
-    match Command::new("sudo").args(["rm", "-f", &model_path]).output() {
+    match Command::new("sudo")
+        .args(["rm", "-f", &model_path])
+        .output()
+    {
         Ok(output) if output.status.success() => {
             println!("{}", format!("Model {} removed", model).green());
         }
@@ -470,7 +518,8 @@ async fn interactive_chat(model: Option<&str>) -> anyhow::Result<()> {
     let model_display = model.unwrap_or("default");
 
     print!("{}\n", "-".repeat(60).dimmed());
-    println!("{}  {}  {}",
+    println!(
+        "{}  {}  {}",
         "Chat".bold(),
         format!("Model: {}", model_display).bold().cyan(),
         "Type 'exit' or 'quit' to end"
@@ -581,7 +630,11 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
 
         // Health check
         if let Ok(_) = check_server_health().await {
-            println!("  {} API: responding on {}", "OK".green(), LLAMA_SERVER_HOST);
+            println!(
+                "  {} API: responding on {}",
+                "OK".green(),
+                LLAMA_SERVER_HOST
+            );
         }
     } else {
         println!("  {} Service: {}", "!!".red(), "not running".red());
@@ -598,7 +651,10 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
 
             if verbose {
                 if let Ok(output) = Command::new("nvidia-smi")
-                    .args(["--query-gpu=driver_version,temperature.gpu,utilization.gpu", "--format=csv,noheader"])
+                    .args([
+                        "--query-gpu=driver_version,temperature.gpu,utilization.gpu",
+                        "--format=csv,noheader",
+                    ])
                     .output()
                 {
                     let info = String::from_utf8_lossy(&output.stdout);
@@ -668,7 +724,8 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
                 if parts.len() >= 3 {
                     let rss_kb: i64 = parts[1].parse().unwrap_or(0);
                     let rss_mb = rss_kb / 1024;
-                    println!("  {} PID {}: {} MB",
+                    println!(
+                        "  {} PID {}: {} MB",
                         "->".dimmed(),
                         parts[0].cyan(),
                         rss_mb.to_string().cyan()
@@ -698,7 +755,10 @@ enum GpuInfo {
 fn check_gpu() -> GpuInfo {
     // Check for NVIDIA GPU
     if let Ok(output) = Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
     {
         if output.status.success() {
@@ -716,7 +776,8 @@ fn check_gpu() -> GpuInfo {
     if let Ok(output) = Command::new("rocminfo").output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         if let Some(line) = output_str.lines().find(|l| l.contains("Marketing Name")) {
-            let name = line.split(':')
+            let name = line
+                .split(':')
                 .nth(1)
                 .unwrap_or("AMD GPU")
                 .trim()
@@ -730,10 +791,7 @@ fn check_gpu() -> GpuInfo {
         let output_str = String::from_utf8_lossy(&output.stdout);
         for line in output_str.lines() {
             if line.contains("VGA") && line.contains("AMD") {
-                let name = line.split(": ")
-                    .nth(1)
-                    .unwrap_or("AMD GPU")
-                    .to_string();
+                let name = line.split(": ").nth(1).unwrap_or("AMD GPU").to_string();
                 return GpuInfo::Amd { name };
             }
         }
@@ -744,10 +802,7 @@ fn check_gpu() -> GpuInfo {
         let output_str = String::from_utf8_lossy(&output.stdout);
         for line in output_str.lines() {
             if line.contains("VGA") && line.contains("Intel") {
-                let name = line.split(": ")
-                    .nth(1)
-                    .unwrap_or("Intel GPU")
-                    .to_string();
+                let name = line.split(": ").nth(1).unwrap_or("Intel GPU").to_string();
                 return GpuInfo::Intel { name };
             }
         }
@@ -769,10 +824,7 @@ async fn is_server_running() -> bool {
     }
 
     // Check if port 8082 is listening
-    if let Ok(output) = Command::new("ss")
-        .args(["-tlnp"])
-        .output()
-    {
+    if let Ok(output) = Command::new("ss").args(["-tlnp"]).output() {
         let output_str = String::from_utf8_lossy(&output.stdout);
         if output_str.contains(":8082") {
             return true;
@@ -834,7 +886,10 @@ fn resolve_model_url(model: &str) -> (String, String) {
 
     // If it ends with .gguf, assume it's a filename - check known models
     if model.ends_with(".gguf") {
-        let url = format!("https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/{}", model);
+        let url = format!(
+            "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/{}",
+            model
+        );
         return (url, model.to_string());
     }
 

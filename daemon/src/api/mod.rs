@@ -12,9 +12,10 @@ use axum::{
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{Json, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
+use log::error;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -26,9 +27,16 @@ use utoipa::{
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::ai::AiManager;
-use crate::system::SystemMonitor;
+use crate::context_policies::ContextPoliciesManager;
+use crate::experience_modes::ExperienceManager;
+use crate::follow_along::FollowAlongManager;
 use crate::health::HealthMonitor;
 use crate::notifications::NotificationManager;
+use crate::overlay::{OverlayManager, OverlayTheme};
+use crate::screen_capture::ScreenCapture;
+use crate::system::SystemMonitor;
+use crate::update_scheduler::UpdateScheduler;
+use std::path::PathBuf;
 
 /// Shared API state
 #[derive(Clone)]
@@ -38,6 +46,13 @@ pub struct ApiState {
     pub health_monitor: Arc<HealthMonitor>,
     pub ai_manager: Arc<RwLock<AiManager>>,
     pub notification_manager: Arc<NotificationManager>,
+    pub overlay_manager: Arc<RwLock<OverlayManager>>,
+    pub screen_capture: Arc<RwLock<ScreenCapture>>,
+    pub experience_manager: Arc<RwLock<ExperienceManager>>,
+    pub update_scheduler: Arc<RwLock<UpdateScheduler>>,
+    pub follow_along_manager: Arc<RwLock<FollowAlongManager>>,
+    pub context_policies_manager: Arc<RwLock<ContextPoliciesManager>>,
+    pub telemetry_manager: Arc<RwLock<crate::telemetry::TelemetryManager>>,
     pub config: ApiConfig,
 }
 
@@ -72,6 +87,48 @@ impl Default for ApiConfig {
         get_ai_status,
         get_ai_models,
         post_ai_chat,
+        show_overlay,
+        hide_overlay,
+        toggle_overlay,
+        overlay_chat,
+        overlay_screenshot,
+        clear_overlay,
+        overlay_status,
+        overlay_config,
+        overlay_export,
+        overlay_import,
+        list_shortcuts,
+        register_shortcuts,
+        unregister_shortcuts,
+        trigger_shortcut,
+        get_current_mode,
+        set_mode,
+        list_modes,
+        compare_modes,
+        get_mode_features,
+        test_feature,
+        get_mode_info,
+        get_update_channel,
+        set_update_channel,
+        get_update_schedule,
+        set_update_schedule,
+        get_available_updates,
+        schedule_update,
+        check_for_updates,
+        get_update_history,
+        install_update,
+        rollback_update,
+        get_update_status,
+        clear_schedule,
+        get_followalong_config,
+        set_followalong_config,
+        set_followalong_consent,
+        get_followalong_context,
+        get_followalong_stats,
+        generate_followalong_summary,
+        translate_followalong_summary,
+        explain_followalong_activity,
+        clear_followalong_events,
         get_notifications,
         post_notification,
         get_system_info,
@@ -90,13 +147,55 @@ impl Default for ApiConfig {
             SystemInfo,
             CommandRequest,
             ApiError,
+            UpdateChannelResponse,
+            SetUpdateChannelRequest,
+            UpdateScheduleResponse,
+            SetUpdateScheduleRequest,
+            AvailableUpdatesResponse,
+            AvailableVersionInfo,
+            ScheduleUpdateRequest,
+            UpdateHistoryResponse,
+            UpdateRecordInfo,
+            InstallUpdateRequest,
+            UpdateStatusResponse,
+            FollowAlongConfigResponse,
+            SetFollowAlongConfigRequest,
+            SetConsentRequest,
+            RecordEventRequest,
+            SummaryResponse,
+            TranslateSummaryRequest,
+            ExplainActivityRequest,
+            ExplanationResponse,
+            ContextStateResponse,
+            EventStatsResponse,
+            EventCountInfo,
+            ExportEventsRequest,
+            ContextTypeResponse,
+            SetContextTypeRequest,
+            ListContextProfilesResponse,
+            ProfileInfo,
+            ProfileDetailsResponse,
+            SwitchContextRequest,
+            CreateContextProfileRequest,
+            AddContextRuleRequest,
+            DetectContextResponse,
+            GetContextRulesResponse,
+            ContextRuleInfo,
+            ContextStatsResponse,
+            ApplyRulesRequest,
+            ApplyRulesResponse,
+            AppliedRuleInfo,
         )
     ),
     tags(
         (name = "system", description = "System management endpoints"),
         (name = "health", description = "Health monitoring endpoints"),
         (name = "ai", description = "AI service endpoints"),
+        (name = "overlay", description = "AI overlay UI endpoints"),
         (name = "notifications", description = "Notification endpoints"),
+        (name = "updates", description = "Update management endpoints"),
+        (name = "followalong", description = "FollowAlong monitoring endpoints"),
+        (name = "context", description = "Context policies endpoints"),
     ),
     modifiers(&SecurityAddon)
 )]
@@ -116,6 +215,491 @@ impl Modify for SecurityAddon {
 }
 
 // ==================== DATA MODELS ====================
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayStatusResponse {
+    pub visible: bool,
+    pub focused: bool,
+    pub stats: OverlayStats,
+    pub chat_history: Vec<ChatMessageInfo>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayStats {
+    pub total_messages: usize,
+    pub visible: bool,
+    pub focused: bool,
+    pub theme: String,
+    pub shortcut: String,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayChatRequest {
+    pub message: String,
+    #[serde(default)]
+    pub include_screen: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayChatResponse {
+    pub response: String,
+    pub model: String,
+    pub tokens_used: Option<u32>,
+    pub duration_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayScreenshotResponse {
+    pub path: String,
+    pub filename: String,
+    pub width: u32,
+    pub height: u32,
+    pub size_bytes: u64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetModeRequest {
+    pub mode: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct CompareModesRequest {
+    pub mode1: String,
+    pub mode2: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct TestFeatureRequest {
+    pub feature: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct CurrentModeResponse {
+    pub mode: String,
+    pub display_name: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ListModesResponse {
+    pub modes: Vec<ModeInfo>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ModeInfo {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub ui_complexity: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct CompareModesResponse {
+    pub mode1: String,
+    pub mode1_display: String,
+    pub mode2: String,
+    pub mode2_display: String,
+    pub differences: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ModeFeaturesResponse {
+    pub mode: String,
+    pub features: Vec<FeatureInfo>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct FeatureInfo {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub enabled: bool,
+    pub category: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct TestFeatureResponse {
+    pub available: bool,
+    pub mode: String,
+    pub feature: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ModeInfoResponse {
+    pub mode: String,
+    pub display_name: String,
+    pub description: String,
+    pub features: Vec<FeatureInfo>,
+    pub settings: ModeSettingsInfo,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ModeSettingsInfo {
+    pub ui_complexity: String,
+    pub update_channel: String,
+    pub ai_enabled: bool,
+    pub ai_context_size: u32,
+    pub telemetry_enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayConfigRequest {
+    #[serde(default)]
+    pub theme: Option<String>,
+    #[serde(default)]
+    pub shortcut: Option<String>,
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayExportRequest {
+    pub path: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayShortcutTriggerRequest {
+    pub shortcut_name: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ShortcutInfo {
+    pub name: String,
+    pub keys: String,
+    pub action: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ShortcutsListResponse {
+    pub shortcuts: Vec<ShortcutInfo>,
+    pub active: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayImportRequest {
+    pub path: String,
+}
+
+// ==================== UPDATE API STRUCTS ====================
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct UpdateChannelResponse {
+    pub channel: String,
+    pub display_name: String,
+    pub description: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetUpdateChannelRequest {
+    pub channel: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct UpdateScheduleResponse {
+    pub schedule_type: String,
+    pub update_time: String,
+    pub update_day: u8,
+    pub check_frequency_hours: u32,
+    pub auto_install: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetUpdateScheduleRequest {
+    #[serde(default)]
+    pub schedule_type: Option<String>,
+    #[serde(default)]
+    pub update_time: Option<String>,
+    #[serde(default)]
+    pub update_day: Option<u8>,
+    #[serde(default)]
+    pub check_frequency_hours: Option<u32>,
+    #[serde(default)]
+    pub auto_install: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct AvailableUpdatesResponse {
+    pub updates: Vec<AvailableVersionInfo>,
+    pub count: usize,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct AvailableVersionInfo {
+    pub version: String,
+    pub channel: String,
+    pub release_date: String,
+    pub notes: String,
+    pub size_bytes: u64,
+    pub download_url: String,
+    pub required_disk_space_mb: u32,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ScheduleUpdateRequest {
+    pub version: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct UpdateHistoryResponse {
+    pub history: Vec<UpdateRecordInfo>,
+    pub count: usize,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct UpdateRecordInfo {
+    pub timestamp: String,
+    pub version: String,
+    pub channel: String,
+    pub status: String,
+    pub checksum: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct InstallUpdateRequest {
+    pub version: String,
+    #[serde(default)]
+    pub channel: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct UpdateStatusResponse {
+    pub current_channel: String,
+    pub available_versions: usize,
+    pub scheduled_updates: usize,
+    pub last_update: Option<String>,
+    pub schedule_type: String,
+    pub check_frequency_hours: u32,
+}
+
+// ==================== FOLLOWALONG API STRUCTS ====================
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct FollowAlongConfigResponse {
+    pub enabled: bool,
+    pub consent_status: String,
+    pub auto_summarize: bool,
+    pub auto_translate: bool,
+    pub auto_explain: bool,
+    pub summary_interval_seconds: u64,
+    pub max_events_buffer: usize,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetFollowAlongConfigRequest {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub auto_summarize: Option<bool>,
+    #[serde(default)]
+    pub auto_translate: Option<bool>,
+    #[serde(default)]
+    pub auto_explain: Option<bool>,
+    #[serde(default)]
+    pub summary_interval_seconds: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetConsentRequest {
+    pub granted: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct RecordEventRequest {
+    pub event_type: String,
+    #[serde(default)]
+    pub application: Option<String>,
+    #[serde(default)]
+    pub window_title: Option<String>,
+    pub details: serde_json::Value,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SummaryResponse {
+    pub summary: String,
+    pub timestamp: String,
+    pub event_count: usize,
+    pub session_duration_minutes: i64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct TranslateSummaryRequest {
+    pub target_language: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ExplainActivityRequest {
+    pub question: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ExplanationResponse {
+    pub explanation: String,
+    pub question: String,
+    pub timestamp: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ContextStateResponse {
+    pub current_application: Option<String>,
+    pub current_window: Option<String>,
+    pub active_pattern: Option<String>,
+    pub session_duration_minutes: i64,
+    pub last_event: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct EventStatsResponse {
+    pub total_events: usize,
+    pub event_counts: Vec<EventCountInfo>,
+    pub current_application: Option<String>,
+    pub current_window: Option<String>,
+    pub session_duration_minutes: i64,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct EventCountInfo {
+    pub event_type: String,
+    pub count: usize,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ExportEventsRequest {
+    pub path: String,
+}
+
+// ==================== CONTEXT POLICIES API STRUCTS ====================
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ContextTypeResponse {
+    pub context: String,
+    pub display_name: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetContextTypeRequest {
+    pub context: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ListContextProfilesResponse {
+    pub profiles: Vec<ProfileInfo>,
+    pub count: usize,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ProfileInfo {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub context: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ProfileDetailsResponse {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub context: String,
+    pub features: Vec<FeatureInfo>,
+    pub detection_method: String,
+    pub trigger_applications: Vec<String>,
+    pub trigger_network: Option<String>,
+    pub priority: u32,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SwitchContextRequest {
+    pub context: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct CreateContextProfileRequest {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub context: String,
+    pub detection_method: String,
+    pub trigger_applications: Vec<String>,
+    pub trigger_network: Option<String>,
+    pub priority: u32,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct AddContextRuleRequest {
+    pub name: String,
+    pub description: String,
+    pub rule_type: String,
+    pub enabled: bool,
+    pub priority: u32,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct DetectContextResponse {
+    pub detected: bool,
+    pub context: String,
+    pub confidence: f32,
+    pub detection_method: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct GetContextRulesResponse {
+    pub context: String,
+    pub rules: Vec<ContextRuleInfo>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ContextRuleInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub rule_type: String,
+    pub enabled: bool,
+    pub priority: u32,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ContextStatsResponse {
+    pub current_context: String,
+    pub active_profile: String,
+    pub last_switch: String,
+    pub total_profiles: usize,
+    pub detection_method: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ApplyRulesRequest {
+    pub context: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ApplyRulesResponse {
+    pub context: String,
+    pub applied_rules: Vec<AppliedRuleInfo>,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct AppliedRuleInfo {
+    pub rule_id: String,
+    pub rule_name: String,
+    pub action: String,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ChatMessageInfo {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: String,
+    pub has_screen_context: bool,
+}
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
 pub struct SystemStatus {
@@ -255,10 +839,78 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/ai/status", get(get_ai_status))
         .route("/ai/models", get(get_ai_models))
         .route("/ai/chat", post(post_ai_chat))
+        // Overlay endpoints
+        .route("/overlay/show", post(show_overlay))
+        .route("/overlay/hide", post(hide_overlay))
+        .route("/overlay/toggle", post(toggle_overlay))
+        .route("/overlay/chat", post(overlay_chat))
+        .route("/overlay/screenshot", post(overlay_screenshot))
+        .route("/overlay/clear", post(clear_overlay))
+        .route("/overlay/status", get(overlay_status))
+        .route("/overlay/config", post(overlay_config))
+        .route("/overlay/export", post(overlay_export))
+        .route("/overlay/import", post(overlay_import))
         // Notification endpoints
         .route("/notifications", get(get_notifications))
         .route("/notifications", post(post_notification))
         .route("/notifications/:id/read", put(mark_notification_read))
+        // Shortcut endpoints
+        .route("/shortcuts/list", get(list_shortcuts))
+        .route("/shortcuts/register", post(register_shortcuts))
+        .route("/shortcuts/unregister", post(unregister_shortcuts))
+        .route("/shortcuts/trigger", post(trigger_shortcut))
+        // Mode endpoints
+        .route("/mode/current", get(get_current_mode))
+        .route("/mode/set", post(set_mode))
+        .route("/mode/list", get(list_modes))
+        .route("/mode/compare", post(compare_modes))
+        .route("/mode/features", get(get_mode_features))
+        .route("/mode/test", post(test_feature))
+        .route("/mode/info", get(get_mode_info))
+        // Update endpoints
+        .route("/updates/channel", get(get_update_channel))
+        .route("/updates/set-channel", post(set_update_channel))
+        .route("/updates/schedule", get(get_update_schedule))
+        .route("/updates/set-schedule", post(set_update_schedule))
+        .route("/updates/available", get(get_available_updates))
+        .route("/updates/schedule-update", post(schedule_update))
+        .route("/updates/check", post(check_for_updates))
+        .route("/updates/history", get(get_update_history))
+        .route("/updates/install", post(install_update))
+        .route("/updates/rollback", post(rollback_update))
+        .route("/updates/status", get(get_update_status))
+        .route("/updates/schedule-clear", post(clear_schedule))
+        .route("/followalong/config", get(get_followalong_config))
+        .route("/followalong/config", post(set_followalong_config))
+        .route("/followalong/consent", post(set_followalong_consent))
+        .route("/followalong/context", get(get_followalong_context))
+        .route("/followalong/stats", get(get_followalong_stats))
+        .route("/followalong/summary", post(generate_followalong_summary))
+        .route(
+            "/followalong/translate",
+            post(translate_followalong_summary),
+        )
+        .route("/followalong/explain", post(explain_followalong_activity))
+        .route("/followalong/clear", post(clear_followalong_events))
+        // Context policies
+        .route("/context/status", get(get_context_status))
+        .route("/context/set", post(set_context))
+        .route("/context/profiles", get(list_context_profiles))
+        .route("/context/profile/:context", get(get_context_profile))
+        .route("/context/profile", post(create_context_profile))
+        .route("/context/profile/:context", delete(delete_context_profile))
+        .route("/context/profile/:context/rule", post(add_context_rule))
+        .route("/context/detect", post(detect_context))
+        .route("/context/rules/:context", get(get_context_rules))
+        .route("/context/stats", get(get_context_stats))
+        // Telemetry
+        .route("/telemetry/stats", get(get_telemetry_stats))
+        .route("/telemetry/consent", get(get_telemetry_consent))
+        .route("/telemetry/consent", post(set_telemetry_consent))
+        .route("/telemetry/events", get(get_telemetry_events))
+        .route("/telemetry/snapshot", post(take_hardware_snapshot))
+        .route("/telemetry/export", get(export_telemetry))
+        .route("/telemetry/clear", post(clear_telemetry))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bootstrap_token,
@@ -319,16 +971,18 @@ async fn require_bootstrap_token(
     ),
     tag = "system"
 )]
-async fn get_system_status(State(state): State<ApiState>) -> Result<Json<SystemStatus>, (StatusCode, Json<ApiError>)> {
+async fn get_system_status(
+    State(state): State<ApiState>,
+) -> Result<Json<SystemStatus>, (StatusCode, Json<ApiError>)> {
     let _system_monitor = state.system_monitor.read().await;
-    
+
     let uptime = std::time::Duration::from_secs(
         std::fs::read_to_string("/proc/uptime")
             .ok()
             .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
-            .unwrap_or(0.0) as u64
+            .unwrap_or(0.0) as u64,
     );
-    
+
     let status = SystemStatus {
         online: true,
         uptime_seconds: uptime.as_secs(),
@@ -339,7 +993,7 @@ async fn get_system_status(State(state): State<ApiState>) -> Result<Json<SystemS
             .map(|t| t.to_rfc3339())
             .unwrap_or_default(),
     };
-    
+
     Ok(Json(status))
 }
 
@@ -353,7 +1007,9 @@ async fn get_system_status(State(state): State<ApiState>) -> Result<Json<SystemS
     ),
     tag = "system"
 )]
-async fn get_system_resources(State(state): State<ApiState>) -> Result<Json<ResourceUsage>, (StatusCode, Json<ApiError>)> {
+async fn get_system_resources(
+    State(state): State<ApiState>,
+) -> Result<Json<ResourceUsage>, (StatusCode, Json<ApiError>)> {
     let mut system_monitor = state.system_monitor.write().await;
     let metrics = system_monitor.collect_metrics().map_err(|e| {
         (
@@ -377,7 +1033,7 @@ async fn get_system_resources(State(state): State<ApiState>) -> Result<Json<Reso
         network_rx_mbps: metrics.network_rx_mbps,
         network_tx_mbps: metrics.network_tx_mbps,
     };
-    
+
     Ok(Json(usage))
 }
 
@@ -391,7 +1047,9 @@ async fn get_system_resources(State(state): State<ApiState>) -> Result<Json<Reso
     ),
     tag = "system"
 )]
-async fn get_system_info(State(_state): State<ApiState>) -> Result<Json<SystemInfo>, (StatusCode, Json<ApiError>)> {
+async fn get_system_info(
+    State(_state): State<ApiState>,
+) -> Result<Json<SystemInfo>, (StatusCode, Json<ApiError>)> {
     let info = SystemInfo {
         hostname: get_hostname(),
         os_name: "LifeOS".to_string(),
@@ -405,7 +1063,7 @@ async fn get_system_info(State(_state): State<ApiState>) -> Result<Json<SystemIn
         lifeos_version: env!("CARGO_PKG_VERSION").to_string(),
         lifeos_build: "2024.02.24".to_string(),
     };
-    
+
     Ok(Json(info))
 }
 
@@ -427,7 +1085,7 @@ async fn post_system_command(
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
     // Validate command (only allow safe commands)
     let allowed_commands = vec!["status", "info", "ping"];
-    
+
     if !allowed_commands.contains(&request.command.as_str()) {
         return Err((
             StatusCode::FORBIDDEN,
@@ -438,7 +1096,7 @@ async fn post_system_command(
             }),
         ));
     }
-    
+
     // Execute command
     Ok(StatusCode::OK)
 }
@@ -453,21 +1111,19 @@ async fn post_system_command(
     ),
     tag = "health"
 )]
-async fn get_health_status(State(state): State<ApiState>) -> Result<Json<HealthReport>, (StatusCode, Json<ApiError>)> {
-    let report = state
-        .health_monitor
-        .check_all()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    error: "Internal Server Error".to_string(),
-                    message: format!("Failed to collect health status: {e}"),
-                    code: 500,
-                }),
-            )
-        })?;
+async fn get_health_status(
+    State(state): State<ApiState>,
+) -> Result<Json<HealthReport>, (StatusCode, Json<ApiError>)> {
+    let report = state.health_monitor.check_all().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to collect health status: {e}"),
+                code: 500,
+            }),
+        )
+    })?;
 
     let total_checks = report.checks.len() as u32;
     let passed_checks = report.checks.iter().filter(|check| check.passed).count() as u32;
@@ -490,14 +1146,14 @@ async fn get_health_status(State(state): State<ApiState>) -> Result<Json<HealthR
             message: Some(check.message.clone()),
         })
         .collect();
-    
+
     let response = HealthReport {
         healthy: report.healthy,
         score,
         checks,
         timestamp: report.timestamp.to_rfc3339(),
     };
-    
+
     Ok(Json(response))
 }
 
@@ -511,9 +1167,11 @@ async fn get_health_status(State(state): State<ApiState>) -> Result<Json<HealthR
     ),
     tag = "ai"
 )]
-async fn get_ai_status(State(state): State<ApiState>) -> Result<Json<AiStatus>, (StatusCode, Json<ApiError>)> {
+async fn get_ai_status(
+    State(state): State<ApiState>,
+) -> Result<Json<AiStatus>, (StatusCode, Json<ApiError>)> {
     let ai_manager = state.ai_manager.read().await;
-    
+
     let status = AiStatus {
         running: ai_manager.is_running().await,
         version: "0.1.0".to_string(),
@@ -522,7 +1180,7 @@ async fn get_ai_status(State(state): State<ApiState>) -> Result<Json<AiStatus>, 
         gpu_available: ai_manager.gpu_available().await,
         gpu_name: ai_manager.gpu_name().await,
     };
-    
+
     Ok(Json(status))
 }
 
@@ -536,22 +1194,21 @@ async fn get_ai_status(State(state): State<ApiState>) -> Result<Json<AiStatus>, 
     ),
     tag = "ai"
 )]
-async fn get_ai_models(State(state): State<ApiState>) -> Result<Json<Vec<ModelInfo>>, (StatusCode, Json<ApiError>)> {
+async fn get_ai_models(
+    State(state): State<ApiState>,
+) -> Result<Json<Vec<ModelInfo>>, (StatusCode, Json<ApiError>)> {
     let ai_manager = state.ai_manager.read().await;
 
-    let models = ai_manager
-        .list_models()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    error: "Internal Server Error".to_string(),
-                    message: format!("Failed to list AI models: {e}"),
-                    code: 500,
-                }),
-            )
-        })?;
+    let models = ai_manager.list_models().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to list AI models: {e}"),
+                code: 500,
+            }),
+        )
+    })?;
 
     let models: Vec<ModelInfo> = models
         .into_iter()
@@ -563,7 +1220,7 @@ async fn get_ai_models(State(state): State<ApiState>) -> Result<Json<Vec<ModelIn
             modified_at: m.modified,
         })
         .collect();
-    
+
     Ok(Json(models))
 }
 
@@ -584,7 +1241,7 @@ async fn post_ai_chat(
     Json(request): Json<ChatRequest>,
 ) -> Result<Json<ChatResponse>, (StatusCode, Json<ApiError>)> {
     let ai_manager = state.ai_manager.read().await;
-    
+
     if !ai_manager.is_running().await {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
@@ -595,7 +1252,7 @@ async fn post_ai_chat(
             }),
         ));
     }
-    
+
     let start = std::time::Instant::now();
 
     let mut messages: Vec<(String, String)> = request
@@ -627,7 +1284,7 @@ async fn post_ai_chat(
         tokens_used: chat.tokens_used,
         duration_ms: start.elapsed().as_millis() as u64,
     };
-    
+
     Ok(Json(response))
 }
 
@@ -641,20 +1298,20 @@ async fn post_ai_chat(
     ),
     tag = "notifications"
 )]
-async fn get_notifications(State(_state): State<ApiState>) -> Result<Json<Vec<Notification>>, (StatusCode, Json<ApiError>)> {
-    let notifications = vec![
-        Notification {
-            id: "1".to_string(),
-            title: "System Update Available".to_string(),
-            message: "LifeOS 0.2.0 is ready to install".to_string(),
-            notification_type: "update".to_string(),
-            priority: "normal".to_string(),
-            timestamp: chrono::Local::now().to_rfc3339(),
-            read: false,
-            action_url: Some("life://update".to_string()),
-        },
-    ];
-    
+async fn get_notifications(
+    State(_state): State<ApiState>,
+) -> Result<Json<Vec<Notification>>, (StatusCode, Json<ApiError>)> {
+    let notifications = vec![Notification {
+        id: "1".to_string(),
+        title: "System Update Available".to_string(),
+        message: "LifeOS 0.2.0 is ready to install".to_string(),
+        notification_type: "update".to_string(),
+        priority: "normal".to_string(),
+        timestamp: chrono::Local::now().to_rfc3339(),
+        read: false,
+        action_url: Some("life://update".to_string()),
+    }];
+
     Ok(Json(notifications))
 }
 
@@ -667,14 +1324,373 @@ async fn get_notifications(State(_state): State<ApiState>) -> Result<Json<Vec<No
         (status = 201, description = "Notification created"),
         (status = 400, description = "Invalid request", body = ApiError),
     ),
-    tag = "notifications"
+    tag = "notifications",
 )]
 async fn post_notification(
     State(_state): State<ApiState>,
     Json(_notification): Json<Notification>,
 ) -> StatusCode {
-    // Send notification via notification manager
     StatusCode::CREATED
+}
+
+// ==================== SHORTCUT HANDLERS ====================
+
+/// List registered shortcuts
+#[utoipa::path(
+    get,
+    path = "/api/v1/shortcuts/list",
+    responses(
+        (status = 200, description = "Shortcuts list retrieved successfully", body = ShortcutsListResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn list_shortcuts(
+    State(_state): State<ApiState>,
+) -> Result<Json<ShortcutsListResponse>, (StatusCode, Json<ApiError>)> {
+    let shortcut_infos: Vec<ShortcutInfo> = vec![ShortcutInfo {
+        name: "toggle_overlay".to_string(),
+        keys: "Super+Space".to_string(),
+        action: "toggle_overlay".to_string(),
+        description: "Toggle LifeOS overlay".to_string(),
+    }];
+
+    Ok(Json(ShortcutsListResponse {
+        shortcuts: shortcut_infos,
+        active: true,
+    }))
+}
+
+/// Register shortcuts with the system
+#[utoipa::path(
+    post,
+    path = "/api/v1/shortcuts/register",
+    responses(
+        (status = 200, description = "Shortcuts registered successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn register_shortcuts(State(_state): State<ApiState>) -> StatusCode {
+    StatusCode::OK
+}
+
+/// Unregister shortcuts from the system
+#[utoipa::path(
+    post,
+    path = "/api/v1/shortcuts/unregister",
+    responses(
+        (status = 200, description = "Shortcuts unregistered successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn unregister_shortcuts(State(_state): State<ApiState>) -> StatusCode {
+    StatusCode::OK
+}
+
+// ==================== MODE HANDLERS ====================
+
+/// Get current experience mode
+#[utoipa::path(
+    get,
+    path = "/api/v1/mode/current",
+    responses(
+        (status = 200, description = "Current mode retrieved", body = CurrentModeResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn get_current_mode(
+    State(_state): State<ApiState>,
+) -> Result<Json<CurrentModeResponse>, (StatusCode, Json<ApiError>)> {
+    let mgr = ExperienceManager::new(PathBuf::from("/var/lib/lifeos"));
+    let current = mgr.get_current_mode().await;
+
+    if let Some(mode_details) = mgr.get_current_mode_details().await {
+        Ok(Json(CurrentModeResponse {
+            mode: current.clone(),
+            display_name: mode_details.display_name,
+            description: mode_details.description,
+        }))
+    } else {
+        Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Mode Error".to_string(),
+                message: "Failed to get current mode details".to_string(),
+                code: 500,
+            }),
+        ))
+    }
+}
+
+/// Set experience mode
+#[utoipa::path(
+    post,
+    path = "/api/v1/mode/set",
+    request_body = SetModeRequest,
+    responses(
+        (status = 200, description = "Mode set successfully", body = crate::experience_modes::ModeApplicationResult),
+        (status = 400, description = "Invalid mode", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn set_mode(
+    State(_state): State<ApiState>,
+    Json(request): Json<SetModeRequest>,
+) -> Result<Json<crate::experience_modes::ModeApplicationResult>, (StatusCode, Json<ApiError>)> {
+    let mgr = ExperienceManager::new(PathBuf::from("/var/lib/lifeos"));
+
+    match mgr.apply_mode(&request.mode).await {
+        Ok(result) => Ok(Json(result)),
+        Err(e) => {
+            error!("Failed to set mode '{}': {}", request.mode, e);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Mode Error".to_string(),
+                    message: format!("Failed to set mode: {}", e),
+                    code: 500,
+                }),
+            ))
+        }
+    }
+}
+
+/// List all experience modes
+#[utoipa::path(
+    get,
+    path = "/api/v1/mode/list",
+    responses(
+        (status = 200, description = "Modes listed successfully", body = ListModesResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn list_modes(
+    State(_state): State<ApiState>,
+) -> Result<Json<ListModesResponse>, (StatusCode, Json<ApiError>)> {
+    let mgr = ExperienceManager::new(PathBuf::from("/var/lib/lifeos"));
+    let modes = mgr.list_modes();
+
+    let mode_infos: Vec<ModeInfo> = modes
+        .iter()
+        .map(|m| ModeInfo {
+            name: m.name.clone(),
+            display_name: m.display_name.clone(),
+            description: m.description.clone(),
+            ui_complexity: format!("{:?}", m.settings.ui_complexity),
+        })
+        .collect();
+
+    Ok(Json(ListModesResponse { modes: mode_infos }))
+}
+
+/// Compare two experience modes
+#[utoipa::path(
+    post,
+    path = "/api/v1/mode/compare",
+    request_body = CompareModesRequest,
+    responses(
+        (status = 200, description = "Modes compared", body = CompareModesResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn compare_modes(
+    State(_state): State<ApiState>,
+    Json(request): Json<CompareModesRequest>,
+) -> Result<Json<CompareModesResponse>, (StatusCode, Json<ApiError>)> {
+    let mgr = ExperienceManager::new(PathBuf::from("/var/lib/lifeos"));
+    let comparison = mgr.compare_modes(&request.mode1, &request.mode2);
+
+    Ok(Json(CompareModesResponse {
+        mode1: comparison.mode1,
+        mode1_display: comparison.mode1_display,
+        mode2: comparison.mode2,
+        mode2_display: comparison.mode2_display,
+        differences: comparison.differences,
+    }))
+}
+
+/// Get features for current mode
+#[utoipa::path(
+    get,
+    path = "/api/v1/mode/features",
+    responses(
+        (status = 200, description = "Features retrieved", body = ModeFeaturesResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn get_mode_features(
+    State(_state): State<ApiState>,
+) -> Result<Json<ModeFeaturesResponse>, (StatusCode, Json<ApiError>)> {
+    let mgr = ExperienceManager::new(PathBuf::from("/var/lib/lifeos"));
+    let features = mgr.get_current_features().await;
+
+    let mode = mgr.get_current_mode().await;
+
+    let feature_infos: Vec<FeatureInfo> = features
+        .iter()
+        .map(|f| FeatureInfo {
+            name: f.name.clone(),
+            display_name: f.display_name.clone(),
+            description: f.description.clone(),
+            enabled: f.enabled,
+            category: format!("{:?}", f.category),
+        })
+        .collect();
+
+    Ok(Json(ModeFeaturesResponse {
+        mode,
+        features: feature_infos,
+    }))
+}
+
+/// Test if feature is available
+#[utoipa::path(
+    post,
+    path = "/api/v1/mode/test",
+    request_body = TestFeatureRequest,
+    responses(
+        (status = 200, description = "Feature tested", body = TestFeatureResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn test_feature(
+    State(_state): State<ApiState>,
+    Json(request): Json<TestFeatureRequest>,
+) -> Result<Json<TestFeatureResponse>, (StatusCode, Json<ApiError>)> {
+    let mgr = ExperienceManager::new(PathBuf::from("/var/lib/lifeos"));
+    let available = mgr.is_feature_enabled(&request.feature).await;
+    let mode = mgr.get_current_mode().await;
+
+    Ok(Json(TestFeatureResponse {
+        available,
+        mode,
+        feature: request.feature,
+    }))
+}
+
+/// Get mode information
+#[utoipa::path(
+    get,
+    path = "/api/v1/mode/info",
+    responses(
+        (status = 200, description = "Mode info retrieved", body = ModeInfoResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn get_mode_info(
+    State(_state): State<ApiState>,
+) -> Result<Json<ModeInfoResponse>, (StatusCode, Json<ApiError>)> {
+    let mode_param: Option<String> = None;
+    let mode = mode_param.as_ref().map(|s| s.as_str()).unwrap_or("current");
+    let mgr = ExperienceManager::new(PathBuf::from("/var/lib/lifeos"));
+
+    let (mode_name, display_name, description) = if mode == "current" {
+        let current = mgr.get_current_mode().await;
+        if let Some(details) = mgr.get_current_mode_details().await {
+            (current, details.display_name, details.description)
+        } else {
+            (current, "Unknown".to_string(), "".to_string())
+        }
+    } else {
+        if let Some(details) = mgr.get_mode(&mode) {
+            (
+                details.name.clone(),
+                details.display_name.clone(),
+                details.description.clone(),
+            )
+        } else {
+            (mode.to_string(), "Unknown".to_string(), "".to_string())
+        }
+    };
+
+    // Get features
+    let features = if mode == "current" {
+        mgr.get_current_features().await
+    } else if let Some(mode_details) = mgr.get_mode(&mode) {
+        mode_details.settings.features.clone()
+    } else {
+        vec![]
+    };
+
+    let feature_infos: Vec<FeatureInfo> = features
+        .iter()
+        .map(|f| FeatureInfo {
+            name: f.name.clone(),
+            display_name: f.display_name.clone(),
+            description: f.description.clone(),
+            enabled: f.enabled,
+            category: format!("{:?}", f.category),
+        })
+        .collect();
+
+    let settings = if mode == "current" {
+        mgr.get_current_mode_details()
+            .await
+            .map(|d| d.settings.clone())
+    } else {
+        mgr.get_mode(&mode).map(|d| d.settings.clone())
+    };
+
+    let (ui_complexity, update_channel, ai_enabled, ai_context_size, telemetry_enabled) =
+        match settings {
+            Some(s) => (
+                format!("{:?}", s.ui_complexity),
+                match s.updates.channel {
+                    crate::experience_modes::UpdateChannel::Stable => "stable".to_string(),
+                    crate::experience_modes::UpdateChannel::Candidate => "candidate".to_string(),
+                    crate::experience_modes::UpdateChannel::Edge => "edge".to_string(),
+                },
+                s.ai.enabled,
+                s.ai.context_size,
+                s.privacy.telemetry_enabled,
+            ),
+            None => ("Unknown".to_string(), "stable".to_string(), false, 0, false),
+        };
+
+    Ok(Json(ModeInfoResponse {
+        mode: mode_name,
+        display_name,
+        description,
+        features: feature_infos,
+        settings: ModeSettingsInfo {
+            ui_complexity,
+            update_channel,
+            ai_enabled,
+            ai_context_size,
+            telemetry_enabled,
+        },
+    }))
+}
+
+/// Trigger a shortcut action
+#[utoipa::path(
+    post,
+    path = "/api/v1/shortcuts/trigger",
+    request_body = OverlayShortcutTriggerRequest,
+    responses(
+        (status = 200, description = "Shortcut triggered successfully"),
+        (status = 404, description = "Shortcut not found", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn trigger_shortcut(
+    State(_state): State<ApiState>,
+    Json(_request): Json<OverlayShortcutTriggerRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    Ok(StatusCode::OK)
 }
 
 /// Mark notification as read
@@ -694,6 +1710,1135 @@ async fn mark_notification_read(
     StatusCode::OK
 }
 
+// ==================== OVERLAY HANDLERS ====================
+
+/// Show overlay window
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/show",
+    responses(
+        (status = 200, description = "Overlay shown successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn show_overlay(State(_state): State<ApiState>) -> StatusCode {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    match overlay_mgr.show().await {
+        Ok(_) => StatusCode::OK,
+        Err(e) => {
+            error!("Failed to show overlay: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Hide overlay window
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/hide",
+    responses(
+        (status = 200, description = "Overlay hidden successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn hide_overlay(State(_state): State<ApiState>) -> StatusCode {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    match overlay_mgr.hide().await {
+        Ok(_) => StatusCode::OK,
+        Err(e) => {
+            error!("Failed to hide overlay: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Toggle overlay visibility
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/toggle",
+    responses(
+        (status = 200, description = "Overlay toggled successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn toggle_overlay(State(_state): State<ApiState>) -> StatusCode {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    match overlay_mgr.toggle().await {
+        Ok(_) => StatusCode::OK,
+        Err(e) => {
+            error!("Failed to toggle overlay: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Send message to overlay chat
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/chat",
+    request_body = OverlayChatRequest,
+    responses(
+        (status = 200, description = "Message sent successfully", body = OverlayChatResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_chat(
+    State(_state): State<ApiState>,
+    Json(request): Json<OverlayChatRequest>,
+) -> Result<Json<OverlayChatResponse>, (StatusCode, Json<ApiError>)> {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+
+    let response_content = match overlay_mgr
+        .send_message(request.message, request.include_screen)
+        .await
+    {
+        Ok(response) => response,
+        Err(e) => {
+            error!("Failed to send chat message: {}", e);
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "AI Service Error".to_string(),
+                    message: format!("llama-server request failed: {}", e),
+                    code: 502,
+                }),
+            ));
+        }
+    };
+
+    Ok(Json(OverlayChatResponse {
+        response: response_content,
+        model: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+        tokens_used: None,
+        duration_ms: 0,
+    }))
+}
+
+/// Capture screen for overlay
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/screenshot",
+    responses(
+        (status = 200, description = "Screenshot captured successfully", body = OverlayScreenshotResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_screenshot(
+    State(_state): State<ApiState>,
+) -> Result<Json<OverlayScreenshotResponse>, (StatusCode, Json<ApiError>)> {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let screenshot_path = match overlay_mgr.include_screen_context().await {
+        Ok(path) => path,
+        Err(e) => {
+            error!("Failed to capture screenshot: {}", e);
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Screenshot Error".to_string(),
+                    message: format!("Failed to capture screen: {}", e),
+                    code: 500,
+                }),
+            ));
+        }
+    };
+
+    let filename = screenshot_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("screenshot.png")
+        .to_string();
+
+    // Get file metadata
+    let metadata = tokio::fs::metadata(&screenshot_path).await.map_err(|e| {
+        error!("Failed to get screenshot metadata: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Metadata Error".to_string(),
+                message: format!("Failed to get metadata: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(OverlayScreenshotResponse {
+        path: screenshot_path.to_string_lossy().to_string(),
+        filename,
+        width: 1920,
+        height: 1080,
+        size_bytes: metadata.len(),
+    }))
+}
+
+/// Clear overlay chat history
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/clear",
+    responses(
+        (status = 200, description = "Chat cleared successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn clear_overlay(State(_state): State<ApiState>) -> StatusCode {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    match overlay_mgr.clear_chat().await {
+        Ok(_) => StatusCode::OK,
+        Err(e) => {
+            error!("Failed to clear chat: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Get overlay status
+#[utoipa::path(
+    get,
+    path = "/api/v1/overlay/status",
+    responses(
+        (status = 200, description = "Overlay status retrieved successfully", body = OverlayStatusResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_status(
+    State(_state): State<ApiState>,
+) -> Result<Json<OverlayStatusResponse>, (StatusCode, Json<ApiError>)> {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let stats = overlay_mgr.get_stats().await;
+    let state = overlay_mgr.get_state().await;
+
+    // Convert chat messages to ChatMessageInfo
+    let total_messages = state.chat_history.len();
+    let chat_history: Vec<ChatMessageInfo> = state
+        .chat_history
+        .iter()
+        .map(|msg| ChatMessageInfo {
+            id: msg.id.clone(),
+            role: match &msg.role {
+                crate::overlay::ChatRole::User => "user".to_string(),
+                crate::overlay::ChatRole::Assistant => "assistant".to_string(),
+                crate::overlay::ChatRole::System => "system".to_string(),
+            },
+            content: msg.content.clone(),
+            timestamp: msg.timestamp.clone(),
+            has_screen_context: msg.has_screen_context,
+        })
+        .collect();
+
+    Ok(Json(OverlayStatusResponse {
+        visible: state.visible,
+        focused: state.focused,
+        stats: OverlayStats {
+            total_messages,
+            visible: stats.visible,
+            focused: stats.focused,
+            theme: format!("{:?}", stats.theme),
+            shortcut: stats.shortcut,
+            enabled: stats.enabled,
+        },
+        chat_history,
+    }))
+}
+
+/// Configure overlay settings
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/config",
+    request_body = OverlayConfigRequest,
+    responses(
+        (status = 200, description = "Overlay configured successfully"),
+        (status = 400, description = "Invalid request", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_config(
+    State(_state): State<ApiState>,
+    Json(request): Json<OverlayConfigRequest>,
+) -> StatusCode {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let mut config = overlay_mgr.get_config().await;
+
+    if let Some(theme) = request.theme {
+        config.theme = match theme.as_str() {
+            "dark" => OverlayTheme::Dark,
+            "light" => OverlayTheme::Light,
+            "auto" => OverlayTheme::Auto,
+            _ => config.theme,
+        };
+    }
+
+    if let Some(shortcut) = request.shortcut {
+        config.shortcut = shortcut;
+    }
+
+    if let Some(opacity) = request.opacity {
+        config.opacity = opacity;
+    }
+
+    if let Some(enabled) = request.enabled {
+        config.enabled = enabled;
+    }
+
+    match overlay_mgr.update_config(config).await {
+        Ok(_) => StatusCode::OK,
+        Err(e) => {
+            error!("Failed to update overlay config: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Export overlay chat history
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/export",
+    request_body = OverlayExportRequest,
+    responses(
+        (status = 200, description = "Chat exported successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_export(
+    State(_state): State<ApiState>,
+    Json(request): Json<OverlayExportRequest>,
+) -> StatusCode {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let path = PathBuf::from(&request.path);
+
+    match overlay_mgr.export_chat(path).await {
+        Ok(_) => StatusCode::OK,
+        Err(e) => {
+            error!("Failed to export chat: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Import overlay chat history
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/import",
+    request_body = OverlayImportRequest,
+    responses(
+        (status = 200, description = "Chat imported successfully"),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_import(
+    State(_state): State<ApiState>,
+    Json(request): Json<OverlayImportRequest>,
+) -> StatusCode {
+    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let path = PathBuf::from(&request.path);
+
+    match overlay_mgr.import_chat(path).await {
+        Ok(_) => StatusCode::OK,
+        Err(e) => {
+            error!("Failed to import chat: {}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+// ==================== UPDATE API HANDLERS ====================
+
+/// Get current update channel
+#[utoipa::path(
+    get,
+    path = "/api/v1/updates/channel",
+    responses(
+        (status = 200, description = "Update channel retrieved", body = UpdateChannelResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn get_update_channel(
+    State(_state): State<ApiState>,
+) -> Result<Json<UpdateChannelResponse>, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+    let channel = scheduler.get_channel().await;
+
+    let (display_name, description) = match channel {
+        crate::update_scheduler::UpdateChannel::Stable => ("Stable", "Stable releases only"),
+        crate::update_scheduler::UpdateChannel::Candidate => {
+            ("Candidate", "Release candidates for testing")
+        }
+        crate::update_scheduler::UpdateChannel::Edge => ("Edge", "Bleeding edge features"),
+    };
+
+    Ok(Json(UpdateChannelResponse {
+        channel: format!("{:?}", channel),
+        display_name: display_name.to_string(),
+        description: description.to_string(),
+    }))
+}
+
+/// Set update channel
+#[utoipa::path(
+    post,
+    path = "/api/v1/updates/set-channel",
+    request_body = SetUpdateChannelRequest,
+    responses(
+        (status = 200, description = "Update channel set"),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn set_update_channel(
+    State(_state): State<ApiState>,
+    Json(request): Json<SetUpdateChannelRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+
+    let channel = match request.channel.to_lowercase().as_str() {
+        "stable" => crate::update_scheduler::UpdateChannel::Stable,
+        "candidate" => crate::update_scheduler::UpdateChannel::Candidate,
+        "edge" => crate::update_scheduler::UpdateChannel::Edge,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Invalid channel".to_string(),
+                    message: "Channel must be one of: stable, candidate, edge".to_string(),
+                    code: 400,
+                }),
+            ))
+        }
+    };
+
+    match scheduler.set_channel(channel).await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to set channel".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Get update schedule
+#[utoipa::path(
+    get,
+    path = "/api/v1/updates/schedule",
+    responses(
+        (status = 200, description = "Update schedule retrieved", body = UpdateScheduleResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn get_update_schedule(
+    State(_state): State<ApiState>,
+) -> Result<Json<UpdateScheduleResponse>, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+    let status = scheduler.get_status().await;
+
+    Ok(Json(UpdateScheduleResponse {
+        schedule_type: format!("{:?}", status.schedule_type),
+        update_time: "02:00".to_string(),
+        update_day: 1,
+        check_frequency_hours: status.check_frequency_hours,
+        auto_install: false,
+    }))
+}
+
+/// Set update schedule
+#[utoipa::path(
+    post,
+    path = "/api/v1/updates/set-schedule",
+    request_body = SetUpdateScheduleRequest,
+    responses(
+        (status = 200, description = "Update schedule set"),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn set_update_schedule(
+    State(_state): State<ApiState>,
+    Json(_request): Json<SetUpdateScheduleRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    // In a real implementation, this would update the schedule configuration
+    Ok(StatusCode::OK)
+}
+
+/// Get available updates
+#[utoipa::path(
+    get,
+    path = "/api/v1/updates/available",
+    responses(
+        (status = 200, description = "Available updates retrieved", body = AvailableUpdatesResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn get_available_updates(
+    State(_state): State<ApiState>,
+) -> Result<Json<AvailableUpdatesResponse>, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+    match scheduler.get_available_versions(None).await {
+        Ok(versions) => {
+            let version_infos: Vec<AvailableVersionInfo> = versions
+                .iter()
+                .map(|v| AvailableVersionInfo {
+                    version: v.version.clone(),
+                    channel: format!("{:?}", v.channel),
+                    release_date: v.release_date.to_rfc3339(),
+                    notes: v.notes.clone(),
+                    size_bytes: v.size_bytes,
+                    download_url: v.download_url.clone(),
+                    required_disk_space_mb: v.required_disk_space_mb,
+                })
+                .collect();
+
+            Ok(Json(AvailableUpdatesResponse {
+                updates: version_infos,
+                count: versions.len(),
+            }))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to get available updates".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Schedule an update
+#[utoipa::path(
+    post,
+    path = "/api/v1/updates/schedule-update",
+    request_body = ScheduleUpdateRequest,
+    responses(
+        (status = 200, description = "Update scheduled"),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn schedule_update(
+    State(_state): State<ApiState>,
+    Json(request): Json<ScheduleUpdateRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+    let channel = request.channel.unwrap_or_else(|| "stable".to_string());
+
+    let update_channel = match channel.to_lowercase().as_str() {
+        "stable" => crate::update_scheduler::UpdateChannel::Stable,
+        "candidate" => crate::update_scheduler::UpdateChannel::Candidate,
+        "edge" => crate::update_scheduler::UpdateChannel::Edge,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Invalid channel".to_string(),
+                    message: "Channel must be one of: stable, candidate, edge".to_string(),
+                    code: 400,
+                }),
+            ))
+        }
+    };
+
+    match scheduler
+        .schedule_update(request.version, update_channel)
+        .await
+    {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to schedule update".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Check for updates
+#[utoipa::path(
+    post,
+    path = "/api/v1/updates/check",
+    responses(
+        (status = 200, description = "Update check completed"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn check_for_updates(
+    State(_state): State<ApiState>,
+) -> Result<Json<AvailableUpdatesResponse>, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+    match scheduler.fetch_available_versions().await {
+        Ok(_) => {
+            if let Ok(Some(update)) = scheduler.check_for_updates().await {
+                Ok(Json(AvailableUpdatesResponse {
+                    updates: vec![AvailableVersionInfo {
+                        version: update.version,
+                        channel: format!("{:?}", update.channel),
+                        release_date: update.release_date.to_rfc3339(),
+                        notes: update.notes,
+                        size_bytes: update.size_bytes,
+                        download_url: update.download_url,
+                        required_disk_space_mb: update.required_disk_space_mb,
+                    }],
+                    count: 1,
+                }))
+            } else {
+                Ok(Json(AvailableUpdatesResponse {
+                    updates: vec![],
+                    count: 0,
+                }))
+            }
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to check for updates".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Get update history
+#[utoipa::path(
+    get,
+    path = "/api/v1/updates/history",
+    responses(
+        (status = 200, description = "Update history retrieved", body = UpdateHistoryResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn get_update_history(
+    State(_state): State<ApiState>,
+) -> Result<Json<UpdateHistoryResponse>, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+    let history = scheduler.get_history().await;
+
+    let record_infos: Vec<UpdateRecordInfo> = history
+        .iter()
+        .map(|r| UpdateRecordInfo {
+            timestamp: r.timestamp.to_rfc3339(),
+            version: r.version.clone(),
+            channel: format!("{:?}", r.channel),
+            status: format!("{:?}", r.status),
+            checksum: r.checksum.clone(),
+        })
+        .collect();
+
+    let count = record_infos.len();
+    Ok(Json(UpdateHistoryResponse {
+        history: record_infos,
+        count,
+    }))
+}
+
+/// Install update
+#[utoipa::path(
+    post,
+    path = "/api/v1/updates/install",
+    request_body = InstallUpdateRequest,
+    responses(
+        (status = 200, description = "Update installed"),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn install_update(
+    State(_state): State<ApiState>,
+    Json(request): Json<InstallUpdateRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+
+    // Get available versions
+    let available = match scheduler.get_available_versions(None).await {
+        Ok(v) => v,
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Failed to get available versions".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            ))
+        }
+    };
+
+    // Find the requested version
+    let version = available
+        .iter()
+        .find(|v| v.version == request.version)
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Version not found".to_string(),
+                    message: format!("Version {} not available", request.version),
+                    code: 400,
+                }),
+            )
+        })?;
+
+    // Download update
+    match scheduler.download_update(version).await {
+        Ok(_) => {
+            // Install update
+            match scheduler.install_update(version).await {
+                Ok(_) => Ok(StatusCode::OK),
+                Err(e) => Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Failed to install update".to_string(),
+                        message: e.to_string(),
+                        code: 500,
+                    }),
+                )),
+            }
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to download update".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Rollback update
+#[utoipa::path(
+    post,
+    path = "/api/v1/updates/rollback",
+    responses(
+        (status = 200, description = "Update rolled back"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn rollback_update(
+    State(_state): State<ApiState>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+
+    match scheduler.rollback().await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to rollback".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Get update status
+#[utoipa::path(
+    get,
+    path = "/api/v1/updates/status",
+    responses(
+        (status = 200, description = "Update status retrieved", body = UpdateStatusResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn get_update_status(
+    State(_state): State<ApiState>,
+) -> Result<Json<UpdateStatusResponse>, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+    let status = scheduler.get_status().await;
+
+    Ok(Json(UpdateStatusResponse {
+        current_channel: format!("{:?}", status.current_channel),
+        available_versions: status.available_versions,
+        scheduled_updates: status.scheduled_updates,
+        last_update: status.last_update,
+        schedule_type: format!("{:?}", status.schedule_type),
+        check_frequency_hours: status.check_frequency_hours,
+    }))
+}
+
+/// Clear update schedule
+#[utoipa::path(
+    post,
+    path = "/api/v1/updates/schedule-clear",
+    responses(
+        (status = 200, description = "Update schedule cleared"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "updates"
+)]
+async fn clear_schedule(
+    State(_state): State<ApiState>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+
+    match scheduler.clear_history().await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to clear schedule".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+// ==================== FOLLOWALONG API HANDLERS ====================
+
+/// Get FollowAlong configuration
+#[utoipa::path(
+    get,
+    path = "/api/v1/followalong/config",
+    responses(
+        (status = 200, description = "FollowAlong configuration retrieved", body = FollowAlongConfigResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "followalong"
+)]
+async fn get_followalong_config(
+    State(_state): State<ApiState>,
+) -> Result<Json<FollowAlongConfigResponse>, (StatusCode, Json<ApiError>)> {
+    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
+        .unwrap_or_else(|_| {
+            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        });
+
+    let config = manager.get_config().await;
+
+    Ok(Json(FollowAlongConfigResponse {
+        enabled: config.enabled,
+        consent_status: format!("{:?}", config.consent_status),
+        auto_summarize: config.auto_summarize,
+        auto_translate: config.auto_translate,
+        auto_explain: config.auto_explain,
+        summary_interval_seconds: config.summary_interval_seconds,
+        max_events_buffer: config.max_events_buffer,
+    }))
+}
+
+/// Set FollowAlong configuration
+#[utoipa::path(
+    post,
+    path = "/api/v1/followalong/config",
+    request_body = SetFollowAlongConfigRequest,
+    responses(
+        (status = 200, description = "FollowAlong configuration updated"),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "followalong"
+)]
+async fn set_followalong_config(
+    State(_state): State<ApiState>,
+    Json(request): Json<SetFollowAlongConfigRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
+        .unwrap_or_else(|_| {
+            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        });
+
+    let mut config = manager.get_config().await;
+
+    if let Some(enabled) = request.enabled {
+        config.enabled = enabled;
+    }
+    if let Some(auto_summarize) = request.auto_summarize {
+        config.auto_summarize = auto_summarize;
+    }
+    if let Some(auto_translate) = request.auto_translate {
+        config.auto_translate = auto_translate;
+    }
+    if let Some(auto_explain) = request.auto_explain {
+        config.auto_explain = auto_explain;
+    }
+    if let Some(interval) = request.summary_interval_seconds {
+        config.summary_interval_seconds = interval;
+    }
+
+    match manager.update_config(config).await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to update config".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Set FollowAlong consent
+#[utoipa::path(
+    post,
+    path = "/api/v1/followalong/consent",
+    request_body = SetConsentRequest,
+    responses(
+        (status = 200, description = "Consent status updated"),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "followalong"
+)]
+async fn set_followalong_consent(
+    State(_state): State<ApiState>,
+    Json(request): Json<SetConsentRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
+        .unwrap_or_else(|_| {
+            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        });
+
+    match manager.set_consent(request.granted).await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to set consent".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Get current context state
+#[utoipa::path(
+    get,
+    path = "/api/v1/followalong/context",
+    responses(
+        (status = 200, description = "Context state retrieved", body = ContextStateResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "followalong"
+)]
+async fn get_followalong_context(
+    State(_state): State<ApiState>,
+) -> Result<Json<ContextStateResponse>, (StatusCode, Json<ApiError>)> {
+    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
+        .unwrap_or_else(|_| {
+            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        });
+
+    let context = manager.get_context().await;
+
+    Ok(Json(ContextStateResponse {
+        current_application: context.current_application,
+        current_window: context.current_window,
+        active_pattern: context.active_pattern,
+        session_duration_minutes: context.session_duration.num_minutes(),
+        last_event: context.last_event.map(|t| t.to_rfc3339()),
+    }))
+}
+
+/// Get event statistics
+#[utoipa::path(
+    get,
+    path = "/api/v1/followalong/stats",
+    responses(
+        (status = 200, description = "Event statistics retrieved", body = EventStatsResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "followalong"
+)]
+async fn get_followalong_stats(
+    State(_state): State<ApiState>,
+) -> Result<Json<EventStatsResponse>, (StatusCode, Json<ApiError>)> {
+    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
+        .unwrap_or_else(|_| {
+            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        });
+
+    let stats = manager.get_event_stats().await;
+
+    let event_counts: Vec<EventCountInfo> = stats
+        .event_counts
+        .iter()
+        .map(|(event_type, count)| EventCountInfo {
+            event_type: event_type.clone(),
+            count: *count,
+        })
+        .collect();
+
+    Ok(Json(EventStatsResponse {
+        total_events: stats.total_events,
+        event_counts,
+        current_application: stats.current_application,
+        current_window: stats.current_window,
+        session_duration_minutes: stats.session_duration.num_minutes(),
+    }))
+}
+
+/// Generate activity summary
+#[utoipa::path(
+    post,
+    path = "/api/v1/followalong/summary",
+    responses(
+        (status = 200, description = "Activity summary generated", body = SummaryResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "followalong"
+)]
+async fn generate_followalong_summary(
+    State(_state): State<ApiState>,
+) -> Result<Json<SummaryResponse>, (StatusCode, Json<ApiError>)> {
+    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
+        .unwrap_or_else(|_| {
+            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        });
+
+    match manager.generate_summary().await {
+        Ok(summary) => Ok(Json(SummaryResponse {
+            summary,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            event_count: manager.get_event_stats().await.total_events,
+            session_duration_minutes: manager.get_context().await.session_duration.num_minutes(),
+        })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to generate summary".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Translate activity summary
+#[utoipa::path(
+    post,
+    path = "/api/v1/followalong/translate",
+    request_body = TranslateSummaryRequest,
+    responses(
+        (status = 200, description = "Summary translated"),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "followalong"
+)]
+async fn translate_followalong_summary(
+    State(_state): State<ApiState>,
+    Json(request): Json<TranslateSummaryRequest>,
+) -> Result<Json<SummaryResponse>, (StatusCode, Json<ApiError>)> {
+    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
+        .unwrap_or_else(|_| {
+            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        });
+
+    match manager.translate_summary(&request.target_language).await {
+        Ok(summary) => Ok(Json(SummaryResponse {
+            summary,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            event_count: manager.get_event_stats().await.total_events,
+            session_duration_minutes: manager.get_context().await.session_duration.num_minutes(),
+        })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to translate summary".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Explain activity
+#[utoipa::path(
+    post,
+    path = "/api/v1/followalong/explain",
+    request_body = ExplainActivityRequest,
+    responses(
+        (status = 200, description = "Activity explanation generated", body = ExplanationResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "followalong"
+)]
+async fn explain_followalong_activity(
+    State(_state): State<ApiState>,
+    Json(request): Json<ExplainActivityRequest>,
+) -> Result<Json<ExplanationResponse>, (StatusCode, Json<ApiError>)> {
+    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
+        .unwrap_or_else(|_| {
+            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        });
+
+    match manager.explain_activity(&request.question).await {
+        Ok(explanation) => Ok(Json(ExplanationResponse {
+            explanation,
+            question: request.question,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to explain activity".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Clear events buffer
+#[utoipa::path(
+    post,
+    path = "/api/v1/followalong/clear",
+    responses(
+        (status = 200, description = "Events cleared"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "followalong"
+)]
+async fn clear_followalong_events(
+    State(_state): State<ApiState>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
+        .unwrap_or_else(|_| {
+            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        });
+
+    match manager.clear_events().await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Failed to clear events".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )),
+    }
+}
+
 // ==================== HELPER FUNCTIONS ====================
 
 fn get_hostname() -> String {
@@ -704,12 +2849,7 @@ fn get_hostname() -> String {
 
 fn get_kernel_version() -> String {
     std::fs::read_to_string("/proc/version")
-        .map(|s| {
-            s.split_whitespace()
-                .nth(2)
-                .unwrap_or("unknown")
-                .to_string()
-        })
+        .map(|s| s.split_whitespace().nth(2).unwrap_or("unknown").to_string())
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
@@ -745,18 +2885,546 @@ fn get_gpu_model() -> Option<String> {
     None
 }
 
+// ==================== CONTEXT POLICIES HANDLERS ====================
+
+/// Get current context status
+async fn get_context_status(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let ctx_mgr = state.context_policies_manager.read().await;
+    let stats = ctx_mgr.get_statistics().await;
+
+    Ok(Json(serde_json::json!({
+        "current_context": stats.current_context.to_string(),
+        "active_profile": stats.active_profile,
+        "detection_method": format!("{:?}", stats.detection_method),
+        "last_switch": stats.last_switch.to_rfc3339(),
+    })))
+}
+
+/// Set current context
+async fn set_context(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let context_str = payload["context"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'context' field".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let context_type: crate::context_policies::ContextType = context_str.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: format!("Invalid context: {}", context_str),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let ctx_mgr = state.context_policies_manager.read().await;
+    ctx_mgr.set_context(context_type).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to set context: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+/// List all context profiles
+async fn list_context_profiles(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let ctx_mgr = state.context_policies_manager.read().await;
+    let profiles = ctx_mgr.list_profiles().await;
+
+    let profiles_json: Vec<serde_json::Value> = profiles
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "name": p.name,
+                "context": p.context.to_string(),
+                "description": p.description,
+                "detection_method": format!("{:?}", p.detection_method),
+                "rules": p.rules.iter().map(|r| serde_json::json!({
+                    "id": r.id,
+                    "name": r.name,
+                    "description": r.description,
+                    "enabled": r.enabled,
+                })).collect::<Vec<_>>(),
+                "priority": p.priority,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "profiles": profiles_json })))
+}
+
+/// Get a specific context profile
+async fn get_context_profile(
+    State(state): State<ApiState>,
+    Path(context): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let context_type: crate::context_policies::ContextType = context.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: format!("Invalid context: {}", context),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let ctx_mgr = state.context_policies_manager.read().await;
+    match ctx_mgr.get_profile(&context_type).await {
+        Some(profile) => Ok(Json(serde_json::json!({
+            "name": profile.name,
+            "context": profile.context.to_string(),
+            "description": profile.description,
+            "detection_method": format!("{:?}", profile.detection_method),
+            "priority": profile.priority,
+            "rules": profile.rules.iter().map(|r| serde_json::json!({
+                "id": r.id,
+                "name": r.name,
+                "description": r.description,
+                "enabled": r.enabled,
+                "rule_type": format!("{:?}", r.rule_type),
+            })).collect::<Vec<serde_json::Value>>(),
+        }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("Profile '{}' not found", context),
+                code: 404,
+            }),
+        )),
+    }
+}
+
+/// Create a new context profile
+async fn create_context_profile(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let name = payload["name"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'name' field".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let description = payload["description"].as_str().unwrap_or("Custom context");
+    let priority = payload["priority"].as_u64().unwrap_or(5) as u32;
+
+    let context_type: crate::context_policies::ContextType = name.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: format!("Invalid context name: {}", name),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let profile = crate::context_policies::ContextProfile {
+        context: context_type,
+        name: name.to_string(),
+        description: description.to_string(),
+        detection_method: crate::context_policies::DetectionMethod::Manual,
+        rules: vec![],
+        time_schedule: None,
+        trigger_applications: vec![],
+        trigger_network: None,
+        priority,
+    };
+
+    let ctx_mgr = state.context_policies_manager.read().await;
+    ctx_mgr.save_profile(profile).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to create profile: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({ "status": "ok", "name": name })))
+}
+
+/// Delete a context profile
+async fn delete_context_profile(
+    State(state): State<ApiState>,
+    Path(context): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let context_type: crate::context_policies::ContextType = context.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: format!("Invalid context: {}", context),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let ctx_mgr = state.context_policies_manager.read().await;
+    ctx_mgr.delete_profile(&context_type).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to delete profile: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+/// Add a rule to a context profile
+async fn add_context_rule(
+    State(state): State<ApiState>,
+    Path(context): Path<String>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let context_type: crate::context_policies::ContextType = context.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: format!("Invalid context: {}", context),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let rule_type_str = payload["rule_type"].as_str().unwrap_or("");
+    let value = payload["value"].as_str().unwrap_or("");
+
+    let rule_type = match rule_type_str {
+        "mode" => crate::context_policies::RuleType::SetExperienceMode(value.to_string()),
+        "model" => crate::context_policies::RuleType::SetAiModel(value.to_string()),
+        "notifications" => crate::context_policies::RuleType::DisableNotifications,
+        "capture" => {
+            crate::context_policies::RuleType::ScreenCapture(value == "true" || value == "on")
+        }
+        "channel" => crate::context_policies::RuleType::SetUpdateChannel(value.to_string()),
+        "block-app" => crate::context_policies::RuleType::BlockApplication(value.to_string()),
+        "privacy" => crate::context_policies::RuleType::SetPrivacyLevel(value.to_string()),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: format!("Unknown rule type: {}", rule_type_str),
+                    code: 400,
+                }),
+            ));
+        }
+    };
+
+    let rule = crate::context_policies::ContextRule {
+        id: format!("{}-{}", context, rule_type_str),
+        name: format!("{} rule", rule_type_str),
+        description: format!("Set {} to {}", rule_type_str, value),
+        rule_type,
+        enabled: true,
+        priority: 10,
+    };
+
+    let ctx_mgr = state.context_policies_manager.read().await;
+
+    // Get profile, add rule, save
+    if let Some(mut profile) = ctx_mgr.get_profile(&context_type).await {
+        profile.rules.push(rule);
+        ctx_mgr.save_profile(profile).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: format!("Failed to add rule: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
+        Ok(Json(serde_json::json!({ "status": "ok" })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("Profile '{}' not found", context),
+                code: 404,
+            }),
+        ))
+    }
+}
+
+/// Detect context automatically
+async fn detect_context(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let ctx_mgr = state.context_policies_manager.read().await;
+    match ctx_mgr.detect_context().await {
+        Some(detected) => {
+            // Auto-switch
+            let switched = ctx_mgr.set_context(detected.clone()).await.is_ok();
+            Ok(Json(serde_json::json!({
+                "detected_context": detected.to_string(),
+                "switched": switched,
+            })))
+        }
+        None => Ok(Json(serde_json::json!({
+            "detected_context": null,
+            "switched": false,
+        }))),
+    }
+}
+
+/// Get rules for a context
+async fn get_context_rules(
+    State(state): State<ApiState>,
+    Path(context): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let context_str = if context == "current" {
+        let ctx_mgr = state.context_policies_manager.read().await;
+        ctx_mgr.get_current_context().await.to_string()
+    } else {
+        context.clone()
+    };
+
+    let context_type: crate::context_policies::ContextType = context_str.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: format!("Invalid context: {}", context_str),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let ctx_mgr = state.context_policies_manager.read().await;
+    let applied = ctx_mgr.apply_rules(&context_type).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to get rules: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    let rules_json: Vec<serde_json::Value> = applied
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "rule_id": r.rule_id,
+                "rule_name": r.rule_name,
+                "action": r.action,
+                "status": format!("{:?}", r.status),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "applied_rules": rules_json })))
+}
+
+/// Get context statistics
+async fn get_context_stats(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let ctx_mgr = state.context_policies_manager.read().await;
+    let stats = ctx_mgr.get_statistics().await;
+
+    Ok(Json(serde_json::json!({
+        "current_context": stats.current_context.to_string(),
+        "active_profile": stats.active_profile,
+        "total_profiles": stats.total_profiles,
+        "detection_method": format!("{:?}", stats.detection_method),
+        "last_switch": stats.last_switch.to_rfc3339(),
+    })))
+}
+
+// ==================== TELEMETRY HANDLERS ====================
+
+/// Get telemetry statistics
+async fn get_telemetry_stats(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let tel_mgr = state.telemetry_manager.read().await;
+    let stats = tel_mgr.get_stats().await;
+    Ok(Json(serde_json::to_value(&stats).unwrap_or_default()))
+}
+
+/// Get current telemetry consent level
+async fn get_telemetry_consent(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let tel_mgr = state.telemetry_manager.read().await;
+    let consent = tel_mgr.get_consent().await;
+    Ok(Json(serde_json::json!({
+        "consent_level": format!("{:?}", consent),
+    })))
+}
+
+/// Set telemetry consent level
+async fn set_telemetry_consent(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let level_str = payload["level"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'level' field (disabled, minimal, full)".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let level = match level_str.to_lowercase().as_str() {
+        "disabled" | "off" | "none" => crate::telemetry::ConsentLevel::Disabled,
+        "minimal" | "basic" => crate::telemetry::ConsentLevel::Minimal,
+        "full" | "all" => crate::telemetry::ConsentLevel::Full,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: format!(
+                        "Invalid consent level: {}. Use: disabled, minimal, full",
+                        level_str
+                    ),
+                    code: 400,
+                }),
+            ));
+        }
+    };
+
+    let tel_mgr = state.telemetry_manager.read().await;
+    tel_mgr.set_consent(level).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to set consent: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+/// Get recent telemetry events
+async fn get_telemetry_events(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let tel_mgr = state.telemetry_manager.read().await;
+    let events = tel_mgr.get_recent_events(50).await;
+    Ok(Json(serde_json::json!({
+        "events": events,
+        "count": events.len(),
+    })))
+}
+
+/// Take a hardware snapshot
+async fn take_hardware_snapshot(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let tel_mgr = state.telemetry_manager.read().await;
+    match tel_mgr.record_hardware_snapshot().await {
+        Ok(Some(snapshot)) => Ok(Json(serde_json::to_value(&snapshot).unwrap_or_default())),
+        Ok(None) => Ok(Json(serde_json::json!({
+            "message": "Hardware snapshots require 'full' consent level"
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to take snapshot: {}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Export all telemetry data
+async fn export_telemetry(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let tel_mgr = state.telemetry_manager.read().await;
+    let data = tel_mgr.export_data().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to export: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+    Ok(Json(data))
+}
+
+/// Clear all telemetry data
+async fn clear_telemetry(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let tel_mgr = state.telemetry_manager.read().await;
+    tel_mgr.clear_all_data().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to clear data: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+    Ok(Json(
+        serde_json::json!({ "status": "ok", "message": "All telemetry data cleared" }),
+    ))
+}
+
 // ==================== SERVER STARTUP ====================
 
 pub async fn start_api_server(state: ApiState) -> anyhow::Result<()> {
     let router = create_router(state.clone());
-    
+
     let addr = state.config.bind_address;
-    
+
     log::info!("Starting API server on http://{}", addr);
-    
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    
+
     axum::serve(listener, router).await?;
-    
+
     Ok(())
 }

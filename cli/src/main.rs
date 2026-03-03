@@ -3,24 +3,20 @@ use colored::Colorize;
 
 mod commands;
 mod config;
+mod daemon_client;
 mod system;
 
 #[cfg(test)]
 mod main_tests;
 
-use commands::{
-    first_boot::FirstBootArgs,
-    init::InitArgs,
-    status::StatusArgs,
-    update::UpdateArgs,
-};
+use commands::{first_boot::FirstBootArgs, init::InitArgs, status::StatusArgs, update::UpdateArgs};
 
 #[derive(Parser)]
 #[command(name = "life")]
 #[command(about = "LifeOS - First-IA System CLI")]
 #[command(version = "0.1.0")]
 struct Cli {
-    #[command(subcommand)]
+    #[clap(subcommand)]
     command: Commands,
 }
 
@@ -41,34 +37,49 @@ enum Commands {
     /// Run full system verification
     Check,
     /// Manage system configuration
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Config(commands::config::ConfigCommands),
     /// Export/restore system state
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Capsule(commands::capsule::CapsuleCommands),
     /// AI assistant commands
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Ai(commands::ai::AiCommands),
+    /// AI Overlay commands
+    #[clap(subcommand)]
+    Overlay(commands::overlay::OverlayCommands),
+    /// Experience mode commands
+    #[clap(subcommand)]
+    Mode(commands::mode::ModeCommands),
+    /// FollowAlong contextual assistant
+    #[clap(subcommand)]
+    FollowAlong(commands::followalong::FollowAlongCommands),
+    /// Context policies (workplace profiles)
+    #[clap(subcommand)]
+    Context(commands::context::ContextCommands),
     /// Manage intents
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Intents(commands::intents::IntentsCommands),
     /// Identity and delegation
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Id(commands::id::IdCommands),
     /// App Store - browse and install applications
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Store(commands::store::StoreCommands),
+    /// Local telemetry (privacy-first, no external data)
+    #[clap(subcommand)]
+    Telemetry(commands::telemetry::TelemetryCommands),
     /// Theme system - customize appearance
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Theme(commands::theme::ThemeCommands),
     /// Beta testing commands
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Beta(BetaCommands),
     /// Submit feedback for beta testing
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Feedback(FeedbackCommands),
     /// System lab for testing
-    #[command(subcommand)]
+    #[clap(subcommand)]
     Lab(LabCommands),
 }
 
@@ -130,9 +141,16 @@ async fn main() -> anyhow::Result<()> {
         Commands::Config(args) => commands::config::execute(args).await,
         Commands::Capsule(args) => commands::capsule::execute(args).await,
         Commands::Ai(args) => commands::ai::execute(args).await,
+        Commands::Overlay(args) => commands::overlay::execute(args).await,
+        Commands::Mode(args) => commands::mode::execute(args).await,
+        Commands::FollowAlong(args) => {
+            commands::followalong::execute_followalong_command(args).await
+        }
+        Commands::Context(args) => commands::context::execute(args).await,
         Commands::Intents(args) => commands::intents::execute(args).await,
         Commands::Id(args) => commands::id::execute(args).await,
         Commands::Store(args) => commands::store::execute(args).await,
+        Commands::Telemetry(args) => commands::telemetry::execute(args).await,
         Commands::Theme(args) => commands::theme::execute(args).await,
         Commands::Beta(cmd) => handle_beta_command(cmd).await,
         Commands::Feedback(cmd) => handle_feedback_command(cmd).await,
@@ -206,7 +224,10 @@ async fn handle_beta_command(cmd: BetaCommands) -> anyhow::Result<()> {
             println!("{}", "🐛 Known Issues in Beta".bold().blue());
             println!();
             println!("{}", "View all known issues:".dimmed());
-            println!("  {}", "https://github.com/hectormr/lifeos/issues?q=is:issue+label:beta".cyan());
+            println!(
+                "  {}",
+                "https://github.com/hectormr/lifeos/issues?q=is:issue+label:beta".cyan()
+            );
             Ok(())
         }
     }
@@ -215,13 +236,13 @@ async fn handle_beta_command(cmd: BetaCommands) -> anyhow::Result<()> {
 async fn handle_feedback_command(cmd: FeedbackCommands) -> anyhow::Result<()> {
     // Call the beta-feedback script
     let script_path = std::path::PathBuf::from("/usr/local/share/lifeos/scripts/beta-feedback.sh");
-    
+
     let subcommand = match cmd {
         FeedbackCommands::Bug => "bug",
         FeedbackCommands::Feature => "feature",
         FeedbackCommands::General => "general",
     };
-    
+
     // If the script exists, run it
     if script_path.exists() {
         std::process::Command::new("bash")
@@ -230,18 +251,27 @@ async fn handle_feedback_command(cmd: FeedbackCommands) -> anyhow::Result<()> {
             .status()?;
     } else {
         // Fallback: show instructions
-        println!("{}", format!("📝 Submitting {} feedback...", subcommand).bold().blue());
+        println!(
+            "{}",
+            format!("📝 Submitting {} feedback...", subcommand)
+                .bold()
+                .blue()
+        );
         println!();
         println!("Please submit your feedback via GitHub:");
-        
+
         let url = match cmd {
-            FeedbackCommands::Bug => "https://github.com/hectormr/lifeos/issues/new?template=bug_report.md",
-            FeedbackCommands::Feature => "https://github.com/hectormr/lifeos/issues/new?template=feature_request.md",
+            FeedbackCommands::Bug => {
+                "https://github.com/hectormr/lifeos/issues/new?template=bug_report.md"
+            }
+            FeedbackCommands::Feature => {
+                "https://github.com/hectormr/lifeos/issues/new?template=feature_request.md"
+            }
             FeedbackCommands::General => "https://github.com/hectormr/lifeos/discussions",
         };
-        
+
         println!("  {}", url.cyan().underline());
     }
-    
+
     Ok(())
 }

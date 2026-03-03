@@ -29,7 +29,16 @@ futures-lite = "2.3.0"
 utoipa = { version = "4", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui = { version = "6", features = ["axum"] }
 num_cpus = "1.16"
+# GTK4 and UI dependencies
+gtk4 = { version = "0.9", features = ["v4_16"], optional = true }
+glib = { version = "0.20", features = ["v2_80"], optional = true }
+adw = { version = "0.7", package = "libadwaita", optional = true }
+# Screen capture dependencies
+image = "0.25"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4", "serde"] }
 [features]
 default = ["dbus", "http-api"]
 dbus = ["zbus"]
 http-api = ["axum"]
+ui-overlay = ["gtk4", "glib"]

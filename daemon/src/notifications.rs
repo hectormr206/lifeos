@@ -1,8 +1,8 @@
 //! Notification management module
 //! Handles desktop notifications for system events
 
-use notify_rust::Notification;
 use log::info;
+use notify_rust::Notification;
 
 #[cfg(test)]
 mod notifications_tests;
@@ -25,11 +25,7 @@ impl NotificationManager {
     }
 
     /// Send a system notification
-    fn send(&self,
-        summary: &str,
-        body: &str,
-        urgency: notify_rust::Urgency,
-    ) -> anyhow::Result<()> {
+    fn send(&self, summary: &str, body: &str, urgency: notify_rust::Urgency) -> anyhow::Result<()> {
         if !self.enabled {
             info!("Notification (disabled): {} - {}", summary, body);
             return Ok(());
@@ -58,7 +54,9 @@ impl NotificationManager {
             super::health::Severity::Info => notify_rust::Urgency::Low,
         };
 
-        let suggestion = issue.suggestion.as_ref()
+        let suggestion = issue
+            .suggestion
+            .as_ref()
             .map(|s| format!("\n\nSuggestion: {}", s))
             .unwrap_or_default();
 
@@ -70,35 +68,31 @@ impl NotificationManager {
     }
 
     /// Send update available notification
-    pub async fn send_update_notification(
-        &self,
-        version: &str,
-    ) -> anyhow::Result<()> {
+    pub async fn send_update_notification(&self, version: &str) -> anyhow::Result<()> {
         self.send(
             "LifeOS Update Available",
-            &format!("Version {} is available. Run 'life update' to install.", version),
+            &format!(
+                "Version {} is available. Run 'life update' to install.",
+                version
+            ),
             notify_rust::Urgency::Normal,
         )
     }
 
     /// Send disk warning notification
-    pub async fn send_disk_warning(
-        &self,
-        usage_percent: f32,
-    ) -> anyhow::Result<()> {
+    pub async fn send_disk_warning(&self, usage_percent: f32) -> anyhow::Result<()> {
         self.send(
             "LifeOS: Low Disk Space",
-            &format!("Disk usage is at {:.1}%. Consider freeing up space.", usage_percent),
+            &format!(
+                "Disk usage is at {:.1}%. Consider freeing up space.",
+                usage_percent
+            ),
             notify_rust::Urgency::Critical,
         )
     }
 
     /// Send generic system notification
-    pub async fn send_system_notification(
-        &self,
-        title: &str,
-        message: &str,
-    ) -> anyhow::Result<()> {
+    pub async fn send_system_notification(&self, title: &str, message: &str) -> anyhow::Result<()> {
         self.send(title, message, notify_rust::Urgency::Normal)
     }
 }

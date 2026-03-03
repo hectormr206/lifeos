@@ -36,7 +36,10 @@ log_error() {
 
 # Print welcome banner
 print_welcome() {
-    clear
+    # In systemd first-boot service there is no interactive TTY.
+    if [[ -t 1 ]] && command -v clear &>/dev/null; then
+        clear || true
+    fi
     echo -e "${CYAN}"
     cat << "EOF"
     __    _ __    ______            __

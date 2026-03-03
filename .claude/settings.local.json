@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(cargo build:*)",
+      "Bash(cd:*)",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/hectormr/personalProjects/gama/lifeos/cli && cargo build --release 2>&1\":*)",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/hectormr/personalProjects/gama/lifeos/daemon && cargo build --release 2>&1\":*)",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/hectormr/personalProjects/gama/lifeos/cli && cargo test:*)",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/hectormr/personalProjects/gama/lifeos/daemon && cargo test 2>&1 | tail -15\":*)",
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(wc:*)",
+      "Bash(wsl -d Ubuntu -- bash -c \"find /home/hectormr/personalProjects/gama/lifeos/image/files -type f 2>/dev/null | sort\")",
+      "Bash(wsl -d Ubuntu -- bash -c \"cd /home/hectormr/personalProjects/gama/lifeos && git status --short\")",
+      "Bash(wsl -d Ubuntu -- bash -c:*)",
+      "Bash(wsl -e bash -lc:*)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:fedoraproject.org)",
+      "WebFetch(domain:osbuild.org)",
+      "Bash(curl:*)",
+      "Bash(python3:*)",
+      "WebFetch(domain:run.tournament.org.il)",
+      "Bash(cargo check:*)",
+      "Bash(wsl -d Ubuntu -- bash -lc \"cd ~/personalProjects/gama/lifeos && cargo check --manifest-path daemon/Cargo.toml 2>&1 | tail -10\")",
+      "Bash(wsl:*)",
+      "WebFetch(domain:qwen.readthedocs.io)",
+      "WebFetch(domain:unsloth.ai)"
+    ]
+  }
+}

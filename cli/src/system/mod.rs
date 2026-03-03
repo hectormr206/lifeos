@@ -1,6 +1,6 @@
 //! System health and bootc integration module
-use std::process::Command;
 use serde::Serialize;
+use std::process::Command;
 
 #[cfg(test)]
 mod tests;
@@ -77,7 +77,8 @@ fn run_with_sudo_fallback(cmd: &str, args: &[&str]) -> std::io::Result<std::proc
     let output = Command::new(cmd).args(args).output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("root") || stderr.contains("permission") || stderr.contains("Permission") {
+        if stderr.contains("root") || stderr.contains("permission") || stderr.contains("Permission")
+        {
             return Command::new("sudo").arg(cmd).args(args).output();
         }
     }
@@ -93,8 +94,10 @@ pub fn get_bootc_status() -> anyhow::Result<BootcStatus> {
     };
 
     if !output.status.success() {
-        anyhow::bail!("bootc status failed: {}",
-            String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "bootc status failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
@@ -103,13 +106,16 @@ pub fn get_bootc_status() -> anyhow::Result<BootcStatus> {
 
 /// Parse bootc status from JSON
 fn parse_bootc_status(json: serde_json::Value) -> anyhow::Result<BootcStatus> {
-    let status = json.get("status")
+    let status = json
+        .get("status")
         .ok_or_else(|| anyhow::anyhow!("Missing status field"))?;
 
-    let booted = status.get("booted")
+    let booted = status
+        .get("booted")
         .ok_or_else(|| anyhow::anyhow!("Missing booted field"))?;
 
-    let booted_slot = booted.get("image")
+    let booted_slot = booted
+        .get("image")
         .and_then(|i| i.get("image"))
         .and_then(|i| i.as_str())
         .map(|s| s.to_string())
@@ -117,11 +123,13 @@ fn parse_bootc_status(json: serde_json::Value) -> anyhow::Result<BootcStatus> {
 
     let slots = vec![BootcSlot {
         name: "booted".to_string(),
-        version: booted.get("version")
+        version: booted
+            .get("version")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "unknown".to_string()),
-        image: booted.get("image")
+        image: booted
+            .get("image")
             .and_then(|i| i.get("image"))
             .and_then(|i| i.as_str())
             .map(|s| s.to_string()),
@@ -129,7 +137,8 @@ fn parse_bootc_status(json: serde_json::Value) -> anyhow::Result<BootcStatus> {
         rollback: false,
     }];
 
-    let rollback_slot = status.get("rollback")
+    let rollback_slot = status
+        .get("rollback")
         .and_then(|r| r.get("image"))
         .and_then(|i| i.get("image"))
         .and_then(|i| i.as_str())
@@ -180,9 +189,7 @@ pub fn check_health() -> HealthStatus {
 /// Uses /var instead of / because on bootc systems the root is a composefs
 /// overlay that always reports 100% usage.
 fn check_disk_space() -> anyhow::Result<()> {
-    let output = Command::new("df")
-        .args(["-Pk", "/var"])
-        .output()?;
+    let output = Command::new("df").args(["-Pk", "/var"]).output()?;
 
     if !output.status.success() {
         anyhow::bail!("df command failed");
@@ -199,7 +206,11 @@ fn check_disk_space() -> anyhow::Result<()> {
 
     match usage {
         Some(pct) if pct >= DISK_USAGE_THRESHOLD => {
-            anyhow::bail!("root filesystem {}% full (threshold: {}%)", pct, DISK_USAGE_THRESHOLD);
+            anyhow::bail!(
+                "root filesystem {}% full (threshold: {}%)",
+                pct,
+                DISK_USAGE_THRESHOLD
+            );
         }
         Some(_) => Ok(()),
         None => {
@@ -247,7 +258,9 @@ pub fn check_updates(_channel: &str) -> anyhow::Result<bool> {
     }
 
     let output = if is_root() {
-        Command::new("bootc").args(["upgrade", "--check"]).output()?
+        Command::new("bootc")
+            .args(["upgrade", "--check"])
+            .output()?
     } else {
         run_with_sudo_fallback("bootc", &["upgrade", "--check"])?
     };
@@ -262,9 +275,9 @@ pub fn check_updates(_channel: &str) -> anyhow::Result<bool> {
     let combined = format!("{}{}", stdout, stderr);
 
     // bootc prints info about available updates when there are some
-    Ok(combined.contains("Update available") ||
-       combined.contains("Diff") ||
-       combined.contains("upgrade") && !combined.contains("No update"))
+    Ok(combined.contains("Update available")
+        || combined.contains("Diff")
+        || combined.contains("upgrade") && !combined.contains("No update"))
 }
 
 /// Perform rollback
@@ -280,8 +293,10 @@ pub async fn perform_rollback() -> anyhow::Result<()> {
     };
 
     if !output.status.success() {
-        anyhow::bail!("Rollback failed: {}",
-            String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "Rollback failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     Ok(())
@@ -295,7 +310,9 @@ pub async fn perform_update(_channel: &str, dry_run: bool) -> anyhow::Result<Upd
 
     if dry_run {
         let output = if is_root() {
-            Command::new("bootc").args(["upgrade", "--check"]).output()?
+            Command::new("bootc")
+                .args(["upgrade", "--check"])
+                .output()?
         } else {
             run_with_sudo_fallback("bootc", &["upgrade", "--check"])?
         };
@@ -303,7 +320,11 @@ pub async fn perform_update(_channel: &str, dry_run: bool) -> anyhow::Result<Upd
         return Ok(UpdateResult {
             would_update: has_update,
             from_version: "current".to_string(),
-            to_version: if has_update { "available".to_string() } else { "current".to_string() },
+            to_version: if has_update {
+                "available".to_string()
+            } else {
+                "current".to_string()
+            },
             changes: vec![],
         });
     }
@@ -313,14 +334,15 @@ pub async fn perform_update(_channel: &str, dry_run: bool) -> anyhow::Result<Upd
     }
 
     let output = if is_root() {
-        Command::new("bootc").args(["upgrade", "--apply"]).output()?
+        Command::new("bootc")
+            .args(["upgrade", "--apply"])
+            .output()?
     } else {
         run_with_sudo_fallback("bootc", &["upgrade", "--apply"])?
     };
 
     if !output.status.success() {
-        anyhow::bail!("Update failed: {}",
-            String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!("Update failed: {}", String::from_utf8_lossy(&output.stderr));
     }
 
     Ok(UpdateResult {
@@ -338,9 +360,7 @@ fn create_pre_update_snapshot() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let output = Command::new(snapshot_script)
-        .arg("pre-update")
-        .output()?;
+    let output = Command::new(snapshot_script).arg("pre-update").output()?;
 
     if !output.status.success() {
         anyhow::bail!(
@@ -416,7 +436,11 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     report.checks.push(HealthCheck {
         name: "network".to_string(),
         passed: net_ok,
-        message: if net_ok { "Default route present".to_string() } else { "No default route found".to_string() },
+        message: if net_ok {
+            "Default route present".to_string()
+        } else {
+            "No default route found".to_string()
+        },
     });
 
     // 4. Check AI service (llama-server)
@@ -455,15 +479,16 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
 
     for (name, unit, running) in &services_to_repair {
         if !running {
-            let restart = Command::new("systemctl")
-                .args(["restart", unit])
-                .output();
+            let restart = Command::new("systemctl").args(["restart", unit]).output();
             match restart {
                 Ok(out) if out.status.success() => {
                     report.repairs.push(format!("Restarted {}", name));
                 }
                 _ => {
-                    report.repairs.push(format!("Failed to restart {} (try: sudo systemctl restart {})", name, unit));
+                    report.repairs.push(format!(
+                        "Failed to restart {} (try: sudo systemctl restart {})",
+                        name, unit
+                    ));
                 }
             }
         }

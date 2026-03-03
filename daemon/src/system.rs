@@ -1,8 +1,8 @@
 //! System monitoring module
 //! Collects system metrics and provides health information
 
-use sysinfo::System;
 use std::time::Instant;
+use sysinfo::System;
 
 /// System metrics snapshot
 #[derive(Debug, Clone)]
@@ -40,7 +40,7 @@ impl SystemMonitor {
     pub fn new() -> Self {
         let mut system = System::new_all();
         system.refresh_all();
-        
+
         Self {
             system,
             last_network_sample: None,
@@ -51,10 +51,10 @@ impl SystemMonitor {
     pub fn collect_metrics(&mut self) -> anyhow::Result<SystemMetrics> {
         // Refresh system information
         self.system.refresh_all();
-        
+
         // CPU usage (global)
         let cpu_usage = self.system.global_cpu_info().cpu_usage();
-        
+
         // Memory usage
         let memory_used = self.system.used_memory();
         let memory_total = self.system.total_memory();
@@ -64,20 +64,18 @@ impl SystemMonitor {
             0.0
         };
 
-        let (disk_used_gb, disk_total_gb, disk_usage) = read_disk_usage()
-            .unwrap_or((0, 0, 0.0));
+        let (disk_used_gb, disk_total_gb, disk_usage) = read_disk_usage().unwrap_or((0, 0, 0.0));
 
-        let (network_rx_mbps, network_tx_mbps) = self.read_network_rates()
-            .unwrap_or((0.0, 0.0));
+        let (network_rx_mbps, network_tx_mbps) = self.read_network_rates().unwrap_or((0.0, 0.0));
 
         let load = System::load_average();
-        
+
         // Uptime
         let uptime = System::uptime();
-        
+
         // Process count
         let process_count = self.system.processes().len();
-        
+
         Ok(SystemMetrics {
             timestamp: chrono::Local::now(),
             cpu_usage,
@@ -98,11 +96,11 @@ impl SystemMonitor {
     /// Check if system is healthy
     pub fn is_healthy(&mut self) -> anyhow::Result<bool> {
         let metrics = self.collect_metrics()?;
-        
+
         // Health thresholds
         let cpu_ok = metrics.cpu_usage < 90.0;
         let memory_ok = metrics.memory_usage < 95.0;
-        
+
         Ok(cpu_ok && memory_ok)
     }
 
@@ -202,7 +200,7 @@ mod tests {
     fn test_collect_metrics() {
         let mut monitor = SystemMonitor::new();
         let metrics = monitor.collect_metrics().unwrap();
-        
+
         // Verify basic structure
         assert!(metrics.memory_total_mb > 0);
         assert!(metrics.timestamp.timestamp() > 0);

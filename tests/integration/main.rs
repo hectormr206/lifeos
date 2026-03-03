@@ -150,7 +150,7 @@ fn test_daemon_binary_exists() {
 
 #[test]
 fn test_config_serialization_roundtrip() {
-    use life::config::{LifeConfig, SystemConfig, AiConfig, SecurityConfig, UpdateConfig};
+    use life::config::{AiConfig, LifeConfig, SecurityConfig, SystemConfig, UpdateConfig};
 
     let config = LifeConfig {
         version: "1".to_string(),
@@ -195,9 +195,7 @@ fn test_system_health_check_integration() {
 
     let health = check_health();
     match health {
-        HealthStatus::Healthy |
-        HealthStatus::Degraded(_) |
-        HealthStatus::Unhealthy(_) => {}
+        HealthStatus::Healthy | HealthStatus::Degraded(_) | HealthStatus::Unhealthy(_) => {}
     }
 }
 
@@ -210,13 +208,29 @@ async fn test_cli_daemon_workflow() {
 #[test]
 fn test_containerfile_exists() {
     let containerfile_path = project_root().join("image/Containerfile");
-    assert!(containerfile_path.exists(), "Containerfile should exist at {:?}", containerfile_path);
+    assert!(
+        containerfile_path.exists(),
+        "Containerfile should exist at {:?}",
+        containerfile_path
+    );
 
-    let content = std::fs::read_to_string(&containerfile_path)
-        .expect("Failed to read Containerfile");
+    let content =
+        std::fs::read_to_string(&containerfile_path).expect("Failed to read Containerfile");
 
-    assert!(content.contains("FROM"), "Containerfile should have FROM instruction");
-    assert!(content.contains("bootc"), "Containerfile should reference bootc");
-    assert!(content.contains("llama-server"), "Containerfile should reference llama-server");
-    assert!(!content.contains("ollama"), "Containerfile should not reference ollama");
+    assert!(
+        content.contains("FROM"),
+        "Containerfile should have FROM instruction"
+    );
+    assert!(
+        content.contains("bootc"),
+        "Containerfile should reference bootc"
+    );
+    assert!(
+        content.contains("llama-server"),
+        "Containerfile should reference llama-server"
+    );
+    assert!(
+        !content.contains("ollama"),
+        "Containerfile should not reference ollama"
+    );
 }

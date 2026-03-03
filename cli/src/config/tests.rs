@@ -217,7 +217,7 @@ schedule = "weekly"
         let config = LifeConfig::default();
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: LifeConfig = toml::from_str(&toml_str).unwrap();
-        
+
         assert_eq!(config.version, parsed.version);
         assert_eq!(config.system.hostname, parsed.system.hostname);
         assert_eq!(config.ai.enabled, parsed.ai.enabled);

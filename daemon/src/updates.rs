@@ -1,9 +1,9 @@
 //! Update checking module
 //! Handles checking for and staging system updates
 
-use serde::{Serialize, Deserialize};
-use std::process::Command;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::process::Command;
 
 #[cfg(test)]
 mod updates_tests;
@@ -51,16 +51,14 @@ impl UpdateChecker {
         self.enforce_tuf_policy()?;
 
         // Get current bootc status to determine current image
-        let output = Command::new("bootc")
-            .args(["status", "--json"])
-            .output()?;
+        let output = Command::new("bootc").args(["status", "--json"]).output()?;
 
         if !output.status.success() {
             anyhow::bail!("Failed to get bootc status");
         }
 
         let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-        
+
         // Extract current image
         let current_image = json
             .get("status")
@@ -71,7 +69,7 @@ impl UpdateChecker {
             .map(|s| s.to_string());
 
         self.current_image = current_image.clone();
-        
+
         let current_version = json
             .get("status")
             .and_then(|s| s.get("booted"))
@@ -89,9 +87,8 @@ impl UpdateChecker {
         let stderr_str = String::from_utf8_lossy(&check_output.stderr);
 
         // Parse output to determine if update is available
-        let available = check_output.status.success() 
-            && (output_str.contains("Update available") 
-                || stderr_str.contains("Update available"));
+        let available = check_output.status.success()
+            && (output_str.contains("Update available") || stderr_str.contains("Update available"));
 
         if available {
             // Parse new version from output
@@ -121,9 +118,7 @@ impl UpdateChecker {
     pub async fn stage_update(&self) -> anyhow::Result<()> {
         self.enforce_tuf_policy()?;
 
-        let output = Command::new("bootc")
-            .arg("upgrade")
-            .output()?;
+        let output = Command::new("bootc").arg("upgrade").output()?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -157,10 +152,8 @@ impl UpdateChecker {
     }
 
     fn enforce_tuf_policy(&self) -> anyhow::Result<()> {
-        let result = crate::tuf::validate_tuf_metadata(
-            &self.tuf_metadata_dir,
-            &self.tuf_state_path,
-        );
+        let result =
+            crate::tuf::validate_tuf_metadata(&self.tuf_metadata_dir, &self.tuf_state_path);
 
         match result {
             Ok(versions) => {
@@ -174,7 +167,10 @@ impl UpdateChecker {
                 Ok(())
             }
             Err(err) if !self.require_tuf => {
-                log::warn!("TUF metadata validation failed but enforcement is disabled: {}", err);
+                log::warn!(
+                    "TUF metadata validation failed but enforcement is disabled: {}",
+                    err
+                );
                 Ok(())
             }
             Err(err) => Err(err),

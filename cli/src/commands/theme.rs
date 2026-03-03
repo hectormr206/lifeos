@@ -202,14 +202,19 @@ async fn show_status() -> anyhow::Result<()> {
         "pro" => "🚀",
         _ => "🎨",
     };
-    println!("{} {} {}", 
+    println!(
+        "{} {} {}",
         variant_icon,
         "Variant:".bold(),
         config.variant.to_uppercase().cyan()
     );
 
     // Current mode
-    let mode_icon = if config.appearance.dark_mode { "🌙" } else { "☀️" };
+    let mode_icon = if config.appearance.dark_mode {
+        "🌙"
+    } else {
+        "☀️"
+    };
     let mode_text = if config.appearance.follow_system {
         "Auto (follows system)"
     } else if config.appearance.dark_mode {
@@ -217,22 +222,20 @@ async fn show_status() -> anyhow::Result<()> {
     } else {
         "Light"
     };
-    println!("{} {} {}", 
-        mode_icon,
-        "Mode:".bold(),
-        mode_text.cyan()
-    );
+    println!("{} {} {}", mode_icon, "Mode:".bold(), mode_text.cyan());
 
     // Accent color
     let accent_emoji = accent_emoji(&config.accent_color);
-    println!("{} {} {}", 
+    println!(
+        "{} {} {}",
         accent_emoji,
         "Accent:".bold(),
         config.accent_color.cyan()
     );
 
     // Wallpaper
-    println!("{} {} {}",
+    println!(
+        "{} {} {}",
         "🖼️",
         "Wallpaper:".bold(),
         shorten_path(&config.wallpaper.desktop).cyan()
@@ -240,10 +243,19 @@ async fn show_status() -> anyhow::Result<()> {
 
     println!();
     println!("Quick commands:");
-    println!("  Switch variant:  {}", "life theme variant simple|pro".cyan());
-    println!("  Change mode:     {}", "life theme mode dark|light|auto".cyan());
+    println!(
+        "  Switch variant:  {}",
+        "life theme variant simple|pro".cyan()
+    );
+    println!(
+        "  Change mode:     {}",
+        "life theme mode dark|light|auto".cyan()
+    );
     println!("  Set accent:      {}", "life theme accent blue".cyan());
-    println!("  Set wallpaper:   {}", "life theme wallpaper set ~/image.jpg".cyan());
+    println!(
+        "  Set wallpaper:   {}",
+        "life theme wallpaper set ~/image.jpg".cyan()
+    );
 
     Ok(())
 }
@@ -255,7 +267,10 @@ async fn set_mode(mode: ModeCommands) -> anyhow::Result<()> {
         ModeCommands::Auto => ("auto", false, true),
     };
 
-    println!("{}", format!("🌓 Setting {} mode...", mode_str).bold().blue());
+    println!(
+        "{}",
+        format!("🌓 Setting {} mode...", mode_str).bold().blue()
+    );
 
     // Update config
     let mut config = load_config().unwrap_or_default();
@@ -278,8 +293,21 @@ async fn set_variant(variant: VariantCommands) -> anyhow::Result<()> {
         VariantCommands::Pro => "pro",
     };
 
-    let icon = if variant_str == "simple" { "✨" } else { "🚀" };
-    println!("{}", format!("{} Switching to {} theme...", icon, variant_str.to_uppercase()).bold().blue());
+    let icon = if variant_str == "simple" {
+        "✨"
+    } else {
+        "🚀"
+    };
+    println!(
+        "{}",
+        format!(
+            "{} Switching to {} theme...",
+            icon,
+            variant_str.to_uppercase()
+        )
+        .bold()
+        .blue()
+    );
 
     // Update config
     let mut config = load_config().unwrap_or_default();
@@ -309,7 +337,7 @@ async fn manage_wallpaper(cmd: WallpaperCommands) -> anyhow::Result<()> {
 
             let path_expanded = shellexpand::tilde(&path).to_string();
             let path_for_config = path_expanded.clone();
-            
+
             // Validate file exists (if local path)
             if !path.starts_with("http") && !std::path::Path::new(&path_expanded).exists() {
                 anyhow::bail!("Wallpaper file not found: {}", path);
@@ -359,7 +387,7 @@ async fn manage_wallpaper(cmd: WallpaperCommands) -> anyhow::Result<()> {
             for dir in dirs {
                 if std::path::Path::new(dir).exists() {
                     println!("{}/:", dir.dimmed());
-                    
+
                     if let Ok(entries) = fs::read_dir(dir) {
                         for entry in entries.flatten() {
                             if let Some(name) = entry.file_name().to_str() {
@@ -373,40 +401,53 @@ async fn manage_wallpaper(cmd: WallpaperCommands) -> anyhow::Result<()> {
                 }
             }
 
-            println!("Set wallpaper: {}", "life theme wallpaper set /path/to/image.jpg".cyan());
+            println!(
+                "Set wallpaper: {}",
+                "life theme wallpaper set /path/to/image.jpg".cyan()
+            );
         }
         WallpaperCommands::Download { url, name } => {
             println!("{}", format!("⬇️  Downloading wallpaper...").bold().blue());
-            
-            let filename = name.unwrap_or_else(|| {
-                url.split('/').last().unwrap_or("wallpaper.jpg").to_string()
-            });
-            
+
+            let filename = name
+                .unwrap_or_else(|| url.split('/').last().unwrap_or("wallpaper.jpg").to_string());
+
             let wallpaper_dir = dirs::home_dir()
                 .map(|h| h.join("Pictures/Wallpapers"))
                 .unwrap_or_else(|| PathBuf::from("~/Pictures/Wallpapers"));
-            
+
             fs::create_dir_all(&wallpaper_dir)?;
-            
+
             let output_path = wallpaper_dir.join(&filename);
-            
+
             // Download
             let status = std::process::Command::new("curl")
-                .args([
-                    "-L", &url,
-                    "-o", output_path.to_str().unwrap(),
-                ])
+                .args(["-L", &url, "-o", output_path.to_str().unwrap()])
                 .status()?;
-            
+
             if status.success() {
-                println!("{}", format!("✅ Downloaded to: {}", output_path.display()).green());
-                println!("Set with: {}", format!("life theme wallpaper set {}", output_path.display()).cyan());
+                println!(
+                    "{}",
+                    format!("✅ Downloaded to: {}", output_path.display()).green()
+                );
+                println!(
+                    "Set with: {}",
+                    format!("life theme wallpaper set {}", output_path.display()).cyan()
+                );
             } else {
                 anyhow::bail!("Download failed");
             }
         }
-        WallpaperCommands::Cycle { interval, directory } => {
-            println!("{}", format!("🔄 Wallpaper cycling every {} seconds", interval).bold().blue());
+        WallpaperCommands::Cycle {
+            interval,
+            directory,
+        } => {
+            println!(
+                "{}",
+                format!("🔄 Wallpaper cycling every {} seconds", interval)
+                    .bold()
+                    .blue()
+            );
             println!();
             if let Some(dir) = directory {
                 println!("Directory: {}", dir.display().to_string().cyan());
@@ -441,11 +482,11 @@ async fn set_accent(color: Option<&str>, list: bool) -> anyhow::Result<()> {
     if list {
         println!("{}", "🎨 Available Accent Colors".bold().blue());
         println!();
-        
+
         for (name, emoji, desc) in colors {
             println!("{} {:<10} {}", emoji, name.cyan(), desc.dimmed());
         }
-        
+
         println!();
         println!("Set with: {}", "life theme accent <color>".cyan());
         return Ok(());
@@ -472,7 +513,12 @@ async fn set_accent(color: Option<&str>, list: bool) -> anyhow::Result<()> {
         anyhow::bail!("Invalid color");
     }
 
-    println!("{}", format!("🎨 Setting accent color to {}...", color_name).bold().blue());
+    println!(
+        "{}",
+        format!("🎨 Setting accent color to {}...", color_name)
+            .bold()
+            .blue()
+    );
 
     // Update config
     let mut config = load_config().unwrap_or_default();
@@ -483,7 +529,10 @@ async fn set_accent(color: Option<&str>, list: bool) -> anyhow::Result<()> {
     apply_accent(&color_name).await?;
 
     let emoji = accent_emoji(&color_name);
-    println!("{}", format!("{} Accent color set to {}", emoji, color_name).green());
+    println!(
+        "{}",
+        format!("{} Accent color set to {}", emoji, color_name).green()
+    );
 
     Ok(())
 }
@@ -500,8 +549,22 @@ async fn set_appearance(dark: bool, light: bool, auto: bool) -> anyhow::Result<(
         let config = load_config().unwrap_or_default();
         println!("{}", "🌓 Appearance Settings".bold().blue());
         println!();
-        println!("Dark mode:      {}", if config.appearance.dark_mode { "✓ On".green() } else { "✗ Off".dimmed() });
-        println!("Follow system:  {}", if config.appearance.follow_system { "✓ On".green() } else { "✗ Off".dimmed() });
+        println!(
+            "Dark mode:      {}",
+            if config.appearance.dark_mode {
+                "✓ On".green()
+            } else {
+                "✗ Off".dimmed()
+            }
+        );
+        println!(
+            "Follow system:  {}",
+            if config.appearance.follow_system {
+                "✓ On".green()
+            } else {
+                "✗ Off".dimmed()
+            }
+        );
         println!();
         println!("Change with:");
         println!("  {}", "life theme appearance --dark".cyan());
@@ -525,7 +588,12 @@ async fn list_themes() -> anyhow::Result<()> {
     println!();
 
     println!("{}", "Variants:".bold());
-    println!("  {} {} {}", "✨", "Simple".cyan(), "- Clean, minimal interface");
+    println!(
+        "  {} {} {}",
+        "✨",
+        "Simple".cyan(),
+        "- Clean, minimal interface"
+    );
     println!("     Optimized for focus and simplicity");
     println!();
     println!("  {} {} {}", "🚀", "Pro".cyan(), "- Feature-rich interface");
@@ -559,7 +627,12 @@ async fn preview_theme(variant: Option<ThemeVariant>) -> anyhow::Result<()> {
         }
     };
 
-    println!("{}", format!("🎨 Previewing {} theme:", variant_str.to_uppercase()).bold().blue());
+    println!(
+        "{}",
+        format!("🎨 Previewing {} theme:", variant_str.to_uppercase())
+            .bold()
+            .blue()
+    );
     println!();
 
     if variant_str == "simple" {
@@ -595,7 +668,10 @@ async fn preview_theme(variant: Option<ThemeVariant>) -> anyhow::Result<()> {
     }
 
     println!();
-    println!("Apply this theme: {}", format!("life theme variant {}", variant_str).cyan());
+    println!(
+        "Apply this theme: {}",
+        format!("life theme variant {}", variant_str).cyan()
+    );
 
     Ok(())
 }
@@ -606,22 +682,28 @@ async fn manage_config(cmd: ConfigCommands) -> anyhow::Result<()> {
             let config = load_config().unwrap_or_default();
             let json = serde_json::to_string_pretty(&config)?;
             fs::write(&path, json)?;
-            println!("{}", format!("✅ Theme config exported to: {}", path.display()).green());
+            println!(
+                "{}",
+                format!("✅ Theme config exported to: {}", path.display()).green()
+            );
         }
         ConfigCommands::Import { path } => {
             let json = fs::read_to_string(&path)?;
             let config: ThemeConfig = serde_json::from_str(&json)?;
             save_config(&config)?;
             apply_config(&config).await?;
-            println!("{}", format!("✅ Theme config imported from: {}", path.display()).green());
+            println!(
+                "{}",
+                format!("✅ Theme config imported from: {}", path.display()).green()
+            );
         }
         ConfigCommands::Reset => {
             print!("Reset theme configuration to defaults? [y/N] ");
             std::io::Write::flush(&mut std::io::stdout())?;
-            
+
             let mut input = String::new();
             std::io::stdin().read_line(&mut input)?;
-            
+
             if input.trim().eq_ignore_ascii_case("y") {
                 let config = ThemeConfig::default();
                 save_config(&config)?;
@@ -676,7 +758,12 @@ async fn apply_mode(dark: bool, follow_system: bool) -> anyhow::Result<()> {
 
     // Apply to GNOME
     let _ = std::process::Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.interface", "color-scheme", color_scheme])
+        .args([
+            "set",
+            "org.gnome.desktop.interface",
+            "color-scheme",
+            color_scheme,
+        ])
         .output();
 
     let gtk_theme = if dark { "Adwaita-dark" } else { "Adwaita" };
@@ -690,10 +777,19 @@ async fn apply_mode(dark: bool, follow_system: bool) -> anyhow::Result<()> {
 async fn apply_variant(variant: &str) -> anyhow::Result<()> {
     // Apply variant-specific settings
     // This would integrate with the desktop environment
-    
-    let icon_theme = if variant == "simple" { "Adwaita" } else { "Adwaita" };
+
+    let icon_theme = if variant == "simple" {
+        "Adwaita"
+    } else {
+        "Adwaita"
+    };
     let _ = std::process::Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.interface", "icon-theme", icon_theme])
+        .args([
+            "set",
+            "org.gnome.desktop.interface",
+            "icon-theme",
+            icon_theme,
+        ])
         .output();
 
     Ok(())
@@ -702,7 +798,7 @@ async fn apply_variant(variant: &str) -> anyhow::Result<()> {
 async fn apply_accent(color: &str) -> anyhow::Result<()> {
     // Apply accent color
     // This would integrate with the desktop environment's accent system
-    
+
     let accent = match color {
         "blue" => "#3584e4",
         "purple" => "#9141ac",
@@ -736,8 +832,12 @@ async fn set_wallpaper_gnome(path: &str, desktop: bool) -> anyhow::Result<()> {
     } else {
         "org.gnome.desktop.screensaver"
     };
-    
-    let key = if desktop { "picture-uri" } else { "picture-uri" };
+
+    let key = if desktop {
+        "picture-uri"
+    } else {
+        "picture-uri"
+    };
     let uri = if path.starts_with("http") {
         path.to_string()
     } else {
@@ -774,7 +874,7 @@ fn accent_emoji(color: &str) -> &'static str {
 
 fn shorten_path(path: &str) -> String {
     if path.len() > 50 {
-        format!("...{}", &path[path.len()-47..])
+        format!("...{}", &path[path.len() - 47..])
     } else {
         path.to_string()
     }

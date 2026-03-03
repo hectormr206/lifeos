@@ -16,6 +16,12 @@ RUN dnf -y install \
     pkgconf-pkg-config \
     gcc \
     git \
+    gtk4-devel \
+    glib2-devel \
+    pango-devel \
+    gdk-pixbuf2-devel \
+    graphene-devel \
+    cairo-devel \
     && dnf clean all
 
 WORKDIR /build
@@ -218,10 +224,10 @@ RUN rm -f /usr/lib/os-release && \
     'ANSI_COLOR="0;36"' \
     'LOGO="fedora-logo-icon"' \
     'CPE_NAME="cpe:/o:fedoraproject:fedora:42"' \
-    'HOME_URL="https://lifeos.dev"' \
-    'DOCUMENTATION_URL="https://lifeos.dev/docs"' \
-    'SUPPORT_URL="https://lifeos.dev/support"' \
-    'BUG_REPORT_URL="https://lifeos.dev/bugs"' \
+    'HOME_URL="https://lifeos.hectormr.com"' \
+    'DOCUMENTATION_URL="https://lifeos.hectormr.com/docs"' \
+    'SUPPORT_URL="https://lifeos.hectormr.com/support"' \
+    'BUG_REPORT_URL="https://lifeos.hectormr.com/bugs"' \
     'REDHAT_BUGZILLA_PRODUCT="Fedora"' \
     'REDHAT_BUGZILLA_PRODUCT_VERSION="42"' \
     'REDHAT_SUPPORT_PRODUCT="Fedora"' \
