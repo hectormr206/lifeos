@@ -2,6 +2,8 @@
 //! Manages llama-server integration and AI-related system tasks
 
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::process::Command;
 
 /// AI service status
@@ -27,6 +29,14 @@ pub struct AiChatResponse {
     pub response: String,
     pub model: String,
     pub tokens_used: Option<u32>,
+}
+
+/// Embedding response from llama-server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingResponse {
+    pub embedding: Vec<f32>,
+    pub model: String,
+    pub dimensions: usize,
 }
 
 /// AI manager
@@ -272,6 +282,85 @@ impl AiManager {
             model: response_model,
             tokens_used,
         })
+    }
+
+    /// Generate embeddings using llama-server's OpenAI-compatible API
+    /// Falls back to hash-based embeddings if llama-server is unavailable
+    pub async fn embed(&self, text: &str) -> anyhow::Result<EmbeddingResponse> {
+        const EMBEDDING_DIM: usize = 768;
+
+        if self.is_running().await {
+            let payload = serde_json::json!({
+                "model": "nomic-embed-text-v1.5.f16.gguf",
+                "input": text
+            });
+
+            match reqwest::Client::new()
+                .post("http://127.0.0.1:8082/v1/embeddings")
+                .json(&payload)
+                .timeout(std::time::Duration::from_secs(30))
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    if let Ok(body) = response.json::<serde_json::Value>().await {
+                        if let Some(embedding) = body["data"][0]["embedding"].as_array() {
+                            let vec: Vec<f32> = embedding
+                                .iter()
+                                .filter_map(|v| v.as_f64().map(|f| f as f32))
+                                .collect();
+
+                            if vec.len() == EMBEDDING_DIM {
+                                return Ok(EmbeddingResponse {
+                                    embedding: vec,
+                                    model: "nomic-embed-text".to_string(),
+                                    dimensions: EMBEDDING_DIM,
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        log::warn!("llama-server embeddings unavailable, using hash-based fallback");
+        let hash_embedding = self.hash_based_embedding(text);
+        let mut padded = vec![0.0f32; EMBEDDING_DIM];
+        for (i, &v) in hash_embedding.iter().enumerate() {
+            if i < EMBEDDING_DIM {
+                padded[i] = v;
+            }
+        }
+
+        Ok(EmbeddingResponse {
+            embedding: padded,
+            model: "hash-fallback".to_string(),
+            dimensions: EMBEDDING_DIM,
+        })
+    }
+
+    fn hash_based_embedding(&self, text: &str) -> Vec<f32> {
+        const FALLBACK_DIM: usize = 96;
+        let mut embedding = vec![0.0f32; FALLBACK_DIM];
+
+        let normalized = text.to_lowercase();
+        for i in 0..normalized.len().saturating_sub(2) {
+            let trigram = &normalized[i..i + 3];
+            let mut hasher = DefaultHasher::new();
+            trigram.hash(&mut hasher);
+            let idx = (hasher.finish() as usize) % FALLBACK_DIM;
+            embedding[idx] += 1.0;
+        }
+
+        let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for e in &mut embedding {
+                *e /= norm;
+            }
+        }
+
+        embedding
     }
 }
 

@@ -1,0 +1,49 @@
+{
+  "schema_version": "lifeos-model-catalog/v1",
+  "catalog_version": "2026.03.03",
+  "generated_at": "2026-03-03T00:00:00Z",
+  "models": [
+    {
+      "id": "Qwen3.5-4B-Q4_K_M.gguf",
+      "download_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+      "size_bytes": 2940000000,
+      "runtime_profiles": ["lite", "edge", "secure", "pro"],
+      "roles": ["general", "reasoning", "vision"]
+    },
+    {
+      "id": "Qwen3.5-9B-Q4_K_M.gguf",
+      "download_url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+      "size_bytes": 5900000000,
+      "runtime_profiles": ["edge", "pro"],
+      "roles": ["general", "reasoning", "vision"]
+    },
+    {
+      "id": "llama-3.2-3b-instruct-q4_k_m.gguf",
+      "download_url": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+      "size_bytes": 2100000000,
+      "runtime_profiles": ["lite", "edge", "secure", "pro"],
+      "roles": ["general", "code"]
+    },
+    {
+      "id": "llama-3.2-1b-instruct-q4_k_m.gguf",
+      "download_url": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "size_bytes": 840000000,
+      "runtime_profiles": ["lite", "edge", "secure", "pro"],
+      "roles": ["general"]
+    },
+    {
+      "id": "mistral-7b-instruct-v0.3-q4_k_m.gguf",
+      "download_url": "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+      "size_bytes": 4200000000,
+      "runtime_profiles": ["edge", "secure", "pro"],
+      "roles": ["general", "code"]
+    },
+    {
+      "id": "nomic-embed-text-v1.5.f16.gguf",
+      "download_url": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.f16.gguf",
+      "size_bytes": 275000000,
+      "runtime_profiles": ["lite", "edge", "secure", "pro"],
+      "roles": ["embeddings"]
+    }
+  ]
+}

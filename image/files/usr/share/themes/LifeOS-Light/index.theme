@@ -1,0 +1,38 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=LifeOS Light
+Comment=LifeOS Light Theme - Clean and bright for daytime use
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=LifeOS-Light
+MetacityTheme=LifeOS-Light
+IconTheme=Adwaita
+CursorTheme=Adwaita
+CursorSize=24
+NotificationTheme=Default
+
+[Settings]
+; LifeOS Light Color Palette
+; Background: #f8f9fa
+; Surface: #ffffff
+; Primary: #0f4c75
+; Accent: #3282b8
+; Text: #1a1a2e
+; Error: #c0392b
+; Success: #27ae60
+
+[Cosmic]
+; COSMIC-specific theme settings using libcosmic
+Background=#f8f9fa
+Surface=#ffffff
+Primary=#0f4c75
+Accent=#3282b8
+Text=#1a1a2e
+TextMuted=#6b6b7b
+Error=#c0392b
+Warning=#d68910
+Success=#27ae60
+
+; WCAG AA compliant
+ContrastRatio=8.2

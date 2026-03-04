@@ -412,7 +412,7 @@ fn cmd_mcp_export(output: Option<&str>, trust: Option<&str>) -> anyhow::Result<(
     let payload = serde_json::json!({
         "protocol": "mcp-tools/v1",
         "server": "lifeos-skills",
-        "generated_at": chrono::Utc::now(),
+        "generated_at": chrono::Utc::now().to_rfc3339(),
         "tools_count": tools.len(),
         "tools": tools,
     });

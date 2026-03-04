@@ -4,11 +4,21 @@
 #
 # Build context must be the repo root:
 #   podman build -t lifeos:latest -f image/Containerfile .
+#
+# Channel builds:
+#   podman build --build-arg LIFEOS_CHANNEL=stable -t lifeos:stable -f image/Containerfile .
+#   podman build --build-arg LIFEOS_CHANNEL=candidate -t lifeos:candidate -f image/Containerfile .
+#   podman build --build-arg LIFEOS_CHANNEL=edge -t lifeos:edge -f image/Containerfile .
 
 # ============================================================================
 # Stage 1: Build CLI + Daemon (Rust)
 # ============================================================================
 FROM fedora:42 AS builder
+
+ARG LIFEOS_CHANNEL=edge
+ARG LIFEOS_VERSION=dev
+ARG BUILD_DATE
+ARG VCS_REF
 
 RUN dnf -y install \
     rust cargo \
@@ -29,6 +39,7 @@ WORKDIR /build
 # Copy CLI source
 COPY cli/Cargo.toml cli/Cargo.lock* cli/
 COPY cli/src cli/src/
+COPY cli/assets cli/assets/
 
 # Copy Daemon source
 COPY daemon/Cargo.toml daemon/
@@ -43,6 +54,22 @@ RUN cd daemon && cargo build --release
 # ============================================================================
 FROM quay.io/fedora/fedora-bootc:42
 
+ARG LIFEOS_CHANNEL=edge
+ARG LIFEOS_VERSION=dev
+ARG BUILD_DATE
+ARG VCS_REF
+
+LABEL org.lifeos.channel="${LIFEOS_CHANNEL}" \
+      org.lifeos.version="${LIFEOS_VERSION}" \
+      org.lifeos.build-date="${BUILD_DATE}" \
+      org.lifeos.vcs-ref="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/hectormrm/lifeos" \
+      org.opencontainers.image.title="LifeOS" \
+      org.opencontainers.image.description="AI-focused operating system with COSMIC Desktop" \
+      org.opencontainers.image.version="${LIFEOS_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
 # --- Repositorios adicionales (COSMIC y RPMFusion) ---
 RUN dnf -y install dnf5-plugins && \
     dnf -y copr enable ryanabx/cosmic-epoch && \
@@ -53,7 +80,8 @@ RUN dnf -y install dnf5-plugins && \
 # --- Escritorio COSMIC y Base ---
 RUN dnf -y install --skip-unavailable \
     cosmic-desktop cosmic-files cosmic-term cosmic-edit cosmic-store \
-    xdg-desktop-portal-cosmic xdg-user-dirs \
+    xdg-desktop-portal-cosmic xdg-desktop-portal-gtk xdg-desktop-portal-wlr \
+    xdg-user-dirs \
     NetworkManager bluez pipewire wireplumber \
     && dnf clean all
 
@@ -142,11 +170,23 @@ RUN set -eux && \
 # --- Copiar archivos de configuración y scripts desde el repo ---
 # Configuración de LifeOS
 COPY image/files/etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml.default
+COPY image/files/etc/lifeos/channels.toml       /etc/lifeos/channels.toml
 COPY image/files/etc/lifeos/llama-server.env    /etc/lifeos/llama-server.env
 COPY image/files/etc/lifeos/tuf/root.json       /etc/lifeos/tuf/root.json
 COPY image/files/etc/lifeos/tuf/timestamp.json  /etc/lifeos/tuf/timestamp.json
 COPY image/files/etc/lifeos/tuf/snapshot.json   /etc/lifeos/tuf/snapshot.json
 COPY image/files/etc/lifeos/tuf/targets.json    /etc/lifeos/tuf/targets.json
+COPY image/files/etc/lifeos/cosmic-theme.toml  /etc/lifeos/cosmic-theme.toml
+
+RUN echo "LIFEOS_CHANNEL=${LIFEOS_CHANNEL}" > /etc/lifeos/channel && \
+    echo "LIFEOS_VERSION=${LIFEOS_VERSION}" >> /etc/lifeos/channel && \
+    echo "BUILD_DATE=${BUILD_DATE}" >> /etc/lifeos/channel && \
+    echo "VCS_REF=${VCS_REF}" >> /etc/lifeos/channel
+
+# LifeOS COSMIC Themes
+COPY image/files/usr/share/themes/LifeOS-Dark/index.theme        /usr/share/themes/LifeOS-Dark/index.theme
+COPY image/files/usr/share/themes/LifeOS-Light/index.theme       /usr/share/themes/LifeOS-Light/index.theme
+COPY image/files/usr/share/themes/LifeOS-HighContrast/index.theme /usr/share/themes/LifeOS-HighContrast/index.theme
 
 # Scripts de LifeOS
 COPY image/files/usr/local/bin/lifeos-first-boot.sh       /usr/local/bin/lifeos-first-boot.sh
@@ -163,6 +203,9 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-integrity-check.sh \
              /usr/local/bin/lifeos-security-baseline-check.sh \
              /usr/local/bin/lifeos-check
+
+# xdg-desktop-portal LifeOS integration
+COPY files/usr/share/xdg-desktop-portal/portals/lifeos.portal /usr/share/xdg-desktop-portal/portals/lifeos.portal
 
 # Copiar configuración inicial si no existe
 RUN cp -n /etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml || true
@@ -326,6 +369,12 @@ RUN test -x /usr/bin/life && \
     test -f /etc/lifeos/tuf/snapshot.json && \
     test -f /etc/lifeos/tuf/targets.json && \
     test -f /etc/lifeos/lifeos.toml.default && \
+    test -f /etc/lifeos/channels.toml && \
+    test -f /etc/lifeos/channel && \
+    test -f /etc/lifeos/cosmic-theme.toml && \
+    test -f /usr/share/themes/LifeOS-Dark/index.theme && \
+    test -f /usr/share/themes/LifeOS-Light/index.theme && \
+    test -f /usr/share/themes/LifeOS-HighContrast/index.theme && \
     test -x /usr/local/bin/lifeos-first-boot.sh && \
     test -x /usr/local/bin/lifeos-ai-setup.sh && \
     test -x /usr/local/bin/llama-server-health-check.sh && \

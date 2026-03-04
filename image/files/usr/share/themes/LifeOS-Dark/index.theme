@@ -1,0 +1,38 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=LifeOS Dark
+Comment=LifeOS Dark Theme - Deep blue-black palette for comfortable coding
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=LifeOS-Dark
+MetacityTheme=LifeOS-Dark
+IconTheme=Adwaita
+CursorTheme=Adwaita
+CursorSize=24
+NotificationTheme=Default
+
+[Settings]
+; LifeOS Dark Color Palette
+; Background: #1a1a2e (deep blue-black)
+; Surface: #16213e
+; Primary: #0f4c75 (LifeOS blue)
+; Accent: #3282b8
+; Text: #e8e8e8
+; Error: #e74c3c
+; Success: #2ecc71
+
+[Cosmic]
+; COSMIC-specific theme settings using libcosmic
+Background=#1a1a2e
+Surface=#16213e
+Primary=#0f4c75
+Accent=#3282b8
+Text=#e8e8e8
+TextMuted=#a0a0a0
+Error=#e74c3c
+Warning=#f39c12
+Success=#2ecc71
+
+; WCAG AA compliant
+ContrastRatio=7.5

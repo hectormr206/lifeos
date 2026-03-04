@@ -16,10 +16,15 @@ const MODEL_CATALOG_URL: &str = "https://models.lifeos.dev/catalog/v1.json";
 /// Default remote model catalog detached signature (sha256 digest string)
 const MODEL_CATALOG_SIG_URL: &str = "https://models.lifeos.dev/catalog/v1.json.sig";
 /// Embedded offline fallback catalog bundled in the repo/ISO
-const EMBEDDED_MODEL_CATALOG: &str = include_str!("../../../contracts/models/v1/catalog.json");
+const EMBEDDED_MODEL_CATALOG: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/models/v1/catalog.json"
+));
 /// Embedded detached signature for the fallback catalog
-const EMBEDDED_MODEL_CATALOG_SIG: &str =
-    include_str!("../../../contracts/models/v1/catalog.json.sig");
+const EMBEDDED_MODEL_CATALOG_SIG: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/assets/models/v1/catalog.json.sig"
+));
 
 #[derive(Subcommand)]
 pub enum AiCommands {

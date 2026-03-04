@@ -6,6 +6,8 @@
 //! - Push notifications
 //! - System management
 
+mod lab;
+
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -34,12 +36,14 @@ use crate::context_policies::ContextPoliciesManager;
 use crate::experience_modes::ExperienceManager;
 use crate::follow_along::FollowAlongManager;
 use crate::health::HealthMonitor;
+use crate::lab::LabManager;
 use crate::memory_plane::{MemoryPlaneManager, MemorySearchMode};
 use crate::notifications::NotificationManager;
 use crate::overlay::{OverlayManager, OverlayTheme};
 use crate::screen_capture::ScreenCapture;
 use crate::system::SystemMonitor;
 use crate::update_scheduler::UpdateScheduler;
+use crate::visual_comfort::{ComfortProfile, VisualComfortManager};
 use std::path::PathBuf;
 
 /// Shared API state
@@ -59,6 +63,8 @@ pub struct ApiState {
     pub telemetry_manager: Arc<RwLock<crate::telemetry::TelemetryManager>>,
     pub agent_runtime_manager: Arc<RwLock<AgentRuntimeManager>>,
     pub memory_plane_manager: Arc<RwLock<MemoryPlaneManager>>,
+    pub visual_comfort_manager: Arc<RwLock<VisualComfortManager>>,
+    pub lab_manager: Arc<RwLock<LabManager>>,
     pub config: ApiConfig,
 }
 
@@ -698,6 +704,63 @@ pub struct AppliedRuleInfo {
     pub status: String,
 }
 
+// ==================== VISUAL COMFORT API STRUCTS ====================
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct VisualComfortStatusResponse {
+    pub current_temperature: u32,
+    pub target_temperature: u32,
+    pub current_font_scale: f32,
+    pub target_font_scale: f32,
+    pub animations_enabled: bool,
+    pub active_profile: String,
+    pub session_duration_minutes: u32,
+    pub is_night_time: bool,
+    pub transitioning: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct VisualComfortConfigResponse {
+    pub color_temperature_day: u32,
+    pub color_temperature_night: u32,
+    pub night_start_hour: u8,
+    pub night_end_hour: u8,
+    pub font_scale_base: f32,
+    pub font_scale_max: f32,
+    pub animation_reduction_threshold_minutes: u32,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetProfileRequest {
+    pub profile: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetTemperatureRequest {
+    pub temperature: u32,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetFontScaleRequest {
+    pub scale: f32,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct SetAnimationsRequest {
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct ProfileInfoResponse {
+    pub name: String,
+    pub display_name: String,
+    pub temperature: u32,
+    pub font_scale: f32,
+    pub contrast_level: f32,
+    pub animations_enabled: bool,
+}
+
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
 pub struct ChatMessageInfo {
     pub id: String,
@@ -996,6 +1059,24 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/mcp/skills/tools", get(get_mcp_skills_tools))
         .route("/computer-use/status", get(get_computer_use_status))
         .route("/computer-use/action", post(execute_computer_use_action))
+        // Visual Comfort endpoints
+        .route("/visual-comfort/status", get(get_visual_comfort_status))
+        .route("/visual-comfort/config", get(get_visual_comfort_config))
+        .route("/visual-comfort/profile", post(set_visual_comfort_profile))
+        .route("/visual-comfort/profiles", get(list_visual_comfort_profiles))
+        .route("/visual-comfort/temperature", post(set_visual_comfort_temperature))
+        .route("/visual-comfort/font-scale", post(set_visual_comfort_font_scale))
+        .route("/visual-comfort/animations", post(set_visual_comfort_animations))
+        .route("/visual-comfort/reset", post(reset_visual_comfort_session))
+        // Lab endpoints
+        .route("/lab/status", get(lab::get_lab_status))
+        .route("/lab/experiment", post(lab::start_experiment))
+        .route("/lab/experiment/:id", get(lab::get_experiment))
+        .route("/lab/experiment/:id/canary", post(lab::start_canary))
+        .route("/lab/experiment/:id/promote", post(lab::promote_experiment))
+        .route("/lab/experiment/:id/rollback", post(lab::rollback_experiment))
+        .route("/lab/experiment/:id/report", get(lab::get_experiment_report))
+        .route("/lab/history", get(lab::get_lab_history))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bootstrap_token,
@@ -5434,6 +5515,309 @@ fn parse_computer_use_action(
             }),
         )),
     }
+}
+
+// ==================== VISUAL COMFORT HANDLERS ====================
+
+/// Get visual comfort status
+#[utoipa::path(
+    get,
+    path = "/api/v1/visual-comfort/status",
+    responses(
+        (status = 200, description = "Visual comfort status retrieved", body = VisualComfortStatusResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "visual-comfort"
+)]
+async fn get_visual_comfort_status(
+    State(state): State<ApiState>,
+) -> Result<Json<VisualComfortStatusResponse>, (StatusCode, Json<ApiError>)> {
+    let manager = state.visual_comfort_manager.read().await;
+    let state_data = manager.get_state().await;
+
+    Ok(Json(VisualComfortStatusResponse {
+        current_temperature: state_data.current_temperature,
+        target_temperature: state_data.target_temperature,
+        current_font_scale: state_data.current_font_scale,
+        target_font_scale: state_data.target_font_scale,
+        animations_enabled: state_data.animations_enabled,
+        active_profile: state_data.active_profile.as_str().to_string(),
+        session_duration_minutes: state_data.session_duration_minutes,
+        is_night_time: state_data.is_night_time,
+        transitioning: state_data.transitioning,
+    }))
+}
+
+/// Get visual comfort configuration
+#[utoipa::path(
+    get,
+    path = "/api/v1/visual-comfort/config",
+    responses(
+        (status = 200, description = "Visual comfort config retrieved", body = VisualComfortConfigResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "visual-comfort"
+)]
+async fn get_visual_comfort_config(
+    State(state): State<ApiState>,
+) -> Result<Json<VisualComfortConfigResponse>, (StatusCode, Json<ApiError>)> {
+    let manager = state.visual_comfort_manager.read().await;
+    let config = manager.get_config().await;
+
+    Ok(Json(VisualComfortConfigResponse {
+        color_temperature_day: config.color_temperature_day,
+        color_temperature_night: config.color_temperature_night,
+        night_start_hour: config.night_start_hour,
+        night_end_hour: config.night_end_hour,
+        font_scale_base: config.font_scale_base,
+        font_scale_max: config.font_scale_max,
+        animation_reduction_threshold_minutes: config.animation_reduction_threshold_minutes,
+        enabled: config.enabled,
+    }))
+}
+
+/// Set comfort profile
+#[utoipa::path(
+    post,
+    path = "/api/v1/visual-comfort/profile",
+    request_body = SetProfileRequest,
+    responses(
+        (status = 200, description = "Profile set successfully"),
+        (status = 400, description = "Invalid profile", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "visual-comfort"
+)]
+async fn set_visual_comfort_profile(
+    State(state): State<ApiState>,
+    Json(request): Json<SetProfileRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let profile = ComfortProfile::from_str(&request.profile).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: format!(
+                    "Invalid profile '{}'. Must be: default, coding, reading, design, or meeting",
+                    request.profile
+                ),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let manager = state.visual_comfort_manager.read().await;
+    manager.set_profile(profile).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to set profile: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(StatusCode::OK)
+}
+
+/// List available profiles
+#[utoipa::path(
+    get,
+    path = "/api/v1/visual-comfort/profiles",
+    responses(
+        (status = 200, description = "Profiles listed", body = Vec<ProfileInfoResponse>),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "visual-comfort"
+)]
+async fn list_visual_comfort_profiles() -> Result<Json<Vec<ProfileInfoResponse>>, (StatusCode, Json<ApiError>)> {
+    let profiles = vec![
+        ProfileInfoResponse {
+            name: "default".to_string(),
+            display_name: "Default".to_string(),
+            temperature: 6500,
+            font_scale: 1.0,
+            contrast_level: 1.0,
+            animations_enabled: true,
+        },
+        ProfileInfoResponse {
+            name: "coding".to_string(),
+            display_name: "Coding".to_string(),
+            temperature: 6000,
+            font_scale: 0.95,
+            contrast_level: 1.2,
+            animations_enabled: false,
+        },
+        ProfileInfoResponse {
+            name: "reading".to_string(),
+            display_name: "Reading".to_string(),
+            temperature: 4000,
+            font_scale: 1.15,
+            contrast_level: 1.0,
+            animations_enabled: true,
+        },
+        ProfileInfoResponse {
+            name: "design".to_string(),
+            display_name: "Design".to_string(),
+            temperature: 6500,
+            font_scale: 1.0,
+            contrast_level: 1.0,
+            animations_enabled: true,
+        },
+        ProfileInfoResponse {
+            name: "meeting".to_string(),
+            display_name: "Meeting".to_string(),
+            temperature: 4500,
+            font_scale: 1.05,
+            contrast_level: 0.9,
+            animations_enabled: false,
+        },
+    ];
+
+    Ok(Json(profiles))
+}
+
+/// Set color temperature manually
+#[utoipa::path(
+    post,
+    path = "/api/v1/visual-comfort/temperature",
+    request_body = SetTemperatureRequest,
+    responses(
+        (status = 200, description = "Temperature set successfully"),
+        (status = 400, description = "Invalid temperature", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "visual-comfort"
+)]
+async fn set_visual_comfort_temperature(
+    State(state): State<ApiState>,
+    Json(request): Json<SetTemperatureRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    if request.temperature < 2500 || request.temperature > 6500 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Temperature must be between 2500K and 6500K".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let manager = state.visual_comfort_manager.read().await;
+    manager.set_temperature(request.temperature).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to set temperature: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(StatusCode::OK)
+}
+
+/// Set font scale
+#[utoipa::path(
+    post,
+    path = "/api/v1/visual-comfort/font-scale",
+    request_body = SetFontScaleRequest,
+    responses(
+        (status = 200, description = "Font scale set successfully"),
+        (status = 400, description = "Invalid scale", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "visual-comfort"
+)]
+async fn set_visual_comfort_font_scale(
+    State(state): State<ApiState>,
+    Json(request): Json<SetFontScaleRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    if request.scale < 0.8 || request.scale > 1.5 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Font scale must be between 0.8 and 1.5".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let manager = state.visual_comfort_manager.read().await;
+    manager.set_font_scale(request.scale).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to set font scale: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(StatusCode::OK)
+}
+
+/// Enable/disable animations
+#[utoipa::path(
+    post,
+    path = "/api/v1/visual-comfort/animations",
+    request_body = SetAnimationsRequest,
+    responses(
+        (status = 200, description = "Animation state set successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "visual-comfort"
+)]
+async fn set_visual_comfort_animations(
+    State(state): State<ApiState>,
+    Json(request): Json<SetAnimationsRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let manager = state.visual_comfort_manager.read().await;
+    manager.set_animations(request.enabled).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to set animations: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(StatusCode::OK)
+}
+
+/// Reset visual comfort session
+#[utoipa::path(
+    post,
+    path = "/api/v1/visual-comfort/reset",
+    responses(
+        (status = 200, description = "Session reset successfully"),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "visual-comfort"
+)]
+async fn reset_visual_comfort_session(
+    State(state): State<ApiState>,
+) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
+    let manager = state.visual_comfort_manager.read().await;
+    manager.reset_session().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to reset session: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(StatusCode::OK)
 }
 
 // ==================== SERVER STARTUP ====================

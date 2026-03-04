@@ -1,0 +1,61 @@
+# tests/e2e/bootc_test_config.yaml
+# Configuration for bootc upgrade/rollback E2E tests
+
+# VM Configuration
+vm:
+  name: "lifeos-bootc-test"
+  memory: "4096"        # MB
+  cpus: "2"
+  disk_size: "20G"      # GB
+  firmware: "uefi"      # uefi or bios
+
+# Network Configuration  
+network:
+  ssh_port: "2222"
+  ssh_user: "lifeos"
+  ssh_password: "lifeos"  # Default password for testing
+
+# Timeouts (in seconds)
+timeouts:
+  vm_boot: "120"        # Wait for VM to boot
+  ssh_ready: "300"      # Wait for SSH to be available
+  command: "30"         # Default command timeout
+  reboot: "60"          # Wait after reboot
+
+# Test Configuration
+test:
+  skip_upgrade: false   # Skip upgrade tests if no updates available
+  skip_rollback: false  # Skip rollback tests
+  cleanup_on_success: true
+  cleanup_on_failure: true
+  save_logs: true
+  log_dir: "/tmp"
+
+# Bootc Registry (for upgrade tests)
+registry:
+  url: ""               # Custom registry URL (leave empty for default)
+  username: ""          # Registry credentials (if needed)
+  password: ""
+
+# QEMU/Libvirt Settings
+virtualization:
+  accelerator: "kvm"    # kvm, tcg, or auto
+  machine_type: "q35"
+  graphics: false       # Headless mode
+  console: "serial"     # serial or pty
+
+# Expected Behavior
+expectations:
+  bootc_version: ">= 0.1"
+  min_slots: 2          # Minimum number of boot slots expected
+  supported_commands:
+    - "status"
+    - "upgrade"
+    - "rollback"
+    - "list"
+
+# CI/CD Settings
+ci:
+  artifact_upload: true
+  fail_fast: false      # Stop on first failure
+  retry_count: 2        # Retry failed tests

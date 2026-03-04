@@ -1,0 +1,51 @@
+[channels.stable]
+name = "stable"
+description = "Production-ready releases - recommended for most users"
+update_schedule = "weekly"
+auto_update = true
+require_signature = true
+require_sbom = true
+min_age_hours = 0
+
+[channels.candidate]
+name = "candidate"
+description = "Pre-release testing - for users who want early access to features"
+update_schedule = "daily"
+auto_update = false
+require_signature = true
+require_sbom = true
+min_age_hours = 0
+
+[channels.edge]
+name = "edge"
+description = "Bleeding edge development - for testing and development only"
+update_schedule = "on-demand"
+auto_update = false
+require_signature = true
+require_sbom = false
+min_age_hours = 0
+
+[promotion]
+candidate_to_stable_min_age_hours = 168
+candidate_to_stable_requires = [
+    "all-tests-pass",
+    "no-critical-bugs",
+    "manual-approval",
+    "sbom-verified"
+]
+
+[update_policy]
+check_interval_hours = 24
+download_window_start = "02:00"
+download_window_end = "06:00"
+retry_attempts = 3
+retry_delay_minutes = 30
+rollback_on_failure = true
+create_backup_before_update = true
+verify_checksum = true
+
+[security]
+verify_cosign_signature = true
+verify_sbom = true
+allowed_registries = ["ghcr.io"]
+required_labels = ["org.lifeos.channel", "org.lifeos.version", "org.lifeos.build-date"]

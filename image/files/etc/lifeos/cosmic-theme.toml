@@ -1,0 +1,65 @@
+# LifeOS COSMIC Theme Configuration
+# This file configures the default theme and theme preferences for COSMIC desktop
+
+[theme]
+# Default theme: "LifeOS-Dark" | "LifeOS-Light" | "LifeOS-HighContrast"
+default = "LifeOS-Dark"
+
+# Auto-switch between dark/light based on time of day
+auto_switch = false
+
+# Time ranges for auto-switch (24h format)
+dark_mode_start = 19  # 7 PM
+light_mode_start = 7  # 7 AM
+
+[accessibility]
+# Enable high contrast mode by default
+high_contrast_default = false
+
+# Increase cursor size for accessibility
+large_cursor = false
+cursor_size = 24  # 24 (default) | 32 (large) | 48 (extra large)
+
+# Reduce motion/animations
+reduce_motion = false
+
+[colors]
+# LifeOS brand colors for reference
+# Primary: #0f4c75 (LifeOS Blue)
+# Accent: #3282b8 (Lighter Blue)
+
+[dark]
+name = "LifeOS Dark"
+background = "#1a1a2e"
+surface = "#16213e"
+primary = "#0f4c75"
+accent = "#3282b8"
+text = "#e8e8e8"
+text_muted = "#a0a0a0"
+error = "#e74c3c"
+warning = "#f39c12"
+success = "#2ecc71"
+
+[light]
+name = "LifeOS Light"
+background = "#f8f9fa"
+surface = "#ffffff"
+primary = "#0f4c75"
+accent = "#3282b8"
+text = "#1a1a2e"
+text_muted = "#6b6b7b"
+error = "#c0392b"
+warning = "#d68910"
+success = "#27ae60"
+
+[high_contrast]
+name = "LifeOS High Contrast"
+background = "#000000"
+surface = "#1a1a1a"
+primary = "#00ff00"
+accent = "#ffff00"
+text = "#ffffff"
+text_muted = "#cccccc"
+error = "#ff0000"
+warning = "#ffff00"
+success = "#00ff00"

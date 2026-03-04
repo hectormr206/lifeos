@@ -121,25 +121,20 @@ enum Commands {
     /// Theme system - customize appearance
     #[clap(subcommand)]
     Theme(commands::theme::ThemeCommands),
+    /// Visual comfort settings (color temperature, font scale, animations)
+    #[clap(subcommand)]
+    VisualComfort(commands::visual_comfort::VisualComfortCommands),
+    /// xdg-desktop-portal integration for app sandboxing
+    #[clap(subcommand)]
+    Portal(commands::portal::PortalCommands),
     /// Beta testing commands
     #[clap(subcommand)]
     Beta(BetaCommands),
     /// Submit feedback for beta testing
     #[clap(subcommand)]
     Feedback(FeedbackCommands),
-    /// System lab for testing
-    #[clap(subcommand)]
-    Lab(LabCommands),
-}
-
-#[derive(Subcommand)]
-enum LabCommands {
-    /// Start lab environment
-    Start,
-    /// Run tests in lab
-    Test,
-    /// Generate lab report
-    Report,
+    /// LifeOS Lab - autonomous improvement pipeline
+    Lab(commands::lab::LabArgs),
 }
 
 #[derive(Subcommand)]
@@ -218,22 +213,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Store(args) => commands::store::execute(args).await,
         Commands::Telemetry(args) => commands::telemetry::execute(args).await,
         Commands::Theme(args) => commands::theme::execute(args).await,
+        Commands::VisualComfort(args) => commands::visual_comfort::execute(args).await,
+        Commands::Portal(args) => commands::portal::execute(args).await,
         Commands::Beta(cmd) => handle_beta_command(cmd).await,
         Commands::Feedback(cmd) => handle_feedback_command(cmd).await,
-        Commands::Lab(cmd) => match cmd {
-            LabCommands::Start => {
-                println!("{}", "Starting lab environment...".blue());
-                Ok(())
-            }
-            LabCommands::Test => {
-                println!("{}", "Running lab tests...".blue());
-                Ok(())
-            }
-            LabCommands::Report => {
-                println!("{}", "Generating lab report...".blue());
-                Ok(())
-            }
-        },
+        Commands::Lab(args) => commands::lab::execute(args).await,
     }
 }
 

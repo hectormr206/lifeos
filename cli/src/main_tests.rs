@@ -4,6 +4,7 @@
 mod tests {
     use super::super::*;
     use crate::commands::config::ConfigCommands;
+    use crate::commands::lab::{LabArgs, LabCommands};
     use clap::Parser;
 
     #[test]
@@ -144,21 +145,33 @@ mod tests {
 
     #[test]
     fn test_cli_parses_lab_commands() {
-        let start_cli = Cli::parse_from(["life", "lab", "start"]);
+        let status_cli = Cli::parse_from(["life", "lab", "status"]);
+        match status_cli.command {
+            Commands::Lab(LabArgs {
+                command: LabCommands::Status { .. },
+            }) => (), // Pass
+            _ => panic!("Expected Lab Status command"),
+        }
+
+        let start_cli = Cli::parse_from([
+            "life",
+            "lab",
+            "start",
+            "config_optimization",
+            "test hypothesis",
+        ]);
         match start_cli.command {
-            Commands::Lab(LabCommands::Start) => (), // Pass
+            Commands::Lab(LabArgs {
+                command: LabCommands::Start { .. },
+            }) => (), // Pass
             _ => panic!("Expected Lab Start command"),
         }
 
-        let test_cli = Cli::parse_from(["life", "lab", "test"]);
-        match test_cli.command {
-            Commands::Lab(LabCommands::Test) => (), // Pass
-            _ => panic!("Expected Lab Test command"),
-        }
-
-        let report_cli = Cli::parse_from(["life", "lab", "report"]);
+        let report_cli = Cli::parse_from(["life", "lab", "report", "exp-123"]);
         match report_cli.command {
-            Commands::Lab(LabCommands::Report) => (), // Pass
+            Commands::Lab(LabArgs {
+                command: LabCommands::Report { .. },
+            }) => (), // Pass
             _ => panic!("Expected Lab Report command"),
         }
     }

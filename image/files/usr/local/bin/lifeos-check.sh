@@ -201,6 +201,29 @@ check_life_cmd "ai status" ai status
 check_life_cmd "update status" update status
 echo
 
+# --- CLI Fase 2 ---
+echo -e "${BOLD}CLI Fase 2${NC}"
+check_life_cmd "intents mode status" intents mode status
+check_life_cmd "intents team-runs" intents team-runs --limit 1
+check_life_cmd "intents log" intents log --limit 1
+check_life_cmd "id list" id list --active
+check_life_cmd "workspace list" workspace list --limit 5
+check_life_cmd "onboarding trust-mode status" onboarding trust-mode status
+check_life_cmd "memory stats" memory stats
+check_life_cmd "memory list" memory list --limit 1
+check_life_cmd "permissions show" permissions show
+check_life_cmd "sync status" sync status
+check_life_cmd "skills list" skills list
+check_life_cmd "agents list" agents list --active
+check_life_cmd "soul merge" soul merge --workplace base
+check_life_cmd "mesh list" mesh list --active
+check_life_cmd "browser audit" browser audit --limit 1
+check_life_cmd "computer-use status" computer-use status
+check_life_cmd "workflow help" workflow --help
+check_life_cmd "portal status" portal status
+check_life_cmd "lab status" lab status --json
+echo
+
 # --- Disco ---
 echo -e "${BOLD}Disco${NC}"
 DISK_INFO=$(df -h /var 2>/dev/null | tail -1)

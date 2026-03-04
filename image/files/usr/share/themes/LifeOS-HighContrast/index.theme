@@ -1,0 +1,39 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=LifeOS High Contrast
+Comment=LifeOS High Contrast Theme - Accessibility-first design (WCAG AAA)
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=LifeOS-HighContrast
+MetacityTheme=LifeOS-HighContrast
+IconTheme=Adwaita
+CursorTheme=Adwaita
+CursorSize=32
+NotificationTheme=Default
+
+[Settings]
+; LifeOS High Contrast Color Palette
+; Background: #000000
+; Surface: #1a1a1a
+; Primary: #00ff00
+; Accent: #ffff00
+; Text: #ffffff
+; Error: #ff0000
+; Success: #00ff00
+
+[Cosmic]
+; COSMIC-specific theme settings using libcosmic
+Background=#000000
+Surface=#1a1a1a
+Primary=#00ff00
+Accent=#ffff00
+Text=#ffffff
+TextMuted=#cccccc
+Error=#ff0000
+Warning=#ffff00
+Success=#00ff00
+
+; WCAG AAA compliant (7:1+ contrast ratio)
+ContrastRatio=21.0
+HighContrast=true

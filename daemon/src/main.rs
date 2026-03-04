@@ -27,6 +27,7 @@ mod follow_along;
 mod health;
 #[cfg(feature = "ui-overlay")]
 mod keyboard_shortcut;
+mod lab;
 mod memory_plane;
 mod models;
 mod notifications;
@@ -35,12 +36,15 @@ mod overlay;
 mod overlay_window;
 #[cfg(feature = "dbus")]
 mod permissions;
+#[cfg(feature = "dbus")]
+mod portal;
 mod screen_capture;
 mod system;
 mod telemetry;
 mod tuf;
 mod update_scheduler;
 mod updates;
+mod visual_comfort;
 
 use accessibility::AccessibilityManager;
 use agent_runtime::AgentRuntimeManager;
@@ -50,6 +54,7 @@ use follow_along::FollowAlongManager;
 use health::HealthMonitor;
 #[cfg(feature = "ui-overlay")]
 use keyboard_shortcut::ShortcutManager;
+use lab::LabManager;
 use memory_plane::MemoryPlaneManager;
 use notifications::NotificationManager;
 use overlay::OverlayManager;
@@ -60,6 +65,7 @@ use system::SystemMonitor;
 use telemetry::TelemetryManager;
 use update_scheduler::UpdateScheduler;
 use updates::UpdateChecker;
+use visual_comfort::VisualComfortManager;
 
 /// Daemon configuration
 #[derive(Debug, Clone)]
@@ -135,6 +141,8 @@ pub struct DaemonState {
     pub telemetry_manager: Arc<RwLock<TelemetryManager>>,
     pub agent_runtime_manager: Arc<RwLock<AgentRuntimeManager>>,
     pub memory_plane_manager: Arc<RwLock<MemoryPlaneManager>>,
+    pub visual_comfort_manager: Arc<RwLock<VisualComfortManager>>,
+    pub lab_manager: Arc<RwLock<LabManager>>,
     pub bootstrap_token: Option<String>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
@@ -215,6 +223,19 @@ async fn main() -> anyhow::Result<()> {
                 MemoryPlaneManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
             }),
         )),
+        visual_comfort_manager: Arc::new(RwLock::new(
+            VisualComfortManager::new(PathBuf::from("/var/lib/lifeos")),
+        )),
+        lab_manager: Arc::new(RwLock::new(
+            LabManager::new(lab::LabConfig::default()).unwrap_or_else(|e| {
+                warn!("Failed to initialize LabManager: {}", e);
+                LabManager::new(lab::LabConfig {
+                    workspace_path: PathBuf::from("/tmp/lifeos/lab"),
+                    ..Default::default()
+                })
+                .unwrap()
+            }),
+        )),
         bootstrap_token,
         last_health_check: RwLock::new(None),
         last_update_check: RwLock::new(None),
@@ -243,6 +264,18 @@ async fn main() -> anyhow::Result<()> {
         let memory_plane = state.memory_plane_manager.read().await;
         if let Err(e) = memory_plane.initialize().await {
             warn!("Failed to initialize memory plane state: {}", e);
+        }
+    }
+    {
+        let visual_comfort = state.visual_comfort_manager.read().await;
+        if let Err(e) = visual_comfort.initialize().await {
+            warn!("Failed to initialize visual comfort state: {}", e);
+        }
+    }
+    {
+        let lab = state.lab_manager.read().await;
+        if let Err(e) = lab.initialize().await {
+            warn!("Failed to initialize lab state: {}", e);
         }
     }
 
@@ -276,6 +309,16 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Start Portal D-Bus service
+    let portal_handle = tokio::spawn(async move {
+        if let Err(e) = portal::start_portal().await {
+            error!("Failed to start D-Bus Portal: {}", e);
+        } else {
+            log::info!("Portal running on D-Bus Session.");
+            futures_lite::future::pending::<()>().await;
+        }
+    });
+
     // Start background tasks
     let health_handle = tokio::spawn(run_health_checks(state.clone()));
     let update_handle = tokio::spawn(run_update_checks(state.clone()));
@@ -304,6 +347,7 @@ async fn main() -> anyhow::Result<()> {
     update_handle.abort();
     metrics_handle.abort();
     dbus_handle.abort();
+    portal_handle.abort();
 
     if let Some(handle) = api_handle {
         handle.abort();
@@ -329,6 +373,8 @@ async fn start_api_server(state: Arc<DaemonState>) {
         telemetry_manager: state.telemetry_manager.clone(),
         agent_runtime_manager: state.agent_runtime_manager.clone(),
         memory_plane_manager: state.memory_plane_manager.clone(),
+        visual_comfort_manager: state.visual_comfort_manager.clone(),
+        lab_manager: state.lab_manager.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,
             api_key: state.bootstrap_token.clone(),

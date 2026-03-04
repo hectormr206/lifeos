@@ -1,0 +1,110 @@
+# LifeOS Lab Configuration
+# Autonomous improvement pipeline settings
+
+[general]
+# Enable or disable the lab functionality
+enabled = true
+
+# Maximum number of completed experiments to keep in history
+max_experiments = 10
+
+# Automatically promote successful experiments after canary phase
+auto_promote = false
+
+[workspace]
+# Path where lab data is stored (experiments, backups, results)
+path = "/var/lib/lifeos/lab"
+
+[canary]
+# Duration of canary phase in hours (1-24)
+duration_hours = 24
+
+# Threshold for automatic rollback during canary
+# If error rate exceeds this value, experiment is rolled back
+max_error_rate = 10.0
+
+# CPU usage threshold for automatic rollback (percentage)
+max_cpu_usage = 90.0
+
+# Memory usage threshold for automatic rollback (percentage)
+max_memory_usage = 95.0
+
+[experiments]
+# Allowed experiment types
+# Options: config_optimization, service_tuning, power_management, ai_model_selection, security_hardening
+allowed_types = [
+    "config_optimization",
+    "service_tuning",
+]
+
+# Require manual approval before starting experiments
+require_approval = false
+
+# Maximum concurrent experiments (currently only 1 is supported)
+max_concurrent = 1
+
+[container]
+# Container runtime to use (podman only supported currently)
+runtime = "podman"
+
+# Base image for experiment containers
+base_image = "localhost/lifeos-lab-base:latest"
+
+# Timeout for container operations (seconds)
+timeout_seconds = 300
+
+[metrics]
+# Metrics collection interval during experiments (seconds)
+collection_interval = 60
+
+# Number of samples to collect before making decisions
+min_samples = 10
+
+# Metrics to track during experiments
+tracked_metrics = [
+    "cpu_usage",
+    "memory_usage",
+    "disk_io",
+    "network_io",
+    "error_rate",
+    "service_latency",
+]
+
+[rollback]
+# Automatically rollback on failure
+auto_rollback_on_failure = true
+
+# Keep backup for this many days after rollback
+backup_retention_days = 7
+
+# Maximum rollback attempts before alerting
+max_attempts = 3
+
+[notifications]
+# Send notifications on experiment events
+enabled = true
+
+# Notify on experiment start
+on_start = true
+
+# Notify on canary phase start
+on_canary = true
+
+# Notify on successful promotion
+on_promote = true
+
+# Notify on rollback
+on_rollback = true
+
+# Notify on failure
+on_failure = true
+
+[logging]
+# Log level for lab operations (trace, debug, info, warn, error)
+level = "info"
+
+# Keep experiment logs for this many days
+retention_days = 30
+
+# Include detailed metrics in logs
+detailed_metrics = false
