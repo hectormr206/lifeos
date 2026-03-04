@@ -2097,7 +2097,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 ### 27.2 Entregables obligatorios pendientes
 
 1. Flujo de firma Cosign con KMS operativo en CI (actualmente manual).
-2. `life capsule export/restore` funcional end-to-end (minimo config + apps + dotfiles).
+2. ~~`life capsule export/restore` funcional end-to-end (minimo config + apps + dotfiles).~~ **Hecho (baseline v1).** Pipeline validado con test automatizado de export/restore y restauracion de apps Flatpak.
 3. Onboarding GUI con consentimiento explicito para activar sync (first-boot script existe, falta GUI).
 4. ~~Matriz de compatibilidad de hardware publicada.~~ **Hecho.** `docs/hardware-compatibility-matrix.md` publicado y versionado.
 5. ~~Guia operativa de incidentes (rollback, recovery, revocacion de artefactos).~~ **Hecho.** `docs/incident-response-playbook.md` con runbook operativo.

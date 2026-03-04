@@ -155,3 +155,102 @@ pub async fn execute(args: CapsuleCommands) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn unique_suffix() -> String {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos().to_string())
+            .unwrap_or_else(|_| "0".to_string())
+    }
+
+    fn write_executable(path: &Path, content: &str) {
+        std::fs::write(path, content).unwrap();
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(path, perms).unwrap();
+    }
+
+    #[tokio::test]
+    async fn capsule_export_restore_pipeline_works_with_tools() {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+
+        let base = std::env::temp_dir().join(format!("life-capsule-test-{}", unique_suffix()));
+        let home = base.join("home");
+        let bin = base.join("bin");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(home.join(".config/lifeos")).unwrap();
+        std::fs::write(
+            home.join(".config/lifeos/settings.toml"),
+            "profile = \"test\"\n",
+        )
+        .unwrap();
+
+        let flatpak_log = base.join("flatpak.log");
+        write_executable(
+            &bin.join("flatpak"),
+            &format!(
+                "#!/usr/bin/env sh\nif [ \"$1\" = \"list\" ]; then\necho \"org.test.App\"\nexit 0\nfi\nif [ \"$1\" = \"install\" ]; then\necho \"$@\" >> \"{}\"\nexit 0\nfi\nexit 0\n",
+                flatpak_log.display()
+            ),
+        );
+        write_executable(
+            &bin.join("tar"),
+            "#!/usr/bin/env sh\nif [ \"$1\" = \"czf\" ]; then\necho \"archive\" > \"$2\"\nexit 0\nfi\nif [ \"$1\" = \"xzf\" ]; then\nmkdir -p \"$4/.config/lifeos\"\necho \"restored\" > \"$4/.config/lifeos/restored_from_capsule\"\nmkdir -p \"$4/.local/share/lifeos\"\necho \"org.test.App\" > \"$4/.local/share/lifeos/flatpak_list.txt\"\nexit 0\nfi\nexit 1\n",
+        );
+        write_executable(
+            &bin.join("age"),
+            "#!/usr/bin/env sh\nout=\"\"\nlast=\"\"\nwhile [ $# -gt 0 ]; do\n  case \"$1\" in\n    -o)\n      out=\"$2\"\n      shift 2\n      ;;\n    -r|-i)\n      shift 2\n      ;;\n    -d)\n      shift\n      ;;\n    *)\n      last=\"$1\"\n      shift\n      ;;\n  esac\ndone\ncp \"$last\" \"$out\"\n",
+        );
+
+        let old_home = std::env::var("HOME").ok();
+        let old_path = std::env::var("PATH").ok();
+        std::env::set_var("HOME", &home);
+        std::env::set_var(
+            "PATH",
+            format!("{}:{}", bin.display(), old_path.clone().unwrap_or_default()),
+        );
+
+        let capsule_path = base.join("backup.capsule");
+        execute(CapsuleCommands::Export {
+            recipient: "age1testrecipient".to_string(),
+            output: capsule_path.to_string_lossy().to_string(),
+        })
+        .await
+        .unwrap();
+        assert!(capsule_path.exists());
+
+        std::fs::remove_file(home.join(".config/lifeos/settings.toml")).unwrap();
+
+        execute(CapsuleCommands::Restore {
+            identity: base.join("identity.txt").to_string_lossy().to_string(),
+            path: capsule_path.to_string_lossy().to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            home.join(".config/lifeos/restored_from_capsule").exists(),
+            "restore marker file should be created by fake tar extract"
+        );
+
+        match old_home {
+            Some(val) => std::env::set_var("HOME", val),
+            None => std::env::remove_var("HOME"),
+        }
+        match old_path {
+            Some(val) => std::env::set_var("PATH", val),
+            None => std::env::remove_var("PATH"),
+        }
+        std::fs::remove_dir_all(base).ok();
+    }
+}
