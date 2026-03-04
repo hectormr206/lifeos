@@ -1485,6 +1485,11 @@ life skills list [--trust verified]   Listar skills por nivel de confianza.
 life skills verify <id>               Verificar integridad de skill instalado.
 life skills run <id> -- <args>        Ejecutar skill en sandbox por defecto.
 
+life soul init --tui                  Inicializar Soul Plane por usuario.
+life soul set assistant.autonomy guarded --profile base
+                                     Ajustar perfil de Soul por clave.
+life soul merge --workplace work      Resolver merge determinista global->usuario->workplace.
+
 life id issue --agent <name>          Emitir token de capacidad temporal.
 life id list                           Listar identidades y delegaciones activas.
 life id revoke <token-id>              Revocar token/delegacion en caliente.
@@ -2121,7 +2126,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 23. ~~`model-catalog` firmado con versionado y fallback offline embebido en la ISO.~~ **Hecho.** Catalogo v1 firmado + cache + fallback embebido.
 24. ~~Runtime realtime AI-first implementado con `heavy_model_slots = 1` y pruebas de no regresion de latencia.~~ **Hecho (baseline).** `model-profile.toml` persiste `heavy_model_slots = 1` y `autotune` lo aplica.
 25. ~~`trust_me_mode` implementado con validacion criptografica de `consent_bundle` y auditoria completa.~~ **Hecho.** Activacion requiere `consent_bundle` + `signature` valida (SHA-256) y deja evidencia en ledger.
-26. `Soul Plane` por usuario en `~/.config/lifeos/soul/` (ver modelo biologico en `docs/lifeos_biological_model.md`).
+26. ~~`Soul Plane` por usuario en `~/.config/lifeos/soul/` (ver modelo biologico en `docs/lifeos_biological_model.md`).~~ **Hecho (baseline v1).** `life soul init/set/merge/show` con merge determinista `global -> user -> workplace`.
 27. `Skills Plane` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar.
 
 29. ~~Actualizar `contracts/onboarding/first-boot-config.schema.json` para usar nombres de modelos GGUF en lugar de formato Ollama.~~ **Hecho.** Schema actualizado con ejemplos GGUF reales.

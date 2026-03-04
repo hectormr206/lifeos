@@ -15,6 +15,7 @@ pub mod permissions;
 pub mod recover;
 pub mod rollback;
 pub mod skills;
+pub mod soul;
 pub mod status;
 pub mod store;
 pub mod sync;

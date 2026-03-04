@@ -509,4 +509,28 @@ mod tests {
             _ => panic!("Expected skills install command"),
         }
     }
+
+    #[test]
+    fn test_cli_parses_soul_merge() {
+        let cli = Cli::parse_from([
+            "life",
+            "soul",
+            "merge",
+            "--workplace",
+            "development",
+            "--json",
+        ]);
+        match cli.command {
+            Commands::Soul(commands::soul::SoulCommands::Merge {
+                workplace,
+                json,
+                output,
+            }) => {
+                assert_eq!(workplace, "development");
+                assert!(json);
+                assert!(output.is_none());
+            }
+            _ => panic!("Expected soul merge command"),
+        }
+    }
 }

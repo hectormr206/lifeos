@@ -81,6 +81,9 @@ enum Commands {
     /// Skills registry and sandboxed execution
     #[clap(subcommand)]
     Skills(commands::skills::SkillsCommands),
+    /// Soul Plane profiles (global/user/workplace merge)
+    #[clap(subcommand)]
+    Soul(commands::soul::SoulCommands),
     /// App Store - browse and install applications
     #[clap(subcommand)]
     Store(commands::store::StoreCommands),
@@ -173,6 +176,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Permissions(args) => commands::permissions::execute(args).await,
         Commands::Sync(args) => commands::sync::execute(args).await,
         Commands::Skills(args) => commands::skills::execute(args).await,
+        Commands::Soul(args) => commands::soul::execute(args).await,
         Commands::Store(args) => commands::store::execute(args).await,
         Commands::Telemetry(args) => commands::telemetry::execute(args).await,
         Commands::Theme(args) => commands::theme::execute(args).await,
