@@ -8,6 +8,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Subcommand)]
 pub enum SkillsCommands {
+    /// Generate a scaffolded skill package (manifest + entrypoint)
+    Generate {
+        #[arg(long)]
+        id: String,
+        #[arg(long, default_value = "0.1.0")]
+        version: String,
+        #[arg(long, default_value = "community", value_parser = ["core", "verified", "community"])]
+        trust: String,
+        /// Output directory for generated skill folder
+        #[arg(long, default_value = ".")]
+        output_dir: String,
+    },
+    /// Sign/update manifest by hashing current entrypoint content
+    Sign {
+        /// Path to skill manifest JSON
+        #[arg(long)]
+        manifest: String,
+    },
     /// Install a skill from manifest
     Install {
         /// Path to skill manifest JSON
@@ -107,6 +125,13 @@ struct SkillsRegistry {
 
 pub async fn execute(cmd: SkillsCommands) -> anyhow::Result<()> {
     match cmd {
+        SkillsCommands::Generate {
+            id,
+            version,
+            trust,
+            output_dir,
+        } => cmd_generate(&id, &version, &trust, &output_dir),
+        SkillsCommands::Sign { manifest } => cmd_sign(&manifest),
         SkillsCommands::Install { manifest } => cmd_install(&manifest),
         SkillsCommands::List { trust } => cmd_list(trust.as_deref()),
         SkillsCommands::Verify { skill_id, version } => cmd_verify(&skill_id, version.as_deref()),
@@ -118,6 +143,74 @@ pub async fn execute(cmd: SkillsCommands) -> anyhow::Result<()> {
         } => cmd_run(&skill_id, version.as_deref(), unsafe_no_sandbox, &args),
         SkillsCommands::Remove { skill_id, version } => cmd_remove(&skill_id, version.as_deref()),
     }
+}
+
+fn cmd_generate(id: &str, version: &str, trust: &str, output_dir: &str) -> anyhow::Result<()> {
+    let trust_level = TrustLevel::from_filter(trust)
+        .ok_or_else(|| anyhow::anyhow!("invalid trust level '{}'", trust))?;
+    if id.trim().is_empty() {
+        anyhow::bail!("id is required");
+    }
+    if version.trim().is_empty() {
+        anyhow::bail!("version is required");
+    }
+
+    let skill_dir = PathBuf::from(output_dir).join(id);
+    std::fs::create_dir_all(&skill_dir)?;
+    let entrypoint = skill_dir.join("run.sh");
+    if !entrypoint.exists() {
+        std::fs::write(
+            &entrypoint,
+            "#!/usr/bin/env sh\n# LifeOS skill entrypoint\n\necho \"skill executed\"\n",
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&entrypoint)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&entrypoint, perms)?;
+        }
+    }
+
+    let digest = sha256_file(&entrypoint)?;
+    let manifest = SkillManifest {
+        id: id.to_string(),
+        version: version.to_string(),
+        trust_level,
+        entrypoint: "run.sh".to_string(),
+        entrypoint_sha256: Some(digest),
+        description: "Generated LifeOS skill scaffold".to_string(),
+        capabilities: vec![],
+    };
+    let manifest_path = skill_dir.join("skill.json");
+    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+
+    println!("{}", "Skill scaffold generated".green().bold());
+    println!("  dir: {}", skill_dir.display().to_string().cyan());
+    println!("  manifest: {}", manifest_path.display().to_string().cyan());
+    Ok(())
+}
+
+fn cmd_sign(manifest_path: &str) -> anyhow::Result<()> {
+    let path = PathBuf::from(manifest_path);
+    let mut manifest = read_manifest(&path)?;
+    validate_manifest(&manifest)?;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("manifest path has no parent"))?;
+    let entrypoint = parent.join(&manifest.entrypoint);
+    if !entrypoint.exists() {
+        anyhow::bail!("entrypoint not found: {}", entrypoint.display());
+    }
+
+    let digest = sha256_file(&entrypoint)?;
+    manifest.entrypoint_sha256 = Some(digest);
+    std::fs::write(&path, serde_json::to_string_pretty(&manifest)?)?;
+
+    println!("{}", "Skill manifest signed".green().bold());
+    println!("  manifest: {}", path.display().to_string().cyan());
+    Ok(())
 }
 
 fn cmd_install(manifest_path: &str) -> anyhow::Result<()> {
@@ -494,5 +587,26 @@ mod tests {
             capabilities: vec![],
         };
         assert!(validate_manifest(&manifest).is_err());
+    }
+
+    #[test]
+    fn generate_and_sign_skill_scaffold() {
+        let base = temp_dir("life-skills-generate");
+        let dir = base.to_string_lossy().to_string();
+
+        cmd_generate("gen.skill", "0.2.0", "community", &dir).unwrap();
+        let manifest_path = base.join("gen.skill").join("skill.json");
+        assert!(manifest_path.exists());
+
+        std::fs::write(
+            base.join("gen.skill").join("run.sh"),
+            "#!/usr/bin/env sh\necho hi\n",
+        )
+        .unwrap();
+        cmd_sign(manifest_path.to_str().unwrap()).unwrap();
+        let manifest = read_manifest(&manifest_path).unwrap();
+        assert!(manifest.entrypoint_sha256.is_some());
+
+        std::fs::remove_dir_all(base).ok();
     }
 }

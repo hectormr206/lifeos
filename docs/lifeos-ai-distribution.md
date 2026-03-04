@@ -1482,6 +1482,9 @@ life memory mcp "..."                 Exportar contexto compatible con MCP.
 
 life skills install --manifest <file> Instalar skill versionado.
 life skills list [--trust verified]   Listar skills por nivel de confianza.
+life skills generate --id my.skill --version 0.1.0 --trust community
+                                     Generar skill scaffold (manifest + entrypoint).
+life skills sign --manifest <file>    Firmar manifiesto con hash SHA-256 del entrypoint.
 life skills verify <id>               Verificar integridad de skill instalado.
 life skills run <id> -- <args>        Ejecutar skill en sandbox por defecto.
 
@@ -2127,7 +2130,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 24. ~~Runtime realtime AI-first implementado con `heavy_model_slots = 1` y pruebas de no regresion de latencia.~~ **Hecho (baseline).** `model-profile.toml` persiste `heavy_model_slots = 1` y `autotune` lo aplica.
 25. ~~`trust_me_mode` implementado con validacion criptografica de `consent_bundle` y auditoria completa.~~ **Hecho.** Activacion requiere `consent_bundle` + `signature` valida (SHA-256) y deja evidencia en ledger.
 26. ~~`Soul Plane` por usuario en `~/.config/lifeos/soul/` (ver modelo biologico en `docs/lifeos_biological_model.md`).~~ **Hecho (baseline v1).** `life soul init/set/merge/show` con merge determinista `global -> user -> workplace`.
-27. `Skills Plane` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar.
+27. ~~`Skills Plane` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar.~~ **Hecho (baseline v1).** `life skills generate/sign/install/verify/run/remove` implementa ciclo local completo.
 
 29. ~~Actualizar `contracts/onboarding/first-boot-config.schema.json` para usar nombres de modelos GGUF en lugar de formato Ollama.~~ **Hecho.** Schema actualizado con ejemplos GGUF reales.
 

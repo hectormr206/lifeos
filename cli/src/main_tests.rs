@@ -511,6 +511,35 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_skills_generate() {
+        let cli = Cli::parse_from([
+            "life",
+            "skills",
+            "generate",
+            "--id",
+            "demo.skill",
+            "--version",
+            "0.1.0",
+            "--trust",
+            "community",
+        ]);
+        match cli.command {
+            Commands::Skills(commands::skills::SkillsCommands::Generate {
+                id,
+                version,
+                trust,
+                output_dir,
+            }) => {
+                assert_eq!(id, "demo.skill");
+                assert_eq!(version, "0.1.0");
+                assert_eq!(trust, "community");
+                assert_eq!(output_dir, ".");
+            }
+            _ => panic!("Expected skills generate command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_soul_merge() {
         let cli = Cli::parse_from([
             "life",
