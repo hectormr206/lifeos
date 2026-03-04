@@ -27,6 +27,9 @@ pub struct FirstBootArgs {
     /// Force re-run first boot
     #[arg(long)]
     pub force: bool,
+    /// Use zenity-based GUI onboarding flow
+    #[arg(long)]
+    pub gui: bool,
 }
 
 /// First boot wizard state
@@ -42,6 +45,7 @@ pub struct FirstBootState {
     pub theme: ThemeChoice,
     pub privacy_analytics: bool,
     pub privacy_telemetry: bool,
+    pub sync_enabled: bool,
     pub ai_enabled: bool,
     pub ai_model: String,
     pub network_configured: bool,
@@ -93,6 +97,8 @@ pub async fn execute(args: FirstBootArgs) -> anyhow::Result<()> {
     // Run the wizard
     let state = if args.auto {
         run_auto_setup(&args).await?
+    } else if args.gui {
+        run_gui_wizard(&args).await?
     } else {
         run_interactive_wizard(&args).await?
     };
@@ -196,6 +202,15 @@ fn print_completion_message(state: &FirstBootState) {
             "Disabled"
         }
     );
+    println!(
+        "  {} Sync: {}",
+        "•".cyan(),
+        if state.sync_enabled {
+            "Enabled"
+        } else {
+            "Disabled"
+        }
+    );
 
     println!("\n{}", "Quick commands:".bold());
     println!(
@@ -245,6 +260,7 @@ async fn run_auto_setup(args: &FirstBootArgs) -> anyhow::Result<FirstBootState> 
         theme,
         privacy_analytics: false,
         privacy_telemetry: false,
+        sync_enabled: false,
         ai_enabled: true,
         ai_model: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
         network_configured: true,
@@ -329,6 +345,11 @@ async fn run_interactive_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBoo
         .default(false)
         .interact()?;
 
+    let sync_enabled = Confirm::with_theme(&theme)
+        .with_prompt("Enable Sync after explicit consent?")
+        .default(false)
+        .interact()?;
+
     // Step 5: AI Configuration
     println!("\n{}", "🤖 Step 5: AI Configuration".bold().green());
 
@@ -370,6 +391,14 @@ async fn run_interactive_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBoo
             "Disabled".red()
         }
     );
+    println!(
+        "  Sync: {}",
+        if sync_enabled {
+            "Enabled".green()
+        } else {
+            "Disabled".yellow()
+        }
+    );
 
     let confirm = Confirm::with_theme(&theme)
         .with_prompt("Apply these settings?")
@@ -394,10 +423,140 @@ async fn run_interactive_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBoo
         theme: selected_theme,
         privacy_analytics: analytics,
         privacy_telemetry: telemetry,
+        sync_enabled,
         ai_enabled,
         ai_model,
         network_configured: true,
     })
+}
+
+async fn run_gui_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBootState> {
+    if !Command::new("sh")
+        .args(["-c", "command -v zenity >/dev/null 2>&1"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+    {
+        println!(
+            "{}",
+            "Zenity no disponible; fallback a onboarding TUI interactivo.".yellow()
+        );
+        return run_interactive_wizard(args).await;
+    }
+
+    println!("{}", "Launching GUI onboarding (zenity)...".blue());
+    let username = zenity_entry(
+        "Username",
+        args.username.as_deref().unwrap_or("user"),
+        false,
+    )?;
+    let fullname = zenity_entry("Full Name", &username, false)?;
+    let hostname = zenity_entry(
+        "Hostname",
+        args.hostname.as_deref().unwrap_or("lifeos"),
+        false,
+    )?;
+    let timezone = zenity_entry("Timezone", &detect_timezone(), false)?;
+    let password = zenity_entry("Password", "", true)?;
+    std::fs::write("/tmp/lifeos-setup-password", password)?;
+
+    let theme = if zenity_select("Theme", &["Simple", "Pro"], 0)? == "Pro" {
+        ThemeChoice::Pro
+    } else {
+        ThemeChoice::Simple
+    };
+    let ai_enabled = if args.skip_ai {
+        false
+    } else {
+        zenity_confirm("Enable local AI assistant?")?
+    };
+    let sync_enabled = zenity_confirm("Enable Sync after explicit consent?")?;
+
+    let ai_model = if ai_enabled {
+        zenity_select(
+            "Default AI model",
+            &[
+                "Qwen3.5-4B-Q4_K_M.gguf",
+                "Qwen3.5-9B-Q4_K_M.gguf",
+                "llama-3.2-3b-instruct-q4_k_m.gguf",
+                "mistral-7b-instruct-v0.3-q4_k_m.gguf",
+            ],
+            0,
+        )?
+    } else {
+        "Qwen3.5-4B-Q4_K_M.gguf".to_string()
+    };
+
+    Ok(FirstBootState {
+        hostname,
+        username,
+        fullname,
+        timezone,
+        locale: "en_US.UTF-8".to_string(),
+        keyboard: "us".to_string(),
+        theme,
+        privacy_analytics: false,
+        privacy_telemetry: false,
+        sync_enabled,
+        ai_enabled,
+        ai_model,
+        network_configured: true,
+    })
+}
+
+fn zenity_entry(prompt: &str, default: &str, hidden: bool) -> anyhow::Result<String> {
+    let mut args = vec!["--entry", "--title", "LifeOS Onboarding", "--text", prompt];
+    if hidden {
+        args.push("--hide-text");
+    } else if !default.is_empty() {
+        args.push("--entry-text");
+        args.push(default);
+    }
+
+    let output = Command::new("zenity").args(&args).output()?;
+    if !output.status.success() {
+        anyhow::bail!("GUI onboarding cancelled at '{}'", prompt);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn zenity_confirm(prompt: &str) -> anyhow::Result<bool> {
+    let status = Command::new("zenity")
+        .args([
+            "--question",
+            "--title",
+            "LifeOS Onboarding",
+            "--text",
+            prompt,
+        ])
+        .status()?;
+    Ok(status.success())
+}
+
+fn zenity_select(prompt: &str, options: &[&str], default_idx: usize) -> anyhow::Result<String> {
+    let mut args = vec![
+        "--list",
+        "--title",
+        "LifeOS Onboarding",
+        "--text",
+        prompt,
+        "--column",
+        "Option",
+    ];
+    for option in options {
+        args.push(option);
+    }
+
+    let output = Command::new("zenity").args(&args).output()?;
+    if !output.status.success() {
+        anyhow::bail!("GUI onboarding cancelled at '{}'", prompt);
+    }
+    let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if selected.is_empty() {
+        Ok(options.get(default_idx).unwrap_or(&options[0]).to_string())
+    } else {
+        Ok(selected)
+    }
 }
 
 /// System verification results
@@ -691,6 +850,18 @@ async fn apply_configuration(state: &FirstBootState) -> anyhow::Result<()> {
 
     // Also save system-wide config
     let _ = config::save_config(&config, PathBuf::from("/etc/lifeos/lifeos.toml").as_path());
+
+    // Persist explicit sync consent state for onboarding/audit.
+    let sync_consent = serde_json::json!({
+        "enabled": state.sync_enabled,
+        "updated_at": chrono::Utc::now().to_rfc3339(),
+        "source": "first-boot",
+    });
+    let _ = std::fs::create_dir_all("/var/lib/lifeos");
+    let _ = std::fs::write(
+        "/var/lib/lifeos/sync-consent.json",
+        serde_json::to_string_pretty(&sync_consent)?,
+    );
 
     println!("{}", "✓".green());
 

@@ -173,6 +173,15 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_first_boot_gui() {
+        let cli = Cli::parse_from(["life", "first-boot", "--gui"]);
+        match cli.command {
+            Commands::FirstBoot(args) => assert!(args.gui),
+            _ => panic!("Expected FirstBoot command"),
+        }
+    }
+
+    #[test]
     fn test_cli_version_flag() {
         // This should print version and exit, but we can't easily test that
         // Just verify the parser accepts the flag
@@ -223,6 +232,7 @@ mod tests {
         // Default::default() gives "" for String; clap's default_value only applies at parse time
         assert!(!args.skip_ai);
         assert!(!args.force);
+        assert!(!args.gui);
     }
 
     #[test]

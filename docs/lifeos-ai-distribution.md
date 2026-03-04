@@ -1432,6 +1432,7 @@ life config apply        Aplicar configuracion declarativa (instalar apps faltan
 life lab start           Iniciar entorno de pruebas (container/VM).
 life lab test            Correr test suite en el lab.
 life lab report          Generar reporte del lab.
+life first-boot --gui    Onboarding GUI (zenity) con consentimiento de sync.
 life init --profile developer --tui
                          Bootstrap reproducible por perfil con selector TUI.
 
@@ -2106,7 +2107,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 
 1. ~~Flujo de firma Cosign con KMS operativo en CI (actualmente manual).~~ **Hecho (baseline CI).** Workflow `docker.yml` firma con `COSIGN_KMS_KEY_URI` y fallback keyless OIDC.
 2. ~~`life capsule export/restore` funcional end-to-end (minimo config + apps + dotfiles).~~ **Hecho (baseline v1).** Pipeline validado con test automatizado de export/restore y restauracion de apps Flatpak.
-3. Onboarding GUI con consentimiento explicito para activar sync (first-boot script existe, falta GUI).
+3. ~~Onboarding GUI con consentimiento explicito para activar sync (first-boot script existe, falta GUI).~~ **Hecho (baseline v1).** `life first-boot --gui` agrega flujo zenity y persiste consentimiento de sync.
 4. ~~Matriz de compatibilidad de hardware publicada.~~ **Hecho.** `docs/hardware-compatibility-matrix.md` publicado y versionado.
 5. ~~Guia operativa de incidentes (rollback, recovery, revocacion de artefactos).~~ **Hecho.** `docs/incident-response-playbook.md` con runbook operativo.
 6. ~~Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.~~ **Hecho (baseline v1).** Daemon + API + CLI + salida MCP + cifrado AES-256-GCM-SIV.
