@@ -182,6 +182,24 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_focus_command() {
+        let cli = Cli::parse_from(["life", "focus"]);
+        match cli.command {
+            Commands::Focus => (),
+            _ => panic!("Expected Focus command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_meeting_command() {
+        let cli = Cli::parse_from(["life", "meeting"]);
+        match cli.command {
+            Commands::Meeting => (),
+            _ => panic!("Expected Meeting command"),
+        }
+    }
+
+    #[test]
     fn test_cli_version_flag() {
         // This should print version and exit, but we can't easily test that
         // Just verify the parser accepts the flag
@@ -550,6 +568,42 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_agents_register() {
+        let cli = Cli::parse_from([
+            "life",
+            "agents",
+            "register",
+            "qa-agent",
+            "--role",
+            "qa",
+            "--capability",
+            "tests.run",
+            "--capability",
+            "reports.read",
+            "--trust",
+            "verified",
+        ]);
+        match cli.command {
+            Commands::Agents(commands::agents::AgentsCommands::Register {
+                agent_id,
+                role,
+                capability,
+                trust,
+                ttl,
+                scope,
+            }) => {
+                assert_eq!(agent_id, "qa-agent");
+                assert_eq!(role, "qa");
+                assert_eq!(capability, vec!["tests.run", "reports.read"]);
+                assert_eq!(trust, "verified");
+                assert_eq!(ttl, 60);
+                assert!(scope.is_none());
+            }
+            _ => panic!("Expected agents register command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_soul_merge() {
         let cli = Cli::parse_from([
             "life",
@@ -618,6 +672,23 @@ mod tests {
                 assert_eq!(step, vec!["open:https://example.com", "title"]);
             }
             _ => panic!("Expected browser run command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_computer_use_move() {
+        let cli = Cli::parse_from(["life", "computer-use", "move", "120", "340", "--dry-run"]);
+        match cli.command {
+            Commands::ComputerUse(commands::computer_use::ComputerUseCommands::Move {
+                x,
+                y,
+                dry_run,
+            }) => {
+                assert_eq!(x, 120);
+                assert_eq!(y, 340);
+                assert!(dry_run);
+            }
+            _ => panic!("Expected computer-use move command"),
         }
     }
 

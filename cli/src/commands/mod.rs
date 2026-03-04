@@ -1,9 +1,12 @@
+pub mod agents;
 pub mod ai;
 pub mod browser;
 pub mod capsule;
+pub mod computer_use;
 pub mod config;
 pub mod context;
 pub mod first_boot;
+pub mod focus;
 pub mod followalong;
 pub mod id;
 pub mod init;

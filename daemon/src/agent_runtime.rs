@@ -835,6 +835,19 @@ impl AgentRuntimeManager {
             .collect()
     }
 
+    pub async fn record_ledger_event(
+        &self,
+        category: &str,
+        action: &str,
+        target: &str,
+        detail: serde_json::Value,
+    ) -> Result<()> {
+        let mut state = self.state.write().await;
+        append_ledger(&mut state, category, action, target, detail);
+        drop(state);
+        self.save_state().await
+    }
+
     pub async fn execution_mode(&self) -> ExecutionMode {
         let state = self.state.read().await;
         state.execution_mode.clone()

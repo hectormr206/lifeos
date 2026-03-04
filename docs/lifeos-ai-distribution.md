@@ -963,12 +963,12 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 
 - [ ] Temas custom LifeOS para COSMIC.
 - [ ] Motor de confort visual: temperatura de color, tipografia adaptativa, perfiles de contraste. _Requiere integracion COSMIC/Wayland._
-- [ ] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night. _Extension de experience_modes, requiere integracion con notificaciones desktop._
+- [x] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night. _Baseline v1: `life focus` y `life meeting` implementados; modo Night completo queda como extension desktop._
 - [ ] xdg-desktop-portal integrado para sandboxing de permisos de apps.
 - [ ] Soporte GPU hibrida (Nvidia Optimus/PRIME), drivers akmod-nvidia via bootc. _Requiere hardware real._
 - [ ] Steam via Flatpak + Proton, displays 144Hz+, G-Sync/Adaptive-Sync. _Requiere hardware real._
-- [ ] First-boot wizard GUI. _CLI `life first-boot` existe, falta interfaz grafica._
-- [ ] Trust Me Mode: consent bundles firmados, activacion de perfil automatica.
+- [x] First-boot wizard GUI. _Implementado baseline v1: `life first-boot --gui` (zenity + fallback TUI)._
+- [x] Trust Me Mode: consent bundles firmados, activacion de perfil automatica. _Implementado en daemon+CLI con validacion SHA-256 y auditoria._
 - [ ] Prueba de `bootc upgrade` + rollback en VM automatizada. _Heredado de Fase 0._
 - [ ] Prueba de ISO en al menos un equipo fisico real.
 - [ ] LifeOS Lab real (no stub), pipeline de mejora autonoma, canary test.
@@ -1008,9 +1008,9 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 - [ ] Switching de modelo pesado por prioridad con degradacion automatica bajo carga.
 - [ ] Control de recursos AI por prioridad (cgroups).
 
-- [ ] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `libei`/ydotool, permitiendo simulacion de clics y escritura en apps de terceros. _Esto es el diferenciador real: automatizacion de GUI como citizen de primera clase._
+- [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado baseline v1: API `/computer-use/status|action` + CLI `life computer-use`._
 
-- [ ] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `libei`/ydotool, permitiendo simulacion de clics y escritura en apps de terceros. _Esto es el diferenciador real: automatizacion de GUI como citizen de primera clase._
+- [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado baseline v1: API `/computer-use/status|action` + CLI `life computer-use`._
 - [ ] Vision/OCR a nivel de OS: analisis de pantalla, OCR en tiempo real (Wayland/grim). _Qwen3.5-4B ya tiene vision nativa (ScreenSpot Pro 60.3%, OCRBench 85.0%)._
 - [x] Automatizaciones en lenguaje natural (`life ai do "..."`).
 **P0 — Protocolos y Estandares (base de la arquitectura agentica):**
@@ -1022,12 +1022,12 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 - [x] Ledger cifrado y exportable de ejecucion AI (`intents/results/artifacts`) con endpoint y CLI.
 - [ ] **Model Context Protocol (MCP):** Integracion nativa para extensibilidad estandar, permitiendo a LifeOS usar _Skills_ de terceros sin acoplar codigo y renderizar UI (MCP-UI) nativamente en COSMIC.
 
-- [ ] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace). _Implementa el "ADN" del modelo biologico (ver `docs/lifeos_biological_model.md`)._
+- [x] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace). _Implementado baseline v1: `life soul init/set/merge/show`._
 
-- [ ] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace). _Implementa el "ADN" del modelo biologico (ver `docs/lifeos_biological_model.md`)._
-- [ ] `Skills Plane` v1: `~/.local/share/lifeos/skills/` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar y niveles `core/verified/community`. _Implementa la "memoria muscular"._
+- [x] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace). _Implementado baseline v1: `life soul init/set/merge/show`._
+- [x] `Skills Plane` v1: `~/.local/share/lifeos/skills/` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar y niveles `core/verified/community`. _Implementado baseline v1: `life skills generate/sign/install/verify/run/remove`._
 
-- [ ] `Agent Plane` v1: registro de agentes especializados con identidad (`life-id`), capacidades y gobernanza. _Implementa el "sistema inmunologico"._
+- [x] `Agent Plane` v1: registro de agentes especializados con identidad (`life-id`), capacidades y gobernanza. _Implementado baseline v1: `life agents register/list/show/revoke` con registro local y delegacion/revocacion de tokens `life-id`._
 
 - **Memoria a Corto Plazo (Context Window):** Mantenimiento del hilo de voz o texto actual. Se borra al terminar la sesion o tras X minutos de inactividad para no saturar el LLM.
 
@@ -1050,16 +1050,16 @@ Implementacion concreta:
 
 - [ ] Modo Jarvis temporal: implementacion completa segun seccion 9.4 (tokens de capacidad con TTL, aprobacion biometrica/PIN, kill switch `Super+Escape`). _No redefinir aqui — referenciar seccion 9.4._
 
-- [ ] Ledger cifrado y exportable de todas las acciones autonomas.
+- [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline v1: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
 - [x] Modos de ejecucion: interactive, run-until-done, silent-until-done (ver seccion 13.2). _Implementado en `agent_runtime` + API `/runtime/mode` + CLI `life intents mode`._
-- [ ] Ledger cifrado y exportable de todas las acciones autonomas.
+- [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline v1: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
 - [ ] Auto-defensas: awareness situacional, auto-reparacion con rollback, operacion degradada offline (ver seccion 9.5).
 - [ ] Harness de red-team continuo con corpus de ataques agenticos reales (prompt injection, tool abuse, exfiltracion encubierta, cadena de deep links).
 - [ ] SLO CVE por severidad en dependencias criticas de agente/runtime: `critical` mitigacion <=24h y parche <=48h; `high` <=72h; `medium` <=14 dias.
 
 **CLI extendido:**
 
-- [ ] `life focus`, `life meeting`. _`life sync`, `life permissions` y `life workspace` ya estan implementados._
+- [x] `life focus`, `life meeting`. _Implementado baseline v1 con presets contextuales y reglas automatizadas._
 - [x] `life onboarding trust-mode` para configuracion de autonomia. _Implementado: `status|enable|disable` con validacion de bundle/sig en daemon._
 
 **Entregable:** release 1.0 con asistente AI multimodal funcional, Computer Use API operativo, y modelo biologico (Soul/Skills/Workplace/Agents) implementado.
@@ -1085,14 +1085,14 @@ Implementacion concreta:
 
 - [ ] Life Capsule sync completo (multi-dispositivo E2E cifrado).
 - [ ] _[CONDICIONAL]_ COSMIC Sync integrado. _Depende de que System76 entregue Epoch 2 con sync. Plan B: implementar sync propio usando Life Capsule como transporte._
-- [ ] Device mesh: identidad de nodo, delegacion remota, revocacion.
+- [x] Device mesh: identidad de nodo, delegacion remota, revocacion. _Implementado baseline v1 con `life mesh init/add/list/delegate/revoke`._
 - [ ] Life Capsule v2: incluir `soul`, `skills`, memoria vectorial y politicas firmadas con restauracion selectiva por componente. _Evolucion natural del modelo biologico implementado en Fase 2._
 
 **Extensibilidad:**
 
 - [ ] SDK para extensiones AI de terceros.
 - [ ] Marketplace de skills/extensiones: niveles core/verified/community con aislamiento por defecto.
-- [ ] Browser operator para tareas web multi-paso con politicas y auditoria. _Prerequisito: Computer Use API de Fase 2 funcional._
+- [x] Browser operator para tareas web multi-paso con politicas y auditoria. _Implementado baseline v1 con `life browser policy-init/run/audit`._
 - [ ] Pipeline de confianza de skills (modelo hibrido): raiz de confianza LifeOS + mantenedores delegados (`verified`) + transparencia de firmas + revocacion.
 
 **Multi-agente y orquestacion:**
@@ -1494,6 +1494,11 @@ life soul set assistant.autonomy guarded --profile base
                                      Ajustar perfil de Soul por clave.
 life soul merge --workplace work      Resolver merge determinista global->usuario->workplace.
 
+life agents register qa-agent --role qa --capability tests.run --capability reports.read
+                                     Registrar agente especializado con capacidades y tokens life-id.
+life agents list --active            Listar agentes activos del Agent Plane local.
+life agents revoke qa-agent          Revocar delegaciones y marcar agente como revocado.
+
 life mesh init --alias laptop --endpoint 10.0.0.20
                                      Inicializar identidad de nodo local.
 life mesh add <node-id> --alias desk --endpoint 10.0.0.10 --trust verified
@@ -1507,6 +1512,12 @@ life browser policy-init --output browser-policy.json
 life browser run --policy browser-policy.json --step open:https://example.com --step title
                                      Ejecutar workflow web multi-step bajo politica.
 life browser audit --limit 50         Auditar acciones del browser operator.
+
+life computer-use status             Ver backend disponible para automatizacion GUI.
+life computer-use move 120 340       Mover puntero a coordenadas absolutas.
+life computer-use click --button 1   Ejecutar clic de raton.
+life computer-use type "hola mundo"  Escribir texto en ventana enfocada.
+life computer-use key ctrl+shift+k   Enviar combinacion de teclado.
 
 life workflow build --output flow.json
                                      Constructor no-code (TUI) para workflows.
@@ -2151,8 +2162,11 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 25. ~~`trust_me_mode` implementado con validacion criptografica de `consent_bundle` y auditoria completa.~~ **Hecho.** Activacion requiere `consent_bundle` + `signature` valida (SHA-256) y deja evidencia en ledger.
 26. ~~`Soul Plane` por usuario en `~/.config/lifeos/soul/` (ver modelo biologico en `docs/lifeos_biological_model.md`).~~ **Hecho (baseline v1).** `life soul init/set/merge/show` con merge determinista `global -> user -> workplace`.
 27. ~~`Skills Plane` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar.~~ **Hecho (baseline v1).** `life skills generate/sign/install/verify/run/remove` implementa ciclo local completo.
-
+28. ~~`Agent Plane` con registro de agentes especializados, capacidades y gobernanza (`life-id`).~~ **Hecho (baseline v1).** `life agents register/list/show/revoke` con registry local y revocacion de tokens delegados.
 29. ~~Actualizar `contracts/onboarding/first-boot-config.schema.json` para usar nombres de modelos GGUF en lugar de formato Ollama.~~ **Hecho.** Schema actualizado con ejemplos GGUF reales.
+30. ~~Computer Use API para automatizacion GUI (mouse/keyboard) con auditoria.~~ **Hecho (baseline v1).** API `/computer-use/status|action` + CLI `life computer-use` y eventos en ledger.
+31. ~~Comandos `life focus` y `life meeting` para modos contextuales rapidos.~~ **Hecho (baseline v1).** Presets con reglas de contexto y activacion directa.
+
 
 ### 27.3 Criterio de cierre de faltantes
 

@@ -20,6 +20,7 @@ mod accessibility;
 mod agent_runtime;
 mod ai;
 mod api;
+mod computer_use;
 mod context_policies;
 mod experience_modes;
 mod follow_along;

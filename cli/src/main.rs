@@ -51,6 +51,10 @@ enum Commands {
     /// Experience mode commands
     #[clap(subcommand)]
     Mode(commands::mode::ModeCommands),
+    /// Activate Flow context preset
+    Focus,
+    /// Activate Meeting context preset
+    Meeting,
     /// FollowAlong contextual assistant
     #[clap(subcommand)]
     FollowAlong(commands::followalong::FollowAlongCommands),
@@ -81,6 +85,9 @@ enum Commands {
     /// Skills registry and sandboxed execution
     #[clap(subcommand)]
     Skills(commands::skills::SkillsCommands),
+    /// Agent Plane registry, capabilities and governance controls
+    #[clap(subcommand)]
+    Agents(commands::agents::AgentsCommands),
     /// Soul Plane profiles (global/user/workplace merge)
     #[clap(subcommand)]
     Soul(commands::soul::SoulCommands),
@@ -90,6 +97,9 @@ enum Commands {
     /// Secure browser operator with policy + audit
     #[clap(subcommand)]
     Browser(commands::browser::BrowserCommands),
+    /// Computer Use actions (mouse/keyboard automation)
+    #[clap(subcommand)]
+    ComputerUse(commands::computer_use::ComputerUseCommands),
     /// No-code workflow builder and runner
     #[clap(subcommand)]
     Workflow(commands::workflow::WorkflowCommands),
@@ -173,6 +183,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Ai(args) => commands::ai::execute(args).await,
         Commands::Overlay(args) => commands::overlay::execute(args).await,
         Commands::Mode(args) => commands::mode::execute(args).await,
+        Commands::Focus => commands::focus::execute_focus().await,
+        Commands::Meeting => commands::focus::execute_meeting().await,
         Commands::FollowAlong(args) => {
             commands::followalong::execute_followalong_command(args).await
         }
@@ -185,9 +197,11 @@ async fn main() -> anyhow::Result<()> {
         Commands::Permissions(args) => commands::permissions::execute(args).await,
         Commands::Sync(args) => commands::sync::execute(args).await,
         Commands::Skills(args) => commands::skills::execute(args).await,
+        Commands::Agents(args) => commands::agents::execute(args).await,
         Commands::Soul(args) => commands::soul::execute(args).await,
         Commands::Mesh(args) => commands::mesh::execute(args).await,
         Commands::Browser(args) => commands::browser::execute(args).await,
+        Commands::ComputerUse(args) => commands::computer_use::execute(args).await,
         Commands::Workflow(args) => commands::workflow::execute(args).await,
         Commands::Store(args) => commands::store::execute(args).await,
         Commands::Telemetry(args) => commands::telemetry::execute(args).await,

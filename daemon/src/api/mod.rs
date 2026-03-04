@@ -28,6 +28,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::agent_runtime::AgentRuntimeManager;
 use crate::ai::AiManager;
+use crate::computer_use::{ComputerUseAction, ComputerUseManager};
 use crate::context_policies::ContextPoliciesManager;
 use crate::experience_modes::ExperienceManager;
 use crate::follow_along::FollowAlongManager;
@@ -945,6 +946,8 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/memory/search", get(search_memory_entries))
         .route("/memory/stats", get(get_memory_stats))
         .route("/memory/mcp/context", post(get_memory_mcp_context))
+        .route("/computer-use/status", get(get_computer_use_status))
+        .route("/computer-use/action", post(execute_computer_use_action))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bootstrap_token,
@@ -3518,6 +3521,18 @@ struct MemoryMcpContextPayload {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ComputerUseActionPayload {
+    action: String,
+    x: Option<i32>,
+    y: Option<i32>,
+    button: Option<u8>,
+    text: Option<String>,
+    combo: Option<String>,
+    dry_run: Option<bool>,
+    actor: Option<String>,
+}
+
 // ==================== AGENT RUNTIME HANDLERS ====================
 
 async fn plan_intent(
@@ -4117,6 +4132,154 @@ async fn get_memory_mcp_context(
             )
         })?;
     Ok(Json(context))
+}
+
+async fn get_computer_use_status() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)>
+{
+    let manager = ComputerUseManager::new();
+    let status = manager.status().await;
+    Ok(Json(
+        serde_json::to_value(status).unwrap_or_else(|_| serde_json::json!({})),
+    ))
+}
+
+async fn execute_computer_use_action(
+    State(state): State<ApiState>,
+    Json(payload): Json<ComputerUseActionPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let action = parse_computer_use_action(&payload)?;
+    let manager = ComputerUseManager::new();
+    let result = manager
+        .execute(action.clone(), payload.dry_run.unwrap_or(false))
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            let status = if msg.contains("required")
+                || msg.contains("Unsupported key")
+                || msg.contains("exceeds")
+                || msg.contains("No supported backend")
+            {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                Json(ApiError {
+                    error: status.canonical_reason().unwrap_or("Error").to_string(),
+                    message: msg,
+                    code: status.as_u16(),
+                }),
+            )
+        })?;
+
+    let actor = payload
+        .actor
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or("user://local/default");
+
+    let runtime = state.agent_runtime_manager.read().await;
+    let _ = runtime
+        .record_ledger_event(
+            "computer_use",
+            "action",
+            &payload.action,
+            serde_json::json!({
+                "actor": actor,
+                "backend": result.backend,
+                "dry_run": result.dry_run,
+                "success": result.success,
+                "command": result.command,
+                "exit_code": result.exit_code,
+            }),
+        )
+        .await;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "result": result,
+    })))
+}
+
+fn parse_computer_use_action(
+    payload: &ComputerUseActionPayload,
+) -> Result<ComputerUseAction, (StatusCode, Json<ApiError>)> {
+    let action_name = payload.action.trim().to_lowercase();
+    match action_name.as_str() {
+        "move" => {
+            let x = payload.x.ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError {
+                        error: "Bad Request".to_string(),
+                        message: "Missing 'x' for move action".to_string(),
+                        code: 400,
+                    }),
+                )
+            })?;
+            let y = payload.y.ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError {
+                        error: "Bad Request".to_string(),
+                        message: "Missing 'y' for move action".to_string(),
+                        code: 400,
+                    }),
+                )
+            })?;
+            Ok(ComputerUseAction::Move { x, y })
+        }
+        "click" => Ok(ComputerUseAction::Click {
+            button: payload.button.unwrap_or(1),
+        }),
+        "type" => {
+            let text = payload
+                .text
+                .as_deref()
+                .filter(|v| !v.trim().is_empty())
+                .ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ApiError {
+                            error: "Bad Request".to_string(),
+                            message: "Missing 'text' for type action".to_string(),
+                            code: 400,
+                        }),
+                    )
+                })?;
+            Ok(ComputerUseAction::TypeText {
+                text: text.to_string(),
+            })
+        }
+        "key" => {
+            let combo = payload
+                .combo
+                .as_deref()
+                .filter(|v| !v.trim().is_empty())
+                .ok_or_else(|| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ApiError {
+                            error: "Bad Request".to_string(),
+                            message: "Missing 'combo' for key action".to_string(),
+                            code: 400,
+                        }),
+                    )
+                })?;
+            Ok(ComputerUseAction::Key {
+                combo: combo.to_string(),
+            })
+        }
+        _ => Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Unknown action. Use move|click|type|key".to_string(),
+                code: 400,
+            }),
+        )),
+    }
 }
 
 // ==================== SERVER STARTUP ====================
