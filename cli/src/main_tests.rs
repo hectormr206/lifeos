@@ -322,4 +322,25 @@ mod tests {
             _ => panic!("Expected ai autotune command"),
         }
     }
+
+    #[test]
+    fn test_cli_parses_ai_profile_command() {
+        let cli = Cli::parse_from(["life", "ai", "profile", "--runtime", "secure", "--apply"]);
+        match cli.command {
+            Commands::Ai(commands::ai::AiCommands::Profile { runtime, apply }) => {
+                assert_eq!(runtime.as_deref(), Some("secure"));
+                assert!(apply);
+            }
+            _ => panic!("Expected ai profile command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_ai_catalog_command() {
+        let cli = Cli::parse_from(["life", "ai", "catalog", "--refresh"]);
+        match cli.command {
+            Commands::Ai(commands::ai::AiCommands::Catalog { refresh }) => assert!(refresh),
+            _ => panic!("Expected ai catalog command"),
+        }
+    }
 }

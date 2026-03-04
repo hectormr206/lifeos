@@ -244,6 +244,7 @@ fn test_phase2_contract_schemas_exist_and_parse() {
         "contracts/intents/v1/result.schema.json",
         "contracts/identity/v1/delegation.schema.json",
         "contracts/identity/v1/capability-token.schema.json",
+        "contracts/onboarding/first-boot-config.schema.json",
     ];
 
     for rel_path in schema_paths {
@@ -262,4 +263,52 @@ fn test_phase2_contract_schemas_exist_and_parse() {
             path
         );
     }
+}
+
+#[test]
+fn test_phase2_model_catalog_exists_and_has_signature() {
+    let root = project_root();
+    let catalog_path = root.join("contracts/models/v1/catalog.json");
+    let sig_path = root.join("contracts/models/v1/catalog.json.sig");
+
+    assert!(
+        catalog_path.exists(),
+        "Catalog should exist: {:?}",
+        catalog_path
+    );
+    assert!(
+        sig_path.exists(),
+        "Catalog signature should exist: {:?}",
+        sig_path
+    );
+
+    let catalog_raw = std::fs::read_to_string(&catalog_path)
+        .unwrap_or_else(|e| panic!("Read failed {:?}: {}", catalog_path, e));
+    let catalog: serde_json::Value = serde_json::from_str(&catalog_raw)
+        .unwrap_or_else(|e| panic!("Invalid JSON {:?}: {}", catalog_path, e));
+
+    assert_eq!(
+        catalog["schema_version"].as_str(),
+        Some("lifeos-model-catalog/v1")
+    );
+    let models = catalog["models"]
+        .as_array()
+        .expect("Catalog must include models array");
+    assert!(
+        !models.is_empty(),
+        "Catalog should include at least one model"
+    );
+    assert!(models.iter().any(|m| {
+        m.get("id")
+            .and_then(|v| v.as_str())
+            .map(|id| id.eq_ignore_ascii_case("Qwen3.5-4B-Q4_K_M.gguf"))
+            .unwrap_or(false)
+    }));
+
+    let sig_raw = std::fs::read_to_string(&sig_path)
+        .unwrap_or_else(|e| panic!("Read failed {:?}: {}", sig_path, e));
+    assert!(
+        sig_raw.trim().starts_with("sha256:"),
+        "Catalog signature should be sha256-prefixed"
+    );
 }

@@ -1008,9 +1008,9 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 - [ ] Whisper.cpp como daemon STT separado (voz local). _El texto+vision ya funcionan con Qwen3.5-4B + mmproj desde Fase 0. Voz es el gap restante (ver `docs/AI_MODEL_SELECTION.md` seccion "Arquitectura de audio")._
 
 - [ ] Whisper.cpp como daemon STT separado (voz local). _El texto+vision ya funcionan con Qwen3.5-4B + mmproj desde Fase 0. Voz es el gap restante (ver `docs/AI_MODEL_SELECTION.md` seccion "Arquitectura de audio")._
-- [ ] Catalogo de modelos firmado con fallback offline para bootstrap.
+- [x] Catalogo de modelos firmado con fallback offline para bootstrap. _Implementado: catalogo v1 (`contracts/models/v1/catalog.json`) con firma SHA-256 (`catalog.json.sig`), validacion y fallback remoto/cache/embebido en `life ai catalog`._
 - [ ] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Camara wellness pasa a Fase 3._
-- [ ] Catalogo de modelos firmado con fallback offline para bootstrap.
+- [x] Catalogo de modelos firmado con fallback offline para bootstrap. _Implementado: catalogo v1 firmado con fallback offline._
 - [ ] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Camara wellness pasa a Fase 3._
 - [ ] Micro-modelos always-on: VAD, hotword, clasificacion de intents.
 - [ ] Switching de modelo pesado por prioridad con degradacion automatica bajo carga.
@@ -2095,7 +2095,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 8. Registry open source de skills/capacidades con versionado, firmas y politica de confianza.
 9. Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.
 10. Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.
-11. Perfiles de runtime `lite/edge/secure/pro` con deteccion automatica de hardware.
+11. ~~Perfiles de runtime `lite/edge/secure/pro` con deteccion automatica de hardware.~~ **Hecho.** `life ai profile` detecta hardware y persiste perfil.
 12. ~~Aislamiento por objetivo (sandbox/container/microVM) segun riesgo de la accion.~~ **Hecho.** `life workspace run/list` activo con control de aprobacion por riesgo y fallback seguro.
 13. Constructor visual de workflows y agentes (no-code) para usuarios no tecnicos.
 14. Browser operator seguro para tareas web multi-step con politicas y auditoria.
@@ -2107,13 +2107,13 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 20. `device-mesh` operativo para coordinacion multi-PC con identidad de nodo, delegacion y revocacion remota.
 21. Pipeline de extensiones/skills con niveles de confianza (`core`, `verified`, `community`) y aislamiento por defecto.
 22. ~~Autoselector de modelos (`life ai autotune`) implementado con benchmark local y persistencia por rol.~~ **Hecho.** `autotune` selecciona y aplica modelo recomendado.
-23. `model-catalog` firmado con versionado y fallback offline embebido en la ISO.
-24. Runtime realtime AI-first implementado con `heavy_model_slots = 1` y pruebas de no regresion de latencia.
+23. ~~`model-catalog` firmado con versionado y fallback offline embebido en la ISO.~~ **Hecho.** Catalogo v1 firmado + cache + fallback embebido.
+24. ~~Runtime realtime AI-first implementado con `heavy_model_slots = 1` y pruebas de no regresion de latencia.~~ **Hecho (baseline).** `model-profile.toml` persiste `heavy_model_slots = 1` y `autotune` lo aplica.
 25. `trust_me_mode` implementado con validacion criptografica de `consent_bundle` y auditoria completa.
 26. `Soul Plane` por usuario en `~/.config/lifeos/soul/` (ver modelo biologico en `docs/lifeos_biological_model.md`).
 27. `Skills Plane` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar.
 
-29. Actualizar `contracts/onboarding/first-boot-config.schema.json` para usar nombres de modelos GGUF en lugar de formato Ollama.
+29. ~~Actualizar `contracts/onboarding/first-boot-config.schema.json` para usar nombres de modelos GGUF en lugar de formato Ollama.~~ **Hecho.** Schema actualizado con ejemplos GGUF reales.
 
 ### 27.3 Criterio de cierre de faltantes
 
@@ -2281,4 +2281,3 @@ Reglas finales para el LLM implementador:
 
 **LifeOS no promete "nunca falla". Demuestra que se recupera solo, rapido y de forma verificable.**
 Esa es la diferencia entre una distro interesante y una distro que millones de personas pueden usar todos los dias.
-

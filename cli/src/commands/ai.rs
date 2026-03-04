@@ -2,6 +2,7 @@ use clap::Subcommand;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
+use std::path::PathBuf;
 use std::process::Command;
 
 use crate::daemon_client;
@@ -10,6 +11,15 @@ use crate::daemon_client;
 const LLAMA_SERVER_HOST: &str = "http://localhost:8082";
 /// Default model directory
 const MODEL_DIR: &str = "/var/lib/lifeos/models";
+/// Default remote model catalog
+const MODEL_CATALOG_URL: &str = "https://models.lifeos.dev/catalog/v1.json";
+/// Default remote model catalog detached signature (sha256 digest string)
+const MODEL_CATALOG_SIG_URL: &str = "https://models.lifeos.dev/catalog/v1.json.sig";
+/// Embedded offline fallback catalog bundled in the repo/ISO
+const EMBEDDED_MODEL_CATALOG: &str = include_str!("../../../contracts/models/v1/catalog.json");
+/// Embedded detached signature for the fallback catalog
+const EMBEDDED_MODEL_CATALOG_SIG: &str =
+    include_str!("../../../contracts/models/v1/catalog.json.sig");
 
 #[derive(Subcommand)]
 pub enum AiCommands {
@@ -79,6 +89,21 @@ pub enum AiCommands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Detect and persist hardware runtime profile (lite/edge/secure/pro)
+    Profile {
+        /// Optional explicit profile override (lite|edge|secure|pro)
+        #[arg(long)]
+        runtime: Option<String>,
+        /// Persist the detected/selected profile to model-profile.toml
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Show model catalog source and signature verification status
+    Catalog {
+        /// Try remote refresh before fallback
+        #[arg(long)]
+        refresh: bool,
+    },
 }
 
 pub async fn execute(args: AiCommands) -> anyhow::Result<()> {
@@ -98,6 +123,8 @@ pub async fn execute(args: AiCommands) -> anyhow::Result<()> {
             repeats,
         } => benchmark_models(model.as_deref(), short, repeats).await,
         AiCommands::Autotune { dry_run } => autotune_model(dry_run).await,
+        AiCommands::Profile { runtime, apply } => detect_profile(runtime.as_deref(), apply).await,
+        AiCommands::Catalog { refresh } => show_catalog_status(refresh).await,
     }
 }
 
@@ -420,38 +447,29 @@ async fn list_models(all: bool) -> anyhow::Result<()> {
     if all {
         println!();
         println!("{}", "Available to Download:".bold());
-        let available = vec![
-            (
-                "Qwen3.5-4B-Q4_K_M.gguf",
-                "~2.7GB",
-                "Qwen3.5 4B - Multimodal vision+text (default)",
-            ),
-            (
-                "Qwen3.5-9B-Q4_K_M.gguf",
-                "~5.5GB",
-                "Qwen3.5 9B - Larger multimodal",
-            ),
-            (
-                "llama-3.2-3b-instruct-q4_k_m.gguf",
-                "~2.0GB",
-                "Llama 3.2 3B - Lightweight text-only",
-            ),
-            (
-                "llama-3.2-1b-instruct-q4_k_m.gguf",
-                "~0.8GB",
-                "Llama 3.2 1B - Minimal",
-            ),
-            (
-                "mistral-7b-instruct-v0.3-q4_k_m.gguf",
-                "~4.1GB",
-                "Mistral 7B - General purpose",
-            ),
-        ];
-
-        for (name, size, desc) in available {
-            println!("  {:<45} {:>8}  {}", name.cyan(), size.dimmed(), desc);
+        let loaded_catalog = load_model_catalog(false).await?;
+        for model in &loaded_catalog.catalog.models {
+            println!(
+                "  {:<45} {:>8}  roles: {}",
+                model.id.cyan(),
+                format_size(model.size_bytes).dimmed(),
+                if model.roles.is_empty() {
+                    "general".to_string()
+                } else {
+                    model.roles.join(",")
+                }
+            );
         }
         println!();
+        println!(
+            "Catalog source: {} ({})",
+            loaded_catalog.source.cyan(),
+            if loaded_catalog.signature_valid {
+                "signature valid".green().to_string()
+            } else {
+                "signature invalid".red().to_string()
+            }
+        );
         println!("Or download any GGUF model directly:");
         println!(
             "  {}",
@@ -823,6 +841,56 @@ struct BenchmarkReport {
     entries: Vec<BenchmarkEntry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ModelCatalog {
+    schema_version: String,
+    catalog_version: String,
+    generated_at: String,
+    models: Vec<CatalogModelEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CatalogModelEntry {
+    id: String,
+    download_url: String,
+    size_bytes: u64,
+    #[serde(default)]
+    runtime_profiles: Vec<String>,
+    #[serde(default)]
+    roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuntimeProfileState {
+    generated_at: String,
+    runtime_profile: String,
+    heavy_model_slots: u8,
+    total_ram_gb: u32,
+    total_vram_gb: Option<u32>,
+    gpu: String,
+    cpu_cores: u32,
+    selected_model: Option<String>,
+    catalog_version: Option<String>,
+    catalog_source: Option<String>,
+    catalog_signature_valid: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeProfileDetection {
+    runtime_profile: String,
+    total_ram_gb: u32,
+    total_vram_gb: Option<u32>,
+    gpu: String,
+    cpu_cores: u32,
+}
+
+#[derive(Debug, Clone)]
+struct LoadedCatalog {
+    catalog: ModelCatalog,
+    source: String,
+    signature_valid: bool,
+}
+
 async fn benchmark_models(
     model_filter: Option<&str>,
     short: bool,
@@ -954,7 +1022,54 @@ async fn autotune_model(dry_run: bool) -> anyhow::Result<()> {
         anyhow::bail!("No benchmark entries found. Run: life ai benchmark --short");
     }
 
+    let detected = detect_runtime_profile(None)?;
+    let loaded_catalog = load_model_catalog(true).await?;
+
+    let mut runtime_state = load_runtime_profile().unwrap_or_else(|_| RuntimeProfileState {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        runtime_profile: detected.runtime_profile.clone(),
+        heavy_model_slots: 1,
+        total_ram_gb: detected.total_ram_gb,
+        total_vram_gb: detected.total_vram_gb,
+        gpu: detected.gpu.clone(),
+        cpu_cores: detected.cpu_cores,
+        selected_model: None,
+        catalog_version: Some(loaded_catalog.catalog.catalog_version.clone()),
+        catalog_source: Some(loaded_catalog.source.clone()),
+        catalog_signature_valid: loaded_catalog.signature_valid,
+    });
+
+    runtime_state.catalog_version = Some(loaded_catalog.catalog.catalog_version.clone());
+    runtime_state.catalog_source = Some(loaded_catalog.source.clone());
+    runtime_state.catalog_signature_valid = loaded_catalog.signature_valid;
+    runtime_state.heavy_model_slots = 1;
+
+    let allowed_models: Vec<String> = loaded_catalog
+        .catalog
+        .models
+        .iter()
+        .filter(|m| {
+            m.runtime_profiles.is_empty()
+                || m.runtime_profiles
+                    .iter()
+                    .any(|rp| rp.eq_ignore_ascii_case(&runtime_state.runtime_profile))
+        })
+        .map(|m| m.id.clone())
+        .collect();
+
     let mut sorted = report.entries.clone();
+    sorted.retain(|e| {
+        if allowed_models.is_empty() {
+            return true;
+        }
+        allowed_models.iter().any(|m| m == &e.model)
+    });
+    if sorted.is_empty() {
+        anyhow::bail!(
+            "No benchmark entries match runtime profile '{}' from verified catalog",
+            runtime_state.runtime_profile
+        );
+    }
     sorted.sort_by(|a, b| b.score.total_cmp(&a.score));
     let best = sorted
         .first()
@@ -969,6 +1084,20 @@ async fn autotune_model(dry_run: bool) -> anyhow::Result<()> {
         best.avg_latency_ms,
         best.success_rate * 100.0
     );
+    println!(
+        "  Runtime profile: {} (heavy_model_slots={})",
+        runtime_state.runtime_profile.cyan(),
+        runtime_state.heavy_model_slots
+    );
+    println!(
+        "  Catalog: {} ({})",
+        loaded_catalog.catalog.catalog_version.cyan(),
+        if loaded_catalog.signature_valid {
+            "signature valid".green().to_string()
+        } else {
+            "signature invalid".red().to_string()
+        }
+    );
 
     if dry_run {
         println!("{}", "Dry run enabled: no changes applied.".yellow());
@@ -976,6 +1105,9 @@ async fn autotune_model(dry_run: bool) -> anyhow::Result<()> {
     }
 
     apply_model_selection(&best.model)?;
+    runtime_state.selected_model = Some(best.model.clone());
+    runtime_state.generated_at = chrono::Utc::now().to_rfc3339();
+    save_runtime_profile(&runtime_state)?;
     println!(
         "{} {}",
         "Applied model to /etc/lifeos/llama-server.env:"
@@ -983,7 +1115,107 @@ async fn autotune_model(dry_run: bool) -> anyhow::Result<()> {
             .bold(),
         best.model.cyan()
     );
+    println!(
+        "{} {}",
+        "Saved runtime profile:".green().bold(),
+        model_profile_path().display().to_string().cyan()
+    );
     println!("Restart service with: {}", "life ai start".cyan());
+    Ok(())
+}
+
+async fn detect_profile(runtime_override: Option<&str>, apply: bool) -> anyhow::Result<()> {
+    let detected = detect_runtime_profile(runtime_override)?;
+
+    println!("{}", "AI Runtime Profile".bold().blue());
+    println!("  Runtime: {}", detected.runtime_profile.cyan());
+    println!("  RAM:     {} GB", detected.total_ram_gb);
+    println!(
+        "  VRAM:    {}",
+        detected
+            .total_vram_gb
+            .map(|v| format!("{} GB", v))
+            .unwrap_or_else(|| "N/A".to_string())
+            .cyan()
+    );
+    println!("  GPU:     {}", detected.gpu.cyan());
+    println!("  CPU:     {} cores", detected.cpu_cores);
+    println!("  heavy_model_slots: {}", "1".cyan());
+
+    let loaded_catalog = load_model_catalog(false).await?;
+    let preferred = loaded_catalog
+        .catalog
+        .models
+        .iter()
+        .find(|m| {
+            m.runtime_profiles
+                .iter()
+                .any(|rp| rp.eq_ignore_ascii_case(&detected.runtime_profile))
+        })
+        .map(|m| m.id.clone());
+    if let Some(model) = preferred.as_ref() {
+        println!("  Suggested model: {}", model.cyan());
+    }
+
+    if apply {
+        let profile = RuntimeProfileState {
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            runtime_profile: detected.runtime_profile,
+            heavy_model_slots: 1,
+            total_ram_gb: detected.total_ram_gb,
+            total_vram_gb: detected.total_vram_gb,
+            gpu: detected.gpu,
+            cpu_cores: detected.cpu_cores,
+            selected_model: preferred.clone(),
+            catalog_version: Some(loaded_catalog.catalog.catalog_version),
+            catalog_source: Some(loaded_catalog.source),
+            catalog_signature_valid: loaded_catalog.signature_valid,
+        };
+        save_runtime_profile(&profile)?;
+        println!(
+            "{} {}",
+            "Saved profile to".green().bold(),
+            model_profile_path().display().to_string().cyan()
+        );
+    } else {
+        println!("{}", "Use --apply to persist this profile.".dimmed());
+    }
+
+    Ok(())
+}
+
+async fn show_catalog_status(refresh: bool) -> anyhow::Result<()> {
+    let loaded_catalog = load_model_catalog(refresh).await?;
+    println!("{}", "Model Catalog".bold().blue());
+    println!("  Source: {}", loaded_catalog.source.as_str().cyan());
+    println!(
+        "  Version: {}",
+        loaded_catalog.catalog.catalog_version.as_str().cyan()
+    );
+    println!(
+        "  Signature: {}",
+        if loaded_catalog.signature_valid {
+            "valid".green()
+        } else {
+            "invalid".red()
+        }
+    );
+    println!("  Models: {}", loaded_catalog.catalog.models.len());
+    for model in loaded_catalog.catalog.models.iter().take(8) {
+        println!(
+            "  {} {} [{}]",
+            "-".dimmed(),
+            model.id.cyan(),
+            if model.runtime_profiles.is_empty() {
+                "all".to_string()
+            } else {
+                model.runtime_profiles.join(",")
+            }
+        );
+    }
+    if loaded_catalog.catalog.models.len() > 8 {
+        println!("  {}", "...".dimmed());
+    }
     Ok(())
 }
 
@@ -1229,6 +1461,254 @@ fn apply_model_selection(model_name: &str) -> anyhow::Result<()> {
         anyhow::bail!("Failed to update /etc/lifeos/llama-server.env");
     }
     Ok(())
+}
+
+fn model_profile_path() -> PathBuf {
+    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    base.join("lifeos").join("model-profile.toml")
+}
+
+fn model_catalog_cache_path() -> PathBuf {
+    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    base.join("lifeos").join("catalog").join("v1.json")
+}
+
+fn model_catalog_cache_sig_path() -> PathBuf {
+    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    base.join("lifeos").join("catalog").join("v1.json.sig")
+}
+
+fn save_runtime_profile(profile: &RuntimeProfileState) -> anyhow::Result<()> {
+    let path = model_profile_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let serialized = toml::to_string_pretty(profile)?;
+    std::fs::write(path, serialized)?;
+    Ok(())
+}
+
+fn load_runtime_profile() -> anyhow::Result<RuntimeProfileState> {
+    let path = model_profile_path();
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow::anyhow!("Failed to read runtime profile {}: {}", path.display(), e))?;
+    let profile: RuntimeProfileState = toml::from_str(&raw).map_err(|e| {
+        anyhow::anyhow!("Failed to parse runtime profile {}: {}", path.display(), e)
+    })?;
+    Ok(profile)
+}
+
+fn total_ram_gb() -> u32 {
+    if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+        for line in content.lines() {
+            if line.starts_with("MemTotal:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(kb_str) = parts.get(1) {
+                    if let Ok(kb) = kb_str.parse::<u64>() {
+                        return ((kb / 1024 / 1024).max(1)) as u32;
+                    }
+                }
+            }
+        }
+    }
+    8
+}
+
+fn total_vram_gb(gpu: &GpuInfo) -> Option<u32> {
+    match gpu {
+        GpuInfo::Nvidia { vram, .. } => Some((vram / 1024) as u32),
+        _ => None,
+    }
+}
+
+fn normalize_runtime_profile(profile: &str) -> anyhow::Result<String> {
+    let normalized = profile.trim().to_lowercase();
+    if matches!(normalized.as_str(), "lite" | "edge" | "secure" | "pro") {
+        Ok(normalized)
+    } else {
+        anyhow::bail!(
+            "Invalid runtime profile '{}'. Use lite|edge|secure|pro",
+            profile
+        );
+    }
+}
+
+fn detect_runtime_profile(
+    runtime_override: Option<&str>,
+) -> anyhow::Result<RuntimeProfileDetection> {
+    let gpu = check_gpu();
+    let total_ram_gb = total_ram_gb();
+    let total_vram_gb = total_vram_gb(&gpu);
+    let cpu_cores = num_cpus::get() as u32;
+
+    let gpu_label = match &gpu {
+        GpuInfo::Nvidia { name, .. } => format!("nvidia:{}", name),
+        GpuInfo::Amd { name } => format!("amd:{}", name),
+        GpuInfo::Intel { name } => format!("intel:{}", name),
+        GpuInfo::None => "none".to_string(),
+    };
+
+    let auto = if total_ram_gb < 8 {
+        "lite".to_string()
+    } else if total_ram_gb < 16 {
+        "edge".to_string()
+    } else if total_ram_gb >= 24 && total_vram_gb.unwrap_or(0) >= 8 {
+        "pro".to_string()
+    } else if total_ram_gb >= 16 && matches!(gpu, GpuInfo::None) {
+        "secure".to_string()
+    } else {
+        "edge".to_string()
+    };
+
+    let runtime_profile = if let Some(override_profile) = runtime_override {
+        normalize_runtime_profile(override_profile)?
+    } else {
+        auto
+    };
+
+    Ok(RuntimeProfileDetection {
+        runtime_profile,
+        total_ram_gb,
+        total_vram_gb,
+        gpu: gpu_label,
+        cpu_cores,
+    })
+}
+
+fn parse_signature(sig: &str) -> String {
+    sig.lines()
+        .find_map(|line| {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                return None;
+            }
+            Some(t.strip_prefix("sha256:").unwrap_or(t).trim().to_lowercase())
+        })
+        .unwrap_or_default()
+}
+
+fn digest_catalog_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    format!("{:x}", digest)
+}
+
+fn verify_catalog_signature(bytes: &[u8], signature_text: &str) -> anyhow::Result<bool> {
+    let expected = parse_signature(signature_text);
+    if expected.is_empty() {
+        return Ok(false);
+    }
+    let actual = digest_catalog_bytes(bytes);
+    Ok(actual.eq_ignore_ascii_case(&expected))
+}
+
+fn parse_catalog(bytes: &[u8]) -> anyhow::Result<ModelCatalog> {
+    let catalog: ModelCatalog = serde_json::from_slice(bytes)?;
+    if catalog.models.is_empty() {
+        anyhow::bail!("Catalog has no models");
+    }
+    Ok(catalog)
+}
+
+fn cache_catalog(bytes: &[u8], signature_text: &str) -> anyhow::Result<()> {
+    let path = model_catalog_cache_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, bytes)?;
+    std::fs::write(model_catalog_cache_sig_path(), signature_text)?;
+    Ok(())
+}
+
+fn load_cached_catalog() -> anyhow::Result<LoadedCatalog> {
+    let bytes = std::fs::read(model_catalog_cache_path())?;
+    let sig = std::fs::read_to_string(model_catalog_cache_sig_path())?;
+    let signature_valid = verify_catalog_signature(&bytes, &sig)?;
+    if !signature_valid {
+        anyhow::bail!("Cached catalog signature verification failed");
+    }
+    let catalog = parse_catalog(&bytes)?;
+    Ok(LoadedCatalog {
+        catalog,
+        source: "cache".to_string(),
+        signature_valid,
+    })
+}
+
+fn load_embedded_catalog() -> anyhow::Result<LoadedCatalog> {
+    let bytes = EMBEDDED_MODEL_CATALOG.as_bytes();
+    let signature_valid = verify_catalog_signature(bytes, EMBEDDED_MODEL_CATALOG_SIG)?;
+    if !signature_valid {
+        anyhow::bail!("Embedded catalog signature verification failed");
+    }
+    let catalog = parse_catalog(bytes)?;
+    Ok(LoadedCatalog {
+        catalog,
+        source: "embedded-fallback".to_string(),
+        signature_valid,
+    })
+}
+
+async fn try_fetch_remote_catalog() -> anyhow::Result<LoadedCatalog> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .build()?;
+
+    let catalog_resp = client.get(MODEL_CATALOG_URL).send().await?;
+    if !catalog_resp.status().is_success() {
+        anyhow::bail!(
+            "Remote catalog returned status {}",
+            catalog_resp.status().as_u16()
+        );
+    }
+    let catalog_bytes = catalog_resp.bytes().await?.to_vec();
+
+    let sig_resp = client.get(MODEL_CATALOG_SIG_URL).send().await?;
+    if !sig_resp.status().is_success() {
+        anyhow::bail!(
+            "Remote catalog signature returned status {}",
+            sig_resp.status().as_u16()
+        );
+    }
+    let sig_text = sig_resp.text().await?;
+
+    let signature_valid = verify_catalog_signature(&catalog_bytes, &sig_text)?;
+    if !signature_valid {
+        anyhow::bail!("Remote catalog signature verification failed");
+    }
+
+    let catalog = parse_catalog(&catalog_bytes)?;
+    cache_catalog(&catalog_bytes, &sig_text)?;
+
+    Ok(LoadedCatalog {
+        catalog,
+        source: "remote".to_string(),
+        signature_valid,
+    })
+}
+
+async fn load_model_catalog(refresh: bool) -> anyhow::Result<LoadedCatalog> {
+    if refresh {
+        if let Ok(remote) = try_fetch_remote_catalog().await {
+            return Ok(remote);
+        }
+    }
+
+    if !refresh {
+        if let Ok(cached) = load_cached_catalog() {
+            return Ok(cached);
+        }
+    }
+
+    if let Ok(remote) = try_fetch_remote_catalog().await {
+        return Ok(remote);
+    }
+
+    if let Ok(cached) = load_cached_catalog() {
+        return Ok(cached);
+    }
+
+    load_embedded_catalog()
 }
 
 // Required for streaming in chat
