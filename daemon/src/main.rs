@@ -26,6 +26,7 @@ mod follow_along;
 mod health;
 #[cfg(feature = "ui-overlay")]
 mod keyboard_shortcut;
+mod memory_plane;
 mod models;
 mod notifications;
 mod overlay;
@@ -48,6 +49,7 @@ use follow_along::FollowAlongManager;
 use health::HealthMonitor;
 #[cfg(feature = "ui-overlay")]
 use keyboard_shortcut::ShortcutManager;
+use memory_plane::MemoryPlaneManager;
 use notifications::NotificationManager;
 use overlay::OverlayManager;
 #[cfg(feature = "ui-overlay")]
@@ -131,6 +133,7 @@ pub struct DaemonState {
     pub context_policies_manager: Arc<RwLock<ContextPoliciesManager>>,
     pub telemetry_manager: Arc<RwLock<TelemetryManager>>,
     pub agent_runtime_manager: Arc<RwLock<AgentRuntimeManager>>,
+    pub memory_plane_manager: Arc<RwLock<MemoryPlaneManager>>,
     pub bootstrap_token: Option<String>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
@@ -205,6 +208,12 @@ async fn main() -> anyhow::Result<()> {
                 AgentRuntimeManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
             }),
         )),
+        memory_plane_manager: Arc::new(RwLock::new(
+            MemoryPlaneManager::new(PathBuf::from("/var/lib/lifeos")).unwrap_or_else(|e| {
+                warn!("Failed to initialize MemoryPlaneManager: {}", e);
+                MemoryPlaneManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+            }),
+        )),
         bootstrap_token,
         last_health_check: RwLock::new(None),
         last_update_check: RwLock::new(None),
@@ -227,6 +236,12 @@ async fn main() -> anyhow::Result<()> {
         let agent_runtime = state.agent_runtime_manager.read().await;
         if let Err(e) = agent_runtime.initialize().await {
             warn!("Failed to initialize agent runtime state: {}", e);
+        }
+    }
+    {
+        let memory_plane = state.memory_plane_manager.read().await;
+        if let Err(e) = memory_plane.initialize().await {
+            warn!("Failed to initialize memory plane state: {}", e);
         }
     }
 
@@ -312,6 +327,7 @@ async fn start_api_server(state: Arc<DaemonState>) {
         context_policies_manager: state.context_policies_manager.clone(),
         telemetry_manager: state.telemetry_manager.clone(),
         agent_runtime_manager: state.agent_runtime_manager.clone(),
+        memory_plane_manager: state.memory_plane_manager.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,
             api_key: state.bootstrap_token.clone(),

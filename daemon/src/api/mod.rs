@@ -32,6 +32,7 @@ use crate::context_policies::ContextPoliciesManager;
 use crate::experience_modes::ExperienceManager;
 use crate::follow_along::FollowAlongManager;
 use crate::health::HealthMonitor;
+use crate::memory_plane::MemoryPlaneManager;
 use crate::notifications::NotificationManager;
 use crate::overlay::{OverlayManager, OverlayTheme};
 use crate::screen_capture::ScreenCapture;
@@ -55,6 +56,7 @@ pub struct ApiState {
     pub context_policies_manager: Arc<RwLock<ContextPoliciesManager>>,
     pub telemetry_manager: Arc<RwLock<crate::telemetry::TelemetryManager>>,
     pub agent_runtime_manager: Arc<RwLock<AgentRuntimeManager>>,
+    pub memory_plane_manager: Arc<RwLock<MemoryPlaneManager>>,
     pub config: ApiConfig,
 }
 
@@ -933,6 +935,14 @@ pub fn create_router(state: ApiState) -> Router {
             "/runtime/trust-mode",
             get(get_trust_mode).post(set_trust_mode),
         )
+        .route(
+            "/memory/entries",
+            get(list_memory_entries).post(add_memory_entry),
+        )
+        .route("/memory/entries/:entry_id", delete(delete_memory_entry))
+        .route("/memory/search", get(search_memory_entries))
+        .route("/memory/stats", get(get_memory_stats))
+        .route("/memory/mcp/context", post(get_memory_mcp_context))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bootstrap_token,
@@ -3464,6 +3474,36 @@ struct TrustModePayload {
     signature: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AddMemoryEntryPayload {
+    kind: String,
+    scope: Option<String>,
+    tags: Option<Vec<String>>,
+    source: Option<String>,
+    importance: Option<u8>,
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListMemoryEntriesQuery {
+    limit: Option<usize>,
+    scope: Option<String>,
+    tag: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchMemoryEntriesQuery {
+    q: Option<String>,
+    limit: Option<usize>,
+    scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryMcpContextPayload {
+    query: String,
+    limit: Option<usize>,
+}
+
 // ==================== AGENT RUNTIME HANDLERS ====================
 
 async fn plan_intent(
@@ -3855,6 +3895,167 @@ async fn set_trust_mode(
         "status": "ok",
         "trust_mode": trust,
     })))
+}
+
+async fn add_memory_entry(
+    State(state): State<ApiState>,
+    Json(payload): Json<AddMemoryEntryPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let scope = payload
+        .scope
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("user");
+    let tags = payload.tags.unwrap_or_default();
+    let source = payload.source.as_deref();
+    let importance = payload.importance.unwrap_or(50);
+
+    let mgr = state.memory_plane_manager.read().await;
+    let entry = mgr
+        .add_entry(
+            &payload.kind,
+            scope,
+            &tags,
+            source,
+            importance,
+            &payload.content,
+        )
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            let status =
+                if msg.contains("required") || msg.contains("range") || msg.contains("too large") {
+                    StatusCode::BAD_REQUEST
+                } else {
+                    StatusCode::INTERNAL_SERVER_ERROR
+                };
+            (
+                status,
+                Json(ApiError {
+                    error: status.canonical_reason().unwrap_or("Error").to_string(),
+                    message: msg,
+                    code: status.as_u16(),
+                }),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "entry": entry,
+    })))
+}
+
+async fn list_memory_entries(
+    State(state): State<ApiState>,
+    Query(query): Query<ListMemoryEntriesQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let limit = query.limit.unwrap_or(20);
+    let mgr = state.memory_plane_manager.read().await;
+    let entries = mgr
+        .list_entries(limit, query.scope.as_deref(), query.tag.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "entries": entries,
+        "count": entries.len(),
+    })))
+}
+
+async fn search_memory_entries(
+    State(state): State<ApiState>,
+    Query(query): Query<SearchMemoryEntriesQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let q = query.q.as_deref().unwrap_or("");
+    let limit = query.limit.unwrap_or(10);
+    let mgr = state.memory_plane_manager.read().await;
+    let results = mgr
+        .search_entries(q, limit, query.scope.as_deref())
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            let status = if msg.contains("query is required") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                Json(ApiError {
+                    error: status.canonical_reason().unwrap_or("Error").to_string(),
+                    message: msg,
+                    code: status.as_u16(),
+                }),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "results": results,
+        "count": results.len(),
+    })))
+}
+
+async fn delete_memory_entry(
+    State(state): State<ApiState>,
+    Path(entry_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let deleted = mgr.delete_entry(&entry_id).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "deleted": deleted,
+        "entry_id": entry_id,
+    })))
+}
+
+async fn get_memory_stats(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let stats = mgr.stats().await;
+    Ok(Json(
+        serde_json::to_value(stats).unwrap_or_else(|_| serde_json::json!({})),
+    ))
+}
+
+async fn get_memory_mcp_context(
+    State(state): State<ApiState>,
+    Json(payload): Json<MemoryMcpContextPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let context = mgr
+        .mcp_context(&payload.query, payload.limit.unwrap_or(5))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: e.to_string(),
+                    code: 400,
+                }),
+            )
+        })?;
+    Ok(Json(context))
 }
 
 // ==================== SERVER STARTUP ====================

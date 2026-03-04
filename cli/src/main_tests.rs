@@ -391,4 +391,73 @@ mod tests {
             _ => panic!("Expected onboarding trust-mode enable command"),
         }
     }
+
+    #[test]
+    fn test_cli_parses_memory_add_command() {
+        let cli = Cli::parse_from([
+            "life",
+            "memory",
+            "add",
+            "remember this context",
+            "--kind",
+            "note",
+            "--scope",
+            "user",
+            "--tag",
+            "phase2",
+            "--importance",
+            "75",
+        ]);
+        match cli.command {
+            Commands::Memory(commands::memory::MemoryCommands::Add {
+                content,
+                file,
+                kind,
+                scope,
+                tag,
+                source,
+                importance,
+            }) => {
+                assert_eq!(content.as_deref(), Some("remember this context"));
+                assert!(file.is_none());
+                assert_eq!(kind, "note");
+                assert_eq!(scope, "user");
+                assert_eq!(tag, vec!["phase2"]);
+                assert!(source.is_none());
+                assert_eq!(importance, 75);
+            }
+            _ => panic!("Expected memory add command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_permissions_revoke_command() {
+        let cli = Cli::parse_from([
+            "life",
+            "permissions",
+            "revoke",
+            "org.test.app",
+            "--resource",
+            "filesystem.home",
+        ]);
+        match cli.command {
+            Commands::Permissions(commands::permissions::PermissionsCommands::Revoke {
+                app_id,
+                resource,
+            }) => {
+                assert_eq!(app_id, "org.test.app");
+                assert_eq!(resource.as_deref(), Some("filesystem.home"));
+            }
+            _ => panic!("Expected permissions revoke command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_sync_now_dry_run() {
+        let cli = Cli::parse_from(["life", "sync", "now", "--dry-run"]);
+        match cli.command {
+            Commands::Sync(commands::sync::SyncCommands::Now { dry_run }) => assert!(dry_run),
+            _ => panic!("Expected sync now command"),
+        }
+    }
 }

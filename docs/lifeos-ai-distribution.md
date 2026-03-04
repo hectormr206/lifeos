@@ -1047,7 +1047,7 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 Implementacion concreta:
 
 - [ ] Embeddings + busqueda semantica local cifrada (SQLite-vec, modelo: `nomic-embed-text`).
-- [ ] Memoria contextual local cifrada persistente (memory-plane con CLI/API/MCP).
+- [x] Memoria contextual local cifrada persistente (memory-plane con CLI/API/MCP). _Implementado baseline v1: almacenamiento local cifrado, API `/memory/*`, CLI `life memory` y salida de contexto MCP._
 - [ ] Asistente accesible desde launcher, terminal y atajo de teclado.
 - [ ] Correlacion contextual cross-app/cross-archivo (grafo de actividad).
 
@@ -1067,7 +1067,7 @@ Implementacion concreta:
 
 **CLI extendido:**
 
-- [ ] `life focus`, `life meeting`, `life sync`, `life permissions`, `life workspace`.
+- [ ] `life focus`, `life meeting`. _`life sync`, `life permissions` y `life workspace` ya estan implementados._
 - [x] `life onboarding trust-mode` para configuracion de autonomia. _Implementado: `status|enable|disable` con validacion de bundle/sig en daemon._
 
 **Entregable:** release 1.0 con asistente AI multimodal funcional, Computer Use API operativo, y modelo biologico (Soul/Skills/Workplace/Agents) implementado.
@@ -1477,6 +1477,11 @@ life intents mode set run-until-done  Configurar modo de ejecucion autonoma.
 life intents status <intent-id>       Ver estado de ejecucion y evidencias.
 life intents validate <file.json>     Validar payload contra schema v1.
 life intents log [--since 24h]        Auditar intents/acciones/diffs.
+
+life memory add "..."                 Guardar memoria contextual cifrada local.
+life memory list --limit 20           Listar memorias recientes.
+life memory search "..."              Buscar memorias relevantes.
+life memory mcp "..."                 Exportar contexto compatible con MCP.
 
 life id issue --agent <name>          Emitir token de capacidad temporal.
 life id list                           Listar identidades y delegaciones activas.
@@ -2092,9 +2097,9 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 1. Flujo de firma Cosign con KMS operativo en CI (actualmente manual).
 2. `life capsule export/restore` funcional end-to-end (minimo config + apps + dotfiles).
 3. Onboarding GUI con consentimiento explicito para activar sync (first-boot script existe, falta GUI).
-4. Matriz de compatibilidad de hardware publicada.
-5. Guia operativa de incidentes (rollback, recovery, revocacion de artefactos).
-6. Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.
+4. ~~Matriz de compatibilidad de hardware publicada.~~ **Hecho.** `docs/hardware-compatibility-matrix.md` publicado y versionado.
+5. ~~Guia operativa de incidentes (rollback, recovery, revocacion de artefactos).~~ **Hecho.** `docs/incident-response-playbook.md` con runbook operativo.
+6. ~~Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.~~ **Hecho (baseline v1).** Daemon + API + CLI + salida MCP + cifrado AES-256-GCM-SIV.
 7. Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.
 8. Registry open source de skills/capacidades con versionado, firmas y politica de confianza.
 9. Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.

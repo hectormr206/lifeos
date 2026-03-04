@@ -69,6 +69,15 @@ enum Commands {
     /// Onboarding and managed deployment controls
     #[clap(subcommand)]
     Onboarding(commands::onboarding::OnboardingCommands),
+    /// Encrypted local memory-plane operations
+    #[clap(subcommand)]
+    Memory(commands::memory::MemoryCommands),
+    /// Permissions policy and audit controls
+    #[clap(subcommand)]
+    Permissions(commands::permissions::PermissionsCommands),
+    /// Local synchronization controls
+    #[clap(subcommand)]
+    Sync(commands::sync::SyncCommands),
     /// App Store - browse and install applications
     #[clap(subcommand)]
     Store(commands::store::StoreCommands),
@@ -157,6 +166,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Id(args) => commands::id::execute(args).await,
         Commands::Workspace(args) => commands::workspace::execute(args).await,
         Commands::Onboarding(args) => commands::onboarding::execute(args).await,
+        Commands::Memory(args) => commands::memory::execute(args).await,
+        Commands::Permissions(args) => commands::permissions::execute(args).await,
+        Commands::Sync(args) => commands::sync::execute(args).await,
         Commands::Store(args) => commands::store::execute(args).await,
         Commands::Telemetry(args) => commands::telemetry::execute(args).await,
         Commands::Theme(args) => commands::theme::execute(args).await,
