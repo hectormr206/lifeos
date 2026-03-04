@@ -1,0 +1,9 @@
+{
+  "channel": "edge",
+  "version": "edge-20260304-b24d699",
+  "tag": "edge-20260304-b24d699",
+  "digest": "sha256:076bf6800ca528a6c10e7a27dd563cb0fb31b1ea001e5d5b5185a49ebed8a7f3",
+  "image": "ghcr.io/hectormr206/lifeos:edge-20260304-b24d699",
+  "released_at": "2026-03-04T17:41:46Z",
+  "commit": "b24d6992467e2cfb7a6d5169219c67646f8fdc05"
+}
