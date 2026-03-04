@@ -2112,7 +2112,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 6. ~~Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.~~ **Hecho (baseline v1).** Daemon + API + CLI + salida MCP + cifrado AES-256-GCM-SIV.
 7. ~~Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.~~ **Hecho (baseline v1).** `life intents orchestrate/team-runs` + API `/orchestrator/*` con auditoria en ledger.
 8. ~~Registry open source de skills/capacidades con versionado, firmas y politica de confianza.~~ **Hecho (baseline local v1).** `life skills install/list/verify/remove` con manifiestos versionados y verificacion SHA-256.
-9. Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.
+9. ~~Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.~~ **Hecho (baseline CI).** Workflow `ai-review.yml` ejecuta `scripts/ai-review.py`, aplica reglas bloqueantes y publica artefacto JSON.
 10. ~~Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.~~ **Hecho (baseline v1).** `life init --profile ... --tui` aplica perfiles reproducibles y guarda receipt de bootstrap.
 11. ~~Perfiles de runtime `lite/edge/secure/pro` con deteccion automatica de hardware.~~ **Hecho.** `life ai profile` detecta hardware y persiste perfil.
 12. ~~Aislamiento por objetivo (sandbox/container/microVM) segun riesgo de la accion.~~ **Hecho.** `life workspace run/list` activo con control de aprobacion por riesgo y fallback seguro.
