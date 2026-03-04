@@ -1,5 +1,6 @@
 use clap::Args;
 use colored::Colorize;
+use dialoguer::Select;
 use std::path::PathBuf;
 
 use crate::config;
@@ -12,6 +13,12 @@ pub struct InitArgs {
     /// Skip AI setup
     #[arg(long)]
     pub skip_ai: bool,
+    /// Bootstrap profile (user|developer|server)
+    #[arg(long, value_parser = ["user", "developer", "server"])]
+    pub profile: Option<String>,
+    /// Open interactive TUI profile selector
+    #[arg(long)]
+    pub tui: bool,
 }
 
 pub async fn execute(args: InitArgs) -> anyhow::Result<()> {
@@ -52,6 +59,9 @@ pub async fn execute(args: InitArgs) -> anyhow::Result<()> {
         }
     };
 
+    let selected_profile = resolve_bootstrap_profile(args.profile.as_deref(), args.tui)?;
+    apply_bootstrap_profile(&lifeos_config_path, selected_profile, args.skip_ai).await?;
+
     // Step 3: Create data directories
     print!("Creating data directories... ");
     match create_data_directories().await {
@@ -80,6 +90,7 @@ pub async fn execute(args: InitArgs) -> anyhow::Result<()> {
     println!();
     println!("Configuration: {}", lifeos_config_path.display());
     println!("Config directory: {}", config_dir.display());
+    println!("Bootstrap profile: {}", selected_profile.as_str().cyan());
     println!();
     println!("Next steps:");
     println!(
@@ -97,6 +108,7 @@ async fn create_data_directories() -> anyhow::Result<()> {
         get_data_dir()?.join("capsules"),
         get_data_dir()?.join("logs"),
         get_data_dir()?.join("cache"),
+        get_data_dir()?.join("bootstrap"),
     ];
 
     for dir in data_dirs {
@@ -224,5 +236,124 @@ async fn setup_ai() -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BootstrapProfile {
+    User,
+    Developer,
+    Server,
+}
+
+impl BootstrapProfile {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Developer => "developer",
+            Self::Server => "server",
+        }
+    }
+
+    fn from_str(input: &str) -> anyhow::Result<Self> {
+        match input.trim().to_lowercase().as_str() {
+            "user" => Ok(Self::User),
+            "developer" => Ok(Self::Developer),
+            "server" => Ok(Self::Server),
+            other => anyhow::bail!("Unsupported bootstrap profile '{}'", other),
+        }
+    }
+}
+
+fn resolve_bootstrap_profile(profile: Option<&str>, tui: bool) -> anyhow::Result<BootstrapProfile> {
+    if let Some(explicit) = profile {
+        return BootstrapProfile::from_str(explicit);
+    }
+
+    if tui {
+        let items = vec![
+            "user - daily desktop profile",
+            "developer - tooling and candidate updates",
+            "server - conservative headless profile",
+        ];
+        let selected = Select::new()
+            .with_prompt("Select LifeOS bootstrap profile")
+            .items(&items)
+            .default(0)
+            .interact()?;
+
+        let profile = match selected {
+            0 => BootstrapProfile::User,
+            1 => BootstrapProfile::Developer,
+            _ => BootstrapProfile::Server,
+        };
+        return Ok(profile);
+    }
+
+    Ok(BootstrapProfile::User)
+}
+
+async fn apply_bootstrap_profile(
+    config_path: &std::path::Path,
+    profile: BootstrapProfile,
+    skip_ai: bool,
+) -> anyhow::Result<()> {
+    let mut cfg = config::load_config_from(config_path)?;
+
+    match profile {
+        BootstrapProfile::User => {
+            cfg.updates.channel = "stable".to_string();
+            cfg.updates.auto_check = true;
+            cfg.updates.auto_apply = false;
+            cfg.updates.schedule = "daily".to_string();
+            cfg.security.auto_lock = true;
+            cfg.security.auto_lock_timeout = 300;
+            cfg.ai.enabled = !skip_ai;
+        }
+        BootstrapProfile::Developer => {
+            cfg.updates.channel = "candidate".to_string();
+            cfg.updates.auto_check = true;
+            cfg.updates.auto_apply = false;
+            cfg.updates.schedule = "daily".to_string();
+            cfg.security.auto_lock = false;
+            cfg.security.auto_lock_timeout = 0;
+            cfg.ai.enabled = !skip_ai;
+        }
+        BootstrapProfile::Server => {
+            cfg.updates.channel = "stable".to_string();
+            cfg.updates.auto_check = true;
+            cfg.updates.auto_apply = true;
+            cfg.updates.schedule = "daily".to_string();
+            cfg.security.auto_lock = false;
+            cfg.security.auto_lock_timeout = 0;
+            cfg.ai.enabled = false;
+        }
+    }
+
+    if skip_ai {
+        cfg.ai.enabled = false;
+    }
+
+    config::save_config(&cfg, config_path)?;
+    save_bootstrap_receipt(profile, config_path).await?;
+    Ok(())
+}
+
+async fn save_bootstrap_receipt(
+    profile: BootstrapProfile,
+    config_path: &std::path::Path,
+) -> anyhow::Result<()> {
+    let data_dir = get_data_dir()?.join("bootstrap");
+    tokio::fs::create_dir_all(&data_dir).await?;
+    let receipt = serde_json::json!({
+        "profile": profile.as_str(),
+        "config_path": config_path.display().to_string(),
+        "created_at": chrono::Utc::now().to_rfc3339(),
+    });
+    tokio::fs::write(
+        data_dir.join("last-bootstrap.json"),
+        serde_json::to_string_pretty(&receipt)?,
+    )
+    .await?;
     Ok(())
 }

@@ -1432,6 +1432,8 @@ life config apply        Aplicar configuracion declarativa (instalar apps faltan
 life lab start           Iniciar entorno de pruebas (container/VM).
 life lab test            Correr test suite en el lab.
 life lab report          Generar reporte del lab.
+life init --profile developer --tui
+                         Bootstrap reproducible por perfil con selector TUI.
 
 life ai ask "..."        Preguntar al asistente local (llama-server).
 life ai do "..."         Ejecutar accion en lenguaje natural.
@@ -2103,7 +2105,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 7. ~~Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.~~ **Hecho (baseline v1).** `life intents orchestrate/team-runs` + API `/orchestrator/*` con auditoria en ledger.
 8. ~~Registry open source de skills/capacidades con versionado, firmas y politica de confianza.~~ **Hecho (baseline local v1).** `life skills install/list/verify/remove` con manifiestos versionados y verificacion SHA-256.
 9. Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.
-10. Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.
+10. ~~Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.~~ **Hecho (baseline v1).** `life init --profile ... --tui` aplica perfiles reproducibles y guarda receipt de bootstrap.
 11. ~~Perfiles de runtime `lite/edge/secure/pro` con deteccion automatica de hardware.~~ **Hecho.** `life ai profile` detecta hardware y persiste perfil.
 12. ~~Aislamiento por objetivo (sandbox/container/microVM) segun riesgo de la accion.~~ **Hecho.** `life workspace run/list` activo con control de aprobacion por riesgo y fallback seguro.
 13. Constructor visual de workflows y agentes (no-code) para usuarios no tecnicos.

@@ -25,6 +25,15 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_init_with_profile() {
+        let cli = Cli::parse_from(["life", "init", "--profile", "developer"]);
+        match cli.command {
+            Commands::Init(args) => assert_eq!(args.profile.as_deref(), Some("developer")),
+            _ => panic!("Expected Init command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_status_command() {
         let cli = Cli::parse_from(["life", "status"]);
         match cli.command {
@@ -188,6 +197,8 @@ mod tests {
         let args = commands::init::InitArgs::default();
         assert!(!args.force);
         assert!(!args.skip_ai);
+        assert!(args.profile.is_none());
+        assert!(!args.tui);
     }
 
     #[test]
