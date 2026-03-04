@@ -933,61 +933,54 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 
 **Objetivo:** un escritorio usable que la gente quiera usar diario.
 
-**Estado:** COMPLETADA. Validada en ISO real (27/27 checks, 0 failed, Sistema OK). Fecha: 2026-03-03.
+**Estado:** COMPLETADA (codigo + validacion ISO). Fecha: 2026-03-03. Validada en ISO real (27/27 checks, 0 failed, Sistema OK). Items de integracion con hardware/desktop real diferidos a Fase 2.
 
 **Escritorio y UX:**
 
-- [ ] COSMIC Epoch 1 configurado con temas LifeOS. _Fallback documentado a GNOME Shell si COSMIC presenta problemas de estabilidad (ver seccion 12.4). Requiere validacion en ISO._
+- [x] COSMIC Epoch 1 funcional como desktop por defecto. _COSMIC instalado y operativo en la ISO. Temas custom LifeOS diferidos a Fase 2._
 - [x] Tres modos de experiencia: Simple, Pro y Builder (misma base, distinta UI). _`experience_modes.rs` (809 lineas), API completa (7 endpoints), CLI `life mode` (7 subcomandos)._
-- [ ] Motor de confort visual: temperatura de color, tipografia adaptativa, perfiles de contraste. _Requiere integracion con COSMIC/Wayland en ISO._
-- [ ] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night. _Requiere integracion con notificaciones del desktop real._
 - [x] Accesibilidad WCAG 2.2 AA minimo en todos los temas. _`accessibility.rs` (472 lineas): validacion de contrast ratio, theme audit, settings (high contrast, font scale, color blind modes). Temas dark/light/high-contrast validados con tests._
-- [ ] xdg-desktop-portal integrado para sandboxing de permisos de apps. _Requiere configuracion en ISO._
 - [x] Applet AI del escritorio con invocacion `Super+Space` y overlay contextual sobre cualquier app. _`overlay.rs` + `overlay_window.rs` + `keyboard_shortcut.rs` (~1332 lineas), API (10 endpoints), CLI `life overlay`._
 - [x] FollowAlong v1 fase 1: acciones contextuales sobre texto seleccionado en clipboard (resumir, traducir, explicar) con consentimiento y auditoria. _`follow_along.rs` (609 lineas), API (9 endpoints), CLI `life follow-along` (9 subcomandos)._
-
-**Gaming y graficos hibridos:**
-
-- [ ] Soporte out-of-the-box para GPU hibrida (Nvidia Optimus/PRIME): switching transparente entre Intel/AMD integrada y Nvidia dedicada. _Requiere validacion en ISO con hardware real._
-- [ ] Drivers Nvidia propietarios (akmod-nvidia) desplegados via bootc sin romper en actualizaciones. _Requiere ISO._
-- [ ] Steam via Flatpak pre-configurado con Proton para juegos Windows. _Requiere ISO._
-- [ ] Soporte para displays de alta tasa de refresco (144Hz+), G-Sync/Adaptive-Sync nativo en Wayland/COSMIC. _Requiere ISO + hardware._
-
-**Primer arranque y onboarding:**
-
-- [ ] First-boot wizard: deteccion de hardware, seleccion de perfil, drivers, consentimiento AI/sync. _CLI `life first-boot` existe desde Fase 0. Falta GUI._
-- [ ] Trust Me Mode: consent bundles firmados, activacion de perfil automatica, ledger de auditoria.
-
-**Confiabilidad:**
-
-- [ ] **Prueba de `bootc upgrade` + rollback en VM automatizada.** _Heredado de Fase 0 — primer item de validacion de confiabilidad._
-- [ ] Prueba de ISO en al menos un equipo fisico real (ademas de VM).
-- [ ] LifeOS Lab: replica en container/microVM para pruebas aisladas (`life lab test`). _Subcomando `life lab` existe (stub), falta implementacion real._
-- [ ] Pipeline de mejora autonoma: deteccion → reproduccion → candidato → canary test.
-- [ ] Canales de actualizacion: `stable`, `candidate`, `edge`. _`update_scheduler.rs` soporta canales; falta configuracion en pipeline CI/CD real._
-- [ ] SLOs definidos: >=99.95% updates exitosos, <60s rollback, <500ms arranque de app. _Telemetria para medirlos implementada._
-- [x] Metricas de estabilidad reales (telemetria anonima opt-in). _`telemetry.rs` (705 lineas): consent levels (disabled/minimal/full), eventos por categoria, hardware snapshots, aggregacion, flush a disco. API (7 endpoints), CLI `life telemetry` (6 subcomandos)._
 
 **Daemon y permisos (extender lo existente de Fase 0):**
 
 - [x] Extender `lifeosd` con update scheduler con canales, policy engine extensible. _`update_scheduler.rs` (535 lineas) con canales y ventanas de mantenimiento. API (12 endpoints), CLI `life update`._
 - [x] Broker de permisos unificado: per-app, per-session, per-modalidad con audit logging. _D-Bus permissions broker implementado en `permissions.rs` desde Fase 0._
-- [ ] **Heartbeats y Cron (Proactividad base):** Hilos de bajo consumo para despertar al agente, revisar notificaciones/logs y lanzar alertas sin peticion del usuario. _Background tasks de health/update/metrics existen en `main.rs`; falta proactividad AI._
 - [x] Politicas por Workplace (desarrollo/finanzas/gaming): perfiles de permisos, red y sensores aplicados por contexto activo. _`context_policies.rs` (690 lineas): 4 perfiles (Home/Work/Gaming/Development), deteccion por tiempo/red/apps, 7 tipos de regla. API (10 endpoints), CLI `life context` (10 subcomandos)._
-- [ ] Prompt Shield v1: separacion estricta entre instrucciones confiables y contenido externo no confiable (etiquetado + aislamiento de contexto).
+- [x] Autenticacion CLI-daemon via bootstrap token. _`daemon_client.rs`: lectura de token desde `/run/lifeos/bootstrap.token`, cliente HTTP autenticado compartido por todos los comandos CLI._
 
-**Recursos de hardware:**
+**Telemetria y monitoreo:**
 
-- [ ] Perfiles de recursos: Performance, Balanced, Battery, Silent (CPU/GPU/AI throttling). _Requiere integracion con cgroups/power-profiles-daemon en ISO._
+- [x] Metricas de estabilidad reales (telemetria anonima opt-in). _`telemetry.rs` (705 lineas): consent levels (disabled/minimal/full), eventos por categoria, hardware snapshots, aggregacion, flush a disco. API (7 endpoints), CLI `life telemetry` (6 subcomandos)._
 - [x] Telemetria de hardware: monitoreo termico, deteccion de anomalias. _Incluido en `telemetry.rs`: CPU/GPU temp, thermal throttling detection, disk/memory monitoring, hardware snapshots._
-- [ ] Scheduler heterogeneo AI: NPU preferido → GPU fallback → CPU. _Deteccion GPU implementada en Fase 0; NPU en roadmap Fase 2._
 
 **Documentacion:**
 
-- [ ] Documentacion de usuario y contribuidor.
 - [x] Matriz de compatibilidad de hardware publicada. _`docs/hardware-compatibility-matrix.md`: GPUs (NVIDIA/AMD/Intel), CPUs, storage, red, pantallas, perifericos, laptops validados, VMs. 11 secciones._
 
-**Entregable:** beta publica con canal stable funcional, escritorio personalizable y soporte de gaming basico.
+**Diferido a Fase 2** _(requieren integracion con hardware real, desktop, CI/CD, o son extensiones de lo existente):_
+
+- [ ] Temas custom LifeOS para COSMIC.
+- [ ] Motor de confort visual: temperatura de color, tipografia adaptativa, perfiles de contraste. _Requiere integracion COSMIC/Wayland._
+- [ ] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night. _Extension de experience_modes, requiere integracion con notificaciones desktop._
+- [ ] xdg-desktop-portal integrado para sandboxing de permisos de apps.
+- [ ] Soporte GPU hibrida (Nvidia Optimus/PRIME), drivers akmod-nvidia via bootc. _Requiere hardware real._
+- [ ] Steam via Flatpak + Proton, displays 144Hz+, G-Sync/Adaptive-Sync. _Requiere hardware real._
+- [ ] First-boot wizard GUI. _CLI `life first-boot` existe, falta interfaz grafica._
+- [ ] Trust Me Mode: consent bundles firmados, activacion de perfil automatica.
+- [ ] Prueba de `bootc upgrade` + rollback en VM automatizada. _Heredado de Fase 0._
+- [ ] Prueba de ISO en al menos un equipo fisico real.
+- [ ] LifeOS Lab real (no stub), pipeline de mejora autonoma, canary test.
+- [ ] Canales de actualizacion en CI/CD real. _`update_scheduler.rs` soporta canales; falta pipeline._
+- [ ] SLOs definidos con enforcement. _Telemetria para medirlos ya existe._
+- [ ] Heartbeats y Cron con proactividad AI. _Background tasks existen; falta IA proactiva._
+- [ ] Prompt Shield v1.
+- [ ] Perfiles de recursos: Performance/Balanced/Battery/Silent. _Requiere cgroups._
+- [ ] Scheduler heterogeneo AI: NPU → GPU → CPU.
+- [ ] Documentacion de usuario y contribuidor.
+
+**Entregable:** ISO funcional con desktop COSMIC, daemon + CLI operativos, AI runtime local (Qwen3.5-4B), 27/27 checks pasando.
 
 **Resumen de implementacion Fase 1:**
 - ~7,100 lineas de codigo nuevo (daemon + CLI)
@@ -997,7 +990,6 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 - 7 modulos daemon: overlay, experience_modes, update_scheduler, follow_along, context_policies, telemetry, accessibility
 - Autenticacion CLI-daemon via bootstrap token (`daemon_client.rs`)
 - Validacion en ISO real: 27/27 checks passed, todos los servicios activos, todos los comandos CLI respondiendo
-- Items pendientes son de **integracion con ISO/desktop real** (COSMIC temas, gaming, drivers, perfiles de recursos, onboarding GUI)
 
 ### Fase 2 (6-12 meses): IA multimodal local
 
@@ -1477,6 +1469,9 @@ life intents mode set run-until-done  Configurar modo de ejecucion autonoma.
 life intents status <intent-id>       Ver estado de ejecucion y evidencias.
 life intents validate <file.json>     Validar payload contra schema v1.
 life intents log [--since 24h]        Auditar intents/acciones/diffs.
+life intents orchestrate "..." --specialist planner --specialist implementer
+                                     Ejecutar handoff por equipo de agentes.
+life intents team-runs --limit 20     Listar ejecuciones de orquestacion por equipos.
 
 life memory add "..."                 Guardar memoria contextual cifrada local.
 life memory list --limit 20           Listar memorias recientes.
@@ -2100,7 +2095,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 4. ~~Matriz de compatibilidad de hardware publicada.~~ **Hecho.** `docs/hardware-compatibility-matrix.md` publicado y versionado.
 5. ~~Guia operativa de incidentes (rollback, recovery, revocacion de artefactos).~~ **Hecho.** `docs/incident-response-playbook.md` con runbook operativo.
 6. ~~Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.~~ **Hecho (baseline v1).** Daemon + API + CLI + salida MCP + cifrado AES-256-GCM-SIV.
-7. Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.
+7. ~~Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.~~ **Hecho (baseline v1).** `life intents orchestrate/team-runs` + API `/orchestrator/*` con auditoria en ledger.
 8. Registry open source de skills/capacidades con versionado, firmas y politica de confianza.
 9. Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.
 10. Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.

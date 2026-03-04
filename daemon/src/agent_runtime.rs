@@ -119,6 +119,27 @@ pub struct WorkspaceRunRecord {
     pub stderr: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamHandoffStep {
+    pub specialist: String,
+    pub intent_id: String,
+    pub status: IntentStatus,
+    pub summary: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamOrchestrationRecord {
+    pub run_id: String,
+    pub objective: String,
+    pub execution_mode: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub status: IntentStatus,
+    pub steps: Vec<TeamHandoffStep>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ExecutionMode {
@@ -143,6 +164,8 @@ struct AgentRuntimeState {
     ledger: Vec<LedgerEntry>,
     #[serde(default)]
     workspace_runs: Vec<WorkspaceRunRecord>,
+    #[serde(default)]
+    team_runs: Vec<TeamOrchestrationRecord>,
     #[serde(default)]
     execution_mode: ExecutionMode,
     #[serde(default)]
@@ -706,6 +729,112 @@ impl AgentRuntimeManager {
             .collect()
     }
 
+    pub async fn orchestrate_team(
+        &self,
+        objective: &str,
+        specialists: &[String],
+        approved: bool,
+    ) -> Result<TeamOrchestrationRecord> {
+        let objective = objective.trim();
+        if objective.is_empty() {
+            anyhow::bail!("objective is required");
+        }
+        if specialists.is_empty() {
+            anyhow::bail!("at least one specialist is required");
+        }
+
+        let run_id = format!("team-{}", Uuid::new_v4());
+        let started_at = Utc::now();
+        let mut steps = Vec::new();
+        let mut overall_status = IntentStatus::Succeeded;
+
+        for specialist in specialists {
+            let specialist = specialist.trim();
+            if specialist.is_empty() {
+                continue;
+            }
+
+            let step_started = Utc::now();
+            let planned = self
+                .plan_intent(&format!("[specialist:{}] {}", specialist, objective))
+                .await?;
+            let applied = self.apply_intent(&planned.intent_id, approved).await?;
+            let step_finished = Utc::now();
+            let status = applied.status.clone();
+            let summary = match status {
+                IntentStatus::Succeeded => "handoff completed".to_string(),
+                IntentStatus::AwaitingApproval => {
+                    overall_status = IntentStatus::AwaitingApproval;
+                    "handoff blocked awaiting approval".to_string()
+                }
+                _ => {
+                    overall_status = IntentStatus::Failed;
+                    "handoff failed".to_string()
+                }
+            };
+            steps.push(TeamHandoffStep {
+                specialist: specialist.to_string(),
+                intent_id: planned.intent_id.clone(),
+                status: applied.status,
+                summary,
+                started_at: step_started,
+                finished_at: step_finished,
+            });
+
+            if matches!(
+                overall_status,
+                IntentStatus::AwaitingApproval | IntentStatus::Failed
+            ) {
+                break;
+            }
+        }
+
+        let finished_at = Utc::now();
+        let execution_mode = {
+            let state = self.state.read().await;
+            format_execution_mode(&state.execution_mode).to_string()
+        };
+
+        let run = TeamOrchestrationRecord {
+            run_id: run_id.clone(),
+            objective: objective.to_string(),
+            execution_mode,
+            started_at,
+            finished_at,
+            status: overall_status.clone(),
+            steps,
+        };
+
+        let mut state = self.state.write().await;
+        state.team_runs.push(run.clone());
+        append_ledger(
+            &mut state,
+            "orchestrator",
+            "team_run",
+            &run_id,
+            serde_json::json!({
+                "objective": objective,
+                "status": format!("{:?}", overall_status),
+                "steps": run.steps.len(),
+                "specialists": specialists,
+            }),
+        );
+        drop(state);
+        self.save_state().await?;
+        Ok(run)
+    }
+
+    pub async fn list_team_runs(&self, limit: usize) -> Vec<TeamOrchestrationRecord> {
+        let state = self.state.read().await;
+        state
+            .team_runs
+            .iter()
+            .rev()
+            .take(limit.max(1).min(200))
+            .cloned()
+            .collect()
+    }
+
     pub async fn execution_mode(&self) -> ExecutionMode {
         let state = self.state.read().await;
         state.execution_mode.clone()
@@ -1141,6 +1270,32 @@ mod tests {
             .unwrap();
         assert_eq!(mode, ExecutionMode::SilentUntilDone);
         assert_eq!(mgr.execution_mode().await, ExecutionMode::SilentUntilDone);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn orchestrate_team_creates_handoff_steps() {
+        let dir = temp_dir("agent-runtime-test-team");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let run = mgr
+            .orchestrate_team(
+                "prepare phase2 release checklist",
+                &[
+                    "planner".to_string(),
+                    "implementer".to_string(),
+                    "reviewer".to_string(),
+                ],
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(run.steps.len(), 3);
+        assert_eq!(run.status, IntentStatus::Succeeded);
+        let listed = mgr.list_team_runs(10).await;
+        assert_eq!(listed.len(), 1);
 
         std::fs::remove_dir_all(dir).ok();
     }

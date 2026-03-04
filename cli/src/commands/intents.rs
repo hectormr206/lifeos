@@ -30,6 +30,22 @@ pub enum IntentsCommands {
         #[arg(long)]
         passphrase: Option<String>,
     },
+    /// Run a specialist team handoff for one objective
+    Orchestrate {
+        objective: String,
+        /// Specialists involved in order (repeatable)
+        #[arg(long, required = true)]
+        specialist: Vec<String>,
+        /// Explicitly approve high/critical intents
+        #[arg(long)]
+        approve: bool,
+    },
+    /// List recent team orchestrations
+    TeamRuns {
+        /// Max runs to return
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
     /// Runtime execution mode for autonomous intent pipeline
     #[command(subcommand)]
     Mode(IntentModeCommands),
@@ -61,6 +77,12 @@ pub async fn execute(args: IntentsCommands) -> anyhow::Result<()> {
             export,
             passphrase,
         } => cmd_log(limit, export.as_deref(), passphrase.as_deref()).await?,
+        IntentsCommands::Orchestrate {
+            objective,
+            specialist,
+            approve,
+        } => cmd_orchestrate(&objective, &specialist, approve).await?,
+        IntentsCommands::TeamRuns { limit } => cmd_team_runs(limit).await?,
         IntentsCommands::Mode(mode_cmd) => cmd_mode(mode_cmd).await?,
     }
     Ok(())
@@ -414,6 +436,107 @@ async fn cmd_mode_set(mode: &str, actor: &str) -> anyhow::Result<()> {
         Ok(r) => {
             let body = r.text().await.unwrap_or_default();
             anyhow::bail!("Failed to set runtime mode: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_orchestrate(
+    objective: &str,
+    specialists: &[String],
+    approve: bool,
+) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/orchestrator/team-run", daemon_url()))
+        .json(&serde_json::json!({
+            "objective": objective,
+            "specialists": specialists,
+            "approved": approve,
+        }))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            let run = &body["run"];
+            println!("{}", "Team orchestration started".green().bold());
+            println!(
+                "  Run ID:    {}",
+                run["run_id"].as_str().unwrap_or("?").cyan()
+            );
+            println!("  Objective: {}", run["objective"].as_str().unwrap_or("?"));
+            println!(
+                "  Status:    {}",
+                run["status"].as_str().unwrap_or("?").cyan()
+            );
+            if let Some(steps) = run["steps"].as_array() {
+                println!("  Steps:     {}", steps.len());
+                for step in steps {
+                    println!(
+                        "    - {} => {}",
+                        step["specialist"].as_str().unwrap_or("?").cyan(),
+                        step["status"].as_str().unwrap_or("?")
+                    );
+                }
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to orchestrate team run: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_team_runs(limit: usize) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!(
+            "{}/api/v1/orchestrator/team-runs?limit={}",
+            daemon_url(),
+            limit.max(1).min(200)
+        ))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Team orchestrations".bold().blue());
+            if let Some(runs) = body["runs"].as_array() {
+                if runs.is_empty() {
+                    println!("  {}", "No team runs yet.".dimmed());
+                } else {
+                    for run in runs {
+                        println!(
+                            "  {} [{}] {}",
+                            run["run_id"].as_str().unwrap_or("?").cyan(),
+                            run["status"].as_str().unwrap_or("?"),
+                            run["objective"].as_str().unwrap_or("?")
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to list team runs: {}", body);
         }
         Err(_) => {
             println!(

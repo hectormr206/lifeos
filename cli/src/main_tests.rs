@@ -273,6 +273,33 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_intents_orchestrate() {
+        let cli = Cli::parse_from([
+            "life",
+            "intents",
+            "orchestrate",
+            "ship phase2 milestone",
+            "--specialist",
+            "planner",
+            "--specialist",
+            "implementer",
+            "--approve",
+        ]);
+        match cli.command {
+            Commands::Intents(commands::intents::IntentsCommands::Orchestrate {
+                objective,
+                specialist,
+                approve,
+            }) => {
+                assert_eq!(objective, "ship phase2 milestone");
+                assert_eq!(specialist, vec!["planner", "implementer"]);
+                assert!(approve);
+            }
+            _ => panic!("Expected intents orchestrate command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_id_list_active_flag() {
         let cli = Cli::parse_from(["life", "id", "list", "--active"]);
         match cli.command {

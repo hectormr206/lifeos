@@ -927,6 +927,8 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/id/revoke", post(revoke_identity_token))
         .route("/workspace/run", post(run_workspace))
         .route("/workspace/runs", get(list_workspace_runs))
+        .route("/orchestrator/team-run", post(orchestrate_team_run))
+        .route("/orchestrator/team-runs", get(list_team_runs))
         .route(
             "/runtime/mode",
             get(get_runtime_mode).post(set_runtime_mode),
@@ -3461,6 +3463,18 @@ struct WorkspaceRunsQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct TeamRunPayload {
+    objective: String,
+    specialists: Vec<String>,
+    approved: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TeamRunsQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RuntimeModePayload {
     mode: String,
     actor: Option<String>,
@@ -3810,6 +3824,53 @@ async fn list_workspace_runs(
     let limit = query.limit.unwrap_or(20).max(1).min(200);
     let mgr = state.agent_runtime_manager.read().await;
     let runs = mgr.list_workspace_runs(limit).await;
+    Ok(Json(serde_json::json!({
+        "runs": runs,
+        "count": runs.len(),
+    })))
+}
+
+async fn orchestrate_team_run(
+    State(state): State<ApiState>,
+    Json(payload): Json<TeamRunPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let run = mgr
+        .orchestrate_team(
+            &payload.objective,
+            &payload.specialists,
+            payload.approved.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            let status = if msg.contains("required") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                Json(ApiError {
+                    error: status.canonical_reason().unwrap_or("Error").to_string(),
+                    message: msg,
+                    code: status.as_u16(),
+                }),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "run": run,
+    })))
+}
+
+async fn list_team_runs(
+    State(state): State<ApiState>,
+    Query(query): Query<TeamRunsQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let runs = mgr.list_team_runs(query.limit.unwrap_or(20)).await;
     Ok(Json(serde_json::json!({
         "runs": runs,
         "count": runs.len(),
