@@ -487,4 +487,15 @@ mod tests {
             _ => panic!("Expected sync now command"),
         }
     }
+
+    #[test]
+    fn test_cli_parses_skills_install() {
+        let cli = Cli::parse_from(["life", "skills", "install", "--manifest", "/tmp/skill.json"]);
+        match cli.command {
+            Commands::Skills(commands::skills::SkillsCommands::Install { manifest }) => {
+                assert_eq!(manifest, "/tmp/skill.json");
+            }
+            _ => panic!("Expected skills install command"),
+        }
+    }
 }

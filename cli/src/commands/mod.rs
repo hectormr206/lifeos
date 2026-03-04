@@ -14,6 +14,7 @@ pub mod overlay;
 pub mod permissions;
 pub mod recover;
 pub mod rollback;
+pub mod skills;
 pub mod status;
 pub mod store;
 pub mod sync;

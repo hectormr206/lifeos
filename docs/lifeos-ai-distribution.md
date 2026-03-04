@@ -1478,6 +1478,11 @@ life memory list --limit 20           Listar memorias recientes.
 life memory search "..."              Buscar memorias relevantes.
 life memory mcp "..."                 Exportar contexto compatible con MCP.
 
+life skills install --manifest <file> Instalar skill versionado.
+life skills list [--trust verified]   Listar skills por nivel de confianza.
+life skills verify <id>               Verificar integridad de skill instalado.
+life skills run <id> -- <args>        Ejecutar skill en sandbox por defecto.
+
 life id issue --agent <name>          Emitir token de capacidad temporal.
 life id list                           Listar identidades y delegaciones activas.
 life id revoke <token-id>              Revocar token/delegacion en caliente.
@@ -2096,7 +2101,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 5. ~~Guia operativa de incidentes (rollback, recovery, revocacion de artefactos).~~ **Hecho.** `docs/incident-response-playbook.md` con runbook operativo.
 6. ~~Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.~~ **Hecho (baseline v1).** Daemon + API + CLI + salida MCP + cifrado AES-256-GCM-SIV.
 7. ~~Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.~~ **Hecho (baseline v1).** `life intents orchestrate/team-runs` + API `/orchestrator/*` con auditoria en ledger.
-8. Registry open source de skills/capacidades con versionado, firmas y politica de confianza.
+8. ~~Registry open source de skills/capacidades con versionado, firmas y politica de confianza.~~ **Hecho (baseline local v1).** `life skills install/list/verify/remove` con manifiestos versionados y verificacion SHA-256.
 9. Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.
 10. Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.
 11. ~~Perfiles de runtime `lite/edge/secure/pro` con deteccion automatica de hardware.~~ **Hecho.** `life ai profile` detecta hardware y persiste perfil.
@@ -2109,7 +2114,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 18. ~~`life intents` y `life id` implementados end-to-end con pruebas de aprobacion, rechazo y revocacion.~~ **Hecho.** Flujo plan/apply/status/validate/log + issue/list/revoke.
 19. ~~Ledger cifrado de ejecucion (`intents/results/artifacts`) con exportacion firmada para auditoria.~~ **Hecho.** Export cifrado disponible via API/CLI.
 20. `device-mesh` operativo para coordinacion multi-PC con identidad de nodo, delegacion y revocacion remota.
-21. Pipeline de extensiones/skills con niveles de confianza (`core`, `verified`, `community`) y aislamiento por defecto.
+21. ~~Pipeline de extensiones/skills con niveles de confianza (`core`, `verified`, `community`) y aislamiento por defecto.~~ **Hecho (baseline v1).** `life skills run` usa sandbox por defecto y bloquea `community` en `--unsafe-no-sandbox`.
 22. ~~Autoselector de modelos (`life ai autotune`) implementado con benchmark local y persistencia por rol.~~ **Hecho.** `autotune` selecciona y aplica modelo recomendado.
 23. ~~`model-catalog` firmado con versionado y fallback offline embebido en la ISO.~~ **Hecho.** Catalogo v1 firmado + cache + fallback embebido.
 24. ~~Runtime realtime AI-first implementado con `heavy_model_slots = 1` y pruebas de no regresion de latencia.~~ **Hecho (baseline).** `model-profile.toml` persiste `heavy_model_slots = 1` y `autotune` lo aplica.

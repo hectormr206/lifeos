@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lifeos.dev/contracts/skills/v1/skill-manifest.schema.json",
+  "title": "LifeOS Skill Manifest v1",
+  "type": "object",
+  "required": [
+    "id",
+    "version",
+    "trust_level",
+    "entrypoint"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9._-]+$"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trust_level": {
+      "type": "string",
+      "enum": [
+        "core",
+        "verified",
+        "community"
+      ]
+    },
+    "entrypoint": {
+      "type": "string",
+      "minLength": 1
+    },
+    "entrypoint_sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "description": {
+      "type": "string"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "additionalProperties": false
+}
