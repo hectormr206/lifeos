@@ -663,6 +663,7 @@ mod tests {
         let id1 = generate_event_id();
         let id2 = generate_event_id();
         assert!(!id1.is_empty());
+        assert!(!id2.is_empty());
         assert!(id1.contains('-'));
         // IDs should differ (timestamp part at least)
         // Note: in very fast execution, they might match, so we don't assert inequality

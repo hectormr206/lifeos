@@ -17,6 +17,7 @@ use tokio::signal;
 use tokio::sync::RwLock;
 
 mod accessibility;
+mod agent_runtime;
 mod ai;
 mod api;
 mod context_policies;
@@ -40,6 +41,7 @@ mod update_scheduler;
 mod updates;
 
 use accessibility::AccessibilityManager;
+use agent_runtime::AgentRuntimeManager;
 use context_policies::ContextPoliciesManager;
 use experience_modes::ExperienceManager;
 use follow_along::FollowAlongManager;
@@ -128,6 +130,7 @@ pub struct DaemonState {
     pub follow_along_manager: Arc<RwLock<FollowAlongManager>>,
     pub context_policies_manager: Arc<RwLock<ContextPoliciesManager>>,
     pub telemetry_manager: Arc<RwLock<TelemetryManager>>,
+    pub agent_runtime_manager: Arc<RwLock<AgentRuntimeManager>>,
     pub bootstrap_token: Option<String>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
@@ -196,6 +199,12 @@ async fn main() -> anyhow::Result<()> {
                 TelemetryManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
             }),
         )),
+        agent_runtime_manager: Arc::new(RwLock::new(
+            AgentRuntimeManager::new(PathBuf::from("/var/lib/lifeos")).unwrap_or_else(|e| {
+                warn!("Failed to initialize AgentRuntimeManager: {}", e);
+                AgentRuntimeManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+            }),
+        )),
         bootstrap_token,
         last_health_check: RwLock::new(None),
         last_update_check: RwLock::new(None),
@@ -212,6 +221,12 @@ async fn main() -> anyhow::Result<()> {
         let context_policies = state.context_policies_manager.read().await;
         if let Err(e) = context_policies.initialize().await {
             warn!("Failed to initialize context policies state: {}", e);
+        }
+    }
+    {
+        let agent_runtime = state.agent_runtime_manager.read().await;
+        if let Err(e) = agent_runtime.initialize().await {
+            warn!("Failed to initialize agent runtime state: {}", e);
         }
     }
 
@@ -296,6 +311,7 @@ async fn start_api_server(state: Arc<DaemonState>) {
         follow_along_manager: state.follow_along_manager.clone(),
         context_policies_manager: state.context_policies_manager.clone(),
         telemetry_manager: state.telemetry_manager.clone(),
+        agent_runtime_manager: state.agent_runtime_manager.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,
             api_key: state.bootstrap_token.clone(),

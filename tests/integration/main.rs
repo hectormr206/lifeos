@@ -234,3 +234,32 @@ fn test_containerfile_exists() {
         "Containerfile should not reference ollama"
     );
 }
+
+#[test]
+fn test_phase2_contract_schemas_exist_and_parse() {
+    let root = project_root();
+    let schema_paths = [
+        "contracts/intents/v1/intent.schema.json",
+        "contracts/intents/v1/plan.schema.json",
+        "contracts/intents/v1/result.schema.json",
+        "contracts/identity/v1/delegation.schema.json",
+        "contracts/identity/v1/capability-token.schema.json",
+    ];
+
+    for rel_path in schema_paths {
+        let path = root.join(rel_path);
+        assert!(path.exists(), "Schema should exist: {:?}", path);
+
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("Read failed {:?}: {}", path, e));
+        let json: serde_json::Value = serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("Invalid JSON {:?}: {}", path, e));
+
+        assert_eq!(json["type"].as_str(), Some("object"));
+        assert!(
+            json.get("required").is_some(),
+            "Schema should define required fields: {:?}",
+            path
+        );
+    }
+}

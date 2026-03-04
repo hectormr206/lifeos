@@ -1,0 +1,200 @@
+//! Workspace execution commands.
+//!
+//! Phase 2 baseline for isolated intent execution.
+
+use clap::Subcommand;
+use colored::Colorize;
+
+use crate::daemon_client;
+
+#[derive(Subcommand)]
+pub enum WorkspaceCommands {
+    /// Run an intent inside an isolated workspace
+    Run {
+        /// Intent identifier
+        #[arg(long)]
+        intent: String,
+        /// Optional command override (default comes from intent action)
+        #[arg(long)]
+        command: Option<String>,
+        /// Requested isolation mode: sandbox|container|microvm
+        #[arg(long, default_value = "sandbox")]
+        isolation: String,
+        /// Explicitly approve high/critical risk intents
+        #[arg(long)]
+        approve: bool,
+    },
+    /// List recent workspace runs
+    List {
+        /// Maximum number of records
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
+}
+
+pub async fn execute(cmd: WorkspaceCommands) -> anyhow::Result<()> {
+    match cmd {
+        WorkspaceCommands::Run {
+            intent,
+            command,
+            isolation,
+            approve,
+        } => cmd_run(&intent, command.as_deref(), &isolation, approve).await,
+        WorkspaceCommands::List { limit } => cmd_list(limit).await,
+    }
+}
+
+fn daemon_url() -> String {
+    daemon_client::daemon_url()
+}
+
+async fn cmd_run(
+    intent_id: &str,
+    command: Option<&str>,
+    isolation: &str,
+    approve: bool,
+) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/workspace/run", daemon_url()))
+        .json(&serde_json::json!({
+            "intent_id": intent_id,
+            "command": command,
+            "isolation": isolation,
+            "approved": approve,
+        }))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            let run = &body["run"];
+            println!("{}", "Workspace run completed".green().bold());
+            println!(
+                "  Run ID:     {}",
+                run["run_id"].as_str().unwrap_or("?").cyan()
+            );
+            println!(
+                "  Intent ID:  {}",
+                run["intent_id"].as_str().unwrap_or("?").cyan()
+            );
+            println!(
+                "  Isolation:  {} -> {}",
+                run["requested_isolation"].as_str().unwrap_or("?"),
+                run["effective_isolation"].as_str().unwrap_or("?").dimmed()
+            );
+            println!(
+                "  Exit code:  {}",
+                run["exit_code"].as_i64().unwrap_or(-1).to_string().cyan()
+            );
+            println!(
+                "  Succeeded:  {}",
+                if run["succeeded"].as_bool().unwrap_or(false) {
+                    "yes".green()
+                } else {
+                    "no".red()
+                }
+            );
+            println!(
+                "  Duration:   {} ms",
+                run["duration_ms"].as_u64().unwrap_or(0)
+            );
+            println!(
+                "  Workspace:  {}",
+                run["workspace_path"].as_str().unwrap_or("?").dimmed()
+            );
+
+            let stdout = run["stdout"].as_str().unwrap_or("");
+            if !stdout.is_empty() {
+                println!();
+                println!("{}", "stdout:".bold().blue());
+                println!("{}", stdout);
+            }
+
+            let stderr = run["stderr"].as_str().unwrap_or("");
+            if !stderr.is_empty() {
+                println!();
+                println!("{}", "stderr:".bold().yellow());
+                println!("{}", stderr);
+            }
+            Ok(())
+        }
+        Ok(r) if r.status().as_u16() == 409 => {
+            let body = r.text().await.unwrap_or_default();
+            println!("{}", "Workspace run blocked".yellow().bold());
+            println!("  {}", body);
+            println!();
+            println!(
+                "Retry with approval: {}",
+                format!("life workspace run --intent {} --approve", intent_id).cyan()
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to run workspace: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_list(limit: usize) -> anyhow::Result<()> {
+    let limit = limit.max(1).min(200);
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!(
+            "{}/api/v1/workspace/runs?limit={}",
+            daemon_url(),
+            limit
+        ))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Workspace runs".bold().blue());
+            println!();
+
+            if let Some(runs) = body["runs"].as_array() {
+                if runs.is_empty() {
+                    println!("  {}", "No workspace runs yet.".dimmed());
+                } else {
+                    for run in runs {
+                        let run_id = run["run_id"].as_str().unwrap_or("?");
+                        let intent_id = run["intent_id"].as_str().unwrap_or("?");
+                        let exit_code = run["exit_code"].as_i64().unwrap_or(-1);
+                        let ok = run["succeeded"].as_bool().unwrap_or(false);
+                        let status = if ok { "ok".green() } else { "failed".red() };
+                        println!("  {} [{}] {}", run_id.cyan(), status, intent_id);
+                        println!(
+                            "    code={} isolation={} duration={}ms",
+                            exit_code,
+                            run["effective_isolation"].as_str().unwrap_or("?"),
+                            run["duration_ms"].as_u64().unwrap_or(0)
+                        );
+                    }
+                }
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to list workspace runs: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}

@@ -16,3 +16,4 @@ pub mod store;
 pub mod telemetry;
 pub mod theme;
 pub mod update;
+pub mod workspace;

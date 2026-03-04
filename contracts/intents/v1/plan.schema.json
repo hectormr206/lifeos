@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "LifeOS Intent Plan v1",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "plan"],
+  "properties": {
+    "apiVersion": {
+      "type": "string",
+      "const": "intents.lifeos.dev/v1"
+    },
+    "kind": {
+      "type": "string",
+      "const": "Plan"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["intent_name", "generated_at"],
+      "properties": {
+        "intent_name": {
+          "type": "string"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "required": ["steps", "requires_approval", "evidence_plan"],
+      "properties": {
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["tool", "args", "expected_output", "rollback_step"],
+            "properties": {
+              "tool": {
+                "type": "string"
+              },
+              "args": {
+                "type": "object"
+              },
+              "expected_output": {
+                "type": "string"
+              },
+              "rollback_step": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "requires_approval": {
+          "type": "boolean"
+        },
+        "evidence_plan": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

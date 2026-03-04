@@ -213,4 +213,113 @@ mod tests {
         assert!(!args.skip_ai);
         assert!(!args.force);
     }
+
+    #[test]
+    fn test_cli_parses_intents_log_command() {
+        let cli = Cli::parse_from([
+            "life",
+            "intents",
+            "log",
+            "--limit",
+            "10",
+            "--export",
+            "/tmp/ledger.json",
+        ]);
+        match cli.command {
+            Commands::Intents(commands::intents::IntentsCommands::Log {
+                limit,
+                export,
+                passphrase: _,
+            }) => {
+                assert_eq!(limit, 10);
+                assert_eq!(export.as_deref(), Some("/tmp/ledger.json"));
+            }
+            _ => panic!("Expected intents log command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_intents_apply_approve_flag() {
+        let cli = Cli::parse_from(["life", "intents", "apply", "intent-123", "--approve"]);
+        match cli.command {
+            Commands::Intents(commands::intents::IntentsCommands::Apply { intent_id, approve }) => {
+                assert_eq!(intent_id, "intent-123");
+                assert!(approve);
+            }
+            _ => panic!("Expected intents apply command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_id_list_active_flag() {
+        let cli = Cli::parse_from(["life", "id", "list", "--active"]);
+        match cli.command {
+            Commands::Id(commands::id::IdCommands::List { active }) => assert!(active),
+            _ => panic!("Expected id list command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_workspace_run_command() {
+        let cli = Cli::parse_from([
+            "life",
+            "workspace",
+            "run",
+            "--intent",
+            "intent-123",
+            "--isolation",
+            "sandbox",
+            "--approve",
+        ]);
+        match cli.command {
+            Commands::Workspace(commands::workspace::WorkspaceCommands::Run {
+                intent,
+                isolation,
+                approve,
+                ..
+            }) => {
+                assert_eq!(intent, "intent-123");
+                assert_eq!(isolation, "sandbox");
+                assert!(approve);
+            }
+            _ => panic!("Expected workspace run command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_workspace_list_command() {
+        let cli = Cli::parse_from(["life", "workspace", "list", "--limit", "5"]);
+        match cli.command {
+            Commands::Workspace(commands::workspace::WorkspaceCommands::List { limit }) => {
+                assert_eq!(limit, 5)
+            }
+            _ => panic!("Expected workspace list command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_ai_benchmark_command() {
+        let cli = Cli::parse_from(["life", "ai", "benchmark", "--short", "--repeats", "3"]);
+        match cli.command {
+            Commands::Ai(commands::ai::AiCommands::Benchmark {
+                model,
+                short,
+                repeats,
+            }) => {
+                assert!(model.is_none());
+                assert!(short);
+                assert_eq!(repeats, 3);
+            }
+            _ => panic!("Expected ai benchmark command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_ai_autotune_command() {
+        let cli = Cli::parse_from(["life", "ai", "autotune", "--dry-run"]);
+        match cli.command {
+            Commands::Ai(commands::ai::AiCommands::Autotune { dry_run }) => assert!(dry_run),
+            _ => panic!("Expected ai autotune command"),
+        }
+    }
 }

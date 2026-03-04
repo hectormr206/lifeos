@@ -63,6 +63,9 @@ enum Commands {
     /// Identity and delegation
     #[clap(subcommand)]
     Id(commands::id::IdCommands),
+    /// Isolated workspace execution
+    #[clap(subcommand)]
+    Workspace(commands::workspace::WorkspaceCommands),
     /// App Store - browse and install applications
     #[clap(subcommand)]
     Store(commands::store::StoreCommands),
@@ -149,6 +152,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Context(args) => commands::context::execute(args).await,
         Commands::Intents(args) => commands::intents::execute(args).await,
         Commands::Id(args) => commands::id::execute(args).await,
+        Commands::Workspace(args) => commands::workspace::execute(args).await,
         Commands::Store(args) => commands::store::execute(args).await,
         Commands::Telemetry(args) => commands::telemetry::execute(args).await,
         Commands::Theme(args) => commands::theme::execute(args).await,

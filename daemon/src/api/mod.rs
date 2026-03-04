@@ -8,7 +8,7 @@
 
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{Json, Response},
@@ -26,6 +26,7 @@ use utoipa::{
 };
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::agent_runtime::AgentRuntimeManager;
 use crate::ai::AiManager;
 use crate::context_policies::ContextPoliciesManager;
 use crate::experience_modes::ExperienceManager;
@@ -53,6 +54,7 @@ pub struct ApiState {
     pub follow_along_manager: Arc<RwLock<FollowAlongManager>>,
     pub context_policies_manager: Arc<RwLock<ContextPoliciesManager>>,
     pub telemetry_manager: Arc<RwLock<crate::telemetry::TelemetryManager>>,
+    pub agent_runtime_manager: Arc<RwLock<AgentRuntimeManager>>,
     pub config: ApiConfig,
 }
 
@@ -911,6 +913,18 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/telemetry/snapshot", post(take_hardware_snapshot))
         .route("/telemetry/export", get(export_telemetry))
         .route("/telemetry/clear", post(clear_telemetry))
+        // Phase 2 foundations: intents + identity + ledger
+        .route("/intents/plan", post(plan_intent))
+        .route("/intents/apply", post(apply_intent))
+        .route("/intents/status/:intent_id", get(get_intent_status))
+        .route("/intents/validate", post(validate_intent))
+        .route("/intents/log", get(get_intent_log))
+        .route("/intents/ledger/export", post(export_intent_ledger))
+        .route("/id/issue", post(issue_identity_token))
+        .route("/id/list", get(list_identity_tokens))
+        .route("/id/revoke", post(revoke_identity_token))
+        .route("/workspace/run", post(run_workspace))
+        .route("/workspace/runs", get(list_workspace_runs))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bootstrap_token,
@@ -3411,6 +3425,333 @@ async fn clear_telemetry(
     Ok(Json(
         serde_json::json!({ "status": "ok", "message": "All telemetry data cleared" }),
     ))
+}
+
+#[derive(Debug, Deserialize)]
+struct IntentLogQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdentityListQuery {
+    active: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceRunsQuery {
+    limit: Option<usize>,
+}
+
+// ==================== AGENT RUNTIME HANDLERS ====================
+
+async fn plan_intent(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let description = payload["description"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'description' field".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let intent = mgr.plan_intent(description).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to plan intent: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "intent": intent,
+    })))
+}
+
+async fn apply_intent(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let intent_id = payload["intent_id"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'intent_id' field".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+    let approved = payload["approved"].as_bool().unwrap_or(false);
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let intent = mgr.apply_intent(intent_id, approved).await.map_err(|e| {
+        let status = if e.to_string().contains("Intent not found") {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (
+            status,
+            Json(ApiError {
+                error: status.canonical_reason().unwrap_or("Error").to_string(),
+                message: e.to_string(),
+                code: status.as_u16(),
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "intent": intent,
+    })))
+}
+
+async fn get_intent_status(
+    State(state): State<ApiState>,
+    Path(intent_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    if let Some(intent) = mgr.get_intent(&intent_id).await {
+        Ok(Json(serde_json::json!({
+            "status": "ok",
+            "intent": intent,
+        })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("Intent '{}' not found", intent_id),
+                code: 404,
+            }),
+        ))
+    }
+}
+
+async fn validate_intent(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let to_validate = payload
+        .get("intent")
+        .cloned()
+        .unwrap_or_else(|| payload.clone());
+    let mgr = state.agent_runtime_manager.read().await;
+    let report = mgr.validate_intent_payload(&to_validate);
+    Ok(Json(serde_json::json!(report)))
+}
+
+async fn get_intent_log(
+    State(state): State<ApiState>,
+    Query(query): Query<IntentLogQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let limit = query.limit.unwrap_or(50).max(1).min(500);
+    let mgr = state.agent_runtime_manager.read().await;
+    let entries = mgr.ledger_entries(limit).await;
+    Ok(Json(serde_json::json!({
+        "entries": entries,
+        "count": entries.len(),
+    })))
+}
+
+async fn export_intent_ledger(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let passphrase = payload["passphrase"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'passphrase' field".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+    let limit = payload["limit"].as_u64().unwrap_or(200).clamp(1, 5000) as usize;
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let export = mgr
+        .export_ledger_encrypted(passphrase, limit)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: format!("Failed to export ledger: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
+    Ok(Json(export))
+}
+
+async fn issue_identity_token(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let agent = payload["agent"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'agent' field".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+    let cap = payload["cap"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'cap' field".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+    let ttl = payload["ttl"].as_u64().unwrap_or(60) as u32;
+    let scope = payload["scope"].as_str();
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let token = mgr.issue_token(agent, cap, ttl, scope).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to issue token: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "token": token,
+    })))
+}
+
+async fn list_identity_tokens(
+    State(state): State<ApiState>,
+    Query(query): Query<IdentityListQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let active_only = query.active.unwrap_or(false);
+    let mgr = state.agent_runtime_manager.read().await;
+    let tokens = mgr.list_tokens(active_only).await;
+    Ok(Json(serde_json::json!({
+        "tokens": tokens,
+        "count": tokens.len(),
+    })))
+}
+
+async fn revoke_identity_token(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let token_id = payload["token_id"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'token_id' field".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let token = mgr.revoke_token(token_id).await.map_err(|e| {
+        let status = if e.to_string().contains("Token not found") {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        (
+            status,
+            Json(ApiError {
+                error: status.canonical_reason().unwrap_or("Error").to_string(),
+                message: e.to_string(),
+                code: status.as_u16(),
+            }),
+        )
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "token": token,
+    })))
+}
+
+async fn run_workspace(
+    State(state): State<ApiState>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let intent_id = payload["intent_id"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "Missing 'intent_id' field".to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let command = payload["command"].as_str();
+    let isolation = payload["isolation"].as_str().unwrap_or("sandbox");
+    let approved = payload["approved"].as_bool().unwrap_or(false);
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let run = mgr
+        .workspace_run(intent_id, command, isolation, approved)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            let status = if msg.contains("not found") {
+                StatusCode::NOT_FOUND
+            } else if msg.contains("requires approval") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                Json(ApiError {
+                    error: status.canonical_reason().unwrap_or("Error").to_string(),
+                    message: msg,
+                    code: status.as_u16(),
+                }),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "run": run,
+    })))
+}
+
+async fn list_workspace_runs(
+    State(state): State<ApiState>,
+    Query(query): Query<WorkspaceRunsQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let limit = query.limit.unwrap_or(20).max(1).min(200);
+    let mgr = state.agent_runtime_manager.read().await;
+    let runs = mgr.list_workspace_runs(limit).await;
+    Ok(Json(serde_json::json!({
+        "runs": runs,
+        "count": runs.len(),
+    })))
 }
 
 // ==================== SERVER STARTUP ====================

@@ -1,7 +1,10 @@
 use clap::Subcommand;
 use colored::Colorize;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Write};
 use std::process::Command;
+
+use crate::daemon_client;
 
 /// Default llama-server host
 const LLAMA_SERVER_HOST: &str = "http://localhost:8082";
@@ -58,6 +61,24 @@ pub enum AiCommands {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// Benchmark local models (latency + success rate)
+    Benchmark {
+        /// Optional model to benchmark (default: all installed models)
+        #[arg(short, long)]
+        model: Option<String>,
+        /// Run a shorter benchmark profile
+        #[arg(long)]
+        short: bool,
+        /// Repetitions per model
+        #[arg(long, default_value = "2")]
+        repeats: u32,
+    },
+    /// Auto-select best local model from latest benchmark
+    Autotune {
+        /// Only show recommendation, do not apply
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub async fn execute(args: AiCommands) -> anyhow::Result<()> {
@@ -71,6 +92,12 @@ pub async fn execute(args: AiCommands) -> anyhow::Result<()> {
         AiCommands::Remove { model, yes } => remove_model(&model, yes).await,
         AiCommands::Chat { model } => interactive_chat(model.as_deref()).await,
         AiCommands::Status { verbose } => check_status(verbose).await,
+        AiCommands::Benchmark {
+            model,
+            short,
+            repeats,
+        } => benchmark_models(model.as_deref(), short, repeats).await,
+        AiCommands::Autotune { dry_run } => autotune_model(dry_run).await,
     }
 }
 
@@ -278,55 +305,88 @@ async fn ask_ai(prompt: &str) -> anyhow::Result<()> {
 }
 
 async fn do_action(action: &str) -> anyhow::Result<()> {
-    println!("{} {}", "Executing:".bold(), action.cyan());
-
-    let prompt = format!(
-        "The user wants to: {}. \
-         Generate a shell command to accomplish this. \
-         Respond ONLY with the command, no explanation.",
-        action
+    println!(
+        "{} {}",
+        "Routing action through intents:".bold(),
+        action.cyan()
     );
 
-    let client = reqwest::Client::new();
-    let response = client
-        .post(format!("{}/v1/chat/completions", LLAMA_SERVER_HOST))
+    let client = daemon_client::authenticated_client();
+    let base_url = daemon_client::daemon_url();
+
+    let plan_resp = client
+        .post(format!("{}/api/v1/intents/plan", base_url))
+        .json(&serde_json::json!({ "description": action }))
+        .send()
+        .await?;
+
+    if !plan_resp.status().is_success() {
+        let status = plan_resp.status();
+        let body = plan_resp.text().await.unwrap_or_default();
+        anyhow::bail!("Could not plan intent ({}): {}", status, body);
+    }
+
+    let plan_json: serde_json::Value = plan_resp.json().await?;
+    let intent = &plan_json["intent"];
+    let intent_id = intent["intent_id"].as_str().unwrap_or_default();
+    let risk = intent["risk"].as_str().unwrap_or("unknown");
+
+    if intent_id.is_empty() {
+        anyhow::bail!("Daemon did not return intent_id");
+    }
+
+    println!("  {} {}", "Intent ID:".dimmed(), intent_id.cyan());
+    println!("  {} {}", "Risk:".dimmed(), risk);
+
+    let mut approved = false;
+    if matches!(risk, "high" | "critical") {
+        println!(
+            "\n{} {}",
+            "This action requires explicit approval due to risk level:".yellow(),
+            risk.yellow().bold()
+        );
+        print!("Approve execution? [y/N] ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        approved = input.trim().eq_ignore_ascii_case("y");
+    }
+
+    let apply_resp = client
+        .post(format!("{}/api/v1/intents/apply", base_url))
         .json(&serde_json::json!({
-            "messages": [
-                {"role": "system", "content": "You are a command generator. Output only the shell command, no markdown, no explanation."},
-                {"role": "user", "content": prompt}
-            ],
-            "stream": false
+            "intent_id": intent_id,
+            "approved": approved
         }))
         .send()
         .await?;
 
-    if response.status().is_success() {
-        let json: serde_json::Value = response.json().await?;
-        if let Some(cmd) = json
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("message"))
-            .and_then(|m| m.get("content"))
-            .and_then(|c| c.as_str())
-        {
-            let cmd = cmd.trim();
-            println!("\nGenerated command:");
-            println!("  {}", cmd.cyan());
-            println!("\nExecute? [Y/n] ");
+    if !apply_resp.status().is_success() {
+        let status = apply_resp.status();
+        let body = apply_resp.text().await.unwrap_or_default();
+        anyhow::bail!("Could not apply intent ({}): {}", status, body);
+    }
 
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
+    let apply_json: serde_json::Value = apply_resp.json().await?;
+    let status = apply_json["intent"]["status"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
 
-            if input.trim().is_empty() || input.trim().eq_ignore_ascii_case("y") {
-                println!("\nExecuting...\n");
-                let output = Command::new("sh").arg("-c").arg(cmd).output()?;
-
-                print!("{}", String::from_utf8_lossy(&output.stdout));
-                eprint!("{}", String::from_utf8_lossy(&output.stderr));
-            } else {
-                println!("Cancelled.");
-            }
-        }
+    println!();
+    println!("{}", "Intent pipeline result".bold().blue());
+    println!("  {} {}", "Intent:".dimmed(), intent_id.cyan());
+    println!("  {} {}", "Status:".dimmed(), status.cyan());
+    if status == "awaiting_approval" {
+        println!(
+            "  {}",
+            format!(
+                "Run with explicit approval: life intents apply {} --approve",
+                intent_id
+            )
+            .yellow()
+        );
     }
 
     Ok(())
@@ -743,6 +803,190 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkEntry {
+    model: String,
+    avg_latency_ms: u64,
+    p95_latency_ms: u64,
+    success_rate: f64,
+    attempts: u32,
+    model_size_bytes: u64,
+    score: f64,
+    benchmarked_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BenchmarkReport {
+    generated_at: String,
+    profile: String,
+    prompt: String,
+    entries: Vec<BenchmarkEntry>,
+}
+
+async fn benchmark_models(
+    model_filter: Option<&str>,
+    short: bool,
+    repeats: u32,
+) -> anyhow::Result<()> {
+    if !is_server_running().await {
+        println!("AI server is not running. Starting now...");
+        start_ai(None, false).await?;
+    }
+
+    let mut models = if let Some(model) = model_filter {
+        vec![model.to_string()]
+    } else {
+        list_gguf_models()
+    };
+    models.sort();
+    models.dedup();
+
+    if models.is_empty() {
+        anyhow::bail!("No models found to benchmark");
+    }
+
+    let repeats = repeats.max(1).min(10);
+    let prompt = if short {
+        "Reply with only: OK"
+    } else {
+        "In two short sentences, explain why local-first AI improves privacy and resilience."
+    };
+    let profile = if short { "short" } else { "standard" };
+
+    println!("{}", "LifeOS Bench v1".bold().blue());
+    println!("  Profile: {}", profile.cyan());
+    println!("  Models:  {}", models.len());
+    println!("  Repeats: {}", repeats);
+    println!();
+
+    let mut results = Vec::new();
+    for model in &models {
+        println!("{} {}", "Benchmarking".bold(), model.cyan());
+        let mut latencies = Vec::new();
+        let mut success = 0u32;
+        for _ in 0..repeats {
+            let started = std::time::Instant::now();
+            let response = reqwest::Client::new()
+                .post(format!("{}/v1/chat/completions", LLAMA_SERVER_HOST))
+                .json(&serde_json::json!({
+                    "model": model,
+                    "messages": [{ "role": "user", "content": prompt }],
+                    "stream": false,
+                }))
+                .send()
+                .await;
+
+            match response {
+                Ok(r) if r.status().is_success() => {
+                    latencies.push(started.elapsed().as_millis() as u64);
+                    success += 1;
+                }
+                _ => {
+                    latencies.push(started.elapsed().as_millis() as u64);
+                }
+            }
+        }
+
+        latencies.sort_unstable();
+        let avg_latency_ms = latencies.iter().copied().sum::<u64>() / latencies.len() as u64;
+        let p95_idx = ((latencies.len() as f64) * 0.95).ceil() as usize - 1;
+        let p95_latency_ms = latencies
+            .get(p95_idx.min(latencies.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(avg_latency_ms);
+        let success_rate = success as f64 / repeats as f64;
+        let model_size_bytes = model_file_size(model);
+
+        // Weighted score: prioritize reliability + latency, with minor size bias.
+        let score = (success_rate * 1000.0) + (10000.0 / (avg_latency_ms.max(1) as f64))
+            - ((model_size_bytes as f64 / 1_000_000_000.0) * 2.0);
+
+        let entry = BenchmarkEntry {
+            model: model.to_string(),
+            avg_latency_ms,
+            p95_latency_ms,
+            success_rate,
+            attempts: repeats,
+            model_size_bytes,
+            score,
+            benchmarked_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        println!(
+            "  avg={}ms p95={}ms success={:.0}% score={:.2}",
+            entry.avg_latency_ms,
+            entry.p95_latency_ms,
+            entry.success_rate * 100.0,
+            entry.score
+        );
+        println!();
+        results.push(entry);
+    }
+
+    results.sort_by(|a, b| b.score.total_cmp(&a.score));
+    if let Some(best) = results.first() {
+        println!(
+            "{} {} (score {:.2})",
+            "Recommended model:".green().bold(),
+            best.model.cyan(),
+            best.score
+        );
+    }
+
+    let report = BenchmarkReport {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        profile: profile.to_string(),
+        prompt: prompt.to_string(),
+        entries: results,
+    };
+
+    save_benchmark_report(&report)?;
+    println!(
+        "Saved benchmark report: {}",
+        benchmark_report_path().display().to_string().cyan()
+    );
+    Ok(())
+}
+
+async fn autotune_model(dry_run: bool) -> anyhow::Result<()> {
+    let report = load_benchmark_report()?;
+    if report.entries.is_empty() {
+        anyhow::bail!("No benchmark entries found. Run: life ai benchmark --short");
+    }
+
+    let mut sorted = report.entries.clone();
+    sorted.sort_by(|a, b| b.score.total_cmp(&a.score));
+    let best = sorted
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Benchmark report is empty"))?;
+
+    println!("{}", "AI Autotune".bold().blue());
+    println!(
+        "  Selected: {} (score {:.2}, avg {}ms, success {:.0}%)",
+        best.model.cyan(),
+        best.score,
+        best.avg_latency_ms,
+        best.success_rate * 100.0
+    );
+
+    if dry_run {
+        println!("{}", "Dry run enabled: no changes applied.".yellow());
+        return Ok(());
+    }
+
+    apply_model_selection(&best.model)?;
+    println!(
+        "{} {}",
+        "Applied model to /etc/lifeos/llama-server.env:"
+            .green()
+            .bold(),
+        best.model.cyan()
+    );
+    println!("Restart service with: {}", "life ai start".cyan());
+    Ok(())
+}
+
 // ==================== HELPER FUNCTIONS ====================
 
 enum GpuInfo {
@@ -939,6 +1183,52 @@ fn format_size(bytes: u64) -> String {
     }
 
     format!("{:.1} {}", size, UNITS[unit_idx])
+}
+
+fn model_file_size(model: &str) -> u64 {
+    let path = std::path::Path::new(MODEL_DIR).join(model);
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+fn benchmark_report_path() -> std::path::PathBuf {
+    let base = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    base.join("lifeos").join("bench").join("latest.json")
+}
+
+fn save_benchmark_report(report: &BenchmarkReport) -> anyhow::Result<()> {
+    let path = benchmark_report_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let serialized = serde_json::to_string_pretty(report)?;
+    std::fs::write(path, serialized)?;
+    Ok(())
+}
+
+fn load_benchmark_report() -> anyhow::Result<BenchmarkReport> {
+    let path = benchmark_report_path();
+    let raw = std::fs::read_to_string(&path).map_err(|e| {
+        anyhow::anyhow!("Failed to read benchmark report {}: {}", path.display(), e)
+    })?;
+    let parsed: BenchmarkReport = serde_json::from_str(&raw).map_err(|e| {
+        anyhow::anyhow!("Failed to parse benchmark report {}: {}", path.display(), e)
+    })?;
+    Ok(parsed)
+}
+
+fn apply_model_selection(model_name: &str) -> anyhow::Result<()> {
+    let status = Command::new("sudo")
+        .args([
+            "sed",
+            "-i",
+            &format!("s/^LIFEOS_AI_MODEL=.*/LIFEOS_AI_MODEL={}/", model_name),
+            "/etc/lifeos/llama-server.env",
+        ])
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("Failed to update /etc/lifeos/llama-server.env");
+    }
+    Ok(())
 }
 
 // Required for streaming in chat
