@@ -18,6 +18,13 @@ ok()   { echo -e "  ${GREEN}[OK]${NC}   $1"; ((PASS++)); }
 fail() { echo -e "  ${RED}[FAIL]${NC} $1"; ((FAIL++)); }
 warn() { echo -e "  ${YELLOW}[WARN]${NC} $1"; ((WARN++)); }
 info() { echo -e "  ${BLUE}[INFO]${NC} $1"; }
+
+TARGET_USER="${SUDO_USER:-$(id -un)}"
+TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
+if [[ -z "$TARGET_HOME" ]]; then
+    TARGET_HOME="$HOME"
+fi
+
 check_life_cmd() {
     local label="$1"
     shift
@@ -222,6 +229,111 @@ check_life_cmd "computer-use status" computer-use status
 check_life_cmd "workflow help" workflow --help
 check_life_cmd "portal status" portal status
 check_life_cmd "lab status" lab status --json
+echo
+
+# --- Hardware Fase 2 ---
+echo -e "${BOLD}Hardware Fase 2${NC}"
+GPU_LINES=$(lspci 2>/dev/null | grep -Ei 'vga|3d|display' || true)
+HAS_NVIDIA=0
+HAS_AMD=0
+HAS_INTEL=0
+
+if [[ -n "$GPU_LINES" ]]; then
+    GPU_COUNT=$(echo "$GPU_LINES" | wc -l | tr -d ' ')
+    ok "Adaptadores GPU detectados: $GPU_COUNT"
+else
+    warn "No se detectaron adaptadores GPU por lspci"
+fi
+
+if echo "$GPU_LINES" | grep -Eqi 'nvidia'; then HAS_NVIDIA=1; fi
+if echo "$GPU_LINES" | grep -Eqi 'amd|advanced micro devices|radeon'; then HAS_AMD=1; fi
+if echo "$GPU_LINES" | grep -Eqi 'intel'; then HAS_INTEL=1; fi
+
+if [[ $HAS_NVIDIA -eq 1 ]]; then
+    if command -v nvidia-smi &>/dev/null; then
+        if nvidia-smi -L >/dev/null 2>&1; then
+            ok "NVIDIA stack: nvidia-smi operativo"
+        else
+            fail "NVIDIA stack: nvidia-smi no operativo"
+        fi
+    else
+        fail "GPU NVIDIA detectada pero nvidia-smi no encontrado"
+    fi
+
+    if lsmod 2>/dev/null | grep -q '^nvidia'; then
+        ok "Modulo kernel nvidia: cargado"
+    else
+        warn "Modulo kernel nvidia no cargado"
+    fi
+fi
+
+if [[ $HAS_AMD -eq 1 ]]; then
+    if command -v rocminfo &>/dev/null; then
+        if rocminfo >/dev/null 2>&1; then
+            ok "AMD stack: rocminfo operativo"
+        else
+            warn "AMD stack: rocminfo instalado pero no operativo (fallback posible)"
+        fi
+    else
+        info "rocminfo no instalado (AMD puede usar fallback Vulkan/CPU)"
+    fi
+fi
+
+if [[ $HAS_INTEL -eq 1 ]] && ([[ $HAS_NVIDIA -eq 1 ]] || [[ $HAS_AMD -eq 1 ]]); then
+    ok "Topologia GPU hibrida detectada (iGPU + dGPU)"
+    if command -v supergfxctl &>/dev/null; then
+        if supergfxctl -g >/dev/null 2>&1; then
+            ok "supergfxctl disponible y responde"
+        else
+            warn "supergfxctl presente pero no responde"
+        fi
+    else
+        warn "supergfxctl no encontrado (switching hibrido limitado)"
+    fi
+else
+    info "Topologia hibrida no detectada"
+fi
+
+if compgen -G "/sys/class/drm/card*-*/modes" >/dev/null; then
+    HIGH_REFRESH_MODE=$(grep -hE '[0-9]{3,4}x[0-9]{3,4}.*(120|144|165|240)' /sys/class/drm/card*-*/modes 2>/dev/null | head -1 || true)
+    if [[ -n "$HIGH_REFRESH_MODE" ]]; then
+        ok "Modo high-refresh detectado (${HIGH_REFRESH_MODE})"
+    else
+        warn "No se detectaron modos >=120Hz en DRM"
+    fi
+else
+    warn "No se pudieron leer modos DRM"
+fi
+
+if compgen -G "/sys/class/drm/card*-*/vrr_capable" >/dev/null; then
+    if grep -q '^1$' /sys/class/drm/card*-*/vrr_capable 2>/dev/null; then
+        ok "VRR/Adaptive-Sync reportado por DRM"
+    else
+        warn "VRR/Adaptive-Sync no reportado por DRM"
+    fi
+else
+    info "VRR no expuesto por este stack DRM"
+fi
+
+if command -v flatpak &>/dev/null; then
+    if flatpak info com.valvesoftware.Steam >/dev/null 2>&1; then
+        ok "Steam Flatpak instalado"
+        if flatpak list --columns=application 2>/dev/null | grep -Eqi 'Steam\.CompatibilityTool\.Proton'; then
+            ok "Proton runtime detectado (Flatpak)"
+        elif find "$TARGET_HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/common" -maxdepth 1 -type d -iname 'Proton*' 2>/dev/null | grep -q .; then
+            ok "Proton detectado en libreria de Steam"
+        else
+            warn "Proton no detectado aun (se descarga con juegos compatibles)"
+        fi
+    else
+        warn "Steam Flatpak no instalado"
+    fi
+else
+    warn "flatpak no encontrado"
+fi
+
+check_life_cmd "ai profile" ai profile
+check_life_cmd "telemetry snapshot" telemetry snapshot
 echo
 
 # --- Disco ---
