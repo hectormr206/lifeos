@@ -196,15 +196,32 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
-      - name: Run security audit (CLI)
-        working-directory: ./cli
-        run: cargo audit
-        continue-on-error: true
+      - name: Prepare security artifacts directory
+        run: mkdir -p artifacts
 
-      - name: Run security audit (Daemon)
+      - name: Generate cargo-audit report (CLI)
+        working-directory: ./cli
+        run: cargo audit --json > ../artifacts/audit-cli.json || true
+
+      - name: Generate cargo-audit report (Daemon)
         working-directory: ./daemon
-        run: cargo audit
-        continue-on-error: true
+        run: cargo audit --json > ../artifacts/audit-daemon.json || true
+
+      - name: Enforce CVE SLO policy (CLI)
+        run: |
+          python3 scripts/cve-slo-enforce.py \
+            --audit artifacts/audit-cli.json \
+            --policy security/cve_slo_policy.json \
+            --waivers security/cve_waivers.json \
+            --report artifacts/cve-slo-cli-report.json
+
+      - name: Enforce CVE SLO policy (Daemon)
+        run: |
+          python3 scripts/cve-slo-enforce.py \
+            --audit artifacts/audit-daemon.json \
+            --policy security/cve_slo_policy.json \
+            --waivers security/cve_waivers.json \
+            --report artifacts/cve-slo-daemon-report.json
 
   # ============================================================================
   # Job 5: Runtime Security Regression

@@ -1,5 +1,7 @@
+pub mod adapters;
 pub mod agents;
 pub mod ai;
+pub mod assistant;
 pub mod browser;
 pub mod capsule;
 pub mod computer_use;
@@ -27,5 +29,6 @@ pub mod sync;
 pub mod telemetry;
 pub mod theme;
 pub mod update;
+pub mod voice;
 pub mod workflow;
 pub mod workspace;

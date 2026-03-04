@@ -45,6 +45,15 @@ enum Commands {
     /// AI assistant commands
     #[clap(subcommand)]
     Ai(commands::ai::AiCommands),
+    /// Unified assistant access (launcher, terminal, shortcut)
+    #[clap(subcommand)]
+    Assistant(commands::assistant::AssistantCommands),
+    /// AI adapters by app/domain (email, image, search)
+    #[clap(subcommand)]
+    Adapters(commands::adapters::AdaptersCommands),
+    /// Voice/STT daemon controls (whisper.cpp)
+    #[clap(subcommand)]
+    Voice(commands::voice::VoiceCommands),
     /// AI Overlay commands
     #[clap(subcommand)]
     Overlay(commands::overlay::OverlayCommands),
@@ -181,6 +190,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Config(args) => commands::config::execute(args).await,
         Commands::Capsule(args) => commands::capsule::execute(args).await,
         Commands::Ai(args) => commands::ai::execute(args).await,
+        Commands::Assistant(args) => commands::assistant::execute(args).await,
+        Commands::Adapters(args) => commands::adapters::execute(args).await,
+        Commands::Voice(args) => commands::voice::execute(args).await,
         Commands::Overlay(args) => commands::overlay::execute(args).await,
         Commands::Mode(args) => commands::mode::execute(args).await,
         Commands::Focus => commands::focus::execute_focus().await,

@@ -15,6 +15,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -23,6 +24,7 @@ use uuid::Uuid;
 const STATE_FILE: &str = "memory_plane_state.json";
 const DEFAULT_MEMORY_KEY: &str = "lifeos-memory-local-key";
 const MAX_CONTENT_BYTES: usize = 64 * 1024;
+const SEMANTIC_EMBED_DIM: usize = 96;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
@@ -41,6 +43,27 @@ pub struct MemoryEntry {
 pub struct MemorySearchResult {
     pub entry: MemoryEntry,
     pub score: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemorySearchMode {
+    Lexical,
+    Semantic,
+    Hybrid,
+}
+
+impl MemorySearchMode {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value
+            .map(|v| v.trim().to_lowercase())
+            .unwrap_or_else(|| "hybrid".to_string())
+            .as_str()
+        {
+            "lexical" => Self::Lexical,
+            "semantic" => Self::Semantic,
+            _ => Self::Hybrid,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -188,8 +211,20 @@ impl MemoryPlaneManager {
         limit: usize,
         scope: Option<&str>,
     ) -> Result<Vec<MemorySearchResult>> {
+        self.search_entries_with_mode(query, limit, scope, MemorySearchMode::Hybrid)
+            .await
+    }
+
+    pub async fn search_entries_with_mode(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: Option<&str>,
+        mode: MemorySearchMode,
+    ) -> Result<Vec<MemorySearchResult>> {
         let query = normalize_non_empty(query).context("query is required")?;
         let query_lc = query.to_lowercase();
+        let query_embedding = semantic_embedding(&query_lc);
         let scope = scope
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty());
@@ -208,7 +243,15 @@ impl MemoryPlaneManager {
                 }
             }
             let entry = self.decrypt_record(&enc)?;
-            let score = lexical_score(&query_lc, &entry);
+            let score = match mode {
+                MemorySearchMode::Lexical => lexical_score(&query_lc, &entry),
+                MemorySearchMode::Semantic => semantic_score(&query_embedding, &entry),
+                MemorySearchMode::Hybrid => {
+                    let lexical = lexical_score(&query_lc, &entry);
+                    let semantic = semantic_score(&query_embedding, &entry);
+                    (lexical * 0.45) + (semantic * 0.55)
+                }
+            };
             if score > 0.0 {
                 scored.push(MemorySearchResult { entry, score });
             }
@@ -256,7 +299,9 @@ impl MemoryPlaneManager {
     }
 
     pub async fn mcp_context(&self, query: &str, limit: usize) -> Result<serde_json::Value> {
-        let results = self.search_entries(query, limit, None).await?;
+        let results = self
+            .search_entries_with_mode(query, limit, None, MemorySearchMode::Hybrid)
+            .await?;
         let resources = results
             .iter()
             .map(|r| {
@@ -279,8 +324,89 @@ impl MemoryPlaneManager {
         Ok(serde_json::json!({
             "protocol": "mcp-memory-context/v1",
             "query": query,
+            "search_mode": "hybrid",
+            "embedding_model": "nomic-embed-text (local-fallback)",
             "resources": resources,
             "count": results.len(),
+        }))
+    }
+
+    pub async fn correlation_graph(&self, limit: usize) -> Result<serde_json::Value> {
+        let limit = limit.max(1).min(1000);
+        let entries = self.list_entries(limit, None, None).await?;
+
+        let mut node_set = BTreeMap::<String, serde_json::Value>::new();
+        let mut edge_counts = BTreeMap::<(String, String, String), usize>::new();
+
+        for entry in entries {
+            let source_node = format!("source:{}", entry.source);
+            node_set.entry(source_node.clone()).or_insert_with(|| {
+                serde_json::json!({
+                    "id": source_node,
+                    "type": "source",
+                    "label": entry.source
+                })
+            });
+
+            let kind_node = format!("kind:{}", entry.kind);
+            node_set.entry(kind_node.clone()).or_insert_with(|| {
+                serde_json::json!({
+                    "id": kind_node,
+                    "type": "kind",
+                    "label": entry.kind
+                })
+            });
+            *edge_counts
+                .entry((source_node.clone(), kind_node, "source_kind".to_string()))
+                .or_insert(0) += 1;
+
+            let scope_node = format!("scope:{}", entry.scope);
+            node_set.entry(scope_node.clone()).or_insert_with(|| {
+                serde_json::json!({
+                    "id": scope_node,
+                    "type": "scope",
+                    "label": entry.scope
+                })
+            });
+            *edge_counts
+                .entry((source_node.clone(), scope_node, "source_scope".to_string()))
+                .or_insert(0) += 1;
+
+            for tag in entry.tags {
+                let tag_node = format!("tag:{}", tag);
+                node_set.entry(tag_node.clone()).or_insert_with(|| {
+                    serde_json::json!({
+                        "id": tag_node,
+                        "type": "tag",
+                        "label": tag
+                    })
+                });
+                *edge_counts
+                    .entry((source_node.clone(), tag_node, "source_tag".to_string()))
+                    .or_insert(0) += 1;
+            }
+        }
+
+        let nodes = node_set.into_values().collect::<Vec<_>>();
+        let edges = edge_counts
+            .into_iter()
+            .map(|((from, to, relation), weight)| {
+                serde_json::json!({
+                    "from": from,
+                    "to": to,
+                    "relation": relation,
+                    "weight": weight
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok(serde_json::json!({
+            "schema": "life-memory-graph/v1",
+            "nodes": nodes,
+            "edges": edges,
+            "nodes_count": nodes.len(),
+            "edges_count": edges.len(),
+            "sampled_entries": limit,
         }))
     }
 
@@ -433,6 +559,106 @@ fn lexical_score(query: &str, entry: &MemoryEntry) -> f64 {
     score.min(1.0)
 }
 
+fn semantic_score(query_embedding: &[f64], entry: &MemoryEntry) -> f64 {
+    if query_embedding.is_empty() {
+        return 0.0;
+    }
+    let corpus = format!(
+        "{} {} {} {} {}",
+        entry.kind,
+        entry.scope,
+        entry.tags.join(" "),
+        entry.source,
+        entry.content
+    )
+    .to_lowercase();
+    let entry_embedding = semantic_embedding(&corpus);
+    if entry_embedding.is_empty() {
+        return 0.0;
+    }
+
+    let sim = cosine_similarity(query_embedding, &entry_embedding).max(0.0);
+    let weighted = sim + (entry.importance as f64 / 100.0) * 0.08;
+    weighted.min(1.0)
+}
+
+fn semantic_embedding(text: &str) -> Vec<f64> {
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut vector = vec![0.0_f64; SEMANTIC_EMBED_DIM];
+    let mut features = Vec::new();
+    for word in text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|token| !token.trim().is_empty())
+    {
+        features.push(word.trim().to_lowercase());
+    }
+
+    // Character trigrams improve fuzzy matching for close variants.
+    let compact = text
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for trigram in compact
+        .as_bytes()
+        .windows(3)
+        .filter_map(|window| std::str::from_utf8(window).ok())
+    {
+        if trigram.trim().is_empty() {
+            continue;
+        }
+        features.push(format!("tri:{}", trigram));
+    }
+
+    if features.is_empty() {
+        return Vec::new();
+    }
+
+    for feature in features {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        feature.hash(&mut hasher);
+        let h = hasher.finish();
+        let idx = (h as usize) % SEMANTIC_EMBED_DIM;
+        let sign = if (h & 1) == 0 { 1.0 } else { -1.0 };
+        vector[idx] += sign;
+    }
+    normalize_embedding(vector)
+}
+
+fn normalize_embedding(mut vector: Vec<f64>) -> Vec<f64> {
+    let norm = vector.iter().map(|v| v * v).sum::<f64>().sqrt();
+    if norm <= f64::EPSILON {
+        return Vec::new();
+    }
+    for v in &mut vector {
+        *v /= norm;
+    }
+    vector
+}
+
+fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
+    if a.is_empty() || b.is_empty() || a.len() != b.len() {
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    let mut a_norm = 0.0;
+    let mut b_norm = 0.0;
+    for (av, bv) in a.iter().zip(b.iter()) {
+        dot += av * bv;
+        a_norm += av * av;
+        b_norm += bv * bv;
+    }
+    if a_norm <= f64::EPSILON || b_norm <= f64::EPSILON {
+        0.0
+    } else {
+        dot / (a_norm.sqrt() * b_norm.sqrt())
+    }
+}
+
 fn tokenize(input: &str) -> HashSet<String> {
     input
         .split(|c: char| !c.is_alphanumeric())
@@ -510,7 +736,12 @@ mod tests {
         .unwrap();
 
         let hits = mgr
-            .search_entries("runtime approval automation", 5, Some("user"))
+            .search_entries_with_mode(
+                "runtime approval automation",
+                5,
+                Some("user"),
+                MemorySearchMode::Hybrid,
+            )
             .await
             .unwrap();
         assert!(!hits.is_empty());
@@ -547,6 +778,61 @@ mod tests {
         assert!(deleted);
         let entries = mgr.list_entries(10, None, None).await.unwrap();
         assert!(entries.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn semantic_mode_matches_related_text() {
+        let dir = temp_dir("memory-plane-semantic");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+
+        mgr.add_entry(
+            "note",
+            "user",
+            &["automation".to_string()],
+            None,
+            60,
+            "Approve runtime tasks automatically when trust mode is active.",
+        )
+        .await
+        .unwrap();
+
+        let hits = mgr
+            .search_entries_with_mode(
+                "automatic approval for runtime operations",
+                3,
+                Some("user"),
+                MemorySearchMode::Semantic,
+            )
+            .await
+            .unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits[0].score > 0.15);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn correlation_graph_contains_source_tag_edges() {
+        let dir = temp_dir("memory-plane-graph");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+
+        mgr.add_entry(
+            "note",
+            "workspace",
+            &["release".to_string(), "qa".to_string()],
+            Some("app://terminal"),
+            70,
+            "Run release QA checklist",
+        )
+        .await
+        .unwrap();
+
+        let graph = mgr.correlation_graph(20).await.unwrap();
+        assert_eq!(graph["schema"].as_str(), Some("life-memory-graph/v1"));
+        assert!(graph["nodes_count"].as_u64().unwrap_or(0) >= 3);
+        assert!(graph["edges_count"].as_u64().unwrap_or(0) >= 2);
 
         std::fs::remove_dir_all(dir).ok();
     }

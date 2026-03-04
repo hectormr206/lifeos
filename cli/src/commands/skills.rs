@@ -65,6 +65,15 @@ pub enum SkillsCommands {
         #[arg(long)]
         version: Option<String>,
     },
+    /// Export installed skills as MCP-compatible tools manifest
+    McpExport {
+        /// Optional output file path (prints to stdout when omitted)
+        #[arg(long)]
+        output: Option<String>,
+        /// Optional trust filter (core|verified|community)
+        #[arg(long)]
+        trust: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -142,6 +151,9 @@ pub async fn execute(cmd: SkillsCommands) -> anyhow::Result<()> {
             args,
         } => cmd_run(&skill_id, version.as_deref(), unsafe_no_sandbox, &args),
         SkillsCommands::Remove { skill_id, version } => cmd_remove(&skill_id, version.as_deref()),
+        SkillsCommands::McpExport { output, trust } => {
+            cmd_mcp_export(output.as_deref(), trust.as_deref())
+        }
     }
 }
 
@@ -351,6 +363,72 @@ fn cmd_remove(skill_id: &str, version: Option<&str>) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn cmd_mcp_export(output: Option<&str>, trust: Option<&str>) -> anyhow::Result<()> {
+    let registry = load_registry()?;
+    let trust_filter = trust.and_then(TrustLevel::from_filter);
+
+    let mut tools = Vec::new();
+    for skill in registry.skills {
+        if let Some(ref filter) = trust_filter {
+            if &skill.trust_level != filter {
+                continue;
+            }
+        }
+
+        let manifest = read_manifest(Path::new(&skill.manifest_path))?;
+        verify_skill_integrity(&skill, &manifest)?;
+        let tool_name = sanitize_tool_name(&skill.id);
+        let description = if manifest.description.trim().is_empty() {
+            format!("Run skill {}@{}", skill.id, skill.version)
+        } else {
+            manifest.description.clone()
+        };
+
+        tools.push(serde_json::json!({
+            "name": format!("skills.{}", tool_name),
+            "description": description,
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                },
+                "additionalProperties": false
+            },
+            "metadata": {
+                "skill_id": skill.id,
+                "version": skill.version,
+                "trust_level": skill.trust_level.as_str(),
+            },
+            "run": {
+                "type": "command",
+                "argv_template": ["life", "skills", "run", skill.id, "--", "${args...}"]
+            }
+        }));
+    }
+
+    let payload = serde_json::json!({
+        "protocol": "mcp-tools/v1",
+        "server": "lifeos-skills",
+        "generated_at": chrono::Utc::now(),
+        "tools_count": tools.len(),
+        "tools": tools,
+    });
+
+    let rendered = serde_json::to_string_pretty(&payload)?;
+    if let Some(path) = output {
+        std::fs::write(path, rendered)?;
+        println!("{}", "MCP tools manifest exported".green().bold());
+        println!("  output: {}", path.cyan());
+        println!("  tools: {}", payload["tools_count"]);
+    } else {
+        println!("{}", rendered);
+    }
+    Ok(())
+}
+
 fn install_from_manifest(manifest_path: &str) -> anyhow::Result<InstalledSkill> {
     let manifest_path = PathBuf::from(manifest_path);
     let manifest = read_manifest(&manifest_path)?;
@@ -529,6 +607,22 @@ fn unique_suffix() -> String {
         .unwrap_or_else(|_| "0".to_string())
 }
 
+fn sanitize_tool_name(value: &str) -> String {
+    let mut out = String::new();
+    for c in value.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if c == '.' || c == '-' || c == '_' {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "skill".to_string()
+    } else {
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,7 +661,10 @@ mod tests {
         assert_eq!(installed.id, "demo.skill");
         assert_eq!(installed.version, "1.0.0");
         let registry = load_registry().unwrap();
-        assert_eq!(registry.skills.len(), 1);
+        assert!(registry
+            .skills
+            .iter()
+            .any(|s| s.id == "demo.skill" && s.version == "1.0.0"));
 
         let manifest = read_manifest(Path::new(&installed.manifest_path)).unwrap();
         verify_skill_integrity(&installed, &manifest).unwrap();
@@ -606,6 +703,41 @@ mod tests {
         cmd_sign(manifest_path.to_str().unwrap()).unwrap();
         let manifest = read_manifest(&manifest_path).unwrap();
         assert!(manifest.entrypoint_sha256.is_some());
+
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn exports_installed_skills_as_mcp_tools() {
+        let base = temp_dir("life-skills-mcp-export");
+        std::env::set_var("LIFEOS_SKILLS_DIR", &base);
+
+        let source = base.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        let entrypoint = source.join("run.sh");
+        std::fs::write(&entrypoint, "#!/usr/bin/env sh\necho mcp\n").unwrap();
+        let digest = sha256_file(&entrypoint).unwrap();
+        let manifest = serde_json::json!({
+            "id": "demo.mcp.skill",
+            "version": "1.0.0",
+            "trust_level": "verified",
+            "entrypoint": "run.sh",
+            "entrypoint_sha256": digest,
+            "description": "MCP test skill"
+        });
+        let manifest_path = source.join("skill.json");
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        install_from_manifest(manifest_path.to_str().unwrap()).unwrap();
+
+        let output = base.join("tools.json");
+        cmd_mcp_export(Some(output.to_str().unwrap()), Some("verified")).unwrap();
+        let raw = std::fs::read_to_string(output).unwrap();
+        assert!(raw.contains("mcp-tools/v1"));
+        assert!(raw.contains("skills.demo_mcp_skill"));
 
         std::fs::remove_dir_all(base).ok();
     }

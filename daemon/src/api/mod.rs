@@ -19,6 +19,7 @@ use log::error;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::process::Command;
 use tokio::sync::RwLock;
 use utoipa::{
     openapi::security::{ApiKey, ApiKeyValue, SecurityScheme},
@@ -33,7 +34,7 @@ use crate::context_policies::ContextPoliciesManager;
 use crate::experience_modes::ExperienceManager;
 use crate::follow_along::FollowAlongManager;
 use crate::health::HealthMonitor;
-use crate::memory_plane::MemoryPlaneManager;
+use crate::memory_plane::{MemoryPlaneManager, MemorySearchMode};
 use crate::notifications::NotificationManager;
 use crate::overlay::{OverlayManager, OverlayTheme};
 use crate::screen_capture::ScreenCapture;
@@ -844,6 +845,10 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/ai/status", get(get_ai_status))
         .route("/ai/models", get(get_ai_models))
         .route("/ai/chat", post(post_ai_chat))
+        .route("/audio/stt/status", get(get_stt_status))
+        .route("/audio/stt/start", post(start_stt_service))
+        .route("/audio/stt/stop", post(stop_stt_service))
+        .route("/audio/stt/transcribe", post(transcribe_audio_file))
         // Overlay endpoints
         .route("/overlay/show", post(show_overlay))
         .route("/overlay/hide", post(hide_overlay))
@@ -939,13 +944,31 @@ pub fn create_router(state: ApiState) -> Router {
             get(get_trust_mode).post(set_trust_mode),
         )
         .route(
+            "/runtime/resources",
+            get(get_resource_runtime).post(set_resource_runtime),
+        )
+        .route(
+            "/runtime/jarvis",
+            get(get_jarvis_session).post(start_jarvis_session),
+        )
+        .route("/runtime/workspace-awareness", get(get_workspace_awareness))
+        .route("/runtime/prompt-shield/scan", post(scan_prompt_shield))
+        .route("/runtime/jarvis/stop", post(stop_jarvis_session))
+        .route(
+            "/runtime/jarvis/kill-switch",
+            post(trigger_jarvis_kill_switch),
+        )
+        .route(
             "/memory/entries",
             get(list_memory_entries).post(add_memory_entry),
         )
         .route("/memory/entries/:entry_id", delete(delete_memory_entry))
         .route("/memory/search", get(search_memory_entries))
         .route("/memory/stats", get(get_memory_stats))
+        .route("/memory/graph", get(get_memory_graph))
         .route("/memory/mcp/context", post(get_memory_mcp_context))
+        .route("/mcp/memory/context", post(get_memory_mcp_context))
+        .route("/mcp/skills/tools", get(get_mcp_skills_tools))
         .route("/computer-use/status", get(get_computer_use_status))
         .route("/computer-use/action", post(execute_computer_use_action))
         .route_layer(middleware::from_fn_with_state(
@@ -1323,6 +1346,255 @@ async fn post_ai_chat(
     };
 
     Ok(Json(response))
+}
+
+const DEFAULT_STT_SERVICE: &str = "whisper-stt.service";
+const DEFAULT_STT_BINARY: &str = "whisper-cli";
+
+async fn resolve_stt_binary_path() -> Option<String> {
+    for candidate in ["whisper-cli", "whisper", "whisper-cpp"] {
+        let output = Command::new("which").arg(candidate).output().await.ok()?;
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn output_stderr(output: &std::process::Output) -> String {
+    String::from_utf8_lossy(&output.stderr).trim().to_string()
+}
+
+async fn get_stt_status() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let service = DEFAULT_STT_SERVICE;
+    let running = Command::new("systemctl")
+        .args(["is-active", "--quiet", service])
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false);
+
+    let enabled = Command::new("systemctl")
+        .args(["is-enabled", "--quiet", service])
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false);
+
+    let binary = resolve_stt_binary_path()
+        .await
+        .unwrap_or_else(|| DEFAULT_STT_BINARY.to_string());
+
+    Ok(Json(serde_json::json!({
+        "running": running,
+        "enabled": enabled,
+        "service": service,
+        "binary": binary,
+    })))
+}
+
+async fn start_stt_service(
+    Json(payload): Json<SttStartPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let service = DEFAULT_STT_SERVICE;
+    let enable_on_boot = payload.enable.unwrap_or(false);
+
+    let start_output = Command::new("systemctl")
+        .args(["start", service])
+        .output()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: format!("Failed to execute systemctl start: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    if !start_output.status.success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ApiError {
+                error: "Bad Gateway".to_string(),
+                message: format!(
+                    "Unable to start STT service '{}': {}",
+                    service,
+                    output_stderr(&start_output)
+                ),
+                code: 502,
+            }),
+        ));
+    }
+
+    if enable_on_boot {
+        let enable_output = Command::new("systemctl")
+            .args(["enable", service])
+            .output()
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Internal Server Error".to_string(),
+                        message: format!("Failed to execute systemctl enable: {}", e),
+                        code: 500,
+                    }),
+                )
+            })?;
+
+        if !enable_output.status.success() {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "Bad Gateway".to_string(),
+                    message: format!(
+                        "STT service started but failed to enable on boot: {}",
+                        output_stderr(&enable_output)
+                    ),
+                    code: 502,
+                }),
+            ));
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "service": service,
+        "running": true,
+        "enable_on_boot": enable_on_boot,
+    })))
+}
+
+async fn stop_stt_service() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let service = DEFAULT_STT_SERVICE;
+    let stop_output = Command::new("systemctl")
+        .args(["stop", service])
+        .output()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: format!("Failed to execute systemctl stop: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    if !stop_output.status.success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ApiError {
+                error: "Bad Gateway".to_string(),
+                message: format!(
+                    "Unable to stop STT service '{}': {}",
+                    service,
+                    output_stderr(&stop_output)
+                ),
+                code: 502,
+            }),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "service": service,
+        "running": false,
+    })))
+}
+
+async fn transcribe_audio_file(
+    Json(payload): Json<SttTranscribePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let file = payload.file.trim();
+    if file.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "file is required".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+
+    if !std::path::Path::new(file).exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("Audio file not found: {}", file),
+                code: 404,
+            }),
+        ));
+    }
+
+    let binary = resolve_stt_binary_path().await.ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "Service Unavailable".to_string(),
+                message: "No whisper.cpp binary found (expected whisper-cli/whisper)".to_string(),
+                code: 503,
+            }),
+        )
+    })?;
+
+    let mut cmd = Command::new(&binary);
+    if let Some(model) = payload
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        cmd.args(["-m", model]);
+    }
+    cmd.args(["-f", file]);
+
+    let output = cmd.output().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: format!("Failed to execute STT binary: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    if !output.status.success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ApiError {
+                error: "Bad Gateway".to_string(),
+                message: format!(
+                    "STT transcription failed with {}: {}",
+                    binary,
+                    output_stderr(&output)
+                ),
+                code: 502,
+            }),
+        ));
+    }
+
+    let mut text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        text = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "text": text,
+        "binary": binary,
+        "model": payload.model,
+    })))
 }
 
 /// Get notifications
@@ -3484,11 +3756,45 @@ struct RuntimeModePayload {
 }
 
 #[derive(Debug, Deserialize)]
+struct ResourceRuntimePayload {
+    profile: String,
+    actor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct TrustModePayload {
     enabled: bool,
     actor: Option<String>,
     consent_bundle: Option<String>,
     signature: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JarvisStartPayload {
+    actor: Option<String>,
+    pin: String,
+    ttl_minutes: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JarvisControlPayload {
+    actor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PromptShieldScanPayload {
+    input: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SttStartPayload {
+    enable: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SttTranscribePayload {
+    file: String,
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3513,6 +3819,12 @@ struct SearchMemoryEntriesQuery {
     q: Option<String>,
     limit: Option<usize>,
     scope: Option<String>,
+    mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MemoryGraphQuery {
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3934,6 +4246,40 @@ async fn set_runtime_mode(
     })))
 }
 
+async fn get_resource_runtime(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let status = mgr.resource_runtime().await;
+    Ok(Json(
+        serde_json::to_value(status).unwrap_or_else(|_| serde_json::json!({})),
+    ))
+}
+
+async fn set_resource_runtime(
+    State(state): State<ApiState>,
+    Json(payload): Json<ResourceRuntimePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let status = mgr
+        .set_resource_profile(&payload.profile, payload.actor.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: e.to_string(),
+                    code: 400,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "resources": status,
+    })))
+}
+
 async fn get_trust_mode(
     State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
@@ -3970,6 +4316,157 @@ async fn set_trust_mode(
     Ok(Json(serde_json::json!({
         "status": "ok",
         "trust_mode": trust,
+    })))
+}
+
+async fn get_jarvis_session(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let jarvis = mgr.jarvis_session().await;
+    Ok(Json(serde_json::json!(jarvis)))
+}
+
+async fn start_jarvis_session(
+    State(state): State<ApiState>,
+    Json(payload): Json<JarvisStartPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let jarvis = mgr
+        .start_jarvis_session(
+            payload.actor.as_deref(),
+            &payload.pin,
+            payload.ttl_minutes.unwrap_or(30),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: e.to_string(),
+                    code: 400,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "jarvis": jarvis,
+    })))
+}
+
+async fn stop_jarvis_session(
+    State(state): State<ApiState>,
+    Json(payload): Json<JarvisControlPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let jarvis = mgr
+        .stop_jarvis_session(payload.actor.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "jarvis": jarvis,
+    })))
+}
+
+async fn trigger_jarvis_kill_switch(
+    State(state): State<ApiState>,
+    Json(payload): Json<JarvisControlPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let jarvis = mgr
+        .trigger_kill_switch(payload.actor.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "jarvis": jarvis,
+        "execution_mode": "interactive",
+        "trust_mode": "disabled",
+    })))
+}
+
+async fn scan_prompt_shield(
+    State(state): State<ApiState>,
+    Json(payload): Json<PromptShieldScanPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let input = payload.input.trim();
+    if input.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "input is required".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+    let mgr = state.agent_runtime_manager.read().await;
+    let report = mgr.scan_prompt_shield(input);
+    Ok(Json(serde_json::json!(report)))
+}
+
+async fn get_workspace_awareness() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)>
+{
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "COSMIC".to_string());
+    let workspace = std::env::var("COSMIC_WORKSPACE")
+        .or_else(|_| std::env::var("LIFEOS_WORKSPACE_HINT"))
+        .unwrap_or_else(|_| "default".to_string());
+    let workspace_lc = workspace.to_lowercase();
+
+    let habitat = if workspace_lc.contains("meeting") {
+        "meeting"
+    } else if workspace_lc.contains("focus") || workspace_lc.contains("flow") {
+        "focus"
+    } else if workspace_lc.contains("dev") || workspace_lc.contains("code") {
+        "development"
+    } else {
+        "general"
+    };
+
+    let suggestions = match habitat {
+        "meeting" => vec![
+            "Enable meeting context preset (life meeting)".to_string(),
+            "Prioritize concise summaries and action items".to_string(),
+        ],
+        "focus" => vec![
+            "Enable focus preset (life focus)".to_string(),
+            "Silence non-critical notifications".to_string(),
+        ],
+        "development" => vec![
+            "Route assistant to implementation specialist".to_string(),
+            "Prefer workspace-isolated execution for risky tasks".to_string(),
+        ],
+        _ => vec![
+            "Use interactive execution mode".to_string(),
+            "Offer cross-app memory context suggestions".to_string(),
+        ],
+    };
+
+    Ok(Json(serde_json::json!({
+        "desktop": desktop,
+        "workspace": workspace,
+        "habitat": habitat,
+        "suggestions": suggestions
     })))
 }
 
@@ -4053,9 +4550,10 @@ async fn search_memory_entries(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let q = query.q.as_deref().unwrap_or("");
     let limit = query.limit.unwrap_or(10);
+    let mode = MemorySearchMode::parse(query.mode.as_deref());
     let mgr = state.memory_plane_manager.read().await;
     let results = mgr
-        .search_entries(q, limit, query.scope.as_deref())
+        .search_entries_with_mode(q, limit, query.scope.as_deref(), mode)
         .await
         .map_err(|e| {
             let msg = e.to_string();
@@ -4113,6 +4611,27 @@ async fn get_memory_stats(
     ))
 }
 
+async fn get_memory_graph(
+    State(state): State<ApiState>,
+    Query(query): Query<MemoryGraphQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let graph = mgr
+        .correlation_graph(query.limit.unwrap_or(200))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    Ok(Json(graph))
+}
+
 async fn get_memory_mcp_context(
     State(state): State<ApiState>,
     Json(payload): Json<MemoryMcpContextPayload>,
@@ -4132,6 +4651,89 @@ async fn get_memory_mcp_context(
             )
         })?;
     Ok(Json(context))
+}
+
+async fn get_mcp_skills_tools() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let registry_path = std::env::var("LIFEOS_SKILLS_REGISTRY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/var/lib/lifeos/skills/registry.json"));
+
+    let tools = if !registry_path.exists() {
+        Vec::new()
+    } else {
+        let raw = tokio::fs::read_to_string(&registry_path)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Internal Server Error".to_string(),
+                        message: format!(
+                            "Failed to read MCP skills registry '{}': {}",
+                            registry_path.display(),
+                            e
+                        ),
+                        code: 500,
+                    }),
+                )
+            })?;
+
+        let parsed: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: format!(
+                        "Invalid MCP skills registry '{}': {}",
+                        registry_path.display(),
+                        e
+                    ),
+                    code: 500,
+                }),
+            )
+        })?;
+
+        parsed["skills"]
+            .as_array()
+            .map(|skills| {
+                skills
+                    .iter()
+                    .map(|skill| {
+                        let id = skill["id"].as_str().unwrap_or("unknown.skill");
+                        let version = skill["version"].as_str().unwrap_or("0.0.0");
+                        let trust = skill["trust_level"].as_str().unwrap_or("community");
+                        serde_json::json!({
+                            "name": format!("skills.{}", id.replace(['.', '-'], "_")),
+                            "description": format!("Run skill {}@{}", id, version),
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "args": {
+                                        "type": "array",
+                                        "items": { "type": "string" }
+                                    }
+                                },
+                                "additionalProperties": false
+                            },
+                            "metadata": {
+                                "skill_id": id,
+                                "version": version,
+                                "trust_level": trust
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    Ok(Json(serde_json::json!({
+        "protocol": "mcp-tools/v1",
+        "server": "lifeos-skills",
+        "registry_path": registry_path.to_string_lossy(),
+        "tools_count": tools.len(),
+        "tools": tools,
+    })))
 }
 
 async fn get_computer_use_status() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)>

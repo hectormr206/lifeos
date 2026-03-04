@@ -49,11 +49,23 @@ pub enum MemoryCommands {
         /// Optional scope filter
         #[arg(long)]
         scope: Option<String>,
+        /// Search mode (lexical, semantic, hybrid)
+        #[arg(long, default_value = "hybrid", value_parser = ["lexical", "semantic", "hybrid"])]
+        mode: String,
     },
     /// Delete an entry by ID
     Delete { entry_id: String },
     /// Show memory store statistics
     Stats,
+    /// Build contextual correlation graph (cross-source/tags/scopes)
+    Graph {
+        /// Maximum entries to sample
+        #[arg(short, long, default_value_t = 200)]
+        limit: usize,
+        /// Optional output path
+        #[arg(long)]
+        output: Option<String>,
+    },
     /// Export MCP-compatible context block from memory
     Mcp {
         query: String,
@@ -92,9 +104,11 @@ pub async fn execute(cmd: MemoryCommands) -> anyhow::Result<()> {
             query,
             limit,
             scope,
-        } => cmd_search(&query, limit, scope.as_deref()).await,
+            mode,
+        } => cmd_search(&query, limit, scope.as_deref(), &mode).await,
         MemoryCommands::Delete { entry_id } => cmd_delete(&entry_id).await,
         MemoryCommands::Stats => cmd_stats().await,
+        MemoryCommands::Graph { limit, output } => cmd_graph(limit, output.as_deref()).await,
         MemoryCommands::Mcp { query, limit } => cmd_mcp(&query, limit).await,
     }
 }
@@ -197,12 +211,18 @@ async fn cmd_list(limit: usize, scope: Option<&str>, tag: Option<&str>) -> anyho
     Ok(())
 }
 
-async fn cmd_search(query: &str, limit: usize, scope: Option<&str>) -> anyhow::Result<()> {
+async fn cmd_search(
+    query: &str,
+    limit: usize,
+    scope: Option<&str>,
+    mode: &str,
+) -> anyhow::Result<()> {
     let mut url = format!(
-        "{}/api/v1/memory/search?q={}&limit={}",
+        "{}/api/v1/memory/search?q={}&limit={}&mode={}",
         daemon_url(),
         query,
-        limit.max(1)
+        limit.max(1),
+        mode
     );
     if let Some(scope) = scope {
         url.push_str("&scope=");
@@ -311,5 +331,33 @@ async fn cmd_mcp(query: &str, limit: usize) -> anyhow::Result<()> {
     }
     let body: serde_json::Value = resp.json().await?;
     println!("{}", serde_json::to_string_pretty(&body)?);
+    Ok(())
+}
+
+async fn cmd_graph(limit: usize, output: Option<&str>) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!(
+            "{}/api/v1/memory/graph?limit={}",
+            daemon_url(),
+            limit.max(1)
+        ))
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to build memory graph: {}", body);
+    }
+    let body: serde_json::Value = resp.json().await?;
+    let rendered = serde_json::to_string_pretty(&body)?;
+
+    if let Some(path) = output {
+        std::fs::write(path, &rendered)?;
+        println!("{}", "Memory graph exported".green().bold());
+        println!("  path: {}", path.cyan());
+    } else {
+        println!("{}", rendered);
+    }
     Ok(())
 }

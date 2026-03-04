@@ -1,0 +1,18 @@
+{
+  "policy_version": "lifeos-cve-slo/v1",
+  "threshold_hours": {
+    "critical": {
+      "mitigation": 24,
+      "patch": 48
+    },
+    "high": {
+      "mitigation": 72,
+      "patch": 72
+    },
+    "medium": {
+      "mitigation": 336,
+      "patch": 336
+    }
+  },
+  "enforced_levels": ["critical", "high", "medium"]
+}

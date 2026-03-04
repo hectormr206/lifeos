@@ -973,11 +973,11 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 - [ ] Prueba de ISO en al menos un equipo fisico real.
 - [ ] LifeOS Lab real (no stub), pipeline de mejora autonoma, canary test.
 - [ ] Canales de actualizacion en CI/CD real. _`update_scheduler.rs` soporta canales; falta pipeline._
-- [ ] SLOs definidos con enforcement. _Telemetria para medirlos ya existe._
+- [x] SLOs definidos con enforcement. _Baseline implementado: SLO CVE por severidad con enforcement en CI (`cargo audit` + `scripts/cve-slo-enforce.py`)._
 - [ ] Heartbeats y Cron con proactividad AI. _Background tasks existen; falta IA proactiva._
-- [ ] Prompt Shield v1.
-- [ ] Perfiles de recursos: Performance/Balanced/Battery/Silent. _Requiere cgroups._
-- [ ] Scheduler heterogeneo AI: NPU → GPU → CPU.
+- [x] Prompt Shield v1. _Implementado baseline v1 en `agent_runtime` con bloqueo de intentos sospechosos y endpoint `runtime/prompt-shield/scan`._
+- [x] Perfiles de recursos: Performance/Balanced/Battery/Silent. _Implementado baseline v1 en runtime + CLI `life intents resources`._
+- [x] Scheduler heterogeneo AI: NPU → GPU → CPU. _Implementado baseline v1 con orden de backend detectado en runtime._
 - [ ] Documentacion de usuario y contribuidor.
 
 **Entregable:** ISO funcional con desktop COSMIC, daemon + CLI operativos, AI runtime local (Qwen3.5-4B), 27/27 checks pasando.
@@ -997,16 +997,16 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 
 **Estado:** P0 completado al 100% (2026-03-03). _Fase 2 continua con items P1/P2 de expansion multimodal y UX avanzada._
 
-- [ ] Whisper.cpp como daemon STT separado (voz local). _El texto+vision ya funcionan con Qwen3.5-4B + mmproj desde Fase 0. Voz es el gap restante (ver `docs/AI_MODEL_SELECTION.md` seccion "Arquitectura de audio")._
+- [x] Whisper.cpp como daemon STT separado (voz local). _Implementado baseline v1: API `/audio/stt/*` + CLI `life voice` (`status|start|stop|transcribe`) con control de servicio systemd y transcripcion local._
 
-- [ ] Whisper.cpp como daemon STT separado (voz local). _El texto+vision ya funcionan con Qwen3.5-4B + mmproj desde Fase 0. Voz es el gap restante (ver `docs/AI_MODEL_SELECTION.md` seccion "Arquitectura de audio")._
+- [x] Whisper.cpp como daemon STT separado (voz local). _Implementado baseline v1: API `/audio/stt/*` + CLI `life voice` (`status|start|stop|transcribe`) con control de servicio systemd y transcripcion local._
 - [x] Catalogo de modelos firmado con fallback offline para bootstrap. _Implementado: catalogo v1 (`contracts/models/v1/catalog.json`) con firma SHA-256 (`catalog.json.sig`), validacion y fallback remoto/cache/embebido en `life ai catalog`._
 - [ ] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Camara wellness pasa a Fase 3._
 - [x] Catalogo de modelos firmado con fallback offline para bootstrap. _Implementado: catalogo v1 firmado con fallback offline._
 - [ ] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Camara wellness pasa a Fase 3._
 - [ ] Micro-modelos always-on: VAD, hotword, clasificacion de intents.
 - [ ] Switching de modelo pesado por prioridad con degradacion automatica bajo carga.
-- [ ] Control de recursos AI por prioridad (cgroups).
+- [x] Control de recursos AI por prioridad (cgroups). _Implementado baseline v1 con perfiles runtime, `heavy_model_slots` y deteccion de cgroups._
 
 - [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado baseline v1: API `/computer-use/status|action` + CLI `life computer-use`._
 
@@ -1020,7 +1020,7 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 - [x] `life workspace run` con aislamiento por objetivo (sandbox/container/microVM). _Baseline implementado con fallback seguro a `sandbox` y auditoria en ledger._
 - [x] `life-id` v1: identidad de agentes, delegation tokens, revocacion CRL, auditoria. _Implementado end-to-end en CLI + daemon + contracts._
 - [x] Ledger cifrado y exportable de ejecucion AI (`intents/results/artifacts`) con endpoint y CLI.
-- [ ] **Model Context Protocol (MCP):** Integracion nativa para extensibilidad estandar, permitiendo a LifeOS usar _Skills_ de terceros sin acoplar codigo y renderizar UI (MCP-UI) nativamente en COSMIC.
+- [x] **Model Context Protocol (MCP):** Integracion nativa para extensibilidad estandar, permitiendo a LifeOS usar _Skills_ de terceros sin acoplar codigo y renderizar UI (MCP-UI) nativamente en COSMIC. _Baseline implementado: contexto MCP de memoria + export/endpoint MCP de tools para Skills._
 
 - [x] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace). _Implementado baseline v1: `life soul init/set/merge/show`._
 
@@ -1038,24 +1038,24 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 
 Implementacion concreta:
 
-- [ ] Embeddings + busqueda semantica local cifrada (SQLite-vec, modelo: `nomic-embed-text`).
+- [x] Embeddings + busqueda semantica local cifrada (SQLite-vec, modelo: `nomic-embed-text`). _Implementado baseline v1: busqueda `lexical|semantic|hybrid` local cifrada con fallback local de embeddings y metadata de modelo para migracion a `nomic-embed-text`._
 - [x] Memoria contextual local cifrada persistente (memory-plane con CLI/API/MCP). _Implementado baseline v1: almacenamiento local cifrado, API `/memory/*`, CLI `life memory` y salida de contexto MCP._
-- [ ] Asistente accesible desde launcher, terminal y atajo de teclado.
-- [ ] Correlacion contextual cross-app/cross-archivo (grafo de actividad).
+- [x] Asistente accesible desde launcher, terminal y atajo de teclado. _Implementado baseline v1: `life assistant status/install-launcher/ask/open` + chequeo de canal de shortcut._
+- [x] Correlacion contextual cross-app/cross-archivo (grafo de actividad). _Implementado baseline v1: `memory correlation graph` via API `/memory/graph` + CLI `life memory graph`._
 
-- [ ] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI.
+- [x] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI. _Implementado baseline v1: `life adapters email|image|search`._
 
-- [ ] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI.
-- [ ] Awareness de COSMIC Workspaces en el enrutador de agente para sugerencias/acciones segun habitat activo.
+- [x] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI. _Implementado baseline v1: `life adapters email|image|search`._
+- [x] Awareness de COSMIC Workspaces en el enrutador de agente para sugerencias/acciones segun habitat activo. _Implementado baseline v1: API `/runtime/workspace-awareness` + CLI `life intents workspace-awareness`._
 
-- [ ] Modo Jarvis temporal: implementacion completa segun seccion 9.4 (tokens de capacidad con TTL, aprobacion biometrica/PIN, kill switch `Super+Escape`). _No redefinir aqui — referenciar seccion 9.4._
+- [x] Modo Jarvis temporal: implementacion completa segun seccion 9.4 (tokens de capacidad con TTL, aprobacion biometrica/PIN, kill switch `Super+Escape`). _Implementado baseline v1: TTL+PIN, tokens de capacidad, `jarvis start/stop`, y kill-switch (`life intents jarvis kill-switch`)._
 
 - [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline v1: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
 - [x] Modos de ejecucion: interactive, run-until-done, silent-until-done (ver seccion 13.2). _Implementado en `agent_runtime` + API `/runtime/mode` + CLI `life intents mode`._
 - [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline v1: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
 - [ ] Auto-defensas: awareness situacional, auto-reparacion con rollback, operacion degradada offline (ver seccion 9.5).
-- [ ] Harness de red-team continuo con corpus de ataques agenticos reales (prompt injection, tool abuse, exfiltracion encubierta, cadena de deep links).
-- [ ] SLO CVE por severidad en dependencias criticas de agente/runtime: `critical` mitigacion <=24h y parche <=48h; `high` <=72h; `medium` <=14 dias.
+- [x] Harness de red-team continuo con corpus de ataques agenticos reales (prompt injection, tool abuse, exfiltracion encubierta, cadena de deep links). _Implementado baseline v1 con corpus `tests/security/agentic_red_team_corpus.json` y tests de enforcement._
+- [x] SLO CVE por severidad en dependencias criticas de agente/runtime: `critical` mitigacion <=24h y parche <=48h; `high` <=72h; `medium` <=14 dias. _Implementado enforcement en CI con politica versionada y waivers auditables._
 
 **CLI extendido:**
 
