@@ -97,7 +97,10 @@ system_setup() {
     log "Performing system setup..."
 
     # Create necessary directories
-    mkdir -p /var/lib/lifeos/models
+    mkdir -p /var/lib/lifeos
+    if [[ ! -e /var/lib/lifeos/models ]]; then
+        mkdir -p /var/lib/lifeos/models
+    fi
     mkdir -p /var/log
     mkdir -p /etc/lifeos
 

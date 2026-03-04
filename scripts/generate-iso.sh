@@ -231,8 +231,41 @@ generate_iso() {
     pass_hash=$(python3 -c "import crypt; print(crypt.crypt('lifeos', crypt.mksalt(crypt.METHOD_SHA512)))" 2>/dev/null || \
                 openssl passwd -6 lifeos)
 
+    local iso_volume_id="${LIFEOS_ISO_VOLUME_ID:-LIFEOS_INSTALL}"
+    local iso_application_id="${LIFEOS_ISO_APPLICATION_ID:-LIFEOS_INSTALLER}"
+    local iso_publisher="${LIFEOS_ISO_PUBLISHER:-LIFEOS}"
+
     # Escribir la configuración a un archivo temporal local
     local tmp_config=$(mktemp config-XXXXXX.json)
+    if [[ "$BUILD_TYPE" == "iso" ]]; then
+    cat << CONFIG > "$tmp_config"
+{
+  "blueprint": {
+    "customizations": {
+      "user": [
+        {
+          "name": "lifeos",
+          "password": "${pass_hash}",
+          "key": "",
+          "groups": ["wheel"]
+        }
+      ],
+      "kernel": {
+        "append": "quiet rhgb"
+      },
+      "iso": {
+        "volume_id": "${iso_volume_id}",
+        "application_id": "${iso_application_id}",
+        "publisher": "${iso_publisher}"
+      },
+      "services": {
+        "enabled": ["sshd", "chronyd", "cosmic-greeter"]
+      }
+    }
+  }
+}
+CONFIG
+    else
     cat << CONFIG > "$tmp_config"
 {
   "blueprint": {
@@ -255,6 +288,7 @@ generate_iso() {
   }
 }
 CONFIG
+    fi
 
     # Run bootc-image-builder
     echo "Running bootc-image-builder..."

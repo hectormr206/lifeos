@@ -76,9 +76,14 @@ LABEL org.lifeos.channel="${LIFEOS_CHANNEL}" \
 # --- Repositorios adicionales (COSMIC y RPMFusion) ---
 RUN dnf -y install dnf5-plugins && \
     dnf -y copr enable ryanabx/cosmic-epoch && \
-    dnf install -y \
-        https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm \
-        https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm
+    dnf -y install distribution-gpg-keys && \
+    rpm --import \
+      /usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-free-fedora-2020 \
+      /usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-nonfree-fedora-2020 && \
+    dnf -y --setopt=localpkg_gpgcheck=1 install \
+      "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+      "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" && \
+    dnf clean all
 
 # --- Escritorio COSMIC y Base ---
 RUN dnf -y install --skip-unavailable \
@@ -89,11 +94,17 @@ RUN dnf -y install --skip-unavailable \
     && dnf clean all
 
 # --- Soporte Nvidia Optimus y Gaming ---
-RUN dnf -y install \
-    kernel-devel \
-    akmod-nvidia xorg-x11-drv-nvidia-cuda supergfxctl \
-    && akmods --force || true \
-    && dnf clean all
+RUN set -eux && \
+    dnf -y install --skip-unavailable kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda && \
+    if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
+        dnf -y install supergfxctl; \
+    else \
+        echo "INFO: supergfxctl not available in current repos; continuing without hybrid-switch helper"; \
+    fi && \
+    if command -v akmods >/dev/null 2>&1; then \
+        akmods --force || echo "WARNING: akmods failed in build environment; will retry on target host"; \
+    fi && \
+    dnf clean all
 
 # --- Steam/Proton (default via RPM Fusion) ---
 RUN dnf -y install \
@@ -155,7 +166,7 @@ RUN set -eux && \
 
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
-RUN mkdir -p /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
+RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
     chmod 0700 /var/roothome
 
 # --- AI Model (pre-bundled) ---
@@ -164,9 +175,9 @@ RUN mkdir -p /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/ro
 # See docs/AI_MODEL_SELECTION.md for technical justification.
 RUN set -eux && \
     MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf" && \
-    MODEL_FILE="/var/lib/lifeos/models/Qwen3.5-4B-Q4_K_M.gguf" && \
+    MODEL_FILE="/usr/share/lifeos/models/Qwen3.5-4B-Q4_K_M.gguf" && \
     MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf" && \
-    MMPROJ_FILE="/var/lib/lifeos/models/mmproj-F16.gguf" && \
+    MMPROJ_FILE="/usr/share/lifeos/models/mmproj-F16.gguf" && \
     echo ">>> Downloading Qwen3.5-4B Q4_K_M (~2.74GB)..." && \
     curl -fSL --retry 3 --connect-timeout 60 -o "${MODEL_FILE}" "${MODEL_URL}" && \
     echo ">>> Model size: $(du -h "${MODEL_FILE}" | cut -f1)" && \
@@ -174,7 +185,8 @@ RUN set -eux && \
     echo ">>> Downloading vision projector mmproj F16 (~672MB)..." && \
     curl -fSL --retry 3 --connect-timeout 60 -o "${MMPROJ_FILE}" "${MMPROJ_URL}" && \
     echo ">>> mmproj size: $(du -h "${MMPROJ_FILE}" | cut -f1)" && \
-    test -s "${MMPROJ_FILE}" || { echo "ERROR: mmproj file is empty"; exit 1; }
+    test -s "${MMPROJ_FILE}" || { echo "ERROR: mmproj file is empty"; exit 1; } && \
+    ln -sfn /usr/share/lifeos/models /var/lib/lifeos/models
 
 # --- Copiar archivos de configuración y scripts desde el repo ---
 # Configuración de LifeOS
@@ -301,9 +313,14 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     printf '%s\n' \
     'g wsdd -' \
     'u wsdd - "WSDD Service User" /var/lib/wsdd -' \
+    'g akmods -' \
+    'u akmods - "User is used by akmods to build akmod packages" /var/cache/akmods/ -' \
     > /usr/lib/sysusers.d/wsdd.conf && \
     printf '%s\n' \
     'L /var/lib/greetd/.config/systemd/user/xdg-desktop-portal.service - - - - /dev/null' \
+    'L /var/lib/lifeos/models - - - - /usr/share/lifeos/models' \
+    'L /var/lib/unbound/root.key - - - - ../../../etc/unbound/dnssec-root.key' \
+    'd /var/cache/dnf 0755 root root - -' \
     'd /var/cache/PackageKit 0755 root root - -' \
     'd /var/cache/app-info 0755 root root - -' \
     'd /var/cache/app-info/icons 0755 root root - -' \
@@ -331,7 +348,9 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     'd /var/lib/greetd/.config/systemd 0755 greetd greetd - -' \
     'd /var/lib/greetd/.config/systemd/user 0755 greetd greetd - -' \
     'd /var/lib/lifeos 0755 root root - -' \
-    'd /var/lib/lifeos/models 0755 root root - -' \
+    'd /var/lib/rpm-state 0755 root root - -' \
+    'd /var/lib/rpm-state/kernel 0755 root root - -' \
+    'd /var/lib/unbound 0755 unbound unbound - -' \
     'd /var/lib/smartmontools 0755 root root - -' \
     'd /var/lib/tuned 0755 root root - -' \
     'd /var/log/lifeos 0755 root root - -' \
@@ -391,4 +410,5 @@ RUN test -x /usr/bin/life && \
     test -x /usr/local/bin/lifeos-integrity-check.sh && \
     test -x /usr/local/bin/lifeos-security-baseline-check.sh
 
-RUN dnf clean all && rm -f /var/log/dnf5.log* && bootc container lint
+# nonempty-boot is intentionally skipped: /boot/efi content is required for bootc-image-builder ISO generation.
+RUN dnf clean all && rm -f /var/log/dnf5.log* /var/cache/ldconfig/aux-cache && bootc container lint --skip nonempty-boot

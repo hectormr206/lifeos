@@ -11,7 +11,7 @@
 #
 # Requisitos:
 #   - Podman instalado (sudo apt install podman  o  sudo dnf install podman)
-#   - Root o rootless (este script detecta y usa el storage adecuado)
+#   - Root (bootc-image-builder requiere podman rootful)
 #
 # Desde Windows (WSL2):
 #   wsl -d Ubuntu -- sudo bash /ruta/al/proyecto/scripts/generate-iso-simple.sh
@@ -26,6 +26,8 @@ OUTPUT_DIR="${LIFEOS_OUTPUT_DIR:-${PROJECT_ROOT}/output}"
 IMAGE_NAME="localhost/lifeos:latest"
 BUILD_TYPE="${1:-iso}"
 BIB_IMAGE="quay.io/centos-bootc/bootc-image-builder:latest"
+BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+VCS_REF="${VCS_REF:-$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
 
 # Colores
 RED='\033[0;31m'
@@ -77,13 +79,12 @@ if ! command -v podman &>/dev/null; then
     error "Podman no está instalado. Instálalo con: sudo apt install podman (Ubuntu) o sudo dnf install podman (Fedora)"
 fi
 
-if [[ $EUID -eq 0 ]]; then
-    CONTAINERS_STORAGE="/var/lib/containers/storage"
-    log "Ejecutando como root"
-else
-    CONTAINERS_STORAGE="${HOME}/.local/share/containers/storage"
-    warn "Ejecutando en modo rootless (sin sudo)"
+if [[ $EUID -ne 0 ]]; then
+    error "bootc-image-builder requiere podman rootful. Ejecuta con: sudo ./scripts/generate-iso-simple.sh --type $BUILD_TYPE --image \"$IMAGE_NAME\""
 fi
+
+CONTAINERS_STORAGE="/var/lib/containers/storage"
+log "Ejecutando como root"
 
 if [[ ! -d "$CONTAINERS_STORAGE" ]]; then
     error "No se encontró el storage de podman en: $CONTAINERS_STORAGE"
@@ -95,14 +96,10 @@ case "$BUILD_TYPE" in
     *) error "Tipo de build inválido: $BUILD_TYPE. Usa: iso, vmdk, qcow2 o raw" ;;
 esac
 
-# ISO necesita loop devices para crear efiboot.img (mkfs.fat en osbuild).
-# En rootless sin permiso a /dev/loop-control fallará al final tras varios minutos.
-if [[ "$BUILD_TYPE" == "iso" ]] && [[ $EUID -ne 0 ]] && [[ ! -w /dev/loop-control ]]; then
-    error "No hay permisos de escritura sobre /dev/loop-control. Para generar ISO usa:
-  1) sudo ./scripts/generate-iso-simple.sh --type iso --image \"$IMAGE_NAME\"
-  2) o agrega tu usuario al grupo disk y reinicia sesión:
-     sudo usermod -aG disk $USER"
-fi
+# Opciones de etiqueta para medio ISO (solo aplican cuando BUILD_TYPE=iso)
+ISO_VOLUME_ID="${LIFEOS_ISO_VOLUME_ID:-LIFEOS_INSTALL}"
+ISO_APPLICATION_ID="${LIFEOS_ISO_APPLICATION_ID:-LIFEOS_INSTALLER}"
+ISO_PUBLISHER="${LIFEOS_ISO_PUBLISHER:-LIFEOS}"
 
 success "Prerequisitos OK"
 log "Directorio de salida: $OUTPUT_DIR"
@@ -136,6 +133,8 @@ if [[ "$NEEDS_BUILD" -eq 1 ]]; then
     fi
 
     podman build \
+        --build-arg "BUILD_DATE=${BUILD_DATE}" \
+        --build-arg "VCS_REF=${VCS_REF}" \
         -t "$IMAGE_NAME" \
         -f "$PROJECT_ROOT/image/Containerfile" \
         "$PROJECT_ROOT"
@@ -173,6 +172,31 @@ PASS_HASH=$(python3 -c "import crypt; print(crypt.crypt('lifeos', crypt.mksalt(c
             openssl passwd -6 lifeos)
 
 CONFIG_FILE="$OUTPUT_DIR/config.json"
+if [[ "$BUILD_TYPE" == "iso" ]]; then
+cat > "$CONFIG_FILE" << CONFIGEOF
+{
+  "blueprint": {
+    "customizations": {
+      "user": [
+        {
+          "name": "lifeos",
+          "password": "${PASS_HASH}",
+          "groups": ["wheel"]
+        }
+      ],
+      "kernel": {
+        "append": "quiet rhgb"
+      },
+      "iso": {
+        "volume_id": "${ISO_VOLUME_ID}",
+        "application_id": "${ISO_APPLICATION_ID}",
+        "publisher": "${ISO_PUBLISHER}"
+      }
+    }
+  }
+}
+CONFIGEOF
+else
 cat > "$CONFIG_FILE" << CONFIGEOF
 {
   "blueprint": {
@@ -191,6 +215,7 @@ cat > "$CONFIG_FILE" << CONFIGEOF
   }
 }
 CONFIGEOF
+fi
 
 success "Configuración generada"
 echo "  Usuario: lifeos"
@@ -227,16 +252,6 @@ PODMAN_RUN_ARGS=(
     -v
     "$CONFIG_FILE:/config.json:ro"
 )
-
-# Rootless + ISO: osbuild necesita acceso explícito a loop devices en algunos hosts.
-if [[ "$BUILD_TYPE" == "iso" ]] && [[ $EUID -ne 0 ]]; then
-    PODMAN_RUN_ARGS+=(--group-add keep-groups)
-    PODMAN_RUN_ARGS+=(--device /dev/loop-control:/dev/loop-control)
-    for loopdev in /dev/loop[0-9]*; do
-        [[ -b "$loopdev" ]] || continue
-        PODMAN_RUN_ARGS+=(--device "$loopdev:$loopdev")
-    done
-fi
 
 podman run \
     "${PODMAN_RUN_ARGS[@]}" \

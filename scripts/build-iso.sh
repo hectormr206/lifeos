@@ -68,6 +68,8 @@ BANNER
 echo -e "${NC}"
 
 START_TIME=$(date +%s)
+BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+VCS_REF="${VCS_REF:-$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
 
 # ============================================
 # Paso 0: Limpiar imagen anterior
@@ -89,6 +91,8 @@ echo
 
 podman build \
     --no-cache \
+    --build-arg "BUILD_DATE=${BUILD_DATE}" \
+    --build-arg "VCS_REF=${VCS_REF}" \
     -t "$IMAGE_NAME" \
     -f "$PROJECT_ROOT/image/Containerfile" \
     "$PROJECT_ROOT"

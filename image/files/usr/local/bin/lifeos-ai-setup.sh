@@ -69,7 +69,10 @@ fi
 echo "Downloading default AI model: $MODEL (~2.74GB)"
 echo "This may take several minutes..."
 
-mkdir -p "$MODEL_DIR"
+mkdir -p "$(dirname "$MODEL_DIR")"
+if [ ! -e "$MODEL_DIR" ]; then
+    mkdir -p "$MODEL_DIR"
+fi
 
 # Download model with retry
 for attempt in 1 2 3; do

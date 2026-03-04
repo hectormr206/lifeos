@@ -121,7 +121,14 @@ docker: docker-build docker-lint
 
 docker-build:
 	@echo "🐳 Building container image..."
-	cd image && podman build -t lifeos:dev -f Containerfile .
+	@BUILD_DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+	VCS_REF="$$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"; \
+	podman build \
+		--build-arg "BUILD_DATE=$$BUILD_DATE" \
+		--build-arg "VCS_REF=$$VCS_REF" \
+		-t lifeos:dev \
+		-f image/Containerfile \
+		.
 
 docker-lint:
 	@echo "🔍 Linting container image..."
