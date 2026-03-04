@@ -104,6 +104,18 @@ pub enum AiCommands {
         #[arg(long)]
         refresh: bool,
     },
+    /// Run OS-level OCR on a file or current screen capture
+    Ocr {
+        /// Existing image path to OCR
+        #[arg(long)]
+        source: Option<String>,
+        /// Force capture screen before OCR
+        #[arg(long)]
+        capture_screen: bool,
+        /// OCR language (default: eng)
+        #[arg(long)]
+        language: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,6 +162,11 @@ pub async fn execute(args: AiCommands) -> anyhow::Result<()> {
         AiCommands::Autotune { dry_run } => autotune_model(dry_run).await,
         AiCommands::Profile { runtime, apply } => detect_profile(runtime.as_deref(), apply).await,
         AiCommands::Catalog { refresh } => show_catalog_status(refresh).await,
+        AiCommands::Ocr {
+            source,
+            capture_screen,
+            language,
+        } => ocr_screen(source.as_deref(), capture_screen, language.as_deref()).await,
     }
 }
 
@@ -1283,6 +1300,53 @@ async fn show_catalog_status(refresh: bool) -> anyhow::Result<()> {
         println!("  {}", "...".dimmed());
     }
     Ok(())
+}
+
+async fn ocr_screen(
+    source: Option<&str>,
+    capture_screen: bool,
+    language: Option<&str>,
+) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let response = client
+        .post(format!("{}/api/v1/vision/ocr", daemon_client::daemon_url()))
+        .json(&serde_json::json!({
+            "source": source,
+            "capture_screen": capture_screen,
+            "language": language,
+        }))
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) if resp.status().is_success() => {
+            let body: serde_json::Value = resp.json().await?;
+            println!("{}", "Vision OCR result".bold().blue());
+            println!(
+                "  source: {}",
+                body["source"].as_str().unwrap_or("-").dimmed()
+            );
+            println!(
+                "  language: {}",
+                body["language"].as_str().unwrap_or("eng").cyan()
+            );
+            println!();
+            println!("{}", body["text"].as_str().unwrap_or("").trim());
+            Ok(())
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("OCR request failed ({}): {}", status, body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
 }
 
 // ==================== HELPER FUNCTIONS ====================

@@ -197,6 +197,122 @@ impl Default for ResourceRuntimeState {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlwaysOnRuntimeState {
+    pub enabled: bool,
+    pub vad_enabled: bool,
+    pub hotword_enabled: bool,
+    pub intent_classifier_enabled: bool,
+    pub wake_word: String,
+    pub last_inference_at: Option<DateTime<Utc>>,
+    pub last_inference_label: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl Default for AlwaysOnRuntimeState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            vad_enabled: true,
+            hotword_enabled: true,
+            intent_classifier_enabled: true,
+            wake_word: "hey life".to_string(),
+            last_inference_at: None,
+            last_inference_label: None,
+            updated_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SensoryCaptureRuntimeState {
+    pub enabled: bool,
+    pub audio_enabled: bool,
+    pub screen_enabled: bool,
+    pub running: bool,
+    pub last_snapshot_at: Option<DateTime<Utc>>,
+    pub last_screen_path: Option<String>,
+    pub last_transcript_chars: usize,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl Default for SensoryCaptureRuntimeState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            audio_enabled: false,
+            screen_enabled: false,
+            running: false,
+            last_snapshot_at: None,
+            last_screen_path: None,
+            last_transcript_chars: 0,
+            updated_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelRoutingDecision {
+    pub priority: String,
+    pub selected_tier: String,
+    pub model_hint: String,
+    pub degraded: bool,
+    pub reason: String,
+    pub resource_profile: String,
+    pub backend_order: Vec<String>,
+    pub cpu_pressure_percent: f32,
+    pub memory_pressure_percent: f32,
+    pub load_1m: f64,
+    pub observed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelfDefenseStatus {
+    pub situational_awareness: String,
+    pub ai_service_running: bool,
+    pub network_online: bool,
+    pub rollback_available: bool,
+    pub degraded_offline: bool,
+    pub disk_usage_percent: f32,
+    pub recommended_actions: Vec<String>,
+    pub observed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelfDefenseRepairResult {
+    pub status_before: SelfDefenseStatus,
+    pub status_after: SelfDefenseStatus,
+    pub actions_taken: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatRuntimeState {
+    pub enabled: bool,
+    pub interval_seconds: u64,
+    pub last_tick_at: Option<DateTime<Utc>>,
+    pub last_summary: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl Default for HeartbeatRuntimeState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_seconds: 300,
+            last_tick_at: None,
+            last_summary: None,
+            updated_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatTickReport {
+    pub heartbeat: HeartbeatRuntimeState,
+    pub actions: Vec<String>,
+    pub awareness: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct AgentRuntimeState {
     intents: Vec<IntentRecord>,
@@ -214,6 +330,12 @@ struct AgentRuntimeState {
     jarvis: JarvisSessionState,
     #[serde(default)]
     resource_runtime: ResourceRuntimeState,
+    #[serde(default)]
+    always_on_runtime: AlwaysOnRuntimeState,
+    #[serde(default)]
+    sensory_capture_runtime: SensoryCaptureRuntimeState,
+    #[serde(default)]
+    heartbeat_runtime: HeartbeatRuntimeState,
 }
 
 pub struct AgentRuntimeManager {
@@ -1014,6 +1136,429 @@ impl AgentRuntimeManager {
         Ok(snapshot)
     }
 
+    pub async fn always_on_runtime(&self) -> AlwaysOnRuntimeState {
+        let state = self.state.read().await;
+        state.always_on_runtime.clone()
+    }
+
+    pub async fn set_always_on_runtime(
+        &self,
+        enabled: bool,
+        wake_word: Option<&str>,
+        actor: Option<&str>,
+    ) -> Result<AlwaysOnRuntimeState> {
+        let actor = actor.unwrap_or("user://local/default");
+        let wake_word = wake_word
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .unwrap_or("hey life")
+            .to_lowercase();
+
+        let mut state = self.state.write().await;
+        state.always_on_runtime.enabled = enabled;
+        state.always_on_runtime.vad_enabled = enabled;
+        state.always_on_runtime.hotword_enabled = enabled;
+        state.always_on_runtime.intent_classifier_enabled = enabled;
+        state.always_on_runtime.wake_word = wake_word.clone();
+        state.always_on_runtime.updated_at = Some(Utc::now());
+
+        append_ledger(
+            &mut state,
+            "runtime",
+            if enabled {
+                "always_on_enable"
+            } else {
+                "always_on_disable"
+            },
+            "always-on-runtime",
+            serde_json::json!({
+                "actor": actor,
+                "enabled": enabled,
+                "wake_word": wake_word,
+            }),
+        );
+
+        let snapshot = state.always_on_runtime.clone();
+        drop(state);
+        self.save_state().await?;
+        Ok(snapshot)
+    }
+
+    pub async fn classify_always_on_signal(&self, text: &str) -> serde_json::Value {
+        let trimmed = text.trim();
+        let mut state = self.state.write().await;
+        let wake_word = state.always_on_runtime.wake_word.clone();
+        let (label, confidence, reasons, hotword_detected) =
+            classify_micro_intent(trimmed, &wake_word);
+        state.always_on_runtime.last_inference_at = Some(Utc::now());
+        state.always_on_runtime.last_inference_label = Some(label.to_string());
+
+        serde_json::json!({
+            "label": label,
+            "confidence": confidence,
+            "hotword_detected": hotword_detected,
+            "wake_word": wake_word,
+            "reasons": reasons,
+            "enabled": state.always_on_runtime.enabled,
+        })
+    }
+
+    pub async fn sensory_capture_runtime(&self) -> SensoryCaptureRuntimeState {
+        let state = self.state.read().await;
+        state.sensory_capture_runtime.clone()
+    }
+
+    pub async fn set_sensory_capture_runtime(
+        &self,
+        enabled: bool,
+        audio_enabled: bool,
+        screen_enabled: bool,
+        actor: Option<&str>,
+    ) -> Result<SensoryCaptureRuntimeState> {
+        let actor = actor.unwrap_or("user://local/default");
+        let mut state = self.state.write().await;
+        state.sensory_capture_runtime.enabled = enabled;
+        state.sensory_capture_runtime.audio_enabled = enabled && audio_enabled;
+        state.sensory_capture_runtime.screen_enabled = enabled && screen_enabled;
+        state.sensory_capture_runtime.running = enabled && (audio_enabled || screen_enabled);
+        state.sensory_capture_runtime.updated_at = Some(Utc::now());
+        let effective_audio_enabled = state.sensory_capture_runtime.audio_enabled;
+        let effective_screen_enabled = state.sensory_capture_runtime.screen_enabled;
+
+        append_ledger(
+            &mut state,
+            "runtime",
+            if enabled {
+                "sensory_capture_start"
+            } else {
+                "sensory_capture_stop"
+            },
+            "sensory-capture",
+            serde_json::json!({
+                "actor": actor,
+                "enabled": enabled,
+                "audio_enabled": effective_audio_enabled,
+                "screen_enabled": effective_screen_enabled,
+            }),
+        );
+
+        let snapshot = state.sensory_capture_runtime.clone();
+        drop(state);
+        self.save_state().await?;
+        Ok(snapshot)
+    }
+
+    pub async fn record_sensory_snapshot(
+        &self,
+        screen_path: Option<&str>,
+        transcript: Option<&str>,
+    ) -> Result<SensoryCaptureRuntimeState> {
+        let mut state = self.state.write().await;
+        state.sensory_capture_runtime.last_snapshot_at = Some(Utc::now());
+        state.sensory_capture_runtime.last_screen_path =
+            screen_path.map(|value| value.trim().to_string());
+        state.sensory_capture_runtime.last_transcript_chars =
+            transcript.map(|value| value.chars().count()).unwrap_or(0);
+
+        let snapshot = state.sensory_capture_runtime.clone();
+        drop(state);
+        self.save_state().await?;
+        Ok(snapshot)
+    }
+
+    pub async fn route_model_for_priority(
+        &self,
+        priority: &str,
+        preferred_model: Option<&str>,
+    ) -> ModelRoutingDecision {
+        let now = Utc::now();
+        let state = self.state.read().await;
+        let load_1m = read_load_1m();
+        let memory_pressure_percent = read_memory_pressure_percent();
+        let cpu_pressure_percent = compute_cpu_pressure_percent(load_1m);
+        let normalized_priority = normalize_priority(priority).to_string();
+        let heavy_allowed = state.resource_runtime.heavy_model_slots > 0
+            && !matches!(
+                state.resource_runtime.profile.as_str(),
+                "battery" | "silent"
+            );
+        let overload = cpu_pressure_percent >= 85.0 || memory_pressure_percent >= 88.0;
+
+        let wants_heavy = matches!(normalized_priority.as_str(), "high" | "critical");
+        let (selected_tier, model_hint, degraded, reason) =
+            if wants_heavy && heavy_allowed && !overload {
+                (
+                    "heavy".to_string(),
+                    preferred_model
+                        .unwrap_or("Qwen3.5-9B-Q4_K_M.gguf")
+                        .to_string(),
+                    false,
+                    "Heavy tier selected for high-priority objective".to_string(),
+                )
+            } else if wants_heavy && (overload || !heavy_allowed) {
+                (
+                    "standard".to_string(),
+                    "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+                    true,
+                    if overload {
+                        "Degraded from heavy model due to system pressure".to_string()
+                    } else {
+                        "Degraded from heavy model due to resource profile/slots".to_string()
+                    },
+                )
+            } else if normalized_priority == "low" || state.resource_runtime.profile == "battery" {
+                (
+                    "light".to_string(),
+                    "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+                    false,
+                    "Light tier selected for low-priority or battery mode".to_string(),
+                )
+            } else {
+                (
+                    "standard".to_string(),
+                    preferred_model
+                        .unwrap_or("Qwen3.5-4B-Q4_K_M.gguf")
+                        .to_string(),
+                    false,
+                    "Standard tier selected".to_string(),
+                )
+            };
+
+        ModelRoutingDecision {
+            priority: normalized_priority,
+            selected_tier,
+            model_hint,
+            degraded,
+            reason,
+            resource_profile: state.resource_runtime.profile.clone(),
+            backend_order: state.resource_runtime.backend_order.clone(),
+            cpu_pressure_percent,
+            memory_pressure_percent,
+            load_1m,
+            observed_at: now,
+        }
+    }
+
+    pub async fn self_defense_status(&self) -> SelfDefenseStatus {
+        let ai_service_running = is_service_active("llama-server.service").await;
+        let network_online = has_default_network_route().await;
+        let rollback_available = has_bootc_rollback_capability().await;
+        let disk_usage_percent = read_disk_usage_percent("/var").await.unwrap_or(0.0);
+
+        let situational_awareness =
+            if (!ai_service_running && !network_online) || disk_usage_percent >= 97.0 {
+                "critical"
+            } else if !ai_service_running || !network_online || disk_usage_percent >= 90.0 {
+                "elevated"
+            } else {
+                "normal"
+            };
+
+        let degraded_offline = !network_online || !ai_service_running;
+        let mut recommended_actions = Vec::new();
+        if !ai_service_running {
+            recommended_actions.push("restart llama-server service".to_string());
+        }
+        if !network_online {
+            recommended_actions.push("switch to offline degraded operation mode".to_string());
+        }
+        if disk_usage_percent >= 90.0 {
+            recommended_actions.push("free disk space in /var and prune old artifacts".to_string());
+        }
+        if rollback_available && situational_awareness == "critical" {
+            recommended_actions.push("prepare controlled bootc rollback".to_string());
+        }
+
+        SelfDefenseStatus {
+            situational_awareness: situational_awareness.to_string(),
+            ai_service_running,
+            network_online,
+            rollback_available,
+            degraded_offline,
+            disk_usage_percent,
+            recommended_actions,
+            observed_at: Utc::now(),
+        }
+    }
+
+    pub async fn run_self_defense_repair(
+        &self,
+        actor: Option<&str>,
+        auto_rollback: bool,
+    ) -> Result<SelfDefenseRepairResult> {
+        let actor = actor.unwrap_or("user://local/default");
+        let status_before = self.self_defense_status().await;
+        let mut actions_taken = Vec::new();
+
+        if !status_before.ai_service_running {
+            let output = Command::new("systemctl")
+                .args(["restart", "llama-server.service"])
+                .output()
+                .await;
+            match output {
+                Ok(out) if out.status.success() => {
+                    actions_taken.push("restarted llama-server.service".to_string());
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    actions_taken.push(format!(
+                        "failed to restart llama-server.service: {}",
+                        stderr
+                    ));
+                }
+                Err(e) => {
+                    actions_taken.push(format!("failed to execute restart command: {}", e));
+                }
+            }
+        }
+
+        if status_before.degraded_offline {
+            let mut state = self.state.write().await;
+            state.execution_mode = ExecutionMode::Interactive;
+            state.resource_runtime.profile = "battery".to_string();
+            state.resource_runtime.heavy_model_slots = 0;
+            state.resource_runtime.updated_at = Some(Utc::now());
+            append_ledger(
+                &mut state,
+                "self-defense",
+                "degraded_mode",
+                "runtime",
+                serde_json::json!({
+                    "actor": actor,
+                    "execution_mode": "interactive",
+                    "resource_profile": "battery"
+                }),
+            );
+            drop(state);
+            actions_taken.push("forced degraded runtime mode (interactive + battery)".to_string());
+        }
+
+        if auto_rollback && status_before.rollback_available && !status_before.ai_service_running {
+            actions_taken
+                .push("auto-rollback requested; manual approval still required".to_string());
+        }
+
+        let status_after = self.self_defense_status().await;
+        let mut state = self.state.write().await;
+        append_ledger(
+            &mut state,
+            "self-defense",
+            "repair",
+            "runtime",
+            serde_json::json!({
+                "actor": actor,
+                "auto_rollback": auto_rollback,
+                "actions_taken": actions_taken,
+                "status_before": status_before.situational_awareness,
+                "status_after": status_after.situational_awareness,
+            }),
+        );
+        drop(state);
+        self.save_state().await?;
+
+        Ok(SelfDefenseRepairResult {
+            status_before,
+            status_after,
+            actions_taken,
+        })
+    }
+
+    pub async fn heartbeat_runtime(&self) -> HeartbeatRuntimeState {
+        let state = self.state.read().await;
+        state.heartbeat_runtime.clone()
+    }
+
+    pub async fn set_heartbeat_runtime(
+        &self,
+        enabled: bool,
+        interval_seconds: Option<u64>,
+        actor: Option<&str>,
+    ) -> Result<HeartbeatRuntimeState> {
+        let actor = actor.unwrap_or("user://local/default");
+        let interval = interval_seconds.unwrap_or(300).clamp(30, 3600);
+
+        let mut state = self.state.write().await;
+        state.heartbeat_runtime.enabled = enabled;
+        state.heartbeat_runtime.interval_seconds = interval;
+        state.heartbeat_runtime.updated_at = Some(Utc::now());
+
+        append_ledger(
+            &mut state,
+            "heartbeat",
+            if enabled {
+                "heartbeat_enable"
+            } else {
+                "heartbeat_disable"
+            },
+            "proactive-runtime",
+            serde_json::json!({
+                "actor": actor,
+                "enabled": enabled,
+                "interval_seconds": interval,
+            }),
+        );
+
+        let snapshot = state.heartbeat_runtime.clone();
+        drop(state);
+        self.save_state().await?;
+        Ok(snapshot)
+    }
+
+    pub async fn run_proactive_heartbeat(
+        &self,
+        actor: Option<&str>,
+    ) -> Result<HeartbeatTickReport> {
+        let actor = actor.unwrap_or("user://local/default");
+        let defense = self.self_defense_status().await;
+        let route = self.route_model_for_priority("medium", None).await;
+
+        let mut actions = Vec::new();
+        if !defense.ai_service_running {
+            actions.push("nudge: restart llama-server".to_string());
+        }
+        if defense.degraded_offline {
+            actions.push("nudge: keep degraded offline-safe execution mode".to_string());
+        }
+        if route.degraded {
+            actions.push("nudge: keep lightweight model until load normalizes".to_string());
+        }
+        if actions.is_empty() {
+            actions.push("no-op: runtime healthy".to_string());
+        }
+
+        let mut state = self.state.write().await;
+        state.heartbeat_runtime.last_tick_at = Some(Utc::now());
+        state.heartbeat_runtime.last_summary = Some(format!(
+            "awareness={} degraded={} actions={}",
+            defense.situational_awareness,
+            route.degraded,
+            actions.len()
+        ));
+        state.heartbeat_runtime.updated_at = Some(Utc::now());
+        let heartbeat = state.heartbeat_runtime.clone();
+
+        append_ledger(
+            &mut state,
+            "heartbeat",
+            "heartbeat_tick",
+            "proactive-runtime",
+            serde_json::json!({
+                "actor": actor,
+                "awareness": defense.situational_awareness,
+                "degraded": route.degraded,
+                "actions": actions,
+            }),
+        );
+        drop(state);
+        self.save_state().await?;
+
+        Ok(HeartbeatTickReport {
+            heartbeat,
+            actions,
+            awareness: defense.situational_awareness,
+        })
+    }
+
     pub async fn execution_mode(&self) -> ExecutionMode {
         let state = self.state.read().await;
         state.execution_mode.clone()
@@ -1506,6 +2051,170 @@ fn detect_backend_order() -> Vec<String> {
     order
 }
 
+fn normalize_priority(priority: &str) -> &'static str {
+    match priority.trim().to_lowercase().as_str() {
+        "critical" => "critical",
+        "high" => "high",
+        "medium" => "medium",
+        _ => "low",
+    }
+}
+
+fn classify_micro_intent(input: &str, wake_word: &str) -> (&'static str, f64, Vec<String>, bool) {
+    let text = input.trim().to_lowercase();
+    if text.is_empty() {
+        return ("silence", 0.0, vec!["empty_input".to_string()], false);
+    }
+
+    let hotword_detected = !wake_word.trim().is_empty() && text.contains(&wake_word.to_lowercase());
+    let mut reasons = Vec::new();
+    if hotword_detected {
+        reasons.push("wake_word_detected".to_string());
+    }
+
+    let label = if text.contains("cancel") || text.contains("stop") {
+        reasons.push("cancel_keyword".to_string());
+        "cancel"
+    } else if text.contains("status") || text.contains("help") {
+        reasons.push("query_keyword".to_string());
+        "query"
+    } else if text.contains("open")
+        || text.contains("run")
+        || text.contains("execute")
+        || text.contains("create")
+    {
+        reasons.push("action_keyword".to_string());
+        "action"
+    } else if text.len() <= 8 {
+        reasons.push("short_utterance".to_string());
+        "noise"
+    } else {
+        reasons.push("fallback_classifier".to_string());
+        "query"
+    };
+
+    let mut confidence: f64 = 0.52;
+    if hotword_detected {
+        confidence += 0.22;
+    }
+    if label == "action" {
+        confidence += 0.10;
+    }
+    if label == "noise" {
+        confidence = 0.35;
+    }
+    (label, confidence.min(0.99), reasons, hotword_detected)
+}
+
+fn core_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|v| v.get())
+        .unwrap_or(1)
+}
+
+fn read_load_1m() -> f64 {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|raw| {
+            raw.split_whitespace()
+                .next()
+                .and_then(|value| value.parse::<f64>().ok())
+        })
+        .unwrap_or(0.0)
+}
+
+fn compute_cpu_pressure_percent(load_1m: f64) -> f32 {
+    let cores = core_count() as f64;
+    if cores <= 0.0 {
+        return 0.0;
+    }
+    ((load_1m / cores) * 100.0).clamp(0.0, 100.0) as f32
+}
+
+fn read_memory_pressure_percent() -> f32 {
+    let content = match std::fs::read_to_string("/proc/meminfo") {
+        Ok(v) => v,
+        Err(_) => return 0.0,
+    };
+    let mut total_kb = 0_u64;
+    let mut available_kb = 0_u64;
+    for line in content.lines() {
+        if line.starts_with("MemTotal:") {
+            total_kb = line
+                .split_whitespace()
+                .nth(1)
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+        } else if line.starts_with("MemAvailable:") {
+            available_kb = line
+                .split_whitespace()
+                .nth(1)
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+        }
+    }
+    if total_kb == 0 {
+        return 0.0;
+    }
+    (((total_kb.saturating_sub(available_kb)) as f64 / total_kb as f64) * 100.0) as f32
+}
+
+async fn is_service_active(service: &str) -> bool {
+    Command::new("systemctl")
+        .args(["is-active", "--quiet", service])
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+async fn has_default_network_route() -> bool {
+    Command::new("ip")
+        .args(["route", "get", "1.1.1.1"])
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+async fn has_bootc_rollback_capability() -> bool {
+    Command::new("bootc")
+        .args(["status", "--json"])
+        .status()
+        .await
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+async fn read_disk_usage_percent(target: &str) -> Option<f32> {
+    let output = Command::new("df")
+        .args(["-Pk", target])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().nth(1)?;
+    let cols: Vec<&str> = line.split_whitespace().collect();
+    if cols.len() < 6 {
+        return None;
+    }
+    let total_kb = cols
+        .get(1)
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    let used_kb = cols
+        .get(2)
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.0);
+    if total_kb <= 0.0 {
+        return None;
+    }
+    Some((used_kb / total_kb) * 100.0)
+}
+
 fn parse_execution_mode(mode: &str) -> Result<ExecutionMode> {
     match mode.trim().to_lowercase().as_str() {
         "interactive" => Ok(ExecutionMode::Interactive),
@@ -1807,6 +2516,107 @@ mod tests {
         let status = mgr.resource_runtime().await;
         assert_eq!(status.profile, "silent");
         assert!(status.backend_order.contains(&"cpu".to_string()));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn always_on_runtime_enable_and_classify() {
+        let dir = temp_dir("agent-runtime-always-on");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let state = mgr
+            .set_always_on_runtime(true, Some("hey life"), Some("user://local/admin"))
+            .await
+            .unwrap();
+        assert!(state.enabled);
+        assert_eq!(state.wake_word, "hey life");
+
+        let classification = mgr
+            .classify_always_on_signal("hey life open terminal now")
+            .await;
+        assert_eq!(classification["label"].as_str(), Some("action"));
+        assert!(classification["hotword_detected"]
+            .as_bool()
+            .unwrap_or(false));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sensory_capture_runtime_records_snapshot() {
+        let dir = temp_dir("agent-runtime-sensory");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let state = mgr
+            .set_sensory_capture_runtime(true, true, true, Some("user://local/admin"))
+            .await
+            .unwrap();
+        assert!(state.enabled);
+        assert!(state.audio_enabled);
+        assert!(state.screen_enabled);
+
+        let updated = mgr
+            .record_sensory_snapshot(Some("/tmp/frame.png"), Some("hello world"))
+            .await
+            .unwrap();
+        assert!(updated.last_snapshot_at.is_some());
+        assert_eq!(updated.last_screen_path.as_deref(), Some("/tmp/frame.png"));
+        assert_eq!(updated.last_transcript_chars, 11);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn model_routing_degrades_under_silent_profile() {
+        let dir = temp_dir("agent-runtime-routing");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        mgr.set_resource_profile("silent", Some("user://local/admin"))
+            .await
+            .unwrap();
+        let decision = mgr
+            .route_model_for_priority("critical", Some("Qwen3.5-9B-Q4_K_M.gguf"))
+            .await;
+        assert!(decision.degraded);
+        assert_eq!(decision.selected_tier, "standard");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn self_defense_repair_returns_status_and_actions() {
+        let dir = temp_dir("agent-runtime-self-defense");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let repair = mgr
+            .run_self_defense_repair(Some("user://local/admin"), false)
+            .await
+            .unwrap();
+        assert!(!repair.status_before.situational_awareness.is_empty());
+        assert!(!repair.status_after.situational_awareness.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn heartbeat_runtime_tick_updates_state() {
+        let dir = temp_dir("agent-runtime-heartbeat");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let state = mgr
+            .set_heartbeat_runtime(true, Some(120), Some("user://local/admin"))
+            .await
+            .unwrap();
+        assert!(state.enabled);
+        assert_eq!(state.interval_seconds, 120);
+
+        let tick = mgr
+            .run_proactive_heartbeat(Some("user://local/admin"))
+            .await
+            .unwrap();
+        assert!(tick.heartbeat.last_tick_at.is_some());
+        assert!(!tick.actions.is_empty());
 
         std::fs::remove_dir_all(dir).ok();
     }

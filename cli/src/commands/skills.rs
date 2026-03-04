@@ -626,6 +626,12 @@ fn sanitize_tool_name(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     fn temp_dir(prefix: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("{}-{}", prefix, unique_suffix()));
@@ -635,6 +641,7 @@ mod tests {
 
     #[test]
     fn install_and_verify_skill_manifest() {
+        let _guard = env_lock();
         let base = temp_dir("life-skills-install");
         std::env::set_var("LIFEOS_SKILLS_DIR", &base);
 
@@ -669,6 +676,7 @@ mod tests {
         let manifest = read_manifest(Path::new(&installed.manifest_path)).unwrap();
         verify_skill_integrity(&installed, &manifest).unwrap();
 
+        std::env::remove_var("LIFEOS_SKILLS_DIR");
         std::fs::remove_dir_all(base).ok();
     }
 
@@ -709,6 +717,7 @@ mod tests {
 
     #[test]
     fn exports_installed_skills_as_mcp_tools() {
+        let _guard = env_lock();
         let base = temp_dir("life-skills-mcp-export");
         std::env::set_var("LIFEOS_SKILLS_DIR", &base);
 
@@ -739,6 +748,7 @@ mod tests {
         assert!(raw.contains("mcp-tools/v1"));
         assert!(raw.contains("skills.demo_mcp_skill"));
 
+        std::env::remove_var("LIFEOS_SKILLS_DIR");
         std::fs::remove_dir_all(base).ok();
     }
 }

@@ -412,6 +412,128 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_intents_always_on_enable() {
+        let cli = Cli::parse_from([
+            "life",
+            "intents",
+            "always-on",
+            "enable",
+            "--wake-word",
+            "hey life",
+            "--actor",
+            "user://local/admin",
+        ]);
+        match cli.command {
+            Commands::Intents(commands::intents::IntentsCommands::AlwaysOn(
+                commands::intents::IntentAlwaysOnCommands::Enable { wake_word, actor },
+            )) => {
+                assert_eq!(wake_word, "hey life");
+                assert_eq!(actor, "user://local/admin");
+            }
+            _ => panic!("Expected intents always-on enable command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_intents_sensory_snapshot() {
+        let cli = Cli::parse_from([
+            "life",
+            "intents",
+            "sensory",
+            "snapshot",
+            "--audio-file",
+            "/tmp/voice.wav",
+            "--model",
+            "whisper-base",
+            "--no-screen",
+        ]);
+        match cli.command {
+            Commands::Intents(commands::intents::IntentsCommands::Sensory(
+                commands::intents::IntentSensoryCommands::Snapshot {
+                    audio_file,
+                    model,
+                    no_screen,
+                },
+            )) => {
+                assert_eq!(audio_file.as_deref(), Some("/tmp/voice.wav"));
+                assert_eq!(model.as_deref(), Some("whisper-base"));
+                assert!(no_screen);
+            }
+            _ => panic!("Expected intents sensory snapshot command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_intents_model_route() {
+        let cli = Cli::parse_from([
+            "life",
+            "intents",
+            "model-route",
+            "critical",
+            "--preferred-model",
+            "Qwen3.5-9B-Q4_K_M.gguf",
+        ]);
+        match cli.command {
+            Commands::Intents(commands::intents::IntentsCommands::ModelRoute {
+                priority,
+                preferred_model,
+            }) => {
+                assert_eq!(priority, "critical");
+                assert_eq!(preferred_model.as_deref(), Some("Qwen3.5-9B-Q4_K_M.gguf"));
+            }
+            _ => panic!("Expected intents model-route command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_intents_defense_repair() {
+        let cli = Cli::parse_from([
+            "life",
+            "intents",
+            "defense",
+            "repair",
+            "--auto-rollback",
+            "--actor",
+            "user://local/admin",
+        ]);
+        match cli.command {
+            Commands::Intents(commands::intents::IntentsCommands::Defense(
+                commands::intents::IntentDefenseCommands::Repair {
+                    auto_rollback,
+                    actor,
+                },
+            )) => {
+                assert!(auto_rollback);
+                assert_eq!(actor, "user://local/admin");
+            }
+            _ => panic!("Expected intents defense repair command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_intents_heartbeat_enable() {
+        let cli = Cli::parse_from([
+            "life",
+            "intents",
+            "heartbeat",
+            "enable",
+            "--interval",
+            "120",
+            "--actor",
+            "user://local/admin",
+        ]);
+        match cli.command {
+            Commands::Intents(commands::intents::IntentsCommands::Heartbeat(
+                commands::intents::IntentHeartbeatCommands::Enable { interval, actor },
+            )) => {
+                assert_eq!(interval, 120);
+                assert_eq!(actor, "user://local/admin");
+            }
+            _ => panic!("Expected intents heartbeat enable command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_id_list_active_flag() {
         let cli = Cli::parse_from(["life", "id", "list", "--active"]);
         match cli.command {
@@ -549,6 +671,31 @@ mod tests {
         match cli.command {
             Commands::Ai(commands::ai::AiCommands::Catalog { refresh }) => assert!(refresh),
             _ => panic!("Expected ai catalog command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_ai_ocr_command() {
+        let cli = Cli::parse_from([
+            "life",
+            "ai",
+            "ocr",
+            "--source",
+            "/tmp/screen.png",
+            "--language",
+            "eng",
+        ]);
+        match cli.command {
+            Commands::Ai(commands::ai::AiCommands::Ocr {
+                source,
+                capture_screen,
+                language,
+            }) => {
+                assert_eq!(source.as_deref(), Some("/tmp/screen.png"));
+                assert!(!capture_screen);
+                assert_eq!(language.as_deref(), Some("eng"));
+            }
+            _ => panic!("Expected ai ocr command"),
         }
     }
 

@@ -845,6 +845,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/ai/status", get(get_ai_status))
         .route("/ai/models", get(get_ai_models))
         .route("/ai/chat", post(post_ai_chat))
+        .route("/vision/ocr", post(post_vision_ocr))
         .route("/audio/stt/status", get(get_stt_status))
         .route("/audio/stt/start", post(start_stt_service))
         .route("/audio/stt/stop", post(stop_stt_service))
@@ -951,6 +952,30 @@ pub fn create_router(state: ApiState) -> Router {
             "/runtime/jarvis",
             get(get_jarvis_session).post(start_jarvis_session),
         )
+        .route(
+            "/runtime/always-on",
+            get(get_always_on_runtime).post(set_always_on_runtime),
+        )
+        .route(
+            "/runtime/always-on/classify",
+            post(classify_always_on_runtime),
+        )
+        .route("/runtime/model-routing", post(route_runtime_model))
+        .route("/runtime/self-defense", get(get_self_defense_status))
+        .route(
+            "/runtime/self-defense/repair",
+            post(run_self_defense_repair),
+        )
+        .route(
+            "/runtime/sensory",
+            get(get_sensory_runtime).post(set_sensory_runtime),
+        )
+        .route("/runtime/sensory/snapshot", post(capture_sensory_snapshot))
+        .route(
+            "/runtime/heartbeat",
+            get(get_heartbeat_runtime).post(set_heartbeat_runtime),
+        )
+        .route("/runtime/heartbeat/tick", post(run_heartbeat_tick))
         .route("/runtime/workspace-awareness", get(get_workspace_awareness))
         .route("/runtime/prompt-shield/scan", post(scan_prompt_shield))
         .route("/runtime/jarvis/stop", post(stop_jarvis_session))
@@ -1536,6 +1561,20 @@ async fn transcribe_audio_file(
         ));
     }
 
+    let (text, binary) = transcribe_with_whisper(file, payload.model.as_deref()).await?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "text": text,
+        "binary": binary,
+        "model": payload.model,
+    })))
+}
+
+async fn transcribe_with_whisper(
+    file: &str,
+    model: Option<&str>,
+) -> Result<(String, String), (StatusCode, Json<ApiError>)> {
     let binary = resolve_stt_binary_path().await.ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1548,12 +1587,7 @@ async fn transcribe_audio_file(
     })?;
 
     let mut cmd = Command::new(&binary);
-    if let Some(model) = payload
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
+    if let Some(model) = model.map(str::trim).filter(|v| !v.is_empty()) {
         cmd.args(["-m", model]);
     }
     cmd.args(["-f", file]);
@@ -1588,12 +1622,119 @@ async fn transcribe_audio_file(
     if text.is_empty() {
         text = String::from_utf8_lossy(&output.stderr).trim().to_string();
     }
+    Ok((text, binary))
+}
 
+async fn post_vision_ocr(
+    State(state): State<ApiState>,
+    Json(payload): Json<VisionOcrPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let capture_screen = payload.capture_screen.unwrap_or(payload.source.is_none());
+
+    let source_path = if capture_screen {
+        ensure_followalong_consent(&state).await?;
+        let capture = ScreenCapture::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+        let screenshot = capture.capture().await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "Bad Gateway".to_string(),
+                    message: format!("Failed to capture screen for OCR: {}", e),
+                    code: 502,
+                }),
+            )
+        })?;
+        screenshot.path.to_string_lossy().to_string()
+    } else {
+        payload
+            .source
+            .as_deref()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError {
+                        error: "Bad Request".to_string(),
+                        message: "source is required when capture_screen=false".to_string(),
+                        code: 400,
+                    }),
+                )
+            })?
+    };
+
+    if !std::path::Path::new(&source_path).exists() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("Image source not found: {}", source_path),
+                code: 404,
+            }),
+        ));
+    }
+
+    let language = payload
+        .language
+        .as_deref()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "eng".to_string());
+
+    let tesseract_path = Command::new("which")
+        .arg("tesseract")
+        .output()
+        .await
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiError {
+                    error: "Service Unavailable".to_string(),
+                    message: "tesseract binary not found for OCR".to_string(),
+                    code: 503,
+                }),
+            )
+        })?;
+
+    let output = Command::new(&tesseract_path)
+        .arg(&source_path)
+        .arg("stdout")
+        .args(["-l", &language])
+        .output()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: format!("Failed to execute tesseract: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    if !output.status.success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            Json(ApiError {
+                error: "Bad Gateway".to_string(),
+                message: format!("OCR failed: {}", output_stderr(&output)),
+                code: 502,
+            }),
+        ));
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(Json(serde_json::json!({
         "status": "ok",
+        "engine": "tesseract",
+        "language": language,
+        "source": source_path,
         "text": text,
-        "binary": binary,
-        "model": payload.model,
     })))
 }
 
@@ -3787,6 +3928,64 @@ struct PromptShieldScanPayload {
 }
 
 #[derive(Debug, Deserialize)]
+struct AlwaysOnRuntimePayload {
+    enabled: bool,
+    wake_word: Option<String>,
+    actor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlwaysOnClassifyPayload {
+    input: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelRoutingPayload {
+    priority: String,
+    preferred_model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SelfDefenseRepairPayload {
+    actor: Option<String>,
+    auto_rollback: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SensoryRuntimePayload {
+    enabled: Option<bool>,
+    audio_enabled: Option<bool>,
+    screen_enabled: Option<bool>,
+    actor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SensorySnapshotPayload {
+    include_screen: Option<bool>,
+    audio_file: Option<String>,
+    model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HeartbeatRuntimePayload {
+    enabled: bool,
+    interval_seconds: Option<u64>,
+    actor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HeartbeatTickPayload {
+    actor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisionOcrPayload {
+    source: Option<String>,
+    capture_screen: Option<bool>,
+    language: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct SttStartPayload {
     enable: Option<bool>,
 }
@@ -4280,6 +4479,342 @@ async fn set_resource_runtime(
     })))
 }
 
+async fn get_always_on_runtime(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let status = mgr.always_on_runtime().await;
+    Ok(Json(
+        serde_json::to_value(status).unwrap_or_else(|_| serde_json::json!({})),
+    ))
+}
+
+async fn set_always_on_runtime(
+    State(state): State<ApiState>,
+    Json(payload): Json<AlwaysOnRuntimePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let status = mgr
+        .set_always_on_runtime(
+            payload.enabled,
+            payload.wake_word.as_deref(),
+            payload.actor.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: e.to_string(),
+                    code: 400,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "always_on": status,
+    })))
+}
+
+async fn classify_always_on_runtime(
+    State(state): State<ApiState>,
+    Json(payload): Json<AlwaysOnClassifyPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    if payload.input.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "input is required".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let report = mgr.classify_always_on_signal(&payload.input).await;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "classification": report
+    })))
+}
+
+async fn route_runtime_model(
+    State(state): State<ApiState>,
+    Json(payload): Json<ModelRoutingPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let priority = payload.priority.trim();
+    if priority.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "priority is required".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let decision = mgr
+        .route_model_for_priority(priority, payload.preferred_model.as_deref())
+        .await;
+    let _ = mgr
+        .record_ledger_event(
+            "runtime",
+            "route_model",
+            "model-router",
+            serde_json::json!({
+                "priority": decision.priority,
+                "selected_tier": decision.selected_tier,
+                "model_hint": decision.model_hint,
+                "degraded": decision.degraded,
+            }),
+        )
+        .await;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "decision": decision,
+    })))
+}
+
+async fn get_self_defense_status(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let report = mgr.self_defense_status().await;
+    Ok(Json(serde_json::json!(report)))
+}
+
+async fn run_self_defense_repair(
+    State(state): State<ApiState>,
+    Json(payload): Json<SelfDefenseRepairPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let report = mgr
+        .run_self_defense_repair(
+            payload.actor.as_deref(),
+            payload.auto_rollback.unwrap_or(false),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "repair": report,
+    })))
+}
+
+async fn get_sensory_runtime(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let status = mgr.sensory_capture_runtime().await;
+    Ok(Json(
+        serde_json::to_value(status).unwrap_or_else(|_| serde_json::json!({})),
+    ))
+}
+
+async fn set_sensory_runtime(
+    State(state): State<ApiState>,
+    Json(payload): Json<SensoryRuntimePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let enabled = payload.enabled.unwrap_or(true);
+    let audio_enabled = payload.audio_enabled.unwrap_or(enabled);
+    let screen_enabled = payload.screen_enabled.unwrap_or(enabled);
+
+    if enabled && (audio_enabled || screen_enabled) {
+        ensure_followalong_consent(&state).await?;
+    }
+
+    let mut stt_started = false;
+    if enabled && audio_enabled {
+        stt_started = Command::new("systemctl")
+            .args(["start", DEFAULT_STT_SERVICE])
+            .status()
+            .await
+            .map(|status| status.success())
+            .unwrap_or(false);
+    }
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let status = mgr
+        .set_sensory_capture_runtime(
+            enabled,
+            audio_enabled,
+            screen_enabled,
+            payload.actor.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: e.to_string(),
+                    code: 400,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "sensory": status,
+        "stt_started": stt_started,
+    })))
+}
+
+async fn capture_sensory_snapshot(
+    State(state): State<ApiState>,
+    Json(payload): Json<SensorySnapshotPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    ensure_followalong_consent(&state).await?;
+
+    let mgr = state.agent_runtime_manager.read().await;
+    let sensory = mgr.sensory_capture_runtime().await;
+    if !sensory.enabled {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ApiError {
+                error: "Conflict".to_string(),
+                message: "sensory capture runtime is not enabled".to_string(),
+                code: 409,
+            }),
+        ));
+    }
+
+    let include_screen = payload.include_screen.unwrap_or(sensory.screen_enabled);
+    let mut screen_path = None;
+    if include_screen {
+        let capture = ScreenCapture::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+        let screenshot = capture.capture().await.map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "Bad Gateway".to_string(),
+                    message: format!("Failed to capture screen: {}", e),
+                    code: 502,
+                }),
+            )
+        })?;
+        screen_path = Some(screenshot.path.to_string_lossy().to_string());
+    }
+
+    let mut transcript = None;
+    if let Some(audio_file) = payload
+        .audio_file
+        .as_deref()
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+    {
+        if !std::path::Path::new(audio_file).exists() {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ApiError {
+                    error: "Not Found".to_string(),
+                    message: format!("Audio file not found: {}", audio_file),
+                    code: 404,
+                }),
+            ));
+        }
+        let (text, _binary) = transcribe_with_whisper(audio_file, payload.model.as_deref()).await?;
+        transcript = Some(text);
+    }
+
+    let status = mgr
+        .record_sensory_snapshot(screen_path.as_deref(), transcript.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "sensory": status,
+        "snapshot": {
+            "screen_path": screen_path,
+            "transcript": transcript,
+        }
+    })))
+}
+
+async fn get_heartbeat_runtime(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let status = mgr.heartbeat_runtime().await;
+    Ok(Json(
+        serde_json::to_value(status).unwrap_or_else(|_| serde_json::json!({})),
+    ))
+}
+
+async fn set_heartbeat_runtime(
+    State(state): State<ApiState>,
+    Json(payload): Json<HeartbeatRuntimePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let status = mgr
+        .set_heartbeat_runtime(
+            payload.enabled,
+            payload.interval_seconds,
+            payload.actor.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: e.to_string(),
+                    code: 400,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "heartbeat": status,
+    })))
+}
+
+async fn run_heartbeat_tick(
+    State(state): State<ApiState>,
+    Json(payload): Json<HeartbeatTickPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let report = mgr
+        .run_proactive_heartbeat(payload.actor.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "tick": report,
+    })))
+}
+
 async fn get_trust_mode(
     State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
@@ -4423,6 +4958,23 @@ async fn scan_prompt_shield(
     let mgr = state.agent_runtime_manager.read().await;
     let report = mgr.scan_prompt_shield(input);
     Ok(Json(serde_json::json!(report)))
+}
+
+async fn ensure_followalong_consent(state: &ApiState) -> Result<(), (StatusCode, Json<ApiError>)> {
+    let manager = state.follow_along_manager.read().await;
+    let config = manager.get_config().await;
+    if config.consent_status == crate::follow_along::ConsentStatus::Granted {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "FollowAlong consent is required for sensory capture".to_string(),
+                code: 403,
+            }),
+        ))
+    }
 }
 
 async fn get_workspace_awareness() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)>

@@ -59,6 +59,25 @@ pub enum IntentsCommands {
     /// Runtime AI resource profile and backend scheduler
     #[command(subcommand)]
     Resources(IntentResourcesCommands),
+    /// Always-on micro-model controls (VAD/hotword/intent classifier)
+    #[command(subcommand)]
+    AlwaysOn(IntentAlwaysOnCommands),
+    /// Consent-gated sensory capture runtime controls
+    #[command(subcommand)]
+    Sensory(IntentSensoryCommands),
+    /// Route model tier by priority with automatic degradation under load
+    ModelRoute {
+        #[arg(value_parser = ["low", "medium", "high", "critical"])]
+        priority: String,
+        #[arg(long)]
+        preferred_model: Option<String>,
+    },
+    /// Self-defense runtime controls (awareness + repair)
+    #[command(subcommand)]
+    Defense(IntentDefenseCommands),
+    /// Heartbeats and proactive cron tick controls
+    #[command(subcommand)]
+    Heartbeat(IntentHeartbeatCommands),
 }
 
 #[derive(Subcommand)]
@@ -119,6 +138,91 @@ pub enum IntentResourcesCommands {
     },
 }
 
+#[derive(Subcommand)]
+pub enum IntentAlwaysOnCommands {
+    /// Show always-on runtime status
+    Status,
+    /// Enable always-on runtime with wake word
+    Enable {
+        #[arg(long, default_value = "hey life")]
+        wake_word: String,
+        #[arg(long, default_value = "user://local/default")]
+        actor: String,
+    },
+    /// Disable always-on runtime
+    Disable {
+        #[arg(long, default_value = "user://local/default")]
+        actor: String,
+    },
+    /// Classify an input signal via micro-intent classifier
+    Classify { input: String },
+}
+
+#[derive(Subcommand)]
+pub enum IntentSensoryCommands {
+    /// Show sensory runtime status
+    Status,
+    /// Start consent-gated sensory capture
+    Start {
+        #[arg(long, default_value_t = true)]
+        audio: bool,
+        #[arg(long, default_value_t = true)]
+        screen: bool,
+        #[arg(long, default_value = "user://local/default")]
+        actor: String,
+    },
+    /// Stop sensory capture runtime
+    Stop {
+        #[arg(long, default_value = "user://local/default")]
+        actor: String,
+    },
+    /// Take one sensory snapshot (optional audio transcription + screen frame)
+    Snapshot {
+        #[arg(long)]
+        audio_file: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        no_screen: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum IntentDefenseCommands {
+    /// Show self-defense awareness status
+    Status,
+    /// Run self-defense repair pass
+    Repair {
+        #[arg(long)]
+        auto_rollback: bool,
+        #[arg(long, default_value = "user://local/default")]
+        actor: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum IntentHeartbeatCommands {
+    /// Show heartbeat runtime status
+    Status,
+    /// Enable heartbeat runtime with interval
+    Enable {
+        #[arg(long, default_value_t = 300)]
+        interval: u64,
+        #[arg(long, default_value = "user://local/default")]
+        actor: String,
+    },
+    /// Disable heartbeat runtime
+    Disable {
+        #[arg(long, default_value = "user://local/default")]
+        actor: String,
+    },
+    /// Run one proactive heartbeat tick now
+    Tick {
+        #[arg(long, default_value = "user://local/default")]
+        actor: String,
+    },
+}
+
 pub async fn execute(args: IntentsCommands) -> anyhow::Result<()> {
     match args {
         IntentsCommands::Plan { description } => cmd_plan(&description).await?,
@@ -141,6 +245,14 @@ pub async fn execute(args: IntentsCommands) -> anyhow::Result<()> {
         IntentsCommands::Shield { input } => cmd_shield_scan(&input).await?,
         IntentsCommands::WorkspaceAwareness => cmd_workspace_awareness().await?,
         IntentsCommands::Resources(resources_cmd) => cmd_resources(resources_cmd).await?,
+        IntentsCommands::AlwaysOn(always_on_cmd) => cmd_always_on(always_on_cmd).await?,
+        IntentsCommands::Sensory(sensory_cmd) => cmd_sensory(sensory_cmd).await?,
+        IntentsCommands::ModelRoute {
+            priority,
+            preferred_model,
+        } => cmd_model_route(&priority, preferred_model.as_deref()).await?,
+        IntentsCommands::Defense(defense_cmd) => cmd_defense(defense_cmd).await?,
+        IntentsCommands::Heartbeat(heartbeat_cmd) => cmd_heartbeat(heartbeat_cmd).await?,
     }
     Ok(())
 }
@@ -779,6 +891,596 @@ async fn cmd_resources_set(profile: &str, actor: &str) -> anyhow::Result<()> {
         Ok(r) => {
             let body = r.text().await.unwrap_or_default();
             anyhow::bail!("Failed to set runtime resources: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_always_on(cmd: IntentAlwaysOnCommands) -> anyhow::Result<()> {
+    match cmd {
+        IntentAlwaysOnCommands::Status => cmd_always_on_status().await,
+        IntentAlwaysOnCommands::Enable { wake_word, actor } => {
+            cmd_always_on_set(true, &wake_word, &actor).await
+        }
+        IntentAlwaysOnCommands::Disable { actor } => {
+            cmd_always_on_set(false, "hey life", &actor).await
+        }
+        IntentAlwaysOnCommands::Classify { input } => cmd_always_on_classify(&input).await,
+    }
+}
+
+async fn cmd_always_on_status() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/runtime/always-on", daemon_url()))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Always-on micro-model runtime".bold().blue());
+            println!("  enabled: {}", body["enabled"].as_bool().unwrap_or(false));
+            println!(
+                "  wake_word: {}",
+                body["wake_word"].as_str().unwrap_or("-").cyan()
+            );
+            println!(
+                "  vad/hotword/classifier: {}/{}/{}",
+                body["vad_enabled"].as_bool().unwrap_or(false),
+                body["hotword_enabled"].as_bool().unwrap_or(false),
+                body["intent_classifier_enabled"].as_bool().unwrap_or(false)
+            );
+            println!(
+                "  last_label: {}",
+                body["last_inference_label"]
+                    .as_str()
+                    .unwrap_or("-")
+                    .dimmed()
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to get always-on status: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_always_on_set(enabled: bool, wake_word: &str, actor: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/runtime/always-on", daemon_url()))
+        .json(&serde_json::json!({
+            "enabled": enabled,
+            "wake_word": wake_word,
+            "actor": actor,
+        }))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!(
+                "{}",
+                if enabled {
+                    "Always-on runtime enabled".green().bold()
+                } else {
+                    "Always-on runtime disabled".yellow().bold()
+                }
+            );
+            println!(
+                "  wake_word: {}",
+                body["always_on"]["wake_word"]
+                    .as_str()
+                    .unwrap_or(wake_word)
+                    .cyan()
+            );
+            println!("  actor: {}", actor.cyan());
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to update always-on runtime: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_always_on_classify(input: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!(
+            "{}/api/v1/runtime/always-on/classify",
+            daemon_url()
+        ))
+        .json(&serde_json::json!({ "input": input }))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            let cls = &body["classification"];
+            println!("{}", "Always-on classification".bold().blue());
+            println!("  label: {}", cls["label"].as_str().unwrap_or("-").cyan());
+            println!(
+                "  confidence: {:.2}",
+                cls["confidence"].as_f64().unwrap_or(0.0)
+            );
+            println!(
+                "  hotword_detected: {}",
+                cls["hotword_detected"].as_bool().unwrap_or(false)
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to classify always-on signal: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_sensory(cmd: IntentSensoryCommands) -> anyhow::Result<()> {
+    match cmd {
+        IntentSensoryCommands::Status => cmd_sensory_status().await,
+        IntentSensoryCommands::Start {
+            audio,
+            screen,
+            actor,
+        } => cmd_sensory_set(true, audio, screen, &actor).await,
+        IntentSensoryCommands::Stop { actor } => cmd_sensory_set(false, false, false, &actor).await,
+        IntentSensoryCommands::Snapshot {
+            audio_file,
+            model,
+            no_screen,
+        } => cmd_sensory_snapshot(audio_file.as_deref(), model.as_deref(), !no_screen).await,
+    }
+}
+
+async fn cmd_sensory_status() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/runtime/sensory", daemon_url()))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Sensory runtime".bold().blue());
+            println!("  enabled: {}", body["enabled"].as_bool().unwrap_or(false));
+            println!("  running: {}", body["running"].as_bool().unwrap_or(false));
+            println!(
+                "  audio/screen: {}/{}",
+                body["audio_enabled"].as_bool().unwrap_or(false),
+                body["screen_enabled"].as_bool().unwrap_or(false)
+            );
+            println!(
+                "  last_screen_path: {}",
+                body["last_screen_path"].as_str().unwrap_or("-").dimmed()
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to get sensory status: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_sensory_set(
+    enabled: bool,
+    audio: bool,
+    screen: bool,
+    actor: &str,
+) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/runtime/sensory", daemon_url()))
+        .json(&serde_json::json!({
+            "enabled": enabled,
+            "audio_enabled": audio,
+            "screen_enabled": screen,
+            "actor": actor,
+        }))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!(
+                "{}",
+                if enabled {
+                    "Sensory runtime started".green().bold()
+                } else {
+                    "Sensory runtime stopped".yellow().bold()
+                }
+            );
+            println!(
+                "  audio/screen: {}/{}",
+                body["sensory"]["audio_enabled"].as_bool().unwrap_or(false),
+                body["sensory"]["screen_enabled"].as_bool().unwrap_or(false)
+            );
+            println!("  actor: {}", actor.cyan());
+            if enabled {
+                println!(
+                    "  stt_started: {}",
+                    body["stt_started"].as_bool().unwrap_or(false)
+                );
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to update sensory runtime: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_sensory_snapshot(
+    audio_file: Option<&str>,
+    model: Option<&str>,
+    include_screen: bool,
+) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/runtime/sensory/snapshot", daemon_url()))
+        .json(&serde_json::json!({
+            "include_screen": include_screen,
+            "audio_file": audio_file,
+            "model": model,
+        }))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Sensory snapshot".bold().blue());
+            println!(
+                "  screen_path: {}",
+                body["snapshot"]["screen_path"]
+                    .as_str()
+                    .unwrap_or("-")
+                    .dimmed()
+            );
+            println!(
+                "  transcript: {}",
+                body["snapshot"]["transcript"].as_str().unwrap_or("").trim()
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to capture sensory snapshot: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_model_route(priority: &str, preferred_model: Option<&str>) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/runtime/model-routing", daemon_url()))
+        .json(&serde_json::json!({
+            "priority": priority,
+            "preferred_model": preferred_model,
+        }))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            let decision = &body["decision"];
+            println!("{}", "Model routing decision".bold().blue());
+            println!(
+                "  priority: {}",
+                decision["priority"].as_str().unwrap_or("-")
+            );
+            println!(
+                "  selected_tier: {}",
+                decision["selected_tier"].as_str().unwrap_or("-").cyan()
+            );
+            println!(
+                "  model_hint: {}",
+                decision["model_hint"].as_str().unwrap_or("-").cyan()
+            );
+            println!(
+                "  degraded: {}",
+                decision["degraded"].as_bool().unwrap_or(false)
+            );
+            println!(
+                "  pressure(cpu/mem): {:.1}%/{:.1}%",
+                decision["cpu_pressure_percent"].as_f64().unwrap_or(0.0),
+                decision["memory_pressure_percent"].as_f64().unwrap_or(0.0)
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to route model: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_defense(cmd: IntentDefenseCommands) -> anyhow::Result<()> {
+    match cmd {
+        IntentDefenseCommands::Status => cmd_defense_status().await,
+        IntentDefenseCommands::Repair {
+            auto_rollback,
+            actor,
+        } => cmd_defense_repair(auto_rollback, &actor).await,
+    }
+}
+
+async fn cmd_defense_status() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/runtime/self-defense", daemon_url()))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Self-defense status".bold().blue());
+            println!(
+                "  situational_awareness: {}",
+                body["situational_awareness"].as_str().unwrap_or("-").cyan()
+            );
+            println!(
+                "  ai_service_running/network_online: {}/{}",
+                body["ai_service_running"].as_bool().unwrap_or(false),
+                body["network_online"].as_bool().unwrap_or(false)
+            );
+            println!(
+                "  degraded_offline: {}",
+                body["degraded_offline"].as_bool().unwrap_or(false)
+            );
+            if let Some(actions) = body["recommended_actions"].as_array() {
+                if !actions.is_empty() {
+                    println!("  recommended_actions:");
+                    for action in actions {
+                        println!("    - {}", action.as_str().unwrap_or("?").dimmed());
+                    }
+                }
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to get self-defense status: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_defense_repair(auto_rollback: bool, actor: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!(
+            "{}/api/v1/runtime/self-defense/repair",
+            daemon_url()
+        ))
+        .json(&serde_json::json!({
+            "auto_rollback": auto_rollback,
+            "actor": actor,
+        }))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Self-defense repair executed".green().bold());
+            if let Some(actions) = body["repair"]["actions_taken"].as_array() {
+                if !actions.is_empty() {
+                    println!("  actions_taken:");
+                    for action in actions {
+                        println!("    - {}", action.as_str().unwrap_or("?").dimmed());
+                    }
+                }
+            }
+            println!("  actor: {}", actor.cyan());
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to run self-defense repair: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_heartbeat(cmd: IntentHeartbeatCommands) -> anyhow::Result<()> {
+    match cmd {
+        IntentHeartbeatCommands::Status => cmd_heartbeat_status().await,
+        IntentHeartbeatCommands::Enable { interval, actor } => {
+            cmd_heartbeat_set(true, Some(interval), &actor).await
+        }
+        IntentHeartbeatCommands::Disable { actor } => cmd_heartbeat_set(false, None, &actor).await,
+        IntentHeartbeatCommands::Tick { actor } => cmd_heartbeat_tick(&actor).await,
+    }
+}
+
+async fn cmd_heartbeat_status() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/runtime/heartbeat", daemon_url()))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Heartbeat runtime".bold().blue());
+            println!("  enabled: {}", body["enabled"].as_bool().unwrap_or(false));
+            println!(
+                "  interval_seconds: {}",
+                body["interval_seconds"].as_u64().unwrap_or(300)
+            );
+            println!(
+                "  last_tick_at: {}",
+                body["last_tick_at"].as_str().unwrap_or("-").dimmed()
+            );
+            println!(
+                "  last_summary: {}",
+                body["last_summary"].as_str().unwrap_or("-").dimmed()
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to get heartbeat status: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_heartbeat_set(
+    enabled: bool,
+    interval_seconds: Option<u64>,
+    actor: &str,
+) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/runtime/heartbeat", daemon_url()))
+        .json(&serde_json::json!({
+            "enabled": enabled,
+            "interval_seconds": interval_seconds,
+            "actor": actor,
+        }))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!(
+                "{}",
+                if enabled {
+                    "Heartbeat runtime enabled".green().bold()
+                } else {
+                    "Heartbeat runtime disabled".yellow().bold()
+                }
+            );
+            println!(
+                "  interval_seconds: {}",
+                body["heartbeat"]["interval_seconds"]
+                    .as_u64()
+                    .unwrap_or(300)
+            );
+            println!("  actor: {}", actor.cyan());
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to update heartbeat runtime: {}", body)
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_heartbeat_tick(actor: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/runtime/heartbeat/tick", daemon_url()))
+        .json(&serde_json::json!({
+            "actor": actor,
+        }))
+        .send()
+        .await;
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Heartbeat tick executed".green().bold());
+            println!(
+                "  awareness: {}",
+                body["tick"]["awareness"].as_str().unwrap_or("-").cyan()
+            );
+            if let Some(actions) = body["tick"]["actions"].as_array() {
+                if !actions.is_empty() {
+                    println!("  actions:");
+                    for action in actions {
+                        println!("    - {}", action.as_str().unwrap_or("?").dimmed());
+                    }
+                }
+            }
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to run heartbeat tick: {}", body)
         }
         Err(_) => {
             println!(

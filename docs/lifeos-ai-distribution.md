@@ -974,11 +974,11 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 - [ ] LifeOS Lab real (no stub), pipeline de mejora autonoma, canary test.
 - [ ] Canales de actualizacion en CI/CD real. _`update_scheduler.rs` soporta canales; falta pipeline._
 - [x] SLOs definidos con enforcement. _Baseline implementado: SLO CVE por severidad con enforcement en CI (`cargo audit` + `scripts/cve-slo-enforce.py`)._
-- [ ] Heartbeats y Cron con proactividad AI. _Background tasks existen; falta IA proactiva._
+- [x] Heartbeats y Cron con proactividad AI. _Implementado baseline v1: runtime heartbeat configurable + tick proactivo (`/runtime/heartbeat`, `/runtime/heartbeat/tick`, `life intents heartbeat ...`)._
 - [x] Prompt Shield v1. _Implementado baseline v1 en `agent_runtime` con bloqueo de intentos sospechosos y endpoint `runtime/prompt-shield/scan`._
 - [x] Perfiles de recursos: Performance/Balanced/Battery/Silent. _Implementado baseline v1 en runtime + CLI `life intents resources`._
 - [x] Scheduler heterogeneo AI: NPU → GPU → CPU. _Implementado baseline v1 con orden de backend detectado en runtime._
-- [ ] Documentacion de usuario y contribuidor.
+- [x] Documentacion de usuario y contribuidor. _Baseline publicado en `docs/user-guide.md` y `docs/contributor-guide.md`._
 
 **Entregable:** ISO funcional con desktop COSMIC, daemon + CLI operativos, AI runtime local (Qwen3.5-4B), 27/27 checks pasando.
 
@@ -995,23 +995,23 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 
 **Objetivo:** asistente local util que justifique el "AI-native".
 
-**Estado:** P0 completado al 100% (2026-03-03). _Fase 2 continua con items P1/P2 de expansion multimodal y UX avanzada._
+**Estado:** Core de software completado al 100% (2026-03-04). _Quedan validaciones e integraciones dependientes de hardware/infra real en el bloque "Diferido a Fase 2"._
 
 - [x] Whisper.cpp como daemon STT separado (voz local). _Implementado baseline v1: API `/audio/stt/*` + CLI `life voice` (`status|start|stop|transcribe`) con control de servicio systemd y transcripcion local._
 
 - [x] Whisper.cpp como daemon STT separado (voz local). _Implementado baseline v1: API `/audio/stt/*` + CLI `life voice` (`status|start|stop|transcribe`) con control de servicio systemd y transcripcion local._
 - [x] Catalogo de modelos firmado con fallback offline para bootstrap. _Implementado: catalogo v1 (`contracts/models/v1/catalog.json`) con firma SHA-256 (`catalog.json.sig`), validacion y fallback remoto/cache/embebido en `life ai catalog`._
-- [ ] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Camara wellness pasa a Fase 3._
+- [x] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Implementado baseline v1: runtime consent-gated (`/runtime/sensory`, `/runtime/sensory/snapshot`) con audio STT + captura de pantalla._
 - [x] Catalogo de modelos firmado con fallback offline para bootstrap. _Implementado: catalogo v1 firmado con fallback offline._
-- [ ] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Camara wellness pasa a Fase 3._
-- [ ] Micro-modelos always-on: VAD, hotword, clasificacion de intents.
-- [ ] Switching de modelo pesado por prioridad con degradacion automatica bajo carga.
+- [x] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Implementado baseline v1: runtime consent-gated (`/runtime/sensory`, `/runtime/sensory/snapshot`) con audio STT + captura de pantalla._
+- [x] Micro-modelos always-on: VAD, hotword, clasificacion de intents. _Implementado baseline v1: runtime `always-on` con clasificador de micro-intents y wake-word configurable._
+- [x] Switching de modelo pesado por prioridad con degradacion automatica bajo carga. _Implementado baseline v1: enrutador `/runtime/model-routing` con degradacion por presion CPU/RAM/perfil._
 - [x] Control de recursos AI por prioridad (cgroups). _Implementado baseline v1 con perfiles runtime, `heavy_model_slots` y deteccion de cgroups._
 
 - [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado baseline v1: API `/computer-use/status|action` + CLI `life computer-use`._
 
 - [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado baseline v1: API `/computer-use/status|action` + CLI `life computer-use`._
-- [ ] Vision/OCR a nivel de OS: analisis de pantalla, OCR en tiempo real (Wayland/grim). _Qwen3.5-4B ya tiene vision nativa (ScreenSpot Pro 60.3%, OCRBench 85.0%)._
+- [x] Vision/OCR a nivel de OS: analisis de pantalla, OCR en tiempo real (Wayland/grim). _Implementado baseline v1: endpoint `/vision/ocr` (captura de pantalla + OCR local con `tesseract`)._
 - [x] Automatizaciones en lenguaje natural (`life ai do "..."`).
 **P0 — Protocolos y Estandares (base de la arquitectura agentica):**
 
@@ -1053,7 +1053,7 @@ Implementacion concreta:
 - [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline v1: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
 - [x] Modos de ejecucion: interactive, run-until-done, silent-until-done (ver seccion 13.2). _Implementado en `agent_runtime` + API `/runtime/mode` + CLI `life intents mode`._
 - [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline v1: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
-- [ ] Auto-defensas: awareness situacional, auto-reparacion con rollback, operacion degradada offline (ver seccion 9.5).
+- [x] Auto-defensas: awareness situacional, auto-reparacion con rollback, operacion degradada offline (ver seccion 9.5). _Implementado baseline v1: `/runtime/self-defense` + `/runtime/self-defense/repair` con degradacion offline segura y reparacion automatizada no destructiva._
 - [x] Harness de red-team continuo con corpus de ataques agenticos reales (prompt injection, tool abuse, exfiltracion encubierta, cadena de deep links). _Implementado baseline v1 con corpus `tests/security/agentic_red_team_corpus.json` y tests de enforcement._
 - [x] SLO CVE por severidad en dependencias criticas de agente/runtime: `critical` mitigacion <=24h y parche <=48h; `high` <=72h; `medium` <=14 dias. _Implementado enforcement en CI con politica versionada y waivers auditables._
 
