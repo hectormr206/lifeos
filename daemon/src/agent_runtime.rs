@@ -119,6 +119,23 @@ pub struct WorkspaceRunRecord {
     pub stderr: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecutionMode {
+    #[default]
+    Interactive,
+    RunUntilDone,
+    SilentUntilDone,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TrustModeState {
+    pub enabled: bool,
+    pub consent_bundle_sha256: Option<String>,
+    pub activated_by: Option<String>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct AgentRuntimeState {
     intents: Vec<IntentRecord>,
@@ -126,6 +143,10 @@ struct AgentRuntimeState {
     ledger: Vec<LedgerEntry>,
     #[serde(default)]
     workspace_runs: Vec<WorkspaceRunRecord>,
+    #[serde(default)]
+    execution_mode: ExecutionMode,
+    #[serde(default)]
+    trust_mode: TrustModeState,
 }
 
 pub struct AgentRuntimeManager {
@@ -206,6 +227,7 @@ impl AgentRuntimeManager {
     }
 
     pub async fn apply_intent(&self, intent_id: &str, approved: bool) -> Result<IntentRecord> {
+        let mut approved = approved;
         let mut state = self.state.write().await;
         let intent_idx = state
             .intents
@@ -214,26 +236,48 @@ impl AgentRuntimeManager {
             .with_context(|| format!("Intent not found: {}", intent_id))?;
 
         let risk = state.intents[intent_idx].risk.clone();
+        let exec_mode = state.execution_mode.clone();
+        let trust_enabled = state.trust_mode.enabled;
         if matches!(risk.as_str(), "high" | "critical") && !approved {
+            if trust_enabled
+                && matches!(
+                    exec_mode,
+                    ExecutionMode::RunUntilDone | ExecutionMode::SilentUntilDone
+                )
             {
-                let intent = &mut state.intents[intent_idx];
-                intent.status = IntentStatus::AwaitingApproval;
-                intent.updated_at = Utc::now();
+                approved = true;
+                append_ledger(
+                    &mut state,
+                    "intent",
+                    "auto_approved",
+                    intent_id,
+                    serde_json::json!({
+                        "risk": risk,
+                        "execution_mode": format_execution_mode(&exec_mode),
+                        "reason": "trust_mode_enabled",
+                    }),
+                );
+            } else {
+                {
+                    let intent = &mut state.intents[intent_idx];
+                    intent.status = IntentStatus::AwaitingApproval;
+                    intent.updated_at = Utc::now();
+                }
+                append_ledger(
+                    &mut state,
+                    "intent",
+                    "awaiting_approval",
+                    intent_id,
+                    serde_json::json!({
+                        "risk": risk,
+                        "reason": "high_or_critical_risk_requires_approval"
+                    }),
+                );
+                let snapshot = state.intents[intent_idx].clone();
+                drop(state);
+                self.save_state().await?;
+                return Ok(snapshot);
             }
-            append_ledger(
-                &mut state,
-                "intent",
-                "awaiting_approval",
-                intent_id,
-                serde_json::json!({
-                    "risk": risk,
-                    "reason": "high_or_critical_risk_requires_approval"
-                }),
-            );
-            let snapshot = state.intents[intent_idx].clone();
-            drop(state);
-            self.save_state().await?;
-            return Ok(snapshot);
         }
 
         {
@@ -468,7 +512,8 @@ impl AgentRuntimeManager {
         requested_isolation: &str,
         approved: bool,
     ) -> Result<WorkspaceRunRecord> {
-        let (intent_risk, max_runtime_sec, default_command) = {
+        let mut approved = approved;
+        let (intent_risk, max_runtime_sec, default_command, exec_mode, trust_enabled) = {
             let state = self.state.read().await;
             let intent = state
                 .intents
@@ -479,28 +524,53 @@ impl AgentRuntimeManager {
                 intent.risk.clone(),
                 intent.constraints.max_runtime_sec,
                 intent_default_command(&intent.action),
+                state.execution_mode.clone(),
+                state.trust_mode.enabled,
             )
         };
 
         if matches!(intent_risk.as_str(), "high" | "critical") && !approved {
-            let mut state = self.state.write().await;
-            if let Some(intent) = state.intents.iter_mut().find(|i| i.intent_id == intent_id) {
-                intent.status = IntentStatus::AwaitingApproval;
-                intent.updated_at = Utc::now();
+            if trust_enabled
+                && matches!(
+                    exec_mode,
+                    ExecutionMode::RunUntilDone | ExecutionMode::SilentUntilDone
+                )
+            {
+                approved = true;
+                let mut state = self.state.write().await;
+                append_ledger(
+                    &mut state,
+                    "workspace",
+                    "auto_approved",
+                    intent_id,
+                    serde_json::json!({
+                        "reason": "trust_mode_enabled",
+                        "execution_mode": format_execution_mode(&exec_mode),
+                        "risk": intent_risk
+                    }),
+                );
+                drop(state);
+                self.save_state().await?;
+            } else {
+                let mut state = self.state.write().await;
+                if let Some(intent) = state.intents.iter_mut().find(|i| i.intent_id == intent_id) {
+                    intent.status = IntentStatus::AwaitingApproval;
+                    intent.updated_at = Utc::now();
+                }
+                append_ledger(
+                    &mut state,
+                    "workspace",
+                    "run_blocked",
+                    intent_id,
+                    serde_json::json!({
+                        "reason": "approval_required",
+                        "risk": intent_risk
+                    }),
+                );
+                drop(state);
+                self.save_state().await?;
+                anyhow::bail!("Intent requires approval for workspace execution");
             }
-            append_ledger(
-                &mut state,
-                "workspace",
-                "run_blocked",
-                intent_id,
-                serde_json::json!({
-                    "reason": "approval_required",
-                    "risk": intent_risk
-                }),
-            );
-            drop(state);
-            self.save_state().await?;
-            anyhow::bail!("Intent requires approval for workspace execution");
         }
 
         {
@@ -601,6 +671,7 @@ impl AgentRuntimeManager {
                 "status": if succeeded { "success" } else { "failure" },
                 "workspace_run_id": run_record.run_id,
                 "exit_code": exit_code,
+                "approved": approved,
             }));
         }
         state.workspace_runs.push(run_record.clone());
@@ -633,6 +704,111 @@ impl AgentRuntimeManager {
             .take(limit)
             .cloned()
             .collect()
+    }
+
+    pub async fn execution_mode(&self) -> ExecutionMode {
+        let state = self.state.read().await;
+        state.execution_mode.clone()
+    }
+
+    pub async fn set_execution_mode(
+        &self,
+        mode: &str,
+        actor: Option<&str>,
+    ) -> Result<ExecutionMode> {
+        let parsed = parse_execution_mode(mode)?;
+        let mut state = self.state.write().await;
+        state.execution_mode = parsed.clone();
+        append_ledger(
+            &mut state,
+            "runtime",
+            "set_execution_mode",
+            "execution-mode",
+            serde_json::json!({
+                "mode": format_execution_mode(&parsed),
+                "actor": actor.unwrap_or("user://local/default"),
+            }),
+        );
+        drop(state);
+        self.save_state().await?;
+        Ok(parsed)
+    }
+
+    pub async fn trust_mode(&self) -> TrustModeState {
+        let state = self.state.read().await;
+        state.trust_mode.clone()
+    }
+
+    pub async fn set_trust_mode(
+        &self,
+        enabled: bool,
+        actor: Option<&str>,
+        consent_bundle: Option<&str>,
+        signature: Option<&str>,
+    ) -> Result<TrustModeState> {
+        let actor = actor.unwrap_or("user://local/default");
+        let now = Utc::now();
+
+        let mut state = self.state.write().await;
+        if enabled {
+            let bundle = consent_bundle
+                .map(|b| b.trim())
+                .filter(|b| !b.is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("consent_bundle is required when enabling trust mode")
+                })?;
+            let signature = signature
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("signature is required when enabling trust mode"))?;
+
+            let digest = Sha256::digest(bundle.as_bytes());
+            let digest_hex = format!("{:x}", digest);
+            let expected = normalize_sha256_signature(signature)
+                .ok_or_else(|| anyhow::anyhow!("signature must contain sha256 digest"))?;
+
+            if digest_hex != expected {
+                anyhow::bail!("consent_bundle signature verification failed");
+            }
+
+            state.trust_mode = TrustModeState {
+                enabled: true,
+                consent_bundle_sha256: Some(digest_hex.clone()),
+                activated_by: Some(actor.to_string()),
+                updated_at: Some(now),
+            };
+            append_ledger(
+                &mut state,
+                "trust",
+                "enable",
+                "trust-me-mode",
+                serde_json::json!({
+                    "actor": actor,
+                    "consent_bundle_sha256": digest_hex,
+                    "signature_verified": true,
+                }),
+            );
+        } else {
+            let consent_bundle_sha256 = state.trust_mode.consent_bundle_sha256.clone();
+            state.trust_mode.enabled = false;
+            state.trust_mode.updated_at = Some(now);
+            state.trust_mode.activated_by = Some(actor.to_string());
+            append_ledger(
+                &mut state,
+                "trust",
+                "disable",
+                "trust-me-mode",
+                serde_json::json!({
+                    "actor": actor,
+                    "consent_bundle_sha256": consent_bundle_sha256,
+                }),
+            );
+        }
+
+        let snapshot = state.trust_mode.clone();
+        drop(state);
+        self.save_state().await?;
+        Ok(snapshot)
     }
 
     async fn load_state(&self) -> Result<()> {
@@ -754,6 +930,41 @@ fn infer_risk_level(description: &str) -> &'static str {
     }
 }
 
+fn parse_execution_mode(mode: &str) -> Result<ExecutionMode> {
+    match mode.trim().to_lowercase().as_str() {
+        "interactive" => Ok(ExecutionMode::Interactive),
+        "run-until-done" => Ok(ExecutionMode::RunUntilDone),
+        "silent-until-done" => Ok(ExecutionMode::SilentUntilDone),
+        other => anyhow::bail!(
+            "invalid execution mode '{}': use interactive|run-until-done|silent-until-done",
+            other
+        ),
+    }
+}
+
+fn format_execution_mode(mode: &ExecutionMode) -> &'static str {
+    match mode {
+        ExecutionMode::Interactive => "interactive",
+        ExecutionMode::RunUntilDone => "run-until-done",
+        ExecutionMode::SilentUntilDone => "silent-until-done",
+    }
+}
+
+fn normalize_sha256_signature(sig: &str) -> Option<String> {
+    let trimmed = sig.trim();
+    let candidate = trimmed
+        .strip_prefix("sha256:")
+        .or_else(|| trimmed.strip_prefix("SHA256:"))
+        .unwrap_or(trimmed)
+        .trim()
+        .to_lowercase();
+    if candidate.len() == 64 && candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -859,6 +1070,77 @@ mod tests {
             .as_str()
             .map(|v| !v.is_empty())
             .unwrap_or(false));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn trust_mode_requires_valid_signature() {
+        let dir = temp_dir("agent-runtime-test-trust");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let bad = mgr
+            .set_trust_mode(
+                true,
+                Some("user://local/admin"),
+                Some("allow=true"),
+                Some("sha256:deadbeef"),
+            )
+            .await;
+        assert!(bad.is_err());
+
+        let digest = format!("{:x}", Sha256::digest("allow=true".as_bytes()));
+        let good = mgr
+            .set_trust_mode(
+                true,
+                Some("user://local/admin"),
+                Some("allow=true"),
+                Some(&format!("sha256:{}", digest)),
+            )
+            .await
+            .unwrap();
+        assert!(good.enabled);
+        assert_eq!(good.consent_bundle_sha256.as_deref(), Some(digest.as_str()));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn run_until_done_auto_approves_high_risk_intent() {
+        let dir = temp_dir("agent-runtime-test-auto-approve");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let digest = format!("{:x}", Sha256::digest("allow=true".as_bytes()));
+        mgr.set_trust_mode(
+            true,
+            Some("user://local/admin"),
+            Some("allow=true"),
+            Some(&format!("sha256:{}", digest)),
+        )
+        .await
+        .unwrap();
+        mgr.set_execution_mode("run-until-done", Some("user://local/admin"))
+            .await
+            .unwrap();
+
+        let planned = mgr.plan_intent("install updates now").await.unwrap();
+        let applied = mgr.apply_intent(&planned.intent_id, false).await.unwrap();
+        assert_eq!(applied.status, IntentStatus::Succeeded);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn execution_mode_roundtrip() {
+        let dir = temp_dir("agent-runtime-test-mode");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let mode = mgr
+            .set_execution_mode("silent-until-done", Some("user://local/default"))
+            .await
+            .unwrap();
+        assert_eq!(mode, ExecutionMode::SilentUntilDone);
+        assert_eq!(mgr.execution_mode().await, ExecutionMode::SilentUntilDone);
 
         std::fs::remove_dir_all(dir).ok();
     }

@@ -8,6 +8,7 @@ pub mod id;
 pub mod init;
 pub mod intents;
 pub mod mode;
+pub mod onboarding;
 pub mod overlay;
 pub mod recover;
 pub mod rollback;

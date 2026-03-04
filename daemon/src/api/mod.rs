@@ -925,6 +925,14 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/id/revoke", post(revoke_identity_token))
         .route("/workspace/run", post(run_workspace))
         .route("/workspace/runs", get(list_workspace_runs))
+        .route(
+            "/runtime/mode",
+            get(get_runtime_mode).post(set_runtime_mode),
+        )
+        .route(
+            "/runtime/trust-mode",
+            get(get_trust_mode).post(set_trust_mode),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bootstrap_token,
@@ -3442,6 +3450,20 @@ struct WorkspaceRunsQuery {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RuntimeModePayload {
+    mode: String,
+    actor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrustModePayload {
+    enabled: bool,
+    actor: Option<String>,
+    consent_bundle: Option<String>,
+    signature: Option<String>,
+}
+
 // ==================== AGENT RUNTIME HANDLERS ====================
 
 async fn plan_intent(
@@ -3751,6 +3773,87 @@ async fn list_workspace_runs(
     Ok(Json(serde_json::json!({
         "runs": runs,
         "count": runs.len(),
+    })))
+}
+
+async fn get_runtime_mode(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let mode = mgr.execution_mode().await;
+    let mode_str = serde_json::to_value(&mode)
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "interactive".to_string());
+    Ok(Json(serde_json::json!({
+        "mode": mode_str
+    })))
+}
+
+async fn set_runtime_mode(
+    State(state): State<ApiState>,
+    Json(payload): Json<RuntimeModePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let mode = mgr
+        .set_execution_mode(&payload.mode, payload.actor.as_deref())
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: e.to_string(),
+                    code: 400,
+                }),
+            )
+        })?;
+    let mode_str = serde_json::to_value(&mode)
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "interactive".to_string());
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "mode": mode_str
+    })))
+}
+
+async fn get_trust_mode(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let trust = mgr.trust_mode().await;
+    Ok(Json(
+        serde_json::to_value(trust).unwrap_or_else(|_| serde_json::json!({})),
+    ))
+}
+
+async fn set_trust_mode(
+    State(state): State<ApiState>,
+    Json(payload): Json<TrustModePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.agent_runtime_manager.read().await;
+    let trust = mgr
+        .set_trust_mode(
+            payload.enabled,
+            payload.actor.as_deref(),
+            payload.consent_bundle.as_deref(),
+            payload.signature.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Bad Request".to_string(),
+                    message: e.to_string(),
+                    code: 400,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "trust_mode": trust,
     })))
 }
 

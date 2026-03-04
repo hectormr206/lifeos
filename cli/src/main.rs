@@ -66,6 +66,9 @@ enum Commands {
     /// Isolated workspace execution
     #[clap(subcommand)]
     Workspace(commands::workspace::WorkspaceCommands),
+    /// Onboarding and managed deployment controls
+    #[clap(subcommand)]
+    Onboarding(commands::onboarding::OnboardingCommands),
     /// App Store - browse and install applications
     #[clap(subcommand)]
     Store(commands::store::StoreCommands),
@@ -153,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Intents(args) => commands::intents::execute(args).await,
         Commands::Id(args) => commands::id::execute(args).await,
         Commands::Workspace(args) => commands::workspace::execute(args).await,
+        Commands::Onboarding(args) => commands::onboarding::execute(args).await,
         Commands::Store(args) => commands::store::execute(args).await,
         Commands::Telemetry(args) => commands::telemetry::execute(args).await,
         Commands::Theme(args) => commands::theme::execute(args).await,

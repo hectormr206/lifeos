@@ -106,6 +106,31 @@ pub enum AiCommands {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeExecutionMode {
+    Interactive,
+    RunUntilDone,
+    SilentUntilDone,
+}
+
+impl RuntimeExecutionMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Interactive => "interactive",
+            Self::RunUntilDone => "run-until-done",
+            Self::SilentUntilDone => "silent-until-done",
+        }
+    }
+
+    fn from_str(value: &str) -> Self {
+        match value {
+            "run-until-done" => Self::RunUntilDone,
+            "silent-until-done" => Self::SilentUntilDone,
+            _ => Self::Interactive,
+        }
+    }
+}
+
 pub async fn execute(args: AiCommands) -> anyhow::Result<()> {
     match args {
         AiCommands::Start { model, enable } => start_ai(model, enable).await,
@@ -365,19 +390,40 @@ async fn do_action(action: &str) -> anyhow::Result<()> {
     println!("  {} {}", "Intent ID:".dimmed(), intent_id.cyan());
     println!("  {} {}", "Risk:".dimmed(), risk);
 
+    let execution_mode = fetch_runtime_mode(&client, &base_url).await;
+    println!(
+        "  {} {}",
+        "Execution mode:".dimmed(),
+        execution_mode.as_str().cyan()
+    );
+
     let mut approved = false;
     if matches!(risk, "high" | "critical") {
-        println!(
-            "\n{} {}",
-            "This action requires explicit approval due to risk level:".yellow(),
-            risk.yellow().bold()
-        );
-        print!("Approve execution? [y/N] ");
-        io::stdout().flush()?;
+        if execution_mode == RuntimeExecutionMode::Interactive {
+            println!(
+                "\n{} {}",
+                "This action requires explicit approval due to risk level:".yellow(),
+                risk.yellow().bold()
+            );
+            print!("Approve execution? [y/N] ");
+            io::stdout().flush()?;
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        approved = input.trim().eq_ignore_ascii_case("y");
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            approved = input.trim().eq_ignore_ascii_case("y");
+        } else {
+            println!(
+                "\n{} {}",
+                "High-risk intent detected: local prompt skipped by execution mode."
+                    .yellow()
+                    .bold(),
+                execution_mode.as_str().yellow()
+            );
+            println!(
+                "  {}",
+                "Daemon policy will enforce approval or auto-approval via trust mode.".dimmed()
+            );
+        }
     }
 
     let apply_resp = client
@@ -417,6 +463,26 @@ async fn do_action(action: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+async fn fetch_runtime_mode(client: &reqwest::Client, base_url: &str) -> RuntimeExecutionMode {
+    let response = client
+        .get(format!("{}/api/v1/runtime/mode", base_url))
+        .send()
+        .await;
+
+    let Ok(resp) = response else {
+        return RuntimeExecutionMode::Interactive;
+    };
+    if !resp.status().is_success() {
+        return RuntimeExecutionMode::Interactive;
+    }
+
+    let Ok(body) = resp.json::<serde_json::Value>().await else {
+        return RuntimeExecutionMode::Interactive;
+    };
+    let mode = body["mode"].as_str().unwrap_or("interactive");
+    RuntimeExecutionMode::from_str(mode)
 }
 
 async fn list_models(all: bool) -> anyhow::Result<()> {

@@ -30,6 +30,24 @@ pub enum IntentsCommands {
         #[arg(long)]
         passphrase: Option<String>,
     },
+    /// Runtime execution mode for autonomous intent pipeline
+    #[command(subcommand)]
+    Mode(IntentModeCommands),
+}
+
+#[derive(Subcommand)]
+pub enum IntentModeCommands {
+    /// Show current execution mode
+    Status,
+    /// Set execution mode
+    Set {
+        /// interactive | run-until-done | silent-until-done
+        #[arg(value_parser = ["interactive", "run-until-done", "silent-until-done"])]
+        mode: String,
+        /// Actor principal changing mode
+        #[arg(long, default_value = "user://local/default")]
+        actor: String,
+    },
 }
 
 pub async fn execute(args: IntentsCommands) -> anyhow::Result<()> {
@@ -43,6 +61,7 @@ pub async fn execute(args: IntentsCommands) -> anyhow::Result<()> {
             export,
             passphrase,
         } => cmd_log(limit, export.as_deref(), passphrase.as_deref()).await?,
+        IntentsCommands::Mode(mode_cmd) => cmd_mode(mode_cmd).await?,
     }
     Ok(())
 }
@@ -324,6 +343,77 @@ async fn cmd_log(
         Ok(r) => {
             let body = r.text().await.unwrap_or_default();
             anyhow::bail!("Failed to fetch ledger: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_mode(cmd: IntentModeCommands) -> anyhow::Result<()> {
+    match cmd {
+        IntentModeCommands::Status => cmd_mode_status().await,
+        IntentModeCommands::Set { mode, actor } => cmd_mode_set(&mode, &actor).await,
+    }
+}
+
+async fn cmd_mode_status() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/runtime/mode", daemon_url()))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Runtime execution mode".bold().blue());
+            println!(
+                "  mode: {}",
+                body["mode"].as_str().unwrap_or("interactive").cyan()
+            );
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to get runtime mode: {}", body);
+        }
+        Err(_) => {
+            println!(
+                "{}",
+                "Cannot connect to lifeosd. Is the daemon running?".red()
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_mode_set(mode: &str, actor: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!("{}/api/v1/runtime/mode", daemon_url()))
+        .json(&serde_json::json!({
+            "mode": mode,
+            "actor": actor,
+        }))
+        .send()
+        .await;
+
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r.json().await?;
+            println!("{}", "Runtime execution mode updated".green().bold());
+            println!("  mode: {}", body["mode"].as_str().unwrap_or(mode).cyan());
+            println!("  actor: {}", actor.cyan());
+            Ok(())
+        }
+        Ok(r) => {
+            let body = r.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to set runtime mode: {}", body);
         }
         Err(_) => {
             println!(

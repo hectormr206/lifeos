@@ -1059,7 +1059,7 @@ Implementacion concreta:
 - [ ] Modo Jarvis temporal: implementacion completa segun seccion 9.4 (tokens de capacidad con TTL, aprobacion biometrica/PIN, kill switch `Super+Escape`). _No redefinir aqui — referenciar seccion 9.4._
 
 - [ ] Ledger cifrado y exportable de todas las acciones autonomas.
-- [ ] Modos de ejecucion: interactive, run-until-done, silent-until-done (ver seccion 13.2).
+- [x] Modos de ejecucion: interactive, run-until-done, silent-until-done (ver seccion 13.2). _Implementado en `agent_runtime` + API `/runtime/mode` + CLI `life intents mode`._
 - [ ] Ledger cifrado y exportable de todas las acciones autonomas.
 - [ ] Auto-defensas: awareness situacional, auto-reparacion con rollback, operacion degradada offline (ver seccion 9.5).
 - [ ] Harness de red-team continuo con corpus de ataques agenticos reales (prompt injection, tool abuse, exfiltracion encubierta, cadena de deep links).
@@ -1068,7 +1068,7 @@ Implementacion concreta:
 **CLI extendido:**
 
 - [ ] `life focus`, `life meeting`, `life sync`, `life permissions`, `life workspace`.
-- [ ] `life onboarding trust-mode` para configuracion de autonomia.
+- [x] `life onboarding trust-mode` para configuracion de autonomia. _Implementado: `status|enable|disable` con validacion de bundle/sig en daemon._
 
 **Entregable:** release 1.0 con asistente AI multimodal funcional, Computer Use API operativo, y modelo biologico (Soul/Skills/Workplace/Agents) implementado.
 
@@ -1453,8 +1453,10 @@ life ai unpin <rol>            Quitar override y volver a autoseleccion.
 life ai realtime on      Activar modo AI-first always-on (post-consent).
 life ai realtime off     Desactivar captura/reaccion en tiempo real.
 life ai realtime status  Ver estado de sensores, slot pesado y latencia.
-life onboarding trust-mode enable --policy /ruta/policy.toml --sig /ruta/policy.sig
-                         Activar trust_me_mode con politica firmada.
+life onboarding trust-mode status
+                         Ver estado actual de trust_me_mode.
+life onboarding trust-mode enable --actor user://local/admin --bundle /ruta/consent.toml --sig /ruta/consent.sig
+                         Activar trust_me_mode con consentimiento firmado.
 life onboarding trust-mode disable
                          Desactivar trust_me_mode y volver a consentimiento interactivo.
 
@@ -1470,6 +1472,8 @@ life permissions log     Ver log de accesos.
 
 life intents plan "..."               Generar plan tipado desde una intencion natural.
 life intents apply <intent-id>        Ejecutar plan aprobado (o pedir aprobacion segun riesgo).
+life intents mode status              Mostrar modo de ejecucion (interactive/run-until-done/silent-until-done).
+life intents mode set run-until-done  Configurar modo de ejecucion autonoma.
 life intents status <intent-id>       Ver estado de ejecucion y evidencias.
 life intents validate <file.json>     Validar payload contra schema v1.
 life intents log [--since 24h]        Auditar intents/acciones/diffs.
@@ -2109,7 +2113,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 22. ~~Autoselector de modelos (`life ai autotune`) implementado con benchmark local y persistencia por rol.~~ **Hecho.** `autotune` selecciona y aplica modelo recomendado.
 23. ~~`model-catalog` firmado con versionado y fallback offline embebido en la ISO.~~ **Hecho.** Catalogo v1 firmado + cache + fallback embebido.
 24. ~~Runtime realtime AI-first implementado con `heavy_model_slots = 1` y pruebas de no regresion de latencia.~~ **Hecho (baseline).** `model-profile.toml` persiste `heavy_model_slots = 1` y `autotune` lo aplica.
-25. `trust_me_mode` implementado con validacion criptografica de `consent_bundle` y auditoria completa.
+25. ~~`trust_me_mode` implementado con validacion criptografica de `consent_bundle` y auditoria completa.~~ **Hecho.** Activacion requiere `consent_bundle` + `signature` valida (SHA-256) y deja evidencia en ledger.
 26. `Soul Plane` por usuario en `~/.config/lifeos/soul/` (ver modelo biologico en `docs/lifeos_biological_model.md`).
 27. `Skills Plane` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar.
 

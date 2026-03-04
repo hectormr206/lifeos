@@ -251,6 +251,28 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_intents_mode_set() {
+        let cli = Cli::parse_from([
+            "life",
+            "intents",
+            "mode",
+            "set",
+            "run-until-done",
+            "--actor",
+            "user://local/admin",
+        ]);
+        match cli.command {
+            Commands::Intents(commands::intents::IntentsCommands::Mode(
+                commands::intents::IntentModeCommands::Set { mode, actor },
+            )) => {
+                assert_eq!(mode, "run-until-done");
+                assert_eq!(actor, "user://local/admin");
+            }
+            _ => panic!("Expected intents mode set command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_id_list_active_flag() {
         let cli = Cli::parse_from(["life", "id", "list", "--active"]);
         match cli.command {
@@ -341,6 +363,32 @@ mod tests {
         match cli.command {
             Commands::Ai(commands::ai::AiCommands::Catalog { refresh }) => assert!(refresh),
             _ => panic!("Expected ai catalog command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_onboarding_trust_mode_enable() {
+        let cli = Cli::parse_from([
+            "life",
+            "onboarding",
+            "trust-mode",
+            "enable",
+            "--actor",
+            "user://local/admin",
+            "--bundle",
+            "/tmp/consent.toml",
+            "--sig",
+            "/tmp/consent.sig",
+        ]);
+        match cli.command {
+            Commands::Onboarding(commands::onboarding::OnboardingCommands::TrustMode(
+                commands::onboarding::TrustModeCommands::Enable { actor, bundle, sig },
+            )) => {
+                assert_eq!(actor, "user://local/admin");
+                assert_eq!(bundle, "/tmp/consent.toml");
+                assert_eq!(sig, "/tmp/consent.sig");
+            }
+            _ => panic!("Expected onboarding trust-mode enable command"),
         }
     }
 }
