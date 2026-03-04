@@ -11,6 +11,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  COSIGN_EXPERIMENTAL: "1"
 
 jobs:
   build-and-push:
@@ -54,9 +55,16 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@v3
 
-      - name: Sign image with Cosign (KMS)
+      - name: Sign image with Cosign (KMS/keyless)
         if: github.event_name != 'pull_request'
         run: |
-          cosign sign --yes --key env://COSIGN_PRIVATE_KEY ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-        env:
-          COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_KMS_KEY }}
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          KMS_KEY_URI="${{ secrets.COSIGN_KMS_KEY_URI }}"
+
+          if [ -n "$KMS_KEY_URI" ]; then
+            echo "Signing image with KMS key: $KMS_KEY_URI"
+            cosign sign --yes --key "$KMS_KEY_URI" "$IMAGE"
+          else
+            echo "COSIGN_KMS_KEY_URI not configured; using keyless OIDC signing"
+            cosign sign --yes "$IMAGE"
+          fi

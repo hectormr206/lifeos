@@ -2096,7 +2096,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 
 ### 27.2 Entregables obligatorios pendientes
 
-1. Flujo de firma Cosign con KMS operativo en CI (actualmente manual).
+1. ~~Flujo de firma Cosign con KMS operativo en CI (actualmente manual).~~ **Hecho (baseline CI).** Workflow `docker.yml` firma con `COSIGN_KMS_KEY_URI` y fallback keyless OIDC.
 2. ~~`life capsule export/restore` funcional end-to-end (minimo config + apps + dotfiles).~~ **Hecho (baseline v1).** Pipeline validado con test automatizado de export/restore y restauracion de apps Flatpak.
 3. Onboarding GUI con consentimiento explicito para activar sync (first-boot script existe, falta GUI).
 4. ~~Matriz de compatibilidad de hardware publicada.~~ **Hecho.** `docs/hardware-compatibility-matrix.md` publicado y versionado.
