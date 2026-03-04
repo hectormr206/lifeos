@@ -572,4 +572,63 @@ mod tests {
             _ => panic!("Expected soul merge command"),
         }
     }
+
+    #[test]
+    fn test_cli_parses_mesh_delegate() {
+        let cli = Cli::parse_from([
+            "life",
+            "mesh",
+            "delegate",
+            "node-123",
+            "--capability",
+            "mesh.sync",
+            "--ttl",
+            "90",
+        ]);
+        match cli.command {
+            Commands::Mesh(commands::mesh::MeshCommands::Delegate {
+                node_id,
+                capability,
+                ttl,
+            }) => {
+                assert_eq!(node_id, "node-123");
+                assert_eq!(capability, "mesh.sync");
+                assert_eq!(ttl, 90);
+            }
+            _ => panic!("Expected mesh delegate command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_browser_run() {
+        let cli = Cli::parse_from([
+            "life",
+            "browser",
+            "run",
+            "--policy",
+            "browser-policy.json",
+            "--step",
+            "open:https://example.com",
+            "--step",
+            "title",
+        ]);
+        match cli.command {
+            Commands::Browser(commands::browser::BrowserCommands::Run { policy, step }) => {
+                assert_eq!(policy, "browser-policy.json");
+                assert_eq!(step, vec!["open:https://example.com", "title"]);
+            }
+            _ => panic!("Expected browser run command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_workflow_validate() {
+        let cli = Cli::parse_from(["life", "workflow", "validate", "flow.json"]);
+        match cli.command {
+            Commands::Workflow(commands::workflow::WorkflowCommands::Validate { path }) => {
+                assert_eq!(path, "flow.json");
+            }
+            _ => panic!("Expected workflow validate command"),
+        }
+    }
 }

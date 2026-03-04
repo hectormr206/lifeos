@@ -1494,6 +1494,25 @@ life soul set assistant.autonomy guarded --profile base
                                      Ajustar perfil de Soul por clave.
 life soul merge --workplace work      Resolver merge determinista global->usuario->workplace.
 
+life mesh init --alias laptop --endpoint 10.0.0.20
+                                     Inicializar identidad de nodo local.
+life mesh add <node-id> --alias desk --endpoint 10.0.0.10 --trust verified
+                                     Registrar nodo remoto en el mesh.
+life mesh delegate <node-id> --capability mesh.sync --ttl 60
+                                     Delegar capacidad temporal via life-id.
+life mesh revoke <node-id>            Revocar nodo y token delegado.
+
+life browser policy-init --output browser-policy.json
+                                     Crear politica de dominios permitidos/bloqueados.
+life browser run --policy browser-policy.json --step open:https://example.com --step title
+                                     Ejecutar workflow web multi-step bajo politica.
+life browser audit --limit 50         Auditar acciones del browser operator.
+
+life workflow build --output flow.json
+                                     Constructor no-code (TUI) para workflows.
+life workflow validate flow.json      Validar workflow v1.
+life workflow run flow.json           Ejecutar workflow via orquestador por equipos.
+
 life id issue --agent <name>          Emitir token de capacidad temporal.
 life id list                           Listar identidades y delegaciones activas.
 life id revoke <token-id>              Revocar token/delegacion en caliente.
@@ -2117,14 +2136,14 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 10. ~~Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.~~ **Hecho (baseline v1).** `life init --profile ... --tui` aplica perfiles reproducibles y guarda receipt de bootstrap.
 11. ~~Perfiles de runtime `lite/edge/secure/pro` con deteccion automatica de hardware.~~ **Hecho.** `life ai profile` detecta hardware y persiste perfil.
 12. ~~Aislamiento por objetivo (sandbox/container/microVM) segun riesgo de la accion.~~ **Hecho.** `life workspace run/list` activo con control de aprobacion por riesgo y fallback seguro.
-13. Constructor visual de workflows y agentes (no-code) para usuarios no tecnicos.
-14. Browser operator seguro para tareas web multi-step con politicas y auditoria.
+13. ~~Constructor visual de workflows y agentes (no-code) para usuarios no tecnicos.~~ **Hecho (baseline v1).** `life workflow build/validate/run` ofrece constructor TUI no-code y ejecucion por orquestador.
+14. ~~Browser operator seguro para tareas web multi-step con politicas y auditoria.~~ **Hecho (baseline v1).** `life browser policy-init/run/audit` con allowlist de dominios y bitacora local.
 15. ~~Suite de benchmarks reproducibles para validar rendimiento/latencia/consumo frente a competidores.~~ **Hecho (v1).** `life ai benchmark` + reporte persistente local.
 16. ~~`contracts/intents/v1` completados con tests de compatibilidad de schema (intent.schema.json y result.schema.json existen, falta plan.schema.json).~~ **Hecho.** `plan.schema.json` agregado y validado en tests.
 17. ~~`contracts/identity/v1` publicados y versionados con validacion de tokens/delegaciones (aun no creados).~~ **Hecho.** Schemas publicados en `contracts/identity/v1`.
 18. ~~`life intents` y `life id` implementados end-to-end con pruebas de aprobacion, rechazo y revocacion.~~ **Hecho.** Flujo plan/apply/status/validate/log + issue/list/revoke.
 19. ~~Ledger cifrado de ejecucion (`intents/results/artifacts`) con exportacion firmada para auditoria.~~ **Hecho.** Export cifrado disponible via API/CLI.
-20. `device-mesh` operativo para coordinacion multi-PC con identidad de nodo, delegacion y revocacion remota.
+20. ~~`device-mesh` operativo para coordinacion multi-PC con identidad de nodo, delegacion y revocacion remota.~~ **Hecho (baseline v1).** `life mesh init/add/list/delegate/revoke` con registry local y delegacion usando `life-id`.
 21. ~~Pipeline de extensiones/skills con niveles de confianza (`core`, `verified`, `community`) y aislamiento por defecto.~~ **Hecho (baseline v1).** `life skills run` usa sandbox por defecto y bloquea `community` en `--unsafe-no-sandbox`.
 22. ~~Autoselector de modelos (`life ai autotune`) implementado con benchmark local y persistencia por rol.~~ **Hecho.** `autotune` selecciona y aplica modelo recomendado.
 23. ~~`model-catalog` firmado con versionado y fallback offline embebido en la ISO.~~ **Hecho.** Catalogo v1 firmado + cache + fallback embebido.

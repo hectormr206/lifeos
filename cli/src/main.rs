@@ -84,6 +84,15 @@ enum Commands {
     /// Soul Plane profiles (global/user/workplace merge)
     #[clap(subcommand)]
     Soul(commands::soul::SoulCommands),
+    /// Device mesh coordination and delegation
+    #[clap(subcommand)]
+    Mesh(commands::mesh::MeshCommands),
+    /// Secure browser operator with policy + audit
+    #[clap(subcommand)]
+    Browser(commands::browser::BrowserCommands),
+    /// No-code workflow builder and runner
+    #[clap(subcommand)]
+    Workflow(commands::workflow::WorkflowCommands),
     /// App Store - browse and install applications
     #[clap(subcommand)]
     Store(commands::store::StoreCommands),
@@ -177,6 +186,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Sync(args) => commands::sync::execute(args).await,
         Commands::Skills(args) => commands::skills::execute(args).await,
         Commands::Soul(args) => commands::soul::execute(args).await,
+        Commands::Mesh(args) => commands::mesh::execute(args).await,
+        Commands::Browser(args) => commands::browser::execute(args).await,
+        Commands::Workflow(args) => commands::workflow::execute(args).await,
         Commands::Store(args) => commands::store::execute(args).await,
         Commands::Telemetry(args) => commands::telemetry::execute(args).await,
         Commands::Theme(args) => commands::theme::execute(args).await,
