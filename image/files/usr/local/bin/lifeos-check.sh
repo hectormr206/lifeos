@@ -315,21 +315,74 @@ else
     info "VRR no expuesto por este stack DRM"
 fi
 
-if command -v flatpak &>/dev/null; then
-    if flatpak info com.valvesoftware.Steam >/dev/null 2>&1; then
-        ok "Steam Flatpak instalado"
-        if flatpak list --columns=application 2>/dev/null | grep -Eqi 'Steam\.CompatibilityTool\.Proton'; then
-            ok "Proton runtime detectado (Flatpak)"
-        elif find "$TARGET_HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/common" -maxdepth 1 -type d -iname 'Proton*' 2>/dev/null | grep -q .; then
-            ok "Proton detectado en libreria de Steam"
-        else
-            warn "Proton no detectado aun (se descarga con juegos compatibles)"
-        fi
+# Visual comfort backends (color temperature)
+if command -v wlsunset &>/dev/null; then
+    ok "Visual comfort backend: wlsunset disponible (Wayland)"
+else
+    warn "wlsunset no encontrado (ajuste de temperatura en Wayland limitado)"
+fi
+
+if command -v gammastep &>/dev/null; then
+    ok "Visual comfort backend: gammastep disponible (fallback)"
+else
+    warn "gammastep no encontrado (fallback de temperatura no disponible)"
+fi
+
+# Verify package installation explicitly (not just PATH visibility)
+if rpm -q wlsunset gammastep >/dev/null 2>&1; then
+    ok "Visual comfort RPMs: wlsunset + gammastep instalados"
+else
+    MISSING_VC_PKGS=""
+    rpm -q wlsunset >/dev/null 2>&1 || MISSING_VC_PKGS="${MISSING_VC_PKGS} wlsunset"
+    rpm -q gammastep >/dev/null 2>&1 || MISSING_VC_PKGS="${MISSING_VC_PKGS} gammastep"
+    warn "Visual comfort RPMs faltantes:${MISSING_VC_PKGS}"
+fi
+
+# Runtime diagnostics from lifeosd logs (informational)
+VC_LOGS=$(journalctl -u lifeosd -n 120 --no-pager 2>/dev/null | \
+    grep -Ei "visual comfort using active graphical session|Applied color temperature .* via (wlsunset|gammastep)|headless" || true)
+if [[ -n "$VC_LOGS" ]]; then
+    if echo "$VC_LOGS" | grep -Eqi "visual comfort using active graphical session|Applied color temperature .* via (wlsunset|gammastep)"; then
+        ok "Visual comfort runtime: sesion grafica detectada en logs de lifeosd"
+    elif echo "$VC_LOGS" | grep -Eqi "headless"; then
+        warn "Visual comfort runtime: logs recientes indican modo headless"
     else
-        warn "Steam Flatpak no instalado"
+        info "Visual comfort runtime: logs de diagnostico disponibles"
     fi
 else
-    warn "flatpak no encontrado"
+    info "Visual comfort runtime: sin eventos recientes en logs de lifeosd"
+fi
+
+STEAM_INSTALL_KIND=""
+if rpm -q steam >/dev/null 2>&1; then
+    STEAM_INSTALL_KIND="rpm"
+    ok "Steam RPM instalado"
+    if rpm -q steam-devices >/dev/null 2>&1; then
+        ok "steam-devices instalado (reglas udev/controladores)"
+    else
+        warn "steam-devices no instalado (algunos controles/perifericos pueden fallar)"
+    fi
+elif command -v flatpak &>/dev/null && flatpak info com.valvesoftware.Steam >/dev/null 2>&1; then
+    STEAM_INSTALL_KIND="flatpak"
+    info "Steam Flatpak instalado (fallback; RPM es default en LifeOS)"
+else
+    warn "Steam no instalado (default recomendado: Steam RPM)"
+fi
+
+if [[ "$STEAM_INSTALL_KIND" == "rpm" ]]; then
+    if find "$TARGET_HOME/.steam/steam/steamapps/common" "$TARGET_HOME/.local/share/Steam/steamapps/common" -maxdepth 1 -type d -iname 'Proton*' 2>/dev/null | grep -q .; then
+        ok "Proton detectado en libreria de Steam"
+    else
+        warn "Proton no detectado aun (se descarga con juegos compatibles)"
+    fi
+elif [[ "$STEAM_INSTALL_KIND" == "flatpak" ]]; then
+    if flatpak list --columns=application 2>/dev/null | grep -Eqi 'Steam\.CompatibilityTool\.Proton'; then
+        ok "Proton runtime detectado (Flatpak)"
+    elif find "$TARGET_HOME/.var/app/com.valvesoftware.Steam/data/Steam/steamapps/common" -maxdepth 1 -type d -iname 'Proton*' 2>/dev/null | grep -q .; then
+        ok "Proton detectado en libreria de Steam"
+    else
+        warn "Proton no detectado aun (se descarga con juegos compatibles)"
+    fi
 fi
 
 check_life_cmd "ai profile" ai profile

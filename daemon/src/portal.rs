@@ -94,14 +94,6 @@ impl LifeOsPortal {
         Self::default()
     }
 
-    pub async fn register(connection: &Connection, portal: Self) -> zbus::Result<()> {
-        connection
-            .object_server()
-            .at("/org/lifeos/Portal", portal)
-            .await?;
-        connection.request_name("org.lifeos.Portal").await?;
-        Ok(())
-    }
 }
 
 #[interface(name = "org.lifeos.Portal")]
@@ -148,19 +140,21 @@ impl LifeOsPortal {
     async fn revoke_permission(&self, app_id: &str, permission: &str) -> zbus::fdo::Result<()> {
         let mut perms = self.permissions.lock().await;
 
-        let Some(app_perms) = perms.get_mut(app_id) else {
-            return Ok(());
-        };
+        let (changed, is_empty) = {
+            let Some(app_perms) = perms.get_mut(app_id) else {
+                return Ok(());
+            };
 
-        let before = app_perms.len();
-        app_perms.retain(|p| p.resource != permission);
-        let changed = app_perms.len() != before;
+            let before = app_perms.len();
+            app_perms.retain(|p| p.resource != permission);
+            let changed = app_perms.len() != before;
+            let is_empty = app_perms.is_empty();
+            (changed, is_empty)
+        };
 
         if !changed {
             return Ok(());
         }
-
-        let is_empty = app_perms.is_empty();
         let audit_entry = AuditEntry {
             timestamp: chrono::Local::now().to_rfc3339(),
             app_id: app_id.to_string(),
@@ -168,8 +162,6 @@ impl LifeOsPortal {
             action: "revoked".to_string(),
             reason: None,
         };
-
-        drop(app_perms);
 
         if is_empty {
             perms.remove(app_id);

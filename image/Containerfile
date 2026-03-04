@@ -45,6 +45,9 @@ COPY cli/assets cli/assets/
 COPY daemon/Cargo.toml daemon/
 COPY daemon/src daemon/src/
 
+# Copy contracts for model catalog (needed by CLI include_str!)
+COPY contracts/ contracts/
+
 # Build both sequentially (they don't share a workspace in the container)
 RUN cd cli && cargo build --release
 RUN cd daemon && cargo build --release
@@ -92,10 +95,16 @@ RUN dnf -y install \
     && akmods --force || true \
     && dnf clean all
 
+# --- Steam/Proton (default via RPM Fusion) ---
+RUN dnf -y install \
+    steam steam-devices \
+    && dnf clean all
+
 # --- Herramientas del Sistema ---
 RUN dnf -y install \
     toolbox btrfs-progs smartmontools podman buildah flatpak \
-    fish bat ripgrep fd-find htop fastfetch age jq sqlite \
+    fish bat ripgrep fd-find htop fastfetch age jq sqlite git wget \
+    wlsunset gammastep \
     pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
     python3-mako \
     anaconda-core anaconda-dracut \
@@ -139,7 +148,7 @@ RUN set -eux && \
     echo ">>> Verifying static binary..." && \
     /usr/sbin/llama-server --version && \
     rm -rf /tmp/llama.cpp && \
-    dnf remove -y cmake make gcc-c++ git openssl-devel && \
+    dnf remove -y cmake make gcc-c++ openssl-devel && \
     dnf clean all && \
     echo ">>> llama-server installed (static build) at /usr/sbin and /usr/bin" && \
     ls -la /usr/sbin/llama-server /usr/bin/llama-server

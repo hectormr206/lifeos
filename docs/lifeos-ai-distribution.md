@@ -103,6 +103,165 @@ El usuario puede cambiar de modo en cualquier momento, sin reinstalar. Los modos
 - **Terminal de nueva generacion:** texto, imagenes, tablas, logs enriquecidos, acciones en lenguaje natural integradas.
 - **Comando unificado `life`:** API humana del sistema.
 
+### 3.3 Identidad Visual, Cultura y Mascota: Axi el Ajolote
+
+Al igual que Rust tiene a Ferris el Cangrejo o Linux a Tux, LifeOS posee una identidad visual fuerte basada en la biología y la regeneración constante: **Axi, el Ajolote (Axolotl) Tecnológico**.
+
+#### La Metáfora Técnica
+
+El ajolote es mundialmente conocido por su capacidad de regeneración celular perfecta (puede regenerar extremidades y órganos sin cicatrices). Esto representa el objetivo técnico de **LifeOS** (Fedora bootc + Btrfs): un sistema inmutable orientado a recuperarse rápido ante fallos comunes mediante _rollback_ a una imagen o instantánea previa. Esta metáfora no sustituye backups ni prácticas operativas: escenarios como falla de disco o borrado de datos de usuario requieren respaldo externo.
+
+| Concepto Biológico | Equivalente Técnico LifeOS |
+|--------------------|----------------------------|
+| Regeneración celular perfecta | Rollback orquestado de bootc (cuando aplica) |
+| Sin cicatrices tras regeneración | Recuperación sin reinstalar en fallos de sistema |
+| Extremidades/órganos recuperables | Snapshots Btrfs de `/home` y `/var`; `/etc` versionado |
+| "Nunca muere" | Alta resiliencia operativa con slots A/B inmutables |
+
+#### Axi: El Daemon del Sistema
+
+Axi, con sus branquias externas (parecen antenas) y aspecto casi alienígena pero amigable, simboliza el `lifeosd` (El Daemon/Alma del sistema). Es una inteligencia biológico-tecnológica que opera en segundo plano para asistir sin invadir.
+
+- **Branquias externas** = Sensores/antenas del sistema
+- **Asistencia continua** = `lifeosd` monitoreando salud técnica del sistema
+- **Aspecto alienígena pero amigable** = IA que asiste sin invadir
+- **Silencioso** = Respeta privacidad, permisos y consentimiento del usuario
+
+#### Límites de observabilidad (privacy by design)
+
+- `lifeosd` no inspecciona contenido personal por defecto.
+- Capacidades sensibles (voz/captura) requieren consentimiento explícito y revocable.
+- La telemetría por defecto es mínima y orientada a salud/diagnóstico técnico.
+- Toda elevación de permisos y acciones sensibles debe quedar auditada.
+
+#### Identidad Cultural
+
+El ajolote es **mexicano** (endémico de Xochimilco). Esto da a LifeOS una identidad cultural propia como distro latinoamericana, no solo otra distribución genérica:
+
+- Linux → Tux (pingüino, universal)
+- Rust → Ferris (cangrejo, juego de palabras)
+- **LifeOS → Axi (regeneración + latino)**
+
+#### Variaciones Visuales de Axi por Estado del Sistema
+
+| Estado del Sistema | Axi Visual | Descripción |
+|-------------------|-------------|-------------|
+| **Healthy** | Axi sonriendo, branquias relajadas | Sistema funcionando perfectamente |
+| **Updating** | Axi con casco de obra | Aplicando actualizaciones |
+| **Rollback/Recovery** | Axi regenerándose (brillo verde) | Recuperando de un fallo |
+| **Jarvis Mode** | Axi con anteojos de inteligencia | Modo Jarvis activo |
+| **Focus Mode** | Axi con auriculares, ojos concentrados | Modo Flow activo |
+| **Meeting Mode** | Axi con corbata, expresión profesional | Modo reunión activo |
+| **Night Mode** | Axi con pijama, bostezando | Modo nocturno activo |
+| **Error Crítico** | Axi preocupado pero tranquilo | Algo requiere atención |
+| **Offline** | Axi dormido | Sin conexión a red |
+
+#### Integración en el CLI
+
+Axi aparece sutilmente en las respuestas del sistema:
+
+```bash
+life status
+# ┌─────────────────────────────────┐
+# │  🦎 LifeOS Status - Axi Reports │
+# │  System: Healthy ✓              │
+# │  "All systems regenerated!"      │
+# └─────────────────────────────────┘
+
+life recover
+# 🦎 Axi is regenerating your system...
+# [████████████████████] 100%
+# ✓ Rollback complete. Axi says: "Good as new!"
+```
+
+#### Easter Eggs
+
+```bash
+life --axi
+# Imprime arte ASCII de Axi con un mensaje motivacional aleatorio:
+#
+#    ╭━━━━╮╭━━━━╮
+#   ╭┃ ◕ ◕ ┃╮
+#   ╰┃  ▽  ┃╯
+#    ╰┳━━┳╯
+#     ╰──╯
+#   "Axi says: Every rollback is a new beginning!"
+```
+
+```bash
+life --axi-facts
+# Muestra datos curiosos sobre ajolotes reales:
+# "Los ajolotes pueden regenerar su cerebro. LifeOS puede regenerar tu sistema. Coincidencia?"
+```
+
+#### Merchandising y Comunidad
+
+En eventos y conferencias, la comunidad se identifica usando:
+- **Gorritos de ajolote rosados/neón** — Distintivo visual inconfundible
+- **Batas de laboratorio** — Como "Biólogos de Sistemas", creando sentido de tribu
+- **Pines/Stickers de Axi** — En diferentes estados (happy, updating, recovering)
+
+Esto crea un sentido de pertenencia poderoso y divertido alrededor del código abierto, sin ser corporativo ni aburrido.
+
+#### Especificaciones de Arte para Axi
+
+**Paleta de Colores Oficial:**
+
+| Color | Hex | Uso |
+|-------|-----|-----|
+| Rosa Axi | `#FF6B9D` | Color base, branquias |
+| Verde Regeneración | `#00D4AA` | Brillos, efectos de recovery |
+| Azul LifeOS | `#3282B8` | Acentos, complementario |
+| Púrpura Profundo | `#1A1A2E` | Fondos, contornos |
+| Blanco Hueso | `#E8E8E8` | Detalles, ojos |
+
+**Proporciones del Personaje:**
+
+```
+     ╭─────────────────────────────╮
+     │         Cabeza (30%)         │ ← Ojos expresivos, sonrisa
+     │      ◕ ◕    ◕ ◕             │
+     ╰─────────────────────────────╯
+     ╭─────────────────────────────╮
+     │   Branquias (20%)            │ ← 3 pares, estilo antenas
+     │   ╰┬─┬╯  ╰┬─┬╯  ╰┬─┬╯       │
+     ╰─────────────────────────────╯
+     ╭─────────────────────────────╮
+     │      Cuerpo (40%)            │ ← Redondeado, tierno
+     │      ╭───────────────╮       │
+     │      │   │││││││││   │       │
+     │      ╰───────────────╯       │
+     ╰─────────────────────────────╯
+     ╭─────────────────────────────╮
+     │      Cola (10%)              │ ← Aletada, expresiva
+     │         ~~~~~~~               │
+     ╰─────────────────────────────╯
+```
+
+**Estilo Artístico:**
+- **Líneas:** Redondeadas, sin esquinas agresivas
+- **Expresiones:** Minimalistas pero claras (◕ ◕ para happy, ◕ ◡ para neutral, ◕︵◕ para worried)
+- **Simplificación:** Máximo 3 colores por variante
+- **Reconocibilidad:** Debe ser identificable en 32x32px (favicon) y 512x512px (sticker)
+
+**Formatos Requeridos:**
+- SVG (vectorial, para escalado)
+- PNG 512x512px (stickers, merch)
+- PNG 64x64px (iconos de app)
+- ICO 32x32px (favicon)
+- ASCII art (easter eggs CLI)
+
+**Variantes de Axi por Canal:**
+
+| Canal | Variante | Notas |
+|-------|----------|-------|
+| Logo principal | Axi Healthy | Fondo transparente |
+| CLI spinner | Axi Updating animado | Frames PNG o caracteres |
+| Error pages | Axi Worried | Con lágrima estilizada |
+| Boot screen | Axi regenerándose | Animación de brillo verde |
+| Notification icon | Solo cabeza de Axi | 22x22px minimal |
+| Swag/Merch | Axi completo con accesorios | Según contexto (casco, anteojos, etc.) |
+
 ```
 life status          # estado general del sistema
 life recover         # recuperar de un fallo
@@ -111,9 +270,11 @@ life focus           # activar modo Flow
 life update --dry    # simular actualizacion sin aplicar
 life ai ask "..."    # pregunta al asistente local
 life capsule export  # exportar estado completo
+life --axi           # Easter egg: arte ASCII + mensaje
+life --axi-facts     # Datos curiosos de ajolotes
 ```
 
-### 3.3 Onboarding inteligente
+### 3.4 Onboarding inteligente
 
 El primer arranque incluye un asistente que:
 
@@ -124,7 +285,7 @@ El primer arranque incluye un asistente que:
 5. Explica Sync y solicita consentimiento explicito para activarlo.
 6. Ofrece tutorial interactivo adaptado al nivel del usuario.
 
-### 3.4 Despliegue administrado: `trust_me_mode`
+### 3.5 Despliegue administrado: `trust_me_mode`
 
 Para laboratorios, empresas o despliegues internos controlados:
 
@@ -302,12 +463,12 @@ Regla de producto:
 
 Esta matriz es semilla de arranque. En runtime manda el autoselector.
 
-| Clase de hardware                          | General (chat/codigo)                | Reasoning                     | Vision/OCR             | Embeddings         |
-| ------------------------------------------ | ------------------------------------ | ----------------------------- | ---------------------- | ------------------ |
-| `lite` (8-16 GB RAM, sin GPU dedicada)     | `qwen3.5:4b` Q4_K_M (default)        | `deepseek-r1:1.5b` (opcional) | integrado en qwen3.5   | `nomic-embed-text` |
-| `balanced` (16-32 GB RAM, iGPU o GPU 8 GB) | `qwen3.5:9b` Q4_K_M                  | `deepseek-r1:8b`              | integrado en qwen3.5   | `nomic-embed-text` |
-| `pro` (32-64 GB RAM, GPU 12-24 GB)         | `qwen3.5:27b` Q4_K_M                 | `deepseek-r1:14b`             | integrado en qwen3.5   | `nomic-embed-text` |
-| `workstation` (>=64 GB RAM o GPU >=24 GB)  | `qwen3.5:27b` Q8_0                   | `deepseek-r1:32b`             | integrado en qwen3.5   | `nomic-embed-text` |
+| Clase de hardware                          | General (chat/codigo)         | Reasoning                     | Vision/OCR           | Embeddings         |
+| ------------------------------------------ | ----------------------------- | ----------------------------- | -------------------- | ------------------ |
+| `lite` (8-16 GB RAM, sin GPU dedicada)     | `qwen3.5:4b` Q4_K_M (default) | `deepseek-r1:1.5b` (opcional) | integrado en qwen3.5 | `nomic-embed-text` |
+| `balanced` (16-32 GB RAM, iGPU o GPU 8 GB) | `qwen3.5:9b` Q4_K_M           | `deepseek-r1:8b`              | integrado en qwen3.5 | `nomic-embed-text` |
+| `pro` (32-64 GB RAM, GPU 12-24 GB)         | `qwen3.5:27b` Q4_K_M          | `deepseek-r1:14b`             | integrado en qwen3.5 | `nomic-embed-text` |
+| `workstation` (>=64 GB RAM o GPU >=24 GB)  | `qwen3.5:27b` Q8_0            | `deepseek-r1:32b`             | integrado en qwen3.5 | `nomic-embed-text` |
 
 Notas operativas:
 
@@ -624,7 +785,7 @@ LifeOS adopta un modelo de enrutamiento inspirado en sistemas comerciales AI-fir
 
 Dado que muchos usuarios de alto rendimiento utilizan hardware hibrido (como Intel + Nvidia RTX para gaming en laptops con pantallas de altas tasas de refresco):
 
-- **Soporte Out-of-the-box para Gaming AAA:** LifeOS vendra con Steam instalado via Flatpak u opcional integrado, pre-configurado para aprovechar **Proton** para juegos de Windows.
+- **Soporte Out-of-the-box para Gaming AAA:** LifeOS vendra con Steam RPM (RPM Fusion) instalado por defecto y pre-configurado para aprovechar **Proton** para juegos de Windows. Steam Flatpak queda como fallback opcional.
 - **GPU Switching Transparente (Optimus/PRIME):** Integracion nativa a traves del CLI y la UI de COSMIC para conmutar modos de GPU (Modo Hibrido, Modo Dedicado Nvidia, Modo Integrado Intel para ahorro maximo de bateria).
   - En modo automatico, LifeOS usara la GPU dedicada (Nvidia) al lanzar Steam o juegos pesados y volvera a Intel para escritorio normal.
   - La instalacion detectara drivers propietarios de Nvidia y los desplegara correctamente via bootc para no romper en actualizaciones.
@@ -826,6 +987,7 @@ Cada item tiene fase asignada. Son prerequisitos para la arquitectura agentica c
 
 - [x] Base inmutable bootc + slots A/B + rollback funcional. _Containerfile sobre `fedora-bootc:42`; CLI `life rollback` llama `bootc rollback` real._
 - [x] Flatpak + Toolbx funcionando sobre la base inmutable. _Instalados en Containerfile; Flathub configurado en first-boot._
+- [x] Herramientas CLI base para control de versiones y red integradas en ISO (`git`, `wget`, `curl`, `jq`). _Instaladas por defecto en `image/Containerfile`._
 - [x] Btrfs snapshots automaticos antes de cambios criticos. _`lifeos-btrfs-snapshot.sh` + `lifeos-btrfs-snapshot.timer` en imagen y hook pre-update en CLI (`life update`)._
 - [x] fs-verity para verificacion de integridad de `/usr`. _Chequeo explicito via `lifeos-integrity-check.sh` y health check `filesystem-integrity` en daemon._
 
@@ -842,7 +1004,7 @@ Cada item tiene fase asignada. Son prerequisitos para la arquitectura agentica c
 **AI runtime:**
 
 - [x] llama-server (llama.cpp) como runtime AI por defecto con API OpenAI-compatible. _Compilado/descargado en Containerfile con fallback a compilacion desde fuente. **BUG CORREGIDO:** regex de asset matching mejorado para robustez contra cambios de naming en releases de llama.cpp._
-- [x] Modelo GGUF default (Qwen3.5-4B Q4_K_M) pre-bundled en la imagen. _`lifeos-ai-setup.sh` con fallback de descarga si el modelo no esta presente._
+- [x] Modelo GGUF default (Qwen3.5-4B Q4*K_M) pre-bundled en la imagen. *`lifeos-ai-setup.sh` con fallback de descarga si el modelo no esta presente.\_
 - [x] Deteccion automatica de GPU (NVIDIA/AMD/Intel) y configuracion de offload. _Implementada en first-boot, daemon y CLI._
 - [x] `llama-server.service` con security hardening. _Incluye `PrivateUsers`, `SystemCallFilter`, `MemoryMax` y bind loopback (`LIFEOS_AI_HOST=127.0.0.1`)._
 - [x] API REST del daemon (`lifeosd`) con endpoints de sistema, AI y health. _Chat conectado a `llama-server` real, metricas de recursos reales y token bootstrap enforceado._
@@ -962,11 +1124,11 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 **Diferido a Fase 2** _(requieren integracion con hardware real, desktop, CI/CD, o son extensiones de lo existente):_
 
 - [x] Temas custom LifeOS para COSMIC. _Implementado: temas Dark/Light/HighContrast en `files/usr/share/themes/`, configuracion en `files/etc/lifeos/cosmic-theme.toml`._
-- [x] Motor de confort visual: temperatura de color, tipografia adaptativa, perfiles de contraste. _Implementado: daemon/src/visual_comfort.rs con API `/visual-comfort/*`, CLI `life visual-comfort`, integracion wlsunset/gammastep._
+- [x] Motor de confort visual: temperatura de color, tipografia adaptativa, perfiles de contraste. _Implementado: daemon/src/visual_comfort.rs con API `/visual-comfort/*`, CLI `life visual-comfort`, integracion `wlsunset/gammastep` (preinstalados en la imagen base)._
 - [x] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night. _Baseline v1: `life focus` y `life meeting` implementados; modo Night completo queda como extension desktop._
 - [x] xdg-desktop-portal integrado para sandboxing de permisos de apps. _Implementado: daemon/src/portal.rs con D-Bus `org.lifeos.Portal`, CLI `life portal`._
 - [ ] Soporte GPU hibrida (Nvidia Optimus/PRIME), drivers akmod-nvidia via bootc. _Requiere hardware real._
-- [ ] Steam via Flatpak + Proton, displays 144Hz+, G-Sync/Adaptive-Sync. _Requiere hardware real._
+- [ ] Steam RPM (default) + Proton, displays 144Hz+, G-Sync/Adaptive-Sync. _Requiere hardware real._
 - [x] First-boot wizard GUI. _Implementado baseline v1: `life first-boot --gui` (zenity + fallback TUI)._
 - [x] Trust Me Mode: consent bundles firmados, activacion de perfil automatica. _Implementado en daemon+CLI con validacion SHA-256 y auditoria._
 - [x] Prueba de `bootc upgrade` + rollback en VM automatizada. _Implementado: tests/e2e/test_bootc_upgrade_rollback.sh con CI workflow .github/workflows/e2e-tests.yml._
@@ -983,6 +1145,7 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 **Entregable:** ISO funcional con desktop COSMIC, daemon + CLI operativos, AI runtime local (Qwen3.5-4B), 27/27 checks pasando.
 
 **Resumen de implementacion Fase 1:**
+
 - ~7,100 lineas de codigo nuevo (daemon + CLI)
 - 55+ API endpoints funcionales
 - 48+ CLI subcomandos
@@ -1013,7 +1176,7 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 - [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado baseline v1: API `/computer-use/status|action` + CLI `life computer-use`._
 - [x] Vision/OCR a nivel de OS: analisis de pantalla, OCR en tiempo real (Wayland/grim). _Implementado baseline v1: endpoint `/vision/ocr` (captura de pantalla + OCR local con `tesseract`)._
 - [x] Automatizaciones en lenguaje natural (`life ai do "..."`).
-**P0 — Protocolos y Estandares (base de la arquitectura agentica):**
+      **P0 — Protocolos y Estandares (base de la arquitectura agentica):**
 
 - [x] `life-intents` v1: envelope, plan, resultado; workflow plan -> policy -> execute. _Implementado en CLI + daemon + contracts v1._
 
@@ -1074,7 +1237,7 @@ Implementacion concreta:
 
 - [ ] Dedupe global de incidencias + dashboard publico de salud por perfil de hardware.
 - [ ] Telemetria agregada anonima: fingerprint de fallos, priorizacion automatica.
-**Supply chain y CI:**
+      **Supply chain y CI:**
 
 **Supply chain y CI:**
 
@@ -1104,7 +1267,7 @@ Implementacion concreta:
 **Bienestar y accesibilidad:**
 
 - [ ] Co-piloto de salud: tracking de habitos, alertas ergonomicas.
-**Calidad y reproducibilidad:**
+      **Calidad y reproducibilidad:**
 
 **Calidad y reproducibilidad:**
 
@@ -1131,11 +1294,11 @@ Implementacion concreta:
 
 ### Experiencia de usuario
 
-| KPI                                | Objetivo                          | Frecuencia |
-| ---------------------------------- | --------------------------------- | ---------- |
-| Usuarios activos mensuales         | Crecimiento >20% m/m (primer ano) | Mensual    |
-| Tasa de abandono en onboarding     | < 10%                             | Mensual    |
-| Usuarios activos mensuales         | Crecimiento >20% m/m (primer ano) | Mensual    |
+| KPI                            | Objetivo                          | Frecuencia |
+| ------------------------------ | --------------------------------- | ---------- |
+| Usuarios activos mensuales     | Crecimiento >20% m/m (primer ano) | Mensual    |
+| Tasa de abandono en onboarding | < 10%                             | Mensual    |
+| Usuarios activos mensuales     | Crecimiento >20% m/m (primer ano) | Mensual    |
 
 ### IA
 
@@ -1277,7 +1440,7 @@ lifeos/
     └── codeql.yml                         # Escaneo de seguridad CodeQL
 ```
 
-```
+````
 
 ---
 
@@ -1315,9 +1478,13 @@ RUN dnf -y install cosmic-desktop cosmic-files cosmic-terminal \
 # --- Nvidia Optimus (GPU hibrida) ---
 RUN dnf -y install akmod-nvidia xorg-x11-drv-nvidia-cuda supergfxctl && dnf clean all
 
+# --- Steam/Proton (default via RPM Fusion) ---
+RUN dnf -y install steam steam-devices && dnf clean all
+
 # --- Herramientas del sistema ---
 RUN dnf -y install toolbox btrfs-progs podman buildah flatpak \
-    fish bat ripgrep fd-find htop fastfetch age jq sqlite && dnf clean all
+    fish bat ripgrep fd-find htop fastfetch age jq sqlite git wget curl \
+    wlsunset gammastep && dnf clean all
 
 # --- AI Runtime (llama-server via llama.cpp) ---
 # Estrategia: descarga binario pre-compilado, fallback a compilacion desde fuente.
@@ -1346,7 +1513,7 @@ RUN systemctl enable cosmic-greeter.service && \
 
 # --- Verificacion ---
 RUN dnf clean all && bootc container lint
-```
+````
 
 **Nota:** el Containerfile real incluye verificacion final de que todos los binarios y archivos de configuracion existen. Consultar el archivo fuente para detalles completos.
 
@@ -2002,12 +2169,14 @@ El pipeline `ci.yml` compila tanto `cli/` como `daemon/` en un solo job, corre `
 ### 24.1 Requisitos para desarrollar
 
 ```
+
 - Linux (cualquier distro) o WSL2
 - Podman >= 4.0 (para construir imagenes OCI)
 - Rust >= 1.75 (para el CLI life)
 - QEMU/libvirt (para probar imagenes en VM, opcional)
 - bootc-image-builder (via contenedor, no instalacion host obligatoria)
-```
+
+````
 
 ### 24.2 Setup rapido
 
@@ -2036,7 +2205,7 @@ bash scripts/generate-iso-simple.sh
 
 # Probar en VM:
 qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
-```
+````
 
 ### 24.3 Estructura de PRs
 
@@ -2166,7 +2335,6 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 29. ~~Actualizar `contracts/onboarding/first-boot-config.schema.json` para usar nombres de modelos GGUF en lugar de formato Ollama.~~ **Hecho.** Schema actualizado con ejemplos GGUF reales.
 30. ~~Computer Use API para automatizacion GUI (mouse/keyboard) con auditoria.~~ **Hecho (baseline v1).** API `/computer-use/status|action` + CLI `life computer-use` y eventos en ledger.
 31. ~~Comandos `life focus` y `life meeting` para modos contextuales rapidos.~~ **Hecho (baseline v1).** Presets con reglas de contexto y activacion directa.
-
 
 ### 27.3 Criterio de cierre de faltantes
 

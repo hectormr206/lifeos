@@ -8,11 +8,36 @@
 
 use chrono::{DateTime, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::process::Stdio;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
 const CONFIG_FILE: &str = "visual_comfort.toml";
+
+#[derive(Debug, Clone, Default)]
+struct DisplayContext {
+    run_as_user: Option<String>,
+    wayland_display: Option<String>,
+    x11_display: Option<String>,
+    xdg_runtime_dir: Option<String>,
+    dbus_session_bus_address: Option<String>,
+}
+
+impl DisplayContext {
+    fn has_wayland(&self) -> bool {
+        self.wayland_display.is_some()
+    }
+
+    fn has_x11(&self) -> bool {
+        self.x11_display.is_some()
+    }
+
+    fn is_headless(&self) -> bool {
+        !self.has_wayland() && !self.has_x11()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VisualComfortConfig {
@@ -334,16 +359,15 @@ impl VisualComfortManager {
     }
 
     async fn apply_temperature(&self, temperature: u32) -> anyhow::Result<()> {
-        let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
-        let x11_display = std::env::var("DISPLAY").ok();
+        let context = self.resolve_display_context().await;
 
-        if wayland_display.is_some() {
-            if let Err(e) = self.apply_wlsunset(temperature).await {
+        if context.has_wayland() {
+            if let Err(e) = self.apply_wlsunset(temperature, &context).await {
                 log::warn!("wlsunset failed, trying gammastep: {}", e);
-                self.apply_gammastep(temperature).await?;
+                self.apply_gammastep(temperature, &context).await?;
             }
-        } else if x11_display.is_some() {
-            self.apply_gammastep(temperature).await?;
+        } else if context.has_x11() {
+            self.apply_gammastep(temperature, &context).await?;
         } else {
             log::info!("Headless environment, skipping color temperature adjustment");
         }
@@ -351,52 +375,292 @@ impl VisualComfortManager {
         Ok(())
     }
 
-    async fn apply_wlsunset(&self, temperature: u32) -> anyhow::Result<()> {
-        let output = Command::new("pkill")
-            .arg("-f")
-            .arg("wlsunset")
-            .output()
-            .await;
+    async fn resolve_display_context(&self) -> DisplayContext {
+        let local_context = DisplayContext {
+            run_as_user: None,
+            wayland_display: std::env::var("WAYLAND_DISPLAY").ok(),
+            x11_display: std::env::var("DISPLAY").ok(),
+            xdg_runtime_dir: std::env::var("XDG_RUNTIME_DIR").ok(),
+            dbus_session_bus_address: std::env::var("DBUS_SESSION_BUS_ADDRESS").ok(),
+        };
 
-        let _ = output;
+        if !local_context.is_headless() {
+            return local_context;
+        }
+
+        if let Some(session_context) = Self::detect_active_session_context().await {
+            if let Some(user) = &session_context.run_as_user {
+                log::info!(
+                    "Visual comfort using active graphical session context for user '{}'",
+                    user
+                );
+            }
+            return session_context;
+        }
+
+        local_context
+    }
+
+    async fn detect_active_session_context() -> Option<DisplayContext> {
+        let sessions_output = Command::new("loginctl")
+            .arg("list-sessions")
+            .arg("--no-legend")
+            .output()
+            .await
+            .ok()?;
+
+        if !sessions_output.status.success() {
+            return None;
+        }
+
+        let sessions = String::from_utf8_lossy(&sessions_output.stdout);
+        for line in sessions.lines() {
+            let Some(session_id) = line.split_whitespace().next() else {
+                continue;
+            };
+
+            let props_output = Command::new("loginctl")
+                .arg("show-session")
+                .arg(session_id)
+                .arg("-p")
+                .arg("Active")
+                .arg("-p")
+                .arg("State")
+                .arg("-p")
+                .arg("Name")
+                .arg("-p")
+                .arg("Type")
+                .arg("-p")
+                .arg("Display")
+                .arg("-p")
+                .arg("Leader")
+                .output()
+                .await
+                .ok()?;
+
+            if !props_output.status.success() {
+                continue;
+            }
+
+            let props = Self::parse_key_value_lines(&String::from_utf8_lossy(&props_output.stdout));
+            if props.get("Active").map(String::as_str) != Some("yes") {
+                continue;
+            }
+
+            let state = props.get("State").map(String::as_str).unwrap_or_default();
+            if state != "active" && state != "online" {
+                continue;
+            }
+
+            let user = props.get("Name").cloned().unwrap_or_default();
+            if user.is_empty() || user == "root" {
+                continue;
+            }
+
+            let leader_pid = props
+                .get("Leader")
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0);
+            if leader_pid == 0 {
+                continue;
+            }
+
+            let session_env = Self::read_proc_environ(leader_pid);
+            let session_type = props.get("Type").map(String::as_str).unwrap_or_default();
+            let display_prop = props.get("Display").cloned().unwrap_or_default();
+
+            let wayland_display = session_env.get("WAYLAND_DISPLAY").cloned().or_else(|| {
+                if session_type == "wayland" {
+                    if !display_prop.is_empty() && !display_prop.starts_with(':') {
+                        Some(display_prop.clone())
+                    } else {
+                        Some("wayland-0".to_string())
+                    }
+                } else {
+                    None
+                }
+            });
+
+            let x11_display = session_env.get("DISPLAY").cloned().or_else(|| {
+                if !display_prop.is_empty() && display_prop.starts_with(':') {
+                    Some(display_prop.clone())
+                } else {
+                    None
+                }
+            });
+
+            if wayland_display.is_none() && x11_display.is_none() {
+                continue;
+            }
+
+            let mut xdg_runtime_dir = session_env.get("XDG_RUNTIME_DIR").cloned();
+            if xdg_runtime_dir.is_none() {
+                if let Some(uid) = Self::lookup_user_uid(&user).await {
+                    xdg_runtime_dir = Some(format!("/run/user/{}", uid));
+                }
+            }
+
+            let dbus_session_bus_address = session_env
+                .get("DBUS_SESSION_BUS_ADDRESS")
+                .cloned()
+                .or_else(|| {
+                    xdg_runtime_dir
+                        .as_ref()
+                        .map(|runtime| format!("unix:path={}/bus", runtime))
+                });
+
+            return Some(DisplayContext {
+                run_as_user: Some(user),
+                wayland_display,
+                x11_display,
+                xdg_runtime_dir,
+                dbus_session_bus_address,
+            });
+        }
+
+        None
+    }
+
+    async fn lookup_user_uid(user: &str) -> Option<String> {
+        let output = Command::new("id")
+            .arg("-u")
+            .arg(user)
+            .output()
+            .await
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let uid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if uid.is_empty() {
+            None
+        } else {
+            Some(uid)
+        }
+    }
+
+    fn parse_key_value_lines(raw: &str) -> HashMap<String, String> {
+        raw.lines()
+            .filter_map(|line| line.split_once('='))
+            .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
+            .collect()
+    }
+
+    fn read_proc_environ(pid: u32) -> HashMap<String, String> {
+        let path = format!("/proc/{}/environ", pid);
+        let Ok(contents) = std::fs::read(path) else {
+            return HashMap::new();
+        };
+
+        contents
+            .split(|byte| *byte == 0)
+            .filter_map(|entry| {
+                if entry.is_empty() {
+                    return None;
+                }
+                let pair = String::from_utf8_lossy(entry);
+                pair.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
+            .collect()
+    }
+
+    fn command_for_context(context: &DisplayContext, program: &str, args: &[String]) -> Command {
+        if let Some(user) = &context.run_as_user {
+            let mut cmd = Command::new("runuser");
+            cmd.arg("-u").arg(user).arg("--").arg("env");
+
+            if let Some(runtime) = &context.xdg_runtime_dir {
+                cmd.arg(format!("XDG_RUNTIME_DIR={}", runtime));
+            }
+            if let Some(display) = &context.wayland_display {
+                cmd.arg(format!("WAYLAND_DISPLAY={}", display));
+            }
+            if let Some(display) = &context.x11_display {
+                cmd.arg(format!("DISPLAY={}", display));
+            }
+            if let Some(bus) = &context.dbus_session_bus_address {
+                cmd.arg(format!("DBUS_SESSION_BUS_ADDRESS={}", bus));
+            }
+
+            cmd.arg(program);
+            for arg in args {
+                cmd.arg(arg);
+            }
+
+            cmd
+        } else {
+            let mut cmd = Command::new(program);
+
+            if let Some(runtime) = &context.xdg_runtime_dir {
+                cmd.env("XDG_RUNTIME_DIR", runtime);
+            }
+            if let Some(display) = &context.wayland_display {
+                cmd.env("WAYLAND_DISPLAY", display);
+            }
+            if let Some(display) = &context.x11_display {
+                cmd.env("DISPLAY", display);
+            }
+            if let Some(bus) = &context.dbus_session_bus_address {
+                cmd.env("DBUS_SESSION_BUS_ADDRESS", bus);
+            }
+
+            for arg in args {
+                cmd.arg(arg);
+            }
+
+            cmd
+        }
+    }
+
+    async fn kill_existing_color_tool(process_name: &str, context: &DisplayContext) {
+        let mut cmd = Command::new("pkill");
+        if let Some(user) = &context.run_as_user {
+            cmd.arg("-u").arg(user);
+        }
+        cmd.arg("-f").arg(process_name);
+        let _ = cmd.output().await;
+    }
+
+    async fn apply_wlsunset(&self, temperature: u32, context: &DisplayContext) -> anyhow::Result<()> {
+        Self::kill_existing_color_tool("wlsunset", context).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        let output = Command::new("wlsunset")
-            .arg("-t")
-            .arg(temperature.to_string())
-            .arg("-T")
-            .arg(temperature.to_string())
-            .output()
-            .await;
+        let args = vec![
+            "-t".to_string(),
+            temperature.to_string(),
+            "-T".to_string(),
+            temperature.to_string(),
+        ];
 
-        match output {
-            Ok(o) if o.status.success() => {
+        let mut command = Self::command_for_context(context, "wlsunset", &args);
+        command.stdin(Stdio::null());
+        command.stdout(Stdio::null());
+        command.stderr(Stdio::null());
+
+        match command.spawn() {
+            Ok(_) => {
                 log::info!("Applied color temperature {}K via wlsunset", temperature);
                 Ok(())
-            }
-            Ok(o) => {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                anyhow::bail!("wlsunset failed: {}", stderr)
             }
             Err(e) => anyhow::bail!("Failed to execute wlsunset: {}", e),
         }
     }
 
-    async fn apply_gammastep(&self, temperature: u32) -> anyhow::Result<()> {
-        let output = Command::new("pkill")
-            .arg("-f")
-            .arg("gammastep")
-            .output()
-            .await;
-
-        let _ = output;
+    async fn apply_gammastep(
+        &self,
+        temperature: u32,
+        context: &DisplayContext,
+    ) -> anyhow::Result<()> {
+        Self::kill_existing_color_tool("gammastep", context).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
-        let output = Command::new("gammastep")
-            .arg("-O")
-            .arg(temperature.to_string())
+        let args = vec!["-O".to_string(), temperature.to_string()];
+        let output = Self::command_for_context(context, "gammastep", &args)
             .output()
             .await;
 

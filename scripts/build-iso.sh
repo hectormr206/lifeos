@@ -32,6 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 IMAGE_NAME="localhost/lifeos:latest"
 OUTPUT_DIR="${LIFEOS_OUTPUT_DIR:-${PROJECT_ROOT}/output}"
+LOG_FILE="${LIFEOS_BUILD_LOG_FILE:-${OUTPUT_DIR}/build-iso.log}"
 
 # --- Validar que estamos en el directorio correcto ---
 if [[ ! -f "$PROJECT_ROOT/image/Containerfile" ]]; then
@@ -42,6 +43,16 @@ fi
 if [[ $EUID -ne 0 ]]; then
     error "Este script necesita sudo. Ejecuta: sudo ./scripts/build-iso.sh"
 fi
+
+# --- Logging completo (stdout + stderr) ---
+# Un solo archivo por ejecución (sobrescribe el anterior), igual que la imagen/ISO latest.
+mkdir -p "$OUTPUT_DIR"
+mkdir -p "$(dirname "$LOG_FILE")"
+: > "$LOG_FILE"
+exec > >(tee "$LOG_FILE") 2>&1
+
+# Mensaje final automático con ubicación del log
+trap 'status=$?; if [[ $status -ne 0 ]]; then echo -e "${RED}[ERROR]${NC} Build falló. Revisa log: ${LOG_FILE}"; else echo -e "${GREEN}[OK]${NC} Log actualizado: ${LOG_FILE}"; fi' EXIT
 
 # --- Banner ---
 echo -e "${CYAN}${BOLD}"
@@ -169,6 +180,7 @@ echo
 echo -e "  ${BOLD}ISO:${NC}      $ISO_FILE"
 echo -e "  ${BOLD}Tamaño:${NC}   $ISO_SIZE"
 echo -e "  ${BOLD}Tiempo:${NC}   ${MINUTES}m ${SECONDS}s"
+echo -e "  ${BOLD}Log:${NC}      $LOG_FILE"
 echo
 echo -e "  ${BOLD}Siguiente paso:${NC}"
 echo -e "  1. Crear VM en VirtualBox (Fedora 64-bit, 4GB RAM, 40GB disco, EFI)"

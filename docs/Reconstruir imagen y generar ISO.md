@@ -9,6 +9,10 @@ sudo bash scripts/build-iso.sh
 #   1. Reconstruye imagen con --no-cache
 #   2. Verifica imagen (os-release, llama-server, modelo, CLI)
 #   3. Genera ISO con bootc-image-builder
+#
+# Log completo del build:
+#   output/build-iso.log
+#   (se sobreescribe en cada ejecucion, igual que la imagen/ISO latest)
 
 ## Pasos manuales (si se necesita correr por separado)
 

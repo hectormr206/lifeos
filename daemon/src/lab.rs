@@ -278,7 +278,7 @@ impl LabManager {
             );
         }
 
-        let mut state = self.state.write().await;
+        let state = self.state.write().await;
 
         if state.current_experiment.is_some() {
             anyhow::bail!("An experiment is already running. Complete or rollback first.");

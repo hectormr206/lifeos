@@ -1069,14 +1069,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/visual-comfort/animations", post(set_visual_comfort_animations))
         .route("/visual-comfort/reset", post(reset_visual_comfort_session))
         // Lab endpoints
-        .route("/lab/status", get(lab::get_lab_status))
-        .route("/lab/experiment", post(lab::start_experiment))
-        .route("/lab/experiment/:id", get(lab::get_experiment))
-        .route("/lab/experiment/:id/canary", post(lab::start_canary))
-        .route("/lab/experiment/:id/promote", post(lab::promote_experiment))
-        .route("/lab/experiment/:id/rollback", post(lab::rollback_experiment))
-        .route("/lab/experiment/:id/report", get(lab::get_experiment_report))
-        .route("/lab/history", get(lab::get_lab_history))
+        .nest("/lab", lab::lab_routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bootstrap_token,
