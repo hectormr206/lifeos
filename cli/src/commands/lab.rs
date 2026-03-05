@@ -205,9 +205,7 @@ async fn execute_start(experiment_type: String, hypothesis: String) -> Result<()
 
     println!("Starting experiment...");
 
-    let response: StartExperimentResponse = client
-        .post("/api/v1/lab/experiment", &request)
-        .await?;
+    let response: StartExperimentResponse = client.post("/api/v1/lab/experiment", &request).await?;
 
     println!();
     println!("{}", "✓ Experiment started".green().bold());
@@ -221,10 +219,16 @@ async fn execute_start(experiment_type: String, hypothesis: String) -> Result<()
 async fn execute_canary(experiment_id: String) -> Result<()> {
     let client = DaemonClient::new().await?;
 
-    println!("Starting canary phase for experiment {}...", experiment_id.cyan());
+    println!(
+        "Starting canary phase for experiment {}...",
+        experiment_id.cyan()
+    );
 
     let _: serde_json::Value = client
-        .post(&format!("/api/v1/lab/experiment/{}/canary", experiment_id), &())
+        .post(
+            &format!("/api/v1/lab/experiment/{}/canary", experiment_id),
+            &(),
+        )
         .await?;
 
     println!("{}", "✓ Canary phase started".green().bold());
@@ -239,7 +243,10 @@ async fn execute_promote(experiment_id: String) -> Result<()> {
     println!("Promoting experiment {}...", experiment_id.cyan());
 
     let _: serde_json::Value = client
-        .post(&format!("/api/v1/lab/experiment/{}/promote", experiment_id), &())
+        .post(
+            &format!("/api/v1/lab/experiment/{}/promote", experiment_id),
+            &(),
+        )
         .await?;
 
     println!("{}", "✓ Experiment promoted successfully".green().bold());
@@ -330,10 +337,7 @@ fn print_experiment_report(report: &ExperimentReportResponse) {
     }
 
     println!();
-    println!(
-        "Risk Level: {}",
-        colorize_risk_level(&report.risk_level)
-    );
+    println!("Risk Level: {}", colorize_risk_level(&report.risk_level));
 }
 
 async fn execute_history(json: bool, limit: usize) -> Result<()> {
@@ -364,7 +368,11 @@ fn print_history(history: &HistoryResponse) {
     for exp in &history.experiments {
         println!(
             "{} {}",
-            if exp.success { "✓".green() } else { "✗".red() },
+            if exp.success {
+                "✓".green()
+            } else {
+                "✗".red()
+            },
             exp.id.cyan()
         );
         println!("  Type: {}", exp.experiment_type);
@@ -417,8 +425,8 @@ impl DaemonClient {
             None
         };
 
-        let base_url = std::env::var("LIFEOS_API_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
+        let base_url =
+            std::env::var("LIFEOS_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
 
         Ok(Self { base_url, token })
     }

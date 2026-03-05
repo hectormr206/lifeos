@@ -218,7 +218,7 @@ jobs:
       
       - name: Run integration tests
         run: |
-          cargo test --package lifeos-tests --no-fail-fast -- --test-threads=1
+          cargo test --package lifeos-integration-tests --no-fail-fast -- --test-threads=1
         timeout-minutes: 15
       
       - name: Upload integration test logs

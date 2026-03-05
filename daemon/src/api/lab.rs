@@ -1,8 +1,6 @@
 //! Lab API endpoints
 
-use super::{
-    ApiError, ApiState,
-};
+use super::{ApiError, ApiState};
 use crate::lab::ExperimentType;
 use axum::{
     extract::{Path, Query, State},
@@ -432,8 +430,5 @@ pub async fn get_lab_history(
 
     let count = experiments.len();
 
-    Ok(Json(HistoryResponse {
-        experiments,
-        count,
-    }))
+    Ok(Json(HistoryResponse { experiments, count }))
 }

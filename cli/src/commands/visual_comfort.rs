@@ -126,19 +126,23 @@ async fn show_status() -> anyhow::Result<()> {
     println!(
         "  {}: {}",
         "Animations".bold().cyan(),
-        if animations { "enabled".green() } else { "disabled".red() }
+        if animations {
+            "enabled".green()
+        } else {
+            "disabled".red()
+        }
     );
 
-    println!(
-        "  {}: {}",
-        "Active Profile".bold().cyan(),
-        profile.cyan()
-    );
+    println!("  {}: {}", "Active Profile".bold().cyan(), profile.cyan());
 
     println!(
         "  {}: {}",
         "Time of Day".bold().cyan(),
-        if is_night { "night".purple() } else { "day".yellow() }
+        if is_night {
+            "night".purple()
+        } else {
+            "day".yellow()
+        }
     );
 
     println!(
@@ -186,7 +190,11 @@ async fn set_profile(name: &str) -> anyhow::Result<()> {
         );
     }
 
-    println!("{} {}", "Setting comfort profile:".bold().blue(), profile.cyan());
+    println!(
+        "{} {}",
+        "Setting comfort profile:".bold().blue(),
+        profile.cyan()
+    );
     println!();
 
     let client = daemon_client::authenticated_client();
@@ -274,7 +282,10 @@ async fn list_profiles() -> anyhow::Result<()> {
         }
     }
 
-    println!("Set profile: {}", "life visual-comfort profile <name>".cyan());
+    println!(
+        "Set profile: {}",
+        "life visual-comfort profile <name>".cyan()
+    );
 
     Ok(())
 }
@@ -284,7 +295,11 @@ async fn set_temperature(kelvin: u32) -> anyhow::Result<()> {
         anyhow::bail!("Temperature must be between 2500K and 6500K");
     }
 
-    println!("{} {}K", "Setting color temperature:".bold().blue(), kelvin.to_string().yellow());
+    println!(
+        "{} {}K",
+        "Setting color temperature:".bold().blue(),
+        kelvin.to_string().yellow()
+    );
     println!();
 
     let client = daemon_client::authenticated_client();
@@ -367,7 +382,11 @@ async fn set_animations(state: &str) -> anyhow::Result<()> {
     println!(
         "{} {}",
         "Setting animations:".bold().blue(),
-        if enabled { "enabled".green() } else { "disabled".red() }
+        if enabled {
+            "enabled".green()
+        } else {
+            "disabled".red()
+        }
     );
     println!();
 
@@ -388,7 +407,10 @@ async fn set_animations(state: &str) -> anyhow::Result<()> {
         anyhow::bail!("Failed to set animations (status: {})", status);
     }
 
-    println!("{}", "Animation setting applied successfully".green().bold());
+    println!(
+        "{}",
+        "Animation setting applied successfully".green().bold()
+    );
 
     Ok(())
 }

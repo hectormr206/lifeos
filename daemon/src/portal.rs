@@ -60,10 +60,7 @@ impl LifeOsPortal {
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Invalid portal permissions path"))?;
         std::fs::create_dir_all(parent)?;
-        std::fs::write(
-            PORTAL_POLICY_FILE,
-            serde_json::to_string_pretty(store)?,
-        )?;
+        std::fs::write(PORTAL_POLICY_FILE, serde_json::to_string_pretty(store)?)?;
         Ok(())
     }
 
@@ -93,21 +90,23 @@ impl LifeOsPortal {
     pub fn new() -> Self {
         Self::default()
     }
-
 }
 
 #[interface(name = "org.lifeos.Portal")]
 impl LifeOsPortal {
     async fn request_camera(&self, app_id: &str, reason: &str) -> zbus::fdo::Result<bool> {
-        self.request_permission_internal(app_id, "camera", reason).await
+        self.request_permission_internal(app_id, "camera", reason)
+            .await
     }
 
     async fn request_microphone(&self, app_id: &str, reason: &str) -> zbus::fdo::Result<bool> {
-        self.request_permission_internal(app_id, "microphone", reason).await
+        self.request_permission_internal(app_id, "microphone", reason)
+            .await
     }
 
     async fn request_screencast(&self, app_id: &str, reason: &str) -> zbus::fdo::Result<bool> {
-        self.request_permission_internal(app_id, "screencast", reason).await
+        self.request_permission_internal(app_id, "screencast", reason)
+            .await
     }
 
     async fn request_file_access(
@@ -126,7 +125,8 @@ impl LifeOsPortal {
         permission: &str,
         reason: &str,
     ) -> zbus::fdo::Result<bool> {
-        self.request_permission_internal(app_id, permission, reason).await
+        self.request_permission_internal(app_id, permission, reason)
+            .await
     }
 
     async fn list_permissions(&self, app_id: &str) -> zbus::fdo::Result<Vec<String>> {
@@ -221,19 +221,22 @@ impl LifeOsPortal {
         let perm = permission.to_string();
         let rsn = reason.to_string();
 
-        let approved = tokio::task::spawn_blocking(move || {
-            prompt_portal_approval(&app, &perm, &rsn)
-        })
-        .await
-        .map_err(|e| zbus::fdo::Error::Failed(format!("Spawn error: {}", e)))?
-        .map_err(|e| zbus::fdo::Error::Failed(format!("Prompt error: {}", e)))?;
+        let approved =
+            tokio::task::spawn_blocking(move || prompt_portal_approval(&app, &perm, &rsn))
+                .await
+                .map_err(|e| zbus::fdo::Error::Failed(format!("Spawn error: {}", e)))?
+                .map_err(|e| zbus::fdo::Error::Failed(format!("Prompt error: {}", e)))?;
 
         let audit_entry = AuditEntry {
             timestamp: chrono::Local::now().to_rfc3339(),
             app_id: app_id.to_string(),
             permission: permission.to_string(),
             action: if approved { "granted" } else { "denied" }.to_string(),
-            reason: if reason.is_empty() { None } else { Some(reason.to_string()) },
+            reason: if reason.is_empty() {
+                None
+            } else {
+                Some(reason.to_string())
+            },
         };
         Self::log_audit(&audit_entry);
 
@@ -241,7 +244,11 @@ impl LifeOsPortal {
             let new_perm = PortalPermission {
                 resource: permission.to_string(),
                 granted_at: chrono::Local::now().to_rfc3339(),
-                reason: if reason.is_empty() { None } else { Some(reason.to_string()) },
+                reason: if reason.is_empty() {
+                    None
+                } else {
+                    Some(reason.to_string())
+                },
             };
 
             let app_perms = perms.entry(app_id.to_string()).or_insert_with(Vec::new);

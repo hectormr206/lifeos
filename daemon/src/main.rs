@@ -223,9 +223,9 @@ async fn main() -> anyhow::Result<()> {
                 MemoryPlaneManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
             }),
         )),
-        visual_comfort_manager: Arc::new(RwLock::new(
-            VisualComfortManager::new(PathBuf::from("/var/lib/lifeos")),
-        )),
+        visual_comfort_manager: Arc::new(RwLock::new(VisualComfortManager::new(PathBuf::from(
+            "/var/lib/lifeos",
+        )))),
         lab_manager: Arc::new(RwLock::new(
             LabManager::new(lab::LabConfig::default()).unwrap_or_else(|e| {
                 warn!("Failed to initialize LabManager: {}", e);

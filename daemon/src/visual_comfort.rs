@@ -302,7 +302,8 @@ impl VisualComfortManager {
 
         self.apply_temperature(target_temp).await?;
         self.apply_font_scale(profile.font_scale()).await?;
-        self.apply_animation_state(profile.animations_enabled()).await?;
+        self.apply_animation_state(profile.animations_enabled())
+            .await?;
 
         let mut state = self.state.write().await;
         state.current_temperature = target_temp;
@@ -522,12 +523,7 @@ impl VisualComfortManager {
     }
 
     async fn lookup_user_uid(user: &str) -> Option<String> {
-        let output = Command::new("id")
-            .arg("-u")
-            .arg(user)
-            .output()
-            .await
-            .ok()?;
+        let output = Command::new("id").arg("-u").arg(user).output().await.ok()?;
 
         if !output.status.success() {
             return None;
@@ -624,7 +620,11 @@ impl VisualComfortManager {
         let _ = cmd.output().await;
     }
 
-    async fn apply_wlsunset(&self, temperature: u32, context: &DisplayContext) -> anyhow::Result<()> {
+    async fn apply_wlsunset(
+        &self,
+        temperature: u32,
+        context: &DisplayContext,
+    ) -> anyhow::Result<()> {
         Self::kill_existing_color_tool("wlsunset", context).await;
 
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -695,17 +695,17 @@ impl VisualComfortManager {
     async fn apply_cosmic_font_scale(&self, scale_percent: u32) -> anyhow::Result<()> {
         let cosmic_config_path = std::env::var("XDG_CONFIG_HOME")
             .unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
-        
+
         let settings_path = format!("{}/cosmic/com.system.settings/Font", cosmic_config_path);
-        
+
         std::fs::create_dir_all(std::path::Path::new(&settings_path).parent().unwrap())?;
-        
+
         let settings = serde_json::json!({
             "scale": scale_percent,
         });
-        
+
         std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-        
+
         log::info!("Applied COSMIC font scale {}%", scale_percent);
         Ok(())
     }
@@ -724,30 +724,36 @@ impl VisualComfortManager {
             log::debug!("COSMIC animation control failed: {}", e);
         }
 
-        log::info!("Applied animation state: {}", if enabled { "enabled" } else { "disabled" });
+        log::info!(
+            "Applied animation state: {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
         Ok(())
     }
 
     async fn apply_cosmic_animation_state(&self, enabled: bool) -> anyhow::Result<()> {
         let cosmic_config_path = std::env::var("XDG_CONFIG_HOME")
             .unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
-        
-        let settings_path = format!("{}/cosmic/com.system.settings/Animations", cosmic_config_path);
-        
+
+        let settings_path = format!(
+            "{}/cosmic/com.system.settings/Animations",
+            cosmic_config_path
+        );
+
         std::fs::create_dir_all(std::path::Path::new(&settings_path).parent().unwrap())?;
-        
+
         let settings = serde_json::json!({
             "enabled": enabled,
         });
-        
+
         std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-        
+
         Ok(())
     }
 
     pub async fn update_time_based_settings(&self) -> anyhow::Result<()> {
         let config = self.config.read().await;
-        
+
         if !config.enabled {
             return Ok(());
         }
@@ -759,20 +765,20 @@ impl VisualComfortManager {
             let mut state = self.state.write().await;
             if state.is_night_time != is_night {
                 state.is_night_time = is_night;
-                
+
                 let target_temp = if is_night {
                     config.color_temperature_night
                 } else {
                     config.color_temperature_day
                 };
-                
+
                 state.target_temperature = target_temp;
                 state.transitioning = true;
-                
+
                 drop(state);
-                
+
                 self.apply_temperature(target_temp).await?;
-                
+
                 let mut state = self.state.write().await;
                 state.current_temperature = target_temp;
                 state.transitioning = false;
@@ -787,7 +793,7 @@ impl VisualComfortManager {
     async fn check_animation_reduction(&self) -> anyhow::Result<()> {
         let config = self.config.read().await;
         let state = self.state.read().await;
-        
+
         if state.session_duration_minutes >= config.animation_reduction_threshold_minutes
             && state.animations_enabled
             && state.active_profile == ComfortProfile::Default
@@ -810,20 +816,20 @@ impl VisualComfortManager {
 
     pub async fn reset_session(&self) -> anyhow::Result<()> {
         let now = Utc::now();
-        
+
         {
             let mut session_start = self.session_start.write().await;
             *session_start = now;
         }
-        
+
         {
             let mut state = self.state.write().await;
             state.session_duration_minutes = 0;
             state.animations_enabled = true;
         }
-        
+
         self.update_time_based_settings().await?;
-        
+
         log::info!("Visual comfort session reset");
         Ok(())
     }

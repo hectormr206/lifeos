@@ -23,13 +23,31 @@ jobs:
       matrix:
         include:
           - language: rust
-            build-mode: manual
+            build-mode: none
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check code scanning availability
+        id: code-scanning
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.request("GET /repos/{owner}/{repo}/code-scanning/default-setup", {
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              core.info("Code scanning is enabled.");
+              core.setOutput("enabled", "true");
+            } catch (error) {
+              core.warning(`Code scanning is not enabled for this repository; skipping CodeQL analysis. (${error.status || "unknown"})`);
+              core.setOutput("enabled", "false");
+            }
+
       - name: Initialize CodeQL
+        if: steps.code-scanning.outputs.enabled == 'true'
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
@@ -37,19 +55,27 @@ jobs:
           queries: security-extended,security-and-quality
 
       - name: Install Rust toolchain
+        if: steps.code-scanning.outputs.enabled == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
 
       - name: Build CLI for CodeQL
+        if: steps.code-scanning.outputs.enabled == 'true'
         working-directory: ./cli
         run: cargo build --release
 
       - name: Build Daemon for CodeQL
+        if: steps.code-scanning.outputs.enabled == 'true'
         working-directory: ./daemon
         run: cargo build --release --all-features
 
       - name: Perform CodeQL Analysis
+        if: steps.code-scanning.outputs.enabled == 'true'
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{ matrix.language }}"
+
+      - name: CodeQL skipped
+        if: steps.code-scanning.outputs.enabled != 'true'
+        run: echo "CodeQL skipped because code scanning is not enabled for this repository."

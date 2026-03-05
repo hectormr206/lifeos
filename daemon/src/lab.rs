@@ -19,21 +19,21 @@ use tokio::sync::RwLock;
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_lab_config_default() {
         let config = LabConfig::default();
         assert!(config.enabled);
         assert_eq!(config.max_experiments, 10);
     }
-    
+
     #[test]
     fn test_experiment_type_serialization() {
         let et = ExperimentType::ConfigOptimization;
         let json = serde_json::to_string(&et).unwrap();
         assert_eq!(json, "\"config_optimization\"");
     }
-    
+
     #[test]
     fn test_metrics_snapshot_default() {
         let metrics = MetricsSnapshot::default();
@@ -271,7 +271,11 @@ impl LabManager {
             anyhow::bail!("Lab experiments are disabled in configuration");
         }
 
-        if !self.config.allowed_experiment_types.contains(&experiment_type) {
+        if !self
+            .config
+            .allowed_experiment_types
+            .contains(&experiment_type)
+        {
             anyhow::bail!(
                 "Experiment type {:?} is not allowed in configuration",
                 experiment_type
@@ -475,8 +479,12 @@ impl LabManager {
         }
 
         let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        log::info!("Created experiment container: {} ({})", container_name, container_id);
-        
+        log::info!(
+            "Created experiment container: {} ({})",
+            container_name,
+            container_id
+        );
+
         Ok(container_id)
     }
 
@@ -505,11 +513,16 @@ impl LabManager {
         let mut all_steps_passed = true;
 
         for (idx, step) in experiment.plan.iter().enumerate() {
-            log::info!("Running step {} for experiment {}: {}", idx + 1, experiment_id, step.action);
-            
+            log::info!(
+                "Running step {} for experiment {}: {}",
+                idx + 1,
+                experiment_id,
+                step.action
+            );
+
             match self.execute_step(&experiment, &step.action).await {
                 Ok(_) => {
-        let mut state = self.state.write().await;
+                    let mut state = self.state.write().await;
                     if let Some(ref mut exp) = state.current_experiment {
                         if let Some(step) = exp.plan.get_mut(idx) {
                             step.completed = true;
@@ -529,9 +542,12 @@ impl LabManager {
 
         if all_steps_passed {
             let tests_passed = self.run_tests(&experiment).await?;
-            
+
             if tests_passed {
-                log::info!("Experiment {} validation passed, ready for canary", experiment_id);
+                log::info!(
+                    "Experiment {} validation passed, ready for canary",
+                    experiment_id
+                );
                 let mut state = self.state.write().await;
                 if let Some(ref mut exp) = state.current_experiment {
                     exp.status = ExperimentStatus::Canary;
@@ -540,12 +556,22 @@ impl LabManager {
                 self.save_state().await?;
             } else {
                 log::warn!("Experiment {} tests failed, rolling back", experiment_id);
-                self.rollback_internal(experiment_id, "Tests failed", metrics_before, metrics_after)
-                    .await?;
+                self.rollback_internal(
+                    experiment_id,
+                    "Tests failed",
+                    metrics_before,
+                    metrics_after,
+                )
+                .await?;
             }
         } else {
-            self.rollback_internal(experiment_id, "Step execution failed", metrics_before, metrics_after)
-                .await?;
+            self.rollback_internal(
+                experiment_id,
+                "Step execution failed",
+                metrics_before,
+                metrics_after,
+            )
+            .await?;
         }
 
         Ok(())
@@ -560,11 +586,15 @@ impl LabManager {
                     .join(&experiment.id)
                     .join("config");
                 std::fs::create_dir_all(&backup_path)?;
-                
+
                 let config_src = PathBuf::from("/etc/lifeos");
                 if config_src.exists() {
                     let output = Command::new("cp")
-                        .args(["-r", &config_src.to_string_lossy(), &backup_path.to_string_lossy()])
+                        .args([
+                            "-r",
+                            &config_src.to_string_lossy(),
+                            &backup_path.to_string_lossy(),
+                        ])
                         .output()?;
                     if !output.status.success() {
                         anyhow::bail!("Failed to backup config");
@@ -573,7 +603,10 @@ impl LabManager {
                 Ok(())
             }
             "apply_optimized_config" => {
-                log::info!("Applying optimized configuration for experiment {}", experiment.id);
+                log::info!(
+                    "Applying optimized configuration for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             "run_validation_tests" => {
@@ -581,15 +614,24 @@ impl LabManager {
                 Ok(())
             }
             "capture_service_baseline" => {
-                log::info!("Capturing service baseline for experiment {}", experiment.id);
+                log::info!(
+                    "Capturing service baseline for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             "apply_tuning_parameters" => {
-                log::info!("Applying tuning parameters for experiment {}", experiment.id);
+                log::info!(
+                    "Applying tuning parameters for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             "monitor_service_performance" => {
-                log::info!("Monitoring service performance for experiment {}", experiment.id);
+                log::info!(
+                    "Monitoring service performance for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             "capture_power_baseline" => {
@@ -597,7 +639,10 @@ impl LabManager {
                 Ok(())
             }
             "apply_power_optimizations" => {
-                log::info!("Applying power optimizations for experiment {}", experiment.id);
+                log::info!(
+                    "Applying power optimizations for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             "validate_battery_life" => {
@@ -605,15 +650,24 @@ impl LabManager {
                 Ok(())
             }
             "benchmark_current_model" => {
-                log::info!("Benchmarking current AI model for experiment {}", experiment.id);
+                log::info!(
+                    "Benchmarking current AI model for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             "deploy_candidate_model" => {
-                log::info!("Deploying candidate AI model for experiment {}", experiment.id);
+                log::info!(
+                    "Deploying candidate AI model for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             "compare_model_performance" => {
-                log::info!("Comparing model performance for experiment {}", experiment.id);
+                log::info!(
+                    "Comparing model performance for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             "audit_current_security" => {
@@ -621,11 +675,17 @@ impl LabManager {
                 Ok(())
             }
             "apply_hardening_measures" => {
-                log::info!("Applying security hardening for experiment {}", experiment.id);
+                log::info!(
+                    "Applying security hardening for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             "validate_security_posture" => {
-                log::info!("Validating security posture for experiment {}", experiment.id);
+                log::info!(
+                    "Validating security posture for experiment {}",
+                    experiment.id
+                );
                 Ok(())
             }
             _ => {
@@ -698,7 +758,10 @@ impl LabManager {
     }
 
     async fn test_system_health(&self) -> (bool, Option<String>) {
-        if let Ok(output) = Command::new("systemctl").args(["is-system-running"]).output() {
+        if let Ok(output) = Command::new("systemctl")
+            .args(["is-system-running"])
+            .output()
+        {
             let status = String::from_utf8_lossy(&output.stdout);
             if status.starts_with("running") || status.starts_with("degraded") {
                 return (true, None);
@@ -771,7 +834,15 @@ impl LabManager {
         }
 
         if let Ok(output) = Command::new("journalctl")
-            .args(["--since", "1 hour ago", "-u", "lifeosd", "-p", "err", "--no-pager"])
+            .args([
+                "--since",
+                "1 hour ago",
+                "-u",
+                "lifeosd",
+                "-p",
+                "err",
+                "--no-pager",
+            ])
             .output()
         {
             let errors = String::from_utf8_lossy(&output.stdout);
@@ -817,14 +888,12 @@ impl LabManager {
         log::info!("Starting canary phase for experiment {}", experiment_id);
         state.canary_active = true;
         drop(state);
-        
+
         self.save_state().await?;
 
         let self_clone = Arc::new(self.clone());
         let experiment_id_owned = experiment_id.to_string();
-        tokio::spawn(async move {
-            self_clone.monitor_canary(experiment_id_owned).await
-        });
+        tokio::spawn(async move { self_clone.monitor_canary(experiment_id_owned).await });
 
         Ok(())
     }
@@ -856,7 +925,10 @@ impl LabManager {
                     if metrics.error_rate > 10.0 || metrics.cpu_usage_avg > 90.0 {
                         drop(state);
                         log::warn!("Canary metrics degraded, triggering rollback");
-                        if let Err(e) = self.rollback(&experiment_id, "Canary metrics degraded").await {
+                        if let Err(e) = self
+                            .rollback(&experiment_id, "Canary metrics degraded")
+                            .await
+                        {
                             log::error!("Canary rollback failed: {}", e);
                         }
                         break;
@@ -884,12 +956,8 @@ impl LabManager {
         log::info!("Promoting experiment {}", experiment_id);
 
         if let Some(ref container_id) = experiment.container_id {
-            let _ = Command::new("podman")
-                .args(["stop", container_id])
-                .output();
-            let _ = Command::new("podman")
-                .args(["rm", container_id])
-                .output();
+            let _ = Command::new("podman").args(["stop", container_id]).output();
+            let _ = Command::new("podman").args(["rm", container_id]).output();
         }
 
         let metrics_after = self.collect_metrics().await?;
@@ -943,8 +1011,9 @@ impl LabManager {
     pub async fn rollback(&self, experiment_id: &str, reason: &str) -> Result<()> {
         let metrics_before = self.collect_metrics().await?;
         let metrics_after = self.collect_metrics().await?;
-        
-        self.rollback_internal(experiment_id, reason, metrics_before, metrics_after).await
+
+        self.rollback_internal(experiment_id, reason, metrics_before, metrics_after)
+            .await
     }
 
     async fn rollback_internal(
@@ -978,9 +1047,7 @@ impl LabManager {
         }
 
         if let Some(ref container_id) = experiment.container_id {
-            let _ = Command::new("podman")
-                .args(["stop", container_id])
-                .output();
+            let _ = Command::new("podman").args(["stop", container_id]).output();
             let _ = Command::new("podman")
                 .args(["rm", "-f", container_id])
                 .output();
@@ -1093,7 +1160,8 @@ impl LabManager {
                     experiment.hypothesis, res.improvement_score
                 );
                 let next_steps = vec![
-                    "Consider applying similar optimizations to other system components".to_string(),
+                    "Consider applying similar optimizations to other system components"
+                        .to_string(),
                     "Monitor long-term stability of changes".to_string(),
                     "Document successful configuration for future reference".to_string(),
                 ];

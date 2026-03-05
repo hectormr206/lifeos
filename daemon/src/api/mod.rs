@@ -1063,10 +1063,22 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/visual-comfort/status", get(get_visual_comfort_status))
         .route("/visual-comfort/config", get(get_visual_comfort_config))
         .route("/visual-comfort/profile", post(set_visual_comfort_profile))
-        .route("/visual-comfort/profiles", get(list_visual_comfort_profiles))
-        .route("/visual-comfort/temperature", post(set_visual_comfort_temperature))
-        .route("/visual-comfort/font-scale", post(set_visual_comfort_font_scale))
-        .route("/visual-comfort/animations", post(set_visual_comfort_animations))
+        .route(
+            "/visual-comfort/profiles",
+            get(list_visual_comfort_profiles),
+        )
+        .route(
+            "/visual-comfort/temperature",
+            post(set_visual_comfort_temperature),
+        )
+        .route(
+            "/visual-comfort/font-scale",
+            post(set_visual_comfort_font_scale),
+        )
+        .route(
+            "/visual-comfort/animations",
+            post(set_visual_comfort_animations),
+        )
         .route("/visual-comfort/reset", post(reset_visual_comfort_session))
         // Lab endpoints
         .nest("/lab", lab::lab_routes())
@@ -5624,7 +5636,8 @@ async fn set_visual_comfort_profile(
     ),
     tag = "visual-comfort"
 )]
-async fn list_visual_comfort_profiles() -> Result<Json<Vec<ProfileInfoResponse>>, (StatusCode, Json<ApiError>)> {
+async fn list_visual_comfort_profiles(
+) -> Result<Json<Vec<ProfileInfoResponse>>, (StatusCode, Json<ApiError>)> {
     let profiles = vec![
         ProfileInfoResponse {
             name: "default".to_string(),
@@ -5699,16 +5712,19 @@ async fn set_visual_comfort_temperature(
     }
 
     let manager = state.visual_comfort_manager.read().await;
-    manager.set_temperature(request.temperature).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiError {
-                error: "Internal Server Error".to_string(),
-                message: format!("Failed to set temperature: {}", e),
-                code: 500,
-            }),
-        )
-    })?;
+    manager
+        .set_temperature(request.temperature)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: format!("Failed to set temperature: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
 
     Ok(StatusCode::OK)
 }

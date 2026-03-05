@@ -13,19 +13,11 @@ pub enum PortalCommands {
     /// Show portal service status
     Status,
     /// List permissions for an app
-    Permissions {
-        app_id: String,
-    },
+    Permissions { app_id: String },
     /// Grant a permission to an app
-    Grant {
-        app_id: String,
-        permission: String,
-    },
+    Grant { app_id: String, permission: String },
     /// Revoke a permission from an app
-    Revoke {
-        app_id: String,
-        permission: String,
-    },
+    Revoke { app_id: String, permission: String },
     /// Show all permission grants across all apps
     Audit {
         /// Number of recent audit entries to show
@@ -74,11 +66,9 @@ fn cmd_status() -> anyhow::Result<()> {
         .output();
 
     let dbus_active = match dbus_check {
-        Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .any(|line| line.contains("org.lifeos.Portal"))
-        }
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.contains("org.lifeos.Portal")),
         _ => false,
     };
 
@@ -121,7 +111,10 @@ fn cmd_status() -> anyhow::Result<()> {
 fn cmd_permissions(app_id: &str) -> anyhow::Result<()> {
     let store = load_store()?;
 
-    println!("{}", format!("Portal Permissions for {}", app_id).bold().blue());
+    println!(
+        "{}",
+        format!("Portal Permissions for {}", app_id).bold().blue()
+    );
 
     match store.granted.get(app_id) {
         Some(perms) if !perms.is_empty() => {
@@ -152,7 +145,10 @@ fn cmd_grant(app_id: &str, permission: &str) -> anyhow::Result<()> {
         reason: Some("manual grant via CLI".to_string()),
     };
 
-    let app_perms = store.granted.entry(app_id.to_string()).or_insert_with(Vec::new);
+    let app_perms = store
+        .granted
+        .entry(app_id.to_string())
+        .or_insert_with(Vec::new);
 
     if app_perms.iter().any(|p| p.resource == permission) {
         println!("{}", "Permission already exists".yellow());
@@ -248,7 +244,12 @@ fn cmd_audit(lines: usize) -> anyhow::Result<()> {
             _ => entry.action.as_str().normal(),
         };
 
-        println!("  [{}] {} -> {}", entry.timestamp.dimmed(), entry.app_id.cyan(), entry.permission);
+        println!(
+            "  [{}] {} -> {}",
+            entry.timestamp.dimmed(),
+            entry.app_id.cyan(),
+            entry.permission
+        );
         println!("    Action: {}", action_color);
         if let Some(reason) = entry.reason {
             println!("    Reason: {}", reason.dimmed());
@@ -338,7 +339,15 @@ fn log_audit_manual(app_id: &str, permission: &str, action: &str) -> anyhow::Res
     }
 
     let mut child = Command::new("sudo")
-        .args(["sh", "-c", &format!("mkdir -p {} && tee -a {}", log_dir.display(), AUDIT_LOG_FILE)])
+        .args([
+            "sh",
+            "-c",
+            &format!(
+                "mkdir -p {} && tee -a {}",
+                log_dir.display(),
+                AUDIT_LOG_FILE
+            ),
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
