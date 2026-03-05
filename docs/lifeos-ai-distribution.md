@@ -1338,6 +1338,22 @@ Implementacion concreta:
 
 **Entregable:** ecosistema autosostenible con comunidad activa y marketplace de skills.
 
+### A Futuro (Experimental B2B): Arquitectura Multi-Agente Corporativa (LifeOS Swarm) [EN REVISIÓN]
+
+**Objetivo:** Explorar la viabilidad de transformar LifeOS en una infraestructura de inteligencia de enjambre (_Swarm Intelligence_) para oficinas y empresas, sin depender de nubes externas.
+
+**Estado:** EXPERIMENTAL / PENDIENTE DE ESTRUCTURACIÓN Y REVISIÓN CON LLMs. No se asigna a una fase consecutiva actual.
+
+**Conceptos Clave del Enjambre (Swarm):**
+
+1. **Escalabilidad del Mesh:** El `Device Mesh` (Fase 3) evoluciona. Las computadoras operativas (Ventas, RRHH, Almacén) se convierten en **nodos periféricos** con IA ligera, comunicándose vía intranet usando tokens criptográficos de `life-id`.
+2. **Jerarquía de Información (RAG Distribuido):**
+   - **Nodos Operativos (Ej. Ventas-PC):** Guardan conocimiento especializado en su base vectorial local (SQLite-vec).
+   - **Nodos Gerenciales:** Tienen delegación para consultar (vía Agent Plane local P2P) los motores vectoriales de los nodos operativos a su cargo para generar reportes en tiempo real.
+   - **Nodo Ejecutivo (Dueño/Dirección):** Perfil con visión global. Su `lifeosd` tiene permiso de lectura resumida a todas las áreas, garantizando observabilidad corporativa total sin que los datos salgan JAMÁS de la intranet a servidores como OpenAI.
+3. **Servidores Dedicados ("Nodos Pesados"):** Instituciones instalan "LifeOS Server" en hardware centralizado (Múltiples GPUs). Los nodos periféricos (laptops de empleados) delegan tareas de alta demanda cognitiva al servidor local transparente al usuario, ahorrando batería y reduciendo costos de hardware por empleado.
+4. **Onboarding Contextual:** El _First-Boot Wizard_ incluye el perfil **"Corporativo / Nodo Mesh"**, donde solicita el archivo `swarm-policy.toml` de TI para asignar el rol, departamento y jefatura de ese equipo, configurando sus permisos en automático.
+
 ---
 
 ## 15. KPIs de exito
