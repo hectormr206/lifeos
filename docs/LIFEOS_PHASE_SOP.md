@@ -117,7 +117,37 @@ Asistente local multimodal util en tareas reales sin comprometer privacidad.
 - Prueba de restore con estado cognitivo conservado.
 - Matriz de riesgo actualizada.
 
-## 6. Plantilla de cierre de tarea (usar siempre)
+## 6. Fase 2.5 SOP - Identidad visual y ergonomia
+
+### 6.1 Objetivo
+
+Entregar una experiencia visual de calidad producto (consistente, accesible y comoda por horas) sobre COSMIC, con evidencia medible.
+
+### 6.2 Checklist operativo
+
+- [ ] Design tokens oficiales publicados y versionados.
+- [ ] Temas LifeOS (dark/light/high-contrast) coherentes en COSMIC y `life theme`.
+- [ ] Night Mode desktop completo y validado en entorno grafico real.
+- [ ] Motor visual-comfort validado en Wayland (incluyendo manejo explicito de escenarios headless).
+- [ ] Presets UX (`balanced/focus/vivid`) disponibles y documentados.
+- [ ] Paquete de wallpapers/iconografia LifeOS consistente con la marca.
+- [ ] Auditoria WCAG 2.2 AA ejecutada en pantallas/comandos clave.
+
+### 6.3 Pruebas minimas obligatorias
+
+- Pruebas visuales golden + diff en pantallas clave (launcher, terminal, settings, overlay).
+- Validacion manual en hardware real: sesion continua >= 3 horas (fatiga visual y legibilidad).
+- Benchmark de latencia UI (p95) sin regresion frente a baseline previo.
+- Prueba de onboarding visual con usuarios nuevos (tareas guiadas y tasa de exito).
+
+### 6.4 Evidence pack minimo
+
+- Reporte de auditoria de contraste y accesibilidad.
+- Capturas/video comparativo antes/despues.
+- Resultados de beta UX (SUS y feedback de fatiga visual).
+- Changelog de tokens/presets visuales y decisiones de diseno.
+
+## 7. Plantilla de cierre de tarea (usar siempre)
 
 ```text
 Tarea:
@@ -129,7 +159,7 @@ Riesgos residuales:
 Docs actualizadas:
 ```
 
-## 7. Criterio de avance entre fases
+## 8. Criterio de avance entre fases
 
 1. No avanzar de fase con bloqueantes criticos abiertos de la fase anterior.
 2. Si hay bypass temporal de seguridad para laboratorio, debe estar documentado y con fecha de remediacion.

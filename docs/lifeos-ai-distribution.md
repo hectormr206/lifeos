@@ -111,12 +111,12 @@ Al igual que Rust tiene a Ferris el Cangrejo o Linux a Tux, LifeOS posee una ide
 
 El ajolote es mundialmente conocido por su capacidad de regeneración celular perfecta (puede regenerar extremidades y órganos sin cicatrices). Esto representa el objetivo técnico de **LifeOS** (Fedora bootc + Btrfs): un sistema inmutable orientado a recuperarse rápido ante fallos comunes mediante _rollback_ a una imagen o instantánea previa. Esta metáfora no sustituye backups ni prácticas operativas: escenarios como falla de disco o borrado de datos de usuario requieren respaldo externo.
 
-| Concepto Biológico | Equivalente Técnico LifeOS |
-|--------------------|----------------------------|
-| Regeneración celular perfecta | Rollback orquestado de bootc (cuando aplica) |
-| Sin cicatrices tras regeneración | Recuperación sin reinstalar en fallos de sistema |
+| Concepto Biológico                | Equivalente Técnico LifeOS                             |
+| --------------------------------- | ------------------------------------------------------ |
+| Regeneración celular perfecta     | Rollback orquestado de bootc (cuando aplica)           |
+| Sin cicatrices tras regeneración  | Recuperación sin reinstalar en fallos de sistema       |
 | Extremidades/órganos recuperables | Snapshots Btrfs de `/home` y `/var`; `/etc` versionado |
-| "Nunca muere" | Alta resiliencia operativa con slots A/B inmutables |
+| "Nunca muere"                     | Alta resiliencia operativa con slots A/B inmutables    |
 
 #### Axi: El Daemon del Sistema
 
@@ -144,17 +144,17 @@ El ajolote es **mexicano** (endémico de Xochimilco). Esto da a LifeOS una ident
 
 #### Variaciones Visuales de Axi por Estado del Sistema
 
-| Estado del Sistema | Axi Visual | Descripción |
-|-------------------|-------------|-------------|
-| **Healthy** | Axi sonriendo, branquias relajadas | Sistema funcionando perfectamente |
-| **Updating** | Axi con casco de obra | Aplicando actualizaciones |
-| **Rollback/Recovery** | Axi regenerándose (brillo verde) | Recuperando de un fallo |
-| **Jarvis Mode** | Axi con anteojos de inteligencia | Modo Jarvis activo |
-| **Focus Mode** | Axi con auriculares, ojos concentrados | Modo Flow activo |
-| **Meeting Mode** | Axi con corbata, expresión profesional | Modo reunión activo |
-| **Night Mode** | Axi con pijama, bostezando | Modo nocturno activo |
-| **Error Crítico** | Axi preocupado pero tranquilo | Algo requiere atención |
-| **Offline** | Axi dormido | Sin conexión a red |
+| Estado del Sistema    | Axi Visual                             | Descripción                       |
+| --------------------- | -------------------------------------- | --------------------------------- |
+| **Healthy**           | Axi sonriendo, branquias relajadas     | Sistema funcionando perfectamente |
+| **Updating**          | Axi con casco de obra                  | Aplicando actualizaciones         |
+| **Rollback/Recovery** | Axi regenerándose (brillo verde)       | Recuperando de un fallo           |
+| **Jarvis Mode**       | Axi con anteojos de inteligencia       | Modo Jarvis activo                |
+| **Focus Mode**        | Axi con auriculares, ojos concentrados | Modo Flow activo                  |
+| **Meeting Mode**      | Axi con corbata, expresión profesional | Modo reunión activo               |
+| **Night Mode**        | Axi con pijama, bostezando             | Modo nocturno activo              |
+| **Error Crítico**     | Axi preocupado pero tranquilo          | Algo requiere atención            |
+| **Offline**           | Axi dormido                            | Sin conexión a red                |
 
 #### Integración en el CLI
 
@@ -197,6 +197,7 @@ life --axi-facts
 #### Merchandising y Comunidad
 
 En eventos y conferencias, la comunidad se identifica usando:
+
 - **Gorritos de ajolote rosados/neón** — Distintivo visual inconfundible
 - **Batas de laboratorio** — Como "Biólogos de Sistemas", creando sentido de tribu
 - **Pines/Stickers de Axi** — En diferentes estados (happy, updating, recovering)
@@ -207,13 +208,13 @@ Esto crea un sentido de pertenencia poderoso y divertido alrededor del código a
 
 **Paleta de Colores Oficial:**
 
-| Color | Hex | Uso |
-|-------|-----|-----|
-| Rosa Axi | `#FF6B9D` | Color base, branquias |
+| Color              | Hex       | Uso                          |
+| ------------------ | --------- | ---------------------------- |
+| Rosa Axi           | `#FF6B9D` | Color base, branquias        |
 | Verde Regeneración | `#00D4AA` | Brillos, efectos de recovery |
-| Azul LifeOS | `#3282B8` | Acentos, complementario |
-| Púrpura Profundo | `#1A1A2E` | Fondos, contornos |
-| Blanco Hueso | `#E8E8E8` | Detalles, ojos |
+| Azul LifeOS        | `#3282B8` | Acentos, complementario      |
+| Púrpura Profundo   | `#1A1A2E` | Fondos, contornos            |
+| Blanco Hueso       | `#E8E8E8` | Detalles, ojos               |
 
 **Proporciones del Personaje:**
 
@@ -239,12 +240,14 @@ Esto crea un sentido de pertenencia poderoso y divertido alrededor del código a
 ```
 
 **Estilo Artístico:**
+
 - **Líneas:** Redondeadas, sin esquinas agresivas
 - **Expresiones:** Minimalistas pero claras (◕ ◕ para happy, ◕ ◡ para neutral, ◕︵◕ para worried)
 - **Simplificación:** Máximo 3 colores por variante
 - **Reconocibilidad:** Debe ser identificable en 32x32px (favicon) y 512x512px (sticker)
 
 **Formatos Requeridos:**
+
 - SVG (vectorial, para escalado)
 - PNG 512x512px (stickers, merch)
 - PNG 64x64px (iconos de app)
@@ -253,14 +256,14 @@ Esto crea un sentido de pertenencia poderoso y divertido alrededor del código a
 
 **Variantes de Axi por Canal:**
 
-| Canal | Variante | Notas |
-|-------|----------|-------|
-| Logo principal | Axi Healthy | Fondo transparente |
-| CLI spinner | Axi Updating animado | Frames PNG o caracteres |
-| Error pages | Axi Worried | Con lágrima estilizada |
-| Boot screen | Axi regenerándose | Animación de brillo verde |
-| Notification icon | Solo cabeza de Axi | 22x22px minimal |
-| Swag/Merch | Axi completo con accesorios | Según contexto (casco, anteojos, etc.) |
+| Canal             | Variante                    | Notas                                  |
+| ----------------- | --------------------------- | -------------------------------------- |
+| Logo principal    | Axi Healthy                 | Fondo transparente                     |
+| CLI spinner       | Axi Updating animado        | Frames PNG o caracteres                |
+| Error pages       | Axi Worried                 | Con lágrima estilizada                 |
+| Boot screen       | Axi regenerándose           | Animación de brillo verde              |
+| Notification icon | Solo cabeza de Axi          | 22x22px minimal                        |
+| Swag/Merch        | Axi completo con accesorios | Según contexto (casco, anteojos, etc.) |
 
 ```
 life status          # estado general del sistema
@@ -1227,11 +1230,67 @@ Implementacion concreta:
 
 **Entregable:** release 1.0 con asistente AI multimodal funcional, Computer Use API operativo, y modelo biologico (Soul/Skills/Workplace/Agents) implementado.
 
+### Fase 2.5 (8-14 semanas): Identidad visual y polish de producto
+
+**Objetivo:** cerrar la brecha de percepcion UX frente a Windows/macOS con una experiencia visual coherente, ergonomica y medible en COSMIC.
+
+**Estado:** Planificada (nueva). _Se ejecuta despues del cierre tecnico de Fase 2 y antes de expandir alcance de Fase 3._
+
+**Sistema de diseno y marca (Axi + LifeOS):**
+
+- [ ] Definir design tokens oficiales (color, tipografia, espaciado, radio, sombras, motion) versionados.
+- [ ] Unificar paletas entre temas COSMIC, `life theme` y guias de marca/documentacion.
+- [ ] Consolidar lineamientos de Axi por canal (CLI, applets, onboarding, errores, notificaciones) con variantes 22x22/64x64/512x512/SVG.
+- [ ] Corregir inconsistencias de marca y accesibilidad en assets/documentos existentes.
+
+**UX visual diaria (fatiga baja, sesiones largas):**
+
+- [ ] Perfil visual por defecto "Balanced Comfort" (contraste, brillo percibido, tipografia y animaciones moderadas).
+- [ ] Night Mode desktop completo (no solo CLI), con transiciones suaves y horarios configurables.
+- [ ] Ajuste fino de `life visual-comfort` para Wayland real (evitar falsas expectativas en headless y dejar trazabilidad clara).
+- [ ] Validacion de legibilidad para 4h+ de uso continuo (trabajo, lectura, terminal, navegador, IDE).
+
+**Integracion COSMIC y consistencia de interfaz:**
+
+- [ ] Aplicacion consistente de tema/acento/wallpaper en shell, lock screen, terminal y componentes LifeOS.
+- [ ] Pulido de micro-interacciones (focus states, hover, feedback de comandos, estados de carga/error).
+- [ ] Paquete inicial de wallpapers LifeOS curado para dark/light con calidad uniforme.
+- [ ] Presets UX listos para usuario nuevo: `life theme preset balanced|focus|vivid`.
+
+**Navegador Web por Defecto (Firefox Hardened + uBlock Origin):**
+
+- [ ] Incorporar Firefox nativo (RPM) en la imagen OCI base (`image/Containerfile`).
+- [ ] Implementar politicas empresariales (`/etc/firefox/policies/policies.json`) anulando telemetria, Pocket y notificaciones invasivas.
+- [ ] Forzar pre-instalacion obligatoria de `uBlock Origin` para proteccion local-first out-of-the-box.
+- [ ] Sincronizar UI de Firefox con COSMIC / LifeOS (Wayland nativo, `userChrome.css`, bordes, y acentos).
+
+**Aplicaciones Nativas Esenciales (Imagen Base):**
+
+- [ ] Incorporar `mpv` (RPM) como reproductor de video ultraligero y nativo para Wayland en la imagen OCI.
+- [ ] Incorporar `evince` (RPM) como visor de documentos/PDF estandar, robusto y facil de usar en la imagen OCI.
+- [ ] Incorporar `keepassxc` (RPM) como gestor de contrasenas offline cifrado, alineado con el principio de privacidad local-first.
+
+**Calidad y validacion con usuarios:**
+
+- [ ] Suite de regresion visual (capturas golden por pantalla clave y diffs automatizados).
+- [ ] Auditoria WCAG 2.2 AA real en temas principales con reporte reproducible.
+- [ ] Beta UX con usuarios nuevos de Linux y comparativa contra baseline (primera semana de uso).
+- [ ] Ajustes finales segun datos de friccion (onboarding, descubribilidad, fatiga visual).
+
+**KPIs de salida de Fase 2.5:**
+
+- [ ] 0 violaciones criticas de contraste en pantallas clave.
+- [ ] SUS >= 80 en pruebas con usuarios nuevos.
+- [ ] p95 de apertura de overlay y paneles sin regresion vs Fase 2.
+- [ ] > = 85% de usuarios reportan "comodidad visual" en sesiones >= 3 horas.
+
+**Entregable:** release de UX/branding estable, consistente y medible para uso diario antes de escalar a ecosistema/comunidad.
+
 ### Fase 3 (12-24 meses): Hive Mind gobernado + escala
 
 **Objetivo:** ecosistema sostenible con mejora continua y comunidad.
 
-**Estado:** Pendiente. _Depende de Fase 2 completada. Algunos items tienen dependencias externas marcadas como condicionales._
+**Estado:** Pendiente. _Depende del cierre de Fase 2 (runtime) y Fase 2.5 (UX/identidad). Algunos items tienen dependencias externas marcadas como condicionales._
 
 - [ ] Dedupe global de incidencias + dashboard publico de salud por perfil de hardware.
 
