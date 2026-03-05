@@ -12,6 +12,7 @@ No reemplaza al spec global de LifeOS. Lo complementa con un flujo practico de i
 - operar updates con cadena de confianza.
 
 SOP operativo por fases: `docs/LIFEOS_PHASE_SOP.md`
+Runbook rapido para updates privados en `stable`: `docs/UPDATE_STABLE_PRIVATE_QUICKSTART.md`
 
 ## 2. Fuentes oficiales clave
 

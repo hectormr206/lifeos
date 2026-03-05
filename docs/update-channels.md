@@ -2,6 +2,9 @@
 
 LifeOS uses a multi-channel release system to balance stability with rapid iteration.
 
+If you only need private `stable` updates for your main laptop, use:
+- `docs/UPDATE_STABLE_PRIVATE_QUICKSTART.md`
+
 ## Available Channels
 
 | Channel   | Purpose                | Update Frequency | Stability | Recommended For        |
@@ -95,16 +98,16 @@ All images are published to GitHub Container Registry:
 
 ```bash
 # Pull stable
-podman pull ghcr.io/hectormrm/lifeos:stable
+podman pull ghcr.io/hectormr206/lifeos:stable
 
 # Pull specific version
-podman pull ghcr.io/hectormrm/lifeos:v0.2.0
+podman pull ghcr.io/hectormr206/lifeos:v0.2.0
 
 # Pull candidate
-podman pull ghcr.io/hectormrm/lifeos:candidate
+podman pull ghcr.io/hectormr206/lifeos:candidate
 
 # Pull edge
-podman pull ghcr.io/hectormrm/lifeos:edge
+podman pull ghcr.io/hectormr206/lifeos:edge
 ```
 
 ## Verification
@@ -114,12 +117,12 @@ All images are signed with Cosign. Verify before use:
 ```bash
 # Verify stable image
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/hectormrm/lifeos/*' \
+  --certificate-identity-regexp 'https://github.com/hectormr206/lifeos/*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/hectormrm/lifeos:stable
+  ghcr.io/hectormr206/lifeos:stable
 
 # Verify with public key (if available)
-cosign verify --key cosign.pub ghcr.io/hectormrm/lifeos:stable
+cosign verify --key cosign.pub ghcr.io/hectormr206/lifeos:stable
 ```
 
 ## SBOM (Software Bill of Materials)
@@ -129,7 +132,7 @@ Stable and candidate releases include SBOMs in SPDX format:
 ```bash
 # Download SBOM from GitHub Actions artifacts
 # Or extract from image:
-cosign download sbom ghcr.io/hectormrm/lifeos:stable
+cosign download sbom ghcr.io/hectormr206/lifeos:stable
 ```
 
 ## Channel Configuration File
@@ -228,8 +231,8 @@ If an update causes issues:
 life update rollback
 
 # Switch to previous stable
-podman image tag ghcr.io/hectormrm/lifeos:stable ghcr.io/hectormrm/lifeos:stable-backup
-bootc switch ghcr.io/hectormrm/lifeos:v0.1.0
+podman image tag ghcr.io/hectormr206/lifeos:stable ghcr.io/hectormr206/lifeos:stable-backup
+bootc switch ghcr.io/hectormr206/lifeos:v0.1.0
 ```
 
 ## Security Considerations
@@ -271,5 +274,5 @@ curl -I https://ghcr.io/v2/
 curl -o cosign.pub https://lifeos.io/keys/cosign.pub
 
 # Verify manually
-cosign verify --key cosign.pub ghcr.io/hectormrm/lifeos:stable
+cosign verify --key cosign.pub ghcr.io/hectormr206/lifeos:stable
 ```
