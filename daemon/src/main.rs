@@ -26,6 +26,7 @@ mod experience_modes;
 mod follow_along;
 mod health;
 #[cfg(feature = "ui-overlay")]
+#[allow(dead_code)]
 mod keyboard_shortcut;
 mod lab;
 mod memory_plane;
@@ -33,6 +34,7 @@ mod models;
 mod notifications;
 mod overlay;
 #[cfg(feature = "ui-overlay")]
+#[allow(dead_code)]
 mod overlay_window;
 #[cfg(feature = "dbus")]
 mod permissions;
