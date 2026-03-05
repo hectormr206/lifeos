@@ -24,20 +24,15 @@ const MAX_EVENTS_IN_MEMORY: usize = 1000;
 const MAX_LOG_SIZE_BYTES: u64 = 5 * 1024 * 1024;
 
 /// Telemetry consent level
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum ConsentLevel {
     /// No telemetry collected
     Disabled,
     /// Only critical system health metrics (boot success, crash reports)
+    #[default]
     Minimal,
     /// Full local telemetry (hardware, performance, usage patterns)
     Full,
-}
-
-impl Default for ConsentLevel {
-    fn default() -> Self {
-        ConsentLevel::Minimal
-    }
 }
 
 /// Category of metric event
@@ -292,7 +287,7 @@ impl TelemetryManager {
         debug!(
             "Telemetry event recorded: {} ({})",
             event_name,
-            format!("{:?}", category)
+            format_args!("{:?}", category)
         );
 
         Ok(())

@@ -146,7 +146,7 @@ async fn cmd_run(
 }
 
 async fn cmd_list(limit: usize) -> anyhow::Result<()> {
-    let limit = limit.max(1).min(200);
+    let limit = limit.clamp(1, 200);
     let client = daemon_client::authenticated_client();
     let resp = client
         .get(format!(

@@ -515,10 +515,10 @@ impl ContextPoliciesManager {
             }
 
             // Check running applications (if available)
-            if !profile.trigger_applications.is_empty() {
-                if self.is_app_running(&profile.trigger_applications).await {
-                    score += 30;
-                }
+            if !profile.trigger_applications.is_empty()
+                && self.is_app_running(&profile.trigger_applications).await
+            {
+                score += 30;
             }
 
             // Add to best match

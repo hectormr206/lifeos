@@ -160,9 +160,7 @@ pub async fn start_experiment(
                 StatusCode::BAD_REQUEST,
                 Json(ApiError {
                     error: "Invalid experiment type".to_string(),
-                    message: format!(
-                        "Valid types: config_optimization, service_tuning, power_management, ai_model_selection, security_hardening"
-                    ),
+                    message: "Valid types: config_optimization, service_tuning, power_management, ai_model_selection, security_hardening".to_string(),
                     code: 400,
                 }),
             ))

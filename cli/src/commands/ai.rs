@@ -683,14 +683,13 @@ async fn interactive_chat(model: Option<&str>) -> anyhow::Result<()> {
 
     let model_display = model.unwrap_or("default");
 
-    print!("{}\n", "-".repeat(60).dimmed());
+    println!("{}", "-".repeat(60).dimmed());
     println!(
-        "{}  {}  {}",
+        "{}  {}  Type 'exit' or 'quit' to end",
         "Chat".bold(),
-        format!("Model: {}", model_display).bold().cyan(),
-        "Type 'exit' or 'quit' to end"
+        format!("Model: {}", model_display).bold().cyan()
     );
-    print!("{}\n", "-".repeat(60).dimmed());
+    println!("{}", "-".repeat(60).dimmed());
 
     let client = reqwest::Client::new();
     let mut messages: Vec<serde_json::Value> = vec![];
@@ -795,7 +794,7 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
         println!("  {} Service: {}", "OK".green(), "running".green());
 
         // Health check
-        if let Ok(_) = check_server_health().await {
+        if check_server_health().await.is_ok() {
             println!(
                 "  {} API: responding on {}",
                 "OK".green(),
@@ -1001,7 +1000,7 @@ async fn benchmark_models(
         anyhow::bail!("No models found to benchmark");
     }
 
-    let repeats = repeats.max(1).min(10);
+    let repeats = repeats.clamp(1, 10);
     let prompt = if short {
         "Reply with only: OK"
     } else {
@@ -1532,7 +1531,7 @@ fn resolve_model_url(model: &str) -> (String, String) {
         ),
         _ => {
             // Assume it's a HuggingFace model path
-            let filename = format!("{}.gguf", model.replace('/', "-").replace(':', "-"));
+            let filename = format!("{}.gguf", model.replace(['/', ':'], "-"));
             let url = format!("https://huggingface.co/{}", model);
             (url, filename)
         }

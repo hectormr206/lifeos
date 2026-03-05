@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -476,7 +476,7 @@ impl ExperienceManager {
     }
 
     /// Load current mode from config
-    fn load_current_mode(config_dir: &PathBuf) -> Result<String> {
+    fn load_current_mode(config_dir: &Path) -> Result<String> {
         let mode_file = config_dir.join("current_mode.txt");
 
         if !mode_file.exists() {
@@ -725,7 +725,7 @@ frequency = {}
                 mode1_display: a.display_name.clone(),
                 mode2: b.name.clone(),
                 mode2_display: b.display_name.clone(),
-                differences: Self::get_differences(&a, &b),
+                differences: Self::get_differences(a, b),
             },
             _ => ModeComparison {
                 mode1: mode1.to_string(),

@@ -73,7 +73,7 @@ impl LifeOsPortal {
         let log_dir = Path::new(AUDIT_LOG_FILE)
             .parent()
             .unwrap_or(Path::new("/var/log/lifeos"));
-        if let Err(_) = std::fs::create_dir_all(log_dir) {
+        if std::fs::create_dir_all(log_dir).is_err() {
             return;
         }
 

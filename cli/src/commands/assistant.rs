@@ -57,10 +57,7 @@ async fn cmd_status() -> anyhow::Result<()> {
     };
 
     println!("{}", "Assistant access channels".bold().blue());
-    println!(
-        "  terminal: {}",
-        "life assistant ask \"...\"".cyan().to_string()
-    );
+    println!("  terminal: {}", "life assistant ask \"...\"".cyan());
     println!(
         "  launcher: {} ({})",
         if launcher_ok {
@@ -71,13 +68,12 @@ async fn cmd_status() -> anyhow::Result<()> {
         launcher_path.display()
     );
     println!(
-        "  shortcut: {} ({})",
+        "  shortcut: {} (Super+Space)",
         if shortcut_ok {
             "available".green().to_string()
         } else {
             "unavailable".yellow().to_string()
-        },
-        "Super+Space"
+        }
     );
 
     Ok(())

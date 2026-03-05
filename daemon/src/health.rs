@@ -59,12 +59,10 @@ impl std::fmt::Debug for HealthMonitor {
 
 impl HealthMonitor {
     pub fn new() -> Self {
-        let monitor = Self { checks: Vec::new() };
-
         // Note: Health checks disabled due to async trait complexity
         // Can be re-enabled with proper async_trait implementation
 
-        monitor
+        Self { checks: Vec::new() }
     }
 
     /// Run basic health checks

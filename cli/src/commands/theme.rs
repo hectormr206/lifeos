@@ -235,8 +235,7 @@ async fn show_status() -> anyhow::Result<()> {
 
     // Wallpaper
     println!(
-        "{} {} {}",
-        "🖼️",
+        "🖼️ {} {}",
         "Wallpaper:".bold(),
         shorten_path(&config.wallpaper.desktop).cyan()
     );
@@ -333,7 +332,7 @@ async fn set_variant(variant: VariantCommands) -> anyhow::Result<()> {
 async fn manage_wallpaper(cmd: WallpaperCommands) -> anyhow::Result<()> {
     match cmd {
         WallpaperCommands::Set { path, lock, both } => {
-            println!("{}", format!("🖼️  Setting wallpaper...").bold().blue());
+            println!("{}", "🖼️  Setting wallpaper...".to_string().bold().blue());
 
             let path_expanded = shellexpand::tilde(&path).to_string();
             let path_for_config = path_expanded.clone();
@@ -407,10 +406,17 @@ async fn manage_wallpaper(cmd: WallpaperCommands) -> anyhow::Result<()> {
             );
         }
         WallpaperCommands::Download { url, name } => {
-            println!("{}", format!("⬇️  Downloading wallpaper...").bold().blue());
+            println!(
+                "{}",
+                "⬇️  Downloading wallpaper...".to_string().bold().blue()
+            );
 
-            let filename = name
-                .unwrap_or_else(|| url.split('/').last().unwrap_or("wallpaper.jpg").to_string());
+            let filename = name.unwrap_or_else(|| {
+                url.split('/')
+                    .next_back()
+                    .unwrap_or("wallpaper.jpg")
+                    .to_string()
+            });
 
             let wallpaper_dir = dirs::home_dir()
                 .map(|h| h.join("Pictures/Wallpapers"))
@@ -588,22 +594,17 @@ async fn list_themes() -> anyhow::Result<()> {
     println!();
 
     println!("{}", "Variants:".bold());
-    println!(
-        "  {} {} {}",
-        "✨",
-        "Simple".cyan(),
-        "- Clean, minimal interface"
-    );
+    println!("  ✨ {} - Clean, minimal interface", "Simple".cyan());
     println!("     Optimized for focus and simplicity");
     println!();
-    println!("  {} {} {}", "🚀", "Pro".cyan(), "- Feature-rich interface");
+    println!("  🚀 {} - Feature-rich interface", "Pro".cyan());
     println!("     Advanced tools, panels, and customization");
     println!();
 
     println!("{}", "Modes:".bold());
-    println!("  {} {}", "🌙", "Dark".cyan());
-    println!("  {} {}", "☀️", "Light".cyan());
-    println!("  {} {} (follows system setting)", "🌓", "Auto".cyan());
+    println!("  🌙 {}", "Dark".cyan());
+    println!("  ☀️ {}", "Light".cyan());
+    println!("  🌓 {} (follows system setting)", "Auto".cyan());
     println!();
 
     println!("{}", "Accent Colors:".bold());
@@ -636,35 +637,35 @@ async fn preview_theme(variant: Option<ThemeVariant>) -> anyhow::Result<()> {
     println!();
 
     if variant_str == "simple" {
-        println!("{}", "┌─────────────────────────────────────────┐");
-        println!("{}", "│  ✨ Simple Theme                        │");
-        println!("{}", "│                                         │");
-        println!("{}", "│  ┌──────┐                              │");
-        println!("{}", "│  │ Clean│  Minimal interface           │");
-        println!("{}", "│  │Focus │                              │");
-        println!("{}", "│  └──────┘                              │");
-        println!("{}", "│                                         │");
-        println!("{}", "│  Features:                              │");
-        println!("{}", "│  • Distraction-free workspace           │");
-        println!("{}", "│  • Essential tools only                 │");
-        println!("{}", "│  • Fast and lightweight                 │");
-        println!("{}", "└─────────────────────────────────────────┘");
+        println!("┌─────────────────────────────────────────┐");
+        println!("│  ✨ Simple Theme                        │");
+        println!("│                                         │");
+        println!("│  ┌──────┐                              │");
+        println!("│  │ Clean│  Minimal interface           │");
+        println!("│  │Focus │                              │");
+        println!("│  └──────┘                              │");
+        println!("│                                         │");
+        println!("│  Features:                              │");
+        println!("│  • Distraction-free workspace           │");
+        println!("│  • Essential tools only                 │");
+        println!("│  • Fast and lightweight                 │");
+        println!("└─────────────────────────────────────────┘");
     } else {
-        println!("{}", "┌─────────────────────────────────────────┐");
-        println!("{}", "│  🚀 Pro Theme                           │");
-        println!("{}", "│  ┌────────┬──────────┬────────────────┐ │");
-        println!("{}", "│  │Sidebar │ Workspace│  AI Panel      │ │");
-        println!("{}", "│  │        │          │  ┌──────────┐  │ │");
-        println!("{}", "│  │ Tools  │  Main    │  │ Chat     │  │ │");
-        println!("{}", "│  │ Panels │  Area    │  │ Actions  │  │ │");
-        println!("{}", "│  │        │          │  └──────────┘  │ │");
-        println!("{}", "│  └────────┴──────────┴────────────────┘ │");
-        println!("{}", "│                                         │");
-        println!("{}", "│  Features:                              │");
-        println!("{}", "│  • Advanced panels and sidebars         │");
-        println!("{}", "│  • Integrated AI assistant              │");
-        println!("{}", "│  • Power user tools                     │");
-        println!("{}", "└─────────────────────────────────────────┘");
+        println!("┌─────────────────────────────────────────┐");
+        println!("│  🚀 Pro Theme                           │");
+        println!("│  ┌────────┬──────────┬────────────────┐ │");
+        println!("│  │Sidebar │ Workspace│  AI Panel      │ │");
+        println!("│  │        │          │  ┌──────────┐  │ │");
+        println!("│  │ Tools  │  Main    │  │ Chat     │  │ │");
+        println!("│  │ Panels │  Area    │  │ Actions  │  │ │");
+        println!("│  │        │          │  └──────────┘  │ │");
+        println!("│  └────────┴──────────┴────────────────┘ │");
+        println!("│                                         │");
+        println!("│  Features:                              │");
+        println!("│  • Advanced panels and sidebars         │");
+        println!("│  • Integrated AI assistant              │");
+        println!("│  • Power user tools                     │");
+        println!("└─────────────────────────────────────────┘");
     }
 
     println!();
@@ -774,15 +775,11 @@ async fn apply_mode(dark: bool, follow_system: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn apply_variant(variant: &str) -> anyhow::Result<()> {
+async fn apply_variant(_variant: &str) -> anyhow::Result<()> {
     // Apply variant-specific settings
     // This would integrate with the desktop environment
 
-    let icon_theme = if variant == "simple" {
-        "Adwaita"
-    } else {
-        "Adwaita"
-    };
+    let icon_theme = "Adwaita";
     let _ = std::process::Command::new("gsettings")
         .args([
             "set",
@@ -833,11 +830,7 @@ async fn set_wallpaper_gnome(path: &str, desktop: bool) -> anyhow::Result<()> {
         "org.gnome.desktop.screensaver"
     };
 
-    let key = if desktop {
-        "picture-uri"
-    } else {
-        "picture-uri"
-    };
+    let key = "picture-uri";
     let uri = if path.starts_with("http") {
         path.to_string()
     } else {

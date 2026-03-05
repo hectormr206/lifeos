@@ -1011,14 +1011,13 @@ async fn configure_desktop(state: &FirstBootState) -> anyhow::Result<()> {
 
 async fn setup_lifeos_branding() -> anyhow::Result<()> {
     // Create LifeOS about dialog info
-    let about_info = format!(
-        r#"[LifeOS]
+    let about_info = r#"[LifeOS]
 Name=LifeOS
 Comment=AI-First Linux Distribution
 Version=0.1.0
 Website=https://lifeos.io
 "#
-    );
+    .to_string();
 
     std::fs::create_dir_all("/usr/share/lifeos")?;
     std::fs::write("/usr/share/lifeos/about.ini", about_info)?;

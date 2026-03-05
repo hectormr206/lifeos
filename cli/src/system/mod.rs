@@ -363,10 +363,7 @@ fn create_pre_update_snapshot() -> anyhow::Result<()> {
     let output = Command::new(snapshot_script).arg("pre-update").output()?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "{}",
-            String::from_utf8_lossy(&output.stderr).trim().to_string()
-        );
+        anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

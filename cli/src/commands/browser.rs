@@ -193,7 +193,7 @@ fn cmd_audit(limit: usize) -> anyhow::Result<()> {
     let raw = std::fs::read_to_string(&path)?;
     let mut lines = raw.lines().collect::<Vec<_>>();
     lines.reverse();
-    for line in lines.into_iter().take(limit.max(1).min(500)) {
+    for line in lines.into_iter().take(limit.clamp(1, 500)) {
         println!("  {}", line);
     }
     Ok(())

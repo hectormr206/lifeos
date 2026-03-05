@@ -458,7 +458,7 @@ async fn cmd_log(
     export_path: Option<&str>,
     passphrase: Option<&str>,
 ) -> anyhow::Result<()> {
-    let limit = limit.max(1).min(500);
+    let limit = limit.clamp(1, 500);
     let client = daemon_client::authenticated_client();
     let resp = client
         .get(format!(
@@ -1618,7 +1618,7 @@ async fn cmd_team_runs(limit: usize) -> anyhow::Result<()> {
         .get(format!(
             "{}/api/v1/orchestrator/team-runs?limit={}",
             daemon_url(),
-            limit.max(1).min(200)
+            limit.clamp(1, 200)
         ))
         .send()
         .await;

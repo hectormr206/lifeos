@@ -1255,7 +1255,7 @@ async fn post_system_command(
     Json(request): Json<CommandRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
     // Validate command (only allow safe commands)
-    let allowed_commands = vec!["status", "info", "ping"];
+    let allowed_commands = ["status", "info", "ping"];
 
     if !allowed_commands.contains(&request.command.as_str()) {
         return Err((
@@ -2129,7 +2129,7 @@ async fn get_mode_info(
     State(_state): State<ApiState>,
 ) -> Result<Json<ModeInfoResponse>, (StatusCode, Json<ApiError>)> {
     let mode_param: Option<String> = None;
-    let mode = mode_param.as_ref().map(|s| s.as_str()).unwrap_or("current");
+    let mode = mode_param.as_deref().unwrap_or("current");
     let mgr = ExperienceManager::new(PathBuf::from("/var/lib/lifeos"));
 
     let (mode_name, display_name, description) = if mode == "current" {
@@ -2139,22 +2139,20 @@ async fn get_mode_info(
         } else {
             (current, "Unknown".to_string(), "".to_string())
         }
+    } else if let Some(details) = mgr.get_mode(mode) {
+        (
+            details.name.clone(),
+            details.display_name.clone(),
+            details.description.clone(),
+        )
     } else {
-        if let Some(details) = mgr.get_mode(&mode) {
-            (
-                details.name.clone(),
-                details.display_name.clone(),
-                details.description.clone(),
-            )
-        } else {
-            (mode.to_string(), "Unknown".to_string(), "".to_string())
-        }
+        (mode.to_string(), "Unknown".to_string(), "".to_string())
     };
 
     // Get features
     let features = if mode == "current" {
         mgr.get_current_features().await
-    } else if let Some(mode_details) = mgr.get_mode(&mode) {
+    } else if let Some(mode_details) = mgr.get_mode(mode) {
         mode_details.settings.features.clone()
     } else {
         vec![]
@@ -2176,7 +2174,7 @@ async fn get_mode_info(
             .await
             .map(|d| d.settings.clone())
     } else {
-        mgr.get_mode(&mode).map(|d| d.settings.clone())
+        mgr.get_mode(mode).map(|d| d.settings.clone())
     };
 
     let (ui_complexity, update_channel, ai_enabled, ai_context_size, telemetry_enabled) =
@@ -4243,7 +4241,7 @@ async fn get_intent_log(
     State(state): State<ApiState>,
     Query(query): Query<IntentLogQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let limit = query.limit.unwrap_or(50).max(1).min(500);
+    let limit = query.limit.unwrap_or(50).clamp(1, 500);
     let mgr = state.agent_runtime_manager.read().await;
     let entries = mgr.ledger_entries(limit).await;
     Ok(Json(serde_json::json!({
@@ -4433,7 +4431,7 @@ async fn list_workspace_runs(
     State(state): State<ApiState>,
     Query(query): Query<WorkspaceRunsQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let limit = query.limit.unwrap_or(20).max(1).min(200);
+    let limit = query.limit.unwrap_or(20).clamp(1, 200);
     let mgr = state.agent_runtime_manager.read().await;
     let runs = mgr.list_workspace_runs(limit).await;
     Ok(Json(serde_json::json!({

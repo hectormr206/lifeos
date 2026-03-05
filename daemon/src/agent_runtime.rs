@@ -224,7 +224,7 @@ impl Default for AlwaysOnRuntimeState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SensoryCaptureRuntimeState {
     pub enabled: bool,
     pub audio_enabled: bool,
@@ -234,21 +234,6 @@ pub struct SensoryCaptureRuntimeState {
     pub last_screen_path: Option<String>,
     pub last_transcript_chars: usize,
     pub updated_at: Option<DateTime<Utc>>,
-}
-
-impl Default for SensoryCaptureRuntimeState {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            audio_enabled: false,
-            screen_enabled: false,
-            running: false,
-            last_snapshot_at: None,
-            last_screen_path: None,
-            last_transcript_chars: 0,
-            updated_at: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1058,7 +1043,7 @@ impl AgentRuntimeManager {
             .team_runs
             .iter()
             .rev()
-            .take(limit.max(1).min(200))
+            .take(limit.clamp(1, 200))
             .cloned()
             .collect()
     }
@@ -1609,7 +1594,7 @@ impl AgentRuntimeManager {
         if pin.len() < 4 {
             anyhow::bail!("jarvis pin must be at least 4 characters");
         }
-        if ttl_minutes < 15 || ttl_minutes > 60 {
+        if !(15..=60).contains(&ttl_minutes) {
             anyhow::bail!("jarvis ttl must be between 15 and 60 minutes");
         }
 

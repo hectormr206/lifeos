@@ -110,7 +110,7 @@ fn cmd_revoke(app_id: &str, resource: Option<&str>) -> anyhow::Result<()> {
 }
 
 fn cmd_log(lines: usize) -> anyhow::Result<()> {
-    let lines = lines.max(10).min(1000).to_string();
+    let lines = lines.clamp(10, 1000).to_string();
     let output = Command::new("journalctl")
         .args([
             "-u",

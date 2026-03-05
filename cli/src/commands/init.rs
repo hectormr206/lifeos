@@ -137,9 +137,8 @@ async fn check_system_requirements() {
         }
         _ => {
             println!(
-                "  {} bootc: {}",
-                "✗".red(),
-                "not found (optional for container installs)"
+                "  {} bootc: not found (optional for container installs)",
+                "✗".red()
             );
         }
     }
@@ -151,13 +150,12 @@ async fn check_system_requirements() {
 
     match systemd_check {
         Ok(output) if output.status.success() => {
-            println!("  {} systemd: {}", "✓".green(), "available");
+            println!("  {} systemd: available", "✓".green());
         }
         _ => {
             println!(
-                "  {} systemd: {}",
-                "⚠".yellow(),
-                "not available (some features disabled)"
+                "  {} systemd: not available (some features disabled)",
+                "⚠".yellow()
             );
         }
     }
@@ -174,9 +172,8 @@ async fn check_system_requirements() {
         }
         _ => {
             println!(
-                "  {} podman: {}",
-                "⚠".yellow(),
-                "not found (container features disabled)"
+                "  {} podman: not found (container features disabled)",
+                "⚠".yellow()
             );
         }
     }
@@ -190,7 +187,7 @@ async fn setup_ai() -> anyhow::Result<()> {
 
     match server_check {
         Ok(output) if output.status.success() => {
-            println!("  {} llama-server: {}", "✓".green(), "installed");
+            println!("  {} llama-server: installed", "✓".green());
 
             // Check if llama-server service is running
             let service_check = std::process::Command::new("systemctl")
@@ -199,16 +196,16 @@ async fn setup_ai() -> anyhow::Result<()> {
 
             match service_check {
                 Ok(output) if output.status.success() => {
-                    println!("  {} llama-server service: {}", "✓".green(), "running");
+                    println!("  {} llama-server service: running", "✓".green());
                 }
                 _ => {
-                    println!("  {} llama-server service: {}", "⚠".yellow(), "not running");
+                    println!("  {} llama-server service: not running", "⚠".yellow());
                     println!("    Run {} to start it", "life ai start".cyan());
                 }
             }
         }
         _ => {
-            println!("  {} llama-server: {}", "⚠".yellow(), "not installed");
+            println!("  {} llama-server: not installed", "⚠".yellow());
             println!("    Should be bundled with LifeOS image");
         }
     }
@@ -218,7 +215,7 @@ async fn setup_ai() -> anyhow::Result<()> {
 
     match nvidia_check {
         Ok(output) if output.status.success() => {
-            println!("  {} GPU (NVIDIA): {}", "✓".green(), "available");
+            println!("  {} GPU (NVIDIA): available", "✓".green());
         }
         _ => {
             let amd_check = std::process::Command::new("lspci").output();
@@ -226,12 +223,12 @@ async fn setup_ai() -> anyhow::Result<()> {
             if let Ok(output) = amd_check {
                 let output_str = String::from_utf8_lossy(&output.stdout);
                 if output_str.contains("AMD") && output_str.contains("VGA") {
-                    println!("  {} GPU (AMD): {}", "✓".green(), "available");
+                    println!("  {} GPU (AMD): available", "✓".green());
                 } else {
-                    println!("  {} GPU: {}", "⚠".yellow(), "not detected (CPU-only mode)");
+                    println!("  {} GPU: not detected (CPU-only mode)", "⚠".yellow());
                 }
             } else {
-                println!("  {} GPU: {}", "⚠".yellow(), "not detected (CPU-only mode)");
+                println!("  {} GPU: not detected (CPU-only mode)", "⚠".yellow());
             }
         }
     }

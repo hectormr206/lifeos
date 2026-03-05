@@ -40,6 +40,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libdbus-1-dev \
+            libglib2.0-dev \
+            libgtk-4-dev \
+            libadwaita-1-dev
       
       - name: Cache cargo
         uses: actions/cache@v4
@@ -92,6 +102,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            pkg-config \
+            libdbus-1-dev \
+            libglib2.0-dev \
+            libgtk-4-dev \
+            libadwaita-1-dev \
             qemu-kvm \
             libvirt-daemon-system \
             virtinst \

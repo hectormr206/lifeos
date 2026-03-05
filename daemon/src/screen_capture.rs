@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tokio::fs;
 
@@ -414,7 +414,7 @@ impl ScreenCapture {
     }
 
     /// Get image resolution using identify
-    async fn get_image_resolution(&self, path: &PathBuf) -> Result<(u32, u32)> {
+    async fn get_image_resolution(&self, path: &Path) -> Result<(u32, u32)> {
         if let Ok(output) = Command::new("identify")
             .args(["-format", "%w %h", path.to_str().unwrap()])
             .output()

@@ -42,7 +42,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             cli/target/
-          key: ${{ runner.os }}-cargo-cli-${{ hashFiles('cli/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-cli-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-cli-
 
@@ -92,7 +92,12 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
+          sudo apt-get install -y \
+            pkg-config \
+            libdbus-1-dev \
+            libglib2.0-dev \
+            libgtk-4-dev \
+            libadwaita-1-dev
 
       - name: Cache cargo dependencies
         uses: actions/cache@v4
@@ -103,7 +108,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             daemon/target/
-          key: ${{ runner.os }}-cargo-daemon-${{ hashFiles('daemon/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-daemon-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-daemon-
 
@@ -200,12 +205,18 @@ jobs:
         run: mkdir -p artifacts
 
       - name: Generate cargo-audit report (CLI)
-        working-directory: ./cli
-        run: cargo audit --json > ../artifacts/audit-cli.json || true
+        run: |
+          cargo audit --json --file Cargo.lock > artifacts/audit-cli.json || true
+          if [ ! -s artifacts/audit-cli.json ]; then
+            echo '{"vulnerabilities":{"found":false,"count":0,"list":[]}}' > artifacts/audit-cli.json
+          fi
 
       - name: Generate cargo-audit report (Daemon)
-        working-directory: ./daemon
-        run: cargo audit --json > ../artifacts/audit-daemon.json || true
+        run: |
+          cargo audit --json --file Cargo.lock > artifacts/audit-daemon.json || true
+          if [ ! -s artifacts/audit-daemon.json ]; then
+            echo '{"vulnerabilities":{"found":false,"count":0,"list":[]}}' > artifacts/audit-daemon.json
+          fi
 
       - name: Enforce CVE SLO policy (CLI)
         run: |

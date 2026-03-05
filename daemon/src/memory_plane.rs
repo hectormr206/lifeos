@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -153,9 +153,17 @@ impl MemoryPlaneManager {
         })
     }
 
-    fn open_db(db_path: &PathBuf) -> Result<Connection> {
+    fn open_db(db_path: &Path) -> Result<Connection> {
         unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+            type SqliteAutoExtInit = unsafe extern "C" fn(
+                *mut rusqlite::ffi::sqlite3,
+                *mut *mut i8,
+                *const rusqlite::ffi::sqlite3_api_routines,
+            ) -> i32;
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
+                *const (),
+                SqliteAutoExtInit,
+            >(
                 sqlite_vec::sqlite3_vec_init as *const (),
             )));
         }
@@ -281,7 +289,7 @@ impl MemoryPlaneManager {
         scope: Option<&str>,
         tag: Option<&str>,
     ) -> Result<Vec<MemoryEntry>> {
-        let limit = limit.max(1).min(500);
+        let limit = limit.clamp(1, 500);
         let scope = scope
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty());
@@ -384,7 +392,7 @@ impl MemoryPlaneManager {
         let scope = scope
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty());
-        let limit = limit.max(1).min(100);
+        let limit = limit.clamp(1, 100);
 
         let db_path = self.db_path.clone();
         let ai_manager = self.ai_manager.clone();
@@ -738,7 +746,7 @@ impl MemoryPlaneManager {
     }
 
     pub async fn correlation_graph(&self, limit: usize) -> Result<serde_json::Value> {
-        let limit = limit.max(1).min(1000);
+        let limit = limit.clamp(1, 1000);
         let entries = self.list_entries(limit, None, None).await?;
 
         let mut node_set = BTreeMap::<String, serde_json::Value>::new();

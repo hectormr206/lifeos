@@ -215,7 +215,7 @@ async fn search_apps(query: &str, category: Option<&str>, all: bool) -> anyhow::
     println!();
     println!(
         "Install an app: {}",
-        format!("life store install <app-id>",).cyan()
+        "life store install <app-id>".to_string().cyan()
     );
 
     Ok(())
@@ -506,8 +506,8 @@ async fn list_installed(detailed: bool, _category: Option<&str>) -> anyhow::Resu
                 if parts.len() >= 2 {
                     let name = parts[0];
                     let app_id = parts[1];
-                    let version = parts.get(2).map(|s| *s).unwrap_or("");
-                    let size = parts.get(3).map(|s| *s).unwrap_or("");
+                    let version = parts.get(2).copied().unwrap_or("");
+                    let size = parts.get(3).copied().unwrap_or("");
 
                     if detailed {
                         println!("{}", name.bold());
@@ -828,22 +828,22 @@ async fn get_app_info(app_id: &str) -> anyhow::Result<AppInfo> {
             for line in info.lines() {
                 if line.starts_with("Name:") {
                     name = line
-                        .splitn(2, ':')
-                        .nth(1)
+                        .split_once(':')
+                        .map(|x| x.1)
                         .unwrap_or(&name)
                         .trim()
                         .to_string();
                 } else if line.starts_with("Version:") {
                     version = line
-                        .splitn(2, ':')
-                        .nth(1)
+                        .split_once(':')
+                        .map(|x| x.1)
                         .unwrap_or("unknown")
                         .trim()
                         .to_string();
                 } else if line.starts_with("Installed:") {
                     size = line
-                        .splitn(2, ':')
-                        .nth(1)
+                        .split_once(':')
+                        .map(|x| x.1)
                         .unwrap_or("unknown")
                         .trim()
                         .to_string();

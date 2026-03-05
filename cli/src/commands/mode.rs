@@ -273,10 +273,12 @@ async fn show_features() -> anyhow::Result<()> {
                     .get("enabled")
                     .and_then(|e| e.as_bool())
                     .unwrap_or(false);
-                categories
-                    .entry(category.to_string())
-                    .or_insert_with(Vec::new)
-                    .push((name, display_name, description, enabled));
+                categories.entry(category.to_string()).or_default().push((
+                    name,
+                    display_name,
+                    description,
+                    enabled,
+                ));
             }
         }
     }
@@ -291,9 +293,9 @@ async fn show_features() -> anyhow::Result<()> {
         "Development",
         "Customization",
     ] {
-        if let Some(mode_features) = categories.get(&category.to_string()) {
+        if let Some(mode_features) = categories.get(category) {
             if !mode_features.is_empty() {
-                println!("  {}", format!("{}", category).bold().cyan());
+                println!("  {}", category.bold().cyan());
                 for (_name, display_name, description, enabled) in mode_features.iter() {
                     let status = if *enabled { "✓" } else { "✗" };
                     let colored_desc: colored::ColoredString = if *enabled {

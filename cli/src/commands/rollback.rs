@@ -18,10 +18,7 @@ pub async fn execute() -> anyhow::Result<()> {
                 println!("Rollback target: {}", rollback);
             } else {
                 println!("{}", "⚠️  No rollback target available".yellow());
-                println!(
-                    "{}",
-                    "   The system may not have a previous state to roll back to."
-                );
+                println!("   The system may not have a previous state to roll back to.");
                 return Ok(());
             }
         }

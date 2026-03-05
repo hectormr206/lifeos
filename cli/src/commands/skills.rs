@@ -535,8 +535,8 @@ fn validate_manifest(manifest: &SkillManifest) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn find_installed_skill<'a>(
-    registry: &'a SkillsRegistry,
+fn find_installed_skill(
+    registry: &SkillsRegistry,
     skill_id: &str,
     version: Option<&str>,
 ) -> Option<InstalledSkill> {
