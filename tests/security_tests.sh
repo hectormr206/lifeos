@@ -86,6 +86,23 @@ fi
 
 echo "Bootstrap token generated."
 
+# Wait until the HTTP API is reachable to avoid startup race flakiness.
+readiness_code="000"
+for _ in $(seq 1 50); do
+    readiness_code="$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/api/v1/system/status" || echo "000")"
+    if [[ "${readiness_code}" != "000" ]]; then
+        break
+    fi
+    sleep 0.2
+done
+
+if [[ "${readiness_code}" == "000" ]]; then
+    echo "Daemon HTTP API did not become reachable in time."
+    echo "Daemon logs:"
+    sed -n '1,200p' /tmp/lifeosd-security-tests.log || true
+    exit 1
+fi
+
 # 1) Unauthorized request must be blocked
 code_unauth="$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/api/v1/system/status" || echo "000")"
 assert_http_code "Missing bootstrap token is rejected" "401" "${code_unauth}"
