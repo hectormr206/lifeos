@@ -1338,22 +1338,60 @@ Implementacion concreta:
 
 **Entregable:** ecosistema autosostenible con comunidad activa y marketplace de skills.
 
-### A Futuro (Experimental B2B): Arquitectura Multi-Agente Corporativa (LifeOS Swarm) [EN REVISIÓN]
+### A Futuro (Experimental B2B): Arquitectura Multi-Agente Corporativa (LifeOS Swarm) [RFC EXPERIMENTAL]
 
-**Objetivo:** Explorar la viabilidad de transformar LifeOS en una infraestructura de inteligencia de enjambre (_Swarm Intelligence_) para oficinas y empresas, sin depender de nubes externas.
+**Objetivo:** Evaluar si LifeOS puede operar como plataforma multi-agente empresarial local-first, con control de seguridad y auditoria de grado corporativo.
 
-**Estado:** EXPERIMENTAL / PENDIENTE DE ESTRUCTURACIÓN Y REVISIÓN CON LLMs. No se asigna a una fase consecutiva actual.
+**Estado:** RFC experimental (fuera del compromiso de Fase 2.x y Fase 3). No se implementa en produccion hasta cumplir criterios de salida definidos abajo.
 
-**Conceptos Clave del Enjambre (Swarm):**
+**Correcciones de direccion (para evitar deuda tecnica):**
 
-1. **Escalabilidad del Mesh:** El `Device Mesh` (Fase 3) evoluciona. Las computadoras operativas (Ventas, RRHH, Almacén) se convierten en **nodos periféricos** con IA ligera, comunicándose vía intranet usando tokens criptográficos de `life-id`.
-2. **Jerarquía de Información (RAG Distribuido):**
-   - **Nodos Operativos (Ej. Ventas-PC):** Guardan conocimiento especializado en su base vectorial local (SQLite-vec).
-   - **Nodos Gerenciales:** Tienen delegación para consultar (vía Agent Plane local P2P) los motores vectoriales de los nodos operativos a su cargo para generar reportes en tiempo real.
-   - **Nodo Ejecutivo (Dueño/Dirección):** Perfil con visión global. Su `lifeosd` tiene permiso de lectura resumida a todas las áreas, garantizando observabilidad corporativa total sin que los datos salgan JAMÁS de la intranet a servidores como OpenAI.
-3. **Servidores Dedicados ("Nodos Pesados"):** Instituciones instalan "LifeOS Server" en hardware centralizado (Múltiples GPUs). Los nodos periféricos (laptops de empleados) delegan tareas de alta demanda cognitiva al servidor local transparente al usuario, ahorrando batería y reduciendo costos de hardware por empleado.
-4. **Onboarding Contextual:** El _First-Boot Wizard_ incluye el perfil **"Corporativo / Nodo Mesh"**, donde solicita el archivo `swarm-policy.toml` de TI para asignar el rol, departamento y jefatura de ese equipo, configurando sus permisos en automático.
+1. Cambiar "visibilidad total global" por "acceso minimo por rol y justificacion".
+2. Cambiar "nunca sale de intranet" por "egress externo bloqueado por defecto, habilitable solo por politica explicita y auditable".
+3. Evitar una sola "super jerarquia" fija; usar politicas versionadas (ABAC) para modelar org charts reales que cambian con frecuencia.
 
+**Arquitectura propuesta por planos:**
+
+1. **Identity and Trust Plane:** `life-id` para usuarios, nodos y workloads; rotacion de credenciales; atestacion y revocacion.
+2. **Agent Plane:** protocolo A2A para comunicacion entre agentes (delegacion, handoff, trazabilidad por tarea).
+3. **Tool and Context Plane:** MCP para exponer herramientas/contexto con permisos granulares por agente.
+4. **Data Plane:** memoria local por nodo (vector + estructurada), federacion por consulta y minimizacion de datos por defecto.
+5. **Policy Plane:** motor OPA/Rego con bundles firmados y versionados (`swarm-policy.toml` + artefacto firmado).
+
+**Modelo operativo (Swarm empresarial):**
+
+1. **Nodos operativos (ventas, RRHH, almacen):** agentes ligeros con contexto local y tareas de dominio.
+2. **Nodos de equipo/gerencia:** consolidan reportes por politica, sin lectura irrestricta del contenido fuente.
+3. **Nodos pesados (GPU on-prem):** inferencia y pipelines de alto costo para descargar laptops.
+4. **Nodo de gobierno TI:** emite politicas, controla identidad, define egress y conserva auditoria.
+
+**Seguridad y cumplimiento (baseline minimo):**
+
+1. Zero Trust entre nodos (sin confianza implicita por red local).
+2. ABAC por `tenant`, `team`, `role`, `dataset`, `purpose`, `time-window`.
+3. Firmas de supply chain para politicas y componentes (cosign/in-toto o equivalente).
+4. Trazabilidad end-to-end con OpenTelemetry + logs firmados.
+5. Redaccion automatica de PII/secretos antes de persistencia o export.
+
+**Onboarding corporativo:**
+
+1. El instalador ofrece perfil **Corporativo / Nodo Mesh**.
+2. TI entrega `swarm-policy.toml` firmado y el bootstrap token de inscripcion.
+3. El nodo se registra, recibe rol/politicas y queda operativo con permisos minimos.
+
+**Criterios de salida (de RFC a piloto controlado):**
+
+1. Piloto interno de 10-30 nodos por >= 30 dias sin incidentes criticos de seguridad.
+2. `p95` de delegacion agente-a-agente < 2s en LAN corporativa.
+3. 100% de decisiones de acceso registradas y auditables por request-id.
+4. Egress bloqueado por defecto validado por pruebas negativas y chaos tests de red.
+5. Runbook de incidentes y rollback probado en simulacro.
+
+**No-go (detener avance):**
+
+1. Si no existe modelo de identidad fuerte y revocacion rapida por nodo/workload.
+2. Si la gobernanza depende de permisos "manuales" no versionados.
+3. Si observabilidad y auditoria no permiten reconstruir una accion completa.
 ---
 
 ## 15. KPIs de exito
