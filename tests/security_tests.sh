@@ -48,6 +48,16 @@ assert_http_code() {
     fi
 }
 
+http_code() {
+    local code
+    code="$(curl -s -o /dev/null -w "%{http_code}" "$@" || true)"
+    if [[ "${code}" =~ ^[0-9]{3}$ ]]; then
+        echo "${code}"
+    else
+        echo "000"
+    fi
+}
+
 if [[ ! -x "${DAEMON_BIN}" ]]; then
     echo "Daemon binary not found at ${DAEMON_BIN}"
     echo "Build it first: (cd daemon && cargo build --release)"
@@ -89,7 +99,7 @@ echo "Bootstrap token generated."
 # Wait until the HTTP API is reachable to avoid startup race flakiness.
 readiness_code="000"
 for _ in $(seq 1 50); do
-    readiness_code="$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/api/v1/system/status" || echo "000")"
+    readiness_code="$(http_code "${BASE_URL}/api/v1/system/status")"
     if [[ "${readiness_code}" != "000" ]]; then
         break
     fi
@@ -104,33 +114,33 @@ if [[ "${readiness_code}" == "000" ]]; then
 fi
 
 # 1) Unauthorized request must be blocked
-code_unauth="$(curl -s -o /dev/null -w "%{http_code}" "${BASE_URL}/api/v1/system/status" || echo "000")"
+code_unauth="$(http_code "${BASE_URL}/api/v1/system/status")"
 assert_http_code "Missing bootstrap token is rejected" "401" "${code_unauth}"
 
 # 2) Wrong token must be blocked
-code_wrong="$(curl -s -o /dev/null -w "%{http_code}" -H "x-bootstrap-token: wrong" "${BASE_URL}/api/v1/system/status" || echo "000")"
+code_wrong="$(http_code -H "x-bootstrap-token: wrong" "${BASE_URL}/api/v1/system/status")"
 assert_http_code "Invalid bootstrap token is rejected" "401" "${code_wrong}"
 
 # 3) Correct token grants access
-code_ok="$(curl -s -o /dev/null -w "%{http_code}" -H "x-bootstrap-token: ${BOOTSTRAP_TOKEN}" "${BASE_URL}/api/v1/system/status" || echo "000")"
+code_ok="$(http_code -H "x-bootstrap-token: ${BOOTSTRAP_TOKEN}" "${BASE_URL}/api/v1/system/status")"
 assert_http_code "Valid bootstrap token grants access" "200" "${code_ok}"
 
 # 4) Path traversal style command injection is rejected by allowlist
 payload='{"command":"../../../../etc/shadow","args":[]}'
-code_path="$(curl -s -o /dev/null -w "%{http_code}" \
+code_path="$(http_code \
     -X POST "${BASE_URL}/api/v1/system/command" \
     -H "Content-Type: application/json" \
     -H "x-bootstrap-token: ${BOOTSTRAP_TOKEN}" \
-    -d "${payload}" || echo "000")"
+    -d "${payload}")"
 assert_http_code "Path traversal command is blocked" "403" "${code_path}"
 
 # 5) AI endpoint fails closed when AI service is offline
 chat_payload='{"message":"hello","stream":false}'
-code_ai="$(curl -s -o /dev/null -w "%{http_code}" \
+code_ai="$(http_code \
     -X POST "${BASE_URL}/api/v1/ai/chat" \
     -H "Content-Type: application/json" \
     -H "x-bootstrap-token: ${BOOTSTRAP_TOKEN}" \
-    -d "${chat_payload}" || echo "000")"
+    -d "${chat_payload}")"
 if [[ "${code_ai}" == "503" || "${code_ai}" == "502" ]]; then
     pass "AI chat endpoint fails safely when backend is unavailable (HTTP ${code_ai})"
 else
