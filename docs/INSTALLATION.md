@@ -116,10 +116,20 @@ Using Rufus:
 
 The guided installer will:
 1. Detect your hardware
-2. Set up disk partitions (BTRFS)
-3. Install the base system
-4. Configure user account
-5. Install bootloader
+2. Ask you to select the destination disk explicitly
+3. Set up disk partitions (BTRFS)
+4. Install the base system
+5. Configure user account
+6. Install bootloader
+
+By default, the generated Phase 2 ISO uses interactive installer mode to avoid automatic disk wipes.
+For automated lab/CI installs only, build the ISO with:
+
+```bash
+LIFEOS_INSTALL_MODE=unattended sudo bash scripts/generate-iso-simple.sh --type iso
+```
+
+`unattended` mode can repartition disks automatically.
 
 #### Advanced Options
 
@@ -128,9 +138,6 @@ Press `Tab` at the boot menu to add kernel parameters:
 ```
 # Disable secure boot workaround
 inst.nosb
-
-# Use specific disk
-inst.disk=/dev/nvme0n1
 
 # Disable GUI (text mode)
 inst.text

@@ -189,6 +189,11 @@ echo
 echo -e "  ${BOLD}Siguiente paso:${NC}"
 echo -e "  1. Crear VM en VirtualBox (Fedora 64-bit, 4GB RAM, 40GB disco, EFI)"
 echo -e "  2. Montar el ISO como unidad óptica"
-echo -e "  3. Instalar (usuario: ${CYAN}lifeos${NC} / password: ${CYAN}lifeos${NC})"
+if [[ "${LIFEOS_INSTALL_MODE:-interactive}" == "interactive" ]]; then
+    echo -e "  3. En Anaconda, seleccionar disco destino e instalar"
+else
+    echo -e "  3. Instalar (modo unattended: particionado automático)"
+fi
+echo -e "     (usuario: ${CYAN}lifeos${NC} / password: ${CYAN}lifeos${NC})"
 echo -e "  4. Después de instalar, verificar con: ${CYAN}sudo life check${NC}"
 echo

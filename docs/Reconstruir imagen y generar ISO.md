@@ -14,6 +14,12 @@ sudo bash scripts/build-iso.sh
 #   output/build-iso.log
 #   (se sobreescribe en cada ejecucion, igual que la imagen/ISO latest)
 
+# Nota importante (seguridad de disco):
+#   - Modo default: LIFEOS_INSTALL_MODE=interactive
+#     El instalador pide seleccionar el disco destino en Anaconda.
+#   - Modo CI/lab: LIFEOS_INSTALL_MODE=unattended
+#     Puede particionar automaticamente y sobrescribir disco.
+
 ## Pasos manuales (si se necesita correr por separado)
 
 # 0. Limpiar
@@ -28,10 +34,13 @@ podman run --rm localhost/lifeos:latest cat /usr/lib/os-release | grep ^ID=
 # 3. Generar ISO
 chmod +x scripts/generate-iso-simple.sh && sudo bash scripts/generate-iso-simple.sh --type iso --image localhost/lifeos:latest
 
+# (Opcional CI/lab) instalacion automatica potencialmente destructiva:
+# LIFEOS_INSTALL_MODE=unattended sudo bash scripts/generate-iso-simple.sh --type iso --image localhost/lifeos:latest
+
 ## Instalar en VirtualBox
 
 # Crear VM: Fedora 64-bit, 4GB RAM, 40GB disco, EFI habilitado
-# Montar ISO como unidad optica, arrancar e instalar
+# Montar ISO como unidad optica, arrancar y en Anaconda seleccionar disco destino
 # Usuario: lifeos / Password: lifeos
 
 ## Verificacion post-instalacion (un solo comando)

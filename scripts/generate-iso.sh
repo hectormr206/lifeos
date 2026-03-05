@@ -28,6 +28,7 @@ ISO_VERSION="${LIFEOS_VERSION:-$(date +%Y%m%d)}"
 TARGET_ARCH="${LIFEOS_ARCH:-x86_64}"
 BUILD_TYPE="${LIFEOS_BUILD_TYPE:-iso}"  # iso, raw, qcow2, vmdk
 ROOTFS_SIZE="${LIFEOS_ROOTFS_SIZE:-20}"
+INSTALL_MODE="${LIFEOS_INSTALL_MODE:-interactive}" # interactive (safe) | unattended (CI/lab)
 
 # Show help
 show_help() {
@@ -47,6 +48,8 @@ OPTIONS:
     -a, --arch ARCH         Target architecture: x86_64, aarch64 (default: $TARGET_ARCH)
     -t, --type TYPE         Build type: iso, raw, qcow2, vmdk (default: $BUILD_TYPE)
     -s, --size SIZE         Root filesystem size in GB (default: $ROOTFS_SIZE)
+    -m, --install-mode MODE Installer mode for ISO: interactive (default, disk selection)
+                           or unattended (automatic partitioning)
     --local                 Use local podman image instead of pulling
     --no-verify             Skip image verification
     --vm-test               Test the generated ISO in a VM
@@ -69,6 +72,7 @@ ENVIRONMENT:
     LIFEOS_IMAGE            Default container image
     LIFEOS_OUTPUT           Default output directory
     LIFEOS_VERSION          Default version string
+    LIFEOS_INSTALL_MODE     interactive (default) or unattended
 EOF
 }
 
@@ -121,6 +125,10 @@ parse_args() {
                 ;;
             -s|--size)
                 ROOTFS_SIZE="$2"
+                shift 2
+                ;;
+            -m|--install-mode)
+                INSTALL_MODE="$2"
                 shift 2
                 ;;
             --local)
@@ -236,7 +244,34 @@ generate_iso() {
     local iso_publisher="${LIFEOS_ISO_PUBLISHER:-LIFEOS}"
 
     # Escribir la configuración a un archivo temporal local
-    local tmp_config=$(mktemp config-XXXXXX.json)
+    local tmp_config
+    local config_target
+    if [[ "$BUILD_TYPE" == "iso" && "$INSTALL_MODE" == "interactive" ]]; then
+    tmp_config=$(mktemp config-XXXXXX.toml)
+    config_target="/config.toml"
+    cat << CONFIG > "$tmp_config"
+[customizations.installer.kickstart]
+contents = """
+graphical
+interactive
+lang en_US.UTF-8
+keyboard us
+timezone UTC --utc
+network --bootproto=dhcp --device=link --activate --onboot=on
+rootpw --lock
+user --name=lifeos --password=${pass_hash} --iscrypted --groups=wheel
+bootloader --append="quiet rhgb"
+reboot
+"""
+
+[customizations.iso]
+volume_id = "${iso_volume_id}"
+application_id = "${iso_application_id}"
+publisher = "${iso_publisher}"
+CONFIG
+    else
+    tmp_config=$(mktemp config-XXXXXX.json)
+    config_target="/config.json"
     if [[ "$BUILD_TYPE" == "iso" ]]; then
     cat << CONFIG > "$tmp_config"
 {
@@ -289,6 +324,7 @@ CONFIG
 }
 CONFIG
     fi
+    fi
 
     # Run bootc-image-builder
     echo "Running bootc-image-builder..."
@@ -299,10 +335,10 @@ CONFIG
         --security-opt label=type:unconfined_t \
         -v "$(pwd)/$OUTPUT_DIR:/output" \
         -v /var/lib/containers/storage:/var/lib/containers/storage \
-        -v "$(pwd)/$tmp_config:/config.json:ro" \
+        -v "$(pwd)/$tmp_config:$config_target:ro" \
         "$bib_image" \
         "${bib_opts[@]}" \
-        "--config" "/config.json" \
+        "--config" "$config_target" \
         "$IMAGE_TAG"; then
         rm -f "$tmp_config"
         exit 1
@@ -432,6 +468,7 @@ create_metadata() {
   "version": "$ISO_VERSION",
   "architecture": "$TARGET_ARCH",
   "type": "$BUILD_TYPE",
+  "install_mode": "$INSTALL_MODE",
   "image": "$IMAGE_TAG",
   "image_digest": "$image_digest",
   "generated_at": "$(date -Iseconds)",
@@ -466,6 +503,13 @@ main() {
     
     parse_args "$@"
     resolve_image_tag
+    case "$INSTALL_MODE" in
+        interactive|unattended) ;;
+        *)
+            echo -e "${RED}Error: invalid install mode '$INSTALL_MODE'. Use interactive or unattended.${NC}"
+            exit 1
+            ;;
+    esac
     
     echo "Configuration:"
     echo "  Image:      $IMAGE_TAG"
@@ -475,6 +519,7 @@ main() {
     echo "  Arch:       $TARGET_ARCH"
     echo "  Type:       $BUILD_TYPE"
     echo "  RootFS:     ${ROOTFS_SIZE}GB"
+    echo "  Install:    $INSTALL_MODE"
     echo
     
     check_prerequisites
@@ -500,6 +545,11 @@ main() {
         iso)
             echo "  For USB:        sudo dd if=${OUTPUT_DIR}/${ISO_NAME}-${ISO_VERSION}-${TARGET_ARCH}.iso of=/dev/sdX bs=4M status=progress"
             echo "  For VirtualBox: Create VM (Fedora 64-bit, 4GB RAM, 40GB disk) and mount the ISO"
+            if [[ "$INSTALL_MODE" == "interactive" ]]; then
+                echo "  In installer:   Select the destination disk manually"
+            else
+                echo "  Warning:        unattended mode may overwrite disk layout automatically"
+            fi
             ;;
         vmdk)
             echo "  For VirtualBox: Create VM and attach the .vmdk as existing disk"

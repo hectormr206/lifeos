@@ -86,6 +86,13 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+          df -h
       
       - name: Set build metadata
         id: meta-build

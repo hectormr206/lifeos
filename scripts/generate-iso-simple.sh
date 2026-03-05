@@ -8,6 +8,7 @@
 #   ./scripts/generate-iso-simple.sh              # Genera ISO (default)
 #   ./scripts/generate-iso-simple.sh --type vmdk  # Genera VMDK para VirtualBox
 #   ./scripts/generate-iso-simple.sh --type qcow2 # Genera QCOW2 para QEMU/KVM
+#   ./scripts/generate-iso-simple.sh --install-mode unattended  # Solo CI/lab
 #
 # Requisitos:
 #   - Podman instalado (sudo apt install podman  o  sudo dnf install podman)
@@ -25,6 +26,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT_DIR="${LIFEOS_OUTPUT_DIR:-${PROJECT_ROOT}/output}"
 IMAGE_NAME="localhost/lifeos:latest"
 BUILD_TYPE="${1:-iso}"
+INSTALL_MODE="${LIFEOS_INSTALL_MODE:-interactive}" # interactive (safe) | unattended (CI/lab)
 BIB_IMAGE="quay.io/centos-bootc/bootc-image-builder:latest"
 BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 VCS_REF="${VCS_REF:-$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
@@ -47,12 +49,15 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --type|-t)  BUILD_TYPE="$2"; shift 2 ;;
         --image|-i) IMAGE_NAME="$2"; shift 2 ;;
+        --install-mode|-m) INSTALL_MODE="$2"; shift 2 ;;
         --help|-h)
-            echo "Uso: $0 [--type iso|vmdk|qcow2|raw] [--image IMAGE]"
+            echo "Uso: $0 [--type iso|vmdk|qcow2|raw] [--image IMAGE] [--install-mode interactive|unattended]"
             echo ""
             echo "Opciones:"
-            echo "  --type TYPE    Formato de salida: iso (default), vmdk, qcow2, raw"
-            echo "  --image IMAGE  Imagen OCI a usar (default: localhost/lifeos:latest)"
+            echo "  --type TYPE           Formato de salida: iso (default), vmdk, qcow2, raw"
+            echo "  --image IMAGE         Imagen OCI a usar (default: localhost/lifeos:latest)"
+            echo "  --install-mode MODE   Modo instalador ISO: interactive (default, seleccion manual de disco)"
+            echo "                        o unattended (auto, puede borrar disco completo)"
             exit 0
             ;;
         *) shift ;;
@@ -94,6 +99,11 @@ fi
 case "$BUILD_TYPE" in
     iso|vmdk|qcow2|raw) ;;
     *) error "Tipo de build inválido: $BUILD_TYPE. Usa: iso, vmdk, qcow2 o raw" ;;
+esac
+
+case "$INSTALL_MODE" in
+    interactive|unattended) ;;
+    *) error "Modo de instalación inválido: $INSTALL_MODE. Usa: interactive o unattended" ;;
 esac
 
 # Opciones de etiqueta para medio ISO (solo aplican cuando BUILD_TYPE=iso)
@@ -172,7 +182,31 @@ PASS_HASH=$(python3 -c "import crypt; print(crypt.crypt('lifeos', crypt.mksalt(c
             openssl passwd -6 lifeos)
 
 CONFIG_FILE="$OUTPUT_DIR/config.json"
-if [[ "$BUILD_TYPE" == "iso" ]]; then
+CONFIG_TARGET="/config.json"
+if [[ "$BUILD_TYPE" == "iso" && "$INSTALL_MODE" == "interactive" ]]; then
+CONFIG_FILE="$OUTPUT_DIR/config.toml"
+CONFIG_TARGET="/config.toml"
+cat > "$CONFIG_FILE" << CONFIGEOF
+[customizations.installer.kickstart]
+contents = """
+graphical
+interactive
+lang en_US.UTF-8
+keyboard us
+timezone UTC --utc
+network --bootproto=dhcp --device=link --activate --onboot=on
+rootpw --lock
+user --name=lifeos --password=${PASS_HASH} --iscrypted --groups=wheel
+bootloader --append="quiet rhgb"
+reboot
+"""
+
+[customizations.iso]
+volume_id = "${ISO_VOLUME_ID}"
+application_id = "${ISO_APPLICATION_ID}"
+publisher = "${ISO_PUBLISHER}"
+CONFIGEOF
+elif [[ "$BUILD_TYPE" == "iso" ]]; then
 cat > "$CONFIG_FILE" << CONFIGEOF
 {
   "blueprint": {
@@ -220,6 +254,10 @@ fi
 success "Configuración generada"
 echo "  Usuario: lifeos"
 echo "  Password: lifeos"
+echo "  Install mode: $INSTALL_MODE"
+if [[ "$BUILD_TYPE" == "iso" && "$INSTALL_MODE" == "interactive" ]]; then
+    echo "  Disco destino: seleccion manual en Anaconda"
+fi
 
 # --- Paso 3: Generar imagen con bootc-image-builder ---
 log "Generando imagen ${BUILD_TYPE}..."
@@ -231,8 +269,9 @@ rm -rf "$OUTPUT_DIR/bootiso" "$OUTPUT_DIR/image"
 rm -f "$OUTPUT_DIR/disk.raw" "$OUTPUT_DIR/disk.qcow2" "$OUTPUT_DIR/disk.vmdk"
 
 # bootc-image-builder usa --type anaconda-iso para generar ISOs instalables.
-# Esto produce un ISO con Anaconda + kickstart automatizado que escribe la imagen
-# bootc al disco. No usar bootc-installer/--in-vm (experimental, rompe Anaconda).
+# En modo interactive el usuario selecciona manualmente el disco destino.
+# En modo unattended Anaconda usa kickstart automático (potencialmente destructivo).
+# No usar bootc-installer/--in-vm (experimental, rompe Anaconda).
 BIB_TYPE="$BUILD_TYPE"
 BIB_EXTRA_ARGS=()
 if [[ "$BUILD_TYPE" == "iso" ]]; then
@@ -250,7 +289,7 @@ PODMAN_RUN_ARGS=(
     -v
     "$CONTAINERS_STORAGE:/var/lib/containers/storage"
     -v
-    "$CONFIG_FILE:/config.json:ro"
+    "$CONFIG_FILE:$CONFIG_TARGET:ro"
 )
 
 podman run \
@@ -259,7 +298,7 @@ podman run \
     --type "$BIB_TYPE" \
     --rootfs btrfs \
     "${BIB_EXTRA_ARGS[@]}" \
-    --config /config.json \
+    --config "$CONFIG_TARGET" \
     "$IMAGE_NAME"
 
 # --- Paso 4: Renombrar y verificar output ---
@@ -329,7 +368,11 @@ case "$BUILD_TYPE" in
         echo -e "${YELLOW}Para usar en VirtualBox:${NC}"
         echo "  1. Crear nueva VM (Fedora 64-bit, 4GB RAM, 40GB disco)"
         echo "  2. Montar el ISO como unidad óptica"
-        echo "  3. Arrancar e instalar"
+        if [[ "$INSTALL_MODE" == "interactive" ]]; then
+            echo "  3. Arrancar, elegir disco destino en Anaconda y continuar instalación"
+        else
+            echo "  3. Arrancar e instalar (modo unattended: auto-particionado)"
+        fi
         echo ""
         echo -e "${YELLOW}Para copiar a Windows:${NC}"
         echo "  cp $FINAL_FILE /mnt/c/Users/\$USER/Downloads/"
@@ -351,6 +394,9 @@ esac
 
 echo ""
 echo "  Usuario: lifeos / Password: lifeos"
+if [[ "$BUILD_TYPE" == "iso" && "$INSTALL_MODE" == "unattended" ]]; then
+    warn "Modo unattended puede sobrescribir discos sin pedir confirmación."
+fi
 echo "  Baseline de seguridad: Secure Boot + LUKS2 se validan en runtime"
 echo "  (solo para laboratorio: crear /etc/lifeos/allow-insecure-platform para bypass)"
 echo ""

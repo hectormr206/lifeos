@@ -131,21 +131,23 @@ jobs:
           bash scripts/generate-iso-simple.sh
         env:
           CI: true
+          LIFEOS_INSTALL_MODE: unattended
+          LIFEOS_OUTPUT_DIR: ${{ github.workspace }}/output
       
       - name: Verify ISO exists
         run: |
-          if [ ! -f "build/lifeos.iso" ]; then
-            echo "ISO not found at build/lifeos.iso"
-            ls -la build/ || echo "build directory doesn't exist"
+          if [ ! -f "output/lifeos-latest.iso" ]; then
+            echo "ISO not found at output/lifeos-latest.iso"
+            ls -la output/ || echo "output directory doesn't exist"
             exit 1
           fi
-          ls -lh build/lifeos.iso
+          ls -lh output/lifeos-latest.iso
       
       - name: Run bootc upgrade/rollback test
         run: |
           chmod +x tests/e2e/test_bootc_upgrade_rollback.sh
           ./tests/e2e/test_bootc_upgrade_rollback.sh \
-            --iso build/lifeos.iso \
+            --iso output/lifeos-latest.iso \
             --verbose
         timeout-minutes: 45
         continue-on-error: true
