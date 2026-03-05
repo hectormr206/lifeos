@@ -64,14 +64,37 @@ jobs:
 
       - name: Sign image with Cosign (KMS/keyless)
         if: github.event_name != 'pull_request'
+        env:
+          IMAGE_DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          if [ -z "$IMAGE_DIGEST" ]; then
+            echo "Build digest is empty; refusing to sign by tag."
+            exit 1
+          fi
+
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${IMAGE_DIGEST}"
           KMS_KEY_URI="${{ secrets.COSIGN_KMS_KEY_URI }}"
 
           if [ -n "$KMS_KEY_URI" ]; then
-            echo "Signing image with KMS key: $KMS_KEY_URI"
+            echo "Signing image digest with KMS key: $KMS_KEY_URI"
             cosign sign --yes --key "$KMS_KEY_URI" "$IMAGE"
           else
             echo "COSIGN_KMS_KEY_URI not configured; using keyless OIDC signing"
             cosign sign --yes "$IMAGE"
           fi
+
+      - name: Verify image signature
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE_DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          if [ -z "$IMAGE_DIGEST" ]; then
+            echo "Build digest is empty; cannot verify signature."
+            exit 1
+          fi
+
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${IMAGE_DIGEST}"
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/${{ github.repository }}/*" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE"
