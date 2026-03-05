@@ -8,34 +8,31 @@
 //!
 //! Uses GTK4 (Libadwaita) compatible with COSMIC desktop.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use glib::clone;
 use gtk::gdk;
 use gtk4::{self as gtk, prelude::*};
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::RwLock;
 
-use crate::overlay::{
-    ChatMessage, ChatRole, OverlayConfig, OverlayState, OverlayTheme, WindowPosition,
-};
+use crate::overlay::{ChatMessage, ChatRole, OverlayConfig, OverlayState, OverlayTheme};
 
 /// GTK4 Overlay Window Manager
 pub struct OverlayWindow {
-    app: gtk::Application,
+    _app: gtk::Application,
     window: gtk::ApplicationWindow,
-    overlay_box: gtk::Box,
+    _overlay_box: gtk::Box,
     chat_scrolled: gtk::ScrolledWindow,
     chat_box: gtk::Box,
-    input_box: gtk::Box,
+    _input_box: gtk::Box,
     input_entry: gtk::Entry,
     send_button: gtk::Button,
     screenshot_button: gtk::Button,
     clear_button: gtk::Button,
-    config: OverlayConfig,
+    _config: OverlayConfig,
     state: Arc<RwLock<OverlayState>>,
-    screenshot_path: std::path::PathBuf,
+    _screenshot_path: std::path::PathBuf,
 }
 
 impl OverlayWindow {
@@ -53,11 +50,7 @@ impl OverlayWindow {
             .default_height(400)
             .resizable(true)
             .decorated(false) // No window decorations for overlay feel
-            .build()?;
-
-        // Set window as always on top (layer-shell would be better)
-        window.set_skip_taskbar_hint(true);
-        window.set_skip_pager_hint(true);
+            .build();
 
         // Create main container
         let overlay_box = gtk::Box::builder()
@@ -96,18 +89,14 @@ impl OverlayWindow {
 
         let send_button = gtk::Button::builder()
             .label("Send")
-            .css_classes(&["suggested-action"])
+            .css_classes(["suggested-action"])
             .build();
 
-        let screenshot_button = gtk::Button::builder()
-            .label("📷 Screen")
-            .tooltip("Capture and include screen context")
-            .build();
+        let screenshot_button = gtk::Button::builder().label("📷 Screen").build();
+        screenshot_button.set_tooltip_text(Some("Capture and include screen context"));
 
-        let clear_button = gtk::Button::builder()
-            .label("🗑 Clear")
-            .tooltip("Clear chat history")
-            .build();
+        let clear_button = gtk::Button::builder().label("🗑 Clear").build();
+        clear_button.set_tooltip_text(Some("Clear chat history"));
 
         input_box.append(&input_entry);
         input_box.append(&send_button);
@@ -126,7 +115,7 @@ impl OverlayWindow {
             .label("Ready")
             .halign(gtk::Align::Start)
             .margin_bottom(10)
-            .css_classes(&["status-label"])
+            .css_classes(["status-label"])
             .build();
 
         // Assemble UI
@@ -144,62 +133,25 @@ impl OverlayWindow {
         Self::apply_theme(&overlay_box, &config.theme);
 
         Ok(Self {
-            app,
+            _app: app,
             window,
-            overlay_box,
+            _overlay_box: overlay_box,
             chat_scrolled,
             chat_box,
-            input_box,
+            _input_box: input_box,
             input_entry,
             send_button,
             screenshot_button,
             clear_button,
-            config,
+            _config: config,
             state,
-            screenshot_path: screenshot_dir,
+            _screenshot_path: screenshot_dir,
         })
     }
 
     /// Setup window position
-    fn setup_window_position(window: &gtk::ApplicationWindow, config: &OverlayConfig) {
-        let display = match gdk::Display::default() {
-            Some(d) => d,
-            None => return,
-        };
-
-        let monitor = match display.default_monitor() {
-            Some(m) => m,
-            None => return,
-        };
-
-        let geometry = monitor.geometry();
-
-        let (x, y) = match &config.default_position {
-            WindowPosition::Center => {
-                let width = window.width();
-                let height = window.height();
-                let x = geometry.x() + (geometry.width() - width) / 2;
-                let y = geometry.y() + (geometry.height() - height) / 2;
-                (x.max(0) as i32, y.max(0) as i32)
-            }
-            WindowPosition::TopRight => {
-                let width = window.width();
-                let x = geometry.x() + geometry.width() - width - 20;
-                (x.max(0) as i32, 50)
-            }
-            WindowPosition::TopLeft => (50, 50),
-            WindowPosition::BottomRight => {
-                let width = window.width();
-                let height = window.height();
-                let x = geometry.x() + geometry.width() - width - 20;
-                let y = geometry.y() + geometry.height() - height - 20;
-                (x.max(0) as i32, y.max(0) as i32)
-            }
-            WindowPosition::BottomLeft => (50, geometry.y() + geometry.height() - height - 20),
-            WindowPosition::Custom { x, y } => (*x, *y),
-        };
-
-        window.set_default_size(window.width(), window.height());
+    fn setup_window_position(window: &gtk::ApplicationWindow, _config: &OverlayConfig) {
+        window.set_default_size(600, 400);
     }
 
     /// Apply theme to overlay
@@ -314,9 +266,7 @@ impl OverlayWindow {
         };
 
         let provider = gtk::CssProvider::new();
-        if let Err(e) = provider.load_from_data(css) {
-            warn!("Failed to load CSS: {}", e);
-        }
+        provider.load_from_data(css);
         overlay_box
             .style_context()
             .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_USER);
@@ -328,11 +278,9 @@ impl OverlayWindow {
         self.window.present();
         self.window.grab_focus();
 
-        // Mark as visible in state
-        tokio::spawn(async move {
-            let mut state = self.state.write().await;
+        if let Ok(mut state) = self.state.try_write() {
             state.visible = true;
-        });
+        }
     }
 
     /// Hide overlay window
@@ -340,11 +288,9 @@ impl OverlayWindow {
         debug!("Hiding overlay window");
         self.window.hide();
 
-        // Mark as hidden in state
-        tokio::spawn(async move {
-            let mut state = self.state.write().await;
+        if let Ok(mut state) = self.state.try_write() {
             state.visible = false;
-        });
+        }
     }
 
     /// Toggle visibility
@@ -378,19 +324,20 @@ impl OverlayWindow {
 
         let role_text = gtk::Label::builder()
             .label(format!("<b>{}</b>", role_label))
-            .css_classes(match message.role {
-                ChatRole::User => &["role-label", "role-user"],
-                ChatRole::Assistant => &["role-label", "role-assistant"],
-                ChatRole::System => &["role-label"],
-            })
             .build();
         role_text.set_use_markup(true);
+        role_text.add_css_class("role-label");
+        match message.role {
+            ChatRole::User => role_text.add_css_class("role-user"),
+            ChatRole::Assistant => role_text.add_css_class("role-assistant"),
+            ChatRole::System => {}
+        }
 
         let content_text = gtk::Label::builder()
             .label(&message.content)
-            .wrap_mode(gtk::WrapMode::Word)
+            .wrap_mode(gtk::pango::WrapMode::Word)
             .halign(gtk::Align::Start)
-            .css_classes(&["message-content"])
+            .css_classes(["message-content"])
             .build();
 
         message_box.append(&role_text);
@@ -398,7 +345,8 @@ impl OverlayWindow {
 
         // Add separator
         if message.role == ChatRole::User {
-            let separator = gtk::Separator::builder(gtk::Orientation::Horizontal).build();
+            let separator = gtk::Separator::builder().build();
+            separator.set_orientation(gtk::Orientation::Horizontal);
             self.chat_box.append(&separator);
         }
 
@@ -418,12 +366,8 @@ impl OverlayWindow {
     }
 
     /// Update status label
-    pub fn set_status(&self, status: &str, status_type: &str) {
-        if let Some(status_widget) = self.chat_box.last_child() {
-            // Status label should be the second from last
-            // For simplicity, just log it
-            info!("Status: {}", status);
-        }
+    pub fn set_status(&self, status: &str, _status_type: &str) {
+        info!("Status: {}", status);
     }
 
     /// Set loading state
@@ -457,28 +401,23 @@ impl OverlayWindow {
         // Send button
         let state = self.state.clone();
         let input_entry = self.input_entry.clone();
-        let screenshot_path = self.screenshot_path.clone();
 
         self.send_button.connect_clicked(clone!(
             #[strong]
             state,
             #[strong]
             input_entry,
-            #[strong]
-            screenshot_path,
             move |_| {
                 let message = input_entry.text().to_string();
                 if !message.is_empty() {
                     input_entry.set_text("");
+                    // Include screen context
+                    let include_screen = true;
+                    // For now, generate response without actual llama-server call
+                    let response = format!("I understand: {}", message);
 
-                    tokio::spawn(async move {
-                        // Include screen context
-                        let include_screen = true;
-                        // For now, generate response without actual llama-server call
-                        let response = format!("I understand: {}", message);
-
+                    if let Ok(mut st) = state.try_write() {
                         // Add user message to state
-                        let mut st = state.write().await;
                         st.chat_history.push(ChatMessage {
                             id: uuid::Uuid::new_v4().to_string(),
                             role: ChatRole::User,
@@ -497,7 +436,7 @@ impl OverlayWindow {
                         });
 
                         st.last_message_timestamp = chrono::Utc::now().to_rfc3339();
-                    });
+                    }
                 }
             }
         ));
@@ -508,8 +447,7 @@ impl OverlayWindow {
             #[strong]
             state,
             move |_| {
-                tokio::spawn(async move {
-                    let mut st = state.write().await;
+                if let Ok(mut st) = state.try_write() {
                     st.chat_history.push(ChatMessage {
                         id: uuid::Uuid::new_v4().to_string(),
                         role: ChatRole::System,
@@ -518,7 +456,7 @@ impl OverlayWindow {
                         timestamp: chrono::Utc::now().to_rfc3339(),
                         has_screen_context: true,
                     });
-                });
+                }
             }
         ));
 
@@ -568,10 +506,9 @@ impl OverlayWindow {
             #[strong]
             state,
             move |_| {
-                tokio::spawn(async move {
-                    let mut st = state.write().await;
+                if let Ok(mut st) = state.try_write() {
                     st.visible = false;
-                });
+                }
             }
         ));
     }
@@ -592,13 +529,8 @@ pub fn run_overlay_app(
 
     let app = gtk::Application::builder()
         .application_id("lifeos.ai.overlay")
-        .flags(gtk::ApplicationFlags::NON_UNIQUE)
+        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
         .build();
-
-    app.connect_startup(|_| {
-        // Initialize GTK
-        gtk::init().expect("Failed to initialize GTK");
-    });
 
     app.connect_activate(move |app| {
         match OverlayWindow::new(

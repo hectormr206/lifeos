@@ -52,14 +52,10 @@ use context_policies::ContextPoliciesManager;
 use experience_modes::ExperienceManager;
 use follow_along::FollowAlongManager;
 use health::HealthMonitor;
-#[cfg(feature = "ui-overlay")]
-use keyboard_shortcut::ShortcutManager;
 use lab::LabManager;
 use memory_plane::MemoryPlaneManager;
 use notifications::NotificationManager;
 use overlay::OverlayManager;
-#[cfg(feature = "ui-overlay")]
-use overlay_window::run_overlay_app;
 use screen_capture::ScreenCapture;
 use system::SystemMonitor;
 use telemetry::TelemetryManager;

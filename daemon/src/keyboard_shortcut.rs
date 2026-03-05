@@ -7,13 +7,14 @@ use anyhow::{Context, Result};
 use log::{error, info, warn};
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Global keyboard shortcut manager
 pub struct ShortcutManager {
     /// Shortcuts that can be registered
     shortcuts: Vec<Shortcut>,
     /// Whether shortcuts are active
-    active: bool,
+    active: AtomicBool,
     /// API endpoint for triggering overlay
     overlay_api_url: String,
 }
@@ -76,7 +77,7 @@ impl ShortcutManager {
                     description: "Capture screen for AI".to_string(),
                 },
             ],
-            active: false,
+            active: AtomicBool::new(false),
             overlay_api_url,
         }
     }
@@ -103,7 +104,7 @@ impl ShortcutManager {
         }
 
         info!("Global shortcuts registered successfully");
-        self.active = true;
+        self.active.store(true, Ordering::Relaxed);
 
         Ok(())
     }
@@ -130,10 +131,8 @@ NoDisplay=true
         // Write desktop entry
         tokio::fs::write(&desktop_path, desktop_file)
             .await
-            .map_err(|e| {
-                error!("Failed to write desktop entry for {}: {}", shortcut.name, e);
-                Context::new("Failed to write desktop entry").context(e)
-            })?;
+            .with_context(|| format!("Failed to write desktop entry for {}", shortcut.name))
+            .inspect_err(|e| error!("{}", e))?;
 
         info!("Created shortcut entry: {}", desktop_path.display());
 
@@ -152,14 +151,16 @@ NoDisplay=true
             ));
 
             if desktop_path.exists() {
-                tokio::fs::remove_file(&desktop_path).await.map_err(|e| {
-                    warn!("Failed to remove shortcut entry: {}", e);
-                    Context::new("Failed to remove shortcut entry").context(e)
-                })?;
+                tokio::fs::remove_file(&desktop_path)
+                    .await
+                    .with_context(|| {
+                        format!("Failed to remove shortcut entry {}", desktop_path.display())
+                    })
+                    .inspect_err(|e| warn!("{}", e))?;
             }
         }
 
-        self.active = false;
+        self.active.store(false, Ordering::Relaxed);
         info!("Global shortcuts unregistered");
 
         Ok(())
@@ -167,7 +168,7 @@ NoDisplay=true
 
     /// Check if shortcuts are active
     pub fn is_active(&self) -> bool {
-        self.active
+        self.active.load(Ordering::Relaxed)
     }
 
     /// Trigger a shortcut action
@@ -179,7 +180,7 @@ NoDisplay=true
             .ok_or_else(|| anyhow::anyhow!("Shortcut '{}' not found", shortcut_name))?;
 
         info!(
-            "Triggering shortcut: {} ({})",
+            "Triggering shortcut: {} ({:?})",
             shortcut.name, shortcut.action
         );
 
@@ -212,7 +213,7 @@ NoDisplay=true
         let response = client.post(&url).send().await?;
 
         if !response.status().is_success() {
-            anyhow::anyhow!("Failed to toggle overlay: {}", response.status());
+            anyhow::bail!("Failed to toggle overlay: {}", response.status());
         }
 
         Ok(())
@@ -226,7 +227,7 @@ NoDisplay=true
         let response = client.post(&url).send().await?;
 
         if !response.status().is_success() {
-            anyhow::anyhow!("Failed to hide overlay: {}", response.status());
+            anyhow::bail!("Failed to hide overlay: {}", response.status());
         }
 
         Ok(())
@@ -240,7 +241,7 @@ NoDisplay=true
         let response = client.post(&url).send().await?;
 
         if !response.status().is_success() {
-            anyhow::anyhow!("Failed to show overlay: {}", response.status());
+            anyhow::bail!("Failed to show overlay: {}", response.status());
         }
 
         Ok(())
@@ -254,7 +255,7 @@ NoDisplay=true
         let response = client.post(&url).send().await?;
 
         if !response.status().is_success() {
-            anyhow::anyhow!("Failed to trigger screenshot: {}", response.status());
+            anyhow::bail!("Failed to trigger screenshot: {}", response.status());
         }
 
         Ok(())
@@ -268,11 +269,8 @@ NoDisplay=true
             .arg("-c")
             .arg(cmd)
             .output()
-            .await
-            .map_err(|e| {
-                error!("Failed to execute command '{}': {}", cmd, e);
-                Context::new("Command execution failed").context(e)
-            })?;
+            .with_context(|| format!("Command execution failed for '{}'", cmd))
+            .inspect_err(|e| error!("{}", e))?;
 
         if !output.status.success() {
             warn!("Command '{}' exited with code: {}", cmd, output.status);
@@ -285,7 +283,7 @@ NoDisplay=true
 
     /// Get list of registered shortcuts
     pub fn list_shortcuts(&self) -> Vec<&Shortcut> {
-        self.shortcuts.iter().map(|s| s.as_ref()).collect()
+        self.shortcuts.iter().collect()
     }
 }
 
