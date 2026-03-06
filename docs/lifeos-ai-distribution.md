@@ -27,14 +27,24 @@ Este documento esta escrito para un agente de implementacion (LLM + herramientas
    - documentacion de uso.
 4. Si una tarea bloquea, continuar con el resto del backlog y registrar bloqueo con causa, impacto y accion siguiente.
 
+### 0.2.1 Convencion de estados
+
+Para evitar contradicciones, este spec usa estos estados de forma consistente:
+
+- **Hecho:** entregable cerrado con codigo, pruebas, evidencia y documentacion.
+- **Hecho (baseline):** implementacion inicial funcional cerrada en repo; el hardening y la validacion en campo pueden seguir pendientes.
+- **Hardening pendiente:** la capacidad existe, pero falta endurecerla para uso diario, CI determinista o regresion sostenida.
+- **Validacion en campo pendiente:** la capacidad existe, pero falta validacion con hardware real, usuarios reales o metricas de uso real.
+- **RFC experimental:** fuera del compromiso del roadmap activo; no cuenta como entregable comprometido.
+
 ### 0.3 Definicion de "100% funcional" para este proyecto
 
 Se considera completado cuando se cumplen todos:
 
 1. [x] Imagen OCI de LifeOS construye en CI sin errores. _`docker.yml` activo._
-2. [x] ISO generada arranca en VM y en al menos un equipo real soportado. _Validado en VirtualBox: 15/15 checks OK (2 marzo 2026). Pendiente: prueba en hardware fisico._
+2. [ ] ISO generada arranca en VM y en al menos un equipo real soportado. _Validado en VirtualBox: 15/15 checks OK (2 marzo 2026). Pendiente: prueba en hardware fisico, movida a Fase 3._
 3. [x] `life status`, `life update --dry`, `life rollback` funcionan end-to-end. _CLI implementado._
-4. [ ] Update atomico + rollback validado por test automatizado. _CLI listo, falta test E2E de `bootc upgrade` + rollback en VM (movido a Fase 1)._
+4. [x] Update atomico + rollback validado por test automatizado. _Baseline implementado con `tests/e2e/test_bootc_upgrade_rollback.sh` y workflow `.github/workflows/e2e-tests.yml`; Fase 3 endurece estabilidad y validacion en campo._
 5. [x] Permisos multimodales (mic/camara/pantalla) auditables y revocables. _Broker D-Bus con prompt real y persistencia de politicas en disco._
 6. [x] Life Capsule export/restore funcional. _Cifrado con `age` + tar + flatpak._
 7. [x] Sync instalado por defecto, pero solo activado tras consentimiento explicito. _`sync.enabled = false` en config._
@@ -984,7 +994,7 @@ Cada item tiene fase asignada. Son prerequisitos para la arquitectura agentica c
 
 **Objetivo:** un sistema que arranca, se actualiza y se recupera de forma confiable.
 
-**Estado:** **100% completado** (2 marzo 2026). Todo el codigo implementado, probado en VM (VirtualBox) con resultado 15/15 checks OK, 0 fallos, 0 warnings. Modelo fundacional actualizado a Qwen3.5-4B.
+**Estado:** **CERRADA A NIVEL BASELINE** (2 marzo 2026). Todo el codigo del alcance base fue implementado y probado en VM (VirtualBox) con resultado 15/15 checks OK, 0 fallos, 0 warnings. El hardening y la validacion en campo viven en fases posteriores.
 
 **Sistema base:**
 
@@ -1092,17 +1102,17 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 16. **Compilacion estatica de llama-server:** binario estatico sin backends .so, eliminando el ultimo bloqueante critico.
 17. **Upgrade a Qwen3.5-4B:** modelo fundacional actualizado con mejores benchmarks (+7.3 MMLU, GUI agent scores).
 
-**Nota para Fase 1:** prueba de `bootc upgrade` + rollback en VM automatizada queda como primer item de validacion de confiabilidad.
+**Nota de roadmap:** la prueba de `bootc upgrade` + rollback en VM automatizada ya existe en baseline; Fase 3 se enfoca en mantenerla verde y extender la validacion a hardware real.
 
 ### Fase 1 (3-6 meses): UX y confiabilidad
 
 **Objetivo:** un escritorio usable que la gente quiera usar diario.
 
-**Estado:** COMPLETADA (codigo + validacion ISO). Fecha: 2026-03-03. Validada en ISO real (27/27 checks, 0 failed, Sistema OK). Items de integracion con hardware/desktop real diferidos a Fase 2.
+**Estado:** **CERRADA A NIVEL BASELINE** (codigo + validacion ISO). Fecha: 2026-03-03. Validada en ISO real (27/27 checks, 0 failed, Sistema OK). Items de integracion con hardware/desktop real y hardening de uso diario quedaron reubicados a Fase 3.
 
 **Escritorio y UX:**
 
-- [x] COSMIC Epoch 1 funcional como desktop por defecto. _COSMIC instalado y operativo en la ISO. Temas custom LifeOS diferidos a Fase 2._
+- [x] COSMIC Epoch 1 funcional como desktop por defecto. _COSMIC instalado y operativo en la ISO. Temas custom LifeOS llegaron despues en Fase 2.5._
 - [x] Tres modos de experiencia: Simple, Pro y Builder (misma base, distinta UI). _`experience_modes.rs` (809 lineas), API completa (7 endpoints), CLI `life mode` (7 subcomandos)._
 - [x] Accesibilidad WCAG 2.2 AA minimo en todos los temas. _`accessibility.rs` (472 lineas): validacion de contrast ratio, theme audit, settings (high contrast, font scale, color blind modes). Temas dark/light/high-contrast validados con tests._
 - [x] Applet AI del escritorio con invocacion `Super+Space` y overlay contextual sobre cualquier app. _`overlay.rs` + `overlay_window.rs` + `keyboard_shortcut.rs` (~1332 lineas), API (10 endpoints), CLI `life overlay`._
@@ -1124,25 +1134,25 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 
 - [x] Matriz de compatibilidad de hardware publicada. _`docs/hardware-compatibility-matrix.md`: GPUs (NVIDIA/AMD/Intel), CPUs, storage, red, pantallas, perifericos, laptops validados, VMs. 11 secciones._
 
-**Diferido a Fase 2** _(requieren integracion con hardware real, desktop, CI/CD, o son extensiones de lo existente):_
+**Diferido originalmente del baseline** _(varios items ya se cerraron en Fase 2/2.5; los remanentes de hardware real y uso diario quedaron reubicados a Fase 3):_
 
 - [x] Temas custom LifeOS para COSMIC. _Implementado: temas Dark/Light/HighContrast en `files/usr/share/themes/`, configuracion en `files/etc/lifeos/cosmic-theme.toml`._
 - [x] Motor de confort visual: temperatura de color, tipografia adaptativa, perfiles de contraste. _Implementado: daemon/src/visual_comfort.rs con API `/visual-comfort/*`, CLI `life visual-comfort`, integracion `wlsunset/gammastep` (preinstalados en la imagen base)._
-- [x] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night. _Baseline v1: `life focus` y `life meeting` implementados; modo Night completo queda como extension desktop._
+- [x] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night. _Baseline: `life focus` y `life meeting` implementados; modo Night completo queda como extension desktop._
 - [x] xdg-desktop-portal integrado para sandboxing de permisos de apps. _Implementado: daemon/src/portal.rs con D-Bus `org.lifeos.Portal`, CLI `life portal`._
 - [ ] Soporte GPU hibrida (Nvidia Optimus/PRIME), drivers akmod-nvidia via bootc. _Requiere hardware real._
 - [ ] Steam RPM (default) + Proton, displays 144Hz+, G-Sync/Adaptive-Sync. _Requiere hardware real._
-- [x] First-boot wizard GUI. _Implementado baseline v1: `life first-boot --gui` (zenity + fallback TUI)._
+- [x] First-boot wizard GUI. _Implementado en baseline: `life first-boot --gui` (zenity + fallback TUI)._
 - [x] Trust Me Mode: consent bundles firmados, activacion de perfil automatica. _Implementado en daemon+CLI con validacion SHA-256 y auditoria._
 - [x] Prueba de `bootc upgrade` + rollback en VM automatizada. _Implementado: tests/e2e/test_bootc_upgrade_rollback.sh con CI workflow .github/workflows/e2e-tests.yml._
 - [ ] Prueba de ISO en al menos un equipo fisico real.
 - [x] LifeOS Lab real (no stub), pipeline de mejora autonoma, canary test. _Implementado: daemon/src/lab.rs con container isolation Podman, API `/lab/*`, CLI `life lab`, canary phase con auto-rollback._
 - [x] Canales de actualizacion en CI/CD real. _Implementado: .github/workflows/release-channels.yml con stable/candidate/edge, Cosign signing, SBOM generation._
 - [x] SLOs definidos con enforcement. _Baseline implementado: SLO CVE por severidad con enforcement en CI (`cargo audit` + `scripts/cve-slo-enforce.py`)._
-- [x] Heartbeats y Cron con proactividad AI. _Implementado baseline v1: runtime heartbeat configurable + tick proactivo (`/runtime/heartbeat`, `/runtime/heartbeat/tick`, `life intents heartbeat ...`)._
-- [x] Prompt Shield v1. _Implementado baseline v1 en `agent_runtime` con bloqueo de intentos sospechosos y endpoint `runtime/prompt-shield/scan`._
-- [x] Perfiles de recursos: Performance/Balanced/Battery/Silent. _Implementado baseline v1 en runtime + CLI `life intents resources`._
-- [x] Scheduler heterogeneo AI: NPU → GPU → CPU. _Implementado baseline v1 con orden de backend detectado en runtime._
+- [x] Heartbeats y Cron con proactividad AI. _Implementado en baseline: runtime heartbeat configurable + tick proactivo (`/runtime/heartbeat`, `/runtime/heartbeat/tick`, `life intents heartbeat ...`)._
+- [x] Prompt Shield v1. _Implementado en baseline en `agent_runtime` con bloqueo de intentos sospechosos y endpoint `runtime/prompt-shield/scan`._
+- [x] Perfiles de recursos: Performance/Balanced/Battery/Silent. _Implementado en baseline en runtime + CLI `life intents resources`._
+- [x] Scheduler heterogeneo AI: NPU → GPU → CPU. _Implementado en baseline con orden de backend detectado en runtime._
 - [x] Documentacion de usuario y contribuidor. _Baseline publicado en `docs/user-guide.md` y `docs/contributor-guide.md`._
 
 **Entregable:** ISO funcional con desktop COSMIC, daemon + CLI operativos, AI runtime local (Qwen3.5-4B), 27/27 checks pasando.
@@ -1161,23 +1171,23 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 
 **Objetivo:** asistente local util que justifique el "AI-native".
 
-**Estado:** **100% completado** (2026-03-03). _SQLite-vec integrado con embeddings reales de 768 dimensiones. Busqueda vectorial operativa con fallback automatico._
+**Estado:** **CERRADA A NIVEL BASELINE** (2026-03-03). _SQLite-vec integrado con embeddings reales de 768 dimensiones. Busqueda vectorial operativa con fallback automatico; el hardening de uso diario queda en Fase 3._
 
-- [x] Whisper.cpp como daemon STT separado (voz local). _Implementado baseline v1: API `/audio/stt/*` + CLI `life voice` (`status|start|stop|transcribe`) con control de servicio systemd y transcripcion local._
+- [x] Whisper.cpp como daemon STT separado (voz local). _Implementado en baseline: API `/audio/stt/*` + CLI `life voice` (`status|start|stop|transcribe`) con control de servicio systemd y transcripcion local._
 
-- [x] Whisper.cpp como daemon STT separado (voz local). _Implementado baseline v1: API `/audio/stt/*` + CLI `life voice` (`status|start|stop|transcribe`) con control de servicio systemd y transcripcion local._
+- [x] Whisper.cpp como daemon STT separado (voz local). _Implementado en baseline: API `/audio/stt/*` + CLI `life voice` (`status|start|stop|transcribe`) con control de servicio systemd y transcripcion local._
 - [x] Catalogo de modelos firmado con fallback offline para bootstrap. _Implementado: catalogo v1 (`contracts/models/v1/catalog.json`) con firma SHA-256 (`catalog.json.sig`), validacion y fallback remoto/cache/embebido en `life ai catalog`._
-- [x] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Implementado baseline v1: runtime consent-gated (`/runtime/sensory`, `/runtime/sensory/snapshot`) con audio STT + captura de pantalla._
+- [x] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Implementado en baseline: runtime consent-gated (`/runtime/sensory`, `/runtime/sensory/snapshot`) con audio STT + captura de pantalla._
 - [x] Catalogo de modelos firmado con fallback offline para bootstrap. _Implementado: catalogo v1 firmado con fallback offline._
-- [x] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Implementado baseline v1: runtime consent-gated (`/runtime/sensory`, `/runtime/sensory/snapshot`) con audio STT + captura de pantalla._
-- [x] Micro-modelos always-on: VAD, hotword, clasificacion de intents. _Implementado baseline v1: runtime `always-on` con clasificador de micro-intents y wake-word configurable._
-- [x] Switching de modelo pesado por prioridad con degradacion automatica bajo carga. _Implementado baseline v1: enrutador `/runtime/model-routing` con degradacion por presion CPU/RAM/perfil._
-- [x] Control de recursos AI por prioridad (cgroups). _Implementado baseline v1 con perfiles runtime, `heavy_model_slots` y deteccion de cgroups._
+- [x] Captura sensorial en tiempo real post-consentimiento (audio/pantalla). _Implementado en baseline: runtime consent-gated (`/runtime/sensory`, `/runtime/sensory/snapshot`) con audio STT + captura de pantalla._
+- [x] Micro-modelos always-on: VAD, hotword, clasificacion de intents. _Implementado en baseline: runtime `always-on` con clasificador de micro-intents y wake-word configurable._
+- [x] Switching de modelo pesado por prioridad con degradacion automatica bajo carga. _Implementado en baseline: enrutador `/runtime/model-routing` con degradacion por presion CPU/RAM/perfil._
+- [x] Control de recursos AI por prioridad (cgroups). _Implementado en baseline con perfiles runtime, `heavy_model_slots` y deteccion de cgroups._
 
-- [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado baseline v1: API `/computer-use/status|action` + CLI `life computer-use`._
+- [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado en baseline: API `/computer-use/status|action` + CLI `life computer-use`._
 
-- [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado baseline v1: API `/computer-use/status|action` + CLI `life computer-use`._
-- [x] Vision/OCR a nivel de OS: analisis de pantalla, OCR en tiempo real (Wayland/grim). _Implementado baseline v1: endpoint `/vision/ocr` (captura de pantalla + OCR local con `tesseract`)._
+- [x] **Computer Use API:** Modulo en `lifeosd` para control programatico del raton y teclado via `ydotool`/`xdotool`, permitiendo simulacion de clics y escritura en apps de terceros. _Implementado en baseline: API `/computer-use/status|action` + CLI `life computer-use`._
+- [x] Vision/OCR a nivel de OS: analisis de pantalla, OCR en tiempo real (Wayland/grim). _Implementado en baseline: endpoint `/vision/ocr` (captura de pantalla + OCR local con `tesseract`)._
 - [x] Automatizaciones en lenguaje natural (`life ai do "..."`).
       **P0 — Protocolos y Estandares (base de la arquitectura agentica):**
 
@@ -1188,12 +1198,12 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 - [x] Ledger cifrado y exportable de ejecucion AI (`intents/results/artifacts`) con endpoint y CLI.
 - [x] **Model Context Protocol (MCP):** Integracion nativa para extensibilidad estandar, permitiendo a LifeOS usar _Skills_ de terceros sin acoplar codigo y renderizar UI (MCP-UI) nativamente en COSMIC. _Baseline implementado: contexto MCP de memoria + export/endpoint MCP de tools para Skills._
 
-- [x] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace). _Implementado baseline v1: `life soul init/set/merge/show`._
+- [x] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace). _Implementado en baseline: `life soul init/set/merge/show`._
 
-- [x] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace). _Implementado baseline v1: `life soul init/set/merge/show`._
-- [x] `Skills Plane` v1: `~/.local/share/lifeos/skills/` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar y niveles `core/verified/community`. _Implementado baseline v1: `life skills generate/sign/install/verify/run/remove`._
+- [x] `Soul Plane` v1 por usuario en `~/.config/lifeos/soul/`, con guardrails opcionales en `/etc/lifeos/soul.defaults/` y merge determinista (global -> usuario -> workplace). _Implementado en baseline: `life soul init/set/merge/show`._
+- [x] `Skills Plane` v1: `~/.local/share/lifeos/skills/` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar y niveles `core/verified/community`. _Implementado en baseline: `life skills generate/sign/install/verify/run/remove`._
 
-- [x] `Agent Plane` v1: registro de agentes especializados con identidad (`life-id`), capacidades y gobernanza. _Implementado baseline v1: `life agents register/list/show/revoke` con registro local y delegacion/revocacion de tokens `life-id`._
+- [x] `Agent Plane` v1: registro de agentes especializados con identidad (`life-id`), capacidades y gobernanza. _Implementado en baseline: `life agents register/list/show/revoke` con registro local y delegacion/revocacion de tokens `life-id`._
 
 - **Memoria a Corto Plazo (Context Window):** Mantenimiento del hilo de voz o texto actual. Se borra al terminar la sesion o tras X minutos de inactividad para no saturar el LLM.
 
@@ -1205,27 +1215,27 @@ lifeos-check.sh   # Debe reportar 15/15 passed
 Implementacion concreta:
 
 - [x] Embeddings + busqueda semantica local cifrada (SQLite-vec, modelo: `nomic-embed-text`). _Implementado v1 completo: SQLite con tabla virtual `vec0` (768 dims), busqueda vectorial real via `vec_distance_cosine()`, endpoint `/v1/embeddings` en llama-server, fallback hash-based automatico. Migracion JSON→SQLite automatica. Ver `daemon/src/memory_plane.rs` y `daemon/src/ai.rs`._
-- [x] Memoria contextual local cifrada persistente (memory-plane con CLI/API/MCP). _Implementado baseline v1: almacenamiento local cifrado, API `/memory/*`, CLI `life memory` y salida de contexto MCP._
-- [x] Asistente accesible desde launcher, terminal y atajo de teclado. _Implementado baseline v1: `life assistant status/install-launcher/ask/open` + chequeo de canal de shortcut._
-- [x] Correlacion contextual cross-app/cross-archivo (grafo de actividad). _Implementado baseline v1: `memory correlation graph` via API `/memory/graph` + CLI `life memory graph`._
+- [x] Memoria contextual local cifrada persistente (memory-plane con CLI/API/MCP). _Implementado en baseline: almacenamiento local cifrado, API `/memory/*`, CLI `life memory` y salida de contexto MCP._
+- [x] Asistente accesible desde launcher, terminal y atajo de teclado. _Implementado en baseline: `life assistant status/install-launcher/ask/open` + chequeo de canal de shortcut._
+- [x] Correlacion contextual cross-app/cross-archivo (grafo de actividad). _Implementado en baseline: `memory correlation graph` via API `/memory/graph` + CLI `life memory graph`._
 
-- [x] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI. _Implementado baseline v1: `life adapters email|image|search`._
+- [x] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI. _Implementado en baseline: `life adapters email|image|search`._
 
-- [x] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI. _Implementado baseline v1: `life adapters email|image|search`._
-- [x] Awareness de COSMIC Workspaces en el enrutador de agente para sugerencias/acciones segun habitat activo. _Implementado baseline v1: API `/runtime/workspace-awareness` + CLI `life intents workspace-awareness`._
+- [x] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI. _Implementado en baseline: `life adapters email|image|search`._
+- [x] Awareness de COSMIC Workspaces en el enrutador de agente para sugerencias/acciones segun habitat activo. _Implementado en baseline: API `/runtime/workspace-awareness` + CLI `life intents workspace-awareness`._
 
-- [x] Modo Jarvis temporal: implementacion completa segun seccion 9.4 (tokens de capacidad con TTL, aprobacion biometrica/PIN, kill switch `Super+Escape`). _Implementado baseline v1: TTL+PIN, tokens de capacidad, `jarvis start/stop`, y kill-switch (`life intents jarvis kill-switch`)._
+- [x] Modo Jarvis temporal: implementacion completa segun seccion 9.4 (tokens de capacidad con TTL, aprobacion biometrica/PIN, kill switch `Super+Escape`). _Implementado en baseline: TTL+PIN, tokens de capacidad, `jarvis start/stop`, y kill-switch (`life intents jarvis kill-switch`)._
 
-- [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline v1: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
+- [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
 - [x] Modos de ejecucion: interactive, run-until-done, silent-until-done (ver seccion 13.2). _Implementado en `agent_runtime` + API `/runtime/mode` + CLI `life intents mode`._
-- [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline v1: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
-- [x] Auto-defensas: awareness situacional, auto-reparacion con rollback, operacion degradada offline (ver seccion 9.5). _Implementado baseline v1: `/runtime/self-defense` + `/runtime/self-defense/repair` con degradacion offline segura y reparacion automatizada no destructiva._
-- [x] Harness de red-team continuo con corpus de ataques agenticos reales (prompt injection, tool abuse, exfiltracion encubierta, cadena de deep links). _Implementado baseline v1 con corpus `tests/security/agentic_red_team_corpus.json` y tests de enforcement._
+- [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
+- [x] Auto-defensas: awareness situacional, auto-reparacion con rollback, operacion degradada offline (ver seccion 9.5). _Implementado en baseline: `/runtime/self-defense` + `/runtime/self-defense/repair` con degradacion offline segura y reparacion automatizada no destructiva._
+- [x] Harness de red-team continuo con corpus de ataques agenticos reales (prompt injection, tool abuse, exfiltracion encubierta, cadena de deep links). _Implementado en baseline con corpus `tests/security/agentic_red_team_corpus.json` y tests de enforcement._
 - [x] SLO CVE por severidad en dependencias criticas de agente/runtime: `critical` mitigacion <=24h y parche <=48h; `high` <=72h; `medium` <=14 dias. _Implementado enforcement en CI con politica versionada y waivers auditables._
 
 **CLI extendido:**
 
-- [x] `life focus`, `life meeting`. _Implementado baseline v1 con presets contextuales y reglas automatizadas._
+- [x] `life focus`, `life meeting`. _Implementado en baseline con presets contextuales y reglas automatizadas._
 - [x] `life onboarding trust-mode` para configuracion de autonomia. _Implementado: `status|enable|disable` con validacion de bundle/sig en daemon._
 
 **Entregable:** release 1.0 con asistente AI multimodal funcional, Computer Use API operativo, y modelo biologico (Soul/Skills/Workplace/Agents) implementado.
@@ -1234,7 +1244,7 @@ Implementacion concreta:
 
 **Objetivo:** cerrar la brecha de percepcion UX frente a Windows/macOS con una experiencia visual coherente, ergonomica y medible en COSMIC.
 
-**Estado:** COMPLETADA (codigo, assets e integracion). Fecha: 2026-03-05. Items de validacion con usuarios reales diferidos a Fase 3.
+**Estado:** **CERRADA A NIVEL BASELINE** (codigo, assets e integracion). Fecha: 2026-03-05. La validacion con usuarios reales y la medicion en campo quedan en Fase 3.
 
 **Sistema de diseno y marca (Axi + LifeOS):**
 
@@ -1295,46 +1305,53 @@ Implementacion concreta:
 - Apps nativas: mpv, evince, keepassxc
 - WCAG 2.2 AA: audit CLI + API, 0 violaciones criticas
 
-### Fase 3 (12-24 meses): Hive Mind gobernado + escala
+### Fase 3 (6-12 semanas): Hardening, dogfooding y cierre de producto
 
-**Objetivo:** ecosistema sostenible con mejora continua y comunidad. Incluye items de polish/validacion diferidos de fases anteriores.
+**Objetivo:** convertir LifeOS de un baseline amplio a un sistema diario confiable para el propio equipo, cerrando contradicciones de roadmap/spec, validando hardware real y endureciendo CI/build antes de abrir mas frente de producto.
 
-**Estado:** Pendiente. _Depende del cierre de Fase 2 (runtime). Algunos items tienen dependencias externas marcadas como condicionales._
+**Estado:** **PENDIENTE DE EJECUCION.** Obligatoria despues de Fase 2.5. Esta fase absorbe el trabajo de polish, validacion y confiabilidad que antes estaba mezclado con la fase de ecosistema/escala.
 
-**Completado (adelantado de otras fases):**
+**Disciplina de producto y documentacion (fuente unica de verdad):**
 
-- [x] Device mesh: identidad de nodo, delegacion remota, revocacion. _Implementado baseline v1 con `life mesh init/add/list/delegate/revoke`._
-- [x] Browser operator para tareas web multi-paso con politicas y auditoria. _Implementado baseline v1 con `life browser policy-init/run/audit`._
+- [ ] Consolidar una sola fuente de verdad para estado del proyecto: separar claramente spec normativo, roadmap vigente, estado actual y RFCs experimentales.
+- [ ] Eliminar contradicciones internas entre items marcados como hechos y los mismos items listados otra vez como pendientes.
+- [ ] Declarar explicitamente el wedge principal de LifeOS 1.0: workstation AI local-first para founders/developers, dejando otros frentes como secundarios hasta pasar hardening.
+- [ ] Congelar features netamente nuevas salvo que desbloqueen confiabilidad, validacion o uso diario real.
 
----
+**Hardening tecnico y confiabilidad real:**
 
-**Polish y validacion (diferido de Fase 1 y 2.5):**
-
-_Integracion desktop y hardware (de Fase 1):_
-
-- [ ] Temas custom LifeOS para COSMIC.
-- [ ] Motor de confort visual: temperatura de color, tipografia adaptativa, perfiles de contraste. _Requiere integracion COSMIC/Wayland._
-- [ ] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night. _Extension de experience_modes, requiere integracion con notificaciones desktop._
-- [ ] xdg-desktop-portal integrado para sandboxing de permisos de apps.
-- [ ] Soporte GPU hibrida (Nvidia Optimus/PRIME), drivers akmod-nvidia via bootc. _Requiere hardware real._
-- [ ] Steam via Flatpak + Proton, displays 144Hz+, G-Sync/Adaptive-Sync. _Requiere hardware real._
-- [ ] First-boot wizard GUI. _CLI `life first-boot` existe, falta interfaz grafica._
-- [ ] Trust Me Mode: consent bundles firmados, activacion de perfil automatica.
-- [ ] Perfiles de recursos: Performance/Balanced/Battery/Silent. _Requiere cgroups._
-- [ ] Scheduler heterogeneo AI: NPU → GPU → CPU.
-
-_Confiabilidad y CI/CD (de Fase 1):_
-
-- [ ] Prueba de `bootc upgrade` + rollback en VM automatizada. _Heredado de Fase 0._
-- [ ] Prueba de ISO en al menos un equipo fisico real.
-- [ ] LifeOS Lab real (no stub), pipeline de mejora autonoma, canary test.
-- [ ] Canales de actualizacion en CI/CD real. _`update_scheduler.rs` soporta canales; falta pipeline._
+- [ ] Toolchain reproducible y fijado (`rust-toolchain.toml` o equivalente) para evitar derivas de compilador/CI.
+- [ ] CI determinista con `cargo test`, `cargo clippy`, build de imagen y pruebas E2E verdes en entorno reproducible.
+- [ ] Cierre de brechas de build local para `lifeosd --all-features` con prerequisitos documentados y verificables.
+- [ ] Estabilizar y mantener verde la prueba de `bootc upgrade` + rollback en VM automatizada.
+- [ ] Validacion de ISO, update, rollback y recovery en al menos un equipo fisico real.
+- [ ] LifeOS Lab real (no stub), pipeline de mejora autonoma y canary test.
+- [ ] Canales de actualizacion en CI/CD real. _`update_scheduler.rs` soporta canales; falta pipeline consistente._
 - [ ] SLOs definidos con enforcement. _Telemetria para medirlos ya existe._
-- [ ] Heartbeats y Cron con proactividad AI. _Background tasks existen; falta IA proactiva._
-- [ ] Prompt Shield v1.
-- [ ] Documentacion de usuario y contribuidor.
+- [ ] Kit de recuperacion para daily-driver: USB de rescate, export automatizado de Life Capsule y runbook corto de rollback.
+- [ ] Documentacion de usuario y contribuidor orientada a uso diario real.
 
-_Validacion UX con usuarios (de Fase 2.5):_
+**Dogfooding controlado:**
+
+- [ ] Instalar LifeOS como sistema principal en al menos 1 laptop del equipo fundador y usarlo para desarrollo diario durante 2-4 semanas.
+- [ ] Registrar fricciones reales de uso diario: WiFi, Bluetooth, suspend/resume, audio, mic, webcam, GPU, monitores externos, bateria, hotkeys y temperatura.
+- [ ] Medir carga operativa real del sistema: tiempo de boot, estabilidad del daemon, overlays, consumo de RAM, consumo de bateria y recuperacion tras fallos.
+- [ ] Ejecutar cierre semanal de incidentes con priorizacion por severidad y evidencia reproducible.
+
+**Integracion desktop, hardware y UX:**
+
+- [ ] Temas LifeOS para COSMIC v2 con cobertura completa de shell, lock screen, terminal y componentes propios.
+- [ ] Motor de confort visual v2: temperatura de color, tipografia adaptativa y perfiles de contraste en Wayland real.
+- [ ] Modos contextuales Focus/Meeting/Night v2 integrados con notificaciones desktop y telemetria local.
+- [ ] `xdg-desktop-portal` integrado end-to-end para sandboxing y permisos de apps.
+- [ ] Soporte GPU hibrida (Nvidia Optimus/PRIME), drivers akmod-nvidia via bootc. _Requiere hardware real._
+- [ ] Validacion extendida de hardware: 144Hz+, G-Sync/Adaptive-Sync y ruta gaming opcional (Steam/Proton) para ampliar la matriz.
+- [ ] First-boot wizard GUI v2 con validacion de usuarios nuevos de Linux.
+- [ ] Trust Me Mode hardening: bundles firmados, UX de activacion y auditoria operativa de admin.
+- [ ] Perfiles de recursos y scheduler heterogeneo AI validados en hardware real, incluyendo orden NPU -> GPU -> CPU.
+- [ ] Heartbeats, cron proactivo y Prompt Shield endurecidos con metrica real de utilidad/falsos positivos.
+
+**Validacion UX con usuarios (de Fase 2.5):**
 
 - [ ] Validacion de legibilidad para 4h+ de uso continuo. _Requiere usuarios reales en hardware real._
 - [ ] Pulido de micro-interacciones (focus states, hover, feedback de comandos, estados de carga/error).
@@ -1345,7 +1362,26 @@ _Validacion UX con usuarios (de Fase 2.5):_
 - [ ] KPI: p95 de apertura de overlay y paneles sin regresion vs Fase 2.
 - [ ] KPI: >= 85% de usuarios reportan "comodidad visual" en sesiones >= 3 horas.
 
----
+**Criterios de salida de Fase 3:**
+
+1. El equipo puede trabajar desde LifeOS como sistema principal sin depender de Windows para tareas criticas.
+2. `cargo test`, build de imagen y E2E principales son reproducibles en CI y en entorno dev documentado.
+3. Existe al menos una validacion documentada en hardware real con checklist completo de laptop.
+4. El roadmap deja de mezclar entregables core con RFCs o ideas futuras sin validar.
+5. Cada incidente bloqueante de daily-driver produce fix, workaround documentado o decision explicita de producto.
+
+**Entregable:** beta interna "daily-driver" para founders/developers, con build reproducible, validacion en hardware real y backlog limpiado de contradicciones.
+
+### Fase 4 (12-24 meses): Ecosistema, sincronizacion y escala gobernada
+
+**Objetivo:** construir el ecosistema sostenible de LifeOS una vez cerrado el uso diario real del sistema base.
+
+**Estado:** **PENDIENTE DE EJECUCION.** _Depende del cierre de Fase 3 (hardening + daily-driver). Algunos items tienen dependencias externas marcadas como condicionales._
+
+**Completado (adelantado de otras fases):**
+
+- [x] Device mesh: identidad de nodo, delegacion remota, revocacion. _Implementado en baseline con `life mesh init/add/list/delegate/revoke`._
+- [x] Browser operator para tareas web multi-paso con politicas y auditoria. _Implementado en baseline con `life browser policy-init/run/audit`._
 
 **Telemetria y calidad a escala:**
 
@@ -1379,23 +1415,22 @@ _Validacion UX con usuarios (de Fase 2.5):_
 
 - [ ] Co-piloto de salud: tracking de habitos, alertas ergonomicas.
 
-**Calidad y reproducibilidad:**
-
-- [ ] Bootstrap reproducible: TUI installer con setup automatico de entorno.
-
-**Futuro (post Fase 3 / sin fecha):**
+**Futuro (post Fase 4 / sin fecha):**
 
 - [ ] Visual workflow builder (no-code) para construccion de agentes. _Nice-to-have que no es critico para el valor core. Evaluar si la comunidad lo demanda._
 
-**Entregable:** ecosistema autosostenible con comunidad activa, marketplace de skills, y polish de producto validado con usuarios reales.
+**Entregable:** ecosistema autosostenible con comunidad activa, marketplace de skills, sincronizacion multi-dispositivo y base operativa ya validada en campo.
 
-**Resumen Fase 3:** 2 items completados (adelantados), 26 items diferidos de Fase 1/2.5 (polish + validacion), 13 items originales de ecosistema/escala. Total: 39 pendientes.
+**Nota de roadmap:** la antigua fase de "Hive Mind gobernado + escala" se dividio en dos:
+
+1. **Fase 3:** cierre de producto, hardening y dogfooding.
+2. **Fase 4:** ecosistema, sincronizacion y escala.
 
 ### A Futuro (Experimental B2B): Arquitectura Multi-Agente Corporativa (LifeOS Swarm) [RFC EXPERIMENTAL]
 
 **Objetivo:** Evaluar si LifeOS puede operar como plataforma multi-agente empresarial local-first, con control de seguridad y auditoria de grado corporativo.
 
-**Estado:** RFC experimental (fuera del compromiso de Fase 2.x y Fase 3). No se implementa en produccion hasta cumplir criterios de salida definidos abajo.
+**Estado:** RFC experimental (fuera del compromiso de Fase 2.x, Fase 3 y Fase 4). No se implementa en produccion hasta cumplir criterios de salida definidos abajo.
 
 **Correcciones de direccion (para evitar deuda tecnica):**
 
@@ -2456,53 +2491,51 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 
 ---
 
-## 27. Faltantes para completar ejecucion al 100%
+## 27. Cierre historico de faltantes del baseline
+
+En esta seccion, **Hecho (baseline)** significa "implementado y cerrado a nivel inicial en repo". El hardening y la validacion en campo de esos entregables viven en Fase 3 cuando aplique.
 
 ### 27.1 Entregables ya completados
 
-### 27.1 Entregables ya completados
+1. ~~`daemon/` con broker de permisos~~ — **Hecho.** API REST (Axum + Swagger), D-Bus permissions, health monitor, model registry, AI manager.
+2. ~~`tests/` automatizados~~ — **Hecho.** Tests de integracion (boot, CLI, config, daemon, Containerfile).
+3. ~~`.github/workflows/` reales~~ — **Hecho.** CI, docker, release, nightly, codeql.
 
-3. ~~`daemon/` con broker de permisos~~ — **Hecho.** API REST (Axum + Swagger), D-Bus permissions, health monitor, model registry, AI manager.
-4. ~~`tests/` automatizados~~ — **Hecho.** Tests de integracion (boot, CLI, config, daemon, Containerfile).
-5. ~~`.github/workflows/` reales~~ — **Hecho.** CI, docker, release, nightly, codeql.
-
-### 27.2 Entregables obligatorios pendientes
-
-### 27.2 Entregables obligatorios pendientes
+### 27.2 Entregables obligatorios del baseline ya cerrados
 
 1. ~~Flujo de firma Cosign con KMS operativo en CI (actualmente manual).~~ **Hecho (baseline CI).** Workflow `docker.yml` firma con `COSIGN_KMS_KEY_URI` y fallback keyless OIDC.
-2. ~~`life capsule export/restore` funcional end-to-end (minimo config + apps + dotfiles).~~ **Hecho (baseline v1).** Pipeline validado con test automatizado de export/restore y restauracion de apps Flatpak.
-3. ~~Onboarding GUI con consentimiento explicito para activar sync (first-boot script existe, falta GUI).~~ **Hecho (baseline v1).** `life first-boot --gui` agrega flujo zenity y persiste consentimiento de sync.
+2. ~~`life capsule export/restore` funcional end-to-end (minimo config + apps + dotfiles).~~ **Hecho (baseline).** Pipeline validado con test automatizado de export/restore y restauracion de apps Flatpak.
+3. ~~Onboarding GUI con consentimiento explicito para activar sync (first-boot script existe, falta GUI).~~ **Hecho (baseline).** `life first-boot --gui` agrega flujo zenity y persiste consentimiento de sync.
 4. ~~Matriz de compatibilidad de hardware publicada.~~ **Hecho.** `docs/hardware-compatibility-matrix.md` publicado y versionado.
 5. ~~Guia operativa de incidentes (rollback, recovery, revocacion de artefactos).~~ **Hecho.** `docs/incident-response-playbook.md` con runbook operativo.
-6. ~~Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.~~ **Hecho (baseline v1).** Daemon + API + CLI + salida MCP + cifrado AES-256-GCM-SIV.
-7. ~~Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.~~ **Hecho (baseline v1).** `life intents orchestrate/team-runs` + API `/orchestrator/*` con auditoria en ledger.
-8. ~~Registry open source de skills/capacidades con versionado, firmas y politica de confianza.~~ **Hecho (baseline local v1).** `life skills install/list/verify/remove` con manifiestos versionados y verificacion SHA-256.
+6. ~~Plano de memoria persistente (`memory-plane`) con CLI/API/MCP y almacenamiento local cifrado.~~ **Hecho (baseline).** Daemon + API + CLI + salida MCP + cifrado AES-256-GCM-SIV.
+7. ~~Orquestador por equipos de agentes con modo `run-until-done` y handoff entre especialistas.~~ **Hecho (baseline).** `life intents orchestrate/team-runs` + API `/orchestrator/*` con auditoria en ledger.
+8. ~~Registry open source de skills/capacidades con versionado, firmas y politica de confianza.~~ **Hecho (baseline local).** `life skills install/list/verify/remove` con manifiestos versionados y verificacion SHA-256.
 9. ~~Gate de revision automatica pre-merge (AI reviewer) con cache, reglas y reporte auditable.~~ **Hecho (baseline CI).** Workflow `ai-review.yml` ejecuta `scripts/ai-review.py`, aplica reglas bloqueantes y publica artefacto JSON.
-10. ~~Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.~~ **Hecho (baseline v1).** `life init --profile ... --tui` aplica perfiles reproducibles y guarda receipt de bootstrap.
+10. ~~Bootstrap reproducible de entorno developer/user via perfil y TUI de instalacion.~~ **Hecho (baseline).** `life init --profile ... --tui` aplica perfiles reproducibles y guarda receipt de bootstrap.
 11. ~~Perfiles de runtime `lite/edge/secure/pro` con deteccion automatica de hardware.~~ **Hecho.** `life ai profile` detecta hardware y persiste perfil.
 12. ~~Aislamiento por objetivo (sandbox/container/microVM) segun riesgo de la accion.~~ **Hecho.** `life workspace run/list` activo con control de aprobacion por riesgo y fallback seguro.
-13. ~~Constructor visual de workflows y agentes (no-code) para usuarios no tecnicos.~~ **Hecho (baseline v1).** `life workflow build/validate/run` ofrece constructor TUI no-code y ejecucion por orquestador.
-14. ~~Browser operator seguro para tareas web multi-step con politicas y auditoria.~~ **Hecho (baseline v1).** `life browser policy-init/run/audit` con allowlist de dominios y bitacora local.
+13. ~~Constructor visual de workflows y agentes (no-code) para usuarios no tecnicos.~~ **Hecho (baseline).** `life workflow build/validate/run` ofrece constructor TUI no-code y ejecucion por orquestador.
+14. ~~Browser operator seguro para tareas web multi-step con politicas y auditoria.~~ **Hecho (baseline).** `life browser policy-init/run/audit` con allowlist de dominios y bitacora local.
 15. ~~Suite de benchmarks reproducibles para validar rendimiento/latencia/consumo frente a competidores.~~ **Hecho (v1).** `life ai benchmark` + reporte persistente local.
 16. ~~`contracts/intents/v1` completados con tests de compatibilidad de schema (intent.schema.json y result.schema.json existen, falta plan.schema.json).~~ **Hecho.** `plan.schema.json` agregado y validado en tests.
 17. ~~`contracts/identity/v1` publicados y versionados con validacion de tokens/delegaciones (aun no creados).~~ **Hecho.** Schemas publicados en `contracts/identity/v1`.
 18. ~~`life intents` y `life id` implementados end-to-end con pruebas de aprobacion, rechazo y revocacion.~~ **Hecho.** Flujo plan/apply/status/validate/log + issue/list/revoke.
 19. ~~Ledger cifrado de ejecucion (`intents/results/artifacts`) con exportacion firmada para auditoria.~~ **Hecho.** Export cifrado disponible via API/CLI.
-20. ~~`device-mesh` operativo para coordinacion multi-PC con identidad de nodo, delegacion y revocacion remota.~~ **Hecho (baseline v1).** `life mesh init/add/list/delegate/revoke` con registry local y delegacion usando `life-id`.
-21. ~~Pipeline de extensiones/skills con niveles de confianza (`core`, `verified`, `community`) y aislamiento por defecto.~~ **Hecho (baseline v1).** `life skills run` usa sandbox por defecto y bloquea `community` en `--unsafe-no-sandbox`.
+20. ~~`device-mesh` operativo para coordinacion multi-PC con identidad de nodo, delegacion y revocacion remota.~~ **Hecho (baseline).** `life mesh init/add/list/delegate/revoke` con registry local y delegacion usando `life-id`.
+21. ~~Pipeline de extensiones/skills con niveles de confianza (`core`, `verified`, `community`) y aislamiento por defecto.~~ **Hecho (baseline).** `life skills run` usa sandbox por defecto y bloquea `community` en `--unsafe-no-sandbox`.
 22. ~~Autoselector de modelos (`life ai autotune`) implementado con benchmark local y persistencia por rol.~~ **Hecho.** `autotune` selecciona y aplica modelo recomendado.
 23. ~~`model-catalog` firmado con versionado y fallback offline embebido en la ISO.~~ **Hecho.** Catalogo v1 firmado + cache + fallback embebido.
 24. ~~Runtime realtime AI-first implementado con `heavy_model_slots = 1` y pruebas de no regresion de latencia.~~ **Hecho (baseline).** `model-profile.toml` persiste `heavy_model_slots = 1` y `autotune` lo aplica.
 25. ~~`trust_me_mode` implementado con validacion criptografica de `consent_bundle` y auditoria completa.~~ **Hecho.** Activacion requiere `consent_bundle` + `signature` valida (SHA-256) y deja evidencia en ledger.
-26. ~~`Soul Plane` por usuario en `~/.config/lifeos/soul/` (ver modelo biologico en `docs/lifeos_biological_model.md`).~~ **Hecho (baseline v1).** `life soul init/set/merge/show` con merge determinista `global -> user -> workplace`.
-27. ~~`Skills Plane` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar.~~ **Hecho (baseline v1).** `life skills generate/sign/install/verify/run/remove` implementa ciclo local completo.
-28. ~~`Agent Plane` con registro de agentes especializados, capacidades y gobernanza (`life-id`).~~ **Hecho (baseline v1).** `life agents register/list/show/revoke` con registry local y revocacion de tokens delegados.
+26. ~~`Soul Plane` por usuario en `~/.config/lifeos/soul/` (ver modelo biologico en `docs/lifeos_biological_model.md`).~~ **Hecho (baseline).** `life soul init/set/merge/show` con merge determinista `global -> user -> workplace`.
+27. ~~`Skills Plane` con ciclo generar -> validar -> sandbox -> firmar -> reutilizar.~~ **Hecho (baseline).** `life skills generate/sign/install/verify/run/remove` implementa ciclo local completo.
+28. ~~`Agent Plane` con registro de agentes especializados, capacidades y gobernanza (`life-id`).~~ **Hecho (baseline).** `life agents register/list/show/revoke` con registry local y revocacion de tokens delegados.
 29. ~~Actualizar `contracts/onboarding/first-boot-config.schema.json` para usar nombres de modelos GGUF en lugar de formato Ollama.~~ **Hecho.** Schema actualizado con ejemplos GGUF reales.
-30. ~~Computer Use API para automatizacion GUI (mouse/keyboard) con auditoria.~~ **Hecho (baseline v1).** API `/computer-use/status|action` + CLI `life computer-use` y eventos en ledger.
-31. ~~Comandos `life focus` y `life meeting` para modos contextuales rapidos.~~ **Hecho (baseline v1).** Presets con reglas de contexto y activacion directa.
+30. ~~Computer Use API para automatizacion GUI (mouse/keyboard) con auditoria.~~ **Hecho (baseline).** API `/computer-use/status|action` + CLI `life computer-use` y eventos en ledger.
+31. ~~Comandos `life focus` y `life meeting` para modos contextuales rapidos.~~ **Hecho (baseline).** Presets con reglas de contexto y activacion directa.
 
-### 27.3 Criterio de cierre de faltantes
+### 27.3 Criterio de cierre historico
 
 Un faltante solo se marca cerrado si incluye:
 
