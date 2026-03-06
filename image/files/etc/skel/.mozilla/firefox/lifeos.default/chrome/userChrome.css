@@ -1,0 +1,336 @@
+/* LifeOS Firefox Theme - userChrome.css
+ * Based on LifeOS Design Tokens v1.0.0
+ * This stylesheet customizes Firefox's internal UI (chrome)
+ * Colors reference: /etc/lifeos/design-tokens.json
+ */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* ============================================================================
+   ROOT VARIABLES - LifeOS Design Tokens
+   ============================================================================ */
+
+:root {
+  /* Brand Colors */
+  --lifeos-primary: #0f4c75;
+  --lifeos-accent: #3282b8;
+  --lifeos-surface: #16213e;
+  --lifeos-background: #1a1a2e;
+  
+  /* Text Colors */
+  --lifeos-text: #e8e8e8;
+  --lifeos-text-muted: #a0a0a0;
+  
+  /* State Colors */
+  --lifeos-error: #e74c3c;
+  --lifeos-warning: #f39c12;
+  --lifeos-success: #2ecc71;
+  
+  /* Interaction States */
+  --lifeos-hover: rgba(255, 255, 255, 0.08);
+  --lifeos-active: rgba(255, 255, 255, 0.12);
+  --lifeos-focus: #0f4c75;
+  
+  /* Shadows */
+  --lifeos-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --lifeos-shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  
+  /* Border Radius */
+  --lifeos-radius-md: 8px;
+  --lifeos-radius-lg: 12px;
+  
+  /* Animation */
+  --lifeos-transition-fast: 150ms;
+  --lifeos-transition-normal: 250ms;
+}
+
+/* ============================================================================
+   MAIN BROWSER WINDOW
+   ============================================================================ */
+
+#main-window {
+  background-color: var(--lifeos-background) !important;
+}
+
+/* ============================================================================
+   TAB BAR (Tabstrip)
+   ============================================================================ */
+
+#TabsToolbar {
+  background-color: var(--lifeos-surface) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Tab styling */
+.tabbrowser-tab {
+  background-color: transparent !important;
+  border-radius: var(--lifeos-radius-md) var(--lifeos-radius-md) 0 0 !important;
+  margin-inline: 2px !important;
+  transition: background-color var(--lifeos-transition-fast) ease !important;
+}
+
+.tabbrowser-tab:hover {
+  background-color: var(--lifeos-hover) !important;
+}
+
+.tabbrowser-tab[selected="true"] {
+  background-color: var(--lifeos-background) !important;
+  box-shadow: var(--lifeos-shadow-sm) !important;
+}
+
+/* Tab text */
+.tab-label {
+  color: var(--lifeos-text-muted) !important;
+}
+
+.tabbrowser-tab[selected="true"] .tab-label {
+  color: var(--lifeos-text) !important;
+}
+
+/* Tab close button */
+.tab-close-button {
+  color: var(--lifeos-text-muted) !important;
+  border-radius: var(--lifeos-radius-md) !important;
+  transition: all var(--lifeos-transition-fast) ease !important;
+}
+
+.tab-close-button:hover {
+  background-color: var(--lifeos-error) !important;
+  color: white !important;
+}
+
+/* New tab button */
+#tabs-newtab-button {
+  background-color: transparent !important;
+  border-radius: var(--lifeos-radius-md) !important;
+  transition: background-color var(--lifeos-transition-fast) ease !important;
+}
+
+#tabs-newtab-button:hover {
+  background-color: var(--lifeos-hover) !important;
+}
+
+/* ============================================================================
+   NAVIGATION BAR (URL Bar)
+   ============================================================================ */
+
+#nav-bar {
+  background-color: var(--lifeos-background) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+/* URL bar container */
+#urlbar {
+  background-color: var(--lifeos-surface) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: var(--lifeos-radius-lg) !important;
+  transition: border-color var(--lifeos-transition-fast) ease !important;
+}
+
+#urlbar[focused="true"] {
+  border-color: var(--lifeos-accent) !important;
+  box-shadow: 0 0 0 2px rgba(50, 130, 184, 0.2) !important;
+}
+
+/* URL bar text */
+#urlbar-input {
+  color: var(--lifeos-text) !important;
+}
+
+#urlbar-input::placeholder {
+  color: var(--lifeos-text-muted) !important;
+}
+
+/* ============================================================================
+   BOOKMARKS BAR
+   ============================================================================ */
+
+#PersonalToolbar {
+  background-color: var(--lifeos-surface) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+/* Bookmark items */
+.bookmark-item {
+  color: var(--lifeos-text) !important;
+  border-radius: var(--lifeos-radius-md) !important;
+  transition: background-color var(--lifeos-transition-fast) ease !important;
+}
+
+.bookmark-item:hover {
+  background-color: var(--lifeos-hover) !important;
+}
+
+/* ============================================================================
+   SIDEBAR
+   ============================================================================ */
+
+#sidebar-box {
+  background-color: var(--lifeos-surface) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+#sidebar-header {
+  background-color: var(--lifeos-surface) !important;
+  color: var(--lifeos-text) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+/* ============================================================================
+   MENUS AND POPUPS
+   ============================================================================ */
+
+menupopup,
+panel {
+  background-color: var(--lifeos-surface) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: var(--lifeos-radius-md) !important;
+  box-shadow: var(--lifeos-shadow-md) !important;
+}
+
+menuitem,
+menu {
+  color: var(--lifeos-text) !important;
+  border-radius: 4px !important;
+  margin: 2px 4px !important;
+  transition: background-color var(--lifeos-transition-fast) ease !important;
+}
+
+menuitem:hover,
+menu:hover {
+  background-color: var(--lifeos-hover) !important;
+}
+
+menuitem[selected="true"],
+menu[_moz-menuactive="true"] {
+  background-color: var(--lifeos-accent) !important;
+}
+
+/* Menu separators */
+menuseparator {
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  margin: 4px 8px !important;
+}
+
+/* ============================================================================
+   BUTTONS
+   ============================================================================ */
+
+toolbarbutton {
+  color: var(--lifeos-text) !important;
+  border-radius: var(--lifeos-radius-md) !important;
+  transition: background-color var(--lifeos-transition-fast) ease !important;
+}
+
+toolbarbutton:hover {
+  background-color: var(--lifeos-hover) !important;
+}
+
+toolbarbutton:active {
+  background-color: var(--lifeos-active) !important;
+}
+
+/* ============================================================================
+   STATUS BAR
+   ============================================================================ */
+
+#status-bar {
+  background-color: var(--lifeos-surface) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.05) !important;
+}
+
+/* ============================================================================
+   FIND BAR
+   ============================================================================ */
+
+.findbar-container {
+  background-color: var(--lifeos-surface) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: var(--lifeos-radius-md) !important;
+}
+
+/* ============================================================================
+   SCROLLBARS (Web content doesn't use these, only browser chrome)
+   ============================================================================ */
+
+scrollbar {
+  background-color: var(--lifeos-surface) !important;
+}
+
+scrollbar thumb {
+  background-color: var(--lifeos-text-muted) !important;
+  border-radius: 4px !important;
+}
+
+scrollbar thumb:hover {
+  background-color: var(--lifeos-text) !important;
+}
+
+/* ============================================================================
+   PAGE ACTION BUTTONS (in URL bar)
+   ============================================================================ */
+
+#page-action-buttons {
+  color: var(--lifeos-text-muted) !important;
+}
+
+#page-action-buttons toolbarbutton {
+  border-radius: 4px !important;
+}
+
+#page-action-buttons toolbarbutton:hover {
+  background-color: var(--lifeos-hover) !important;
+}
+
+/* ============================================================================
+   IDENTITY BOX (Secure/Insecure site indicator)
+   ============================================================================ */
+
+#identity-box {
+  color: var(--lifeos-text-muted) !important;
+}
+
+#identity-box[pageproxystate="valid"] {
+  color: var(--lifeos-success) !important;
+}
+
+#identity-box[pageproxystate="valid"].notSecure {
+  color: var(--lifeos-warning) !important;
+}
+
+#identity-box[pageproxystate="valid"].broken {
+  color: var(--lifeos-error) !important;
+}
+
+/* ============================================================================
+   DOWNLOADS INDICATOR
+   ============================================================================ */
+
+#downloads-indicator-progress-inner {
+  background-color: var(--lifeos-accent) !important;
+}
+
+/* ============================================================================
+   NOTIFICATIONS
+   ============================================================================ */
+
+notification {
+  background-color: var(--lifeos-surface) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+  color: var(--lifeos-text) !important;
+}
+
+notification[type="critical"] {
+  background-color: var(--lifeos-error) !important;
+  color: white !important;
+}
+
+notification[type="warning"] {
+  background-color: var(--lifeos-warning) !important;
+  color: var(--lifeos-background) !important;
+}
+
+notification[type="info"] {
+  background-color: var(--lifeos-accent) !important;
+  color: white !important;
+}

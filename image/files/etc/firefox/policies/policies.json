@@ -1,0 +1,90 @@
+{
+  "policies": {
+    "DisableTelemetry": true,
+    "DisablePocket": true,
+    "DisableFirefoxStudies": true,
+    "DisableFirefoxAccounts": true,
+    "DisableSetDesktopBackground": false,
+    "DisableFormHistory": true,
+    "DontCheckDefaultBrowser": true,
+    "PromptForDownloadLocation": false,
+    "Extensions": {
+      "Install": [
+        "uBlock0@raymondhill.net"
+      ],
+      "Uninstall": [],
+      "Locked": [
+        "uBlock0@raymondhill.net"
+      ]
+    },
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+    "Homepage": {
+      "URL": "about:blank",
+      "Locked": false
+    },
+    "NewTabPage": false,
+    "UserMessaging": {
+      "WhatsNew": false,
+      "ExtensionRecommendations": false,
+      "SkipOnboarding": true
+    },
+    "Cookies": {
+      "Default": true,
+      "AcceptThirdParty": "never",
+      "ExpireAtSessionEnd": false,
+      "Locked": false
+    },
+    "EnableTrackingProtection": {
+      "Value": true,
+      "Locked": true,
+      "Cryptomining": true,
+      "Fingerprinting": true
+    },
+    "BlockAboutConfig": false,
+    "BlockAboutProfiles": false,
+    "DisableAppUpdate": false,
+    "Permissions": {
+      "Location": {
+        "BlockNewRequests": true,
+        "Locked": false
+      },
+      "Camera": {
+        "BlockNewRequests": true,
+        "Locked": false
+      },
+      "Microphone": {
+        "BlockNewRequests": true,
+        "Locked": false
+      },
+      "Notifications": {
+        "BlockNewRequests": true,
+        "Locked": false
+      },
+      "VirtualReality": {
+        "BlockNewRequests": true,
+        "Locked": false
+      }
+    },
+    "SanitizeOnShutdown": {
+      "Cache": false,
+      "Cookies": false,
+      "Downloads": false,
+      "FormData": true,
+      "History": false,
+      "Sessions": false,
+      "SiteSettings": false,
+      "OfflineApps": false
+    },
+    "SearchEngines": {
+      "Default": "DuckDuckGo",
+      "PreventInstalls": false,
+      "Remove": [
+        "Google",
+        "Bing",
+        "Amazon.com",
+        "eBay"
+      ]
+    }
+  }
+}

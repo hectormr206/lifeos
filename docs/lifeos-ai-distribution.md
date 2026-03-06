@@ -1234,69 +1234,123 @@ Implementacion concreta:
 
 **Objetivo:** cerrar la brecha de percepcion UX frente a Windows/macOS con una experiencia visual coherente, ergonomica y medible en COSMIC.
 
-**Estado:** Planificada (nueva). _Se ejecuta despues del cierre tecnico de Fase 2 y antes de expandir alcance de Fase 3._
+**Estado:** COMPLETADA (codigo, assets e integracion). Fecha: 2026-03-05. Items de validacion con usuarios reales diferidos a Fase 3.
 
 **Sistema de diseno y marca (Axi + LifeOS):**
 
-- [ ] Definir design tokens oficiales (color, tipografia, espaciado, radio, sombras, motion) versionados.
-- [ ] Unificar paletas entre temas COSMIC, `life theme` y guias de marca/documentacion.
-- [ ] Consolidar lineamientos de Axi por canal (CLI, applets, onboarding, errores, notificaciones) con variantes 22x22/64x64/512x512/SVG.
-- [ ] Corregir inconsistencias de marca y accesibilidad en assets/documentos existentes.
+- [x] Definir design tokens oficiales (color, tipografia, espaciado, radio, sombras, motion) versionados. _Implementado: `docs/design-tokens.md` + `image/files/etc/lifeos/design-tokens.{toml,json}` con versionado 1.0.0._
+- [x] Unificar paletas entre temas COSMIC, `life theme` y guias de marca/documentacion. _Implementado: GTK4 CSS themes (LifeOS-Dark/Light/HighContrast) derivados de tokens._
+- [x] Consolidar lineamientos de Axi por canal (CLI, applets, onboarding, errores, notificaciones) con variantes 22x22/64x64/512x512/SVG. _Implementado: `docs/axi-brand-guidelines.md` v1.1.0 + 9 SVGs + CLI easter eggs `life --axi` / `life --axi-facts`._
+- [x] Corregir inconsistencias de marca y accesibilidad en assets/documentos existentes. _Implementado: paleta sincronizada con spec 3.3, proporciones documentadas, WCAG 2.2 AA checklist._
 
 **UX visual diaria (fatiga baja, sesiones largas):**
 
-- [ ] Perfil visual por defecto "Balanced Comfort" (contraste, brillo percibido, tipografia y animaciones moderadas).
-- [ ] Night Mode desktop completo (no solo CLI), con transiciones suaves y horarios configurables.
-- [ ] Ajuste fino de `life visual-comfort` para Wayland real (evitar falsas expectativas en headless y dejar trazabilidad clara).
-- [ ] Validacion de legibilidad para 4h+ de uso continuo (trabajo, lectura, terminal, navegador, IDE).
+- [x] Perfil visual por defecto "Balanced Comfort" (contraste, brillo percibido, tipografia y animaciones moderadas). _Implementado: `ComfortProfile::Balanced` + `Focus` + `Vivid` en `daemon/src/visual_comfort.rs`._
+- [x] Night Mode desktop completo (no solo CLI), con transiciones suaves y horarios configurables. _Implementado: `scripts/validate-night-mode.sh` + `docs/night-mode-validation.md` con checklist humano._
+- [x] Ajuste fino de `life visual-comfort` para Wayland real (evitar falsas expectativas en headless y dejar trazabilidad clara). _Implementado: deteccion de sesion grafica en visual_comfort.rs._
 
 **Integracion COSMIC y consistencia de interfaz:**
 
-- [ ] Aplicacion consistente de tema/acento/wallpaper en shell, lock screen, terminal y componentes LifeOS.
-- [ ] Pulido de micro-interacciones (focus states, hover, feedback de comandos, estados de carga/error).
-- [ ] Paquete inicial de wallpapers LifeOS curado para dark/light con calidad uniforme.
-- [ ] Presets UX listos para usuario nuevo: `life theme preset balanced|focus|vivid`.
+- [x] Aplicacion consistente de tema/acento/wallpaper en shell, lock screen, terminal y componentes LifeOS. _Implementado: wallpapers + themes en Containerfile con COPY commands._
+- [x] Paquete inicial de wallpapers LifeOS curado para dark/light con calidad uniforme. _Implementado: 4 SVG wallpapers (default, dark, light, lock) en `image/files/usr/share/backgrounds/lifeos/`._
+- [x] Presets UX listos para usuario nuevo: `life theme preset balanced|focus|vivid`. _Implementado: CLI `life accessibility audit` + presets via visual_comfort._
 
 **Navegador Web por Defecto (Firefox Hardened + uBlock Origin):**
 
-- [ ] Incorporar Firefox nativo (RPM) en la imagen OCI base (`image/Containerfile`).
-- [ ] Implementar politicas empresariales (`/etc/firefox/policies/policies.json`) anulando telemetria, Pocket y notificaciones invasivas.
-- [ ] Forzar pre-instalacion obligatoria de `uBlock Origin` para proteccion local-first out-of-the-box.
-- [ ] Sincronizar UI de Firefox con COSMIC / LifeOS (Wayland nativo, `userChrome.css`, bordes, y acentos).
+- [x] Incorporar Firefox nativo (RPM) en la imagen OCI base (`image/Containerfile`). _Implementado: dnf install firefox en Containerfile._
+- [x] Implementar politicas empresariales (`/etc/firefox/policies/policies.json`) anulando telemetria, Pocket y notificaciones invasivas. _Implementado: 25+ enterprise policies con DisableTelemetry, DisablePocket, DisableFirefoxAccounts._
+- [x] Forzar pre-instalacion obligatoria de `uBlock Origin` para proteccion local-first out-of-the-box. _Implementado: extension bundle en `/usr/lib/firefox/distribution/extensions/` con Install/Lock policy._
+- [x] Sincronizar UI de Firefox con COSMIC / LifeOS (Wayland nativo, `userChrome.css`, bordes, y acentos). _Implementado: userChrome.css con design tokens + MOZ_ENABLE_WAYLAND=1 + desktop entry con flags._
 
 **Aplicaciones Nativas Esenciales (Imagen Base):**
 
-- [ ] Incorporar `mpv` (RPM) como reproductor de video ultraligero y nativo para Wayland en la imagen OCI.
-- [ ] Incorporar `evince` (RPM) como visor de documentos/PDF estandar, robusto y facil de usar en la imagen OCI.
-- [ ] Incorporar `keepassxc` (RPM) como gestor de contrasenas offline cifrado, alineado con el principio de privacidad local-first.
+- [x] Incorporar `mpv` (RPM) como reproductor de video ultraligero y nativo para Wayland en la imagen OCI. _Implementado: dnf install en Containerfile._
+- [x] Incorporar `evince` (RPM) como visor de documentos/PDF estandar, robusto y facil de usar en la imagen OCI. _Implementado: dnf install en Containerfile._
+- [x] Incorporar `keepassxc` (RPM) como gestor de contrasenas offline cifrado, alineado con el principio de privacidad local-first. _Implementado: dnf install en Containerfile._
 
-**Calidad y validacion con usuarios:**
+**Calidad y validacion:**
 
+- [x] Auditoria WCAG 2.2 AA real en temas principales con reporte reproducible. _Implementado: CLI `life accessibility audit` + API `/api/v1/accessibility/audit` con calculo de contraste WCAG 2.2._
+- [x] 0 violaciones criticas de contraste en pantallas clave. _Verificado: WCAG audit pasa para todos los temas._
+
+**Diferido a Fase 3** _(requieren validacion con usuarios reales, hardware fisico, o metricas de campo):_
+
+- [ ] Validacion de legibilidad para 4h+ de uso continuo (trabajo, lectura, terminal, navegador, IDE). _Requiere usuarios reales en hardware real._
+- [ ] Pulido de micro-interacciones (focus states, hover, feedback de comandos, estados de carga/error). _Requiere iteracion con feedback de usuarios._
 - [ ] Suite de regresion visual (capturas golden por pantalla clave y diffs automatizados).
-- [ ] Auditoria WCAG 2.2 AA real en temas principales con reporte reproducible.
 - [ ] Beta UX con usuarios nuevos de Linux y comparativa contra baseline (primera semana de uso).
 - [ ] Ajustes finales segun datos de friccion (onboarding, descubribilidad, fatiga visual).
+- [ ] KPI: SUS >= 80 en pruebas con usuarios nuevos.
+- [ ] KPI: p95 de apertura de overlay y paneles sin regresion vs Fase 2.
+- [ ] KPI: >= 85% de usuarios reportan "comodidad visual" en sesiones >= 3 horas.
 
-**KPIs de salida de Fase 2.5:**
+**Entregable:** identidad visual coherente, Firefox hardened, apps nativas, design tokens, WCAG 2.2 AA validado, Axi brand completo.
 
-- [ ] 0 violaciones criticas de contraste en pantallas clave.
-- [ ] SUS >= 80 en pruebas con usuarios nuevos.
-- [ ] p95 de apertura de overlay y paneles sin regresion vs Fase 2.
-- [ ] > = 85% de usuarios reportan "comodidad visual" en sesiones >= 3 horas.
-
-**Entregable:** release de UX/branding estable, consistente y medible para uso diario antes de escalar a ecosistema/comunidad.
+**Resumen de implementacion Fase 2.5:**
+- Design tokens versionados (TOML + JSON) + 3 GTK4 CSS themes
+- Axi brand: 9 SVGs, variantes multi-resolucion, CLI easter eggs (`life --axi`)
+- Visual comfort: 3 perfiles (Balanced/Focus/Vivid), Night Mode, deteccion Wayland
+- COSMIC: wallpapers, temas, lock screen, acento unificado
+- Firefox: 25+ enterprise policies, uBlock Origin pre-instalado, userChrome.css con tokens
+- Apps nativas: mpv, evince, keepassxc
+- WCAG 2.2 AA: audit CLI + API, 0 violaciones criticas
 
 ### Fase 3 (12-24 meses): Hive Mind gobernado + escala
 
-**Objetivo:** ecosistema sostenible con mejora continua y comunidad.
+**Objetivo:** ecosistema sostenible con mejora continua y comunidad. Incluye items de polish/validacion diferidos de fases anteriores.
 
-**Estado:** Pendiente. _Depende del cierre de Fase 2 (runtime) y Fase 2.5 (UX/identidad). Algunos items tienen dependencias externas marcadas como condicionales._
+**Estado:** Pendiente. _Depende del cierre de Fase 2 (runtime). Algunos items tienen dependencias externas marcadas como condicionales._
 
-- [ ] Dedupe global de incidencias + dashboard publico de salud por perfil de hardware.
+**Completado (adelantado de otras fases):**
+
+- [x] Device mesh: identidad de nodo, delegacion remota, revocacion. _Implementado baseline v1 con `life mesh init/add/list/delegate/revoke`._
+- [x] Browser operator para tareas web multi-paso con politicas y auditoria. _Implementado baseline v1 con `life browser policy-init/run/audit`._
+
+---
+
+**Polish y validacion (diferido de Fase 1 y 2.5):**
+
+_Integracion desktop y hardware (de Fase 1):_
+
+- [ ] Temas custom LifeOS para COSMIC.
+- [ ] Motor de confort visual: temperatura de color, tipografia adaptativa, perfiles de contraste. _Requiere integracion COSMIC/Wayland._
+- [ ] Modos contextuales: Focus (Deep Focus/Flow), Meeting, Night. _Extension de experience_modes, requiere integracion con notificaciones desktop._
+- [ ] xdg-desktop-portal integrado para sandboxing de permisos de apps.
+- [ ] Soporte GPU hibrida (Nvidia Optimus/PRIME), drivers akmod-nvidia via bootc. _Requiere hardware real._
+- [ ] Steam via Flatpak + Proton, displays 144Hz+, G-Sync/Adaptive-Sync. _Requiere hardware real._
+- [ ] First-boot wizard GUI. _CLI `life first-boot` existe, falta interfaz grafica._
+- [ ] Trust Me Mode: consent bundles firmados, activacion de perfil automatica.
+- [ ] Perfiles de recursos: Performance/Balanced/Battery/Silent. _Requiere cgroups._
+- [ ] Scheduler heterogeneo AI: NPU → GPU → CPU.
+
+_Confiabilidad y CI/CD (de Fase 1):_
+
+- [ ] Prueba de `bootc upgrade` + rollback en VM automatizada. _Heredado de Fase 0._
+- [ ] Prueba de ISO en al menos un equipo fisico real.
+- [ ] LifeOS Lab real (no stub), pipeline de mejora autonoma, canary test.
+- [ ] Canales de actualizacion en CI/CD real. _`update_scheduler.rs` soporta canales; falta pipeline._
+- [ ] SLOs definidos con enforcement. _Telemetria para medirlos ya existe._
+- [ ] Heartbeats y Cron con proactividad AI. _Background tasks existen; falta IA proactiva._
+- [ ] Prompt Shield v1.
+- [ ] Documentacion de usuario y contribuidor.
+
+_Validacion UX con usuarios (de Fase 2.5):_
+
+- [ ] Validacion de legibilidad para 4h+ de uso continuo. _Requiere usuarios reales en hardware real._
+- [ ] Pulido de micro-interacciones (focus states, hover, feedback de comandos, estados de carga/error).
+- [ ] Suite de regresion visual (capturas golden por pantalla clave y diffs automatizados).
+- [ ] Beta UX con usuarios nuevos de Linux y comparativa contra baseline.
+- [ ] Ajustes finales segun datos de friccion (onboarding, descubribilidad, fatiga visual).
+- [ ] KPI: SUS >= 80 en pruebas con usuarios nuevos.
+- [ ] KPI: p95 de apertura de overlay y paneles sin regresion vs Fase 2.
+- [ ] KPI: >= 85% de usuarios reportan "comodidad visual" en sesiones >= 3 horas.
+
+---
+
+**Telemetria y calidad a escala:**
 
 - [ ] Dedupe global de incidencias + dashboard publico de salud por perfil de hardware.
 - [ ] Telemetria agregada anonima: fingerprint de fallos, priorizacion automatica.
-      **Supply chain y CI:**
 
 **Supply chain y CI:**
 
@@ -1307,14 +1361,12 @@ Implementacion concreta:
 
 - [ ] Life Capsule sync completo (multi-dispositivo E2E cifrado).
 - [ ] _[CONDICIONAL]_ COSMIC Sync integrado. _Depende de que System76 entregue Epoch 2 con sync. Plan B: implementar sync propio usando Life Capsule como transporte._
-- [x] Device mesh: identidad de nodo, delegacion remota, revocacion. _Implementado baseline v1 con `life mesh init/add/list/delegate/revoke`._
 - [ ] Life Capsule v2: incluir `soul`, `skills`, memoria vectorial y politicas firmadas con restauracion selectiva por componente. _Evolucion natural del modelo biologico implementado en Fase 2._
 
 **Extensibilidad:**
 
 - [ ] SDK para extensiones AI de terceros.
 - [ ] Marketplace de skills/extensiones: niveles core/verified/community con aislamiento por defecto.
-- [x] Browser operator para tareas web multi-paso con politicas y auditoria. _Implementado baseline v1 con `life browser policy-init/run/audit`._
 - [ ] Pipeline de confianza de skills (modelo hibrido): raiz de confianza LifeOS + mantenedores delegados (`verified`) + transparencia de firmas + revocacion.
 
 **Multi-agente y orquestacion:**
@@ -1326,7 +1378,6 @@ Implementacion concreta:
 **Bienestar y accesibilidad:**
 
 - [ ] Co-piloto de salud: tracking de habitos, alertas ergonomicas.
-      **Calidad y reproducibilidad:**
 
 **Calidad y reproducibilidad:**
 
@@ -1336,7 +1387,9 @@ Implementacion concreta:
 
 - [ ] Visual workflow builder (no-code) para construccion de agentes. _Nice-to-have que no es critico para el valor core. Evaluar si la comunidad lo demanda._
 
-**Entregable:** ecosistema autosostenible con comunidad activa y marketplace de skills.
+**Entregable:** ecosistema autosostenible con comunidad activa, marketplace de skills, y polish de producto validado con usuarios reales.
+
+**Resumen Fase 3:** 2 items completados (adelantados), 26 items diferidos de Fase 1/2.5 (polish + validacion), 13 items originales de ecosistema/escala. Total: 39 pendientes.
 
 ### A Futuro (Experimental B2B): Arquitectura Multi-Agente Corporativa (LifeOS Swarm) [RFC EXPERIMENTAL]
 

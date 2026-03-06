@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Axi Offline - Sleeping peacefully -->
+  <!-- Proportions: Head 30%, Gills 20%, Body 40%, Tail 10% -->
+  <!-- Palette: Rosa Axi #FF6B9D, Verde Regeneración #00D4AA, Azul LifeOS #3282B8, Púrpura Profundo #1A1A2E, Blanco Hueso #E8E8E8 -->
+  
+  <defs>
+    <linearGradient id="bodyGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF6B9D"/>
+      <stop offset="100%" style="stop-color:#E8558A"/>
+    </linearGradient>
+    <linearGradient id="gillGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#FF6B9D"/>
+      <stop offset="100%" style="stop-color:#FF8EB8"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Tail -->
+  <path d="M200 410 Q180 450 160 480 Q200 500 256 490 Q312 500 352 480 Q332 450 312 410" 
+        fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- Body -->
+  <ellipse cx="256" cy="310" rx="120" ry="100" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="3"/>
+  <ellipse cx="256" cy="330" rx="80" ry="60" fill="#FFB8D0" opacity="0.6"/>
+  
+  <!-- Small legs -->
+  <ellipse cx="200" cy="400" rx="25" ry="15" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="2"/>
+  <ellipse cx="312" cy="400" rx="25" ry="15" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="2"/>
+  
+  <!-- Gills - relaxed/droopy for sleeping -->
+  <path d="M130 165 Q95 180 85 210 Q108 200 130 188" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M125 180 Q90 195 80 225 Q103 215 125 203" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M120 195 Q85 210 75 240 Q98 230 120 218" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M382 165 Q417 180 427 210 Q404 200 382 188" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M387 180 Q422 195 432 225 Q409 215 387 203" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M392 195 Q427 210 437 240 Q414 230 392 218" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  
+  <!-- Head -->
+  <ellipse cx="256" cy="90" rx="130" ry="90" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="3"/>
+  
+  <!-- Closed eyes - sleeping - - - -->
+  <path d="M175 80 Q200 70 225 80" fill="none" stroke="#1A1A2E" stroke-width="5" stroke-linecap="round"/>
+  <path d="M287 80 Q312 70 337 80" fill="none" stroke="#1A1A2E" stroke-width="5" stroke-linecap="round"/>
+  
+  <!-- Peaceful sleeping mouth -->
+  <path d="M240 120 Q256 125 272 120" fill="none" stroke="#1A1A2E" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- Sleepy blush -->
+  <ellipse cx="165" cy="100" rx="18" ry="10" fill="#FF8EB8" opacity="0.5"/>
+  <ellipse cx="347" cy="100" rx="18" ry="10" fill="#FF8EB8" opacity="0.5"/>
+  
+  <!-- Z's for sleeping -->
+  <text x="370" y="60" font-size="28" fill="#3282B8" opacity="0.8">Z</text>
+  <text x="395" y="40" font-size="22" fill="#3282B8" opacity="0.6">z</text>
+  <text x="415" y="25" font-size="16" fill="#3282B8" opacity="0.4">z</text>
+  
+  <!-- Dream bubble -->
+  <circle cx="420" cy="90" r="25" fill="none" stroke="#3282B8" stroke-width="2" stroke-dasharray="5,3" opacity="0.5"/>
+  <circle cx="400" cy="75" r="5" fill="#3282B8" opacity="0.3"/>
+  <circle cx="390" cy="65" r="3" fill="#3282B8" opacity="0.2"/>
+  
+  <!-- Cloud in dream -->
+  <ellipse cx="420" cy="85" rx="12" ry="8" fill="#E8E8E8" opacity="0.4"/>
+  <ellipse cx="428" cy="90" rx="10" ry="7" fill="#E8E8E8" opacity="0.4"/>
+</svg>

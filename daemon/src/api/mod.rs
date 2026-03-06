@@ -29,6 +29,7 @@ use utoipa::{
 };
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::accessibility::AccessibilityManager;
 use crate::agent_runtime::AgentRuntimeManager;
 use crate::ai::AiManager;
 use crate::computer_use::{ComputerUseAction, ComputerUseManager};
@@ -64,6 +65,7 @@ pub struct ApiState {
     pub agent_runtime_manager: Arc<RwLock<AgentRuntimeManager>>,
     pub memory_plane_manager: Arc<RwLock<MemoryPlaneManager>>,
     pub visual_comfort_manager: Arc<RwLock<VisualComfortManager>>,
+    pub accessibility_manager: Arc<RwLock<AccessibilityManager>>,
     pub lab_manager: Arc<RwLock<LabManager>>,
     pub config: ApiConfig,
 }
@@ -145,6 +147,8 @@ impl Default for ApiConfig {
         post_notification,
         get_system_info,
         post_system_command,
+        run_accessibility_audit,
+        get_accessibility_settings,
     ),
     components(
         schemas(
@@ -208,6 +212,7 @@ impl Default for ApiConfig {
         (name = "updates", description = "Update management endpoints"),
         (name = "followalong", description = "FollowAlong monitoring endpoints"),
         (name = "context", description = "Context policies endpoints"),
+        (name = "accessibility", description = "Accessibility and WCAG audit endpoints"),
     ),
     modifiers(&SecurityAddon)
 )]
@@ -1080,6 +1085,9 @@ pub fn create_router(state: ApiState) -> Router {
             post(set_visual_comfort_animations),
         )
         .route("/visual-comfort/reset", post(reset_visual_comfort_session))
+        // Accessibility endpoints
+        .route("/accessibility/audit", get(run_accessibility_audit))
+        .route("/accessibility/settings", get(get_accessibility_settings))
         // Lab endpoints
         .nest("/lab", lab::lab_routes())
         .route_layer(middleware::from_fn_with_state(
@@ -5677,6 +5685,30 @@ async fn list_visual_comfort_profiles(
             contrast_level: 0.9,
             animations_enabled: false,
         },
+        ProfileInfoResponse {
+            name: "balanced".to_string(),
+            display_name: "Balanced".to_string(),
+            temperature: 5500,
+            font_scale: 1.0,
+            contrast_level: 1.0,
+            animations_enabled: true,
+        },
+        ProfileInfoResponse {
+            name: "focus".to_string(),
+            display_name: "Focus".to_string(),
+            temperature: 6000,
+            font_scale: 0.95,
+            contrast_level: 1.2,
+            animations_enabled: false,
+        },
+        ProfileInfoResponse {
+            name: "vivid".to_string(),
+            display_name: "Vivid".to_string(),
+            temperature: 6500,
+            font_scale: 1.0,
+            contrast_level: 1.1,
+            animations_enabled: true,
+        },
     ];
 
     Ok(Json(profiles))
@@ -5825,6 +5857,70 @@ async fn reset_visual_comfort_session(
     })?;
 
     Ok(StatusCode::OK)
+}
+
+// ==================== ACCESSIBILITY ENDPOINTS ====================
+
+/// Run WCAG 2.2 AA accessibility audit
+#[utoipa::path(
+    get,
+    path = "/api/v1/accessibility/audit",
+    responses(
+        (status = 200, description = "Accessibility audit completed", body = serde_json::Value),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "accessibility"
+)]
+async fn run_accessibility_audit(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let manager = state.accessibility_manager.read().await;
+    let results = manager.audit_default_themes();
+
+    let results_json: Vec<serde_json::Value> = results
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "theme_name": r.theme_name,
+                "total_pairs": r.total_pairs,
+                "passing_pairs": r.passing_pairs,
+                "failing_pairs": r.failing_pairs,
+                "overall_pass": r.overall_pass,
+                "issues": r.issues,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "results": results_json,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    })))
+}
+
+/// Get current accessibility settings
+#[utoipa::path(
+    get,
+    path = "/api/v1/accessibility/settings",
+    responses(
+        (status = 200, description = "Accessibility settings retrieved", body = serde_json::Value),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "accessibility"
+)]
+async fn get_accessibility_settings(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let manager = state.accessibility_manager.read().await;
+    let settings = manager.get_settings();
+
+    Ok(Json(serde_json::json!({
+        "high_contrast": settings.high_contrast,
+        "reduce_motion": settings.reduce_motion,
+        "font_scale": settings.font_scale,
+        "min_font_size": settings.min_font_size,
+        "screen_reader_support": settings.screen_reader_support,
+        "keyboard_navigation": settings.keyboard_navigation,
+    })))
 }
 
 // ==================== SERVER STARTUP ====================

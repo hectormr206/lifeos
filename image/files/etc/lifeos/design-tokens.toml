@@ -1,0 +1,172 @@
+# LifeOS Design Tokens
+# Version: 1.0.0
+# Last Updated: 2026-03-05
+# 
+# This file defines the canonical design tokens for LifeOS.
+# Changes to this file should be reflected in:
+#   - docs/design-tokens.md (documentation)
+#   - image/files/etc/lifeos/design-tokens.json (tooling version)
+
+[meta]
+version = "1.0.0"
+name = "LifeOS Design Tokens"
+description = "Canonical design tokens for LifeOS visual identity"
+
+# =============================================================================
+# COLORS
+# =============================================================================
+
+[colors.brand]
+primary = "#0f4c75"      # LifeOS Blue - Primary actions, links, focus rings
+accent = "#3282b8"       # Lighter Blue - Accents, highlights, secondary actions
+surface = "#16213e"      # Surface color - Cards, panels, elevated surfaces
+background = "#1a1a2e"   # Background - Main background
+
+[colors.dark]
+text = "#e8e8e8"         # Primary text
+text_muted = "#a0a0a0"   # Secondary text, placeholders
+error = "#e74c3c"        # Error states, destructive actions
+warning = "#f39c12"      # Warning states
+success = "#2ecc71"      # Success states, confirmations
+
+[colors.light]
+text = "#1a1a2e"         # Primary text
+text_muted = "#6b6b7b"   # Secondary text, placeholders
+error = "#c0392b"        # Error states, destructive actions
+warning = "#d68910"      # Warning states
+success = "#27ae60"      # Success states, confirmations
+
+[colors.high_contrast]
+primary = "#00ff00"      # Green for maximum visibility
+accent = "#ffff00"       # Yellow accent
+background = "#000000"   # Pure black background
+surface = "#1a1a1a"      # Near-black surface
+text = "#ffffff"         # Pure white text
+text_muted = "#cccccc"   # Muted text
+error = "#ff0000"        # Error - bright red
+warning = "#ffff00"      # Warning - bright yellow
+success = "#00ff00"      # Success - bright green
+
+[colors.state]
+hover = "rgba(255, 255, 255, 0.08)"      # Hover overlay
+active = "rgba(255, 255, 255, 0.12)"     # Active/pressed state
+disabled = "rgba(255, 255, 255, 0.38)"   # Disabled elements
+focus = "#0f4c75"                         # Focus ring color (same as primary)
+
+# =============================================================================
+# TYPOGRAPHY
+# =============================================================================
+
+[typography.font_family]
+primary = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif"
+mono = "'JetBrains Mono', 'Fira Code', 'Consolas', monospace"
+
+[typography.sizes]
+xs = 12     # Captions, labels, small text
+sm = 14     # Body small, secondary text
+base = 16   # Body text, default
+lg = 18     # Large body text
+xl = 20     # Headings level 4
+"2xl" = 24  # Headings level 3
+"3xl" = 30  # Headings level 2
+"4xl" = 36  # Headings level 1
+"5xl" = 48  # Display headings
+"6xl" = 72  # Hero text
+
+[typography.weights]
+normal = 400     # Body text
+medium = 500     # Emphasized text
+semibold = 600   # Subheadings
+bold = 700       # Headings, strong emphasis
+
+[typography.line_heights]
+none = 1.0      # Single line
+tight = 1.25    # Headings
+normal = 1.5    # Body text
+relaxed = 1.75  # Long form text
+
+# =============================================================================
+# SPACING (4px base unit)
+# =============================================================================
+
+[spacing]
+"0" = 0     # No spacing
+"1" = 4     # Tight spacing (0.25rem)
+"2" = 8     # Small spacing (0.5rem)
+"3" = 12    # Medium-small (0.75rem)
+"4" = 16    # Default spacing (1rem)
+"5" = 24    # Medium spacing (1.5rem)
+"6" = 32    # Large spacing (2rem)
+"7" = 48    # Section spacing (3rem)
+"8" = 64    # Large section (4rem)
+"9" = 96    # XL spacing (6rem)
+"10" = 128  # Hero spacing (8rem)
+
+# =============================================================================
+# SHADOWS (Elevation)
+# =============================================================================
+
+[shadows]
+none = "none"
+sm = "0 1px 2px rgba(0, 0, 0, 0.3)"
+md = "0 4px 6px rgba(0, 0, 0, 0.4)"
+lg = "0 10px 15px rgba(0, 0, 0, 0.5)"
+xl = "0 20px 25px rgba(0, 0, 0, 0.6)"
+"2xl" = "0 25px 50px rgba(0, 0, 0, 0.7)"
+
+# =============================================================================
+# BORDERS
+# =============================================================================
+
+[borders.radius]
+none = 0
+sm = 4     # Small radius
+md = 8     # Default radius
+lg = 12    # Large radius
+xl = 16    # Extra large
+full = 9999  # Pills, circles
+
+[borders.widths]
+"0" = 0    # No border
+"1" = 1    # Default border
+"2" = 2    # Emphasis border
+"4" = 4    # Strong emphasis
+
+# =============================================================================
+# ANIMATION
+# =============================================================================
+
+[animation.durations]
+fast = 150     # Quick interactions
+normal = 250   # Default transitions
+slow = 400     # Complex animations
+slower = 600   # Page transitions
+
+[animation.easing]
+linear = "linear"
+ease_in = "cubic-bezier(0.4, 0, 1, 1)"
+ease_out = "cubic-bezier(0, 0, 0.2, 1)"
+ease_in_out = "cubic-bezier(0.4, 0, 0.2, 1)"
+
+# =============================================================================
+# Z-INDEX
+# =============================================================================
+
+[z_index]
+base = 0
+dropdown = 100
+sticky = 200
+fixed = 300
+modal_backdrop = 400
+modal = 500
+popover = 600
+tooltip = 700
+
+# =============================================================================
+# WCAG COMPLIANCE
+# =============================================================================
+
+[accessibility]
+dark_contrast_ratio = 7.5     # AAA level
+light_contrast_ratio = 7.2    # AAA level
+high_contrast_ratio = 21.0    # AAA level (maximum)

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+  <title>LifeOS Dark Wallpaper</title>
+  <desc>LifeOS dark variant wallpaper for dark mode</desc>
+  
+  <!-- Background gradient - Darker variant -->
+  <defs>
+    <linearGradient id="bg-gradient-dark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d0d1a;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#1a1a2e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0f4c75;stop-opacity:0.8" />
+    </linearGradient>
+    
+    <!-- Accent glow -->
+    <radialGradient id="accent-glow-dark" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#3282b8;stop-opacity:0.15" />
+      <stop offset="100%" style="stop-color:#3282b8;stop-opacity:0" />
+    </radialGradient>
+    
+    <!-- Stars pattern -->
+    <pattern id="stars" width="100" height="100" patternUnits="userSpaceOnUse">
+      <circle cx="25" cy="25" r="1" fill="#ffffff" opacity="0.3"/>
+      <circle cx="75" cy="75" r="0.5" fill="#ffffff" opacity="0.2"/>
+      <circle cx="50" cy="10" r="0.8" fill="#ffffff" opacity="0.25"/>
+    </pattern>
+  </defs>
+  
+  <!-- Main background -->
+  <rect width="1920" height="1080" fill="url(#bg-gradient-dark)"/>
+  
+  <!-- Stars overlay -->
+  <rect width="1920" height="1080" fill="url(#stars)"/>
+  
+  <!-- Accent glow -->
+  <ellipse cx="960" cy="540" rx="800" ry="500" fill="url(#accent-glow-dark)"/>
+  
+  <!-- Decorative elements -->
+  <circle cx="100" cy="100" r="200" fill="#0f4c75" opacity="0.05"/>
+  <circle cx="1820" cy="980" r="300" fill="#3282b8" opacity="0.05"/>
+  
+  <!-- Abstract wave pattern -->
+  <path d="M0,800 Q480,700 960,800 T1920,750 L1920,1080 L0,1080 Z" fill="#0f4c75" opacity="0.1"/>
+  <path d="M0,850 Q480,750 960,850 T1920,800 L1920,1080 L0,1080 Z" fill="#3282b8" opacity="0.05"/>
+  
+  <!-- LifeOS logo mark (abstract) -->
+  <g transform="translate(960, 540)" opacity="0.05">
+    <circle cx="0" cy="0" r="200" fill="none" stroke="#ffffff" stroke-width="2"/>
+    <circle cx="0" cy="0" r="130" fill="none" stroke="#ffffff" stroke-width="1.5"/>
+    <circle cx="0" cy="0" r="60" fill="#3282b8"/>
+  </g>
+</svg>

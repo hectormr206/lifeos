@@ -202,6 +202,56 @@ clean-all: clean
 	rm -rf ~/.cargo/git/db/
 
 # =============================================================================
+# Axi Visual Assets
+# =============================================================================
+
+## Export Axi SVGs to PNGs (requires Inkscape or rsvg-convert)
+axi-pngs:
+	@echo "🎨 Exporting Axi PNGs from SVGs..."
+	@SVG_DIR="image/files/usr/share/icons/LifeOS/axi/svg"; \
+	PNG_512="image/files/usr/share/icons/LifeOS/axi/png/512"; \
+	PNG_64="image/files/usr/share/icons/LifeOS/axi/png/64"; \
+	PNG_32="image/files/usr/share/icons/LifeOS/axi/png/32"; \
+	NOTIF="image/files/usr/share/icons/LifeOS/axi/notification"; \
+	if command -v inkscape >/dev/null 2>&1; then \
+		for svg in $$SVG_DIR/*.svg; do \
+			name=$$(basename "$$svg" .svg); \
+			echo "  Exporting $$name..."; \
+			inkscape "$$svg" --export-type="png" --export-filename="$$PNG_512/$${name}.png" -w 512 -h 512 2>/dev/null || true; \
+			inkscape "$$svg" --export-type="png" --export-filename="$$PNG_64/$${name}.png" -w 64 -h 64 2>/dev/null || true; \
+			inkscape "$$svg" --export-type="png" --export-filename="$$PNG_32/$${name}.png" -w 32 -h 32 2>/dev/null || true; \
+		done; \
+		echo "✅ PNGs exported successfully with Inkscape"; \
+	elif command -v rsvg-convert >/dev/null 2>&1; then \
+		for svg in $$SVG_DIR/*.svg; do \
+			name=$$(basename "$$svg" .svg); \
+			echo "  Exporting $$name..."; \
+			rsvg-convert -w 512 -h 512 "$$svg" > "$$PNG_512/$${name}.png"; \
+			rsvg-convert -w 64 -h 64 "$$svg" > "$$PNG_64/$${name}.png"; \
+			rsvg-convert -w 32 -h 32 "$$svg" > "$$PNG_32/$${name}.png"; \
+		done; \
+		echo "✅ PNGs exported successfully with rsvg-convert"; \
+	else \
+		echo "⚠️  Neither Inkscape nor rsvg-convert found. Install one of:"; \
+		echo "    - Inkscape: dnf install inkscape"; \
+		echo "    - librsvg2-tools: dnf install librsvg2-tools"; \
+	fi
+
+## Create ICO from PNGs (requires ImageMagick)
+axi-ico:
+	@echo "🖼️  Creating ICO files from PNGs..."
+	@PNG_32="image/files/usr/share/icons/LifeOS/axi/png/32"; \
+	if command -v convert >/dev/null 2>&1; then \
+		for png in $$PNG_32/*.png; do \
+			name=$$(basename "$$png" .png); \
+			convert "$$png" "$${PNG_32%/*}/../$${name}.ico" 2>/dev/null || true; \
+		done; \
+		echo "✅ ICO files created"; \
+	else \
+		echo "⚠️  ImageMagick not found. Install with: dnf install ImageMagick"; \
+	fi
+
+# =============================================================================
 # CI Targets (for GitHub Actions)
 # =============================================================================
 

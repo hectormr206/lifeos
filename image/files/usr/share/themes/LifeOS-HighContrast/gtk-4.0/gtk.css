@@ -1,0 +1,601 @@
+/* LifeOS High Contrast Theme - GTK4 CSS
+ * Version: 1.0.0
+ * 
+ * GTK4 CSS for maximum accessibility with WCAG AAA compliance
+ * Maximum contrast (21:1) for users with visual impairments
+ */
+
+/* =============================================================================
+ * COLOR DEFINITIONS (@define-color for GTK4 compatibility)
+ * ============================================================================= */
+
+@define-color lifeos_primary #00ff00;
+@define-color lifeos_accent #ffff00;
+@define-color lifeos_surface #1a1a1a;
+@define-color lifeos_background #000000;
+@define-color lifeos_text #ffffff;
+@define-color lifeos_text_muted #cccccc;
+@define-color lifeos_error #ff0000;
+@define-color lifeos_warning #ffff00;
+@define-color lifeos_success #00ff00;
+@define-color lifeos_hover rgba(255, 255, 255, 0.15);
+@define-color lifeos_active rgba(255, 255, 255, 0.25);
+@define-color lifeos_disabled rgba(255, 255, 255, 0.4);
+
+/* =============================================================================
+ * BASE THEME SETTINGS
+ * ============================================================================= */
+
+window.background {
+  background-color: @lifeos_background;
+  color: @lifeos_text;
+}
+
+/* =============================================================================
+ * BUTTONS - High visibility with thick borders
+ * ============================================================================= */
+
+button {
+  background-color: @lifeos_surface;
+  color: @lifeos_text;
+  border: 3px solid @lifeos_text;
+  border-radius: 8px;
+  padding: 10px 20px;
+  min-height: 28px;
+  font-weight: 600;
+}
+
+button:hover {
+  background-color: @lifeos_hover;
+  border-color: @lifeos_primary;
+}
+
+button:active {
+  background-color: @lifeos_primary;
+  color: @lifeos_background;
+}
+
+button:disabled {
+  background-color: @lifeos_disabled;
+  color: alpha(@lifeos_text, 0.5);
+  border-color: alpha(@lifeos_text, 0.5);
+}
+
+/* Primary button variant */
+button.suggested-action,
+button.primary {
+  background-color: @lifeos_primary;
+  color: @lifeos_background;
+  border-color: @lifeos_primary;
+}
+
+button.suggested-action:hover,
+button.primary:hover {
+  background-color: #00cc00;
+  border-color: #00cc00;
+}
+
+button.suggested-action:active,
+button.primary:active {
+  background-color: #009900;
+}
+
+/* Destructive button variant */
+button.destructive-action {
+  background-color: @lifeos_error;
+  color: @lifeos_background;
+  border-color: @lifeos_error;
+}
+
+button.destructive-action:hover {
+  background-color: #cc0000;
+  border-color: #cc0000;
+}
+
+/* Flat button variant */
+button.flat {
+  background-color: transparent;
+  border: 3px solid transparent;
+}
+
+button.flat:hover {
+  background-color: @lifeos_hover;
+  border-color: @lifeos_text;
+}
+
+/* =============================================================================
+ * ENTRIES (Text Inputs) - Extra thick borders
+ * ============================================================================= */
+
+entry {
+  background-color: @lifeos_surface;
+  color: @lifeos_text;
+  border: 3px solid @lifeos_text;
+  border-radius: 8px;
+  padding: 10px 14px;
+  min-height: 28px;
+  font-size: 1.1em;
+}
+
+entry:focus {
+  border-color: @lifeos_primary;
+  box-shadow: 0 0 0 4px alpha(@lifeos_primary, 0.5);
+}
+
+entry:disabled {
+  background-color: alpha(@lifeos_surface, 0.5);
+  color: alpha(@lifeos_text, 0.5);
+  border-color: alpha(@lifeos_text, 0.5);
+}
+
+entry.error {
+  border-color: @lifeos_error;
+}
+
+entry.warning {
+  border-color: @lifeos_warning;
+}
+
+entry.success {
+  border-color: @lifeos_success;
+}
+
+/* Placeholder text */
+entry > placeholder {
+  color: @lifeos_text_muted;
+}
+
+/* =============================================================================
+ * LABELS - Large and bold for readability
+ * ============================================================================= */
+
+label {
+  color: @lifeos_text;
+  font-size: 1.05em;
+}
+
+label:disabled {
+  color: alpha(@lifeos_text, 0.5);
+}
+
+.dim-label,
+label.muted {
+  color: @lifeos_text_muted;
+}
+
+/* Title labels */
+label.title {
+  font-weight: 700;
+  font-size: 1.3em;
+}
+
+/* =============================================================================
+ * SCROLLBARS - Larger and more visible
+ * ============================================================================= */
+
+scrollbar {
+  background-color: transparent;
+  border: none;
+}
+
+scrollbar slider {
+  background-color: @lifeos_text;
+  border: 2px solid @lifeos_text;
+  border-radius: 4px;
+  min-width: 14px;
+  min-height: 14px;
+}
+
+scrollbar slider:hover {
+  background-color: @lifeos_primary;
+  border-color: @lifeos_primary;
+}
+
+scrollbar.fine-tune slider {
+  min-width: 8px;
+  min-height: 8px;
+}
+
+/* =============================================================================
+ * MENUS AND POPOVERS - High contrast borders
+ * ============================================================================= */
+
+popover,
+menu {
+  background-color: @lifeos_surface;
+  border: 3px solid @lifeos_text;
+  border-radius: 12px;
+  padding: 8px 0;
+  box-shadow: 0 10px 15px rgba(0, 0, 0, 0.8);
+}
+
+menuitem {
+  padding: 10px 20px;
+  color: @lifeos_text;
+  font-size: 1.05em;
+}
+
+menuitem:hover {
+  background-color: @lifeos_hover;
+  border-left: 4px solid @lifeos_primary;
+}
+
+menuitem:disabled {
+  color: alpha(@lifeos_text, 0.5);
+}
+
+/* =============================================================================
+ * NOTEBOOKS (Tabs) - Clear tab indicators
+ * ============================================================================= */
+
+notebook {
+  background-color: @lifeos_background;
+}
+
+notebook header {
+  background-color: @lifeos_surface;
+  border-bottom: 3px solid @lifeos_text;
+}
+
+notebook tab {
+  background-color: transparent;
+  color: @lifeos_text_muted;
+  padding: 10px 20px;
+  border-radius: 8px 8px 0 0;
+  font-weight: 600;
+}
+
+notebook tab:hover {
+  background-color: @lifeos_hover;
+  color: @lifeos_text;
+}
+
+notebook tab:checked {
+  background-color: @lifeos_background;
+  color: @lifeos_primary;
+  border: 3px solid @lifeos_primary;
+  border-bottom: none;
+}
+
+/* =============================================================================
+ * SWITCHES (Toggle) - Large and clear states
+ * ============================================================================= */
+
+switch {
+  background-color: alpha(@lifeos_text, 0.4);
+  border: 3px solid @lifeos_text;
+  border-radius: 24px;
+  min-width: 56px;
+  min-height: 28px;
+}
+
+switch:checked {
+  background-color: @lifeos_primary;
+  border-color: @lifeos_primary;
+}
+
+switch slider {
+  background-color: @lifeos_text;
+  border: 2px solid @lifeos_text;
+  border-radius: 50%;
+  min-width: 22px;
+  min-height: 22px;
+}
+
+switch:checked slider {
+  background-color: @lifeos_background;
+}
+
+/* =============================================================================
+ * CHECKBOXES AND RADIO BUTTONS - Extra large
+ * ============================================================================= */
+
+check,
+radio {
+  background-color: @lifeos_surface;
+  border: 3px solid @lifeos_text;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+check {
+  border-radius: 6px;
+}
+
+radio {
+  border-radius: 50%;
+}
+
+check:checked,
+radio:checked {
+  background-color: @lifeos_primary;
+  border-color: @lifeos_primary;
+}
+
+check:disabled,
+radio:disabled {
+  background-color: @lifeos_disabled;
+  border-color: alpha(@lifeos_text, 0.5);
+}
+
+/* =============================================================================
+ * PROGRESS BARS - High visibility
+ * ============================================================================= */
+
+progressbar {
+  background-color: alpha(@lifeos_text, 0.3);
+  border: 2px solid @lifeos_text;
+  border-radius: 4px;
+  min-height: 10px;
+}
+
+progressbar trough {
+  background-color: transparent;
+}
+
+progressbar progress {
+  background-color: @lifeos_primary;
+  border-radius: 2px;
+}
+
+/* =============================================================================
+ * SLIDERS (Scale) - Large handles
+ * ============================================================================= */
+
+scale {
+  padding: 10px;
+}
+
+scale trough {
+  background-color: alpha(@lifeos_text, 0.3);
+  border: 2px solid @lifeos_text;
+  border-radius: 4px;
+  min-height: 10px;
+}
+
+scale highlight {
+  background-color: @lifeos_primary;
+  border-radius: 2px;
+}
+
+scale slider {
+  background-color: @lifeos_primary;
+  border: 3px solid @lifeos_text;
+  border-radius: 50%;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+/* =============================================================================
+ * CALENDARS - High contrast grid
+ * ============================================================================= */
+
+calendar {
+  background-color: @lifeos_surface;
+  color: @lifeos_text;
+  border: 3px solid @lifeos_text;
+  border-radius: 12px;
+  padding: 10px;
+}
+
+calendar.header {
+  background-color: alpha(@lifeos_primary, 0.3);
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+calendar.button:hover {
+  background-color: @lifeos_hover;
+}
+
+calendar.highlight {
+  color: @lifeos_primary;
+  font-weight: 700;
+}
+
+calendar:selected {
+  background-color: @lifeos_primary;
+  color: @lifeos_background;
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+/* =============================================================================
+ * TOOLTIPS - High contrast with border
+ * ============================================================================= */
+
+tooltip {
+  background-color: @lifeos_surface;
+  color: @lifeos_text;
+  border: 3px solid @lifeos_text;
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.8);
+  font-size: 1.05em;
+}
+
+/* =============================================================================
+ * LINKS - Underlined for clarity
+ * ============================================================================= */
+
+link {
+  color: @lifeos_primary;
+  text-decoration: underline;
+}
+
+link:hover {
+  color: #00cc00;
+}
+
+link:visited {
+  color: #009900;
+}
+
+/* =============================================================================
+ * SEPARATORS - High visibility
+ * ============================================================================= */
+
+separator {
+  background-color: @lifeos_text;
+  min-height: 2px;
+  min-width: 2px;
+}
+
+separator.vertical {
+  min-height: 0;
+  min-width: 2px;
+}
+
+/* =============================================================================
+ * CARDS AND FRAMES - Clear boundaries
+ * ============================================================================= */
+
+frame,
+.card {
+  background-color: @lifeos_surface;
+  border: 3px solid @lifeos_text;
+  border-radius: 12px;
+}
+
+frame > border,
+.card {
+  border: 3px solid @lifeos_text;
+}
+
+/* =============================================================================
+ * HEADER BARS
+ * ============================================================================= */
+
+headerbar {
+  background-color: @lifeos_surface;
+  border-bottom: 3px solid @lifeos_text;
+  padding: 10px 18px;
+}
+
+headerbar button {
+  background-color: transparent;
+  border: 3px solid transparent;
+  border-radius: 8px;
+  padding: 8px 14px;
+}
+
+headerbar button:hover {
+  background-color: @lifeos_hover;
+  border-color: @lifeos_text;
+}
+
+/* =============================================================================
+ * SIDEBAR - Clear selection
+ * ============================================================================= */
+
+.sidebar {
+  background-color: @lifeos_surface;
+  border-right: 3px solid @lifeos_text;
+}
+
+.sidebar row {
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 1.05em;
+}
+
+.sidebar row:hover {
+  background-color: @lifeos_hover;
+}
+
+.sidebar row:selected {
+  background-color: alpha(@lifeos_primary, 0.4);
+  border-left: 4px solid @lifeos_primary;
+}
+
+/* =============================================================================
+ * SPINNER
+ * ============================================================================= */
+
+spinner {
+  color: @lifeos_primary;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+/* =============================================================================
+ * TREE VIEWS AND LISTS
+ * ============================================================================= */
+
+treeview,
+list {
+  background-color: @lifeos_background;
+  color: @lifeos_text;
+}
+
+treeview header button {
+  background-color: @lifeos_surface;
+  color: @lifeos_text;
+  font-weight: 700;
+  border-bottom: 3px solid @lifeos_text;
+}
+
+row {
+  padding: 10px 18px;
+  font-size: 1.05em;
+}
+
+row:hover {
+  background-color: @lifeos_hover;
+}
+
+row:selected {
+  background-color: alpha(@lifeos_primary, 0.4);
+  border-left: 4px solid @lifeos_primary;
+}
+
+/* =============================================================================
+ * DIALOGS AND WINDOWS
+ * ============================================================================= */
+
+dialog,
+.window-frame {
+  background-color: @lifeos_background;
+  border: 3px solid @lifeos_text;
+  border-radius: 12px;
+  box-shadow: 0 20px 25px rgba(0, 0, 0, 0.8);
+}
+
+dialog > box {
+  padding: 18px;
+}
+
+/* Action area at bottom of dialogs */
+dialog .dialog-action-area {
+  padding-top: 18px;
+  border-top: 3px solid @lifeos_text;
+}
+
+/* =============================================================================
+ * ACCESSIBILITY - STRONG FOCUS INDICATORS
+ * ============================================================================= */
+
+*:focus {
+  outline: 4px solid @lifeos_primary;
+  outline-offset: 3px;
+}
+
+*:focus-visible {
+  outline: 4px solid @lifeos_primary;
+  outline-offset: 3px;
+}
+
+/* Disable animations for users who prefer reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Extra high contrast text selection */
+selection,
+selection:focus {
+  background-color: @lifeos_primary;
+  color: @lifeos_background;
+}

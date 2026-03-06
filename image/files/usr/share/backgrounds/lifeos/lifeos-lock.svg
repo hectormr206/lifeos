@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+  <title>LifeOS Lock Screen Wallpaper</title>
+  <desc>LifeOS lock screen wallpaper with privacy-focused minimal design</desc>
+  
+  <!-- Background gradient -->
+  <defs>
+    <linearGradient id="bg-gradient-lock" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a14;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#0f0f1e;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0d2d47;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Subtle glow for lock indicator area -->
+    <radialGradient id="lock-glow" cx="50%" cy="40%" r="30%">
+      <stop offset="0%" style="stop-color:#3282b8;stop-opacity:0.1" />
+      <stop offset="100%" style="stop-color:#3282b8;stop-opacity:0" />
+    </radialGradient>
+    
+    <!-- Noise texture -->
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="4" result="noise"/>
+      <feColorMatrix type="saturate" values="0"/>
+      <feBlend in="SourceGraphic" in2="noise" mode="multiply" result="blend"/>
+    </filter>
+  </defs>
+  
+  <!-- Main background -->
+  <rect width="1920" height="1080" fill="url(#bg-gradient-lock)"/>
+  
+  <!-- Subtle noise texture overlay -->
+  <rect width="1920" height="1080" fill="#ffffff" opacity="0.01" filter="url(#noise)"/>
+  
+  <!-- Lock glow area -->
+  <ellipse cx="960" cy="432" rx="400" ry="250" fill="url(#lock-glow)"/>
+  
+  <!-- Decorative geometric elements -->
+  <g opacity="0.05">
+    <!-- Corner accents -->
+    <path d="M0,0 L200,0 L0,200 Z" fill="#3282b8"/>
+    <path d="M1920,1080 L1720,1080 L1920,880 Z" fill="#3282b8"/>
+    
+    <!-- Subtle lines -->
+    <line x1="0" y1="200" x2="200" y2="0" stroke="#ffffff" stroke-width="1"/>
+    <line x1="1720" y1="1080" x2="1920" y2="880" stroke="#ffffff" stroke-width="1"/>
+  </g>
+  
+  <!-- Abstract lock icon area (centered, subtle) -->
+  <g transform="translate(960, 400)" opacity="0.08">
+    <!-- Lock body -->
+    <rect x="-60" y="0" width="120" height="100" rx="15" fill="none" stroke="#ffffff" stroke-width="3"/>
+    <!-- Lock shackle -->
+    <path d="M-35,0 L-35,-30 A35,35 0 0,1 35,-30 L35,0" fill="none" stroke="#ffffff" stroke-width="3"/>
+  </g>
+  
+  <!-- Time area indicator (subtle line) -->
+  <line x1="760" y1="540" x2="1160" y2="540" stroke="#ffffff" stroke-width="1" opacity="0.1"/>
+  
+  <!-- Bottom privacy indicator -->
+  <g transform="translate(960, 950)" opacity="0.15">
+    <circle cx="-20" cy="0" r="4" fill="#3282b8"/>
+    <circle cx="0" cy="0" r="4" fill="#3282b8"/>
+    <circle cx="20" cy="0" r="4" fill="#3282b8"/>
+  </g>
+</svg>

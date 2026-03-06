@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 
+mod ascii;
 mod commands;
 mod config;
 mod daemon_client;
@@ -16,8 +17,16 @@ use commands::{first_boot::FirstBootArgs, init::InitArgs, status::StatusArgs, up
 #[command(about = "LifeOS - First-IA System CLI")]
 #[command(version = "0.1.0")]
 struct Cli {
+    /// Show Axi the Axolotl ASCII art with a motivational message
+    #[clap(long = "axi", global = true)]
+    axi: bool,
+
+    /// Show fun facts about axolotls and LifeOS
+    #[clap(long = "axi-facts", global = true)]
+    axi_facts: bool,
+
     #[clap(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -124,6 +133,9 @@ enum Commands {
     /// Visual comfort settings (color temperature, font scale, animations)
     #[clap(subcommand)]
     VisualComfort(commands::visual_comfort::VisualComfortCommands),
+    /// Accessibility settings and WCAG audit
+    #[clap(subcommand)]
+    Accessibility(commands::accessibility::AccessibilityCommands),
     /// xdg-desktop-portal integration for app sandboxing
     #[clap(subcommand)]
     Portal(commands::portal::PortalCommands),
@@ -169,56 +181,108 @@ enum FeedbackCommands {
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // Handle easter egg flags first
+    if cli.axi {
+        print_axi_easter_egg();
+        return Ok(());
+    }
+
+    if cli.axi_facts {
+        print_axi_facts();
+        return Ok(());
+    }
+
+    // Handle regular commands
     match cli.command {
-        Commands::Init(args) => commands::init::execute(args).await,
-        Commands::FirstBoot(args) => commands::first_boot::execute(args).await,
-        Commands::Status(args) => commands::status::execute(args).await,
-        Commands::Update(args) => commands::update::execute(args).await,
-        Commands::Rollback => commands::rollback::execute().await,
-        Commands::Recover => commands::recover::execute().await,
-        Commands::Check => {
+        Some(Commands::Init(args)) => commands::init::execute(args).await,
+        Some(Commands::FirstBoot(args)) => commands::first_boot::execute(args).await,
+        Some(Commands::Status(args)) => commands::status::execute(args).await,
+        Some(Commands::Update(args)) => commands::update::execute(args).await,
+        Some(Commands::Rollback) => commands::rollback::execute().await,
+        Some(Commands::Recover) => commands::recover::execute().await,
+        Some(Commands::Check) => {
             let status = std::process::Command::new("lifeos-check")
                 .status()
                 .map_err(|e| anyhow::anyhow!("Failed to run lifeos-check: {}", e))?;
             std::process::exit(status.code().unwrap_or(1));
         }
-        Commands::Config(args) => commands::config::execute(args).await,
-        Commands::Capsule(args) => commands::capsule::execute(args).await,
-        Commands::Ai(args) => commands::ai::execute(args).await,
-        Commands::Assistant(args) => commands::assistant::execute(args).await,
-        Commands::Adapters(args) => commands::adapters::execute(args).await,
-        Commands::Voice(args) => commands::voice::execute(args).await,
-        Commands::Overlay(args) => commands::overlay::execute(args).await,
-        Commands::Mode(args) => commands::mode::execute(args).await,
-        Commands::Focus => commands::focus::execute_focus().await,
-        Commands::Meeting => commands::focus::execute_meeting().await,
-        Commands::FollowAlong(args) => {
+        Some(Commands::Config(args)) => commands::config::execute(args).await,
+        Some(Commands::Capsule(args)) => commands::capsule::execute(args).await,
+        Some(Commands::Ai(args)) => commands::ai::execute(args).await,
+        Some(Commands::Assistant(args)) => commands::assistant::execute(args).await,
+        Some(Commands::Adapters(args)) => commands::adapters::execute(args).await,
+        Some(Commands::Voice(args)) => commands::voice::execute(args).await,
+        Some(Commands::Overlay(args)) => commands::overlay::execute(args).await,
+        Some(Commands::Mode(args)) => commands::mode::execute(args).await,
+        Some(Commands::Focus) => commands::focus::execute_focus().await,
+        Some(Commands::Meeting) => commands::focus::execute_meeting().await,
+        Some(Commands::FollowAlong(args)) => {
             commands::followalong::execute_followalong_command(args).await
         }
-        Commands::Context(args) => commands::context::execute(args).await,
-        Commands::Intents(args) => commands::intents::execute(args).await,
-        Commands::Id(args) => commands::id::execute(args).await,
-        Commands::Workspace(args) => commands::workspace::execute(args).await,
-        Commands::Onboarding(args) => commands::onboarding::execute(args).await,
-        Commands::Memory(args) => commands::memory::execute(args).await,
-        Commands::Permissions(args) => commands::permissions::execute(args).await,
-        Commands::Sync(args) => commands::sync::execute(args).await,
-        Commands::Skills(args) => commands::skills::execute(args).await,
-        Commands::Agents(args) => commands::agents::execute(args).await,
-        Commands::Soul(args) => commands::soul::execute(args).await,
-        Commands::Mesh(args) => commands::mesh::execute(args).await,
-        Commands::Browser(args) => commands::browser::execute(args).await,
-        Commands::ComputerUse(args) => commands::computer_use::execute(args).await,
-        Commands::Workflow(args) => commands::workflow::execute(args).await,
-        Commands::Store(args) => commands::store::execute(args).await,
-        Commands::Telemetry(args) => commands::telemetry::execute(args).await,
-        Commands::Theme(args) => commands::theme::execute(args).await,
-        Commands::VisualComfort(args) => commands::visual_comfort::execute(args).await,
-        Commands::Portal(args) => commands::portal::execute(args).await,
-        Commands::Beta(cmd) => handle_beta_command(cmd).await,
-        Commands::Feedback(cmd) => handle_feedback_command(cmd).await,
-        Commands::Lab(args) => commands::lab::execute(args).await,
+        Some(Commands::Context(args)) => commands::context::execute(args).await,
+        Some(Commands::Intents(args)) => commands::intents::execute(args).await,
+        Some(Commands::Id(args)) => commands::id::execute(args).await,
+        Some(Commands::Workspace(args)) => commands::workspace::execute(args).await,
+        Some(Commands::Onboarding(args)) => commands::onboarding::execute(args).await,
+        Some(Commands::Memory(args)) => commands::memory::execute(args).await,
+        Some(Commands::Permissions(args)) => commands::permissions::execute(args).await,
+        Some(Commands::Sync(args)) => commands::sync::execute(args).await,
+        Some(Commands::Skills(args)) => commands::skills::execute(args).await,
+        Some(Commands::Agents(args)) => commands::agents::execute(args).await,
+        Some(Commands::Soul(args)) => commands::soul::execute(args).await,
+        Some(Commands::Mesh(args)) => commands::mesh::execute(args).await,
+        Some(Commands::Browser(args)) => commands::browser::execute(args).await,
+        Some(Commands::ComputerUse(args)) => commands::computer_use::execute(args).await,
+        Some(Commands::Workflow(args)) => commands::workflow::execute(args).await,
+        Some(Commands::Store(args)) => commands::store::execute(args).await,
+        Some(Commands::Telemetry(args)) => commands::telemetry::execute(args).await,
+        Some(Commands::Theme(args)) => commands::theme::execute(args).await,
+        Some(Commands::VisualComfort(args)) => commands::visual_comfort::execute(args).await,
+        Some(Commands::Accessibility(args)) => commands::accessibility::execute(args).await,
+        Some(Commands::Portal(args)) => commands::portal::execute(args).await,
+        Some(Commands::Beta(cmd)) => handle_beta_command(cmd).await,
+        Some(Commands::Feedback(cmd)) => handle_feedback_command(cmd).await,
+        Some(Commands::Lab(args)) => commands::lab::execute(args).await,
+        None => {
+            // No command provided, show help
+            println!("{}", "LifeOS - First-IA System CLI".bold().blue());
+            println!();
+            println!("Use {} to see available commands.", "life --help".cyan());
+            println!();
+            println!("Try {} for a surprise! 🦎", "life --axi".cyan());
+            Ok(())
+        }
     }
+}
+
+/// Print Axi the Axolotl ASCII art with a motivational message
+fn print_axi_easter_egg() {
+    println!();
+    println!("{}", "🦎 Axi says:".bold().magenta());
+    println!();
+    println!("{}", ascii::AXI_ASCII.bright_magenta());
+    println!();
+    println!("  \"{}\"", ascii::get_random_quote().italic());
+    println!();
+    println!(
+        "  {}",
+        "— Axi, your friendly neighborhood axolotl 🦎".dimmed()
+    );
+    println!();
+}
+
+/// Print fun facts about axolotls
+fn print_axi_facts() {
+    println!();
+    println!("{}", "🦎 Axi's Fun Facts About Axolotls".bold().magenta());
+    println!("{}", "================================".magenta());
+    println!();
+    println!("{}", ascii::get_random_fact());
+    println!();
+    println!("{}", ascii::AXI_MINI.bright_magenta());
+    println!();
+    println!("  {}", "Want more facts? Run me again!".dimmed());
+    println!();
 }
 
 async fn handle_beta_command(cmd: BetaCommands) -> anyhow::Result<()> {

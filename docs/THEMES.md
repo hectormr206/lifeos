@@ -113,6 +113,120 @@ life theme accent purple
 life theme accent teal
 ```
 
+## Focus Presets
+
+LifeOS provides visual comfort presets optimized for different work scenarios. These presets adjust blue light filtering, color temperature, and saturation to reduce eye strain and improve focus.
+
+### Balanced Preset ⚖️
+
+A balanced setting for general work with moderate eye protection.
+
+**Settings:**
+- Blue light reduction: ~30%
+- Color temperature: 4500K (mild warm)
+- Saturation: Standard
+- Best for: General office work, browsing, communication
+
+```bash
+life focus balanced
+```
+
+**When to use:**
+- Daytime work sessions
+- Mixed activities (reading, writing, coding)
+- When you want subtle eye protection without noticeable color shift
+
+### Vivid Preset 🎨
+
+Enhanced colors with warm tones for creative work and media.
+
+**Settings:**
+- Blue light reduction: ~20%
+- Color temperature: 5000K (slightly warm)
+- Saturation: Enhanced (+15%)
+- Best for: Design work, photo/video editing, presentations
+
+```bash
+life focus vivid
+```
+
+**When to use:**
+- Creative work requiring color accuracy
+- Presentations and meetings
+- When you want vibrant visuals
+
+### Night Preset 🌙
+
+Maximum eye protection for late evening and night work.
+
+**Settings:**
+- Blue light reduction: ~70%
+- Color temperature: 2700K (warm amber)
+- Saturation: Reduced
+- Best for: Evening work, pre-sleep screen time
+
+```bash
+life focus night
+```
+
+**When to use:**
+- Working after sunset
+- 2+ hours before bedtime
+- In low-light environments
+
+### Custom Preset
+
+Create your own preset with specific parameters:
+
+```bash
+# Custom intensity (0-100)
+life focus night --intensity 80
+
+# Custom color temperature (2700K-6500K)
+life focus --temperature 3500
+
+# Combine settings
+life focus --intensity 60 --temperature 4000
+```
+
+### Automatic Scheduling
+
+Enable automatic preset switching based on time:
+
+```bash
+# Auto-switch: balanced during day, night after sunset
+life focus auto
+
+# Custom schedule
+life focus night --schedule 20:00-06:00
+```
+
+### Preset Comparison
+
+| Preset | Blue Light ↓ | Temperature | Saturation | Best For |
+|--------|--------------|-------------|------------|----------|
+| Balanced | ~30% | 4500K | Standard | General work |
+| Vivid | ~20% | 5000K | +15% | Creative work |
+| Night | ~70% | 2700K | Reduced | Evening/bedtime |
+
+### Eye Comfort Tips
+
+1. **20-20-20 Rule**: Every 20 minutes, look at something 20 feet away for 20 seconds
+2. **Brightness Match**: Match screen brightness to room lighting
+3. **Night Mode Early**: Enable night mode 2-3 hours before bed
+4. **Take Breaks**: Even with eye protection, regular breaks are important
+
+### Validation
+
+To validate that Night Mode effectively reduces eye strain during extended sessions:
+
+```bash
+# Run the validation script for 3+ hour sessions
+./scripts/validate-night-mode.sh start
+
+# See docs/night-mode-validation.md for full procedure
+```
+
 ## Wallpaper Management
 
 ### Setting Wallpapers

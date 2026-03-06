@@ -1,0 +1,142 @@
+{
+  "meta": {
+    "version": "1.0.0",
+    "name": "LifeOS Design Tokens",
+    "description": "Canonical design tokens for LifeOS visual identity"
+  },
+  "colors": {
+    "brand": {
+      "primary": "#0f4c75",
+      "accent": "#3282b8",
+      "surface": "#16213e",
+      "background": "#1a1a2e"
+    },
+    "dark": {
+      "text": "#e8e8e8",
+      "text_muted": "#a0a0a0",
+      "error": "#e74c3c",
+      "warning": "#f39c12",
+      "success": "#2ecc71"
+    },
+    "light": {
+      "text": "#1a1a2e",
+      "text_muted": "#6b6b7b",
+      "error": "#c0392b",
+      "warning": "#d68910",
+      "success": "#27ae60"
+    },
+    "high_contrast": {
+      "primary": "#00ff00",
+      "accent": "#ffff00",
+      "background": "#000000",
+      "surface": "#1a1a1a",
+      "text": "#ffffff",
+      "text_muted": "#cccccc",
+      "error": "#ff0000",
+      "warning": "#ffff00",
+      "success": "#00ff00"
+    },
+    "state": {
+      "hover": "rgba(255, 255, 255, 0.08)",
+      "active": "rgba(255, 255, 255, 0.12)",
+      "disabled": "rgba(255, 255, 255, 0.38)",
+      "focus": "#0f4c75"
+    }
+  },
+  "typography": {
+    "font_family": {
+      "primary": "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif",
+      "mono": "'JetBrains Mono', 'Fira Code', 'Consolas', monospace"
+    },
+    "sizes": {
+      "xs": 12,
+      "sm": 14,
+      "base": 16,
+      "lg": 18,
+      "xl": 20,
+      "2xl": 24,
+      "3xl": 30,
+      "4xl": 36,
+      "5xl": 48,
+      "6xl": 72
+    },
+    "weights": {
+      "normal": 400,
+      "medium": 500,
+      "semibold": 600,
+      "bold": 700
+    },
+    "line_heights": {
+      "none": 1.0,
+      "tight": 1.25,
+      "normal": 1.5,
+      "relaxed": 1.75
+    }
+  },
+  "spacing": {
+    "0": 0,
+    "1": 4,
+    "2": 8,
+    "3": 12,
+    "4": 16,
+    "5": 24,
+    "6": 32,
+    "7": 48,
+    "8": 64,
+    "9": 96,
+    "10": 128
+  },
+  "shadows": {
+    "none": "none",
+    "sm": "0 1px 2px rgba(0, 0, 0, 0.3)",
+    "md": "0 4px 6px rgba(0, 0, 0, 0.4)",
+    "lg": "0 10px 15px rgba(0, 0, 0, 0.5)",
+    "xl": "0 20px 25px rgba(0, 0, 0, 0.6)",
+    "2xl": "0 25px 50px rgba(0, 0, 0, 0.7)"
+  },
+  "borders": {
+    "radius": {
+      "none": 0,
+      "sm": 4,
+      "md": 8,
+      "lg": 12,
+      "xl": 16,
+      "full": 9999
+    },
+    "widths": {
+      "0": 0,
+      "1": 1,
+      "2": 2,
+      "4": 4
+    }
+  },
+  "animation": {
+    "durations": {
+      "fast": 150,
+      "normal": 250,
+      "slow": 400,
+      "slower": 600
+    },
+    "easing": {
+      "linear": "linear",
+      "ease_in": "cubic-bezier(0.4, 0, 1, 1)",
+      "ease_out": "cubic-bezier(0, 0, 0.2, 1)",
+      "ease_in_out": "cubic-bezier(0.4, 0, 0.2, 1)"
+    }
+  },
+  "z_index": {
+    "base": 0,
+    "dropdown": 100,
+    "sticky": 200,
+    "fixed": 300,
+    "modal_backdrop": 400,
+    "modal": 500,
+    "popover": 600,
+    "tooltip": 700
+  },
+  "accessibility": {
+    "dark_contrast_ratio": 7.5,
+    "light_contrast_ratio": 7.2,
+    "high_contrast_ratio": 21.0
+  }
+}

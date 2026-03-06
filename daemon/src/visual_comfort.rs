@@ -76,6 +76,9 @@ pub enum ComfortProfile {
     Reading,
     Design,
     Meeting,
+    Balanced,
+    Focus,
+    Vivid,
 }
 
 impl ComfortProfile {
@@ -86,6 +89,9 @@ impl ComfortProfile {
             ComfortProfile::Reading => "reading",
             ComfortProfile::Design => "design",
             ComfortProfile::Meeting => "meeting",
+            ComfortProfile::Balanced => "balanced",
+            ComfortProfile::Focus => "focus",
+            ComfortProfile::Vivid => "vivid",
         }
     }
 
@@ -96,6 +102,9 @@ impl ComfortProfile {
             "reading" => Some(ComfortProfile::Reading),
             "design" => Some(ComfortProfile::Design),
             "meeting" => Some(ComfortProfile::Meeting),
+            "balanced" => Some(ComfortProfile::Balanced),
+            "focus" => Some(ComfortProfile::Focus),
+            "vivid" => Some(ComfortProfile::Vivid),
             _ => None,
         }
     }
@@ -107,6 +116,9 @@ impl ComfortProfile {
             ComfortProfile::Reading => "Reading",
             ComfortProfile::Design => "Design",
             ComfortProfile::Meeting => "Meeting",
+            ComfortProfile::Balanced => "Balanced",
+            ComfortProfile::Focus => "Focus",
+            ComfortProfile::Vivid => "Vivid",
         }
     }
 
@@ -116,6 +128,9 @@ impl ComfortProfile {
             ComfortProfile::Reading => 4000,
             ComfortProfile::Design => 6500,
             ComfortProfile::Meeting => 4500,
+            ComfortProfile::Balanced => 5500,
+            ComfortProfile::Focus => 6000,
+            ComfortProfile::Vivid => 6500,
             ComfortProfile::Default => 6500,
         }
     }
@@ -126,6 +141,9 @@ impl ComfortProfile {
             ComfortProfile::Reading => 1.15,
             ComfortProfile::Design => 1.0,
             ComfortProfile::Meeting => 1.05,
+            ComfortProfile::Balanced => 1.0,
+            ComfortProfile::Focus => 0.95,
+            ComfortProfile::Vivid => 1.0,
             ComfortProfile::Default => 1.0,
         }
     }
@@ -136,6 +154,9 @@ impl ComfortProfile {
             ComfortProfile::Reading => 1.0,
             ComfortProfile::Design => 1.0,
             ComfortProfile::Meeting => 0.9,
+            ComfortProfile::Balanced => 1.0,
+            ComfortProfile::Focus => 1.2,
+            ComfortProfile::Vivid => 1.1,
             ComfortProfile::Default => 1.0,
         }
     }
@@ -146,6 +167,9 @@ impl ComfortProfile {
             ComfortProfile::Reading => true,
             ComfortProfile::Design => true,
             ComfortProfile::Meeting => false,
+            ComfortProfile::Balanced => true,
+            ComfortProfile::Focus => false,
+            ComfortProfile::Vivid => true,
             ComfortProfile::Default => true,
         }
     }

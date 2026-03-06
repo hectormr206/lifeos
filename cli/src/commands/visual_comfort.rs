@@ -7,7 +7,7 @@ use crate::daemon_client;
 pub enum VisualComfortCommands {
     /// Show current visual comfort status
     Status,
-    /// Set comfort profile (default|coding|reading|design|meeting)
+    /// Set comfort profile (default|coding|reading|design|meeting|balanced|focus|vivid)
     Profile {
         /// Profile name
         name: String,
@@ -181,7 +181,9 @@ async fn show_status() -> anyhow::Result<()> {
 async fn set_profile(name: &str) -> anyhow::Result<()> {
     let profile = name.to_lowercase();
 
-    let valid_profiles = ["default", "coding", "reading", "design", "meeting"];
+    let valid_profiles = [
+        "default", "coding", "reading", "design", "meeting", "balanced", "focus", "vivid",
+    ];
     if !valid_profiles.contains(&profile.as_str()) {
         anyhow::bail!(
             "Invalid profile '{}'. Must be: {}",
@@ -222,6 +224,13 @@ async fn set_profile(name: &str) -> anyhow::Result<()> {
         "reading" => ("4000K", "115%", "Warm sepia tones, larger fonts"),
         "design" => ("6500K", "100%", "Neutral colors for accurate work"),
         "meeting" => ("4500K", "105%", "Lower brightness, warm tones"),
+        "balanced" => ("5500K", "100%", "Balanced visual comfort for mixed tasks"),
+        "focus" => ("6000K", "95%", "Deep focus, high contrast, no distractions"),
+        "vivid" => (
+            "6500K",
+            "100%",
+            "Vibrant colors, enhanced visual experience",
+        ),
         _ => ("6500K", "100%", "Standard settings"),
     };
 

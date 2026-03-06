@@ -140,6 +140,7 @@ pub struct DaemonState {
     pub agent_runtime_manager: Arc<RwLock<AgentRuntimeManager>>,
     pub memory_plane_manager: Arc<RwLock<MemoryPlaneManager>>,
     pub visual_comfort_manager: Arc<RwLock<VisualComfortManager>>,
+    pub accessibility_manager: Arc<RwLock<AccessibilityManager>>,
     pub lab_manager: Arc<RwLock<LabManager>>,
     pub bootstrap_token: Option<String>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
@@ -224,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
         visual_comfort_manager: Arc::new(RwLock::new(VisualComfortManager::new(PathBuf::from(
             "/var/lib/lifeos",
         )))),
+        accessibility_manager: Arc::new(RwLock::new(AccessibilityManager::new())),
         lab_manager: Arc::new(RwLock::new(
             LabManager::new(lab::LabConfig::default()).unwrap_or_else(|e| {
                 warn!("Failed to initialize LabManager: {}", e);
@@ -372,6 +374,7 @@ async fn start_api_server(state: Arc<DaemonState>) {
         agent_runtime_manager: state.agent_runtime_manager.clone(),
         memory_plane_manager: state.memory_plane_manager.clone(),
         visual_comfort_manager: state.visual_comfort_manager.clone(),
+        accessibility_manager: state.accessibility_manager.clone(),
         lab_manager: state.lab_manager.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,

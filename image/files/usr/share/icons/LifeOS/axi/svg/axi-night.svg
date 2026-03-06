@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Axi Night Mode - Pajamas, yawning, warmer colors -->
+  <!-- Proportions: Head 30%, Gills 20%, Body 40%, Tail 10% -->
+  <!-- Palette: Rosa Axi #FF6B9D, Verde Regeneración #00D4AA, Azul LifeOS #3282B8, Púrpura Profundo #1A1A2E, Blanco Hueso #E8E8E8 -->
+  <!-- Night mode uses warmer, softer tones -->
+  
+  <defs>
+    <linearGradient id="bodyGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF8EB8"/>
+      <stop offset="100%" style="stop-color:#FF6B9D"/>
+    </linearGradient>
+    <linearGradient id="gillGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#FFB8D0"/>
+      <stop offset="100%" style="stop-color:#FF8EB8"/>
+    </linearGradient>
+    <linearGradient id="pajamaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#5A4A7A"/>
+      <stop offset="100%" style="stop-color:#3A2A5A"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Night sky background hint -->
+  <circle cx="50" cy="50" r="8" fill="#E8E8E8" opacity="0.3"/>
+  <circle cx="450" cy="80" r="6" fill="#E8E8E8" opacity="0.3"/>
+  <circle cx="420" cy="40" r="4" fill="#E8E8E8" opacity="0.3"/>
+  
+  <!-- Tail with pajama pattern -->
+  <path d="M200 410 Q180 450 160 480 Q200 500 256 490 Q312 500 352 480 Q332 450 312 410" 
+        fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- Body with pajama overlay -->
+  <ellipse cx="256" cy="310" rx="120" ry="100" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="3"/>
+  <!-- Pajama top -->
+  <ellipse cx="256" cy="300" rx="100" ry="80" fill="url(#pajamaGradient)" opacity="0.7"/>
+  <!-- Pajama pattern (stars) -->
+  <text x="200" y="280" font-size="16" fill="#E8E8E8" opacity="0.5">★</text>
+  <text x="280" y="320" font-size="14" fill="#E8E8E8" opacity="0.5">★</text>
+  <text x="230" y="350" font-size="12" fill="#E8E8E8" opacity="0.5">★</text>
+  
+  <!-- Small legs -->
+  <ellipse cx="200" cy="400" rx="25" ry="15" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="2"/>
+  <ellipse cx="312" cy="400" rx="25" ry="15" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="2"/>
+  
+  <!-- Gills - relaxed/droopy -->
+  <path d="M130 165 Q95 180 85 210 Q108 200 130 188" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M125 180 Q90 195 80 225 Q103 215 125 203" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M120 195 Q85 210 75 240 Q98 230 120 218" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M382 165 Q417 180 427 210 Q404 200 382 188" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M387 180 Q422 195 432 225 Q409 215 387 203" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  <path d="M392 195 Q427 210 437 240 Q414 230 392 218" fill="url(#gillGradient)" stroke="#FFB8D0" stroke-width="2"/>
+  
+  <!-- Head -->
+  <ellipse cx="256" cy="90" rx="130" ry="90" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="3"/>
+  
+  <!-- Sleepy nightcap -->
+  <path d="M150 40 Q256 -10 362 40 Q380 60 390 100" fill="url(#pajamaGradient)" stroke="#3A2A5A" stroke-width="3"/>
+  <ellipse cx="390" cy="105" rx="15" ry="12" fill="#FFFFFF" opacity="0.8"/>
+  <!-- Nightcap pom-pom -->
+  <circle cx="400" cy="120" r="12" fill="#FFFFFF"/>
+  
+  <!-- Eyes - Sleepy/half-closed -->
+  <ellipse cx="200" cy="80" rx="30" ry="18" fill="#E8E8E8"/>
+  <ellipse cx="312" cy="80" rx="30" ry="18" fill="#E8E8E8"/>
+  <ellipse cx="205" cy="82" rx="15" ry="10" fill="#1A1A2E"/>
+  <ellipse cx="317" cy="82" rx="15" ry="10" fill="#1A1A2E"/>
+  <circle cx="208" cy="78" r="4" fill="#FFFFFF"/>
+  <circle cx="320" cy="78" r="4" fill="#FFFFFF"/>
+  
+  <!-- Yawning mouth -->
+  <ellipse cx="256" cy="125" rx="25" ry="20" fill="#1A1A2E"/>
+  <ellipse cx="256" cy="130" rx="15" ry="10" fill="#FFB8D0"/>
+  
+  <!-- Sleepy blush -->
+  <ellipse cx="165" cy="95" rx="18" ry="10" fill="#FF8EB8" opacity="0.6"/>
+  <ellipse cx="347" cy="95" rx="18" ry="10" fill="#FF8EB8" opacity="0.6"/>
+  
+  <!-- Z's for sleep -->
+  <text x="380" y="150" font-size="24" fill="#3282B8" opacity="0.7">Z</text>
+  <text x="400" y="130" font-size="20" fill="#3282B8" opacity="0.5">z</text>
+  <text x="415" y="115" font-size="16" fill="#3282B8" opacity="0.3">z</text>
+</svg>

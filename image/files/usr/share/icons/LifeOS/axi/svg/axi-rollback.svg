@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Axi Rollback/Recovery - Green glow effect, regenerating -->
+  <!-- Proportions: Head 30%, Gills 20%, Body 40%, Tail 10% -->
+  <!-- Palette: Rosa Axi #FF6B9D, Verde Regeneración #00D4AA, Azul LifeOS #3282B8, Púrpura Profundo #1A1A2E, Blanco Hueso #E8E8E8 -->
+  
+  <defs>
+    <linearGradient id="bodyGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF6B9D"/>
+      <stop offset="100%" style="stop-color:#E8558A"/>
+    </linearGradient>
+    <linearGradient id="gillGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#FF6B9D"/>
+      <stop offset="100%" style="stop-color:#FF8EB8"/>
+    </linearGradient>
+    <!-- Green regeneration glow -->
+    <radialGradient id="regenGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#00D4AA;stop-opacity:0.8"/>
+      <stop offset="70%" style="stop-color:#00D4AA;stop-opacity:0.3"/>
+      <stop offset="100%" style="stop-color:#00D4AA;stop-opacity:0"/>
+    </radialGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Regeneration glow aura -->
+  <ellipse cx="256" cy="256" rx="200" ry="200" fill="url(#regenGlow)" filter="url(#glow)"/>
+  
+  <!-- Tail with green glow -->
+  <path d="M200 410 Q180 450 160 480 Q200 500 256 490 Q312 500 352 480 Q332 450 312 410" 
+        fill="url(#bodyGradient)" stroke="#00D4AA" stroke-width="5" filter="url(#glow)"/>
+  
+  <!-- Body with green accents -->
+  <ellipse cx="256" cy="310" rx="120" ry="100" fill="url(#bodyGradient)" stroke="#00D4AA" stroke-width="5" filter="url(#glow)"/>
+  <ellipse cx="256" cy="330" rx="80" ry="60" fill="#FFB8D0" opacity="0.6"/>
+  
+  <!-- Regeneration lines -->
+  <g stroke="#00D4AA" stroke-width="3" opacity="0.7" filter="url(#glow)">
+    <path d="M200 270 L220 290 L200 310" fill="none"/>
+    <path d="M312 270 L292 290 L312 310" fill="none"/>
+    <path d="M240 350 L256 370 L272 350" fill="none"/>
+  </g>
+  
+  <!-- Small legs -->
+  <ellipse cx="200" cy="400" rx="25" ry="15" fill="url(#bodyGradient)" stroke="#00D4AA" stroke-width="3"/>
+  <ellipse cx="312" cy="400" rx="25" ry="15" fill="url(#bodyGradient)" stroke="#00D4AA" stroke-width="3"/>
+  
+  <!-- Gills with green glow -->
+  <path d="M130 160 Q100 170 90 195 Q110 190 130 180" fill="url(#gillGradient)" stroke="#00D4AA" stroke-width="3"/>
+  <path d="M125 175 Q95 185 85 210 Q105 205 125 195" fill="url(#gillGradient)" stroke="#00D4AA" stroke-width="3"/>
+  <path d="M120 190 Q90 200 80 225 Q100 220 120 210" fill="url(#gillGradient)" stroke="#00D4AA" stroke-width="3"/>
+  <path d="M382 160 Q412 170 422 195 Q402 190 382 180" fill="url(#gillGradient)" stroke="#00D4AA" stroke-width="3"/>
+  <path d="M387 175 Q417 185 427 210 Q407 205 387 195" fill="url(#gillGradient)" stroke="#00D4AA" stroke-width="3"/>
+  <path d="M392 190 Q422 200 432 225 Q412 220 392 210" fill="url(#gillGradient)" stroke="#00D4AA" stroke-width="3"/>
+  
+  <!-- Head -->
+  <ellipse cx="256" cy="90" rx="130" ry="90" fill="url(#bodyGradient)" stroke="#00D4AA" stroke-width="5" filter="url(#glow)"/>
+  
+  <!-- Eyes - Hopeful expression -->
+  <ellipse cx="200" cy="80" rx="30" ry="35" fill="#E8E8E8"/>
+  <ellipse cx="312" cy="80" rx="30" ry="35" fill="#E8E8E8"/>
+  <ellipse cx="205" cy="82" rx="15" ry="18" fill="#1A1A2E"/>
+  <ellipse cx="317" cy="82" rx="15" ry="18" fill="#1A1A2E"/>
+  <circle cx="210" cy="76" r="6" fill="#FFFFFF"/>
+  <circle cx="322" cy="76" r="6" fill="#FFFFFF"/>
+  
+  <!-- Hopeful smile -->
+  <path d="M220 120 Q256 145 292 120" fill="none" stroke="#1A1A2E" stroke-width="5" stroke-linecap="round"/>
+  
+  <!-- Rosy cheeks -->
+  <ellipse cx="165" cy="105" rx="20" ry="12" fill="#00D4AA" opacity="0.4"/>
+  <ellipse cx="347" cy="105" rx="20" ry="12" fill="#00D4AA" opacity="0.4"/>
+</svg>

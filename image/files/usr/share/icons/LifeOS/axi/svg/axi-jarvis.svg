@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Axi Jarvis Mode - Intelligence glasses, analytical expression -->
+  <!-- Proportions: Head 30%, Gills 20%, Body 40%, Tail 10% -->
+  <!-- Palette: Rosa Axi #FF6B9D, Verde Regeneración #00D4AA, Azul LifeOS #3282B8, Púrpura Profundo #1A1A2E, Blanco Hueso #E8E8E8 -->
+  
+  <defs>
+    <linearGradient id="bodyGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#FF6B9D"/>
+      <stop offset="100%" style="stop-color:#E8558A"/>
+    </linearGradient>
+    <linearGradient id="gillGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#FF6B9D"/>
+      <stop offset="100%" style="stop-color:#FF8EB8"/>
+    </linearGradient>
+    <linearGradient id="glassGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3282B8"/>
+      <stop offset="100%" style="stop-color:#1A5A8A"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Tail -->
+  <path d="M200 410 Q180 450 160 480 Q200 500 256 490 Q312 500 352 480 Q332 450 312 410" 
+        fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="3" stroke-linecap="round"/>
+  
+  <!-- Body -->
+  <ellipse cx="256" cy="310" rx="120" ry="100" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="3"/>
+  <ellipse cx="256" cy="330" rx="80" ry="60" fill="#FFB8D0" opacity="0.6"/>
+  
+  <!-- Small legs -->
+  <ellipse cx="200" cy="400" rx="25" ry="15" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="2"/>
+  <ellipse cx="312" cy="400" rx="25" ry="15" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="2"/>
+  
+  <!-- Gills -->
+  <path d="M130 160 Q100 170 90 195 Q110 190 130 180" fill="url(#gillGradient)" stroke="#FF8EB8" stroke-width="2"/>
+  <path d="M125 175 Q95 185 85 210 Q105 205 125 195" fill="url(#gillGradient)" stroke="#FF8EB8" stroke-width="2"/>
+  <path d="M120 190 Q90 200 80 225 Q100 220 120 210" fill="url(#gillGradient)" stroke="#FF8EB8" stroke-width="2"/>
+  <path d="M382 160 Q412 170 422 195 Q402 190 382 180" fill="url(#gillGradient)" stroke="#FF8EB8" stroke-width="2"/>
+  <path d="M387 175 Q417 185 427 210 Q407 205 387 195" fill="url(#gillGradient)" stroke="#FF8EB8" stroke-width="2"/>
+  <path d="M392 190 Q422 200 432 225 Q412 220 392 210" fill="url(#gillGradient)" stroke="#FF8EB8" stroke-width="2"/>
+  
+  <!-- Head -->
+  <ellipse cx="256" cy="90" rx="130" ry="90" fill="url(#bodyGradient)" stroke="#E8558A" stroke-width="3"/>
+  
+  <!-- Intelligence glasses frame -->
+  <rect x="160" y="60" width="80" height="50" rx="10" fill="none" stroke="#1A1A2E" stroke-width="4"/>
+  <rect x="272" y="60" width="80" height="50" rx="10" fill="none" stroke="#1A1A2E" stroke-width="4"/>
+  <!-- Bridge -->
+  <path d="M240 85 Q256 75 272 85" fill="none" stroke="#1A1A2E" stroke-width="4"/>
+  <!-- Glass lenses with blue tint -->
+  <rect x="164" y="64" width="72" height="42" rx="8" fill="url(#glassGradient)" opacity="0.3"/>
+  <rect x="276" y="64" width="72" height="42" rx="8" fill="url(#glassGradient)" opacity="0.3"/>
+  <!-- Glass shine -->
+  <path d="M170 70 L190 70" stroke="#FFFFFF" stroke-width="3" opacity="0.6"/>
+  <path d="M282 70 L302 70" stroke="#FFFFFF" stroke-width="3" opacity="0.6"/>
+  
+  <!-- Eyes behind glasses - Analytical expression -->
+  <ellipse cx="200" cy="85" rx="20" ry="22" fill="#E8E8E8"/>
+  <ellipse cx="312" cy="85" rx="20" ry="22" fill="#E8E8E8"/>
+  <ellipse cx="204" cy="87" rx="10" ry="12" fill="#1A1A2E"/>
+  <ellipse cx="316" cy="87" rx="10" ry="12" fill="#1A1A2E"/>
+  <circle cx="207" cy="82" r="4" fill="#FFFFFF"/>
+  <circle cx="319" cy="82" r="4" fill="#FFFFFF"/>
+  
+  <!-- Analytical smile -->
+  <path d="M230 125 Q256 135 282 125" fill="none" stroke="#1A1A2E" stroke-width="4" stroke-linecap="round"/>
+  
+  <!-- Rosy cheeks -->
+  <ellipse cx="165" cy="105" rx="18" ry="10" fill="#FF8EB8" opacity="0.5"/>
+  <ellipse cx="347" cy="105" rx="18" ry="10" fill="#FF8EB8" opacity="0.5"/>
+  
+  <!-- AI processing indicator -->
+  <g transform="translate(380, 30)">
+    <circle cx="0" cy="0" r="15" fill="#3282B8" opacity="0.3"/>
+    <circle cx="0" cy="0" r="8" fill="#3282B8"/>
+    <circle cx="0" cy="-25" r="4" fill="#00D4AA"/>
+  </g>
+</svg>
