@@ -111,9 +111,22 @@ RUN dnf -y install \
     steam steam-devices \
     && dnf clean all
 
+# --- Firefox Hardened (Privacy-first browser) ---
+RUN dnf -y install \
+    firefox \
+    && dnf clean all
+
+# Download uBlock Origin extension for global installation
+# This is installed as a "distributed extension" that cannot be uninstalled by users
+RUN mkdir -p /usr/lib/firefox/distribution/extensions && \
+    UBLOCK_URL="https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/addon-607454-latest.xpi" && \
+    curl -fSL --retry 3 -o /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi "${UBLOCK_URL}" && \
+    echo ">>> uBlock Origin extension downloaded" && \
+    test -s /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi
+
 # --- Herramientas del Sistema ---
 RUN dnf -y install \
-    toolbox btrfs-progs smartmontools podman buildah flatpak \
+    toolbox btrfs-progs smartmontools podman podman-docker podman-compose buildah flatpak \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git wget \
     wlsunset gammastep \
     pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
@@ -122,6 +135,11 @@ RUN dnf -y install \
     lorax-templates-generic \
     shim-x64 grub2-efi-x64 grub2-efi-x64-modules grub2-efi-x64-cdboot \
     glibc-langpack-es \
+    && dnf clean all
+
+# --- Aplicaciones Nativas Esenciales ---
+RUN dnf -y install \
+    mpv evince keepassxc \
     && dnf clean all
 
 # bootc-image-builder expects EFI binaries under /boot/efi/EFI/fedora when producing installer ISOs.
@@ -198,16 +216,44 @@ COPY image/files/etc/lifeos/tuf/timestamp.json  /etc/lifeos/tuf/timestamp.json
 COPY image/files/etc/lifeos/tuf/snapshot.json   /etc/lifeos/tuf/snapshot.json
 COPY image/files/etc/lifeos/tuf/targets.json    /etc/lifeos/tuf/targets.json
 COPY image/files/etc/lifeos/cosmic-theme.toml  /etc/lifeos/cosmic-theme.toml
+COPY image/files/etc/lifeos/design-tokens.toml /etc/lifeos/design-tokens.toml
+COPY image/files/etc/lifeos/design-tokens.json /etc/lifeos/design-tokens.json
+
+# LifeOS Wallpapers
+COPY image/files/usr/share/backgrounds/lifeos /usr/share/backgrounds/lifeos
+
+# LifeOS Icon Theme
+COPY image/files/usr/share/icons/LifeOS /usr/share/icons/LifeOS
 
 RUN echo "LIFEOS_CHANNEL=${LIFEOS_CHANNEL}" > /etc/lifeos/channel && \
     echo "LIFEOS_VERSION=${LIFEOS_VERSION}" >> /etc/lifeos/channel && \
     echo "BUILD_DATE=${BUILD_DATE}" >> /etc/lifeos/channel && \
     echo "VCS_REF=${VCS_REF}" >> /etc/lifeos/channel
 
-# LifeOS COSMIC Themes
+# LifeOS COSMIC Themes (index.theme + GTK4 CSS)
 COPY image/files/usr/share/themes/LifeOS-Dark/index.theme        /usr/share/themes/LifeOS-Dark/index.theme
+COPY image/files/usr/share/themes/LifeOS-Dark/gtk-4.0/gtk.css    /usr/share/themes/LifeOS-Dark/gtk-4.0/gtk.css
 COPY image/files/usr/share/themes/LifeOS-Light/index.theme       /usr/share/themes/LifeOS-Light/index.theme
+COPY image/files/usr/share/themes/LifeOS-Light/gtk-4.0/gtk.css   /usr/share/themes/LifeOS-Light/gtk-4.0/gtk.css
 COPY image/files/usr/share/themes/LifeOS-HighContrast/index.theme /usr/share/themes/LifeOS-HighContrast/index.theme
+COPY image/files/usr/share/themes/LifeOS-HighContrast/gtk-4.0/gtk.css /usr/share/themes/LifeOS-HighContrast/gtk-4.0/gtk.css
+
+# --- Firefox Hardened Integration ---
+# Enterprise policies for privacy-first browsing
+COPY image/files/etc/firefox/policies/policies.json /etc/firefox/policies/policies.json
+
+# Firefox profile template (skeleton for new users)
+# This creates /etc/skel/.mozilla/firefox/ with default profile
+COPY image/files/etc/skel/.mozilla/firefox/profiles.ini /etc/skel/.mozilla/firefox/profiles.ini
+COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/user.js /etc/skel/.mozilla/firefox/lifeos.default/user.js
+COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css
+
+# Wayland environment for Firefox
+COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland.sh
+COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
+
+# Firefox desktop entry with Wayland flags
+COPY image/files/usr/share/applications/firefox-lifeos.desktop /usr/share/applications/firefox-lifeos.desktop
 
 # Scripts de LifeOS
 COPY image/files/usr/local/bin/lifeos-first-boot.sh       /usr/local/bin/lifeos-first-boot.sh
@@ -381,7 +427,10 @@ RUN set -eux && \
     /usr/sbin/llama-server --version
 
 # --- Verificación final ---
-RUN test -x /usr/bin/life && \
+RUN test -x /usr/bin/mpv && \
+    test -x /usr/bin/evince && \
+    test -x /usr/bin/keepassxc && \
+    test -x /usr/bin/life && \
     test -x /usr/bin/lifeosd && \
     test -x /usr/bin/llama-server && \
     test -x /usr/sbin/llama-server && \
@@ -400,15 +449,35 @@ RUN test -x /usr/bin/life && \
     test -f /etc/lifeos/channels.toml && \
     test -f /etc/lifeos/channel && \
     test -f /etc/lifeos/cosmic-theme.toml && \
+    test -f /etc/lifeos/design-tokens.toml && \
+    test -f /etc/lifeos/design-tokens.json && \
+    test -d /usr/share/backgrounds/lifeos && \
+    test -d /usr/share/icons/LifeOS && \
     test -f /usr/share/themes/LifeOS-Dark/index.theme && \
+    test -f /usr/share/themes/LifeOS-Dark/gtk-4.0/gtk.css && \
     test -f /usr/share/themes/LifeOS-Light/index.theme && \
+    test -f /usr/share/themes/LifeOS-Light/gtk-4.0/gtk.css && \
     test -f /usr/share/themes/LifeOS-HighContrast/index.theme && \
+    test -f /usr/share/themes/LifeOS-HighContrast/gtk-4.0/gtk.css && \
     test -x /usr/local/bin/lifeos-first-boot.sh && \
     test -x /usr/local/bin/lifeos-ai-setup.sh && \
     test -x /usr/local/bin/llama-server-health-check.sh && \
     test -x /usr/local/bin/lifeos-btrfs-snapshot.sh && \
     test -x /usr/local/bin/lifeos-integrity-check.sh && \
-    test -x /usr/local/bin/lifeos-security-baseline-check.sh
+    test -x /usr/local/bin/lifeos-security-baseline-check.sh && \
+    test -x /usr/bin/podman && \
+    test -x /usr/bin/docker && \
+    test -x /usr/bin/podman-compose && \
+    podman --version >/dev/null && \
+    docker --version >/dev/null && \
+    test -x /usr/bin/firefox && \
+    test -f /etc/firefox/policies/policies.json && \
+    test -f /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi && \
+    test -f /etc/skel/.mozilla/firefox/profiles.ini && \
+    test -f /etc/skel/.mozilla/firefox/lifeos.default/user.js && \
+    test -f /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css && \
+    test -f /etc/profile.d/firefox-wayland.sh && \
+    test -f /usr/share/applications/firefox-lifeos.desktop
 
 # nonempty-boot is intentionally skipped: /boot/efi content is required for bootc-image-builder ISO generation.
 RUN dnf clean all && rm -f /var/log/dnf5.log* /var/cache/ldconfig/aux-cache && bootc container lint --skip nonempty-boot

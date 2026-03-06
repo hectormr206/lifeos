@@ -798,17 +798,15 @@ async fn apply_configuration(state: &FirstBootState) -> anyhow::Result<()> {
     if !user_exists(&state.username) {
         let password_file = "/tmp/lifeos-setup-password";
         let password = std::fs::read_to_string(password_file).unwrap_or_default();
+        let groups = if docker_group_exists() {
+            "wheel,docker"
+        } else {
+            "wheel"
+        };
 
         // Create user
         let _ = Command::new("useradd")
-            .args([
-                "-m",
-                "-G",
-                "wheel,docker",
-                "-c",
-                &state.fullname,
-                &state.username,
-            ])
+            .args(["-m", "-G", groups, "-c", &state.fullname, &state.username])
             .output();
 
         // Set password
@@ -831,6 +829,17 @@ async fn apply_configuration(state: &FirstBootState) -> anyhow::Result<()> {
         let _ = std::fs::remove_file(password_file);
     }
     println!("{}", "✓".green());
+
+    print!("Configuring container runtime compatibility... ");
+    if enable_podman_socket_for_user(&state.username) {
+        println!("{}", "OK".green());
+    } else {
+        println!("{}", "!".yellow());
+        println!(
+            "  {}",
+            "Could not fully enable podman.socket automatically. Run: systemctl --user enable --now podman.socket".yellow()
+        );
+    }
 
     // Save configuration
     print!("Saving LifeOS configuration... ");
@@ -874,6 +883,45 @@ fn user_exists(username: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+fn docker_group_exists() -> bool {
+    Command::new("getent")
+        .args(["group", "docker"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn enable_podman_socket_for_user(username: &str) -> bool {
+    let global_enable = Command::new("systemctl")
+        .args(["--global", "enable", "podman.socket"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let _linger_enable = Command::new("loginctl")
+        .args(["enable-linger", username])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    let user_enable = Command::new("runuser")
+        .args([
+            "-u",
+            username,
+            "--",
+            "systemctl",
+            "--user",
+            "enable",
+            "--now",
+            "podman.socket",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    global_enable || user_enable
 }
 
 async fn setup_ai(state: &FirstBootState) -> anyhow::Result<()> {

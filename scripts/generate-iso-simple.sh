@@ -309,7 +309,10 @@ FINAL_FILE=""
 case "$BUILD_TYPE" in
     iso)
         SRC="$OUTPUT_DIR/bootiso/install.iso"
-        if [[ -f "$SRC" ]]; then
+        if [[ ! -f "$SRC" ]]; then
+            SRC=$(find "$OUTPUT_DIR" -name "install.iso" -o -name "*.iso" 2>/dev/null | head -1)
+        fi
+        if [[ -n "$SRC" && -f "$SRC" ]]; then
             rm -f "$OUTPUT_DIR"/lifeos-*.iso
             FINAL_FILE="$OUTPUT_DIR/lifeos-latest.iso"
             mv "$SRC" "$FINAL_FILE"
@@ -318,7 +321,10 @@ case "$BUILD_TYPE" in
         ;;
     vmdk)
         SRC="$OUTPUT_DIR/disk.vmdk"
-        if [[ -f "$SRC" ]]; then
+        if [[ ! -f "$SRC" ]]; then
+            SRC=$(find "$OUTPUT_DIR" -name "disk.vmdk" -o -name "*.vmdk" 2>/dev/null | head -1)
+        fi
+        if [[ -n "$SRC" && -f "$SRC" ]]; then
             rm -f "$OUTPUT_DIR"/lifeos-*.vmdk
             FINAL_FILE="$OUTPUT_DIR/lifeos-latest.vmdk"
             mv "$SRC" "$FINAL_FILE"
@@ -326,7 +332,10 @@ case "$BUILD_TYPE" in
         ;;
     qcow2)
         SRC="$OUTPUT_DIR/disk.qcow2"
-        if [[ -f "$SRC" ]]; then
+        if [[ ! -f "$SRC" ]]; then
+            SRC=$(find "$OUTPUT_DIR" -name "disk.qcow2" -o -name "*.qcow2" 2>/dev/null | head -1)
+        fi
+        if [[ -n "$SRC" && -f "$SRC" ]]; then
             rm -f "$OUTPUT_DIR"/lifeos-*.qcow2
             FINAL_FILE="$OUTPUT_DIR/lifeos-latest.qcow2"
             mv "$SRC" "$FINAL_FILE"
@@ -334,7 +343,11 @@ case "$BUILD_TYPE" in
         ;;
     raw)
         SRC="$OUTPUT_DIR/disk.raw"
-        if [[ -f "$SRC" ]]; then
+        # bootc-image-builder may place output in image/ subdirectory
+        if [[ ! -f "$SRC" ]]; then
+            SRC=$(find "$OUTPUT_DIR" -name "disk.raw" -o -name "*.raw" 2>/dev/null | head -1)
+        fi
+        if [[ -n "$SRC" && -f "$SRC" ]]; then
             rm -f "$OUTPUT_DIR"/lifeos-*.raw
             FINAL_FILE="$OUTPUT_DIR/lifeos-latest.raw"
             mv "$SRC" "$FINAL_FILE"
@@ -343,6 +356,9 @@ case "$BUILD_TYPE" in
 esac
 
 if [[ -z "$FINAL_FILE" ]] || [[ ! -f "$FINAL_FILE" ]]; then
+    warn "Archivos encontrados en $OUTPUT_DIR:"
+    find "$OUTPUT_DIR" -type f -name "*.raw" -o -name "*.qcow2" -o -name "*.vmdk" -o -name "*.iso" -o -name "*.img" 2>/dev/null | head -20
+    ls -laR "$OUTPUT_DIR" 2>/dev/null | head -40
     error "No se generó el archivo de salida. Revisa los logs arriba."
 fi
 

@@ -1,27 +1,44 @@
-# Reconstruir imagen y generar ISO de LifeOS
+# Reconstruir imagen y generar artefactos de LifeOS
 
-## Opcion rapida (un solo comando)
+## Opcion rapida (pipeline completo)
 
+Comando por defecto (genera ISO):
+
+```bash
 sudo bash scripts/build-iso.sh
+```
 
-# Esto ejecuta automaticamente los pasos 0-3:
-#   0. Limpia imagen anterior
-#   1. Reconstruye imagen con --no-cache
-#   2. Verifica imagen (os-release, llama-server, modelo, CLI)
-#   3. Genera ISO con bootc-image-builder
-#
-# Log completo del build:
-#   output/build-iso.log
-#   (se sobreescribe en cada ejecucion, igual que la imagen/ISO latest)
+Comando para `raw` (tu caso de prueba):
 
-# Nota importante (seguridad de disco):
-#   - Modo default: LIFEOS_INSTALL_MODE=interactive
-#     El instalador pide seleccionar el disco destino en Anaconda.
-#   - Modo CI/lab: LIFEOS_INSTALL_MODE=unattended
-#     Puede particionar automaticamente y sobrescribir disco.
+```bash
+sudo bash scripts/build-iso.sh --type raw --image localhost/lifeos:latest
+```
+
+Esto ejecuta automaticamente los pasos 0-3:
+
+1. Limpia imagen anterior
+2. Reconstruye imagen con `--no-cache`
+3. Verifica imagen (os-release, llama-server, modelo, CLI, compat docker/podman-compose)
+4. Genera artefacto con `bootc-image-builder` (`iso`, `raw`, `qcow2` o `vmdk`)
+
+Log completo del build:
+
+- `output/build-iso.log` (siempre se actualiza como ultimo build)
+- `output/build-<type>.log` (log por tipo ejecutado)
+- `output/build-raw.log` (tipo `raw`)
+- `output/build-qcow2.log` (tipo `qcow2`)
+- `output/build-vmdk.log` (tipo `vmdk`)
+
+Nota importante (seguridad de disco en ISO):
+
+- Modo default: `LIFEOS_INSTALL_MODE=interactive`
+  Anaconda pide seleccionar disco destino manualmente.
+- Modo CI/lab: `LIFEOS_INSTALL_MODE=unattended`
+  Puede particionar automaticamente y sobrescribir disco.
 
 ## Pasos manuales (si se necesita correr por separado)
 
+```bash
 # 0. Limpiar
 sudo podman rmi -f localhost/lifeos:latest
 
@@ -31,30 +48,29 @@ sudo podman build --no-cache -t localhost/lifeos:latest -f image/Containerfile .
 # 2. Verificar que tiene ID=fedora
 podman run --rm localhost/lifeos:latest cat /usr/lib/os-release | grep ^ID=
 
-# 3. Generar ISO
-chmod +x scripts/generate-iso-simple.sh && sudo bash scripts/generate-iso-simple.sh --type iso --image localhost/lifeos:latest
+# 3. Generar artefacto
+chmod +x scripts/generate-iso-simple.sh
+sudo bash scripts/generate-iso-simple.sh --type raw --image localhost/lifeos:latest
 
-# (Opcional CI/lab) instalacion automatica potencialmente destructiva:
-# LIFEOS_INSTALL_MODE=unattended sudo bash scripts/generate-iso-simple.sh --type iso --image localhost/lifeos:latest
+# Para ISO:
+sudo bash scripts/generate-iso-simple.sh --type iso --image localhost/lifeos:latest
+```
 
-## Instalar en VirtualBox
+## Instalar en VirtualBox (si usas ISO)
 
-# Crear VM: Fedora 64-bit, 4GB RAM, 40GB disco, EFI habilitado
-# Montar ISO como unidad optica, arrancar y en Anaconda seleccionar disco destino
-# Usuario: lifeos / Password: lifeos
+- Crear VM: Fedora 64-bit, 4GB RAM, 40GB disco, EFI habilitado
+- Montar ISO como unidad optica
+- Arrancar y en Anaconda seleccionar disco destino
+- Usuario: `lifeos` / Password: `lifeos`
 
-## Verificacion post-instalacion (un solo comando)
+## Verificacion post-instalacion
 
+```bash
 sudo life check
+```
 
-# Esto ejecuta lifeos-check que verifica:
-#   - Identidad (os-release, life CLI, VARIANT_ID)
-#   - Servicios (lifeosd, llama-server, lifeos-security-baseline)
-#   - AI Runtime (binary, version, modelo pre-instalado, API)
-#   - bootc (imagen booteada)
-#   - Daemon (bootstrap token, health API)
-#   - Disco (/var usage)
-#   - Red (IP asignada)
-#
-# Tambien se puede correr directamente:
-#   sudo lifeos-check
+Tambien se puede correr directamente:
+
+```bash
+sudo lifeos-check
+```

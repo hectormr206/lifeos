@@ -24,6 +24,19 @@ TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
 if [[ -z "$TARGET_HOME" ]]; then
     TARGET_HOME="$HOME"
 fi
+TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || true)"
+TARGET_DOCKER_HOST=""
+if [[ -n "$TARGET_UID" ]] && [[ -S "/run/user/${TARGET_UID}/podman/podman.sock" ]]; then
+    TARGET_DOCKER_HOST="unix:///run/user/${TARGET_UID}/podman/podman.sock"
+fi
+
+run_as_target_user() {
+    if [[ -n "$TARGET_DOCKER_HOST" ]]; then
+        runuser -u "$TARGET_USER" -- env HOME="$TARGET_HOME" DOCKER_HOST="$TARGET_DOCKER_HOST" "$@"
+    else
+        runuser -u "$TARGET_USER" -- env HOME="$TARGET_HOME" "$@"
+    fi
+}
 
 check_life_cmd() {
     local label="$1"
@@ -173,6 +186,49 @@ if command -v bootc &>/dev/null; then
     fi
 else
     fail "bootc no encontrado"
+fi
+echo
+
+# --- Contenedores (compat Docker) ---
+echo -e "${BOLD}Contenedores (compat Docker)${NC}"
+DOCKER_BIN="$(command -v docker 2>/dev/null || true)"
+if [[ -n "$DOCKER_BIN" ]]; then
+    if run_as_target_user docker --version >/tmp/lifeos-docker-version.log 2>&1; then
+        ok "docker --version (usuario: ${TARGET_USER})"
+    else
+        fail "docker --version fallo (usuario: ${TARGET_USER})"
+    fi
+else
+    fail "docker CLI no encontrado"
+fi
+
+COMPOSE_OUT="$(run_as_target_user docker compose version 2>&1 || true)"
+if echo "$COMPOSE_OUT" | grep -Eqi '^Docker Compose version|^Docker compose version|^compose version'; then
+    ok "docker compose version"
+else
+    PODMAN_COMPOSE_OUT="$(run_as_target_user podman-compose --version 2>&1 || true)"
+    if echo "$PODMAN_COMPOSE_OUT" | grep -Eqi 'podman-compose'; then
+        warn "docker compose no disponible; fallback podman-compose activo"
+    else
+        fail "docker compose/podman-compose no disponibles"
+    fi
+fi
+
+HELLO_LOG="/tmp/lifeos-docker-hello.log"
+if command -v timeout >/dev/null 2>&1; then
+    run_as_target_user timeout 120 docker run --rm hello-world >"$HELLO_LOG" 2>&1
+else
+    run_as_target_user docker run --rm hello-world >"$HELLO_LOG" 2>&1
+fi
+
+if [[ $? -eq 0 ]]; then
+    ok "docker run --rm hello-world"
+else
+    if grep -Eqi 'Temporary failure|Name or service not known|TLS|certificate|toomanyrequests|network is unreachable|i/o timeout|dial tcp|lookup|pull access denied|not found' "$HELLO_LOG"; then
+        warn "docker run hello-world fallo por red/pull (revisar conectividad o rate limits)"
+    else
+        fail "docker run hello-world fallo (ver $HELLO_LOG)"
+    fi
 fi
 echo
 
