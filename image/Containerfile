@@ -90,12 +90,15 @@ RUN dnf -y install --skip-unavailable \
     cosmic-desktop cosmic-files cosmic-term cosmic-edit cosmic-store \
     xdg-desktop-portal-cosmic xdg-desktop-portal-gtk xdg-desktop-portal-wlr \
     xdg-user-dirs \
-    NetworkManager bluez pipewire wireplumber \
+    NetworkManager NetworkManager-wifi wpa_supplicant wireless-regdb \
+    bluez pipewire wireplumber \
     && dnf clean all
 
 # --- Soporte Nvidia Optimus y Gaming ---
 RUN set -eux && \
-    dnf -y install --skip-unavailable kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda && \
+    dnf -y install --skip-unavailable \
+        kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda \
+        xorg-x11-drv-nvidia-power nvidia-settings nvidia-modprobe && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
         dnf -y install supergfxctl; \
     else \
@@ -129,12 +132,14 @@ RUN dnf -y install \
     toolbox btrfs-progs smartmontools podman podman-docker podman-compose buildah flatpak \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git wget \
     wlsunset gammastep \
+    linux-firmware \
     pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
     python3-mako \
     anaconda-core anaconda-dracut \
     lorax-templates-generic \
     shim-x64 grub2-efi-x64 grub2-efi-x64-modules grub2-efi-x64-cdboot \
-    glibc-langpack-es \
+    glibc-langpack-es glibc-langpack-en \
+    langpacks-es langpacks-en \
     && dnf clean all
 
 # --- Aplicaciones Nativas Esenciales ---
@@ -150,7 +155,10 @@ RUN mkdir -p /boot/efi/EFI/fedora && \
 # --- CLI Life y Daemon (binarios compilados) ---
 COPY --from=builder /build/cli/target/release/life /usr/bin/life
 COPY --from=builder /build/daemon/target/release/lifeosd /usr/bin/lifeosd
-RUN chmod +x /usr/bin/life /usr/bin/lifeosd && life --version
+RUN chmod +x /usr/bin/life /usr/bin/lifeosd && \
+    ln -sf /usr/bin/life /usr/local/bin/life && \
+    ln -sf /usr/bin/lifeosd /usr/local/bin/lifeosd && \
+    life --version
 
 # --- AI Runtime (llama.cpp / llama-server) ---
 # llama-server provides OpenAI-compatible API for local AI inference.
@@ -318,6 +326,9 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
     ln -sf /usr/lib/systemd/system/bluetooth.service      /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \
     ln -sf /usr/lib/systemd/system/NetworkManager.service /usr/lib/systemd/system/multi-user.target.wants/NetworkManager.service && \
+    if [ -f /usr/lib/systemd/system/supergfxd.service ]; then \
+        ln -sf /usr/lib/systemd/system/supergfxd.service /usr/lib/systemd/system/multi-user.target.wants/supergfxd.service; \
+    fi && \
     ln -sf /usr/lib/systemd/system/lifeosd.service        /usr/lib/systemd/system/lifeisd.service
 
 # --- Branding y Personalización ---

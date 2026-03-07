@@ -1,7 +1,7 @@
 [system]
 channel = "stable"
 mode = "personal"
-locale = "en_US.UTF-8"
+locale = "es_MX.UTF-8"
 timezone = "UTC"
 
 [ai]

@@ -115,6 +115,72 @@ case "$LLAMA_STATE" in
 esac
 echo
 
+# --- Red ---
+echo -e "${BOLD}Red${NC}"
+NM_STATE=$(systemctl is-active NetworkManager 2>/dev/null)
+case "$NM_STATE" in
+    active)  ok "NetworkManager: active" ;;
+    *)       fail "NetworkManager: $NM_STATE" ;;
+esac
+
+if command -v nmcli &>/dev/null; then
+    NM_GENERAL=$(nmcli -t -f STATE general 2>/dev/null | head -1 || true)
+    case "$NM_GENERAL" in
+        connected|connected\(site\ only\)|connected\(limited\))
+            ok "NetworkManager state: $NM_GENERAL"
+            ;;
+        connecting)
+            warn "NetworkManager state: connecting"
+            ;;
+        disconnected|disconnecting)
+            warn "NetworkManager state: $NM_GENERAL"
+            ;;
+        *)
+            warn "No se pudo determinar estado de nmcli"
+            ;;
+    esac
+
+    WIFI_RADIO=$(nmcli -t -f WIFI general 2>/dev/null | head -1 || true)
+    case "$WIFI_RADIO" in
+        enabled)  ok "Radio Wi-Fi: enabled" ;;
+        disabled) warn "Radio Wi-Fi: disabled (intenta 'nmcli radio wifi on')" ;;
+        *)        info "Radio Wi-Fi: no disponible" ;;
+    esac
+
+    WIFI_DEVICES=$(nmcli -t -f DEVICE,TYPE,STATE device status 2>/dev/null | awk -F: '$2=="wifi" {print $1 ":" $3}' || true)
+    if [[ -n "$WIFI_DEVICES" ]]; then
+        ok "Interfaces Wi-Fi detectadas: $(echo "$WIFI_DEVICES" | tr '\n' ' ')"
+    else
+        warn "NetworkManager no reporta interfaces Wi-Fi"
+    fi
+else
+    fail "nmcli no encontrado"
+fi
+
+if command -v rfkill &>/dev/null; then
+    RFKILL_OUT=$(rfkill list 2>/dev/null || true)
+    if echo "$RFKILL_OUT" | grep -Eqi 'Soft blocked:\s*yes|Hard blocked:\s*yes'; then
+        warn "rfkill reporta radios bloqueados (usa 'rfkill unblock all')"
+    else
+        ok "rfkill: sin bloqueos reportados"
+    fi
+else
+    warn "rfkill no encontrado"
+fi
+
+if ip route 2>/dev/null | grep -q '^default '; then
+    ok "Ruta por defecto: presente"
+else
+    warn "Ruta por defecto: ausente"
+fi
+
+if ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then
+    ok "Conectividad IP externa: OK"
+else
+    warn "Conectividad IP externa: sin respuesta"
+fi
+echo
+
 # --- Unidades fallidas ---
 echo -e "${BOLD}Unidades fallidas${NC}"
 FAILED_UNITS=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}')
@@ -122,13 +188,13 @@ if [[ -z "$FAILED_UNITS" ]]; then
     ok "Sin unidades fallidas en systemd"
 else
     if echo "$FAILED_UNITS" | grep -qx "lifeos-first-boot.service"; then
-        fail "lifeos-first-boot.service falló"
+        fail "lifeos-first-boot.service fallo"
     elif echo "$FAILED_UNITS" | grep -q "lifeos-first-boot.service"; then
-        fail "lifeos-first-boot.service falló"
+        fail "lifeos-first-boot.service fallo"
     fi
 
     if echo "$FAILED_UNITS" | grep -q "systemd-remount-fs.service"; then
-        info "systemd-remount-fs.service falló (conocido en Fedora bootc + VirtualBox)"
+        info "systemd-remount-fs.service fallo (conocido en Fedora bootc + VirtualBox)"
     fi
 
     OTHER_FAILED=$(echo "$FAILED_UNITS" | grep -Ev '^(lifeos-first-boot\.service|systemd-remount-fs\.service)$' || true)
@@ -155,7 +221,7 @@ LLAMA_VER=$("${LLAMA_PATH:-llama-server}" --version 2>&1 | head -1)
 if [[ -n "$LLAMA_VER" ]]; then
     ok "Version: $LLAMA_VER"
 else
-    fail "llama-server --version falló"
+    fail "llama-server --version fallo"
 fi
 
 MODEL_ENV=$(grep -oP '^LIFEOS_AI_MODEL=\K.*' /etc/lifeos/llama-server.env 2>/dev/null)
@@ -321,6 +387,12 @@ if [[ $HAS_NVIDIA -eq 1 ]]; then
     else
         warn "Modulo kernel nvidia no cargado"
     fi
+
+    if command -v nvidia-settings &>/dev/null; then
+        ok "nvidia-settings disponible"
+    else
+        warn "nvidia-settings no encontrado (UI de configuracion NVIDIA limitada)"
+    fi
 fi
 
 if [[ $HAS_AMD -eq 1 ]]; then
@@ -459,8 +531,8 @@ else
 fi
 echo
 
-# --- Red ---
-echo -e "${BOLD}Red${NC}"
+# --- IP ---
+echo -e "${BOLD}IP${NC}"
 IP=$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[\d.]+' | head -1)
 if [[ -n "$IP" ]]; then
     ok "IP: $IP"

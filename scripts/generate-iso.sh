@@ -253,9 +253,8 @@ generate_iso() {
 [customizations.installer.kickstart]
 contents = """
 graphical
-interactive
-lang en_US.UTF-8
-keyboard us
+lang es_MX.UTF-8
+keyboard latam
 timezone UTC --utc
 network --bootproto=dhcp --device=link --activate --onboot=on
 rootpw --lock
