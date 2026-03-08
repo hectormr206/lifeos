@@ -93,6 +93,51 @@ life rollback
 sudo reboot
 ```
 
+### Development Containers (Toolbox)
+
+LifeOS keeps the base system immutable. For development software (Node.js, npm, compilers, SDKs),
+use `toolbox` so changes stay inside a mutable container and do not modify the host OS.
+
+What `toolbox` is:
+- A developer shell container integrated with Fedora/Podman
+- Great for per-stack environments (for example, one container for Node, another for Rust)
+- Reusable across projects while keeping the host clean
+
+Node.js and npm example:
+
+```bash
+# Create a toolbox once
+toolbox create dev-node
+
+# Enter toolbox
+toolbox enter dev-node
+
+# Install packages inside toolbox
+sudo dnf install -y nodejs npm
+
+# Verify
+node --version
+npm --version
+```
+
+Important behavior:
+- `node`/`npm` are available only while inside `toolbox`
+- Outside toolbox, host commands remain unchanged
+- Exit toolbox with `exit` (or `Ctrl+D`)
+
+Useful toolbox commands:
+
+```bash
+# Enter existing toolbox
+toolbox enter dev-node
+
+# List toolboxes
+toolbox list
+
+# Remove toolbox when no longer needed
+toolbox rm dev-node
+```
+
 ## Configuration
 
 ### System Configuration

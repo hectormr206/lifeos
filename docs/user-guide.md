@@ -22,6 +22,24 @@ life ai ask "Resume mi estado del sistema"
 life onboarding trust-mode status
 ```
 
+## Development Containers (Toolbox)
+
+LifeOS is immutable by design. Install development dependencies inside `toolbox` containers:
+
+```bash
+toolbox create dev-node
+toolbox enter dev-node
+sudo dnf install -y nodejs npm
+node --version
+npm --version
+```
+
+Exit toolbox with:
+
+```bash
+exit
+```
+
 ## Assistant Channels
 
 - Terminal: `life assistant ask "..."`.
@@ -93,4 +111,3 @@ life intents heartbeat enable --interval 300
 life intents heartbeat tick
 life intents heartbeat status
 ```
-

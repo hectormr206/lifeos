@@ -220,6 +220,21 @@ flatpak install flathub com.visualstudio.code
 life ai do "install video editing software"
 ```
 
+For development stacks on the immutable host, use `toolbox`:
+
+```bash
+# Example: isolated Node.js environment
+toolbox create dev-node
+toolbox enter dev-node
+sudo dnf install -y nodejs npm
+```
+
+Leave the toolbox with:
+
+```bash
+exit
+```
+
 ### Enable GPU Acceleration
 
 #### NVIDIA
