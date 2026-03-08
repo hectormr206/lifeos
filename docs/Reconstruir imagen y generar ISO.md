@@ -41,6 +41,49 @@ Log completo del build:
 - `output/build-qcow2.log` (tipo `qcow2`)
 - `output/build-vmdk.log` (tipo `vmdk`)
 
+Al finalizar cada build del pipeline completo (`build-iso*.sh`), comparte esto para revision rapida:
+
+```bash
+tail -n 250 output/build-iso.log
+```
+
+Filtro rapido de errores/warnings:
+
+```bash
+rg -n "ERROR|\\[ERROR\\]|\\[!\\]|failed|FATAL" output/build-*.log
+```
+
+Con esos dos comandos podemos validar si quedo correcto o donde ajustar.
+
+## Iteracion realmente rapida (sin reconstruir toda la imagen)
+
+Si no cambiaste `image/Containerfile` ni paquetes base, usa la imagen ya construida y solo genera el artefacto:
+
+```bash
+sudo bash scripts/generate-iso-simple.sh --type iso --image localhost/lifeos:latest
+```
+
+Regla practica:
+
+- Cambios en sistema base (Containerfile, paquetes, servicios base): usa `build-iso*.sh` (pipeline completo).
+- Cambios de empaquetado/artefacto o solo necesitas nueva ISO del mismo `localhost/lifeos:latest`: usa `generate-iso-simple.sh`.
+
+Importante para logs en iteracion rapida:
+
+- `generate-iso-simple.sh` no escribe `output/build-iso.log` por si solo.
+- Para no confundirte con logs viejos, ejecutalo con `tee`:
+
+```bash
+sudo bash scripts/generate-iso-simple.sh --type iso --image localhost/lifeos:latest 2>&1 | tee output/generate-iso.log
+```
+
+- Revision rapida despues de iteracion rapida:
+
+```bash
+tail -n 250 output/generate-iso.log
+rg -n "ERROR|\\[ERROR\\]|\\[!\\]|failed|FATAL" output/generate-iso.log
+```
+
 Nota importante (seguridad de disco en ISO):
 
 - Modo default: `LIFEOS_INSTALL_MODE=interactive`
