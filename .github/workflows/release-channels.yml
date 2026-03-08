@@ -112,6 +112,11 @@ jobs:
           DIGEST_FILE="${RUNNER_TEMP}/lifeos-image.digest"
 
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login "${{ env.REGISTRY }}" -u "${{ github.actor }}" --password-stdin
+          mkdir -p "${HOME}/.docker"
+          AUTH_FILE="${REGISTRY_AUTH_FILE:-${XDG_RUNTIME_DIR}/containers/auth.json}"
+          if [ -f "${AUTH_FILE}" ]; then
+            cp "${AUTH_FILE}" "${HOME}/.docker/config.json"
+          fi
 
           podman build \
             -f image/Containerfile \
@@ -140,15 +145,11 @@ jobs:
       - name: Sign image
         run: |
           cosign sign --yes \
-            --registry-username "${{ github.actor }}" \
-            --registry-password "${{ secrets.GITHUB_TOKEN }}" \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
       
       - name: Verify signature
         run: |
           cosign verify \
-            --registry-username "${{ github.actor }}" \
-            --registry-password "${{ secrets.GITHUB_TOKEN }}" \
             --certificate-identity-regexp "https://github.com/${{ github.repository }}/*" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
