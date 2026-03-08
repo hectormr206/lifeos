@@ -97,6 +97,39 @@ act -j build-cli
 act
 ```
 
+## Self-Hosted Runner on LifeOS
+
+The following workflows use `runs-on: [self-hosted, Linux, X64]`:
+- `.github/workflows/docker.yml`
+- `.github/workflows/release-channels.yml`
+
+Use the helper script to configure a persistent runner on LifeOS hosts:
+
+```bash
+# 1) Generate a registration token in:
+#    GitHub -> Settings -> Actions -> Runners -> New self-hosted runner
+#
+# 2) Run on the host shell (not inside toolbox):
+scripts/setup-self-hosted-runner.sh \
+  --url https://github.com/<owner>/<repo> \
+  --token <RUNNER_REGISTRATION_TOKEN> \
+  --name lifeos-main
+```
+
+What the script configures:
+- Runner files under `/var/lib/lifeos/actions-runner` (survives updates)
+- Systemd service via `svc.sh`
+- User linger + rootless `podman.socket`
+- `DOCKER_HOST` for Docker-compatible actions
+
+Validation:
+
+```bash
+cd /var/lib/lifeos/actions-runner
+sudo ./svc.sh status
+systemctl --user status podman.socket
+```
+
 ## Adding New Workflows
 
 ### Step 1: Create Workflow File

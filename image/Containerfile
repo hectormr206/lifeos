@@ -345,6 +345,7 @@ COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.service /usr/lib/systemd/system/lifeos-btrfs-snapshot.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.timer   /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
+COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
 
 # lifeosd.service (inline - es simple)
 RUN printf '%s\n' \

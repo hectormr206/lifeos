@@ -221,6 +221,9 @@ nvidia-smi  # For NVIDIA
 rocminfo    # For AMD
 ```
 
+On image-mode/bootc installations, avoid using `akmods` directly on the host when `/usr` is read-only.
+Use `life update`/`bootc upgrade` to move to an image that already contains compatible NVIDIA kernel modules.
+
 ### Update Issues
 
 ```bash

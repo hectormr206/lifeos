@@ -243,9 +243,9 @@ exit
 # Check if NVIDIA drivers are installed
 nvidia-smi
 
-# If not, install from Software app or:
-sudo akmods --force
-sudo dracut --force
+# If nvidia-smi is not operational on LifeOS image-mode hosts:
+# 1) Prefer updating to a newer LifeOS image (bootc upgrade/life update)
+# 2) Avoid running akmods directly on read-only /usr hosts
 ```
 
 #### AMD

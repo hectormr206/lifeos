@@ -187,6 +187,8 @@ FAILED_UNITS=$(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print 
 if [[ -z "$FAILED_UNITS" ]]; then
     ok "Sin unidades fallidas en systemd"
 else
+    IGNORE_FAILED_REGEX='^(lifeos-first-boot\.service|systemd-remount-fs\.service)$'
+
     if echo "$FAILED_UNITS" | grep -qx "lifeos-first-boot.service"; then
         fail "lifeos-first-boot.service fallo"
     elif echo "$FAILED_UNITS" | grep -q "lifeos-first-boot.service"; then
@@ -194,10 +196,19 @@ else
     fi
 
     if echo "$FAILED_UNITS" | grep -q "systemd-remount-fs.service"; then
-        info "systemd-remount-fs.service fallo (conocido en Fedora bootc + VirtualBox)"
+        info "systemd-remount-fs.service fallo (conocido en sistemas image-mode/bootc; no suele bloquear operacion)"
     fi
 
-    OTHER_FAILED=$(echo "$FAILED_UNITS" | grep -Ev '^(lifeos-first-boot\.service|systemd-remount-fs\.service)$' || true)
+    if echo "$FAILED_UNITS" | grep -q "nvidia-persistenced.service"; then
+        if command -v nvidia-smi &>/dev/null && nvidia-smi -L >/dev/null 2>&1; then
+            warn "nvidia-persistenced.service fallo aunque NVIDIA esta activo (revisar journalctl -u nvidia-persistenced)"
+        else
+            info "nvidia-persistenced.service fallo porque el driver NVIDIA propietario no esta activo"
+        fi
+        IGNORE_FAILED_REGEX='^(lifeos-first-boot\.service|systemd-remount-fs\.service|nvidia-persistenced\.service)$'
+    fi
+
+    OTHER_FAILED=$(echo "$FAILED_UNITS" | grep -Ev "$IGNORE_FAILED_REGEX" || true)
     if [[ -n "$OTHER_FAILED" ]]; then
         warn "Otras unidades fallidas detectadas: $(echo "$OTHER_FAILED" | tr '\n' ' ')"
     fi
@@ -359,6 +370,11 @@ GPU_LINES=$(lspci 2>/dev/null | grep -Ei 'vga|3d|display' || true)
 HAS_NVIDIA=0
 HAS_AMD=0
 HAS_INTEL=0
+USR_READ_ONLY=0
+
+if findmnt -n -o OPTIONS /usr 2>/dev/null | grep -qw ro; then
+    USR_READ_ONLY=1
+fi
 
 if [[ -n "$GPU_LINES" ]]; then
     GPU_COUNT=$(echo "$GPU_LINES" | wc -l | tr -d ' ')
@@ -376,16 +392,28 @@ if [[ $HAS_NVIDIA -eq 1 ]]; then
         if nvidia-smi -L >/dev/null 2>&1; then
             ok "NVIDIA stack: nvidia-smi operativo"
         else
-            fail "NVIDIA stack: nvidia-smi no operativo"
+            if lsmod 2>/dev/null | grep -q '^nvidia'; then
+                fail "NVIDIA stack: nvidia-smi no operativo con modulo nvidia cargado"
+            else
+                warn "NVIDIA stack: nvidia-smi no operativo (usando fallback CPU/iGPU o nouveau)"
+            fi
         fi
     else
-        fail "GPU NVIDIA detectada pero nvidia-smi no encontrado"
+        warn "GPU NVIDIA detectada pero nvidia-smi no encontrado (aceleracion CUDA no disponible)"
     fi
 
     if lsmod 2>/dev/null | grep -q '^nvidia'; then
         ok "Modulo kernel nvidia: cargado"
     else
-        warn "Modulo kernel nvidia no cargado"
+        if lsmod 2>/dev/null | grep -q '^nouveau'; then
+            warn "Modulo kernel nvidia no cargado (nouveau activo como fallback)"
+        else
+            warn "Modulo kernel nvidia no cargado"
+        fi
+    fi
+
+    if [[ "$USR_READ_ONLY" -eq 1 ]]; then
+        info "Host image-mode detectado (/usr read-only): akmods runtime no instala kmods; requiere imagen/deployment con modulo NVIDIA"
     fi
 
     if command -v nvidia-settings &>/dev/null; then

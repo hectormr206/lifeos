@@ -121,16 +121,72 @@ configure_gpu() {
 
     local gpu_layers=0
     local env_file="/etc/lifeos/llama-server.env"
+    local has_nvidia_gpu=0
+    local nvidia_runtime_ready=0
+    local usr_read_only=0
 
-    # Check for NVIDIA
-    if command -v nvidia-smi &> /dev/null; then
-        local nvidia_info=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || echo "Unknown")
-        log_success "NVIDIA GPU detected: $nvidia_info"
-        gpu_layers=-1  # Offload all layers to GPU
+    if lspci 2>/dev/null | grep -Eqi 'vga|3d|display' && lspci 2>/dev/null | grep -Eqi 'nvidia'; then
+        has_nvidia_gpu=1
+    fi
 
-        # Ensure nvidia-persistenced is running for better performance
-        if systemctl enable nvidia-persistenced 2>/dev/null; then
-            systemctl start nvidia-persistenced 2>/dev/null || true
+    if findmnt -n -o OPTIONS /usr 2>/dev/null | grep -qw ro; then
+        usr_read_only=1
+    fi
+
+    # Check for NVIDIA runtime readiness
+    if [[ "$has_nvidia_gpu" -eq 1 ]]; then
+        if command -v nvidia-smi &>/dev/null && nvidia-smi -L >/dev/null 2>&1; then
+            nvidia_runtime_ready=1
+        fi
+
+        # Attempt to build/load NVIDIA module if GPU exists but runtime is not ready yet
+        if [[ "$nvidia_runtime_ready" -eq 0 ]]; then
+            log_warn "NVIDIA GPU detected but nvidia-smi is not operational yet"
+            if [[ "$usr_read_only" -eq 1 ]]; then
+                log_warn "Skipping akmods on read-only image-mode host; NVIDIA kmod must come from image update/layered deployment"
+            elif command -v akmods &>/dev/null; then
+                log "Trying to build NVIDIA kmod for kernel $(uname -r) with akmods..."
+                if akmods --force --kernels "$(uname -r)" >>"$LOG_FILE" 2>&1; then
+                    log_success "akmods build completed for kernel $(uname -r)"
+                else
+                    log_warn "akmods build failed (Secure Boot or driver support may be blocking)"
+                fi
+            fi
+
+            if command -v modprobe &>/dev/null; then
+                modprobe nvidia >/dev/null 2>&1 || true
+            fi
+
+            if command -v nvidia-smi &>/dev/null && nvidia-smi -L >/dev/null 2>&1; then
+                nvidia_runtime_ready=1
+            fi
+        fi
+
+        if [[ "$nvidia_runtime_ready" -eq 1 ]]; then
+            local nvidia_info
+            nvidia_info=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || echo "Unknown")
+            log_success "NVIDIA GPU detected: $nvidia_info"
+            gpu_layers=-1  # Offload all layers to GPU
+
+            # Ensure nvidia-persistenced is running only when NVIDIA runtime is really active
+            if systemctl enable nvidia-persistenced 2>/dev/null; then
+                if systemctl start nvidia-persistenced 2>/dev/null; then
+                    log_success "nvidia-persistenced enabled"
+                else
+                    log_warn "Could not start nvidia-persistenced"
+                fi
+            fi
+        else
+            if lsmod 2>/dev/null | grep -q '^nouveau'; then
+                log_warn "NVIDIA proprietary driver not active; nouveau is loaded (graphics fallback)"
+            else
+                log_warn "NVIDIA proprietary driver not active; using CPU/iGPU fallback"
+            fi
+
+            # Keep systemd clean in cases where the service was previously enabled but runtime is absent.
+            systemctl disable nvidia-persistenced >/dev/null 2>&1 || true
+            systemctl stop nvidia-persistenced >/dev/null 2>&1 || true
+            systemctl reset-failed nvidia-persistenced >/dev/null 2>&1 || true
         fi
     fi
 
