@@ -43,6 +43,9 @@ Examples:
   sudo ./scripts/build-iso.sh
   sudo ./scripts/build-iso.sh --type raw --image localhost/lifeos:latest
   LIFEOS_INSTALL_MODE=unattended sudo ./scripts/build-iso.sh --type iso
+
+Environment:
+  LIFEOS_PRELOAD_MODEL=true|false   Include prebundled GGUF model in image build (default: false)
 EOF
 }
 
@@ -53,6 +56,7 @@ IMAGE_NAME="localhost/lifeos:latest"
 BUILD_TYPE="iso"
 INSTALL_MODE="${LIFEOS_INSTALL_MODE:-interactive}"
 OUTPUT_DIR="${LIFEOS_OUTPUT_DIR:-${PROJECT_ROOT}/output}"
+PRELOAD_MODEL="${LIFEOS_PRELOAD_MODEL:-false}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -135,6 +139,7 @@ BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 VCS_REF="${VCS_REF:-$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
 
 log "Configuration: type=$BUILD_TYPE image=$IMAGE_NAME install_mode=$INSTALL_MODE output=$OUTPUT_DIR"
+log "Model preload: LIFEOS_PRELOAD_MODEL=$PRELOAD_MODEL"
 echo
 
 log "Step 0/3: Removing previous image (if present)..."
@@ -151,6 +156,7 @@ podman build \
     --no-cache \
     --build-arg "BUILD_DATE=${BUILD_DATE}" \
     --build-arg "VCS_REF=${VCS_REF}" \
+    --build-arg "LIFEOS_PRELOAD_MODEL=${PRELOAD_MODEL}" \
     -t "$IMAGE_NAME" \
     -f "$PROJECT_ROOT/image/Containerfile" \
     "$PROJECT_ROOT"
