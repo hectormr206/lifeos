@@ -140,11 +140,15 @@ jobs:
       - name: Sign image
         run: |
           cosign sign --yes \
+            --registry-username "${{ github.actor }}" \
+            --registry-password "${{ secrets.GITHUB_TOKEN }}" \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
       
       - name: Verify signature
         run: |
           cosign verify \
+            --registry-username "${{ github.actor }}" \
+            --registry-password "${{ secrets.GITHUB_TOKEN }}" \
             --certificate-identity-regexp "https://github.com/${{ github.repository }}/*" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
