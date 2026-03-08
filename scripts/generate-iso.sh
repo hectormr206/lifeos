@@ -166,6 +166,11 @@ check_prerequisites() {
     if ! command -v podman &> /dev/null; then
         missing+=("podman")
     fi
+
+    # skopeo is optional but used as pull fallback for large images.
+    if ! command -v skopeo &> /dev/null; then
+        echo -e "${YELLOW}Warning: skopeo not found, pull fallback path disabled${NC}"
+    fi
     
     # Check for qemu-img (for VM testing)
     if [[ "${VM_TEST:-false}" == true ]] && ! command -v qemu-img &> /dev/null; then
@@ -201,7 +206,30 @@ prepare_image() {
         fi
     else
         echo "Pulling image: $IMAGE_TAG"
-        podman pull "$IMAGE_TAG"
+        local pull_rc=0
+        if command -v timeout &> /dev/null; then
+            local pull_timeout="${PODMAN_PULL_TIMEOUT:-1800}"
+            timeout "${pull_timeout}" podman pull "$IMAGE_TAG" || pull_rc=$?
+        else
+            podman pull "$IMAGE_TAG" || pull_rc=$?
+        fi
+
+        if [[ "$pull_rc" -ne 0 ]]; then
+            echo -e "${YELLOW}Warning: podman pull failed or timed out (rc=${pull_rc}). Trying skopeo fallback...${NC}"
+            if ! command -v skopeo &> /dev/null; then
+                echo -e "${RED}Error: skopeo is not installed, fallback unavailable${NC}"
+                exit 1
+            fi
+
+            local sanitized_image
+            local archive_path
+            sanitized_image="$(echo "$IMAGE_TAG" | tr '/:' '__')"
+            archive_path="/var/tmp/${sanitized_image}-$(date +%s).tar"
+
+            skopeo copy "docker://${IMAGE_TAG}" "docker-archive:${archive_path}:${IMAGE_TAG}"
+            podman load -i "${archive_path}"
+            rm -f "${archive_path}"
+        fi
     fi
     
     # Verify image has bootc metadata

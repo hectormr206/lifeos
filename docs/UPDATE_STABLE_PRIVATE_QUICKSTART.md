@@ -53,6 +53,13 @@ sudo bootc switch ghcr.io/hectormr206/lifeos:stable
 sudo reboot
 ```
 
+Alternativa robusta (recomendada) con script:
+
+```bash
+sudo ./scripts/update-lifeos.sh --channel stable --switch --yes
+sudo reboot
+```
+
 ## 4) Actualizar en cada release estable
 
 Cuando publiques un nuevo `stable`, en la laptop:
@@ -63,12 +70,49 @@ sudo bootc upgrade --apply
 sudo reboot
 ```
 
+Alternativa robusta (incluye pull con fallback `skopeo` si `podman pull` se cuelga):
+
+```bash
+sudo ./scripts/update-lifeos.sh --channel stable --apply --yes
+sudo reboot
+```
+
 ## 5) Rollback rapido si algo falla
 
 ```bash
 sudo bootc rollback
 sudo reboot
 ```
+
+## 8) Script operativo recomendado
+
+Se agrega `scripts/update-lifeos.sh` para encapsular el flujo seguro de update:
+
+- Pull normal con `podman` + timeout.
+- Fallback automatico: `skopeo copy -> docker-archive -> podman load`.
+- `bootc switch` opcional para apuntar al stream.
+- `bootc upgrade --check` y `--apply` opcional.
+- Logging continuo + snapshot de diagnostico automatico en errores.
+
+Ejemplos:
+
+```bash
+# Solo preparar imagen + check de update
+sudo ./scripts/update-lifeos.sh --channel stable
+
+# Switch de stream (primera vez) + apply de update
+sudo ./scripts/update-lifeos.sh --channel stable --switch --apply --yes
+
+# En caso extremo: resetear storage de podman antes del pull (destructivo)
+sudo ./scripts/update-lifeos.sh --channel stable --reset-storage --apply
+
+# Log personalizado (por ejemplo para adjuntar a soporte)
+sudo ./scripts/update-lifeos.sh --channel stable --apply --log-file /var/tmp/lifeos-update.log
+```
+
+Logs por defecto:
+- `/var/log/lifeos/update-lifeos-YYYYMMDD-HHMMSS.log`
+- Fallback: `/var/tmp/update-lifeos-YYYYMMDD-HHMMSS.log`
 
 ## 6) Checklist rapido de verificacion
 

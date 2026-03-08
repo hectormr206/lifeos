@@ -12,6 +12,19 @@ This document lists hardware compatibility status for LifeOS.
 | 🧪 | Testing in progress |
 | ❓ | Unknown/Not tested |
 
+## Built-In Compatibility Stack
+
+LifeOS images include a hardware-compatibility baseline inspired by Fedora + Atomic desktop best practices:
+
+- Connectivity: `NetworkManager`, `NetworkManager-wifi`, `wpa_supplicant`, `wireless-regdb`, `iwd`, `bluez`
+- Audio: `pipewire`, `wireplumber`, `pipewire-alsa`, `pipewire-pulseaudio`, `alsa-utils`, `alsa-sof-firmware`, `alsa-ucm`
+- Video/Camera: `v4l-utils`, `libcamera`
+- Firmware/updates: `linux-firmware`, `fwupd`
+- NVIDIA hybrid support: `akmod-nvidia`, `xorg-x11-drv-nvidia-*`, optional `supergfxctl` when available
+- Optional Broadcom proprietary Wi-Fi module: `broadcom-wl` + `akmod-wl` when repositories provide them
+
+This improves out-of-box support significantly, but no Linux distribution can guarantee 100% hardware coverage across all laptop SKUs, firmware revisions, and OEM BIOS defaults.
+
 ## Laptops
 
 ### Dell

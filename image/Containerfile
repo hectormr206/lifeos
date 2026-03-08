@@ -19,6 +19,7 @@ ARG LIFEOS_CHANNEL=edge
 ARG LIFEOS_VERSION=dev
 ARG BUILD_DATE
 ARG VCS_REF
+ARG LIFEOS_PRELOAD_MODEL=false
 
 RUN dnf -y install \
     rust cargo \
@@ -90,8 +91,12 @@ RUN dnf -y install --skip-unavailable \
     cosmic-desktop cosmic-files cosmic-term cosmic-edit cosmic-store \
     xdg-desktop-portal-cosmic xdg-desktop-portal-gtk xdg-desktop-portal-wlr \
     xdg-user-dirs \
-    NetworkManager NetworkManager-wifi wpa_supplicant wireless-regdb \
-    bluez pipewire wireplumber \
+    NetworkManager NetworkManager-wifi wpa_supplicant wireless-regdb iwd \
+    bluez bluez-tools \
+    pipewire wireplumber pipewire-alsa pipewire-pulseaudio pipewire-utils \
+    alsa-utils alsa-sof-firmware alsa-ucm \
+    v4l-utils libcamera \
+    fwupd \
     && dnf clean all
 
 # --- Soporte Nvidia Optimus y Gaming ---
@@ -103,6 +108,11 @@ RUN set -eux && \
         dnf -y install supergfxctl; \
     else \
         echo "INFO: supergfxctl not available in current repos; continuing without hybrid-switch helper"; \
+    fi && \
+    if dnf -q repoquery --available --qf '%{name}' akmod-wl 2>/dev/null | grep -Fxq akmod-wl; then \
+        dnf -y install broadcom-wl akmod-wl; \
+    else \
+        echo "INFO: broadcom-wl/akmod-wl not available in current repos; continuing without Broadcom proprietary module"; \
     fi && \
     if command -v akmods >/dev/null 2>&1; then \
         akmods --force || echo "WARNING: akmods failed in build environment; will retry on target host"; \
@@ -129,7 +139,8 @@ RUN mkdir -p /usr/lib/firefox/distribution/extensions && \
 
 # --- Herramientas del Sistema ---
 RUN dnf -y install \
-    toolbox btrfs-progs smartmontools podman podman-docker podman-compose buildah flatpak \
+    toolbox btrfs-progs smartmontools podman podman-docker podman-compose buildah skopeo flatpak \
+    fuse-overlayfs slirp4netns \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git wget \
     wlsunset gammastep \
     linux-firmware \
@@ -200,18 +211,21 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/log/lifeos /etc/lifeo
 # Q4_K_M quantization (~2.74GB) + F16 vision projector (~672MB) = ~3.4GB total.
 # See docs/AI_MODEL_SELECTION.md for technical justification.
 RUN set -eux && \
-    MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf" && \
-    MODEL_FILE="/usr/share/lifeos/models/Qwen3.5-4B-Q4_K_M.gguf" && \
-    MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf" && \
-    MMPROJ_FILE="/usr/share/lifeos/models/mmproj-F16.gguf" && \
-    echo ">>> Downloading Qwen3.5-4B Q4_K_M (~2.74GB)..." && \
-    curl -fSL --retry 3 --connect-timeout 60 -o "${MODEL_FILE}" "${MODEL_URL}" && \
-    echo ">>> Model size: $(du -h "${MODEL_FILE}" | cut -f1)" && \
-    test -s "${MODEL_FILE}" || { echo "ERROR: Model file is empty"; exit 1; } && \
-    echo ">>> Downloading vision projector mmproj F16 (~672MB)..." && \
-    curl -fSL --retry 3 --connect-timeout 60 -o "${MMPROJ_FILE}" "${MMPROJ_URL}" && \
-    echo ">>> mmproj size: $(du -h "${MMPROJ_FILE}" | cut -f1)" && \
-    test -s "${MMPROJ_FILE}" || { echo "ERROR: mmproj file is empty"; exit 1; } && \
+    if [ "${LIFEOS_PRELOAD_MODEL}" = "true" ]; then \
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf" && \
+        MODEL_FILE="/usr/share/lifeos/models/Qwen3.5-4B-Q4_K_M.gguf" && \
+        MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf" && \
+        MMPROJ_FILE="/usr/share/lifeos/models/mmproj-F16.gguf" && \
+        echo ">>> LIFEOS_PRELOAD_MODEL=true: downloading Qwen3.5-4B assets..." && \
+        curl -fSL --retry 3 --connect-timeout 60 -o "${MODEL_FILE}" "${MODEL_URL}" && \
+        echo ">>> Model size: $(du -h "${MODEL_FILE}" | cut -f1)" && \
+        test -s "${MODEL_FILE}" || { echo "ERROR: Model file is empty"; exit 1; } && \
+        curl -fSL --retry 3 --connect-timeout 60 -o "${MMPROJ_FILE}" "${MMPROJ_URL}" && \
+        echo ">>> mmproj size: $(du -h "${MMPROJ_FILE}" | cut -f1)" && \
+        test -s "${MMPROJ_FILE}" || { echo "ERROR: mmproj file is empty"; exit 1; }; \
+    else \
+        echo ">>> LIFEOS_PRELOAD_MODEL=false: skipping model pre-bundle to keep image pull/build lightweight"; \
+    fi && \
     ln -sfn /usr/share/lifeos/models /var/lib/lifeos/models
 
 # --- Copiar archivos de configuración y scripts desde el repo ---
@@ -259,6 +273,8 @@ COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css 
 # Wayland environment for Firefox
 COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland.sh
 COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
+COPY image/files/etc/containers/containers.conf /etc/containers/containers.conf
+COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
 
 # Firefox desktop entry with Wayland flags
 COPY image/files/usr/share/applications/firefox-lifeos.desktop /usr/share/applications/firefox-lifeos.desktop
@@ -478,9 +494,12 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/local/bin/lifeos-security-baseline-check.sh && \
     test -x /usr/bin/podman && \
     test -x /usr/bin/docker && \
+    test -x /usr/bin/skopeo && \
     test -x /usr/bin/podman-compose && \
     podman --version >/dev/null && \
     docker --version >/dev/null && \
+    test -f /etc/containers/containers.conf && \
+    test -f /etc/containers/storage.conf && \
     test -x /usr/bin/firefox && \
     test -f /etc/firefox/policies/policies.json && \
     test -f /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi && \

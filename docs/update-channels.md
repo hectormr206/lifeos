@@ -181,6 +181,7 @@ candidate_to_stable_requires = [
 podman build \
   --build-arg LIFEOS_CHANNEL=stable \
   --build-arg LIFEOS_VERSION=0.2.0 \
+  --build-arg LIFEOS_PRELOAD_MODEL=false \
   -t lifeos:stable \
   -f image/Containerfile .
 
@@ -188,6 +189,7 @@ podman build \
 podman build \
   --build-arg LIFEOS_CHANNEL=candidate \
   --build-arg LIFEOS_VERSION=0.2.0-beta \
+  --build-arg LIFEOS_PRELOAD_MODEL=false \
   -t lifeos:candidate \
   -f image/Containerfile .
 
@@ -195,7 +197,17 @@ podman build \
 podman build \
   --build-arg LIFEOS_CHANNEL=edge \
   --build-arg LIFEOS_VERSION=dev-$(date +%Y%m%d) \
+  --build-arg LIFEOS_PRELOAD_MODEL=false \
   -t lifeos:edge \
+  -f image/Containerfile .
+```
+
+To include the default GGUF model in the image, explicitly set:
+
+```bash
+podman build \
+  --build-arg LIFEOS_PRELOAD_MODEL=true \
+  -t lifeos:with-model \
   -f image/Containerfile .
 ```
 
@@ -256,6 +268,36 @@ journalctl -u lifeosd -f
 # Manual update check
 life update check
 ```
+
+Robust scripted path (recommended for large images/private GHCR):
+
+```bash
+sudo ./scripts/update-lifeos.sh --channel stable --apply --yes
+```
+
+The script writes a timestamped log and appends an automatic diagnostics snapshot on failures.
+
+### `podman pull` Stuck On `Copying blob ... done`
+
+When large images stall during extraction, use this deterministic recovery flow:
+
+```bash
+# 1) Reset corrupted container storage state (destructive for local images/containers)
+sudo podman system reset -f
+
+# 2) Pull image through skopeo archive path
+sudo skopeo copy docker://ghcr.io/hectormr206/lifeos:stable docker-archive:/var/tmp/lifeos.tar
+
+# 3) Load into podman local storage
+sudo podman load -i /var/tmp/lifeos.tar
+
+# 4) Cleanup
+sudo rm -f /var/tmp/lifeos.tar
+```
+
+Notes:
+- Use `sudo setenforce 0` only for temporary diagnostics, then re-enable with `sudo setenforce 1`.
+- LifeOS now ships `/etc/containers/containers.conf` with `image_parallel_copies = 1` and `/etc/containers/storage.conf` with `driver = "overlay"` to reduce pull/extract deadlocks on some Btrfs systems.
 
 ### Channel Switch Fails
 

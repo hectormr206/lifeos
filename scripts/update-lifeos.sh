@@ -1,0 +1,440 @@
+#!/usr/bin/env bash
+#===============================================================================
+# LifeOS Robust Update Helper
+#===============================================================================
+# Provides a resilient update flow for bootc-based LifeOS hosts:
+#   1) Pull image with podman (timeout protected)
+#   2) Fallback to skopeo docker-archive + podman load if pull stalls/fails
+#   3) Optional bootc switch/apply/reboot flow
+#
+# Examples:
+#   sudo ./scripts/update-lifeos.sh --channel stable --switch --apply
+#   sudo ./scripts/update-lifeos.sh --image ghcr.io/hectormr206/lifeos:stable --apply --reboot
+#===============================================================================
+
+set -Eeuo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log()     { echo -e "${BLUE}[LifeOS]${NC} $1"; }
+success() { echo -e "${GREEN}[OK]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
+fatal()   {
+    echo -e "${RED}[ERROR]${NC} $1"
+    if [[ -n "${LOG_FILE:-}" ]]; then
+        echo "Log file: ${LOG_FILE}"
+    fi
+    exit 1
+}
+
+DEFAULT_IMAGE="ghcr.io/hectormr206/lifeos:stable"
+IMAGE="${LIFEOS_IMAGE:-$DEFAULT_IMAGE}"
+IMAGE_EXPLICIT=false
+CHANNEL=""
+SWITCH_STREAM=false
+APPLY_UPDATE=false
+REBOOT_AFTER_APPLY=false
+RESET_STORAGE=false
+KEEP_ARCHIVE=false
+ASSUME_YES=false
+SKIP_PULL=false
+ARCHIVE_PATH=""
+ARCHIVE_DIR="${LIFEOS_ARCHIVE_DIR:-/var/tmp}"
+PULL_TIMEOUT="${PODMAN_PULL_TIMEOUT:-1800}"
+LOGIN_USER=""
+LOG_FILE="${LIFEOS_UPDATE_LOG_FILE:-}"
+LOG_DIR="${LIFEOS_UPDATE_LOG_DIR:-/var/log/lifeos}"
+LOG_INITIALIZED=false
+ERROR_HANDLED=false
+
+show_help() {
+    cat << EOF
+LifeOS Robust Update Helper
+
+USAGE:
+  sudo ./scripts/update-lifeos.sh [OPTIONS]
+
+OPTIONS:
+  -c, --channel CH       Update channel image: stable|candidate|edge
+  -i, --image IMAGE      Full image reference (default: ${DEFAULT_IMAGE})
+      --login-user USER  Run 'podman login ghcr.io -u USER' before pull
+      --skip-pull        Skip image pull/import phase (only bootc operations)
+      --switch           Run 'bootc switch <image>' before upgrade checks
+      --apply            Run 'bootc upgrade --apply'
+      --reboot           Reboot after a successful --apply
+      --reset-storage    Run 'podman system reset -f' before pull (DESTRUCTIVE)
+      --archive PATH     Custom docker-archive path for skopeo fallback
+      --keep-archive     Keep fallback archive tar after podman load
+      --pull-timeout SEC Pull timeout in seconds (default: ${PULL_TIMEOUT})
+      --log-file PATH    Write logs to a custom file path
+  -y, --yes              Non-interactive mode (auto-confirm risky steps)
+  -h, --help             Show this help
+
+ENV:
+  LIFEOS_IMAGE           Override default image reference
+  LIFEOS_ARCHIVE_DIR     Directory for fallback archive (default: /var/tmp)
+  PODMAN_PULL_TIMEOUT    Pull timeout in seconds (default: 1800)
+  LIFEOS_UPDATE_LOG_FILE Custom log file path
+  LIFEOS_UPDATE_LOG_DIR  Default log directory (default: /var/log/lifeos)
+EOF
+}
+
+confirm() {
+    local prompt="$1"
+    if [[ "${ASSUME_YES}" == true ]]; then
+        return 0
+    fi
+    read -r -p "${prompt} [y/N]: " answer
+    case "${answer}" in
+        y|Y|yes|YES) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+require_command() {
+    local cmd="$1"
+    command -v "$cmd" >/dev/null 2>&1 || fatal "Missing required command: $cmd"
+}
+
+init_logging() {
+    local ts
+
+    if [[ -z "${LOG_FILE}" ]]; then
+        ts="$(date +%Y%m%d-%H%M%S)"
+        if mkdir -p "${LOG_DIR}" 2>/dev/null; then
+            LOG_FILE="${LOG_DIR}/update-lifeos-${ts}.log"
+        else
+            LOG_FILE="/var/tmp/update-lifeos-${ts}.log"
+            mkdir -p /var/tmp
+        fi
+    else
+        mkdir -p "$(dirname "${LOG_FILE}")"
+    fi
+
+    touch "${LOG_FILE}" || fatal "Cannot write log file: ${LOG_FILE}"
+
+    # Mirror all stdout/stderr to terminal + file.
+    exec > >(tee -a "${LOG_FILE}") 2>&1
+    LOG_INITIALIZED=true
+    log "Logging to ${LOG_FILE}"
+}
+
+on_error() {
+    local exit_code="$1"
+    local line="$2"
+    local cmd="$3"
+
+    trap - ERR
+
+    if [[ "${ERROR_HANDLED}" == true ]]; then
+        exit "${exit_code}"
+    fi
+    ERROR_HANDLED=true
+
+    set +e
+    echo
+    echo -e "${RED}[ERROR]${NC} Failure detected (exit=${exit_code}) at line ${line}"
+    echo "Command: ${cmd}"
+    echo "Collecting diagnostics..."
+    echo
+    echo "----- ERROR SNAPSHOT BEGIN -----"
+    echo "Timestamp: $(date -Iseconds)"
+    echo "Exit code: ${exit_code}"
+    echo "Line: ${line}"
+    echo "Command: ${cmd}"
+    echo "Kernel: $(uname -a 2>/dev/null || true)"
+    echo
+    echo "[Disk usage]"
+    df -h || true
+    echo
+    echo "[Inode usage]"
+    df -i || true
+    echo
+    if command -v bootc >/dev/null 2>&1; then
+        echo "[bootc status]"
+        bootc status || true
+        echo
+    fi
+    if command -v podman >/dev/null 2>&1; then
+        echo "[podman info --debug]"
+        podman info --debug || podman info || true
+        echo
+    fi
+    if command -v journalctl >/dev/null 2>&1; then
+        echo "[journalctl: bootc/podman (last 120 lines each)]"
+        journalctl -b -u bootc --no-pager -n 120 || true
+        journalctl -b -u podman --no-pager -n 120 || true
+        echo
+    fi
+    echo "----- ERROR SNAPSHOT END -----"
+    echo
+    echo "Detailed log saved at: ${LOG_FILE}"
+    exit "${exit_code}"
+}
+
+on_exit() {
+    local exit_code="$1"
+    if [[ "${LOG_INITIALIZED}" == true ]]; then
+        if [[ "${exit_code}" -eq 0 ]]; then
+            success "Log saved at ${LOG_FILE}"
+        else
+            warn "Log saved at ${LOG_FILE}"
+        fi
+    fi
+}
+
+check_free_space_gb() {
+    local path="$1"
+    local min_gb="$2"
+    local df_out
+    local available_gb
+
+    if ! df_out="$(df -BG "$path" 2>/dev/null)"; then
+        warn "Could not check free space for $path"
+        return
+    fi
+
+    available_gb="$(echo "$df_out" | awk 'NR==2 {gsub(/G/, "", $4); print $4}')"
+    if [[ -z "${available_gb}" ]]; then
+        warn "Could not determine free space for $path"
+        return
+    fi
+    if (( available_gb < min_gb )); then
+        warn "Low free space at $path: ${available_gb}GB available, ${min_gb}GB recommended"
+    else
+        success "Free space at $path: ${available_gb}GB"
+    fi
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -c|--channel)
+                CHANNEL="$2"
+                shift 2
+                ;;
+            -i|--image)
+                IMAGE="$2"
+                IMAGE_EXPLICIT=true
+                shift 2
+                ;;
+            --login-user)
+                LOGIN_USER="$2"
+                shift 2
+                ;;
+            --skip-pull)
+                SKIP_PULL=true
+                shift
+                ;;
+            --switch)
+                SWITCH_STREAM=true
+                shift
+                ;;
+            --apply)
+                APPLY_UPDATE=true
+                shift
+                ;;
+            --reboot)
+                REBOOT_AFTER_APPLY=true
+                shift
+                ;;
+            --reset-storage)
+                RESET_STORAGE=true
+                shift
+                ;;
+            --archive)
+                ARCHIVE_PATH="$2"
+                shift 2
+                ;;
+            --keep-archive)
+                KEEP_ARCHIVE=true
+                shift
+                ;;
+            --pull-timeout)
+                PULL_TIMEOUT="$2"
+                shift 2
+                ;;
+            --log-file)
+                LOG_FILE="$2"
+                shift 2
+                ;;
+            -y|--yes)
+                ASSUME_YES=true
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            *)
+                fatal "Unknown option: $1"
+                ;;
+        esac
+    done
+}
+
+resolve_image() {
+    if [[ -n "${CHANNEL}" ]]; then
+        case "${CHANNEL}" in
+            stable|candidate|edge) ;;
+            *) fatal "Invalid --channel '${CHANNEL}'. Use stable|candidate|edge." ;;
+        esac
+        if [[ "${IMAGE_EXPLICIT}" == true ]]; then
+            fatal "Use either --channel or --image, not both."
+        fi
+        IMAGE="ghcr.io/hectormr206/lifeos:${CHANNEL}"
+    fi
+}
+
+podman_pull_with_timeout() {
+    local rc=0
+    if command -v timeout >/dev/null 2>&1; then
+        set +e
+        timeout "${PULL_TIMEOUT}" podman pull "${IMAGE}"
+        rc=$?
+        set -e
+    else
+        set +e
+        podman pull "${IMAGE}"
+        rc=$?
+        set -e
+    fi
+    return "$rc"
+}
+
+skopeo_fallback_pull() {
+    require_command skopeo
+    mkdir -p "${ARCHIVE_DIR}"
+
+    local archive_file
+    if [[ -n "${ARCHIVE_PATH}" ]]; then
+        archive_file="${ARCHIVE_PATH}"
+        mkdir -p "$(dirname "${archive_file}")"
+    else
+        local sanitized
+        sanitized="$(echo "${IMAGE}" | tr '/:@' '___')"
+        archive_file="${ARCHIVE_DIR}/lifeos-${sanitized}-$(date +%Y%m%d-%H%M%S).tar"
+    fi
+
+    check_free_space_gb "$(dirname "${archive_file}")" 30
+
+    log "Fallback: skopeo copy docker://${IMAGE} -> docker-archive:${archive_file}"
+    skopeo copy "docker://${IMAGE}" "docker-archive:${archive_file}:${IMAGE}"
+
+    log "Loading archive into podman storage"
+    podman load -i "${archive_file}"
+
+    if [[ "${KEEP_ARCHIVE}" == true ]]; then
+        success "Archive kept at ${archive_file}"
+    else
+        rm -f "${archive_file}"
+        success "Archive removed: ${archive_file}"
+    fi
+}
+
+main() {
+    parse_args "$@"
+    init_logging
+    trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
+    trap 'on_exit $?' EXIT
+    resolve_image
+
+    [[ $EUID -eq 0 ]] || fatal "Run as root (use sudo)."
+    require_command bootc
+    require_command podman
+
+    log "Target image: ${IMAGE}"
+    log "Pull timeout: ${PULL_TIMEOUT}s"
+    log "Actions: switch=${SWITCH_STREAM}, apply=${APPLY_UPDATE}, reboot=${REBOOT_AFTER_APPLY}, skip_pull=${SKIP_PULL}"
+
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSIL --max-time 10 https://ghcr.io/v2/ >/dev/null; then
+            success "GHCR connectivity check passed"
+        else
+            warn "GHCR connectivity check failed (continuing anyway)"
+        fi
+    fi
+
+    if [[ -n "${LOGIN_USER}" ]]; then
+        log "Running podman login for ghcr.io as ${LOGIN_USER}"
+        podman login ghcr.io -u "${LOGIN_USER}"
+    fi
+
+    if [[ "${RESET_STORAGE}" == true ]]; then
+        warn "This will remove all rootful podman images/containers on this host."
+        if confirm "Proceed with 'podman system reset -f'?"; then
+            podman system reset -f
+            success "Podman storage reset completed"
+        else
+            fatal "Aborted by user."
+        fi
+    fi
+
+    if [[ "${SKIP_PULL}" == false ]]; then
+        check_free_space_gb "/var/lib/containers" 20
+        check_free_space_gb "${ARCHIVE_DIR}" 30
+
+        log "Attempting podman pull"
+        if podman_pull_with_timeout; then
+            success "podman pull completed"
+        else
+            warn "podman pull failed or timed out; using skopeo fallback"
+            skopeo_fallback_pull
+        fi
+
+        if podman image exists "${IMAGE}"; then
+            success "Image is available locally: ${IMAGE}"
+        else
+            warn "Image existence check by exact reference failed; listing recent images"
+            podman images --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" | head -n 10
+        fi
+    fi
+
+    log "Current bootc status"
+    bootc status || true
+
+    if [[ "${SWITCH_STREAM}" == true ]]; then
+        if confirm "Run 'bootc switch ${IMAGE}' now?"; then
+            bootc switch "${IMAGE}"
+            success "bootc switch completed"
+        else
+            fatal "Aborted by user."
+        fi
+    fi
+
+    log "Running bootc upgrade --check"
+    bootc upgrade --check || warn "bootc upgrade --check reported issues"
+
+    if [[ "${APPLY_UPDATE}" == true ]]; then
+        if confirm "Run 'bootc upgrade --apply' now?"; then
+            bootc upgrade --apply
+            success "bootc upgrade --apply completed"
+        else
+            fatal "Aborted by user."
+        fi
+    fi
+
+    log "Final bootc status"
+    bootc status || true
+
+    echo
+    success "Update flow completed."
+    echo "If anything fails after reboot, rollback with:"
+    echo "  sudo bootc rollback && sudo reboot"
+
+    if [[ "${APPLY_UPDATE}" == true && "${REBOOT_AFTER_APPLY}" == true ]]; then
+        if confirm "Reboot now?"; then
+            reboot
+        else
+            warn "Reboot skipped by user. Remember to reboot manually."
+        fi
+    elif [[ "${APPLY_UPDATE}" == true ]]; then
+        warn "Update applied. Reboot is required to boot into the new deployment."
+    fi
+}
+
+main "$@"
