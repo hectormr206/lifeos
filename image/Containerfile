@@ -10,10 +10,13 @@
 #   podman build --build-arg LIFEOS_CHANNEL=candidate -t lifeos:candidate -f image/Containerfile .
 #   podman build --build-arg LIFEOS_CHANNEL=edge -t lifeos:edge -f image/Containerfile .
 
+# Build against the latest supported Fedora major release.
+ARG FEDORA_MAJOR=43
+
 # ============================================================================
 # Stage 1: Build CLI + Daemon (Rust)
 # ============================================================================
-FROM fedora:42 AS builder
+FROM fedora:${FEDORA_MAJOR} AS builder
 
 ARG LIFEOS_CHANNEL=edge
 ARG LIFEOS_VERSION=dev
@@ -54,9 +57,38 @@ RUN cd cli && cargo build --release
 RUN cd daemon && cargo build --release
 
 # ============================================================================
-# Stage 2: Sistema Final
+# Stage 2: Build llama-server (static, CPU-only)
 # ============================================================================
-FROM quay.io/fedora/fedora-bootc:42
+FROM fedora:${FEDORA_MAJOR} AS llama-builder
+
+RUN dnf install -y cmake make gcc-c++ git openssl-devel && \
+    dnf clean all
+
+RUN set -eux && \
+    echo ">>> Building llama-server from source (static, CPU-only)..." && \
+    git clone --depth=1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
+    cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DGGML_STATIC=ON \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_SERVER=ON && \
+    cmake --build /tmp/llama.cpp/build -j"$(nproc)" --target llama-server && \
+    BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
+    echo ">>> Binary found at: ${BUILD_BIN}" && \
+    mkdir -p /out && \
+    install -m 0755 "${BUILD_BIN}" /out/llama-server && \
+    /out/llama-server --version && \
+    rm -rf /tmp/llama.cpp
+
+# ============================================================================
+# Stage 3: Sistema Final
+# ============================================================================
+FROM quay.io/fedora/fedora-bootc:${FEDORA_MAJOR}
+
+ARG LIFEOS_PRELOAD_MODEL=false
+ARG FEDORA_MAJOR=43
 
 ARG LIFEOS_CHANNEL=edge
 ARG LIFEOS_VERSION=dev
@@ -165,9 +197,20 @@ RUN dnf -y install \
     && dnf clean all
 
 # bootc-image-builder expects EFI binaries under /boot/efi/EFI/fedora when producing installer ISOs.
-# On bootc images these live under /usr/lib/bootupd/updates/EFI/fedora, so we mirror them explicitly.
-RUN mkdir -p /boot/efi/EFI/fedora && \
-    cp -a /usr/lib/bootupd/updates/EFI/fedora/. /boot/efi/EFI/fedora/
+# Fedora 42 exposed these via /usr/lib/bootupd/updates/EFI/fedora, while newer bootc images
+# store versioned shim/grub artifacts under /usr/lib/efi/*/.../EFI/fedora.
+RUN set -eux && \
+    mkdir -p /boot/efi/EFI/fedora && \
+    if [ -d /usr/lib/bootupd/updates/EFI/fedora ]; then \
+        cp -a /usr/lib/bootupd/updates/EFI/fedora/. /boot/efi/EFI/fedora/; \
+    else \
+        test -d /usr/lib/efi/shim && \
+        test -d /usr/lib/efi/grub2 && \
+        find /usr/lib/efi/shim -type f -path '*/EFI/fedora/*' -exec cp -a {} /boot/efi/EFI/fedora/ \; && \
+        find /usr/lib/efi/grub2 -type f -path '*/EFI/fedora/*' -exec cp -a {} /boot/efi/EFI/fedora/ \; && \
+        test -f /boot/efi/EFI/fedora/shimx64.efi && \
+        test -f /boot/efi/EFI/fedora/grubx64.efi; \
+    fi
 
 # --- CLI Life y Daemon (binarios compilados) ---
 COPY --from=builder /build/cli/target/release/life /usr/bin/life
@@ -178,32 +221,12 @@ RUN chmod +x /usr/bin/life /usr/bin/lifeosd && \
     life --version
 
 # --- AI Runtime (llama.cpp / llama-server) ---
-# llama-server provides OpenAI-compatible API for local AI inference.
-# Strategy: Build from source with static linking (-DBUILD_SHARED_LIBS=OFF).
-# This avoids all shared library / backend loading issues on bootc (immutable /usr).
-# Pre-compiled binaries from ggml-org use dynamic backends (.so) that break when
-# installed outside their original directory structure.
+# Built in isolated stage to avoid pulling/removing toolchains in the final image.
+COPY --from=llama-builder /out/llama-server /usr/sbin/llama-server
 RUN set -eux && \
-    dnf install -y cmake make gcc-c++ git openssl-devel curl tar gzip && \
-    echo ">>> Building llama-server from source (static, CPU-only)..." && \
-    git clone --depth=1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
-    cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DBUILD_SHARED_LIBS=OFF \
-        -DGGML_STATIC=ON \
-        -DLLAMA_BUILD_TESTS=OFF \
-        -DLLAMA_BUILD_EXAMPLES=OFF \
-        -DLLAMA_BUILD_SERVER=ON && \
-    cmake --build /tmp/llama.cpp/build -j"$(nproc)" --target llama-server && \
-    BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
-    echo ">>> Binary found at: ${BUILD_BIN}" && \
-    install -m 0755 "${BUILD_BIN}" /usr/sbin/llama-server && \
     ln -f /usr/sbin/llama-server /usr/bin/llama-server 2>/dev/null || true && \
     echo ">>> Verifying static binary..." && \
     /usr/sbin/llama-server --version && \
-    rm -rf /tmp/llama.cpp && \
-    dnf remove -y cmake make gcc-c++ openssl-devel && \
-    dnf clean all && \
     echo ">>> llama-server installed (static build) at /usr/sbin and /usr/bin" && \
     ls -la /usr/sbin/llama-server /usr/bin/llama-server
 
@@ -217,7 +240,7 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/log/lifeos /etc/lifeo
 # Q4_K_M quantization (~2.74GB) + F16 vision projector (~672MB) = ~3.4GB total.
 # See docs/AI_MODEL_SELECTION.md for technical justification.
 RUN set -eux && \
-    if [ "${LIFEOS_PRELOAD_MODEL}" = "true" ]; then \
+    if [ "${LIFEOS_PRELOAD_MODEL:-false}" = "true" ]; then \
         MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf" && \
         MODEL_FILE="/usr/share/lifeos/models/Qwen3.5-4B-Q4_K_M.gguf" && \
         MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf" && \
@@ -364,21 +387,20 @@ RUN rm -f /usr/lib/os-release && \
     'ID=fedora' \
     'VARIANT_ID=lifeos' \
     'VARIANT="LifeOS"' \
-    'VERSION_ID="42"' \
-    'PLATFORM_ID="platform:f42"' \
-    'PRETTY_NAME="LifeOS 0.1 Aegis (Fedora 42)"' \
+    "VERSION_ID=\"${FEDORA_MAJOR}\"" \
+    "PLATFORM_ID=\"platform:f${FEDORA_MAJOR}\"" \
+    "PRETTY_NAME=\"LifeOS 0.1 Aegis (Fedora ${FEDORA_MAJOR})\"" \
     'ANSI_COLOR="0;36"' \
     'LOGO="fedora-logo-icon"' \
-    'CPE_NAME="cpe:/o:fedoraproject:fedora:42"' \
+    "CPE_NAME=\"cpe:/o:fedoraproject:fedora:${FEDORA_MAJOR}\"" \
     'HOME_URL="https://lifeos.hectormr.com"' \
     'DOCUMENTATION_URL="https://lifeos.hectormr.com/docs"' \
     'SUPPORT_URL="https://lifeos.hectormr.com/support"' \
     'BUG_REPORT_URL="https://lifeos.hectormr.com/bugs"' \
     'REDHAT_BUGZILLA_PRODUCT="Fedora"' \
-    'REDHAT_BUGZILLA_PRODUCT_VERSION="42"' \
+    "REDHAT_BUGZILLA_PRODUCT_VERSION=\"${FEDORA_MAJOR}\"" \
     'REDHAT_SUPPORT_PRODUCT="Fedora"' \
-    'REDHAT_SUPPORT_PRODUCT_VERSION="42"' \
-    'SUPPORT_END="2026-05-18"' \
+    "REDHAT_SUPPORT_PRODUCT_VERSION=\"${FEDORA_MAJOR}\"" \
     > /usr/lib/os-release
 
 # Placeholders de imagen oscuros para el instalador Anaconda
