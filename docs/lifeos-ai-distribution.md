@@ -1000,7 +1000,7 @@ Cada item tiene fase asignada. Son prerequisitos para la arquitectura agentica c
 
 - [x] Base inmutable bootc + slots A/B + rollback funcional. _Containerfile sobre `fedora-bootc:42`; CLI `life rollback` llama `bootc rollback` real._
 - [x] Flatpak + Toolbx funcionando sobre la base inmutable. _Instalados en Containerfile; Flathub configurado en first-boot._
-- [x] Herramientas CLI base para control de versiones y red integradas en ISO (`git`, `wget`, `curl`, `jq`). _Instaladas por defecto en `image/Containerfile`._
+- [x] Herramientas CLI base para control de versiones y red integradas en ISO (`git`, `gh`, `wget`, `curl`, `jq`). _Instaladas por defecto en `image/Containerfile`._
 - [x] Btrfs snapshots automaticos antes de cambios criticos. _`lifeos-btrfs-snapshot.sh` + `lifeos-btrfs-snapshot.timer` en imagen y hook pre-update en CLI (`life update`)._
 - [x] fs-verity para verificacion de integridad de `/usr`. _Chequeo explicito via `lifeos-integrity-check.sh` y health check `filesystem-integrity` en daemon._
 
@@ -1684,7 +1684,7 @@ RUN dnf -y install steam steam-devices && dnf clean all
 
 # --- Herramientas del sistema ---
 RUN dnf -y install toolbox btrfs-progs podman buildah flatpak \
-    fish bat ripgrep fd-find htop fastfetch age jq sqlite git wget curl \
+    fish bat ripgrep fd-find htop fastfetch age jq sqlite git gh wget curl \
     wlsunset gammastep && dnf clean all
 
 # --- AI Runtime (llama-server via llama.cpp) ---
