@@ -131,11 +131,17 @@ RUN dnf -y install \
 
 # Download uBlock Origin extension for global installation
 # This is installed as a "distributed extension" that cannot be uninstalled by users
-RUN mkdir -p /usr/lib/firefox/distribution/extensions && \
+RUN set -eux && \
     UBLOCK_URL="https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/addon-607454-latest.xpi" && \
-    curl -fSL --retry 3 -o /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi "${UBLOCK_URL}" && \
-    echo ">>> uBlock Origin extension downloaded" && \
-    test -s /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi
+    TMP_XPI="/tmp/uBlock0@raymondhill.net.xpi" && \
+    curl -fSL --retry 3 -o "${TMP_XPI}" "${UBLOCK_URL}" && \
+    test -s "${TMP_XPI}" && \
+    mkdir -p /usr/lib/firefox/distribution/extensions && \
+    install -m 0644 "${TMP_XPI}" /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi && \
+    mkdir -p /usr/lib64/firefox/distribution/extensions && \
+    install -m 0644 "${TMP_XPI}" /usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi && \
+    rm -f "${TMP_XPI}" && \
+    echo ">>> uBlock Origin extension downloaded to /usr/lib and /usr/lib64 Firefox distribution paths"
 
 # --- Herramientas del Sistema ---
 RUN dnf -y install \
@@ -278,6 +284,9 @@ COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
 
 # Firefox desktop entry with Wayland flags
 COPY image/files/usr/share/applications/firefox-lifeos.desktop /usr/share/applications/firefox-lifeos.desktop
+
+# Keep only the LifeOS Firefox launcher to avoid duplicate app entries.
+RUN find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' ! -name 'firefox-lifeos.desktop' -delete || true
 
 # Scripts de LifeOS
 COPY image/files/usr/local/bin/lifeos-first-boot.sh       /usr/local/bin/lifeos-first-boot.sh
@@ -502,12 +511,13 @@ RUN test -x /usr/bin/mpv && \
     test -f /etc/containers/storage.conf && \
     test -x /usr/bin/firefox && \
     test -f /etc/firefox/policies/policies.json && \
-    test -f /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi && \
+    (test -f /usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi || test -f /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi) && \
     test -f /etc/skel/.mozilla/firefox/profiles.ini && \
     test -f /etc/skel/.mozilla/firefox/lifeos.default/user.js && \
     test -f /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css && \
     test -f /etc/profile.d/firefox-wayland.sh && \
-    test -f /usr/share/applications/firefox-lifeos.desktop
+    test -f /usr/share/applications/firefox-lifeos.desktop && \
+    test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1
 
 # nonempty-boot is intentionally skipped: /boot/efi content is required for bootc-image-builder ISO generation.
 RUN dnf clean all && rm -f /var/log/dnf5.log* /var/cache/ldconfig/aux-cache && bootc container lint --skip nonempty-boot

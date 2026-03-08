@@ -25,7 +25,7 @@ Firefox Hardened uses a 4-layer approach:
 │  /etc/firefox/policies/policies.json - Enterprise policies   │
 ├─────────────────────────────────────────────────────────────┤
 │                     Extension Layer                          │
-│  /usr/lib/firefox/distribution/extensions/ - uBlock Origin   │
+│  /usr/lib64/firefox/distribution/extensions/ - uBlock Origin │
 ├─────────────────────────────────────────────────────────────┤
 │                      Profile Layer                           │
 │  /etc/skel/.mozilla/firefox/ - Template for new users        │
@@ -68,7 +68,7 @@ The following policies are enforced via `/etc/firefox/policies/policies.json`:
 
 | Policy | Value | Description |
 |--------|-------|-------------|
-| `Extensions.Install` | `["uBlock0@raymondhill.net"]` | Pre-installs uBlock Origin |
+| `Extensions.Install` | `["file:///usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi"]` | Pre-installs uBlock Origin |
 | `Extensions.Locked` | `["uBlock0@raymondhill.net"]` | Prevents uninstallation |
 
 ### Permissions
@@ -236,7 +236,7 @@ Edit `/etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css`:
 To add more distributed extensions:
 
 1. Download the `.xpi` file from AMO
-2. Add to `/usr/lib/firefox/distribution/extensions/`
+2. Add to `/usr/lib64/firefox/distribution/extensions/`
 3. Update `policies.json` to include in `Extensions.Install` and `Extensions.Locked`
 
 ## Troubleshooting
@@ -267,7 +267,7 @@ python3 -c "import json; json.load(open('/etc/firefox/policies/policies.json'))"
 
 ```bash
 # Check extension file
-ls -la /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi
+ls -la /usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi
 ```
 
 ### Theme not applying
@@ -281,7 +281,7 @@ ls -la /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi
 | File | Purpose |
 |------|---------|
 | `/etc/firefox/policies/policies.json` | Enterprise policies |
-| `/usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi` | uBlock Origin extension |
+| `/usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi` | uBlock Origin extension |
 | `/etc/skel/.mozilla/firefox/profiles.ini` | Profile configuration template |
 | `/etc/skel/.mozilla/firefox/lifeos.default/user.js` | User preferences template |
 | `/etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css` | Visual theme template |

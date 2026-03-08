@@ -10,7 +10,8 @@
     "PromptForDownloadLocation": false,
     "Extensions": {
       "Install": [
-        "uBlock0@raymondhill.net"
+        "file:///usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi",
+        "file:///usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi"
       ],
       "Uninstall": [],
       "Locked": [

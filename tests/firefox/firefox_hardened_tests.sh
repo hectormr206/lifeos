@@ -65,9 +65,16 @@ else
 fi
 
 # Test 1.3: uBlock Origin extension exists
-if [[ -f "/usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi" ]]; then
+UBLOCK_XPI=""
+if [[ -f "/usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi" ]]; then
+    UBLOCK_XPI="/usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi"
+elif [[ -f "/usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi" ]]; then
+    UBLOCK_XPI="/usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi"
+fi
+
+if [[ -n "$UBLOCK_XPI" ]]; then
     pass "uBlock Origin extension exists"
-    EXT_SIZE=$(stat -c%s "/usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi" 2>/dev/null || stat -f%z "/usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi")
+    EXT_SIZE=$(stat -c%s "$UBLOCK_XPI" 2>/dev/null || stat -f%z "$UBLOCK_XPI")
     if [[ $EXT_SIZE -gt 1000000 ]]; then
         pass "uBlock Origin extension size is valid ($(($EXT_SIZE / 1024)) KB)"
     else
@@ -113,6 +120,14 @@ if [[ -f "/usr/share/applications/firefox-lifeos.desktop" ]]; then
     pass "Firefox LifeOS desktop entry exists"
 else
     fail "Firefox LifeOS desktop entry not found"
+fi
+
+# Test 1.7: Only one Firefox launcher exists (LifeOS launcher)
+FIREFOX_DESKTOP_COUNT=$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)
+if [[ "$FIREFOX_DESKTOP_COUNT" -eq 1 ]]; then
+    pass "Only one Firefox launcher is present (firefox-lifeos.desktop)"
+else
+    fail "Unexpected number of Firefox launchers: $FIREFOX_DESKTOP_COUNT"
 fi
 
 # ============================================================================
