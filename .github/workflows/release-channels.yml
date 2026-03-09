@@ -111,19 +111,11 @@ jobs:
           LOCAL_IMAGE="lifeos-release:${{ github.sha }}"
           DIGEST_FILE="${RUNNER_TEMP}/lifeos-image.digest"
 
-          echo "${{ secrets.GITHUB_TOKEN }}" | podman login "${{ env.REGISTRY }}" -u "${{ github.actor }}" --password-stdin
           mkdir -p "${HOME}/.docker"
-          AUTH_FILE="${REGISTRY_AUTH_FILE:-}"
-          if [ -z "${AUTH_FILE}" ]; then
-            if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
-              AUTH_FILE="${XDG_RUNTIME_DIR}/containers/auth.json"
-            else
-              AUTH_FILE="${HOME}/.config/containers/auth.json"
-            fi
-          fi
-          if [ -f "${AUTH_FILE}" ]; then
-            cp "${AUTH_FILE}" "${HOME}/.docker/config.json"
-          fi
+          AUTH_FILE="${HOME}/.docker/config.json"
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login "${{ env.REGISTRY }}" -u "${{ github.actor }}" --password-stdin --authfile "${AUTH_FILE}"
+          export REGISTRY_AUTH_FILE="${AUTH_FILE}"
+          echo "DOCKER_CONFIG=${HOME}/.docker" >> "${GITHUB_ENV}"
 
           podman build \
             -f image/Containerfile \
