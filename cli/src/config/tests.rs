@@ -98,6 +98,45 @@ schedule = "weekly"
     }
 
     #[test]
+    fn test_load_config_with_missing_required_system_fields_uses_defaults() {
+        let config_str = r#"
+version = "1"
+
+[system]
+timezone = "America/Mexico_City"
+
+[updates]
+channel = "edge"
+"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_str.as_bytes()).unwrap();
+
+        let config = load_config_from(file.path()).unwrap();
+        assert_eq!(config.system.hostname, "lifeos");
+        assert_eq!(config.system.timezone, "America/Mexico_City");
+        assert_eq!(config.updates.channel, "edge");
+    }
+
+    #[test]
+    fn test_load_config_with_missing_sections_uses_defaults() {
+        let config_str = r#"
+[updates]
+channel = "candidate"
+"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_str.as_bytes()).unwrap();
+
+        let config = load_config_from(file.path()).unwrap();
+        assert_eq!(config.version, "1");
+        assert_eq!(config.system.hostname, "lifeos");
+        assert_eq!(config.ai.provider, "llama-server");
+        assert_eq!(config.security.secure_boot, true);
+        assert_eq!(config.updates.channel, "candidate");
+    }
+
+    #[test]
     fn test_load_config_from_nonexistent_file() {
         let path = std::path::PathBuf::from("/nonexistent/path/config.toml");
         let result = load_config_from(&path);

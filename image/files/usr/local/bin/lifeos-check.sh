@@ -371,6 +371,11 @@ HAS_NVIDIA=0
 HAS_AMD=0
 HAS_INTEL=0
 USR_READ_ONLY=0
+SECURE_BOOT_ENABLED=0
+
+if command -v mokutil &>/dev/null && mokutil --sb-state 2>/dev/null | grep -qi "SecureBoot enabled"; then
+    SECURE_BOOT_ENABLED=1
+fi
 
 if findmnt -n -o OPTIONS /usr 2>/dev/null | grep -qw ro; then
     USR_READ_ONLY=1
@@ -414,6 +419,30 @@ if [[ $HAS_NVIDIA -eq 1 ]]; then
 
     if [[ "$USR_READ_ONLY" -eq 1 ]]; then
         info "Host image-mode detectado (/usr read-only): akmods runtime no instala kmods; requiere imagen/deployment con modulo NVIDIA"
+    fi
+
+    if [[ "$SECURE_BOOT_ENABLED" -eq 1 ]]; then
+        NVIDIA_MOD_PATH="/usr/lib/modules/$(uname -r)/extra/nvidia/nvidia.ko"
+        if [[ -f "$NVIDIA_MOD_PATH" ]]; then
+            NVIDIA_SIGNER="$(modinfo -F signer "$NVIDIA_MOD_PATH" 2>/dev/null || true)"
+            if [[ -n "$NVIDIA_SIGNER" ]]; then
+                ok "NVIDIA Secure Boot: modulo firmado (${NVIDIA_SIGNER})"
+            else
+                fail "NVIDIA Secure Boot: nvidia.ko sin firma (Secure Boot bloqueara modprobe)"
+            fi
+        else
+            warn "NVIDIA Secure Boot: no se encontro $NVIDIA_MOD_PATH"
+        fi
+
+        if [[ -f /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der ]]; then
+            if mokutil --test-key /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der >/dev/null 2>&1; then
+                ok "NVIDIA Secure Boot: MOK LifeOS enrolada"
+            else
+                warn "NVIDIA Secure Boot: MOK LifeOS no enrolada (ejecuta: sudo lifeos-nvidia-secureboot.sh enroll)"
+            fi
+        else
+            warn "NVIDIA Secure Boot: certificado LifeOS no presente en la imagen"
+        fi
     fi
 
     if command -v nvidia-settings &>/dev/null; then

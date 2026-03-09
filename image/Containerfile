@@ -22,6 +22,8 @@ ARG LIFEOS_CHANNEL=edge
 ARG LIFEOS_VERSION=dev
 ARG BUILD_DATE
 ARG VCS_REF
+ARG LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64=""
+ARG LIFEOS_NVIDIA_KMOD_CERT_DER_B64=""
 ARG LIFEOS_PRELOAD_MODEL=false
 
 RUN dnf -y install \
@@ -149,6 +151,36 @@ RUN set -eux && \
     if command -v akmods >/dev/null 2>&1; then \
         akmods --force || echo "WARNING: akmods failed in build environment; will retry on target host"; \
     fi && \
+    install -d /usr/share/lifeos/secureboot && \
+    if [ -n "${LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64:-}" ] && [ -n "${LIFEOS_NVIDIA_KMOD_CERT_DER_B64:-}" ]; then \
+        KMOD_SIGN_KEY=/tmp/lifeos-nvidia-kmod-sign.key; \
+        KMOD_SIGN_CERT=/tmp/lifeos-nvidia-kmod-sign.der; \
+        echo "${LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64}" | base64 -d > "${KMOD_SIGN_KEY}"; \
+        echo "${LIFEOS_NVIDIA_KMOD_CERT_DER_B64}" | base64 -d > "${KMOD_SIGN_CERT}"; \
+        chmod 0600 "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}"; \
+        cp -f "${KMOD_SIGN_CERT}" /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der; \
+        SIGN_TOOL="/usr/src/kernels/$(uname -r)/scripts/sign-file"; \
+        if [ -x "${SIGN_TOOL}" ]; then \
+            SIGNED_COUNT=0; \
+            for mod in /usr/lib/modules/$(uname -r)/extra/nvidia/*.ko; do \
+                [ -e "${mod}" ] || continue; \
+                "${SIGN_TOOL}" sha256 "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}" "${mod}"; \
+                SIGNED_COUNT=$((SIGNED_COUNT + 1)); \
+            done; \
+            if [ "${SIGNED_COUNT}" -gt 0 ]; then \
+                depmod "$(uname -r)" || true; \
+                echo "INFO: Signed ${SIGNED_COUNT} NVIDIA kernel modules for Secure Boot"; \
+            else \
+                echo "WARNING: No NVIDIA kernel modules found to sign"; \
+            fi; \
+        else \
+            echo "WARNING: sign-file tool not found at ${SIGN_TOOL}; skipping NVIDIA module signing"; \
+        fi; \
+        rm -f "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}"; \
+    else \
+        echo "INFO: NVIDIA module signing secrets not provided; Secure Boot may reject NVIDIA modules"; \
+        rm -f /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der; \
+    fi && \
     dnf clean all
 
 # --- Steam/Proton (default via RPM Fusion) ---
@@ -232,7 +264,7 @@ RUN set -eux && \
 
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
-RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
+RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
     chmod 0700 /var/roothome
 
 # --- AI Model (pre-bundled) ---
@@ -254,8 +286,7 @@ RUN set -eux && \
         test -s "${MMPROJ_FILE}" || { echo "ERROR: mmproj file is empty"; exit 1; }; \
     else \
         echo ">>> LIFEOS_PRELOAD_MODEL=false: skipping model pre-bundle to keep image pull/build lightweight"; \
-    fi && \
-    ln -sfn /usr/share/lifeos/models /var/lib/lifeos/models
+    fi
 
 # --- Copiar archivos de configuración y scripts desde el repo ---
 # Configuración de LifeOS
@@ -318,6 +349,7 @@ COPY image/files/usr/local/bin/llama-server-health-check.sh /usr/local/bin/llama
 COPY image/files/usr/local/bin/lifeos-btrfs-snapshot.sh    /usr/local/bin/lifeos-btrfs-snapshot.sh
 COPY image/files/usr/local/bin/lifeos-integrity-check.sh   /usr/local/bin/lifeos-integrity-check.sh
 COPY image/files/usr/local/bin/lifeos-security-baseline-check.sh /usr/local/bin/lifeos-security-baseline-check.sh
+COPY image/files/usr/local/bin/lifeos-nvidia-secureboot.sh /usr/local/bin/lifeos-nvidia-secureboot.sh
 COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
@@ -325,6 +357,7 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-btrfs-snapshot.sh \
              /usr/local/bin/lifeos-integrity-check.sh \
              /usr/local/bin/lifeos-security-baseline-check.sh \
+             /usr/local/bin/lifeos-nvidia-secureboot.sh \
              /usr/local/bin/lifeos-check
 
 # xdg-desktop-portal LifeOS integration
@@ -423,7 +456,7 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     > /usr/lib/sysusers.d/wsdd.conf && \
     printf '%s\n' \
     'L /var/lib/greetd/.config/systemd/user/xdg-desktop-portal.service - - - - /dev/null' \
-    'L /var/lib/lifeos/models - - - - /usr/share/lifeos/models' \
+    'd /var/lib/lifeos/models 0755 root root - -' \
     'L /var/lib/unbound/root.key - - - - ../../../etc/unbound/dnssec-root.key' \
     'd /var/cache/dnf 0755 root root - -' \
     'd /var/cache/PackageKit 0755 root root - -' \
@@ -493,6 +526,7 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/bin/lifeosd && \
     test -x /usr/bin/llama-server && \
     test -x /usr/sbin/llama-server && \
+    test -x /usr/local/bin/lifeos-nvidia-secureboot.sh && \
     test -f /usr/lib/systemd/system/lifeosd.service && \
     test -f /usr/lib/systemd/system/llama-server.service && \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service && \

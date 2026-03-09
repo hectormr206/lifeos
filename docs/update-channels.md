@@ -275,7 +275,8 @@ Robust scripted path (recommended for large images/private GHCR):
 sudo ./scripts/update-lifeos.sh --channel stable --apply --yes
 ```
 
-The script writes a timestamped log and appends an automatic diagnostics snapshot on failures.
+The script writes a timestamped log, appends an automatic diagnostics snapshot on failures,
+and now prefers local `containers-storage` switching to avoid private-registry auth failures in `bootc switch`.
 
 ### `podman pull` Stuck On `Copying blob ... done`
 
@@ -307,6 +308,12 @@ cat /etc/lifeos/channels.toml
 
 # Check network connectivity
 curl -I https://ghcr.io/v2/
+```
+
+If `bootc switch ghcr.io/...` fails with auth errors on private GHCR, use:
+
+```bash
+sudo ./scripts/update-lifeos.sh --channel stable --login-user <github_user> --switch --yes
 ```
 
 ### Signature Verification Fails

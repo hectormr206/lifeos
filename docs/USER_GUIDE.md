@@ -223,6 +223,15 @@ rocminfo    # For AMD
 
 On image-mode/bootc installations, avoid using `akmods` directly on the host when `/usr` is read-only.
 Use `life update`/`bootc upgrade` to move to an image that already contains compatible NVIDIA kernel modules.
+If Secure Boot is enabled, validate/enroll the LifeOS NVIDIA MOK certificate:
+
+```bash
+sudo lifeos-nvidia-secureboot.sh status
+sudo lifeos-nvidia-secureboot.sh enroll
+sudo reboot
+```
+
+More details: [`docs/NVIDIA_SECURE_BOOT.md`](./NVIDIA_SECURE_BOOT.md).
 
 ### Update Issues
 

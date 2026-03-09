@@ -243,10 +243,17 @@ exit
 # Check if NVIDIA drivers are installed
 nvidia-smi
 
-# If nvidia-smi is not operational on LifeOS image-mode hosts:
-# 1) Prefer updating to a newer LifeOS image (bootc upgrade/life update)
-# 2) Avoid running akmods directly on read-only /usr hosts
+# Check Secure Boot + module signing/enrollment state
+sudo lifeos-nvidia-secureboot.sh status
+
+# If key enrollment is pending:
+sudo lifeos-nvidia-secureboot.sh enroll
+sudo reboot
 ```
+
+On image-mode/bootc hosts, avoid relying on runtime `akmods` installs on read-only `/usr`.
+Prefer updating to an image that already contains signed NVIDIA modules.
+See [`docs/NVIDIA_SECURE_BOOT.md`](./NVIDIA_SECURE_BOOT.md) for the full build + enrollment flow.
 
 #### AMD
 

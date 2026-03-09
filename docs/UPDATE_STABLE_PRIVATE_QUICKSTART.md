@@ -56,7 +56,7 @@ sudo reboot
 Alternativa robusta (recomendada) con script:
 
 ```bash
-sudo ./scripts/update-lifeos.sh --channel stable --switch --yes
+sudo ./scripts/update-lifeos.sh --channel stable --login-user hectormr206 --switch --yes
 sudo reboot
 ```
 
@@ -91,6 +91,7 @@ Se agrega `scripts/update-lifeos.sh` para encapsular el flujo seguro de update:
 - Pull normal con `podman` + timeout.
 - Fallback automatico: `skopeo copy -> docker-archive -> podman load`.
 - `bootc switch` opcional para apuntar al stream.
+- Fallback automatico de `bootc switch` a `--transport containers-storage` cuando hay imagen local.
 - `bootc upgrade --check` y `--apply` opcional.
 - Logging continuo + snapshot de diagnostico automatico en errores.
 

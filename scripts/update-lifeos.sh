@@ -46,6 +46,7 @@ ARCHIVE_PATH=""
 ARCHIVE_DIR="${LIFEOS_ARCHIVE_DIR:-/var/tmp}"
 PULL_TIMEOUT="${PODMAN_PULL_TIMEOUT:-1800}"
 LOGIN_USER=""
+LOCAL_SWITCH_REF=""
 LOG_FILE="${LIFEOS_UPDATE_LOG_FILE:-}"
 LOG_DIR="${LIFEOS_UPDATE_LOG_DIR:-/var/log/lifeos}"
 LOG_INITIALIZED=false
@@ -63,7 +64,7 @@ OPTIONS:
   -i, --image IMAGE      Full image reference (default: ${DEFAULT_IMAGE})
       --login-user USER  Run 'podman login ghcr.io -u USER' before pull
       --skip-pull        Skip image pull/import phase (only bootc operations)
-      --switch           Run 'bootc switch <image>' before upgrade checks
+      --switch           Run bootc switch before upgrade checks (prefers local containers-storage)
       --apply            Run 'bootc upgrade --apply'
       --reboot           Reboot after a successful --apply
       --reset-storage    Run 'podman system reset -f' before pull (DESTRUCTIVE)
@@ -290,6 +291,91 @@ resolve_image() {
     fi
 }
 
+derive_local_switch_ref() {
+    local image_no_digest
+    local image_tail
+    local image_name
+    local image_tag
+
+    image_no_digest="${IMAGE%@*}"
+    image_tail="${image_no_digest##*/}"
+    image_name="${image_tail%%:*}"
+    image_tag="latest"
+
+    if [[ "${image_tail}" == *:* ]]; then
+        image_tag="${image_tail##*:}"
+    fi
+
+    LOCAL_SWITCH_REF="localhost/${image_name}:${image_tag}"
+}
+
+ghcr_connectivity_check() {
+    local status
+
+    if ! command -v curl >/dev/null 2>&1; then
+        return 0
+    fi
+
+    status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://ghcr.io/v2/ || echo "000")"
+    case "${status}" in
+        200|401)
+            success "GHCR connectivity check passed (HTTP ${status})"
+            ;;
+        *)
+            warn "GHCR connectivity check failed (HTTP ${status}, continuing anyway)"
+            ;;
+    esac
+}
+
+prepare_local_switch_ref() {
+    if [[ -z "${LOCAL_SWITCH_REF}" ]]; then
+        return 0
+    fi
+
+    if podman image exists "${IMAGE}"; then
+        podman tag "${IMAGE}" "${LOCAL_SWITCH_REF}"
+        success "Prepared local switch reference: ${LOCAL_SWITCH_REF}"
+        return 0
+    fi
+
+    if podman image exists "${LOCAL_SWITCH_REF}"; then
+        success "Local switch reference already available: ${LOCAL_SWITCH_REF}"
+        return 0
+    fi
+
+    warn "Could not prepare local switch reference from ${IMAGE}"
+}
+
+bootc_switch_with_fallback() {
+    local out
+    local rc=0
+
+    if [[ -n "${LOCAL_SWITCH_REF}" ]] && podman image exists "${LOCAL_SWITCH_REF}"; then
+        log "Switching via local containers-storage reference: ${LOCAL_SWITCH_REF}"
+        bootc switch --transport containers-storage "${LOCAL_SWITCH_REF}"
+        return 0
+    fi
+
+    set +e
+    out="$(bootc switch "${IMAGE}" 2>&1)"
+    rc=$?
+    set -e
+    echo "${out}"
+
+    if [[ ${rc} -eq 0 ]]; then
+        return 0
+    fi
+
+    if [[ -n "${LOCAL_SWITCH_REF}" ]] && podman image exists "${LOCAL_SWITCH_REF}" && \
+       echo "${out}" | grep -Eqi 'unauthorized|invalid username|auth token|denied'; then
+        warn "Registry auth failed during bootc switch; retrying with local containers-storage"
+        bootc switch --transport containers-storage "${LOCAL_SWITCH_REF}"
+        return 0
+    fi
+
+    return "${rc}"
+}
+
 podman_pull_with_timeout() {
     local rc=0
     if command -v timeout >/dev/null 2>&1; then
@@ -342,22 +428,17 @@ main() {
     trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
     trap 'on_exit $?' EXIT
     resolve_image
+    derive_local_switch_ref
 
     [[ $EUID -eq 0 ]] || fatal "Run as root (use sudo)."
     require_command bootc
     require_command podman
 
     log "Target image: ${IMAGE}"
+    log "Local switch ref: ${LOCAL_SWITCH_REF}"
     log "Pull timeout: ${PULL_TIMEOUT}s"
     log "Actions: switch=${SWITCH_STREAM}, apply=${APPLY_UPDATE}, reboot=${REBOOT_AFTER_APPLY}, skip_pull=${SKIP_PULL}"
-
-    if command -v curl >/dev/null 2>&1; then
-        if curl -fsSIL --max-time 10 https://ghcr.io/v2/ >/dev/null; then
-            success "GHCR connectivity check passed"
-        else
-            warn "GHCR connectivity check failed (continuing anyway)"
-        fi
-    fi
+    ghcr_connectivity_check
 
     if [[ -n "${LOGIN_USER}" ]]; then
         log "Running podman login for ghcr.io as ${LOGIN_USER}"
@@ -392,14 +473,27 @@ main() {
             warn "Image existence check by exact reference failed; listing recent images"
             podman images --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" | head -n 10
         fi
+
+        if [[ "${SWITCH_STREAM}" == true ]]; then
+            prepare_local_switch_ref
+        fi
+    elif [[ "${SWITCH_STREAM}" == true ]]; then
+        prepare_local_switch_ref
     fi
 
     log "Current bootc status"
     bootc status || true
 
     if [[ "${SWITCH_STREAM}" == true ]]; then
-        if confirm "Run 'bootc switch ${IMAGE}' now?"; then
-            bootc switch "${IMAGE}"
+        if [[ -n "${LOCAL_SWITCH_REF}" ]] && podman image exists "${LOCAL_SWITCH_REF}"; then
+            if confirm "Run 'bootc switch --transport containers-storage ${LOCAL_SWITCH_REF}' now?"; then
+                bootc_switch_with_fallback
+                success "bootc switch completed"
+            else
+                fatal "Aborted by user."
+            fi
+        elif confirm "Run 'bootc switch ${IMAGE}' now?"; then
+            bootc_switch_with_fallback
             success "bootc switch completed"
         else
             fatal "Aborted by user."

@@ -30,6 +30,8 @@ INSTALL_MODE="${LIFEOS_INSTALL_MODE:-interactive}" # interactive (safe) | unatte
 BIB_IMAGE="quay.io/centos-bootc/bootc-image-builder:latest"
 BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 VCS_REF="${VCS_REF:-$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
+NVIDIA_SIGN_KEY_B64="${LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64:-}"
+NVIDIA_SIGN_CERT_DER_B64="${LIFEOS_NVIDIA_KMOD_CERT_DER_B64:-}"
 
 # Colores
 RED='\033[0;31m'
@@ -86,6 +88,12 @@ fi
 
 if [[ $EUID -ne 0 ]]; then
     error "bootc-image-builder requiere podman rootful. Ejecuta con: sudo ./scripts/generate-iso-simple.sh --type $BUILD_TYPE --image \"$IMAGE_NAME\""
+fi
+
+if [[ -n "$NVIDIA_SIGN_KEY_B64" && -n "$NVIDIA_SIGN_CERT_DER_B64" ]]; then
+    log "Firma NVIDIA Secure Boot habilitada (build args presentes)"
+else
+    warn "Firma NVIDIA Secure Boot deshabilitada (build args ausentes)"
 fi
 
 CONTAINERS_STORAGE="/var/lib/containers/storage"
@@ -145,6 +153,8 @@ if [[ "$NEEDS_BUILD" -eq 1 ]]; then
     podman build \
         --build-arg "BUILD_DATE=${BUILD_DATE}" \
         --build-arg "VCS_REF=${VCS_REF}" \
+        --build-arg "LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64=${NVIDIA_SIGN_KEY_B64}" \
+        --build-arg "LIFEOS_NVIDIA_KMOD_CERT_DER_B64=${NVIDIA_SIGN_CERT_DER_B64}" \
         -t "$IMAGE_NAME" \
         -f "$PROJECT_ROOT/image/Containerfile" \
         "$PROJECT_ROOT"

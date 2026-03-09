@@ -1,0 +1,140 @@
+#!/bin/bash
+# LifeOS NVIDIA + Secure Boot helper
+set -euo pipefail
+
+CERT_PATH="/usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der"
+MODULE_PATH="/usr/lib/modules/$(uname -r)/extra/nvidia/nvidia.ko"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  lifeos-nvidia-secureboot.sh status
+  lifeos-nvidia-secureboot.sh enroll
+
+Commands:
+  status   Show NVIDIA/Secure Boot signing state
+  enroll   Import LifeOS NVIDIA key into MOK (requires reboot confirmation in firmware UI)
+EOF
+}
+
+secure_boot_enabled() {
+    command -v mokutil >/dev/null 2>&1 && mokutil --sb-state 2>/dev/null | grep -qi "SecureBoot enabled"
+}
+
+nvidia_gpu_present() {
+    command -v lspci >/dev/null 2>&1 && lspci 2>/dev/null | grep -Eqi 'vga|3d|display' && lspci 2>/dev/null | grep -Eqi 'nvidia'
+}
+
+key_enrolled() {
+    command -v mokutil >/dev/null 2>&1 && [ -f "${CERT_PATH}" ] && mokutil --test-key "${CERT_PATH}" >/dev/null 2>&1
+}
+
+cmd_status() {
+    local signer=""
+    local rc=0
+
+    echo "LifeOS NVIDIA Secure Boot status"
+    echo "  Kernel: $(uname -r)"
+
+    if secure_boot_enabled; then
+        echo "  Secure Boot: enabled"
+    else
+        echo "  Secure Boot: disabled"
+    fi
+
+    if nvidia_gpu_present; then
+        echo "  NVIDIA GPU: detected"
+    else
+        echo "  NVIDIA GPU: not detected"
+    fi
+
+    if [ -f "${MODULE_PATH}" ]; then
+        signer="$(modinfo -F signer "${MODULE_PATH}" 2>/dev/null || true)"
+        if [ -n "${signer}" ]; then
+            echo "  nvidia.ko signer: ${signer}"
+        else
+            echo "  nvidia.ko signer: <unsigned>"
+            rc=1
+        fi
+    else
+        echo "  nvidia.ko path: missing (${MODULE_PATH})"
+        rc=1
+    fi
+
+    if [ -f "${CERT_PATH}" ]; then
+        echo "  LifeOS MOK cert: present (${CERT_PATH})"
+        if key_enrolled; then
+            echo "  LifeOS MOK cert: enrolled"
+        else
+            echo "  LifeOS MOK cert: not enrolled"
+            rc=1
+        fi
+    else
+        echo "  LifeOS MOK cert: missing (${CERT_PATH})"
+        rc=1
+    fi
+
+    if secure_boot_enabled && nvidia_gpu_present; then
+        if [ "${rc}" -ne 0 ]; then
+            echo
+            echo "Action:"
+            echo "  sudo lifeos-nvidia-secureboot.sh enroll"
+            echo "  sudo reboot"
+        fi
+    fi
+
+    return "${rc}"
+}
+
+cmd_enroll() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "Run as root (use sudo)."
+        exit 1
+    fi
+
+    if ! command -v mokutil >/dev/null 2>&1; then
+        echo "mokutil not found."
+        exit 1
+    fi
+
+    if ! secure_boot_enabled; then
+        echo "Secure Boot is disabled; no MOK enrollment needed."
+        exit 0
+    fi
+
+    if [ ! -f "${CERT_PATH}" ]; then
+        echo "Missing certificate: ${CERT_PATH}"
+        exit 1
+    fi
+
+    if key_enrolled; then
+        echo "LifeOS NVIDIA MOK key is already enrolled."
+        exit 0
+    fi
+
+    echo "Importing ${CERT_PATH} into MOK..."
+    echo "You will set a one-time password and confirm enrollment at next boot."
+    mokutil --import "${CERT_PATH}"
+    echo
+    echo "Pending enrollment created."
+    echo "Next steps:"
+    echo "  1) Reboot"
+    echo "  2) In MOK Manager: Enroll MOK -> Continue -> Yes -> enter password"
+    echo "  3) Boot back and verify with: nvidia-smi"
+}
+
+case "${1:-status}" in
+    status)
+        cmd_status
+        ;;
+    enroll)
+        cmd_enroll
+        ;;
+    -h|--help|help)
+        usage
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac

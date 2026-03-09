@@ -142,6 +142,13 @@ configure_gpu() {
         # Attempt to build/load NVIDIA module if GPU exists but runtime is not ready yet
         if [[ "$nvidia_runtime_ready" -eq 0 ]]; then
             log_warn "NVIDIA GPU detected but nvidia-smi is not operational yet"
+            if command -v mokutil &>/dev/null && mokutil --sb-state 2>/dev/null | grep -qi "SecureBoot enabled"; then
+                if command -v /usr/local/bin/lifeos-nvidia-secureboot.sh &>/dev/null; then
+                    if ! /usr/local/bin/lifeos-nvidia-secureboot.sh status >/dev/null 2>&1; then
+                        log_warn "Secure Boot + NVIDIA requires key enrollment. Run: sudo lifeos-nvidia-secureboot.sh enroll && sudo reboot"
+                    fi
+                fi
+            fi
             if [[ "$usr_read_only" -eq 1 ]]; then
                 log_warn "Skipping akmods on read-only image-mode host; NVIDIA kmod must come from image update/layered deployment"
             elif command -v akmods &>/dev/null; then

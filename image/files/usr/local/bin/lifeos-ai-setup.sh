@@ -19,6 +19,7 @@ fi
 echo "llama-server binary: $LLAMA_BIN"
 
 MODEL_DIR="/var/lib/lifeos/models"
+PRELOAD_MODEL_DIR="/usr/share/lifeos/models"
 ENV_FILE="/etc/lifeos/llama-server.env"
 
 # Default model is pre-bundled in the image during build (see Containerfile).
@@ -37,6 +38,47 @@ MODEL="${LIFEOS_AI_MODEL:-$DEFAULT_MODEL}"
 MODEL_PATH="$MODEL_DIR/$MODEL"
 MMPROJ="${LIFEOS_AI_MMPROJ:-$DEFAULT_MMPROJ}"
 MMPROJ_PATH="$MODEL_DIR/$MMPROJ"
+
+ensure_writable_model_dir() {
+    local target=""
+
+    mkdir -p "$(dirname "$MODEL_DIR")"
+
+    if [ -L "$MODEL_DIR" ]; then
+        target="$(readlink -f "$MODEL_DIR" || true)"
+        if [ ! -w "$MODEL_DIR" ]; then
+            echo "Model directory points to a read-only location (${target}); migrating to writable /var storage"
+            rm -f "$MODEL_DIR"
+            mkdir -p "$MODEL_DIR"
+            chmod 755 "$MODEL_DIR"
+
+            if [ -n "$target" ] && [ -d "$target" ]; then
+                find "$target" -maxdepth 1 -type f -name "*.gguf" -exec cp -n {} "$MODEL_DIR"/ \;
+            fi
+        fi
+    else
+        mkdir -p "$MODEL_DIR"
+    fi
+}
+
+seed_from_preload() {
+    if [ ! -d "$PRELOAD_MODEL_DIR" ]; then
+        return
+    fi
+
+    if [ ! -f "$MODEL_PATH" ] && [ -f "$PRELOAD_MODEL_DIR/$MODEL" ]; then
+        cp -n "$PRELOAD_MODEL_DIR/$MODEL" "$MODEL_PATH"
+        echo "Seeded model from image payload: $MODEL"
+    fi
+
+    if [ ! -f "$MMPROJ_PATH" ] && [ -f "$PRELOAD_MODEL_DIR/$MMPROJ" ]; then
+        cp -n "$PRELOAD_MODEL_DIR/$MMPROJ" "$MMPROJ_PATH"
+        echo "Seeded vision projector from image payload: $MMPROJ"
+    fi
+}
+
+ensure_writable_model_dir
+seed_from_preload
 
 # If model already exists, check mmproj too
 if [ -f "$MODEL_PATH" ]; then
@@ -68,11 +110,6 @@ fi
 
 echo "Downloading default AI model: $MODEL (~2.74GB)"
 echo "This may take several minutes..."
-
-mkdir -p "$(dirname "$MODEL_DIR")"
-if [ ! -e "$MODEL_DIR" ]; then
-    mkdir -p "$MODEL_DIR"
-fi
 
 # Download model with retry
 for attempt in 1 2 3; do

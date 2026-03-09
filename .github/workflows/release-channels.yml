@@ -127,6 +127,8 @@ jobs:
             --build-arg LIFEOS_VERSION="${{ needs.determine-channel.outputs.version }}" \
             --build-arg BUILD_DATE="${{ steps.meta-build.outputs.build_date }}" \
             --build-arg VCS_REF="${{ github.sha }}" \
+            --build-arg LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64="${{ secrets.LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 }}" \
+            --build-arg LIFEOS_NVIDIA_KMOD_CERT_DER_B64="${{ secrets.LIFEOS_NVIDIA_KMOD_CERT_DER_B64 }}" \
             .
 
           podman push --digestfile "${DIGEST_FILE}" "${LOCAL_IMAGE}" "docker://${IMAGE_BASE}:${TAG_PRIMARY}"

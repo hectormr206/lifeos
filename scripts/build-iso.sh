@@ -46,6 +46,8 @@ Examples:
 
 Environment:
   LIFEOS_PRELOAD_MODEL=true|false   Include prebundled GGUF model in image build (default: false)
+  LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64   Base64 PEM private key to sign NVIDIA kmods for Secure Boot
+  LIFEOS_NVIDIA_KMOD_CERT_DER_B64   Base64 DER cert paired with key (also shipped for MOK enrollment)
 EOF
 }
 
@@ -57,6 +59,8 @@ BUILD_TYPE="iso"
 INSTALL_MODE="${LIFEOS_INSTALL_MODE:-interactive}"
 OUTPUT_DIR="${LIFEOS_OUTPUT_DIR:-${PROJECT_ROOT}/output}"
 PRELOAD_MODEL="${LIFEOS_PRELOAD_MODEL:-false}"
+NVIDIA_SIGN_KEY_B64="${LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64:-}"
+NVIDIA_SIGN_CERT_DER_B64="${LIFEOS_NVIDIA_KMOD_CERT_DER_B64:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -140,6 +144,11 @@ VCS_REF="${VCS_REF:-$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/nu
 
 log "Configuration: type=$BUILD_TYPE image=$IMAGE_NAME install_mode=$INSTALL_MODE output=$OUTPUT_DIR"
 log "Model preload: LIFEOS_PRELOAD_MODEL=$PRELOAD_MODEL"
+if [[ -n "$NVIDIA_SIGN_KEY_B64" && -n "$NVIDIA_SIGN_CERT_DER_B64" ]]; then
+    log "NVIDIA Secure Boot signing: enabled (build args provided)"
+else
+    warn "NVIDIA Secure Boot signing: disabled (build args not provided)"
+fi
 echo
 
 log "Step 0/3: Removing previous image (if present)..."
@@ -157,6 +166,8 @@ podman build \
     --build-arg "BUILD_DATE=${BUILD_DATE}" \
     --build-arg "VCS_REF=${VCS_REF}" \
     --build-arg "LIFEOS_PRELOAD_MODEL=${PRELOAD_MODEL}" \
+    --build-arg "LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64=${NVIDIA_SIGN_KEY_B64}" \
+    --build-arg "LIFEOS_NVIDIA_KMOD_CERT_DER_B64=${NVIDIA_SIGN_CERT_DER_B64}" \
     -t "$IMAGE_NAME" \
     -f "$PROJECT_ROOT/image/Containerfile" \
     "$PROJECT_ROOT"

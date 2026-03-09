@@ -53,6 +53,9 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          build-args: |
+            LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64=${{ secrets.LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 }}
+            LIFEOS_NVIDIA_KMOD_CERT_DER_B64=${{ secrets.LIFEOS_NVIDIA_KMOD_CERT_DER_B64 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true

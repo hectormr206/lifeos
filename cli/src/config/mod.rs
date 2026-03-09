@@ -8,9 +8,13 @@ mod tests;
 /// LifeOS configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LifeConfig {
+    #[serde(default = "default_version")]
     pub version: String,
+    #[serde(default)]
     pub system: SystemConfig,
+    #[serde(default)]
     pub ai: AiConfig,
+    #[serde(default)]
     pub security: SecurityConfig,
     #[serde(default)]
     pub updates: UpdateConfig,
@@ -31,7 +35,9 @@ impl Default for LifeConfig {
 /// System configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemConfig {
+    #[serde(default = "default_hostname")]
     pub hostname: String,
+    #[serde(default = "default_timezone")]
     pub timezone: String,
     #[serde(default)]
     pub locale: String,
@@ -42,8 +48,8 @@ pub struct SystemConfig {
 impl Default for SystemConfig {
     fn default() -> Self {
         Self {
-            hostname: "lifeos".to_string(),
-            timezone: "UTC".to_string(),
+            hostname: default_hostname(),
+            timezone: default_timezone(),
             locale: "en_US.UTF-8".to_string(),
             keyboard: "us".to_string(),
         }
@@ -113,6 +119,18 @@ pub struct UpdateConfig {
 
 fn default_channel() -> String {
     "stable".to_string()
+}
+
+fn default_version() -> String {
+    "1".to_string()
+}
+
+fn default_hostname() -> String {
+    "lifeos".to_string()
+}
+
+fn default_timezone() -> String {
+    "UTC".to_string()
 }
 
 fn default_schedule() -> String {
