@@ -32,6 +32,18 @@ Set these repository secrets:
 
 Recommended: keep one long-lived signing keypair for LifeOS NVIDIA modules, and rotate with a planned migration window.
 
+Quick setup with `gh` (recommended):
+
+```bash
+./scripts/setup-nvidia-signing-secrets.sh --generate --apply
+```
+
+This generates a local keypair under `~/.config/lifeos/nvidia-secureboot/` and uploads:
+- `LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64`
+- `LIFEOS_NVIDIA_KMOD_CERT_DER_B64`
+
+After that, re-run release channels so `edge/stable` images are rebuilt with signed NVIDIA modules.
+
 ## Host onboarding (one-time per machine)
 
 After installing/updating to an image signed with your LifeOS NVIDIA cert:
