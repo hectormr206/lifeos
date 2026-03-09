@@ -125,7 +125,12 @@ fi
 
 if [[ "$LOGIN_GH" == true ]]; then
     if command -v gh >/dev/null 2>&1; then
-        printf "%s\n" "$GH_TOKEN" | gh auth login --hostname github.com --with-token >/dev/null
+        # gh auth login refuses to store credentials when GH_TOKEN/GITHUB_TOKEN are set.
+        # Run login in a clean subshell so environment-based auth does not conflict.
+        (
+            unset GH_TOKEN GITHUB_TOKEN CR_PAT
+            printf "%s\n" "$GH_TOKEN" | gh auth login --hostname github.com --with-token >/dev/null
+        )
     else
         echo "Skipping gh login: 'gh' command not found"
     fi
