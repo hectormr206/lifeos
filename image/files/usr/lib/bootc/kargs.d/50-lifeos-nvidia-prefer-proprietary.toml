@@ -1,0 +1,8 @@
+# Prefer the proprietary NVIDIA driver over nouveau on LifeOS images.
+# This avoids nouveau taking control of dGPU hardware before nvidia.ko.
+kargs = [
+  "rd.driver.blacklist=nouveau",
+  "modprobe.blacklist=nouveau",
+  "nouveau.modeset=0",
+  "nvidia-drm.modeset=1",
+]

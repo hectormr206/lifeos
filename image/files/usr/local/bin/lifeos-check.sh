@@ -421,6 +421,14 @@ if [[ $HAS_NVIDIA -eq 1 ]]; then
         info "Host image-mode detectado (/usr read-only): akmods runtime no instala kmods; requiere imagen/deployment con modulo NVIDIA"
     fi
 
+    KERNEL_CMDLINE="$(cat /proc/cmdline 2>/dev/null || true)"
+    if echo "$KERNEL_CMDLINE" | grep -Eq '(^| )rd.driver.blacklist=nouveau( |$)' && \
+       echo "$KERNEL_CMDLINE" | grep -Eq '(^| )modprobe.blacklist=nouveau( |$)'; then
+        ok "Kernel args NVIDIA: blacklist de nouveau activa"
+    else
+        warn "Kernel args NVIDIA: falta blacklist de nouveau (puede tomar la GPU antes de nvidia.ko)"
+    fi
+
     if [[ "$SECURE_BOOT_ENABLED" -eq 1 ]]; then
         NVIDIA_MOD_PATH="/usr/lib/modules/$(uname -r)/extra/nvidia/nvidia.ko"
         if [[ -f "$NVIDIA_MOD_PATH" ]]; then

@@ -254,6 +254,8 @@ sudo reboot
 On image-mode/bootc hosts, avoid relying on runtime `akmods` installs on read-only `/usr`.
 Prefer updating to an image that already contains signed NVIDIA modules.
 See [`docs/NVIDIA_SECURE_BOOT.md`](./NVIDIA_SECURE_BOOT.md) for the full build + enrollment flow.
+Current release images also include bootc kargs to prefer proprietary NVIDIA over `nouveau`
+(`rd.driver.blacklist=nouveau`, `modprobe.blacklist=nouveau`, `nouveau.modeset=0`).
 
 #### AMD
 

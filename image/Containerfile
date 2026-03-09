@@ -352,6 +352,7 @@ COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland
 COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
 COPY image/files/etc/containers/containers.conf /etc/containers/containers.conf
 COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
+COPY image/files/usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml
 
 # Firefox desktop entry with Wayland flags
 COPY image/files/usr/share/applications/firefox-lifeos.desktop /usr/share/applications/firefox-lifeos.desktop
@@ -583,6 +584,7 @@ RUN test -x /usr/bin/mpv && \
     docker --version >/dev/null && \
     test -f /etc/containers/containers.conf && \
     test -f /etc/containers/storage.conf && \
+    test -f /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml && \
     test -x /usr/bin/firefox && \
     test -f /etc/firefox/policies/policies.json && \
     (test -f /usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi || test -f /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi) && \

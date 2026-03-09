@@ -44,6 +44,21 @@ This generates a local keypair under `~/.config/lifeos/nvidia-secureboot/` and u
 
 After that, re-run release channels so `edge/stable` images are rebuilt with signed NVIDIA modules.
 
+## Driver preference defaults (nouveau vs proprietary)
+
+LifeOS images now ship a bootc kernel-args drop-in at:
+
+- `/usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml`
+
+It applies these kernel args to deployments:
+
+- `rd.driver.blacklist=nouveau`
+- `modprobe.blacklist=nouveau`
+- `nouveau.modeset=0`
+- `nvidia-drm.modeset=1`
+
+This is meant to reduce manual post-install tuning on NVIDIA laptops/desktops where `nouveau` can otherwise bind first and block `nvidia.ko` (`modprobe: ... No such device`).
+
 ## Host onboarding (one-time per machine)
 
 After installing/updating to an image signed with your LifeOS NVIDIA cert:
