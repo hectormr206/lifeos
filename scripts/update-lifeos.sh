@@ -71,7 +71,7 @@ OPTIONS:
       --login-token-file P Read login token from file path P (non-interactive login)
       --skip-pull        Skip image pull/import phase (only bootc operations)
       --switch           Run bootc switch before upgrade checks (prefers local containers-storage)
-      --apply            Run 'bootc upgrade --apply'
+      --apply            Run 'bootc upgrade --apply' (may reboot automatically)
       --reboot           Reboot after a successful --apply
       --reset-storage    Run 'podman system reset -f' before pull (DESTRUCTIVE)
       --archive PATH     Custom docker-archive path for skopeo fallback
@@ -590,7 +590,9 @@ main() {
     bootc upgrade --check || warn "bootc upgrade --check reported issues"
 
     if [[ "${APPLY_UPDATE}" == true ]]; then
-        if confirm "Run 'bootc upgrade --apply' now?"; then
+        warn "About to run 'bootc upgrade --apply'."
+        warn "Depending on bootc/systemd behavior, this can trigger an immediate reboot."
+        if confirm "Run 'bootc upgrade --apply' now (possible automatic reboot)?"; then
             bootc upgrade --apply
             success "bootc upgrade --apply completed"
         else

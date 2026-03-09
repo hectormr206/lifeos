@@ -281,6 +281,7 @@ It also supports non-interactive token login via:
 - `--login-token-env <VAR>`
 - `--login-token-file <PATH>`
 - or default env vars `LIFEOS_GHCR_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` / `CR_PAT`.
+- Note: `--apply` can trigger an immediate reboot on some bootc/systemd setups.
 
 ### `podman pull` Stuck On `Copying blob ... done`
 

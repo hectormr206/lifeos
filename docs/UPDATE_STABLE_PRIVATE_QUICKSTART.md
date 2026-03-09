@@ -105,6 +105,10 @@ sudo ./scripts/update-lifeos.sh --channel stable --apply --yes
 sudo reboot
 ```
 
+Importante:
+- `bootc upgrade --apply` (y por lo tanto `update-lifeos.sh --apply`) puede disparar reboot automatico en algunos entornos.
+- Guarda tu trabajo antes de correr `--apply`.
+
 ## 5) Rollback rapido si algo falla
 
 ```bash
@@ -122,6 +126,7 @@ Se agrega `scripts/update-lifeos.sh` para encapsular el flujo seguro de update:
 - Fallback automatico de `bootc switch` a `--transport containers-storage` cuando hay imagen local.
 - `bootc upgrade --check` y `--apply` opcional.
 - Logging continuo + snapshot de diagnostico automatico en errores.
+- Advertencia explicita antes de `--apply` porque `bootc` puede reiniciar automaticamente.
 
 Ejemplos:
 
