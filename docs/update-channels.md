@@ -331,6 +331,10 @@ sudo skopeo inspect --creds "<github_user>:<token>" docker://ghcr.io/hectormr206
 
 Failure means token scope/access mismatch (`read:packages` missing or token not authorized for that package).
 
+Common pitfall:
+- If you rotated/recreated a PAT but still use `--login-token-file` (for example `/tmp/gh_pat.txt`), ensure the file was updated with the new token.
+- A stale token file typically surfaces as `HTTP 401 Bad credentials` or `403 Forbidden`.
+
 ### Signature Verification Fails
 
 ```bash

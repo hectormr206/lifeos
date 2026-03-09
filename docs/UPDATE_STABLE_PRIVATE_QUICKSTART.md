@@ -40,6 +40,10 @@ GHCR privado requiere autenticacion.
 ./scripts/setup-gh-credentials.sh --user hectormr206 --gh-login --podman-login
 ```
 
+Nota importante:
+- Si rotas/recreas tu PAT y usas `--token-file`, actualiza primero ese archivo (por ejemplo `/tmp/gh_pat.txt`).
+- Un archivo con token viejo provoca `HTTP 401 Bad credentials` en `gh auth login` y/o `403 Forbidden` en GHCR.
+
 Esto crea:
 - `~/.config/lifeos/gh.env` (permisos `600`)
 - `/tmp/lifeos-gh.env` (enlace para sesiones de automatizacion/Codex)

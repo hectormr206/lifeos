@@ -33,6 +33,13 @@ Options:
 EOF
 }
 
+print_token_file_hint() {
+    if [[ -n "${TOKEN_FILE}" ]]; then
+        echo "Hint: token loaded from --token-file: ${TOKEN_FILE}" >&2
+        echo "      If you rotated/recreated the PAT, update this file and rerun." >&2
+    fi
+}
+
 append_line_if_missing() {
     local file="$1"
     local line="$2"
@@ -133,8 +140,21 @@ if [[ "$LOGIN_GH" == true ]]; then
     if command -v gh >/dev/null 2>&1; then
         # gh auth login refuses to store credentials when GH_TOKEN/GITHUB_TOKEN are set.
         # Use env -u for the gh process only; keep shell variables intact under set -u.
-        printf "%s\n" "$GH_TOKEN" | env -u GH_TOKEN -u GITHUB_TOKEN -u CR_PAT \
-            gh auth login --hostname github.com --with-token >/dev/null
+        gh_login_output=""
+        set +e
+        gh_login_output="$(
+            printf "%s\n" "$GH_TOKEN" | env -u GH_TOKEN -u GITHUB_TOKEN -u CR_PAT \
+                gh auth login --hostname github.com --with-token 2>&1
+        )"
+        gh_login_rc=$?
+        set -e
+        if [[ ${gh_login_rc} -ne 0 ]]; then
+            echo "${gh_login_output}" >&2
+            if echo "${gh_login_output}" | grep -Eqi 'Bad credentials|HTTP 401|invalid token|authentication failed'; then
+                print_token_file_hint
+            fi
+            exit "${gh_login_rc}"
+        fi
     else
         echo "Skipping gh login: 'gh' command not found"
     fi
@@ -142,7 +162,20 @@ fi
 
 if [[ "$LOGIN_PODMAN" == true ]]; then
     if command -v podman >/dev/null 2>&1; then
-        printf "%s\n" "$GH_TOKEN" | podman login ghcr.io -u "$GH_USER" --password-stdin >/dev/null
+        podman_login_output=""
+        set +e
+        podman_login_output="$(
+            printf "%s\n" "$GH_TOKEN" | podman login ghcr.io -u "$GH_USER" --password-stdin 2>&1
+        )"
+        podman_login_rc=$?
+        set -e
+        if [[ ${podman_login_rc} -ne 0 ]]; then
+            echo "${podman_login_output}" >&2
+            if echo "${podman_login_output}" | grep -Eqi 'unauthorized|authentication|denied|invalid'; then
+                print_token_file_hint
+            fi
+            exit "${podman_login_rc}"
+        fi
     else
         echo "Skipping podman login: 'podman' command not found"
     fi
