@@ -148,21 +148,22 @@ if [[ "$LOGIN_PODMAN" == true ]]; then
     fi
 fi
 
-if [[ "$CHECK_GHCR" == true ]] && command -v curl >/dev/null 2>&1; then
+if [[ "$CHECK_GHCR" == true ]] && (command -v podman >/dev/null 2>&1 || command -v skopeo >/dev/null 2>&1); then
     GHCR_IMAGE="ghcr.io/${GH_USER}/lifeos:edge"
-    GHCR_REF="${GHCR_IMAGE#ghcr.io/}"
-    GHCR_PATH="${GHCR_REF%:*}"
-    GHCR_TAG="edge"
-    GHCR_HTTP_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
-        -u "${GH_USER}:${GH_TOKEN}" \
-        -H 'Accept: application/vnd.oci.image.index.v1+json' \
-        "https://ghcr.io/v2/${GHCR_PATH}/manifests/${GHCR_TAG}" || true)"
-
-    if [[ "${GHCR_HTTP_CODE}" == "200" ]]; then
-        echo "GHCR check passed for ${GHCR_IMAGE} (HTTP 200)"
-    else
-        echo "WARNING: GHCR manifest check failed for ${GHCR_IMAGE} (HTTP ${GHCR_HTTP_CODE:-000})"
-        echo "         If pull fails with 'reading manifest ... denied', recreate PAT with Packages Read."
+    if command -v skopeo >/dev/null 2>&1; then
+        if skopeo inspect --creds "${GH_USER}:${GH_TOKEN}" "docker://${GHCR_IMAGE}" >/dev/null 2>&1; then
+            echo "GHCR check passed for ${GHCR_IMAGE} (skopeo inspect)"
+        else
+            echo "WARNING: GHCR manifest check failed for ${GHCR_IMAGE} (skopeo inspect)"
+            echo "         Recreate PAT with Packages Read (and repo access if package is private)."
+        fi
+    elif command -v podman >/dev/null 2>&1; then
+        if podman manifest inspect "docker://${GHCR_IMAGE}" >/dev/null 2>&1; then
+            echo "GHCR check passed for ${GHCR_IMAGE} (podman manifest inspect)"
+        else
+            echo "WARNING: GHCR manifest check failed for ${GHCR_IMAGE} (podman manifest inspect)"
+            echo "         Recreate PAT with Packages Read (and repo access if package is private)."
+        fi
     fi
 fi
 

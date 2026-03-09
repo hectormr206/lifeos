@@ -349,20 +349,9 @@ is_auth_failure_output() {
 }
 
 print_ghcr_auth_guidance() {
-    local ghcr_ref
-    local ghcr_path
-    local ghcr_tag
-
     if [[ "${IMAGE}" != ghcr.io/* ]]; then
         warn "Registry authorization failed for ${IMAGE}."
         return
-    fi
-
-    ghcr_ref="${IMAGE#ghcr.io/}"
-    ghcr_path="${ghcr_ref%:*}"
-    ghcr_tag="latest"
-    if [[ "${ghcr_ref}" == *:* ]]; then
-        ghcr_tag="${ghcr_ref##*:}"
     fi
 
     warn "GHCR denied manifest access for ${IMAGE}."
@@ -374,12 +363,10 @@ print_ghcr_auth_guidance() {
     echo "  - Classic token: read:packages (and repo if package is private/repo-scoped)"
     echo "  - Fine-grained token: Packages=Read on the owner/repository"
     echo
+    echo "Quick checks:"
+    echo "  sudo podman manifest inspect \"docker://${IMAGE}\""
     if [[ -n "${LOGIN_USER}" ]]; then
-        echo "Quick check (expect HTTP 200):"
-        echo "  curl -sS -o /dev/null -w '%{http_code}\\n' \\"
-        echo "    -u \"${LOGIN_USER}:<TOKEN>\" \\"
-        echo "    -H 'Accept: application/vnd.oci.image.index.v1+json' \\"
-        echo "    \"https://ghcr.io/v2/${ghcr_path}/manifests/${ghcr_tag}\""
+        echo "  sudo skopeo inspect --creds \"${LOGIN_USER}:<TOKEN>\" \"docker://${IMAGE}\""
     fi
 }
 
