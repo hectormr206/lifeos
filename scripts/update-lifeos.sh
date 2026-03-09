@@ -46,6 +46,8 @@ ARCHIVE_PATH=""
 ARCHIVE_DIR="${LIFEOS_ARCHIVE_DIR:-/var/tmp}"
 PULL_TIMEOUT="${PODMAN_PULL_TIMEOUT:-1800}"
 LOGIN_USER=""
+LOGIN_TOKEN_ENV=""
+LOGIN_TOKEN_FILE=""
 LOCAL_SWITCH_REF=""
 LOG_FILE="${LIFEOS_UPDATE_LOG_FILE:-}"
 LOG_DIR="${LIFEOS_UPDATE_LOG_DIR:-/var/log/lifeos}"
@@ -63,6 +65,8 @@ OPTIONS:
   -c, --channel CH       Update channel image: stable|candidate|edge
   -i, --image IMAGE      Full image reference (default: ${DEFAULT_IMAGE})
       --login-user USER  Run 'podman login ghcr.io -u USER' before pull
+      --login-token-env V Read login token from env var name V (non-interactive login)
+      --login-token-file P Read login token from file path P (non-interactive login)
       --skip-pull        Skip image pull/import phase (only bootc operations)
       --switch           Run bootc switch before upgrade checks (prefers local containers-storage)
       --apply            Run 'bootc upgrade --apply'
@@ -81,6 +85,8 @@ ENV:
   PODMAN_PULL_TIMEOUT    Pull timeout in seconds (default: 1800)
   LIFEOS_UPDATE_LOG_FILE Custom log file path
   LIFEOS_UPDATE_LOG_DIR  Default log directory (default: /var/log/lifeos)
+  LIFEOS_GHCR_USER       Default GHCR user for --login-user
+  LIFEOS_GHCR_TOKEN      Default GHCR token for non-interactive login
 EOF
 }
 
@@ -227,6 +233,14 @@ parse_args() {
                 LOGIN_USER="$2"
                 shift 2
                 ;;
+            --login-token-env)
+                LOGIN_TOKEN_ENV="$2"
+                shift 2
+                ;;
+            --login-token-file)
+                LOGIN_TOKEN_FILE="$2"
+                shift 2
+                ;;
             --skip-pull)
                 SKIP_PULL=true
                 shift
@@ -288,6 +302,41 @@ resolve_image() {
             fatal "Use either --channel or --image, not both."
         fi
         IMAGE="ghcr.io/hectormr206/lifeos:${CHANNEL}"
+    fi
+}
+
+resolve_login_credentials() {
+    local token_from_env=""
+    local login_token=""
+
+    if [[ -z "${LOGIN_USER}" ]]; then
+        LOGIN_USER="${LIFEOS_GHCR_USER:-${GH_USER:-${GITHUB_USER:-}}}"
+    fi
+
+    if [[ -n "${LOGIN_TOKEN_FILE}" ]]; then
+        [[ -r "${LOGIN_TOKEN_FILE}" ]] || fatal "Cannot read --login-token-file: ${LOGIN_TOKEN_FILE}"
+        login_token="$(tr -d '\r\n' < "${LOGIN_TOKEN_FILE}")"
+    elif [[ -n "${LOGIN_TOKEN_ENV}" ]]; then
+        token_from_env="${!LOGIN_TOKEN_ENV-}"
+        login_token="$(printf "%s" "${token_from_env}" | tr -d '\r\n')"
+    else
+        for token_var in LIFEOS_GHCR_TOKEN GH_TOKEN GITHUB_TOKEN CR_PAT; do
+            token_from_env="${!token_var-}"
+            if [[ -n "${token_from_env}" ]]; then
+                login_token="$(printf "%s" "${token_from_env}" | tr -d '\r\n')"
+                break
+            fi
+        done
+    fi
+
+    if [[ -n "${LOGIN_USER}" && -n "${login_token}" ]]; then
+        log "Running non-interactive podman login for ghcr.io as ${LOGIN_USER}"
+        printf "%s\n" "${login_token}" | podman login ghcr.io -u "${LOGIN_USER}" --password-stdin
+    elif [[ -n "${LOGIN_USER}" ]]; then
+        log "Running podman login for ghcr.io as ${LOGIN_USER}"
+        podman login ghcr.io -u "${LOGIN_USER}"
+    elif [[ -n "${LOGIN_TOKEN_ENV}" || -n "${LOGIN_TOKEN_FILE}" ]]; then
+        fatal "Token source provided but --login-user (or LIFEOS_GHCR_USER/GH_USER env) is missing."
     fi
 }
 
@@ -440,10 +489,7 @@ main() {
     log "Actions: switch=${SWITCH_STREAM}, apply=${APPLY_UPDATE}, reboot=${REBOOT_AFTER_APPLY}, skip_pull=${SKIP_PULL}"
     ghcr_connectivity_check
 
-    if [[ -n "${LOGIN_USER}" ]]; then
-        log "Running podman login for ghcr.io as ${LOGIN_USER}"
-        podman login ghcr.io -u "${LOGIN_USER}"
-    fi
+    resolve_login_credentials
 
     if [[ "${RESET_STORAGE}" == true ]]; then
         warn "This will remove all rootful podman images/containers on this host."

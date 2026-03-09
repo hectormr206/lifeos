@@ -34,19 +34,29 @@ Esto dispara `release-channels.yml` y publica/mueve la etiqueta `stable`.
 GHCR privado requiere autenticacion.
 
 1. Crea un GitHub PAT con al menos `read:packages`.
-2. En la laptop LifeOS:
+2. Configura credenciales persistentes (recomendado para evitar reingresarlas y para sesiones Codex):
+
+```bash
+./scripts/setup-gh-credentials.sh --user hectormr206 --gh-login --podman-login
+```
+
+Esto crea:
+- `~/.config/lifeos/gh.env` (permisos `600`)
+- `/tmp/lifeos-gh.env` (enlace para sesiones de automatizacion/Codex)
+
+3. En la laptop LifeOS (alternativa manual):
 
 ```bash
 sudo podman login ghcr.io -u hectormr206
 ```
 
-3. Verifica que la imagen existe y es accesible:
+4. Verifica que la imagen existe y es accesible:
 
 ```bash
 sudo podman pull ghcr.io/hectormr206/lifeos:stable
 ```
 
-4. Conecta el sistema al stream `stable` (una sola vez):
+5. Conecta el sistema al stream `stable` (una sola vez):
 
 ```bash
 sudo bootc switch ghcr.io/hectormr206/lifeos:stable
@@ -56,7 +66,7 @@ sudo reboot
 Alternativa robusta (recomendada) con script:
 
 ```bash
-sudo ./scripts/update-lifeos.sh --channel stable --login-user hectormr206 --switch --yes
+sudo ./scripts/update-lifeos.sh --channel stable --switch --yes
 sudo reboot
 ```
 

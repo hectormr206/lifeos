@@ -272,11 +272,15 @@ life update check
 Robust scripted path (recommended for large images/private GHCR):
 
 ```bash
-sudo ./scripts/update-lifeos.sh --channel stable --apply --yes
+sudo ./scripts/update-lifeos.sh --channel stable --login-user <github_user> --apply --yes
 ```
 
 The script writes a timestamped log, appends an automatic diagnostics snapshot on failures,
 and now prefers local `containers-storage` switching to avoid private-registry auth failures in `bootc switch`.
+It also supports non-interactive token login via:
+- `--login-token-env <VAR>`
+- `--login-token-file <PATH>`
+- or default env vars `LIFEOS_GHCR_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` / `CR_PAT`.
 
 ### `podman pull` Stuck On `Copying blob ... done`
 

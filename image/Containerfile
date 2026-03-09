@@ -212,6 +212,7 @@ RUN dnf -y install \
     toolbox btrfs-progs smartmontools podman podman-docker podman-compose buildah skopeo flatpak \
     fuse-overlayfs slirp4netns \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git gh wget \
+    rust cargo \
     wlsunset gammastep \
     linux-firmware \
     pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
