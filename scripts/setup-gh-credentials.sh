@@ -13,6 +13,7 @@ TOKEN_FILE=""
 ENABLE_SHELL_AUTOLOAD=true
 LOGIN_GH=false
 LOGIN_PODMAN=false
+CHECK_GHCR=true
 
 usage() {
     cat <<'EOF'
@@ -27,6 +28,7 @@ Options:
   --no-shell-autoload    Do not edit ~/.bashrc and ~/.zshrc
   --gh-login             Run non-interactive 'gh auth login' with token
   --podman-login         Run non-interactive 'podman login ghcr.io'
+  --skip-ghcr-check      Skip GHCR manifest access check
   -h, --help             Show help
 EOF
 }
@@ -69,6 +71,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --podman-login)
             LOGIN_PODMAN=true
+            shift
+            ;;
+        --skip-ghcr-check)
+            CHECK_GHCR=false
             shift
             ;;
         -h|--help)
@@ -126,11 +132,9 @@ fi
 if [[ "$LOGIN_GH" == true ]]; then
     if command -v gh >/dev/null 2>&1; then
         # gh auth login refuses to store credentials when GH_TOKEN/GITHUB_TOKEN are set.
-        # Run login in a clean subshell so environment-based auth does not conflict.
-        (
-            unset GH_TOKEN GITHUB_TOKEN CR_PAT
-            printf "%s\n" "$GH_TOKEN" | gh auth login --hostname github.com --with-token >/dev/null
-        )
+        # Use env -u for the gh process only; keep shell variables intact under set -u.
+        printf "%s\n" "$GH_TOKEN" | env -u GH_TOKEN -u GITHUB_TOKEN -u CR_PAT \
+            gh auth login --hostname github.com --with-token >/dev/null
     else
         echo "Skipping gh login: 'gh' command not found"
     fi
@@ -141,6 +145,24 @@ if [[ "$LOGIN_PODMAN" == true ]]; then
         printf "%s\n" "$GH_TOKEN" | podman login ghcr.io -u "$GH_USER" --password-stdin >/dev/null
     else
         echo "Skipping podman login: 'podman' command not found"
+    fi
+fi
+
+if [[ "$CHECK_GHCR" == true ]] && command -v curl >/dev/null 2>&1; then
+    GHCR_IMAGE="ghcr.io/${GH_USER}/lifeos:edge"
+    GHCR_REF="${GHCR_IMAGE#ghcr.io/}"
+    GHCR_PATH="${GHCR_REF%:*}"
+    GHCR_TAG="edge"
+    GHCR_HTTP_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
+        -u "${GH_USER}:${GH_TOKEN}" \
+        -H 'Accept: application/vnd.oci.image.index.v1+json' \
+        "https://ghcr.io/v2/${GHCR_PATH}/manifests/${GHCR_TAG}" || true)"
+
+    if [[ "${GHCR_HTTP_CODE}" == "200" ]]; then
+        echo "GHCR check passed for ${GHCR_IMAGE} (HTTP 200)"
+    else
+        echo "WARNING: GHCR manifest check failed for ${GHCR_IMAGE} (HTTP ${GHCR_HTTP_CODE:-000})"
+        echo "         If pull fails with 'reading manifest ... denied', recreate PAT with Packages Read."
     fi
 fi
 

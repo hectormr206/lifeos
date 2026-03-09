@@ -56,6 +56,21 @@ sudo podman login ghcr.io -u hectormr206
 sudo podman pull ghcr.io/hectormr206/lifeos:stable
 ```
 
+Si `podman login` dice `Login Succeeded` pero `podman pull` falla con
+`reading manifest ... denied`, el token no tiene permisos efectivos sobre paquetes GHCR.
+Valida con (debe devolver `200`):
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -u "$GH_USER:$GH_TOKEN" \
+  -H 'Accept: application/vnd.oci.image.index.v1+json' \
+  https://ghcr.io/v2/hectormr206/lifeos/manifests/stable
+```
+
+Si devuelve `401/403`, crea un nuevo PAT con:
+- Classic token: `read:packages` (y `repo` si aplica package privado/repo-scoped).
+- Fine-grained token: `Packages: Read` sobre el owner/repositorio correcto.
+
 5. Conecta el sistema al stream `stable` (una sola vez):
 
 ```bash

@@ -53,6 +53,8 @@ LOG_FILE="${LIFEOS_UPDATE_LOG_FILE:-}"
 LOG_DIR="${LIFEOS_UPDATE_LOG_DIR:-/var/log/lifeos}"
 LOG_INITIALIZED=false
 ERROR_HANDLED=false
+PULL_LAST_OUTPUT=""
+PULL_LAST_RC=0
 
 show_help() {
     cat << EOF
@@ -340,6 +342,47 @@ resolve_login_credentials() {
     fi
 }
 
+is_auth_failure_output() {
+    local msg="$1"
+    echo "${msg}" | grep -Eqi \
+        'invalid token|unauthorized|invalid username|auth token|requested access .* denied|reading manifest .* denied|denied'
+}
+
+print_ghcr_auth_guidance() {
+    local ghcr_ref
+    local ghcr_path
+    local ghcr_tag
+
+    if [[ "${IMAGE}" != ghcr.io/* ]]; then
+        warn "Registry authorization failed for ${IMAGE}."
+        return
+    fi
+
+    ghcr_ref="${IMAGE#ghcr.io/}"
+    ghcr_path="${ghcr_ref%:*}"
+    ghcr_tag="latest"
+    if [[ "${ghcr_ref}" == *:* ]]; then
+        ghcr_tag="${ghcr_ref##*:}"
+    fi
+
+    warn "GHCR denied manifest access for ${IMAGE}."
+    echo "This usually means:"
+    echo "  1) Token is valid enough for 'login' but lacks Packages read access, or"
+    echo "  2) Token is tied to an account without access to this private package."
+    echo
+    echo "Use a PAT with at least:"
+    echo "  - Classic token: read:packages (and repo if package is private/repo-scoped)"
+    echo "  - Fine-grained token: Packages=Read on the owner/repository"
+    echo
+    if [[ -n "${LOGIN_USER}" ]]; then
+        echo "Quick check (expect HTTP 200):"
+        echo "  curl -sS -o /dev/null -w '%{http_code}\\n' \\"
+        echo "    -u \"${LOGIN_USER}:<TOKEN>\" \\"
+        echo "    -H 'Accept: application/vnd.oci.image.index.v1+json' \\"
+        echo "    \"https://ghcr.io/v2/${ghcr_path}/manifests/${ghcr_tag}\""
+    fi
+}
+
 derive_local_switch_ref() {
     local image_no_digest
     local image_tail
@@ -427,17 +470,23 @@ bootc_switch_with_fallback() {
 
 podman_pull_with_timeout() {
     local rc=0
+    local out=""
     if command -v timeout >/dev/null 2>&1; then
         set +e
-        timeout "${PULL_TIMEOUT}" podman pull "${IMAGE}"
+        out="$(timeout "${PULL_TIMEOUT}" podman pull "${IMAGE}" 2>&1)"
         rc=$?
         set -e
     else
         set +e
-        podman pull "${IMAGE}"
+        out="$(podman pull "${IMAGE}" 2>&1)"
         rc=$?
         set -e
     fi
+
+    PULL_LAST_OUTPUT="${out}"
+    PULL_LAST_RC="${rc}"
+    echo "${out}"
+
     return "$rc"
 }
 
@@ -509,6 +558,10 @@ main() {
         if podman_pull_with_timeout; then
             success "podman pull completed"
         else
+            if is_auth_failure_output "${PULL_LAST_OUTPUT}"; then
+                print_ghcr_auth_guidance
+                fatal "Cannot pull ${IMAGE}: registry authorization denied."
+            fi
             warn "podman pull failed or timed out; using skopeo fallback"
             skopeo_fallback_pull
         fi

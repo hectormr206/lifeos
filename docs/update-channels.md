@@ -320,6 +320,18 @@ If `bootc switch ghcr.io/...` fails with auth errors on private GHCR, use:
 sudo ./scripts/update-lifeos.sh --channel stable --login-user <github_user> --switch --yes
 ```
 
+If `podman login` succeeds but pull fails with `reading manifest ... denied`,
+verify package-read access with basic auth (expect `200`):
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -u "<github_user>:<token>" \
+  -H 'Accept: application/vnd.oci.image.index.v1+json' \
+  https://ghcr.io/v2/hectormr206/lifeos/manifests/stable
+```
+
+`401/403` means token scope/access mismatch (`read:packages` missing or token not authorized for that package).
+
 ### Signature Verification Fails
 
 ```bash
