@@ -73,6 +73,29 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Verify NVIDIA signing artifacts in image
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          docker pull "${IMAGE}"
+          docker run --rm --entrypoint /bin/bash "${IMAGE}" -lc '
+            set -euo pipefail
+            test -s /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der
+            mod="$(find /usr/lib/modules -type f -path "*/extra/nvidia/nvidia.ko" | head -n1 || true)"
+            if [[ -z "${mod}" ]]; then
+              echo "ERROR: nvidia.ko not found in image"
+              exit 1
+            fi
+            signer="$(modinfo -F signer "${mod}" || true)"
+            if [[ -z "${signer}" ]]; then
+              echo "ERROR: ${mod} is unsigned"
+              exit 1
+            fi
+            echo "Verified NVIDIA signing in image (${mod}) signer=${signer}"
+          '
+
       - name: Install Cosign
         if: github.event_name != 'pull_request'
         uses: sigstore/cosign-installer@v3

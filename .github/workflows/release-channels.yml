@@ -142,6 +142,22 @@ jobs:
             --build-arg LIFEOS_NVIDIA_KMOD_CERT_DER_B64="${{ secrets.LIFEOS_NVIDIA_KMOD_CERT_DER_B64 }}" \
             .
 
+          podman run --rm --entrypoint /bin/bash "${LOCAL_IMAGE}" -lc '
+            set -euo pipefail
+            test -s /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der
+            mod="$(find /usr/lib/modules -type f -path "*/extra/nvidia/nvidia.ko" | head -n1 || true)"
+            if [[ -z "${mod}" ]]; then
+              echo "ERROR: nvidia.ko not found in image"
+              exit 1
+            fi
+            signer="$(modinfo -F signer "${mod}" || true)"
+            if [[ -z "${signer}" ]]; then
+              echo "ERROR: ${mod} is unsigned"
+              exit 1
+            fi
+            echo "Verified NVIDIA signing in image (${mod}) signer=${signer}"
+          '
+
           podman push --digestfile "${DIGEST_FILE}" "${LOCAL_IMAGE}" "docker://${IMAGE_BASE}:${TAG_PRIMARY}"
           podman push "${LOCAL_IMAGE}" "docker://${IMAGE_BASE}:${TAG_CHANNEL}"
 
