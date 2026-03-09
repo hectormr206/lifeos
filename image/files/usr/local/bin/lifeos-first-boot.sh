@@ -145,7 +145,12 @@ configure_gpu() {
             if command -v mokutil &>/dev/null && mokutil --sb-state 2>/dev/null | grep -qi "SecureBoot enabled"; then
                 if command -v /usr/local/bin/lifeos-nvidia-secureboot.sh &>/dev/null; then
                     if ! /usr/local/bin/lifeos-nvidia-secureboot.sh status >/dev/null 2>&1; then
-                        log_warn "Secure Boot + NVIDIA requires key enrollment. Run: sudo lifeos-nvidia-secureboot.sh enroll && sudo reboot"
+                        if [[ -f /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der ]]; then
+                            log_warn "Secure Boot + NVIDIA requires key enrollment. Run: sudo lifeos-nvidia-secureboot.sh enroll && sudo reboot"
+                        else
+                            log_warn "Secure Boot + NVIDIA: image is missing LifeOS MOK cert (/usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der)"
+                            log_warn "Update/pull a signed LifeOS image build (NVIDIA Secure Boot signing enabled)."
+                        fi
                     fi
                 fi
             fi

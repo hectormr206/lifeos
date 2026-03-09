@@ -32,6 +32,8 @@ key_enrolled() {
 cmd_status() {
     local signer=""
     local rc=0
+    local cert_present=0
+    local cert_enrolled=0
 
     echo "LifeOS NVIDIA Secure Boot status"
     echo "  Kernel: $(uname -r)"
@@ -62,8 +64,10 @@ cmd_status() {
     fi
 
     if [ -f "${CERT_PATH}" ]; then
+        cert_present=1
         echo "  LifeOS MOK cert: present (${CERT_PATH})"
         if key_enrolled; then
+            cert_enrolled=1
             echo "  LifeOS MOK cert: enrolled"
         else
             echo "  LifeOS MOK cert: not enrolled"
@@ -78,8 +82,19 @@ cmd_status() {
         if [ "${rc}" -ne 0 ]; then
             echo
             echo "Action:"
-            echo "  sudo lifeos-nvidia-secureboot.sh enroll"
-            echo "  sudo reboot"
+            if [ "${cert_present}" -eq 0 ]; then
+                echo "  This image is missing ${CERT_PATH}."
+                echo "  Pull/update to a LifeOS image built with NVIDIA Secure Boot signing enabled"
+                echo "  (LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 + LIFEOS_NVIDIA_KMOD_CERT_DER_B64)."
+            elif [ -z "${signer}" ]; then
+                echo "  NVIDIA module is unsigned; Secure Boot will reject modprobe."
+                echo "  Update to a signed image build, then enroll the key:"
+                echo "  sudo lifeos-nvidia-secureboot.sh enroll"
+                echo "  sudo reboot"
+            elif [ "${cert_enrolled}" -eq 0 ]; then
+                echo "  sudo lifeos-nvidia-secureboot.sh enroll"
+                echo "  sudo reboot"
+            fi
         fi
     fi
 
@@ -104,6 +119,8 @@ cmd_enroll() {
 
     if [ ! -f "${CERT_PATH}" ]; then
         echo "Missing certificate: ${CERT_PATH}"
+        echo "This deployment was likely built without NVIDIA Secure Boot signing args."
+        echo "Update to a signed image build, then retry enrollment."
         exit 1
     fi
 

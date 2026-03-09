@@ -441,7 +441,7 @@ if [[ $HAS_NVIDIA -eq 1 ]]; then
                 warn "NVIDIA Secure Boot: MOK LifeOS no enrolada (ejecuta: sudo lifeos-nvidia-secureboot.sh enroll)"
             fi
         else
-            warn "NVIDIA Secure Boot: certificado LifeOS no presente en la imagen"
+            warn "NVIDIA Secure Boot: certificado LifeOS no presente en la imagen (build sin secretos de firmado NVIDIA)"
         fi
     fi
 

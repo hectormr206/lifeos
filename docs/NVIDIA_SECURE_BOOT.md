@@ -20,7 +20,8 @@ These are wired in:
 - `scripts/build-iso.sh`
 - `scripts/generate-iso-simple.sh`
 
-If these args are missing, the build continues but warns that Secure Boot may reject NVIDIA modules.
+Local builds can continue without these args (with warnings), but release publishing workflows now fail fast if secrets are missing to avoid shipping unsigned NVIDIA modules.
+When secrets are provided, image builds now fail if NVIDIA modules cannot be signed/verified.
 
 ## GitHub secrets to configure
 
@@ -74,3 +75,4 @@ life status
 ```
 
 If `nvidia.ko signer` is empty, the image was built without module signing and must be rebuilt with signing secrets.
+If `LifeOS MOK cert` is missing, the image did not include signing cert material and `enroll` cannot fix it; pull/update to a signed image build first.

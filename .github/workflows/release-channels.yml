@@ -100,6 +100,17 @@ jobs:
         run: |
           echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
 
+      - name: Validate NVIDIA Secure Boot signing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ secrets.LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 }}" || -z "${{ secrets.LIFEOS_NVIDIA_KMOD_CERT_DER_B64 }}" ]]; then
+            echo "::error::Missing required secrets for NVIDIA Secure Boot image signing:"
+            echo "::error::LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 and/or LIFEOS_NVIDIA_KMOD_CERT_DER_B64"
+            echo "::error::Refusing to publish release-channel images with unsigned NVIDIA modules."
+            exit 1
+          fi
+
       - name: Build and push (podman)
         id: build
         shell: bash

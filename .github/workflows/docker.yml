@@ -43,6 +43,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Validate NVIDIA Secure Boot signing secrets
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ secrets.LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 }}" || -z "${{ secrets.LIFEOS_NVIDIA_KMOD_CERT_DER_B64 }}" ]]; then
+            echo "::error::Missing required secrets for NVIDIA Secure Boot image signing:"
+            echo "::error::LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 and/or LIFEOS_NVIDIA_KMOD_CERT_DER_B64"
+            echo "::error::Refusing to publish unsigned release images."
+            exit 1
+          fi
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         id: build-and-push
