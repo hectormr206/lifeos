@@ -48,21 +48,24 @@ RUN cargo install --locked cargo-audit --root /opt/lifeos-devtools
 
 WORKDIR /build
 
-# Copy CLI source
-COPY cli/Cargo.toml cli/Cargo.lock* cli/
+# Copy workspace manifests first for better build cache behavior.
+COPY Cargo.toml Cargo.lock ./
+COPY cli/Cargo.toml cli/
+COPY daemon/Cargo.toml daemon/
+COPY tests/Cargo.toml tests/
+COPY tests/integration tests/integration/
+
+# Copy source trees.
 COPY cli/src cli/src/
 COPY cli/assets cli/assets/
-
-# Copy Daemon source
-COPY daemon/Cargo.toml daemon/
 COPY daemon/src daemon/src/
 
 # Copy contracts for model catalog (needed by CLI include_str!)
 COPY contracts/ contracts/
 
-# Build both sequentially (they don't share a workspace in the container)
-RUN cd cli && cargo build --release
-RUN cd daemon && cargo build --release --all-features
+# Build binaries with deterministic dependency resolution.
+RUN cargo build --release --locked -p life
+RUN cargo build --release --all-features --locked -p lifeosd
 
 # ============================================================================
 # Stage 2: Build llama-server (static, CPU-only)
@@ -277,8 +280,8 @@ RUN set -eux && \
     fi
 
 # --- CLI Life y Daemon (binarios compilados) ---
-COPY --from=builder /build/cli/target/release/life /usr/bin/life
-COPY --from=builder /build/daemon/target/release/lifeosd /usr/bin/lifeosd
+COPY --from=builder /build/target/release/life /usr/bin/life
+COPY --from=builder /build/target/release/lifeosd /usr/bin/lifeosd
 COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
 RUN chmod +x /usr/bin/life /usr/bin/lifeosd && \
     ln -sf /usr/bin/life /usr/local/bin/life && \

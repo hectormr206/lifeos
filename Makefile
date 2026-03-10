@@ -22,18 +22,18 @@ build: build-cli build-daemon
 ## Build CLI in release mode
 build-cli:
 	@echo "🔨 Building CLI..."
-	cd cli && cargo build --release
+	cd cli && cargo build --release --locked
 
 ## Build Daemon in release mode with all features
 build-daemon:
 	@echo "🔨 Building Daemon..."
-	cd daemon && cargo build --release --all-features
+	cd daemon && cargo build --release --all-features --locked
 
 ## Build both in debug mode
 debug:
 	@echo "🔨 Building in debug mode..."
-	cd cli && cargo build
-	cd daemon && cargo build --all-features
+	cd cli && cargo build --locked
+	cd daemon && cargo build --all-features --locked
 
 # =============================================================================
 # Test Targets
@@ -45,18 +45,18 @@ test: test-cli test-daemon test-integration
 ## Run CLI tests
 test-cli:
 	@echo "🧪 Running CLI tests..."
-	cd cli && cargo test --all-features
+	cd cli && cargo test --all-features --locked
 
 ## Run Daemon tests
 test-daemon:
 	@echo "🧪 Running Daemon tests..."
-	cd daemon && cargo test --all-features
+	cd daemon && cargo test --all-features --locked
 
 ## Run integration tests
 test-integration:
 	@echo "🧪 Running integration tests..."
 	@if [ -f tests/Cargo.toml ]; then \
-		cd tests && cargo test --test integration_tests; \
+		cd tests && cargo test --test integration_tests --locked; \
 	else \
 		echo "No tests/Cargo.toml found"; \
 	fi
@@ -87,12 +87,12 @@ lint: fmt-check lint-cli lint-daemon
 ## Run clippy on CLI
 lint-cli:
 	@echo "🔍 Running clippy on CLI..."
-	cd cli && cargo clippy --all-features -- -D warnings
+	cd cli && cargo clippy --all-features --locked -- -D warnings
 
 ## Run clippy on Daemon
 lint-daemon:
 	@echo "🔍 Running clippy on Daemon..."
-	cd daemon && cargo clippy --all-features -- -D warnings
+	cd daemon && cargo clippy --all-features --locked -- -D warnings
 
 ## Format all code
 fmt:
@@ -186,12 +186,12 @@ watch:
 
 docs:
 	@echo "📚 Building documentation..."
-	cd cli && cargo doc --no-deps --open
-	cd daemon && cargo doc --no-deps
+	cd cli && cargo doc --no-deps --locked --open
+	cd daemon && cargo doc --no-deps --locked
 
 docs-serve:
 	@echo "🌐 Serving documentation..."
-	cd cli && cargo doc --no-deps
+	cd cli && cargo doc --no-deps --locked
 	python3 -m http.server 8000 --directory target/doc/
 
 # =============================================================================

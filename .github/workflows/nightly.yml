@@ -56,13 +56,13 @@ jobs:
 
       - name: Run full test suite
         run: |
-          cd cli && cargo test --all-features
-          cd ../daemon && cargo test --all-features
+          cd cli && cargo test --all-features --locked
+          cd ../daemon && cargo test --all-features --locked
 
       - name: Build documentation
         run: |
-          cd cli && cargo doc --no-deps
-          cd ../daemon && cargo doc --no-deps
+          cd cli && cargo doc --no-deps --locked
+          cd ../daemon && cargo doc --no-deps --locked
 
   # ============================================================================
   # Nightly Container Build

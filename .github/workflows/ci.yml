@@ -53,19 +53,19 @@ jobs:
 
       - name: Run clippy
         working-directory: ./cli
-        run: cargo clippy --all-features -- -D warnings
+        run: cargo clippy --all-features --locked -- -D warnings
 
       - name: Build CLI (debug)
         working-directory: ./cli
-        run: cargo build
+        run: cargo build --locked
 
       - name: Build CLI (release)
         working-directory: ./cli
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Run CLI tests
         working-directory: ./cli
-        run: cargo test --all-features
+        run: cargo test --all-features --locked
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
@@ -116,19 +116,19 @@ jobs:
 
       - name: Run clippy
         working-directory: ./daemon
-        run: cargo clippy --all-features -- -D warnings
+        run: cargo clippy --all-features --locked -- -D warnings
 
       - name: Build daemon (debug)
         working-directory: ./daemon
-        run: cargo build --all-features
+        run: cargo build --all-features --locked
 
       - name: Build daemon (release)
         working-directory: ./daemon
-        run: cargo build --release --all-features
+        run: cargo build --release --all-features --locked
 
       - name: Run daemon tests
         working-directory: ./daemon
-        run: cargo test --all-features
+        run: cargo test --all-features --locked
 
       - name: Upload daemon artifact
         uses: actions/upload-artifact@v4
@@ -180,7 +180,7 @@ jobs:
         run: chmod +x ./artifacts/*
 
       - name: Run integration tests
-        run: cargo test --package lifeos-integration-tests --test integration_tests -- --test-threads=1
+        run: cargo test --package lifeos-integration-tests --test integration_tests --locked -- --test-threads=1
 
   # ============================================================================
   # Job 4: Security Audit
@@ -282,12 +282,12 @@ jobs:
 
       - name: Generate coverage report (CLI)
         working-directory: ./cli
-        run: cargo tarpaulin --out Xml --output-dir ./coverage
+        run: cargo tarpaulin --locked --out Xml --output-dir ./coverage
         continue-on-error: true
 
       - name: Generate coverage report (Daemon)
         working-directory: ./daemon
-        run: cargo tarpaulin --out Xml --output-dir ./coverage
+        run: cargo tarpaulin --locked --out Xml --output-dir ./coverage
         continue-on-error: true
 
       - name: Upload coverage to Codecov
@@ -319,13 +319,13 @@ jobs:
 
       - name: Build CLI documentation
         working-directory: ./cli
-        run: cargo doc --no-deps
+        run: cargo doc --no-deps --locked
 
       - name: Build daemon documentation
         working-directory: ./daemon
-        run: cargo doc --no-deps
+        run: cargo doc --no-deps --locked
 
       - name: Check for doc warnings
         working-directory: ./cli
-        run: cargo doc --no-deps 2>&1 | grep -i warning && exit 1 || exit 0
+        run: cargo doc --no-deps --locked 2>&1 | grep -i warning && exit 1 || exit 0
         continue-on-error: true

@@ -69,12 +69,12 @@ jobs:
       - name: Build CLI for CodeQL
         if: steps.code-scanning.outputs.enabled == 'true'
         working-directory: ./cli
-        run: cargo build --release
+        run: cargo build --release --locked
 
       - name: Build Daemon for CodeQL
         if: steps.code-scanning.outputs.enabled == 'true'
         working-directory: ./daemon
-        run: cargo build --release --all-features
+        run: cargo build --release --all-features --locked
 
       - name: Perform CodeQL Analysis
         if: steps.code-scanning.outputs.enabled == 'true'
