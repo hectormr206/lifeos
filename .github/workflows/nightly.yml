@@ -89,13 +89,13 @@ jobs:
           sudo apt-get install -y podman
 
       - name: Build container image
-        working-directory: ./image
         run: |
-          podman build -t lifeos:nightly -f Containerfile .
+          podman build -t lifeos:nightly -f image/Containerfile .
 
       - name: Run container tests
         run: |
-          podman run --rm lifeos:nightly life --version || true
+          podman run --rm --entrypoint /bin/sh lifeos:nightly -lc \
+            'life --version && command -v lifeosd && rustfmt --version && cargo audit --version'
 
       - name: Push nightly image
         env:

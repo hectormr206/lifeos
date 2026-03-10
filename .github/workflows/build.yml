@@ -27,4 +27,4 @@ jobs:
           echo "  - .github/workflows/release.yml  - For releases"
           echo ""
           echo "See docs/CI_CD.md for more information."
-          exit 1
+          exit 0

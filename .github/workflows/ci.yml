@@ -70,7 +70,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: life-cli-${{ github.sha }}
-          path: target/release/life
+          path: cli/target/release/life
           if-no-files-found: error
           retention-days: 7
 
@@ -140,7 +140,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lifeosd-${{ github.sha }}
-          path: target/release/lifeosd
+          path: daemon/target/release/lifeosd
           if-no-files-found: error
           retention-days: 7
 
