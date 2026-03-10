@@ -2120,38 +2120,6 @@ fn load_runtime_profile() -> anyhow::Result<RuntimeProfileState> {
     Ok(profile)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_resolve_qwen_9b_exact_filename_uses_correct_repo_and_mmproj() {
-        let download = resolve_model_download("Qwen3.5-9B-Q4_K_M.gguf");
-        assert!(download.url.contains("Qwen3.5-9B-GGUF"));
-        assert_eq!(download.filename, "Qwen3.5-9B-Q4_K_M.gguf");
-        let companion = download
-            .companion_mmproj
-            .expect("Expected Qwen companion mmproj");
-        assert_eq!(companion.filename, "Qwen3.5-9B-mmproj-F16.gguf");
-        assert!(companion.url.contains("Qwen3.5-9B-GGUF"));
-    }
-
-    #[test]
-    fn test_resolve_qwen_27b_short_name_uses_correct_repo() {
-        let download = resolve_model_download("qwen3.5-27b");
-        assert!(download.url.contains("Qwen3.5-27B-GGUF"));
-        assert_eq!(download.filename, "Qwen3.5-27B-Q4_K_M.gguf");
-    }
-
-    #[test]
-    fn test_selectable_model_asset_filters_auxiliary_ggufs() {
-        assert!(is_selectable_model_asset("Qwen3.5-4B-Q4_K_M.gguf"));
-        assert!(!is_selectable_model_asset("Qwen3.5-4B-mmproj-F16.gguf"));
-        assert!(!is_selectable_model_asset("nomic-embed-text-v1.5.f16.gguf"));
-        assert!(!is_selectable_model_asset("whisper-small.gguf"));
-    }
-}
-
 fn total_ram_gb() -> u32 {
     if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
         for line in content.lines() {
@@ -2367,3 +2335,35 @@ async fn load_model_catalog(refresh: bool) -> anyhow::Result<LoadedCatalog> {
 
 // Required for streaming in chat
 use futures::StreamExt;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_qwen_9b_exact_filename_uses_correct_repo_and_mmproj() {
+        let download = resolve_model_download("Qwen3.5-9B-Q4_K_M.gguf");
+        assert!(download.url.contains("Qwen3.5-9B-GGUF"));
+        assert_eq!(download.filename, "Qwen3.5-9B-Q4_K_M.gguf");
+        let companion = download
+            .companion_mmproj
+            .expect("Expected Qwen companion mmproj");
+        assert_eq!(companion.filename, "Qwen3.5-9B-mmproj-F16.gguf");
+        assert!(companion.url.contains("Qwen3.5-9B-GGUF"));
+    }
+
+    #[test]
+    fn test_resolve_qwen_27b_short_name_uses_correct_repo() {
+        let download = resolve_model_download("qwen3.5-27b");
+        assert!(download.url.contains("Qwen3.5-27B-GGUF"));
+        assert_eq!(download.filename, "Qwen3.5-27B-Q4_K_M.gguf");
+    }
+
+    #[test]
+    fn test_selectable_model_asset_filters_auxiliary_ggufs() {
+        assert!(is_selectable_model_asset("Qwen3.5-4B-Q4_K_M.gguf"));
+        assert!(!is_selectable_model_asset("Qwen3.5-4B-mmproj-F16.gguf"));
+        assert!(!is_selectable_model_asset("nomic-embed-text-v1.5.f16.gguf"));
+        assert!(!is_selectable_model_asset("whisper-small.gguf"));
+    }
+}

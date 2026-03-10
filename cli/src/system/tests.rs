@@ -1,7 +1,7 @@
 //! Tests for system module
 
 #[cfg(test)]
-mod tests {
+mod system_module_tests {
     use super::super::*;
 
     #[test]

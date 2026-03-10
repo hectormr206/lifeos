@@ -160,8 +160,9 @@ pub async fn execute(args: CapsuleCommands) -> Result<()> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::OnceLock;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::Mutex;
 
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -181,7 +182,7 @@ mod tests {
 
     #[tokio::test]
     async fn capsule_export_restore_pipeline_works_with_tools() {
-        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await;
 
         let base = std::env::temp_dir().join(format!("life-capsule-test-{}", unique_suffix()));
         let home = base.join("home");

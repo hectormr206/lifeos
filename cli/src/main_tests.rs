@@ -5,7 +5,7 @@ mod tests {
     use super::super::*;
     use crate::commands::config::ConfigCommands;
     use crate::commands::lab::{LabArgs, LabCommands};
-    use clap::Parser;
+    use clap::{error::ErrorKind, Parser};
 
     #[test]
     fn test_cli_parses_init_command() {
@@ -223,22 +223,20 @@ mod tests {
 
     #[test]
     fn test_cli_version_flag() {
-        // This should print version and exit, but we can't easily test that
-        // Just verify the parser accepts the flag
-        let result = std::panic::catch_unwind(|| {
-            let _ = Cli::parse_from(["life", "--version"]);
-        });
-        // clap will exit on --version, so we expect a panic in test context
-        assert!(result.is_err() || true); // Just ensure it doesn't hang
+        let result = Cli::try_parse_from(["life", "--version"]);
+        assert!(matches!(
+            result,
+            Err(err) if err.kind() == ErrorKind::DisplayVersion
+        ));
     }
 
     #[test]
     fn test_cli_help_flag() {
-        // Similar to version, help will exit
-        let result = std::panic::catch_unwind(|| {
-            let _ = Cli::parse_from(["life", "--help"]);
-        });
-        assert!(result.is_err() || true);
+        let result = Cli::try_parse_from(["life", "--help"]);
+        assert!(matches!(
+            result,
+            Err(err) if err.kind() == ErrorKind::DisplayHelp
+        ));
     }
 
     #[test]

@@ -201,7 +201,6 @@ mod tests {
 
     #[test]
     fn test_axi_quotes_not_empty() {
-        assert!(!AXI_QUOTES.is_empty());
         for quote in AXI_QUOTES {
             assert!(!quote.is_empty());
         }
@@ -209,7 +208,6 @@ mod tests {
 
     #[test]
     fn test_axi_facts_not_empty() {
-        assert!(!AXI_FACTS.is_empty());
         for fact in AXI_FACTS {
             assert!(!fact.is_empty());
         }

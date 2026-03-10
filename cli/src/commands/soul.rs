@@ -320,9 +320,6 @@ theme = "solarized"
             toml::Value::Boolean(true),
         )
         .unwrap();
-        assert_eq!(
-            root["assistant"]["voice"]["enabled"].as_bool().unwrap(),
-            true
-        );
+        assert!(root["assistant"]["voice"]["enabled"].as_bool().unwrap());
     }
 }

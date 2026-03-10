@@ -1,7 +1,7 @@
 //! Tests for configuration module
 
 #[cfg(test)]
-mod tests {
+mod config_module_tests {
     use super::super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -12,7 +12,7 @@ mod tests {
         assert_eq!(config.version, "1");
         assert!(config.ai.enabled);
         assert_eq!(config.ai.provider, "llama-server");
-        assert_eq!(config.security.encryption, true);
+        assert!(config.security.encryption);
     }
 
     #[test]
@@ -132,7 +132,7 @@ channel = "candidate"
         assert_eq!(config.version, "1");
         assert_eq!(config.system.hostname, "lifeos");
         assert_eq!(config.ai.provider, "llama-server");
-        assert_eq!(config.security.secure_boot, true);
+        assert!(config.security.secure_boot);
         assert_eq!(config.updates.channel, "candidate");
     }
 
