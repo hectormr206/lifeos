@@ -63,9 +63,13 @@ COPY daemon/src daemon/src/
 # Copy contracts for model catalog (needed by CLI include_str!)
 COPY contracts/ contracts/
 
-# Build binaries with deterministic dependency resolution.
-RUN cargo build --release --locked -p life
-RUN cargo build --release --all-features --locked -p lifeosd
+# Build binaries with deterministic dependency resolution, then keep only artifacts.
+RUN set -eux && \
+    cargo build --release --locked -p life && \
+    cargo build --release --all-features --locked -p lifeosd && \
+    install -D -m 0755 /build/target/release/life /out/life && \
+    install -D -m 0755 /build/target/release/lifeosd /out/lifeosd && \
+    rm -rf /build/target /root/.cargo/registry /root/.cargo/git
 
 # ============================================================================
 # Stage 2: Build llama-server (static, CPU-only)
@@ -280,8 +284,8 @@ RUN set -eux && \
     fi
 
 # --- CLI Life y Daemon (binarios compilados) ---
-COPY --from=builder /build/target/release/life /usr/bin/life
-COPY --from=builder /build/target/release/lifeosd /usr/bin/lifeosd
+COPY --from=builder /out/life /usr/bin/life
+COPY --from=builder /out/lifeosd /usr/bin/lifeosd
 COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
 RUN chmod +x /usr/bin/life /usr/bin/lifeosd && \
     ln -sf /usr/bin/life /usr/local/bin/life && \
