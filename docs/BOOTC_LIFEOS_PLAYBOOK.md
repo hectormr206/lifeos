@@ -53,7 +53,8 @@ Runbook rapido para updates privados en `stable`: `docs/UPDATE_STABLE_PRIVATE_QU
 
 - Base: `FROM quay.io/fedora/fedora-bootc:<tag>`
 - Paquetes de sistema en `image/Containerfile`.
-- Herramientas CLI base preinstaladas en ISO: `git`, `gh`, `cargo`, `rust`, `wget`, `curl`, `jq`.
+- Herramientas CLI base preinstaladas en ISO: `git`, `gh`, `cargo`, `rustc`, `rustfmt`, `cargo clippy`, `cargo-audit`, `wget`, `curl`, `jq`, `pkg-config`.
+- Baseline developer para compilar LifeOS en host: headers y librerias de `dbus`, `glib2`, `gtk4` y `libadwaita` incluidos en la imagen.
 - Gaming default en ISO: `steam` + `steam-devices` via RPM Fusion (Steam Flatpak solo fallback opcional).
 - Servicios y scripts en `image/files/`.
 - No usar instaladores ad-hoc post-install como fuente de verdad.

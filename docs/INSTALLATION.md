@@ -220,7 +220,18 @@ flatpak install flathub com.visualstudio.code
 life ai do "install video editing software"
 ```
 
-For development stacks on the immutable host, use `toolbox`:
+LifeOS developer images already include the native baseline needed to build this repo on-host:
+
+```bash
+cargo --version
+rustc --version
+rustfmt --version
+cargo clippy --version
+cargo audit --version
+pkg-config --modversion gtk4
+```
+
+Use `toolbox` for extra development stacks that should stay isolated from the host, such as Node.js:
 
 ```bash
 # Example: isolated Node.js environment

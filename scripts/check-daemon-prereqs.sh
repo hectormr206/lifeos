@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Validate local prerequisites required to build `lifeosd --all-features`.
+# Validate local prerequisites required to build and validate
+# `lifeosd --all-features` on a self-hosted LifeOS developer machine.
 
 set -euo pipefail
 
@@ -14,15 +15,20 @@ done
 export PATH="$HOME/.cargo/bin:/var/home/${USER:-lifeos}/.cargo/bin:$PATH"
 
 missing_cmd=()
-for cmd in cargo rustc pkg-config; do
+for cmd in cargo rustc pkg-config rustfmt; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         missing_cmd+=("$cmd")
     fi
 done
 
+if ! cargo clippy --version >/dev/null 2>&1; then
+    missing_cmd+=("clippy")
+fi
+
 if [ "${#missing_cmd[@]}" -gt 0 ]; then
     echo "Missing required commands: ${missing_cmd[*]}"
-    echo "Install Rust toolchain + pkg-config before building daemon."
+    echo "Latest LifeOS developer images ship the Rust + GTK build baseline on the host."
+    echo "Install the Rust toolchain + pkg-config before building daemon."
     exit 1
 fi
 
@@ -67,6 +73,11 @@ if [ "${#missing_pkg[@]}" -gt 0 ]; then
         esac
     fi
     exit 1
+fi
+
+if ! command -v cargo-audit >/dev/null 2>&1; then
+    echo "NOTE: cargo-audit not found."
+    echo "Latest LifeOS developer images include it so \`make ci\` works on-host."
 fi
 
 echo "All daemon build prerequisites are installed."

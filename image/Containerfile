@@ -40,6 +40,10 @@ RUN dnf -y install \
     cairo-devel \
     && dnf clean all
 
+# Prebuild QA tooling once so the shipped ISO can run `make ci`
+# without a manual cargo bootstrap on the host.
+RUN cargo install --locked cargo-audit --root /opt/lifeos-devtools
+
 WORKDIR /build
 
 # Copy CLI source
@@ -237,7 +241,7 @@ RUN dnf -y install \
     gcc gcc-c++ make cmake \
     openssl-devel \
     dbus-devel glib2-devel gtk4-devel libadwaita-devel \
-    rust cargo \
+    rust cargo rustfmt clippy rust-analyzer \
     wlsunset gammastep \
     linux-firmware \
     pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
@@ -273,6 +277,7 @@ RUN set -eux && \
 # --- CLI Life y Daemon (binarios compilados) ---
 COPY --from=builder /build/cli/target/release/life /usr/bin/life
 COPY --from=builder /build/daemon/target/release/lifeosd /usr/bin/lifeosd
+COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
 RUN chmod +x /usr/bin/life /usr/bin/lifeosd && \
     ln -sf /usr/bin/life /usr/local/bin/life && \
     ln -sf /usr/bin/lifeosd /usr/local/bin/lifeosd && \
@@ -563,6 +568,7 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/bin/keepassxc && \
     test -x /usr/bin/life && \
     test -x /usr/bin/lifeosd && \
+    test -x /usr/local/bin/cargo-audit && \
     test -x /usr/bin/llama-server && \
     test -x /usr/bin/spice-vdagent && \
     test -x /usr/bin/virsh && \
@@ -602,6 +608,12 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/local/bin/lifeos-security-baseline-check.sh && \
     test -x /usr/bin/podman && \
     test -x /usr/bin/docker && \
+    cargo fmt --version >/dev/null && \
+    cargo clippy --version >/dev/null && \
+    cargo audit --version >/dev/null && \
+    rustc --version >/dev/null && \
+    rustfmt --version >/dev/null && \
+    rust-analyzer --version >/dev/null && \
     pkg-config --exists dbus-1 glib-2.0 gtk4 libadwaita-1 && \
     test -f /usr/lib64/libvirt/connection-driver/libvirt_driver_qemu.so && \
     (test -f /usr/lib/systemd/system/libvirtd.service || test -f /usr/lib/systemd/system/virtqemud.socket) && \

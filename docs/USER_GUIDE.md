@@ -95,12 +95,16 @@ sudo reboot
 
 ### Development Containers (Toolbox)
 
-LifeOS keeps the base system immutable. For development software (Node.js, npm, compilers, SDKs),
-use `toolbox` so changes stay inside a mutable container and do not modify the host OS.
+LifeOS keeps the base system immutable, but the host image already includes the baseline required
+to self-host LifeOS development: `cargo`, `rustc`, `rustfmt`, `cargo clippy`, `cargo-audit`,
+`pkg-config`, and the GTK/libadwaita development headers needed by `lifeosd --all-features`.
+
+Use `toolbox` for extra development software (Node.js, npm, custom SDKs) so those stacks stay
+inside a mutable container and do not modify the host OS.
 
 What `toolbox` is:
 - A developer shell container integrated with Fedora/Podman
-- Great for per-stack environments (for example, one container for Node, another for Rust)
+- Great for per-stack environments beyond the host baseline (for example, one container for Node)
 - Reusable across projects while keeping the host clean
 
 Node.js and npm example:
