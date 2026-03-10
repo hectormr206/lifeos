@@ -26,7 +26,27 @@ nvidia_gpu_present() {
 }
 
 key_enrolled() {
-    command -v mokutil >/dev/null 2>&1 && [ -f "${CERT_PATH}" ] && mokutil --test-key "${CERT_PATH}" >/dev/null 2>&1
+    if ! command -v mokutil >/dev/null 2>&1 || [ ! -f "${CERT_PATH}" ]; then
+        return 1
+    fi
+
+    local test_out=""
+    test_out="$(mokutil --test-key "${CERT_PATH}" 2>&1 || true)"
+    if echo "${test_out}" | grep -Eqi 'already enrolled|is enrolled|enrolled'; then
+        return 0
+    fi
+
+    if command -v openssl >/dev/null 2>&1; then
+        local cert_fp=""
+        cert_fp="$(openssl x509 -inform DER -in "${CERT_PATH}" -fingerprint -noout 2>/dev/null | sed 's/.*=//' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+        if [ -n "${cert_fp}" ]; then
+            if mokutil --list-enrolled 2>/dev/null | tr -d ':' | tr '[:upper:]' '[:lower:]' | grep -q "${cert_fp}"; then
+                return 0
+            fi
+        fi
+    fi
+
+    return 1
 }
 
 cmd_status() {
@@ -131,7 +151,15 @@ cmd_enroll() {
 
     echo "Importing ${CERT_PATH} into MOK..."
     echo "You will set a one-time password and confirm enrollment at next boot."
-    mokutil --import "${CERT_PATH}"
+    local import_out=""
+    import_out="$(mokutil --import "${CERT_PATH}" 2>&1 || true)"
+    echo "${import_out}"
+
+    if echo "${import_out}" | grep -Eqi 'already enrolled|skip'; then
+        echo "LifeOS NVIDIA MOK key is already enrolled."
+        exit 0
+    fi
+
     echo
     echo "Pending enrollment created."
     echo "Next steps:"

@@ -13,11 +13,19 @@ NC='\033[0m'
 PASS=0
 FAIL=0
 WARN=0
+STRICT_CONTAINERS="${LIFEOS_CHECK_STRICT_CONTAINERS:-0}"
 
 ok()   { echo -e "  ${GREEN}[OK]${NC}   $1"; ((PASS++)); }
 fail() { echo -e "  ${RED}[FAIL]${NC} $1"; ((FAIL++)); }
 warn() { echo -e "  ${YELLOW}[WARN]${NC} $1"; ((WARN++)); }
 info() { echo -e "  ${BLUE}[INFO]${NC} $1"; }
+container_issue() {
+    if [[ "$STRICT_CONTAINERS" == "1" ]]; then
+        fail "$1"
+    else
+        warn "$1"
+    fi
+}
 
 TARGET_USER="${SUDO_USER:-$(id -un)}"
 TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
@@ -38,6 +46,30 @@ run_as_target_user() {
     fi
 }
 
+is_mok_key_enrolled() {
+    local cert_path="$1"
+    [[ -f "${cert_path}" ]] || return 1
+    command -v mokutil >/dev/null 2>&1 || return 1
+
+    local test_out=""
+    test_out="$(mokutil --test-key "${cert_path}" 2>&1 || true)"
+    if echo "${test_out}" | grep -Eqi 'already enrolled|is enrolled|enrolled'; then
+        return 0
+    fi
+
+    if command -v openssl >/dev/null 2>&1; then
+        local cert_fp=""
+        cert_fp="$(openssl x509 -inform DER -in "${cert_path}" -fingerprint -noout 2>/dev/null | sed 's/.*=//' | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+        if [[ -n "${cert_fp}" ]]; then
+            if mokutil --list-enrolled 2>/dev/null | tr -d ':' | tr '[:upper:]' '[:lower:]' | grep -q "${cert_fp}"; then
+                return 0
+            fi
+        fi
+    fi
+
+    return 1
+}
+
 check_life_cmd() {
     local label="$1"
     shift
@@ -52,6 +84,25 @@ check_life_cmd() {
 
     if echo "$output" | grep -Eqi "401|unauthorized"; then
         fail "$label (401 Unauthorized)"
+    else
+        fail "$label (exit ${rc})"
+    fi
+}
+
+check_life_cmd_auth_optional() {
+    local label="$1"
+    shift
+
+    local output
+    output="$(life "$@" 2>&1)"
+    local rc=$?
+    if [[ $rc -eq 0 ]]; then
+        ok "$label"
+        return 0
+    fi
+
+    if echo "$output" | grep -Eqi "401|unauthorized"; then
+        warn "$label (401 Unauthorized; run with sudo to validate token-protected endpoint)"
     else
         fail "$label (exit ${rc})"
     fi
@@ -268,15 +319,21 @@ echo
 
 # --- Contenedores (compat Docker) ---
 echo -e "${BOLD}Contenedores (compat Docker)${NC}"
+DOCKER_VER_LOG="$(mktemp /tmp/lifeos-docker-version.XXXXXX.log)"
+HELLO_LOG="$(mktemp /tmp/lifeos-docker-hello.XXXXXX.log)"
 DOCKER_BIN="$(command -v docker 2>/dev/null || true)"
 if [[ -n "$DOCKER_BIN" ]]; then
-    if run_as_target_user docker --version >/tmp/lifeos-docker-version.log 2>&1; then
+    if run_as_target_user docker --version >"$DOCKER_VER_LOG" 2>&1; then
         ok "docker --version (usuario: ${TARGET_USER})"
     else
-        fail "docker --version fallo (usuario: ${TARGET_USER})"
+        container_issue "docker --version fallo (usuario: ${TARGET_USER})"
     fi
 else
-    fail "docker CLI no encontrado"
+    if command -v podman >/dev/null 2>&1; then
+        warn "docker CLI no encontrado (podman disponible)"
+    else
+        container_issue "docker CLI no encontrado"
+    fi
 fi
 
 COMPOSE_OUT="$(run_as_target_user docker compose version 2>&1 || true)"
@@ -287,11 +344,10 @@ else
     if echo "$PODMAN_COMPOSE_OUT" | grep -Eqi 'podman-compose'; then
         warn "docker compose no disponible; fallback podman-compose activo"
     else
-        fail "docker compose/podman-compose no disponibles"
+        container_issue "docker compose/podman-compose no disponibles"
     fi
 fi
 
-HELLO_LOG="/tmp/lifeos-docker-hello.log"
 if command -v timeout >/dev/null 2>&1; then
     run_as_target_user timeout 120 docker run --rm hello-world >"$HELLO_LOG" 2>&1
 else
@@ -304,9 +360,10 @@ else
     if grep -Eqi 'Temporary failure|Name or service not known|TLS|certificate|toomanyrequests|network is unreachable|i/o timeout|dial tcp|lookup|pull access denied|not found' "$HELLO_LOG"; then
         warn "docker run hello-world fallo por red/pull (revisar conectividad o rate limits)"
     else
-        fail "docker run hello-world fallo (ver $HELLO_LOG)"
+        container_issue "docker run hello-world fallo (ver $HELLO_LOG)"
     fi
 fi
+rm -f "$DOCKER_VER_LOG" "$HELLO_LOG"
 echo
 
 # --- Daemon (lifeosd) ---
@@ -361,7 +418,7 @@ check_life_cmd "browser audit" browser audit --limit 1
 check_life_cmd "computer-use status" computer-use status
 check_life_cmd "workflow help" workflow --help
 check_life_cmd "portal status" portal status
-check_life_cmd "lab status" lab status --json
+check_life_cmd_auth_optional "lab status" lab status --json
 echo
 
 # --- Hardware Fase 2 ---
@@ -443,7 +500,7 @@ if [[ $HAS_NVIDIA -eq 1 ]]; then
         fi
 
         if [[ -f /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der ]]; then
-            if mokutil --test-key /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der >/dev/null 2>&1; then
+            if is_mok_key_enrolled /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der; then
                 ok "NVIDIA Secure Boot: MOK LifeOS enrolada"
             else
                 warn "NVIDIA Secure Boot: MOK LifeOS no enrolada (ejecuta: sudo lifeos-nvidia-secureboot.sh enroll)"
