@@ -3,7 +3,8 @@
 
 .PHONY: all build build-cli build-daemon test test-cli test-daemon test-integration \
         lint lint-cli lint-daemon fmt fmt-check audit audit-cli audit-daemon \
-        docker docker-build docker-lint docker-push clean install dev-setup help
+        docker docker-build docker-lint docker-push clean install dev-setup help \
+        check-daemon-prereqs phase3-hardening
 
 # =============================================================================
 # Default Target
@@ -54,11 +55,21 @@ test-daemon:
 ## Run integration tests
 test-integration:
 	@echo "🧪 Running integration tests..."
-	@if [ -d tests/integration ]; then \
-		cd tests/integration && cargo test 2>/dev/null || echo "No integration tests yet"; \
+	@if [ -f tests/Cargo.toml ]; then \
+		cd tests && cargo test --test integration_tests; \
 	else \
-		echo "No integration tests directory"; \
+		echo "No tests/Cargo.toml found"; \
 	fi
+
+## Verify prerequisites to build daemon with all features
+check-daemon-prereqs:
+	@echo "🔍 Checking daemon build prerequisites..."
+	bash scripts/check-daemon-prereqs.sh
+
+## Run Phase 3 hardening verification flow (fmt + clippy + tests)
+phase3-hardening:
+	@echo "🛡️  Running Phase 3 hardening checks..."
+	bash scripts/phase3-hardening-checks.sh
 
 ## Run all tests with coverage
 test-coverage:
@@ -279,6 +290,8 @@ help:
 	@echo "  test-cli       Run CLI tests"
 	@echo "  test-daemon    Run Daemon tests"
 	@echo "  test-integration Run integration tests"
+	@echo "  check-daemon-prereqs Verify daemon --all-features prerequisites"
+	@echo "  phase3-hardening Run deterministic hardening checks"
 	@echo "  test-coverage  Run tests with coverage report"
 	@echo ""
 	@echo "Lint Targets:"

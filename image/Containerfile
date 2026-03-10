@@ -224,10 +224,19 @@ RUN set -eux && \
     echo ">>> uBlock Origin extension downloaded to /usr/lib and /usr/lib64 Firefox distribution paths"
 
 # --- Herramientas del Sistema ---
+# Incluye toolchain de desarrollo para que LifeOS pueda auto-hospedar
+# build/test de `life` y `lifeosd --all-features` sin toolbox adicional.
 RUN dnf -y install \
     toolbox btrfs-progs smartmontools podman podman-docker podman-compose buildah skopeo flatpak \
+    qemu-kvm libvirt-client libvirt-daemon libvirt-daemon-config-network libvirt-daemon-kvm \
+    libvirt-daemon-driver-qemu libvirt-daemon-driver-network \
+    virt-install virt-viewer virt-manager edk2-ovmf swtpm spice-vdagent \
     fuse-overlayfs slirp4netns \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git gh wget \
+    pkgconf-pkg-config \
+    gcc gcc-c++ make cmake \
+    openssl-devel \
+    dbus-devel glib2-devel gtk4-devel libadwaita-devel \
     rust cargo \
     wlsunset gammastep \
     linux-firmware \
@@ -418,7 +427,8 @@ RUN printf '%s\n' \
 # Habilitar servicios via symlinks
 RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/system/graphical.target.wants \
-             /usr/lib/systemd/system/timers.target.wants && \
+             /usr/lib/systemd/system/timers.target.wants \
+             /usr/lib/systemd/system/sockets.target.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeosd.service       /usr/lib/systemd/system/multi-user.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
@@ -429,6 +439,17 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     if [ -f /usr/lib/systemd/system/supergfxd.service ]; then \
         ln -sf /usr/lib/systemd/system/supergfxd.service /usr/lib/systemd/system/multi-user.target.wants/supergfxd.service; \
     fi && \
+    if [ -f /usr/lib/systemd/system/libvirtd.service ]; then \
+        ln -sf /usr/lib/systemd/system/libvirtd.service /usr/lib/systemd/system/multi-user.target.wants/libvirtd.service; \
+    fi && \
+    if [ -f /usr/lib/systemd/system/spice-vdagentd.service ]; then \
+        ln -sf /usr/lib/systemd/system/spice-vdagentd.service /usr/lib/systemd/system/graphical.target.wants/spice-vdagentd.service; \
+    fi && \
+    for unit in virtqemud.socket virtnetworkd.socket virtstoraged.socket virtlogd.socket virtproxyd.socket; do \
+        if [ -f "/usr/lib/systemd/system/${unit}" ]; then \
+            ln -sf "/usr/lib/systemd/system/${unit}" "/usr/lib/systemd/system/sockets.target.wants/${unit}"; \
+        fi; \
+    done && \
     ln -sf /usr/lib/systemd/system/lifeosd.service        /usr/lib/systemd/system/lifeisd.service
 
 # --- Branding y Personalización ---
@@ -543,6 +564,9 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/bin/life && \
     test -x /usr/bin/lifeosd && \
     test -x /usr/bin/llama-server && \
+    test -x /usr/bin/spice-vdagent && \
+    test -x /usr/bin/virsh && \
+    test -x /usr/bin/pkg-config && \
     test -x /usr/sbin/llama-server && \
     test -x /usr/local/bin/lifeos-nvidia-secureboot.sh && \
     test -f /usr/lib/systemd/system/lifeosd.service && \
@@ -578,6 +602,9 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/local/bin/lifeos-security-baseline-check.sh && \
     test -x /usr/bin/podman && \
     test -x /usr/bin/docker && \
+    pkg-config --exists dbus-1 glib-2.0 gtk4 libadwaita-1 && \
+    test -f /usr/lib64/libvirt/connection-driver/libvirt_driver_qemu.so && \
+    (test -f /usr/lib/systemd/system/libvirtd.service || test -f /usr/lib/systemd/system/virtqemud.socket) && \
     test -x /usr/bin/skopeo && \
     test -x /usr/bin/podman-compose && \
     podman --version >/dev/null && \

@@ -1,53 +1,59 @@
-# LifeOS Contributor Guide (Phase 2)
+# LifeOS Contributor Guide
 
-## Development Flow
+## Workflow
 
-1. Create/checkout your branch.
-2. Make focused changes.
-3. Run format + tests before commit:
+1. Create a focused branch.
+2. Implement the change with tests.
+3. Run hardening checks before pushing:
 
 ```bash
-cargo fmt --all
-cargo test -p lifeosd -p life
+make check-daemon-prereqs
+make phase3-hardening
 ```
 
-## Core Runtime Areas
+## Required Quality Gates
 
-- `daemon/src/agent_runtime.rs`
-  - Intent lifecycle, trust mode, Jarvis sessions.
-  - Always-on micro-model state.
-  - Sensory runtime state.
-  - Self-defense and proactive heartbeat runtime.
-- `daemon/src/api/mod.rs`
-  - HTTP routes for runtime controls.
-- `cli/src/commands/intents.rs`
-  - User-facing runtime operations.
-- `cli/src/commands/ai.rs`
-  - OCR and AI orchestration flows.
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace --all-features --no-fail-fast`
+- `cargo test --package lifeos-integration-tests --test integration_tests -- --test-threads=1`
 
-## Phase 2 APIs Added
+## Build Prerequisites
 
-- `POST /api/v1/vision/ocr`
-- `GET/POST /api/v1/runtime/always-on`
-- `POST /api/v1/runtime/always-on/classify`
-- `POST /api/v1/runtime/model-routing`
-- `GET /api/v1/runtime/self-defense`
-- `POST /api/v1/runtime/self-defense/repair`
-- `GET/POST /api/v1/runtime/sensory`
-- `POST /api/v1/runtime/sensory/snapshot`
-- `GET/POST /api/v1/runtime/heartbeat`
-- `POST /api/v1/runtime/heartbeat/tick`
+To build daemon with all features locally:
 
-## Security and Policy Notes
+```bash
+bash scripts/check-daemon-prereqs.sh
+```
 
-- Sensory capture is consent-gated through FollowAlong consent.
-- Self-defense repair must remain non-destructive by default.
-- Any new autonomous action should emit ledger entries.
-- CVE SLO policy is enforced in CI (`scripts/cve-slo-enforce.py`).
+From Phase 3 hardening onward, the LifeOS image includes these build deps by default.
+If your host was installed before that image, update to latest and reboot first.
 
-## Testing Expectations
+If you are running on immutable bootc/ostree host, install `-devel` packages inside `toolbox`:
 
-- Add parser tests for new CLI commands in `cli/src/main_tests.rs`.
-- Add runtime logic tests in `daemon/src/agent_runtime.rs`.
-- Keep tests deterministic; avoid unguarded shared environment mutations.
+```bash
+toolbox create lifeos-dev
+toolbox enter lifeos-dev
+sudo dnf install pkgconf-pkg-config dbus-devel glib2-devel gtk4-devel libadwaita-devel
+cd /var/home/$USER/personalProjects/gama/lifeos
+bash scripts/check-daemon-prereqs.sh
+```
 
+## Security Enforcement
+
+- CVE SLO policy is enforced in CI:
+  - `security/cve_slo_policy.json`
+  - `scripts/cve-slo-enforce.py`
+
+## Daily-Driver Recovery
+
+Generate a recovery kit before risky updates:
+
+```bash
+bash scripts/create-recovery-kit.sh
+```
+
+Runbook references:
+
+- `docs/incident-response-playbook.md`
+- Generated `ROLLBACK_RUNBOOK.md` inside the recovery kit output directory.

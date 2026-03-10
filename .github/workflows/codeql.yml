@@ -58,7 +58,7 @@ jobs:
         if: steps.code-scanning.outputs.enabled == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.85.1
 
       - name: Install daemon build dependencies
         if: steps.code-scanning.outputs.enabled == 'true'

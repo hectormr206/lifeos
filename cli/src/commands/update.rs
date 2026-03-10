@@ -16,7 +16,7 @@ pub struct UpdateArgs {
     #[command(subcommand)]
     pub command: Option<UpdateSubcommand>,
     /// Simulate update without applying
-    #[arg(long)]
+    #[arg(long = "dry-run", alias = "dry")]
     pub dry_run: bool,
     /// Reboot immediately after update
     #[arg(long)]

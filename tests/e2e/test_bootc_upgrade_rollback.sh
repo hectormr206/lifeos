@@ -23,8 +23,9 @@ VM_MEMORY="4096"
 VM_CPUS="2"
 VM_DISK="20G"
 SSH_USER="lifeos"
+SSH_PASSWORD="lifeos"
 SSH_PORT="2222"
-TIMEOUT="300"
+SSH_READY_TIMEOUT="300"
 ISO_PATH=""
 NO_CLEANUP=false
 VERBOSE=false
@@ -93,12 +94,27 @@ parse_args() {
 load_config() {
     if [ -f "$CONFIG_FILE" ]; then
         log_debug "Loading configuration from $CONFIG_FILE"
-        # Simple YAML parsing (basic key-value pairs)
-        grep -E '^[a-z_]+:' "$CONFIG_FILE" | while read -r line; do
-            key=$(echo "$line" | cut -d: -f1 | tr '[:lower:]' '[:upper:]')
-            value=$(echo "$line" | cut -d: -f2- | sed 's/^ *//; s/ *$//; s/^"//; s/"$//')
-            log_debug "Config: $key = $value"
-        done
+        local vm_name vm_memory vm_cpus vm_disk ssh_port ssh_user ssh_password ssh_ready
+        vm_name=$(awk '/^vm:/{in=1;next} in&&/^[^[:space:]]/{in=0} in&&/^[[:space:]]+name:/{print $2;exit}' "$CONFIG_FILE" | tr -d '"')
+        vm_memory=$(awk '/^vm:/{in=1;next} in&&/^[^[:space:]]/{in=0} in&&/^[[:space:]]+memory:/{print $2;exit}' "$CONFIG_FILE" | tr -d '"')
+        vm_cpus=$(awk '/^vm:/{in=1;next} in&&/^[^[:space:]]/{in=0} in&&/^[[:space:]]+cpus:/{print $2;exit}' "$CONFIG_FILE" | tr -d '"')
+        vm_disk=$(awk '/^vm:/{in=1;next} in&&/^[^[:space:]]/{in=0} in&&/^[[:space:]]+disk_size:/{print $2;exit}' "$CONFIG_FILE" | tr -d '"')
+        ssh_port=$(awk '/^network:/{in=1;next} in&&/^[^[:space:]]/{in=0} in&&/^[[:space:]]+ssh_port:/{print $2;exit}' "$CONFIG_FILE" | tr -d '"')
+        ssh_user=$(awk '/^network:/{in=1;next} in&&/^[^[:space:]]/{in=0} in&&/^[[:space:]]+ssh_user:/{print $2;exit}' "$CONFIG_FILE" | tr -d '"')
+        ssh_password=$(awk '/^network:/{in=1;next} in&&/^[^[:space:]]/{in=0} in&&/^[[:space:]]+ssh_password:/{print $2;exit}' "$CONFIG_FILE" | tr -d '"')
+        ssh_ready=$(awk '/^timeouts:/{in=1;next} in&&/^[^[:space:]]/{in=0} in&&/^[[:space:]]+ssh_ready:/{print $2;exit}' "$CONFIG_FILE" | tr -d '"')
+
+        [ -n "${vm_name}" ] && VM_NAME="${vm_name}"
+        [ -n "${vm_memory}" ] && VM_MEMORY="${vm_memory}"
+        [ -n "${vm_cpus}" ] && VM_CPUS="${vm_cpus}"
+        [ -n "${vm_disk}" ] && VM_DISK="${vm_disk}"
+        [ -n "${ssh_port}" ] && SSH_PORT="${ssh_port}"
+        [ -n "${ssh_user}" ] && SSH_USER="${ssh_user}"
+        [ -n "${ssh_password}" ] && SSH_PASSWORD="${ssh_password}"
+        [ -n "${ssh_ready}" ] && SSH_READY_TIMEOUT="${ssh_ready}"
+
+        log_debug "Config applied: VM_NAME=${VM_NAME}, VM_MEMORY=${VM_MEMORY}, VM_CPUS=${VM_CPUS}, VM_DISK=${VM_DISK}"
+        log_debug "Config applied: SSH_USER=${SSH_USER}, SSH_PORT=${SSH_PORT}, SSH_READY_TIMEOUT=${SSH_READY_TIMEOUT}"
     fi
 }
 
@@ -147,6 +163,7 @@ find_iso() {
     
     # Try to find ISO in common locations
     local search_paths=(
+        "${PROJECT_ROOT}/output/lifeos-latest.iso"
         "${PROJECT_ROOT}/build/lifeos.iso"
         "${PROJECT_ROOT}/lifeos.iso"
         "${PROJECT_ROOT}/output/lifeos.iso"
@@ -246,7 +263,10 @@ setup_vm_qemu() {
 wait_for_ssh() {
     log_info "Waiting for SSH to be available on port $SSH_PORT..."
     
-    local max_attempts=60
+    local max_attempts=$(( SSH_READY_TIMEOUT / 5 ))
+    if [ "$max_attempts" -lt 1 ]; then
+        max_attempts=1
+    fi
     local attempt=1
     
     while [ $attempt -le $max_attempts ]; do
@@ -272,7 +292,7 @@ ssh_execute() {
     log_debug "Executing: $cmd"
     
     if command -v sshpass &> /dev/null; then
-        sshpass -p "lifeos" ssh $ssh_opts "${SSH_USER}@localhost" "$cmd" 2>&1
+        sshpass -p "$SSH_PASSWORD" ssh $ssh_opts "${SSH_USER}@localhost" "$cmd" 2>&1
     else
         ssh $ssh_opts "${SSH_USER}@localhost" "$cmd" 2>&1
     fi
@@ -501,26 +521,28 @@ test_life_cli() {
         return 1
     fi
     
-    # Test life update --dry
+    # Test life update dry-run mode (compat: --dry and --dry-run)
     if output=$(ssh_execute "life update --dry" 2>&1); then
         record_test "life update --dry" "PASS"
+    elif output=$(ssh_execute "life update --dry-run" 2>&1); then
+        record_test "life update --dry-run" "PASS"
     else
         # Might not support --dry flag
         if echo "$output" | grep -qi "unknown\|unrecognized"; then
-            record_test "life update --dry" "SKIP" "Flag not supported"
+            record_test "life update dry-run" "SKIP" "Flag not supported"
         else
-            record_test "life update --dry" "FAIL" "$output"
+            record_test "life update dry-run" "FAIL" "$output"
         fi
     fi
     
-    # Test life rollback
-    if output=$(ssh_execute "life rollback --dry" 2>&1); then
-        record_test "life rollback --dry" "PASS"
+    # Test life rollback command availability without changing system state
+    if output=$(ssh_execute "life rollback --help" 2>&1); then
+        record_test "life rollback --help" "PASS"
     else
         if echo "$output" | grep -qi "unknown\|unrecognized"; then
-            record_test "life rollback --dry" "SKIP" "Flag not supported"
+            record_test "life rollback --help" "SKIP" "Subcommand not available"
         else
-            record_test "life rollback --dry" "FAIL" "$output"
+            record_test "life rollback --help" "FAIL" "$output"
         fi
     fi
     

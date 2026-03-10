@@ -86,7 +86,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.85.1
           targets: ${{ matrix.target }}
 
       - name: Install cross-compilation tools (Linux)
@@ -170,7 +170,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.85.1
 
       - name: Publish CLI
         working-directory: ./cli
@@ -196,7 +196,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.85.1
 
       - name: Build documentation
         run: |

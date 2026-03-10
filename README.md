@@ -1,54 +1,49 @@
-# LifeOS: AI-Native Linux Distribution
+# LifeOS
 
-**Versión:** 0.1.0-alpha  
-**Estado:** En desarrollo activo  
-**Fecha de inicio:** Febrero 2026  
+AI-native Linux distribution based on Fedora bootc, focused on reliable daily-driver workflows for founders and developers.
 
-## 🎯 Visión
+## Current Status
 
-Primera distribución Linux AI-first realmente masiva:
-- Tan fácil de usar como macOS/Windows para usuarios nuevos
-- Tan potente como Linux para desarrollo y control total
-- Tan confiable que actualizar deje de dar miedo
-- Tan inteligente que entienda pantalla, voz, cámara y contexto
+- Active wedge: AI local-first workstation (1.0 scope).
+- Phases 0, 1, 2 and 2.5: closed at baseline.
+- Phase 3 hardening closeout: tracked in `evidence/phase-3/phase-3-closeout.md`.
 
-## 📁 Estructura del Proyecto
+## Source Of Truth
+
+- Normative spec: `docs/lifeos-ai-distribution.md`
+- Project execution state: `docs/PROJECT_STATE.md`
+- Historical snapshots (deprecated): `ROADMAP.md`, `PROJECT_STATUS.md`, `FINAL_STATUS.md`
+
+## Workspace Layout
 
 ```
 lifeos/
-├── image/                    # Imagen OCI del sistema
-│   ├── Containerfile         # Build principal
-│   ├── build.sh             # Script de customización
-│   └── files/               # Archivos del sistema
-├── cli/                     # CLI `life` (Rust)
-├── daemon/                  # lifeosd (Rust)
-├── contracts/               # Schemas JSON para intents/identity
-├── onboarding/              # Asistente de primer arranque
-├── tests/                   # Tests de integración
-└── .github/workflows/       # CI/CD
+├── cli/        # `life` command-line interface
+├── daemon/     # `lifeosd` daemon + REST API
+├── tests/      # integration and E2E tests
+├── image/      # bootc container image definition
+├── scripts/    # build and validation automation
+└── docs/       # architecture, ops and user docs
 ```
 
-## 🚀 Estado Actual
+## Quick Commands
 
-### En Progreso 🟡
-- [ ] Fase 0: Fundación técnica (0-3 meses)
-  - [ ] Base inmutable bootc + composefs
-  - [ ] CLI `life` básico
-  - [ ] Pipeline CI/CD
+```bash
+# Build and test
+make build
+make test
+make lint
 
-### Pendiente ⚪
-- [ ] Fase 1: UX y confiabilidad (3-6 meses)
-- [ ] Fase 2: IA multimodal local (6-12 meses)
-- [ ] Fase 3: Hive Mind gobernado (12-24 meses)
+# Phase 3 hardening gate
+make check-daemon-prereqs
+make phase3-hardening
 
-## 📚 Documentación
+# Build ISO
+sudo bash scripts/build-iso-without-model.sh
+```
 
-- [Especificación completa](../../borradores/lifeos-ai-distribution.md)
+## Recovery And Ops
 
-## 🤝 Contribuir
-
-Ver `CONTRIBUTING.md` (próximamente)
-
-## 📄 Licencia
-
-Apache 2.0
+- Incident runbook: `docs/incident-response-playbook.md`
+- Recovery kit generation: `scripts/create-recovery-kit.sh`
+- ISO/VM workflow: `docs/Reconstruir imagen y generar ISO.md`
