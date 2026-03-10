@@ -29,7 +29,7 @@ on:
 jobs:
   # Smoke test - quick validation
   smoke-test:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     
     steps:
@@ -43,14 +43,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libdbus-1-dev \
-            libglib2.0-dev \
-            libgtk-4-dev \
-            libadwaita-1-dev
+        run: bash scripts/ci/install-linux-deps.sh daemon
       
       - name: Cache cargo
         uses: actions/cache@v4
@@ -79,7 +72,7 @@ jobs:
 
   # Bootc upgrade/rollback test - comprehensive VM test
   bootc-upgrade-rollback:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     # Run on: schedule, manual dispatch, PRs with e2e-test label, or main branch pushes
     if: |
       github.event_name == 'schedule' ||
@@ -93,29 +86,18 @@ jobs:
       
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android/sdk
-          sudo rm -rf /opt/ghc
-          sudo docker system prune -af --volumes
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android/sdk || true
+          sudo rm -rf /opt/ghc || true
+          if command -v docker >/dev/null 2>&1; then
+            sudo docker system prune -af --volumes || true
+          fi
           df -h
       
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            podman \
-            libdbus-1-dev \
-            libglib2.0-dev \
-            libgtk-4-dev \
-            libadwaita-1-dev \
-            qemu-kvm \
-            libvirt-daemon-system \
-            virtinst \
-            sshpass \
-            openssl \
-            xorriso \
-            mtools
+          bash scripts/ci/install-linux-deps.sh daemon
+          bash scripts/ci/install-linux-deps.sh e2e
       
       - name: Enable KVM
         run: |
@@ -215,7 +197,7 @@ jobs:
 
   # Integration test - daemon + CLI interaction
   integration:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     
     steps:
@@ -253,7 +235,7 @@ jobs:
 
   # Notify on E2E test failures
   notify-failure:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     needs: [bootc-upgrade-rollback]
     if: failure() && github.event_name == 'schedule'
     
