@@ -26,6 +26,9 @@ on:
           - bootc-upgrade-rollback
           - smoke
 
+env:
+  TMPDIR: /var/tmp
+
 jobs:
   # Smoke test - quick validation
   smoke-test:
@@ -77,8 +80,7 @@ jobs:
     if: |
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e-test')) ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e-test'))
     
     steps:
       - name: Checkout
