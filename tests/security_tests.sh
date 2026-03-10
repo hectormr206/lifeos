@@ -12,8 +12,23 @@ else
 fi
 TMP_RUNTIME="$(mktemp -d)"
 TMP_HOME="$(mktemp -d)"
-PORT="${LIFEOS_SECURITY_TEST_PORT:-8081}"
+if [[ -n "${LIFEOS_SECURITY_TEST_PORT:-}" ]]; then
+    PORT="${LIFEOS_SECURITY_TEST_PORT}"
+elif command -v python3 >/dev/null 2>&1; then
+    PORT="$(
+        python3 - <<'PY'
+import socket
+s = socket.socket()
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+PY
+    )"
+else
+    PORT="18081"
+fi
 BASE_URL="http://127.0.0.1:${PORT}"
+TMP_DAEMON_CONFIG="${TMP_RUNTIME}/daemon.toml"
 
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -68,10 +83,15 @@ echo "==============================================="
 echo " LifeOS Runtime Security Regression Suite"
 echo "==============================================="
 
+cat >"${TMP_DAEMON_CONFIG}" <<EOF
+api_bind_address = "127.0.0.1:${PORT}"
+EOF
+
 echo "Starting daemon in isolated runtime..."
 (
     cd "${PROJECT_ROOT}/daemon"
     LIFEOS_RUNTIME_DIR="${TMP_RUNTIME}" \
+    LIFEOS_DAEMON_CONFIG="${TMP_DAEMON_CONFIG}" \
     HOME="${TMP_HOME}" \
     RUST_LOG=error \
     "${DAEMON_BIN}" >/tmp/lifeosd-security-tests.log 2>&1
@@ -99,6 +119,9 @@ echo "Bootstrap token generated."
 # Wait until the HTTP API is reachable to avoid startup race flakiness.
 readiness_code="000"
 for _ in $(seq 1 50); do
+    if ! kill -0 "${DAEMON_PID}" >/dev/null 2>&1; then
+        break
+    fi
     readiness_code="$(http_code "${BASE_URL}/api/v1/system/status")"
     if [[ "${readiness_code}" != "000" ]]; then
         break
@@ -106,7 +129,7 @@ for _ in $(seq 1 50); do
     sleep 0.2
 done
 
-if [[ "${readiness_code}" == "000" ]]; then
+if [[ "${readiness_code}" == "000" ]] || ! kill -0 "${DAEMON_PID}" >/dev/null 2>&1; then
     echo "Daemon HTTP API did not become reachable in time."
     echo "Daemon logs:"
     sed -n '1,200p' /tmp/lifeosd-security-tests.log || true

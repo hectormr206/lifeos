@@ -414,7 +414,9 @@ async fn start_api_server(state: Arc<DaemonState>) {
 
 /// Load daemon configuration from file
 async fn load_config() -> anyhow::Result<DaemonConfig> {
-    let config_path = std::path::PathBuf::from("/etc/lifeos/daemon.toml");
+    let config_path = std::env::var("LIFEOS_DAEMON_CONFIG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/etc/lifeos/daemon.toml"));
 
     if config_path.exists() {
         let contents = tokio::fs::read_to_string(config_path).await?;
