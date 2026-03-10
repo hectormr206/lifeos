@@ -168,6 +168,10 @@ pub enum IntentSensoryCommands {
         audio: bool,
         #[arg(long, default_value_t = true)]
         screen: bool,
+        #[arg(long, default_value_t = false)]
+        camera: bool,
+        #[arg(long, default_value_t = 10)]
+        interval: u64,
         #[arg(long, default_value = "user://local/default")]
         actor: String,
     },
@@ -1051,9 +1055,13 @@ async fn cmd_sensory(cmd: IntentSensoryCommands) -> anyhow::Result<()> {
         IntentSensoryCommands::Start {
             audio,
             screen,
+            camera,
+            interval,
             actor,
-        } => cmd_sensory_set(true, audio, screen, &actor).await,
-        IntentSensoryCommands::Stop { actor } => cmd_sensory_set(false, false, false, &actor).await,
+        } => cmd_sensory_set(true, audio, screen, camera, interval, &actor).await,
+        IntentSensoryCommands::Stop { actor } => {
+            cmd_sensory_set(false, false, false, false, 10, &actor).await
+        }
         IntentSensoryCommands::Snapshot {
             audio_file,
             model,
@@ -1075,9 +1083,18 @@ async fn cmd_sensory_status() -> anyhow::Result<()> {
             println!("  enabled: {}", body["enabled"].as_bool().unwrap_or(false));
             println!("  running: {}", body["running"].as_bool().unwrap_or(false));
             println!(
-                "  audio/screen: {}/{}",
+                "  audio/screen/camera: {}/{}/{}",
                 body["audio_enabled"].as_bool().unwrap_or(false),
-                body["screen_enabled"].as_bool().unwrap_or(false)
+                body["screen_enabled"].as_bool().unwrap_or(false),
+                body["camera_enabled"].as_bool().unwrap_or(false)
+            );
+            println!(
+                "  kill_switch_active: {}",
+                body["kill_switch_active"].as_bool().unwrap_or(false)
+            );
+            println!(
+                "  capture_interval_seconds: {}",
+                body["capture_interval_seconds"].as_u64().unwrap_or(10)
             );
             println!(
                 "  last_screen_path: {}",
@@ -1103,6 +1120,8 @@ async fn cmd_sensory_set(
     enabled: bool,
     audio: bool,
     screen: bool,
+    camera: bool,
+    interval: u64,
     actor: &str,
 ) -> anyhow::Result<()> {
     let client = daemon_client::authenticated_client();
@@ -1112,6 +1131,8 @@ async fn cmd_sensory_set(
             "enabled": enabled,
             "audio_enabled": audio,
             "screen_enabled": screen,
+            "camera_enabled": camera,
+            "capture_interval_seconds": interval,
             "actor": actor,
         }))
         .send()
@@ -1128,9 +1149,16 @@ async fn cmd_sensory_set(
                 }
             );
             println!(
-                "  audio/screen: {}/{}",
+                "  audio/screen/camera: {}/{}/{}",
                 body["sensory"]["audio_enabled"].as_bool().unwrap_or(false),
-                body["sensory"]["screen_enabled"].as_bool().unwrap_or(false)
+                body["sensory"]["screen_enabled"].as_bool().unwrap_or(false),
+                body["sensory"]["camera_enabled"].as_bool().unwrap_or(false)
+            );
+            println!(
+                "  capture_interval_seconds: {}",
+                body["sensory"]["capture_interval_seconds"]
+                    .as_u64()
+                    .unwrap_or(10)
             );
             println!("  actor: {}", actor.cyan());
             if enabled {

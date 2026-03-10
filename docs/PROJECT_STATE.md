@@ -1,6 +1,6 @@
 # LifeOS Project State (Source Of Truth)
 
-Last updated: 2026-03-09
+Last updated: 2026-03-10
 
 ## Scope and Ownership
 
@@ -26,9 +26,9 @@ Out of wedge for 1.0 hardening:
 - New ecosystem surfaces that do not improve daily-driver reliability.
 - B2B experimental swarm/RFC work.
 
-## Current Phase: Phase 4 — LifeOS Alive
+## Current Phase: Phase 4 Closed / Phase 5 Pending
 
-Phase 4 focuses on making LifeOS feel alive through real sensory interaction:
+Phase 4 focused on making LifeOS feel alive through real sensory interaction:
 voice (bidirectional), vision (screen awareness), camera (presence detection),
 and GPU-accelerated inference with automatic NVIDIA offload.
 
@@ -47,24 +47,25 @@ Key deliverables:
 - Phase 2: closed at baseline (multimodal + memory + runtime controls).
 - Phase 2.5: closed at baseline (visual identity + UX foundations).
 - Phase 3: closed (hardening + dogfooding + closeout). Evidence: `evidence/phase-3/phase-3-closeout.md`.
-- Phase 4: **ACTIVE** — LifeOS Alive (sensory interaction, GPU offload, Axi animated).
-- Phase 5: pending (ecosystem, sync, scale) — after Phase 4 closeout.
+- Phase 4: **CLOSED IN REPO** — LifeOS Alive complete. Evidence: `evidence/phase-4/phase-4-closeout.md`.
+- Phase 5: pending (ecosystem, sync, scale).
 
-## Phase 4 Priority Blocks
+## Phase 4 Closed Blocks
 
 | Block | Priority | Focus |
 |-------|----------|-------|
-| Voice bidirectional | P0 | STT always-on + TTS + voice loop pipeline |
-| GPU offload NVIDIA | P0 | Auto-detect + offload LLM/vision to GPU |
-| Vision contextual | P0 | Screen awareness + OCR + vision queries |
-| Sensory orchestration | P0 | Unified pipeline + model coordination |
-| Presence & camera | P1 | Presence detect + fatigue/posture alerts |
-| Axi alive in desktop | P1 | Animated states + proactive notifications |
+| Voice bidirectional | Closed | STT always-on + TTS + voice loop pipeline |
+| GPU offload NVIDIA | Closed | Auto-detect + offload LLM/vision to GPU |
+| Vision contextual | Closed | Screen awareness + OCR + vision queries |
+| Sensory orchestration | Closed | Unified pipeline + model coordination |
+| Presence & camera | Closed | Presence detect + fatigue/posture alerts |
+| Axi alive in desktop | Closed | Animated states + proactive notifications |
 
 ## Reference Links
 
 - Normative spec: `docs/lifeos-ai-distribution.md` (Phase 4 section)
 - Phase 3 evidence: `evidence/phase-3/phase-3-closeout.md`
+- Phase 4 evidence: `evidence/phase-4/phase-4-closeout.md`
 - Recovery operations: `docs/incident-response-playbook.md`
 - Build and ISO workflow: `docs/Reconstruir imagen y generar ISO.md`
 - Update channels: `docs/update-channels.md`

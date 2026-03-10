@@ -224,16 +224,38 @@ impl Default for AlwaysOnRuntimeState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SensoryCaptureRuntimeState {
     pub enabled: bool,
     pub audio_enabled: bool,
     pub screen_enabled: bool,
+    pub camera_enabled: bool,
     pub running: bool,
+    pub kill_switch_active: bool,
+    pub capture_interval_seconds: u64,
     pub last_snapshot_at: Option<DateTime<Utc>>,
     pub last_screen_path: Option<String>,
     pub last_transcript_chars: usize,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+impl Default for SensoryCaptureRuntimeState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            audio_enabled: false,
+            screen_enabled: false,
+            camera_enabled: false,
+            running: false,
+            kill_switch_active: false,
+            capture_interval_seconds: 10,
+            last_snapshot_at: None,
+            last_screen_path: None,
+            last_transcript_chars: 0,
+            updated_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -323,6 +345,7 @@ struct AgentRuntimeState {
     heartbeat_runtime: HeartbeatRuntimeState,
 }
 
+#[derive(Clone)]
 pub struct AgentRuntimeManager {
     data_dir: PathBuf,
     state: Arc<RwLock<AgentRuntimeState>>,
@@ -1198,6 +1221,8 @@ impl AgentRuntimeManager {
         enabled: bool,
         audio_enabled: bool,
         screen_enabled: bool,
+        camera_enabled: bool,
+        capture_interval_seconds: Option<u64>,
         actor: Option<&str>,
     ) -> Result<SensoryCaptureRuntimeState> {
         let actor = actor.unwrap_or("user://local/default");
@@ -1205,10 +1230,17 @@ impl AgentRuntimeManager {
         state.sensory_capture_runtime.enabled = enabled;
         state.sensory_capture_runtime.audio_enabled = enabled && audio_enabled;
         state.sensory_capture_runtime.screen_enabled = enabled && screen_enabled;
-        state.sensory_capture_runtime.running = enabled && (audio_enabled || screen_enabled);
+        state.sensory_capture_runtime.camera_enabled = enabled && camera_enabled;
+        state.sensory_capture_runtime.running =
+            enabled && (audio_enabled || screen_enabled || camera_enabled);
+        state.sensory_capture_runtime.kill_switch_active = false;
+        state.sensory_capture_runtime.capture_interval_seconds =
+            capture_interval_seconds.unwrap_or(10).clamp(5, 30);
         state.sensory_capture_runtime.updated_at = Some(Utc::now());
         let effective_audio_enabled = state.sensory_capture_runtime.audio_enabled;
         let effective_screen_enabled = state.sensory_capture_runtime.screen_enabled;
+        let effective_camera_enabled = state.sensory_capture_runtime.camera_enabled;
+        let effective_interval = state.sensory_capture_runtime.capture_interval_seconds;
 
         append_ledger(
             &mut state,
@@ -1224,6 +1256,43 @@ impl AgentRuntimeManager {
                 "enabled": enabled,
                 "audio_enabled": effective_audio_enabled,
                 "screen_enabled": effective_screen_enabled,
+                "camera_enabled": effective_camera_enabled,
+                "capture_interval_seconds": effective_interval,
+            }),
+        );
+
+        let snapshot = state.sensory_capture_runtime.clone();
+        drop(state);
+        self.save_state().await?;
+        Ok(snapshot)
+    }
+
+    pub async fn trigger_sensory_kill_switch(
+        &self,
+        actor: Option<&str>,
+    ) -> Result<SensoryCaptureRuntimeState> {
+        let actor = actor.unwrap_or("user://local/default");
+        let mut state = self.state.write().await;
+        state.sensory_capture_runtime.enabled = false;
+        state.sensory_capture_runtime.audio_enabled = false;
+        state.sensory_capture_runtime.screen_enabled = false;
+        state.sensory_capture_runtime.camera_enabled = false;
+        state.sensory_capture_runtime.running = false;
+        state.sensory_capture_runtime.kill_switch_active = true;
+        state.sensory_capture_runtime.updated_at = Some(Utc::now());
+
+        append_ledger(
+            &mut state,
+            "runtime",
+            "sensory_kill_switch",
+            "super-escape",
+            serde_json::json!({
+                "actor": actor,
+                "enabled": false,
+                "audio_enabled": false,
+                "screen_enabled": false,
+                "camera_enabled": false,
+                "kill_switch_active": true,
             }),
         );
 
@@ -2534,12 +2603,20 @@ mod tests {
         let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
 
         let state = mgr
-            .set_sensory_capture_runtime(true, true, true, Some("user://local/admin"))
+            .set_sensory_capture_runtime(
+                true,
+                true,
+                true,
+                false,
+                Some(10),
+                Some("user://local/admin"),
+            )
             .await
             .unwrap();
         assert!(state.enabled);
         assert!(state.audio_enabled);
         assert!(state.screen_enabled);
+        assert!(!state.camera_enabled);
 
         let updated = mgr
             .record_sensory_snapshot(Some("/tmp/frame.png"), Some("hello world"))

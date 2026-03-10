@@ -77,6 +77,7 @@ pub struct Screenshot {
 }
 
 /// Screen capture manager
+#[derive(Clone)]
 pub struct ScreenCapture {
     config: CaptureConfig,
     output_dir: PathBuf,

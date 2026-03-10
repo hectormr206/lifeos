@@ -41,6 +41,7 @@ mod permissions;
 #[cfg(feature = "dbus")]
 mod portal;
 mod screen_capture;
+mod sensory_pipeline;
 mod system;
 mod telemetry;
 mod tuf;
@@ -59,6 +60,7 @@ use memory_plane::MemoryPlaneManager;
 use notifications::NotificationManager;
 use overlay::OverlayManager;
 use screen_capture::ScreenCapture;
+use sensory_pipeline::{AlwaysOnCycle, SensoryPipelineManager, SensoryRuntimeSync};
 use system::SystemMonitor;
 use telemetry::TelemetryManager;
 use update_scheduler::UpdateScheduler;
@@ -93,6 +95,7 @@ impl Default for DaemonConfig {
 
 /// Helper to generate and save bootstrap token
 fn generate_bootstrap_token() -> std::io::Result<String> {
+    use std::fmt::Write;
     use std::fs::File;
     use std::io::Read;
     use std::os::unix::fs::PermissionsExt;
@@ -100,7 +103,11 @@ fn generate_bootstrap_token() -> std::io::Result<String> {
     let mut buf = [0u8; 16];
     let mut f = File::open("/dev/urandom")?;
     f.read_exact(&mut buf)?;
-    let token = buf.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    let mut token = String::with_capacity(buf.len() * 2);
+    for byte in buf {
+        write!(&mut token, "{:02x}", byte)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    }
 
     let runtime_dir =
         std::env::var("LIFEOS_RUNTIME_DIR").unwrap_or_else(|_| "/run/lifeos".to_string());
@@ -132,6 +139,7 @@ pub struct DaemonState {
     pub ai_manager: Arc<RwLock<ai::AiManager>>,
     pub overlay_manager: Arc<RwLock<OverlayManager>>,
     pub screen_capture: Arc<RwLock<ScreenCapture>>,
+    pub sensory_pipeline_manager: Arc<RwLock<SensoryPipelineManager>>,
     pub experience_manager: Arc<RwLock<ExperienceManager>>,
     pub update_scheduler: Arc<RwLock<UpdateScheduler>>,
     pub follow_along_manager: Arc<RwLock<FollowAlongManager>>,
@@ -186,6 +194,12 @@ async fn main() -> anyhow::Result<()> {
         screen_capture: Arc::new(RwLock::new(ScreenCapture::new(PathBuf::from(
             "/var/lib/lifeos/screenshots",
         )))),
+        sensory_pipeline_manager: Arc::new(RwLock::new(
+            SensoryPipelineManager::new(PathBuf::from("/var/lib/lifeos")).unwrap_or_else(|e| {
+                warn!("Failed to initialize SensoryPipelineManager: {}", e);
+                SensoryPipelineManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+            }),
+        )),
         experience_manager: Arc::new(RwLock::new(ExperienceManager::new(PathBuf::from(
             "/var/lib/lifeos",
         )))),
@@ -278,6 +292,12 @@ async fn main() -> anyhow::Result<()> {
             warn!("Failed to initialize lab state: {}", e);
         }
     }
+    {
+        let sensory = state.sensory_pipeline_manager.read().await;
+        if let Err(e) = sensory.initialize().await {
+            warn!("Failed to initialize sensory pipeline state: {}", e);
+        }
+    }
 
     // Run an accessibility audit at startup to validate built-in themes.
     let mut accessibility_manager = AccessibilityManager::new();
@@ -323,6 +343,7 @@ async fn main() -> anyhow::Result<()> {
     let health_handle = tokio::spawn(run_health_checks(state.clone()));
     let update_handle = tokio::spawn(run_update_checks(state.clone()));
     let metrics_handle = tokio::spawn(run_metrics_collection(state.clone()));
+    let sensory_handle = tokio::spawn(run_sensory_runtime(state.clone()));
 
     // Wait for shutdown signal
     info!("Daemon running. Press Ctrl+C to stop.");
@@ -346,6 +367,7 @@ async fn main() -> anyhow::Result<()> {
     health_handle.abort();
     update_handle.abort();
     metrics_handle.abort();
+    sensory_handle.abort();
     dbus_handle.abort();
     portal_handle.abort();
 
@@ -366,6 +388,7 @@ async fn start_api_server(state: Arc<DaemonState>) {
         notification_manager: state.notification_manager.clone(),
         overlay_manager: state.overlay_manager.clone(),
         screen_capture: state.screen_capture.clone(),
+        sensory_pipeline_manager: state.sensory_pipeline_manager.clone(),
         experience_manager: state.experience_manager.clone(),
         update_scheduler: state.update_scheduler.clone(),
         follow_along_manager: state.follow_along_manager.clone(),
@@ -572,6 +595,102 @@ async fn run_metrics_collection(state: Arc<DaemonState>) {
             }
             Err(e) => {
                 error!("Failed to collect metrics: {}", e);
+            }
+        }
+    }
+}
+
+/// Run periodic sensory housekeeping: awareness refresh, presence updates and GPU sync.
+async fn run_sensory_runtime(state: Arc<DaemonState>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+
+    loop {
+        interval.tick().await;
+
+        let ai_manager = *state.ai_manager.read().await;
+        let overlay_manager = state.overlay_manager.read().await.clone();
+        let screen_capture = state.screen_capture.read().await.clone();
+        let sensory_manager = state.sensory_pipeline_manager.read().await.clone();
+        let follow_along_manager = state.follow_along_manager.read().await.clone();
+        let memory_plane_manager = state.memory_plane_manager.read().await.clone();
+        let agent_runtime_manager = state.agent_runtime_manager.read().await.clone();
+        let telemetry_manager = state.telemetry_manager.read().await.clone();
+
+        if let Err(e) = sensory_manager.refresh_capabilities(&ai_manager).await {
+            warn!("Failed to refresh sensory capabilities: {}", e);
+            continue;
+        }
+
+        let runtime = agent_runtime_manager.sensory_capture_runtime().await;
+        let always_on = agent_runtime_manager.always_on_runtime().await;
+        if let Err(e) = sensory_manager
+            .sync_runtime(
+                SensoryRuntimeSync {
+                    audio_enabled: runtime.audio_enabled,
+                    screen_enabled: runtime.screen_enabled,
+                    camera_enabled: runtime.camera_enabled,
+                    kill_switch_active: runtime.kill_switch_active,
+                    capture_interval_seconds: runtime.capture_interval_seconds,
+                    always_on_active: always_on.enabled,
+                    wake_word: Some(always_on.wake_word.as_str()),
+                },
+                &overlay_manager,
+            )
+            .await
+        {
+            warn!("Failed to sync sensory runtime state: {}", e);
+        }
+
+        if runtime.audio_enabled && !runtime.kill_switch_active && always_on.enabled {
+            match sensory_manager
+                .run_always_on_cycle(AlwaysOnCycle {
+                    ai_manager: &ai_manager,
+                    overlay: &overlay_manager,
+                    screen_capture: &screen_capture,
+                    memory_plane: &memory_plane_manager,
+                    telemetry: &telemetry_manager,
+                    wake_word: always_on.wake_word.as_str(),
+                    screen_enabled: runtime.screen_enabled,
+                })
+                .await
+            {
+                Ok(Some(_)) => continue,
+                Ok(None) => {}
+                Err(e) => warn!("Failed to run always-on voice cycle: {}", e),
+            }
+        }
+
+        if runtime.screen_enabled
+            && !runtime.kill_switch_active
+            && sensory_manager
+                .is_screen_awareness_due(runtime.capture_interval_seconds)
+                .await
+        {
+            if let Err(e) = sensory_manager
+                .run_screen_awareness_cycle(
+                    &ai_manager,
+                    &overlay_manager,
+                    &screen_capture,
+                    &memory_plane_manager,
+                    Some(&follow_along_manager),
+                )
+                .await
+            {
+                warn!("Failed to run screen awareness cycle: {}", e);
+            }
+        }
+
+        if runtime.camera_enabled
+            && !runtime.kill_switch_active
+            && sensory_manager
+                .is_presence_refresh_due(runtime.capture_interval_seconds)
+                .await
+        {
+            if let Err(e) = sensory_manager
+                .update_presence(&overlay_manager, &follow_along_manager)
+                .await
+            {
+                warn!("Failed to update camera presence: {}", e);
             }
         }
     }

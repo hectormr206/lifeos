@@ -178,6 +178,12 @@ impl UpdateChecker {
     }
 }
 
+impl Default for UpdateChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Update history entry
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateHistoryEntry {

@@ -115,6 +115,7 @@ impl Default for TelemetryConfig {
 }
 
 /// Local Telemetry Manager
+#[derive(Clone)]
 pub struct TelemetryManager {
     config: Arc<RwLock<TelemetryConfig>>,
     events: Arc<RwLock<VecDeque<TelemetryEvent>>>,

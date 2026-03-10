@@ -129,6 +129,7 @@ impl Default for FollowAlongConfig {
 }
 
 /// FollowAlong manager
+#[derive(Clone)]
 pub struct FollowAlongManager {
     config: Arc<RwLock<FollowAlongConfig>>,
     events_buffer: Arc<RwLock<Vec<UserEvent>>>,

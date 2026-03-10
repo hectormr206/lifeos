@@ -42,6 +42,10 @@ use crate::memory_plane::{MemoryPlaneManager, MemorySearchMode};
 use crate::notifications::NotificationManager;
 use crate::overlay::{OverlayManager, OverlayTheme};
 use crate::screen_capture::ScreenCapture;
+use crate::sensory_pipeline::{
+    SensoryBenchmarkReport, SensoryBenchmarkRequest, SensoryPipelineManager, SensoryRuntimeSync,
+    TtsRequest, VisionDescribeRequest, VoiceLoopRequest,
+};
 use crate::system::SystemMonitor;
 use crate::update_scheduler::UpdateScheduler;
 use crate::visual_comfort::{ComfortProfile, VisualComfortManager};
@@ -57,6 +61,7 @@ pub struct ApiState {
     pub notification_manager: Arc<NotificationManager>,
     pub overlay_manager: Arc<RwLock<OverlayManager>>,
     pub screen_capture: Arc<RwLock<ScreenCapture>>,
+    pub sensory_pipeline_manager: Arc<RwLock<SensoryPipelineManager>>,
     pub experience_manager: Arc<RwLock<ExperienceManager>>,
     pub update_scheduler: Arc<RwLock<UpdateScheduler>>,
     pub follow_along_manager: Arc<RwLock<FollowAlongManager>>,
@@ -239,6 +244,16 @@ pub struct OverlayStatusResponse {
     pub focused: bool,
     pub stats: OverlayStats,
     pub chat_history: Vec<ChatMessageInfo>,
+    pub axi_state: String,
+    pub mic_active: bool,
+    pub camera_active: bool,
+    pub screen_active: bool,
+    pub kill_switch_active: bool,
+    pub feedback_stage: Option<String>,
+    pub tokens_per_second: Option<f32>,
+    pub eta_ms: Option<u64>,
+    pub last_error: Option<String>,
+    pub notifications: Vec<crate::overlay::ProactiveNotification>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -249,6 +264,9 @@ pub struct OverlayStats {
     pub theme: String,
     pub shortcut: String,
     pub enabled: bool,
+    pub axi_state: String,
+    pub widget_aura: String,
+    pub active_notifications: usize,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -918,6 +936,20 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/audio/stt/start", post(start_stt_service))
         .route("/audio/stt/stop", post(stop_stt_service))
         .route("/audio/stt/transcribe", post(transcribe_audio_file))
+        .route("/sensory/status", get(get_sensory_status))
+        .route("/sensory/voice/session", post(run_voice_session))
+        .route("/sensory/voice/interrupt", post(interrupt_voice_session))
+        .route("/sensory/tts/speak", post(run_tts_preview))
+        .route(
+            "/sensory/vision/describe",
+            post(describe_screen_with_sensory),
+        )
+        .route(
+            "/sensory/presence",
+            get(get_presence_status).post(refresh_presence_status),
+        )
+        .route("/sensory/benchmark", post(run_sensory_benchmark))
+        .route("/sensory/kill-switch", post(trigger_sensory_kill_switch))
         // Overlay endpoints
         .route("/overlay/show", post(show_overlay))
         .route("/overlay/hide", post(hide_overlay))
@@ -1832,6 +1864,256 @@ async fn post_vision_ocr(
     })))
 }
 
+async fn get_sensory_status(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let ai_manager = *state.ai_manager.read().await;
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let status = sensory_mgr
+        .refresh_capabilities(&ai_manager)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!(status)))
+}
+
+async fn run_voice_session(
+    State(state): State<ApiState>,
+    Json(payload): Json<SensoryVoiceSessionPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let ai_manager = *state.ai_manager.read().await;
+    let overlay_mgr = state.overlay_manager.read().await.clone();
+    let screen_capture = state.screen_capture.read().await.clone();
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let memory_plane = state.memory_plane_manager.read().await.clone();
+    let telemetry = state.telemetry_manager.read().await.clone();
+
+    let result = sensory_mgr
+        .run_voice_loop(
+            &ai_manager,
+            &overlay_mgr,
+            &screen_capture,
+            &memory_plane,
+            &telemetry,
+            VoiceLoopRequest {
+                audio_file: payload.audio_file,
+                prompt: payload.prompt,
+                include_screen: payload.include_screen.unwrap_or(false),
+                screen_source: payload.screen_source,
+                language: payload.language,
+                voice_model: payload.voice_model,
+                playback: payload.playback.unwrap_or(true),
+            },
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "Bad Gateway".to_string(),
+                    message: e.to_string(),
+                    code: 502,
+                }),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "voice_loop": result,
+    })))
+}
+
+async fn interrupt_voice_session(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let overlay_mgr = state.overlay_manager.read().await.clone();
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let interrupted = sensory_mgr
+        .interrupt_voice_session(&overlay_mgr)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "interrupted": interrupted,
+    })))
+}
+
+async fn run_tts_preview(
+    State(state): State<ApiState>,
+    Json(payload): Json<SensoryTtsPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let overlay_mgr = state.overlay_manager.read().await.clone();
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let result = sensory_mgr
+        .speak_text(
+            &overlay_mgr,
+            TtsRequest {
+                text: payload.text,
+                language: payload.language,
+                voice_model: payload.voice_model,
+                playback: payload.playback.unwrap_or(true),
+            },
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "Bad Gateway".to_string(),
+                    message: e.to_string(),
+                    code: 502,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "tts": result,
+    })))
+}
+
+async fn describe_screen_with_sensory(
+    State(state): State<ApiState>,
+    Json(payload): Json<SensoryVisionPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    if payload.source.is_none() && !payload.capture_screen.unwrap_or(true) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "source is required when capture_screen=false".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let ai_manager = *state.ai_manager.read().await;
+    let overlay_mgr = state.overlay_manager.read().await.clone();
+    let screen_capture = state.screen_capture.read().await.clone();
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let memory_plane = state.memory_plane_manager.read().await.clone();
+
+    let result = sensory_mgr
+        .describe_screen(
+            &ai_manager,
+            &overlay_mgr,
+            &screen_capture,
+            &memory_plane,
+            VisionDescribeRequest {
+                source: payload.source,
+                capture_screen: payload.capture_screen.unwrap_or(true),
+                speak: payload.speak.unwrap_or(true),
+                question: payload.question,
+                language: payload.language,
+                voice_model: payload.voice_model,
+            },
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "Bad Gateway".to_string(),
+                    message: e.to_string(),
+                    code: 502,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "vision": result,
+    })))
+}
+
+async fn get_presence_status(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let status = sensory_mgr.status().await;
+    Ok(Json(serde_json::json!(status.presence)))
+}
+
+async fn refresh_presence_status(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let overlay_mgr = state.overlay_manager.read().await.clone();
+    let follow_along = state.follow_along_manager.read().await.clone();
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let presence = sensory_mgr
+        .update_presence(&overlay_mgr, &follow_along)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "Bad Gateway".to_string(),
+                    message: e.to_string(),
+                    code: 502,
+                }),
+            )
+        })?;
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "presence": presence,
+    })))
+}
+
+async fn run_sensory_benchmark(
+    State(state): State<ApiState>,
+    Json(payload): Json<SensoryBenchmarkPayload>,
+) -> Result<Json<SensoryBenchmarkReport>, (StatusCode, Json<ApiError>)> {
+    let ai_manager = *state.ai_manager.read().await;
+    let overlay_mgr = state.overlay_manager.read().await.clone();
+    let screen_capture = state.screen_capture.read().await.clone();
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let memory_plane = state.memory_plane_manager.read().await.clone();
+    let telemetry = state.telemetry_manager.read().await.clone();
+
+    let report = sensory_mgr
+        .benchmark(
+            &ai_manager,
+            &overlay_mgr,
+            &screen_capture,
+            &memory_plane,
+            &telemetry,
+            SensoryBenchmarkRequest {
+                audio_file: payload.audio_file,
+                prompt: payload.prompt,
+                include_screen: payload.include_screen.unwrap_or(false),
+                screen_source: payload.screen_source,
+                repeats: payload.repeats.unwrap_or(3),
+            },
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ApiError {
+                    error: "Bad Gateway".to_string(),
+                    message: e.to_string(),
+                    code: 502,
+                }),
+            )
+        })?;
+    Ok(Json(report))
+}
+
 /// Get notifications
 #[utoipa::path(
     get,
@@ -2264,8 +2546,8 @@ async fn mark_notification_read(
     ),
     tag = "overlay"
 )]
-async fn show_overlay(State(_state): State<ApiState>) -> StatusCode {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+async fn show_overlay(State(state): State<ApiState>) -> StatusCode {
+    let overlay_mgr = state.overlay_manager.read().await.clone();
     match overlay_mgr.show().await {
         Ok(_) => StatusCode::OK,
         Err(e) => {
@@ -2285,8 +2567,8 @@ async fn show_overlay(State(_state): State<ApiState>) -> StatusCode {
     ),
     tag = "overlay"
 )]
-async fn hide_overlay(State(_state): State<ApiState>) -> StatusCode {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+async fn hide_overlay(State(state): State<ApiState>) -> StatusCode {
+    let overlay_mgr = state.overlay_manager.read().await.clone();
     match overlay_mgr.hide().await {
         Ok(_) => StatusCode::OK,
         Err(e) => {
@@ -2306,8 +2588,8 @@ async fn hide_overlay(State(_state): State<ApiState>) -> StatusCode {
     ),
     tag = "overlay"
 )]
-async fn toggle_overlay(State(_state): State<ApiState>) -> StatusCode {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+async fn toggle_overlay(State(state): State<ApiState>) -> StatusCode {
+    let overlay_mgr = state.overlay_manager.read().await.clone();
     match overlay_mgr.toggle().await {
         Ok(_) => StatusCode::OK,
         Err(e) => {
@@ -2330,10 +2612,10 @@ async fn toggle_overlay(State(_state): State<ApiState>) -> StatusCode {
     tag = "overlay"
 )]
 async fn overlay_chat(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(request): Json<OverlayChatRequest>,
 ) -> Result<Json<OverlayChatResponse>, (StatusCode, Json<ApiError>)> {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let overlay_mgr = state.overlay_manager.read().await.clone();
 
     let response_content = match overlay_mgr
         .send_message(request.message, request.include_screen)
@@ -2372,9 +2654,9 @@ async fn overlay_chat(
     tag = "overlay"
 )]
 async fn overlay_screenshot(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<OverlayScreenshotResponse>, (StatusCode, Json<ApiError>)> {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let overlay_mgr = state.overlay_manager.read().await.clone();
     let screenshot_path = match overlay_mgr.include_screen_context().await {
         Ok(path) => path,
         Err(e) => {
@@ -2428,8 +2710,8 @@ async fn overlay_screenshot(
     ),
     tag = "overlay"
 )]
-async fn clear_overlay(State(_state): State<ApiState>) -> StatusCode {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+async fn clear_overlay(State(state): State<ApiState>) -> StatusCode {
+    let overlay_mgr = state.overlay_manager.read().await.clone();
     match overlay_mgr.clear_chat().await {
         Ok(_) => StatusCode::OK,
         Err(e) => {
@@ -2450,9 +2732,9 @@ async fn clear_overlay(State(_state): State<ApiState>) -> StatusCode {
     tag = "overlay"
 )]
 async fn overlay_status(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<OverlayStatusResponse>, (StatusCode, Json<ApiError>)> {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let overlay_mgr = state.overlay_manager.read().await.clone();
     let stats = overlay_mgr.get_stats().await;
     let state = overlay_mgr.get_state().await;
 
@@ -2484,8 +2766,21 @@ async fn overlay_status(
             theme: format!("{:?}", stats.theme),
             shortcut: stats.shortcut,
             enabled: stats.enabled,
+            axi_state: format!("{:?}", stats.axi_state),
+            widget_aura: stats.widget_aura,
+            active_notifications: stats.active_notifications,
         },
         chat_history,
+        axi_state: format!("{:?}", state.axi_state),
+        mic_active: state.sensor_indicators.mic_active,
+        camera_active: state.sensor_indicators.camera_active,
+        screen_active: state.sensor_indicators.screen_active,
+        kill_switch_active: state.sensor_indicators.kill_switch_active,
+        feedback_stage: state.feedback.stage,
+        tokens_per_second: state.feedback.tokens_per_second,
+        eta_ms: state.feedback.eta_ms,
+        last_error: state.last_error,
+        notifications: state.proactive_notifications,
     }))
 }
 
@@ -2501,10 +2796,10 @@ async fn overlay_status(
     tag = "overlay"
 )]
 async fn overlay_config(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(request): Json<OverlayConfigRequest>,
 ) -> StatusCode {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let overlay_mgr = state.overlay_manager.read().await.clone();
     let mut config = overlay_mgr.get_config().await;
 
     if let Some(theme) = request.theme {
@@ -2549,10 +2844,10 @@ async fn overlay_config(
     tag = "overlay"
 )]
 async fn overlay_export(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(request): Json<OverlayExportRequest>,
 ) -> StatusCode {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let overlay_mgr = state.overlay_manager.read().await.clone();
     let path = PathBuf::from(&request.path);
 
     match overlay_mgr.export_chat(path).await {
@@ -2577,10 +2872,10 @@ async fn overlay_export(
     tag = "overlay"
 )]
 async fn overlay_import(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(request): Json<OverlayImportRequest>,
 ) -> StatusCode {
-    let overlay_mgr = OverlayManager::new(PathBuf::from("/var/lib/lifeos/screenshots"));
+    let overlay_mgr = state.overlay_manager.read().await.clone();
     let path = PathBuf::from(&request.path);
 
     match overlay_mgr.import_chat(path).await {
@@ -4048,6 +4343,8 @@ struct SensoryRuntimePayload {
     enabled: Option<bool>,
     audio_enabled: Option<bool>,
     screen_enabled: Option<bool>,
+    camera_enabled: Option<bool>,
+    capture_interval_seconds: Option<u64>,
     actor: Option<String>,
 }
 
@@ -4086,6 +4383,49 @@ struct SttStartPayload {
 struct SttTranscribePayload {
     file: String,
     model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SensoryVoiceSessionPayload {
+    audio_file: Option<String>,
+    prompt: Option<String>,
+    include_screen: Option<bool>,
+    screen_source: Option<String>,
+    language: Option<String>,
+    voice_model: Option<String>,
+    playback: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SensoryInterruptPayload {
+    actor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SensoryTtsPayload {
+    text: String,
+    language: Option<String>,
+    voice_model: Option<String>,
+    playback: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SensoryVisionPayload {
+    source: Option<String>,
+    capture_screen: Option<bool>,
+    speak: Option<bool>,
+    question: Option<String>,
+    language: Option<String>,
+    voice_model: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SensoryBenchmarkPayload {
+    audio_file: Option<String>,
+    prompt: Option<String>,
+    include_screen: Option<bool>,
+    screen_source: Option<String>,
+    repeats: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4723,8 +5063,12 @@ async fn set_sensory_runtime(
     let enabled = payload.enabled.unwrap_or(true);
     let audio_enabled = payload.audio_enabled.unwrap_or(enabled);
     let screen_enabled = payload.screen_enabled.unwrap_or(enabled);
+    let camera_enabled = payload.camera_enabled.unwrap_or(false);
+    let capture_interval_seconds = payload
+        .capture_interval_seconds
+        .map(|value| value.clamp(5, 30));
 
-    if enabled && (audio_enabled || screen_enabled) {
+    if enabled && (audio_enabled || screen_enabled || camera_enabled) {
         ensure_followalong_consent(&state).await?;
     }
 
@@ -4744,6 +5088,8 @@ async fn set_sensory_runtime(
             enabled,
             audio_enabled,
             screen_enabled,
+            camera_enabled,
+            capture_interval_seconds,
             payload.actor.as_deref(),
         )
         .await
@@ -4754,6 +5100,35 @@ async fn set_sensory_runtime(
                     error: "Bad Request".to_string(),
                     message: e.to_string(),
                     code: 400,
+                }),
+            )
+        })?;
+    let always_on = mgr.always_on_runtime().await;
+    drop(mgr);
+
+    let sensory_mgr = state.sensory_pipeline_manager.read().await;
+    let overlay_mgr = state.overlay_manager.read().await.clone();
+    sensory_mgr
+        .sync_runtime(
+            SensoryRuntimeSync {
+                audio_enabled: status.audio_enabled,
+                screen_enabled: status.screen_enabled,
+                camera_enabled: status.camera_enabled,
+                kill_switch_active: status.kill_switch_active,
+                capture_interval_seconds: status.capture_interval_seconds,
+                always_on_active: always_on.enabled,
+                wake_word: Some(always_on.wake_word.as_str()),
+            },
+            &overlay_mgr,
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
                 }),
             )
         })?;
@@ -5010,9 +5385,21 @@ async fn trigger_jarvis_kill_switch(
     State(state): State<ApiState>,
     Json(payload): Json<JarvisControlPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let mgr = state.agent_runtime_manager.read().await;
-    let jarvis = mgr
-        .trigger_kill_switch(payload.actor.as_deref())
+    let actor = payload.actor.as_deref();
+    let runtime_mgr = state.agent_runtime_manager.read().await;
+    let jarvis = runtime_mgr.trigger_kill_switch(actor).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )
+    })?;
+
+    let sensory_runtime = runtime_mgr
+        .trigger_sensory_kill_switch(actor)
         .await
         .map_err(|e| {
             (
@@ -5024,11 +5411,75 @@ async fn trigger_jarvis_kill_switch(
                 }),
             )
         })?;
+    drop(runtime_mgr);
+
+    let sensory_mgr = state.sensory_pipeline_manager.read().await;
+    let overlay_mgr = state.overlay_manager.read().await.clone();
+    let sensory = sensory_mgr
+        .trigger_kill_switch(&overlay_mgr)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "jarvis": jarvis,
+        "sensory_runtime": sensory_runtime,
+        "sensory": sensory,
         "execution_mode": "interactive",
         "trust_mode": "disabled",
+    })))
+}
+
+async fn trigger_sensory_kill_switch(
+    State(state): State<ApiState>,
+    Json(payload): Json<SensoryInterruptPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let actor = payload.actor.as_deref();
+    let runtime_mgr = state.agent_runtime_manager.read().await;
+    let runtime = runtime_mgr
+        .trigger_sensory_kill_switch(actor)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    drop(runtime_mgr);
+
+    let sensory_mgr = state.sensory_pipeline_manager.read().await;
+    let overlay_mgr = state.overlay_manager.read().await.clone();
+    let sensory = sensory_mgr
+        .trigger_kill_switch(&overlay_mgr)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Internal Server Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "sensory_runtime": runtime,
+        "sensory": sensory,
     })))
 }
 

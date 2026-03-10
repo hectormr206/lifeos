@@ -244,6 +244,12 @@ impl HealthMonitor {
     }
 }
 
+impl Default for HealthMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Health check trait
 #[async_trait]
 #[allow(dead_code)]

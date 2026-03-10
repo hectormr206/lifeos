@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use utoipa::ToSchema;
 
 /// Overlay window configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +70,81 @@ pub enum OverlayTheme {
     Auto,
 }
 
+/// Animated Axi state shown by the overlay and mini-widget.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AxiState {
+    #[default]
+    Idle,
+    Listening,
+    Thinking,
+    Speaking,
+    Watching,
+    Error,
+    Offline,
+    Night,
+}
+
+impl AxiState {
+    fn aura(&self) -> &'static str {
+        match self {
+            Self::Idle => "green",
+            Self::Listening => "cyan",
+            Self::Thinking => "yellow",
+            Self::Speaking => "blue",
+            Self::Watching => "teal",
+            Self::Error => "red",
+            Self::Offline => "gray",
+            Self::Night => "indigo",
+        }
+    }
+}
+
+/// Persistent sensor indicators for privacy-by-design UX.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SensorIndicators {
+    pub mic_active: bool,
+    pub camera_active: bool,
+    pub screen_active: bool,
+    pub kill_switch_active: bool,
+}
+
+/// Live pipeline feedback used by the overlay and compact widget.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OverlayFeedback {
+    pub stage: Option<String>,
+    pub tokens_per_second: Option<f32>,
+    pub eta_ms: Option<u64>,
+    pub audio_level: Option<f32>,
+    pub updated_at: Option<String>,
+}
+
+/// Compact persistent widget state for desktop chrome integrations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MiniWidgetState {
+    pub visible: bool,
+    pub aura: String,
+    pub badge: Option<String>,
+}
+
+impl Default for MiniWidgetState {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            aura: "green".to_string(),
+            badge: None,
+        }
+    }
+}
+
+/// Lightweight proactive notification emitted by the overlay.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ProactiveNotification {
+    pub priority: String,
+    pub message: String,
+    pub created_at: String,
+}
+
 /// Overlay state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OverlayState {
@@ -77,6 +153,12 @@ pub struct OverlayState {
     pub chat_history: Vec<ChatMessage>,
     pub last_message_timestamp: String,
     pub window_position: Option<(i32, i32)>,
+    pub axi_state: AxiState,
+    pub sensor_indicators: SensorIndicators,
+    pub feedback: OverlayFeedback,
+    pub mini_widget: MiniWidgetState,
+    pub proactive_notifications: Vec<ProactiveNotification>,
+    pub last_error: Option<String>,
 }
 
 impl Default for OverlayState {
@@ -87,6 +169,12 @@ impl Default for OverlayState {
             chat_history: Vec::new(),
             last_message_timestamp: chrono::Utc::now().to_rfc3339(),
             window_position: None,
+            axi_state: AxiState::Idle,
+            sensor_indicators: SensorIndicators::default(),
+            feedback: OverlayFeedback::default(),
+            mini_widget: MiniWidgetState::default(),
+            proactive_notifications: Vec::new(),
+            last_error: None,
         }
     }
 }
@@ -110,6 +198,7 @@ pub enum ChatRole {
 }
 
 /// AI Overlay manager
+#[derive(Clone)]
 pub struct OverlayManager {
     config: Arc<RwLock<OverlayConfig>>,
     state: Arc<RwLock<OverlayState>>,
@@ -292,6 +381,121 @@ impl OverlayManager {
         state.clone()
     }
 
+    /// Set the current Axi visual state and keep the mini-widget in sync.
+    pub async fn set_axi_state(&self, axi_state: AxiState, reason: Option<&str>) -> Result<()> {
+        let mut state = self.state.write().await;
+        state.axi_state = axi_state.clone();
+        state.mini_widget.aura = axi_state.aura().to_string();
+        state.mini_widget.badge = reason
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if axi_state != AxiState::Error {
+            state.last_error = None;
+        }
+        Ok(())
+    }
+
+    /// Update persistent privacy LEDs and kill-switch badge.
+    pub async fn set_sensor_indicators(
+        &self,
+        mic_active: bool,
+        camera_active: bool,
+        screen_active: bool,
+        kill_switch_active: bool,
+    ) -> Result<()> {
+        let mut state = self.state.write().await;
+        state.sensor_indicators = SensorIndicators {
+            mic_active,
+            camera_active,
+            screen_active,
+            kill_switch_active,
+        };
+        if kill_switch_active {
+            state.mini_widget.aura = AxiState::Offline.aura().to_string();
+            state.mini_widget.badge = Some("kill-switch".to_string());
+        }
+        Ok(())
+    }
+
+    /// Publish live pipeline progress to the overlay.
+    pub async fn set_processing_feedback(
+        &self,
+        stage: Option<&str>,
+        tokens_per_second: Option<f32>,
+        eta_ms: Option<u64>,
+        audio_level: Option<f32>,
+    ) -> Result<()> {
+        let mut state = self.state.write().await;
+        state.feedback = OverlayFeedback {
+            stage: stage
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+            tokens_per_second,
+            eta_ms,
+            audio_level,
+            updated_at: Some(chrono::Utc::now().to_rfc3339()),
+        };
+        Ok(())
+    }
+
+    pub async fn clear_processing_feedback(&self) -> Result<()> {
+        let mut state = self.state.write().await;
+        state.feedback = OverlayFeedback::default();
+        Ok(())
+    }
+
+    /// Push a non-blocking proactive notification into overlay state.
+    pub async fn push_proactive_notification(&self, priority: &str, message: &str) -> Result<()> {
+        let message = message.trim();
+        if message.is_empty() {
+            return Ok(());
+        }
+
+        let mut state = self.state.write().await;
+        let normalized_priority = priority.trim().to_lowercase();
+        let recent_duplicate = state
+            .proactive_notifications
+            .iter()
+            .rev()
+            .find(|notification| {
+                notification.priority == normalized_priority && notification.message == message
+            });
+        if let Some(notification) = recent_duplicate {
+            if chrono::DateTime::parse_from_rfc3339(&notification.created_at)
+                .ok()
+                .map(|created_at| {
+                    (chrono::Utc::now() - created_at.with_timezone(&chrono::Utc)).num_minutes() < 5
+                })
+                .unwrap_or(false)
+            {
+                return Ok(());
+            }
+        }
+
+        state.proactive_notifications.push(ProactiveNotification {
+            priority: normalized_priority,
+            message: message.to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        });
+        if state.proactive_notifications.len() > 20 {
+            let remove = state.proactive_notifications.len() - 20;
+            state.proactive_notifications.drain(0..remove);
+        }
+        Ok(())
+    }
+
+    pub async fn set_error(&self, message: Option<&str>) -> Result<()> {
+        let mut state = self.state.write().await;
+        state.last_error = message
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        if state.last_error.is_some() {
+            state.axi_state = AxiState::Error;
+            state.mini_widget.aura = AxiState::Error.aura().to_string();
+        }
+        Ok(())
+    }
+
     /// Move overlay window
     pub async fn move_window(&self, x: i32, y: i32) -> Result<()> {
         let mut state = self.state.write().await;
@@ -320,6 +524,9 @@ impl OverlayManager {
             theme: config.theme.clone(),
             shortcut: config.shortcut.clone(),
             enabled: config.enabled,
+            axi_state: state.axi_state.clone(),
+            widget_aura: state.mini_widget.aura.clone(),
+            active_notifications: state.proactive_notifications.len(),
         }
     }
 
@@ -400,6 +607,9 @@ pub struct OverlayStats {
     pub theme: OverlayTheme,
     pub shortcut: String,
     pub enabled: bool,
+    pub axi_state: AxiState,
+    pub widget_aura: String,
+    pub active_notifications: usize,
 }
 
 #[cfg(test)]
@@ -426,5 +636,34 @@ mod tests {
 
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("test message"));
+    }
+
+    #[tokio::test]
+    async fn overlay_tracks_axi_state_and_leds() {
+        let overlay = OverlayManager::new(PathBuf::from("/tmp"));
+        overlay
+            .set_axi_state(AxiState::Listening, Some("voice-loop"))
+            .await
+            .unwrap();
+        overlay
+            .set_sensor_indicators(true, false, true, false)
+            .await
+            .unwrap();
+        overlay
+            .set_processing_feedback(Some("thinking"), Some(21.5), Some(400), Some(0.4))
+            .await
+            .unwrap();
+        overlay
+            .push_proactive_notification("low", "break reminder")
+            .await
+            .unwrap();
+
+        let state = overlay.get_state().await;
+        assert_eq!(state.axi_state, AxiState::Listening);
+        assert_eq!(state.mini_widget.aura, "cyan");
+        assert!(state.sensor_indicators.mic_active);
+        assert!(state.sensor_indicators.screen_active);
+        assert_eq!(state.feedback.stage.as_deref(), Some("thinking"));
+        assert_eq!(state.proactive_notifications.len(), 1);
     }
 }

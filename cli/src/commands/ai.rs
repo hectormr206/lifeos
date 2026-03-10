@@ -88,6 +88,19 @@ pub enum AiCommands {
         #[arg(long, default_value = "2")]
         repeats: u32,
     },
+    /// Run sensory benchmark suite (voice loop, vision query, GPU throughput)
+    BenchSensory {
+        #[arg(long)]
+        audio_file: Option<String>,
+        #[arg(long)]
+        prompt: Option<String>,
+        #[arg(long)]
+        include_screen: bool,
+        #[arg(long)]
+        screen_source: Option<String>,
+        #[arg(long, default_value = "3")]
+        repeats: u32,
+    },
     /// Auto-select best local model from latest benchmark
     Autotune {
         /// Only show recommendation, do not apply
@@ -164,6 +177,22 @@ pub async fn execute(args: AiCommands) -> anyhow::Result<()> {
             short,
             repeats,
         } => benchmark_models(model.as_deref(), short, repeats).await,
+        AiCommands::BenchSensory {
+            audio_file,
+            prompt,
+            include_screen,
+            screen_source,
+            repeats,
+        } => {
+            benchmark_sensory(
+                audio_file.as_deref(),
+                prompt.as_deref(),
+                include_screen,
+                screen_source.as_deref(),
+                repeats,
+            )
+            .await
+        }
         AiCommands::Autotune { dry_run } => autotune_model(dry_run).await,
         AiCommands::Profile { runtime, apply } => detect_profile(runtime.as_deref(), apply).await,
         AiCommands::Catalog { refresh } => show_catalog_status(refresh).await,
@@ -844,6 +873,51 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
         }
     }
 
+    let sensory_status = match daemon_client::authenticated_client()
+        .get(format!(
+            "{}/api/v1/sensory/status",
+            daemon_client::daemon_url()
+        ))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => resp.json::<serde_json::Value>().await.ok(),
+        _ => None,
+    };
+
+    if let Some(sensory) = sensory_status {
+        println!();
+        println!("{}", "Sensory Runtime:".bold());
+        println!(
+            "  Axi: {}",
+            sensory["axi_state"].as_str().unwrap_or("unknown").cyan()
+        );
+        println!(
+            "  Offload: {} / {}",
+            sensory["gpu"]["llm_offload"].as_str().unwrap_or("cpu only"),
+            sensory["gpu"]["vision_offload"]
+                .as_str()
+                .unwrap_or("cpu only")
+        );
+        println!(
+            "  Voice SLO: {} ms (last {} ms)",
+            sensory["voice"]["slo_target_ms"].as_u64().unwrap_or(5000),
+            sensory["voice"]["last_latency_ms"]
+                .as_u64()
+                .unwrap_or_default()
+        );
+        if let Some(tps) = sensory["gpu"]["tokens_per_second"].as_f64() {
+            println!("  GPU throughput: {:.1} tok/s", tps);
+        }
+        if let Some(temp) = sensory["gpu"]["gpu_temp_celsius"].as_f64() {
+            println!("  GPU temperature: {:.1}C", temp);
+        }
+        println!(
+            "  Kill switch: {}",
+            sensory["kill_switch_active"].as_bool().unwrap_or(false)
+        );
+    }
+
     // Models
     println!();
     println!("{}", "Models:".bold());
@@ -1100,6 +1174,60 @@ async fn benchmark_models(
         "Saved benchmark report: {}",
         benchmark_report_path().display().to_string().cyan()
     );
+    Ok(())
+}
+
+async fn benchmark_sensory(
+    audio_file: Option<&str>,
+    prompt: Option<&str>,
+    include_screen: bool,
+    screen_source: Option<&str>,
+    repeats: u32,
+) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!(
+            "{}/api/v1/sensory/benchmark",
+            daemon_client::daemon_url()
+        ))
+        .json(&serde_json::json!({
+            "audio_file": audio_file,
+            "prompt": prompt,
+            "include_screen": include_screen,
+            "screen_source": screen_source,
+            "repeats": repeats,
+        }))
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to run sensory benchmark: {}", body);
+    }
+
+    let body: serde_json::Value = resp.json().await?;
+    println!("{}", "LifeOS Sensory Bench".bold().blue());
+    println!(
+        "  avg voice loop: {} ms",
+        body["avg_voice_loop_latency_ms"]
+            .as_u64()
+            .unwrap_or_default()
+    );
+    println!(
+        "  avg vision query: {} ms",
+        body["avg_vision_query_latency_ms"]
+            .as_u64()
+            .unwrap_or_default()
+    );
+    println!(
+        "  avg gpu throughput: {:.1} tok/s",
+        body["avg_gpu_tokens_per_second"]
+            .as_f64()
+            .unwrap_or_default()
+    );
+    if let Some(entries) = body["entries"].as_array() {
+        println!("  iterations: {}", entries.len());
+    }
     Ok(())
 }
 

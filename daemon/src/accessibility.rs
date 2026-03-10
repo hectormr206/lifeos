@@ -402,6 +402,12 @@ impl AccessibilityManager {
     }
 }
 
+impl Default for AccessibilityManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

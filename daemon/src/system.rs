@@ -136,6 +136,12 @@ impl SystemMonitor {
     }
 }
 
+impl Default for SystemMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn read_disk_usage() -> anyhow::Result<(u64, u64, f32)> {
     let output = std::process::Command::new("df")
         .args(["-Pk", "/"])

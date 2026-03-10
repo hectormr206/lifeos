@@ -1,9 +1,13 @@
 //! AI module for daemon
 //! Manages llama-server integration and AI-related system tasks
 
+use anyhow::Context;
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::process::Command;
 
 /// AI service status
@@ -40,6 +44,7 @@ pub struct EmbeddingResponse {
 }
 
 /// AI manager
+#[derive(Clone, Copy)]
 pub struct AiManager;
 
 impl AiManager {
@@ -237,6 +242,71 @@ impl AiManager {
             "stream": false,
         });
 
+        self.chat_with_payload(payload).await
+    }
+
+    /// Send a multimodal chat completion request using an image payload.
+    pub async fn chat_multimodal(
+        &self,
+        model: Option<&str>,
+        system_prompt: Option<&str>,
+        prompt: &str,
+        image_path: &str,
+    ) -> anyhow::Result<AiChatResponse> {
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            anyhow::bail!("prompt is required");
+        }
+        if !Path::new(image_path).exists() {
+            anyhow::bail!("image source not found: {}", image_path);
+        }
+
+        let model_name = if let Some(m) = model {
+            m.to_string()
+        } else {
+            self.active_model()
+                .await
+                .unwrap_or_else(|| "Qwen3.5-4B-Q4_K_M.gguf".to_string())
+        };
+
+        let data_url = image_path_to_data_url(image_path)?;
+        let mut messages = Vec::new();
+        if let Some(system_prompt) = system_prompt
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": system_prompt,
+            }));
+        }
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": [
+                { "type": "text", "text": prompt },
+                { "type": "image_url", "image_url": { "url": data_url } }
+            ]
+        }));
+
+        let payload = serde_json::json!({
+            "model": model_name,
+            "messages": messages,
+            "stream": false,
+        });
+
+        self.chat_with_payload(payload).await
+    }
+
+    async fn chat_with_payload(
+        &self,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<AiChatResponse> {
+        let request_model = payload
+            .get("model")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
         let response = reqwest::Client::new()
             .post("http://127.0.0.1:8082/v1/chat/completions")
             .json(&payload)
@@ -263,13 +333,7 @@ impl AiManager {
             .get("model")
             .and_then(|m| m.as_str())
             .map(|s| s.to_string())
-            .or_else(|| {
-                payload
-                    .get("model")
-                    .and_then(|m| m.as_str())
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_else(|| "unknown".to_string());
+            .unwrap_or(request_model);
 
         let tokens_used = body
             .get("usage")
@@ -362,6 +426,23 @@ impl AiManager {
 
         embedding
     }
+}
+
+fn image_path_to_data_url(path: &str) -> anyhow::Result<String> {
+    let bytes =
+        std::fs::read(path).with_context(|| format!("Failed to read image file {}", path))?;
+    let mime = match Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or_default()
+        .to_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => "image/png",
+    };
+    Ok(format!("data:{};base64,{}", mime, B64.encode(bytes)))
 }
 
 impl Default for AiManager {
