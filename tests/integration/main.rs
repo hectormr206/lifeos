@@ -201,8 +201,10 @@ fn test_system_health_check_integration() {
 
 #[tokio::test]
 async fn test_cli_daemon_workflow() {
-    // Placeholder for full daemon integration test
-    assert!(true);
+    let cli_entry = project_root().join("cli/src/main.rs");
+    let daemon_entry = project_root().join("daemon/src/main.rs");
+    assert!(cli_entry.exists(), "CLI entrypoint should exist");
+    assert!(daemon_entry.exists(), "Daemon entrypoint should exist");
 }
 
 #[test]
