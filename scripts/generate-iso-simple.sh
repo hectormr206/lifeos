@@ -27,6 +27,7 @@ OUTPUT_DIR="${LIFEOS_OUTPUT_DIR:-${PROJECT_ROOT}/output}"
 IMAGE_NAME="localhost/lifeos:latest"
 BUILD_TYPE="${1:-iso}"
 INSTALL_MODE="${LIFEOS_INSTALL_MODE:-interactive}" # interactive (safe) | unattended (CI/lab)
+REBUILD_POLICY="${LIFEOS_REBUILD_POLICY:-auto}"    # auto | always | never
 BIB_IMAGE="quay.io/centos-bootc/bootc-image-builder:latest"
 BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 VCS_REF="${VCS_REF:-$(git -C "$PROJECT_ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)}"
@@ -52,14 +53,18 @@ while [[ $# -gt 0 ]]; do
         --type|-t)  BUILD_TYPE="$2"; shift 2 ;;
         --image|-i) IMAGE_NAME="$2"; shift 2 ;;
         --install-mode|-m) INSTALL_MODE="$2"; shift 2 ;;
+        --rebuild) REBUILD_POLICY="always"; shift ;;
+        --no-rebuild) REBUILD_POLICY="never"; shift ;;
         --help|-h)
-            echo "Uso: $0 [--type iso|vmdk|qcow2|raw] [--image IMAGE] [--install-mode interactive|unattended]"
+            echo "Uso: $0 [--type iso|vmdk|qcow2|raw] [--image IMAGE] [--install-mode interactive|unattended] [--rebuild|--no-rebuild]"
             echo ""
             echo "Opciones:"
             echo "  --type TYPE           Formato de salida: iso (default), vmdk, qcow2, raw"
             echo "  --image IMAGE         Imagen OCI a usar (default: localhost/lifeos:latest)"
             echo "  --install-mode MODE   Modo instalador ISO: interactive (default, seleccion manual de disco)"
             echo "                        o unattended (auto, puede borrar disco completo)"
+            echo "  --rebuild             Fuerza reconstruccion rootful de la imagen antes de generar artefacto"
+            echo "  --no-rebuild          Reutiliza la imagen existente aunque sea localhost/*"
             exit 0
             ;;
         *) shift ;;
@@ -114,6 +119,11 @@ case "$INSTALL_MODE" in
     *) error "Modo de instalación inválido: $INSTALL_MODE. Usa: interactive o unattended" ;;
 esac
 
+case "$REBUILD_POLICY" in
+    auto|always|never) ;;
+    *) error "Politica de rebuild invalida: $REBUILD_POLICY. Usa: auto, always o never" ;;
+esac
+
 # Opciones de etiqueta para medio ISO (solo aplican cuando BUILD_TYPE=iso)
 ISO_VOLUME_ID="${LIFEOS_ISO_VOLUME_ID:-LIFEOS_INSTALL}"
 ISO_APPLICATION_ID="${LIFEOS_ISO_APPLICATION_ID:-LIFEOS_INSTALLER}"
@@ -126,7 +136,13 @@ log "Directorio de salida: $OUTPUT_DIR"
 log "Verificando imagen del contenedor..."
 
 NEEDS_BUILD=0
-if ! podman image exists "$IMAGE_NAME" 2>/dev/null; then
+if [[ "$REBUILD_POLICY" == "always" ]]; then
+    NEEDS_BUILD=1
+    log "Reconstruccion forzada solicitada"
+elif [[ "$REBUILD_POLICY" == "auto" && "$IMAGE_NAME" == localhost/* ]]; then
+    NEEDS_BUILD=1
+    log "Imagen local localhost/* detectada; se reconstruira en storage rootful para evitar divergencia rootless/rootful"
+elif ! podman image exists "$IMAGE_NAME" 2>/dev/null; then
     NEEDS_BUILD=1
 else
     success "Imagen encontrada: $IMAGE_NAME"

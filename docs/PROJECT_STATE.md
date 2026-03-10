@@ -52,7 +52,7 @@ so OS upgrades do not override model decisions the user already made.
 - Phase 2: closed at baseline (multimodal + memory + runtime controls).
 - Phase 2.5: closed at baseline (visual identity + UX foundations).
 - Phase 3: closed (hardening + dogfooding + closeout). Evidence: `evidence/phase-3/phase-3-closeout.md`.
-- Phase 4: **CLOSED IN REPO** — LifeOS Alive complete. Evidence: `evidence/phase-4/phase-4-closeout.md`.
+- Phase 4: **CLOSED IN REPO** — LifeOS Alive complete. Evidence: `evidence/phase-4/phase-4-closeout.md`, `evidence/phase-4/iso-vm-regression-validation.md`.
 - Phase 4.5: planned (heavy model manager, default-model UX, update-safe lifecycle).
 - Phase 5: pending (ecosystem, sync, scale).
 
@@ -72,6 +72,7 @@ so OS upgrades do not override model decisions the user already made.
 - Normative spec: `docs/lifeos-ai-distribution.md` (Phase 4 section)
 - Phase 3 evidence: `evidence/phase-3/phase-3-closeout.md`
 - Phase 4 evidence: `evidence/phase-4/phase-4-closeout.md`
+- Phase 4 ISO/VM validation: `evidence/phase-4/iso-vm-regression-validation.md`
 - Recovery operations: `docs/incident-response-playbook.md`
 - Build and ISO workflow: `docs/Reconstruir imagen y generar ISO.md`
 - Update channels: `docs/update-channels.md`

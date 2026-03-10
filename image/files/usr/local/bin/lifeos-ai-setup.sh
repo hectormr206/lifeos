@@ -153,6 +153,23 @@ resolve_model_assets() {
     MMPROJ_PATH="$MODEL_DIR/$MMPROJ"
 }
 
+adopt_legacy_mmproj() {
+    local legacy_path="$MODEL_DIR/mmproj-F16.gguf"
+
+    if [ "$MMPROJ" = "mmproj-F16.gguf" ]; then
+        resolve_model_assets
+    fi
+
+    if [ "$MMPROJ" = "mmproj-F16.gguf" ]; then
+        return
+    fi
+
+    if [ -f "$legacy_path" ] && [ ! -f "$MMPROJ_PATH" ]; then
+        mv -f "$legacy_path" "$MMPROJ_PATH"
+        echo "Adopted legacy vision projector as $MMPROJ"
+    fi
+}
+
 seed_from_preload() {
     if [ ! -d "$PRELOAD_MODEL_DIR" ]; then
         return
@@ -174,6 +191,7 @@ seed_from_preload() {
 
 ensure_writable_model_dir
 resolve_model_assets
+adopt_legacy_mmproj
 set_env_value "LIFEOS_AI_MODEL" "$MODEL"
 set_env_value "LIFEOS_AI_MMPROJ" "$MMPROJ"
 seed_from_preload
@@ -228,7 +246,7 @@ echo "This may take several minutes..."
 
 # Download model with retry
 for attempt in 1 2 3; do
-    if curl -fSL --retry 3 --connect-timeout 30 -o "$MODEL_DIR/$MODEL.tmp" "$DEFAULT_MODEL_URL"; then
+    if curl -fSL --retry 3 --connect-timeout 30 -o "$MODEL_DIR/$MODEL.tmp" "$MODEL_URL"; then
         mv "$MODEL_DIR/$MODEL.tmp" "$MODEL_DIR/$MODEL"
         echo "Model downloaded successfully: $MODEL"
         break
@@ -251,7 +269,7 @@ fi
 
 if [ ! -f "$MODEL_PATH" ]; then
     echo "WARNING: Could not download AI model. llama-server will not serve requests until a model is available."
-    echo "Download manually: curl -L -o $MODEL_DIR/$MODEL $DEFAULT_MODEL_URL"
+    echo "Download manually: curl -L -o $MODEL_DIR/$MODEL $MODEL_URL"
     rm -f "$MODEL_DIR/$MODEL.tmp"
 fi
 

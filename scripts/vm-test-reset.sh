@@ -3,7 +3,7 @@
 # - Uses ISO from output/ and maps it for libvirt session access
 #   (hardlink/reflink preferred to avoid duplicate storage)
 # - Recreates VM cleanly to avoid stale storage growth
-# - Defaults to a small test disk (20G)
+# - Defaults to a realistic test disk size for current LifeOS images (40G)
 
 set -euo pipefail
 
@@ -15,7 +15,7 @@ VM_NAME="${LIFEOS_VM_NAME:-lifeos-phase3}"
 CONNECT_URI="${LIFEOS_VM_CONNECT:-qemu:///session}"
 ISO_PATH="${LIFEOS_VM_ISO:-${PROJECT_ROOT}/output/lifeos-latest.iso}"
 ISO_EFFECTIVE_PATH="${ISO_PATH}"
-DISK_SIZE_GB="${LIFEOS_VM_DISK_GB:-20}"
+DISK_SIZE_GB="${LIFEOS_VM_DISK_GB:-40}"
 MEMORY_MB="${LIFEOS_VM_MEMORY_MB:-8192}"
 VCPUS="${LIFEOS_VM_VCPUS:-4}"
 GRAPHICS="${LIFEOS_VM_GRAPHICS:-spice}"

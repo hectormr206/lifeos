@@ -65,6 +65,9 @@ Si no cambiaste `image/Containerfile` ni paquetes base, usa la imagen ya constru
 sudo bash scripts/generate-iso-simple.sh --type iso --image localhost/lifeos:latest
 ```
 
+Nota:
+- Para `localhost/lifeos:latest`, `generate-iso-simple.sh` reconstruye la imagen rootful por defecto. Esto evita que `sudo podman` reutilice una imagen vieja distinta a la del store rootless del usuario.
+
 Regla practica:
 
 - Cambios en sistema base (Containerfile, paquetes, servicios base): usa `build-iso*.sh` (pipeline completo).
@@ -150,7 +153,7 @@ scripts/vm-test-reset.sh run
 Comportamiento por defecto:
 
 - Conexion: `qemu:///session` (evita problemas de permisos sobre `/var/home/lifeos`).
-- Disco VM: `20G`.
+- Disco VM: `40G` por defecto.
 - ISO: `output/lifeos-latest.iso` mapeada automaticamente a `~/.local/share/libvirt/boot/` via hardlink o reflink (sin duplicar datos cuando el FS lo permite).
 - Si ya existe la VM con el mismo nombre, la destruye y recrea para no acumular espacio.
 
@@ -161,7 +164,7 @@ Opciones utiles:
 scripts/vm-test-reset.sh status
 
 # Menor RAM/disco para pruebas rapidas
-scripts/vm-test-reset.sh run --memory 6144 --disk-size 18
+scripts/vm-test-reset.sh run --memory 6144 --disk-size 40
 
 # Limpiar VM y disco
 scripts/vm-test-reset.sh clean

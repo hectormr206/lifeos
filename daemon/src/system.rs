@@ -143,8 +143,10 @@ impl Default for SystemMonitor {
 }
 
 fn read_disk_usage() -> anyhow::Result<(u64, u64, f32)> {
+    // On bootc/composefs systems, `/` is an immutable composefs view that often
+    // reports 100% usage. `/var` reflects the real mutable storage users care about.
     let output = std::process::Command::new("df")
-        .args(["-Pk", "/"])
+        .args(["-Pk", "/var"])
         .output()?;
     if !output.status.success() {
         anyhow::bail!("df command failed");

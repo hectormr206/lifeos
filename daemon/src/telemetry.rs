@@ -587,7 +587,7 @@ async fn read_memory_info() -> (u64, u64) {
 /// Read disk usage percentage
 async fn read_disk_usage() -> f32 {
     match tokio::process::Command::new("df")
-        .args(["-Pk", "/"])
+        .args(["-Pk", "/var"])
         .output()
         .await
     {
