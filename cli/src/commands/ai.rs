@@ -1,6 +1,7 @@
 use clap::Subcommand;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -11,6 +12,10 @@ use crate::daemon_client;
 const LLAMA_SERVER_HOST: &str = "http://localhost:8082";
 /// Default model directory
 const MODEL_DIR: &str = "/var/lib/lifeos/models";
+/// Persisted tombstones for models explicitly removed by the user.
+const REMOVED_MODELS_FILE: &str = "/var/lib/lifeos/models/.removed-models";
+/// Shared llama-server env file
+const LLAMA_ENV_FILE: &str = "/etc/lifeos/llama-server.env";
 /// Default remote model catalog
 const MODEL_CATALOG_URL: &str = "https://models.lifeos.dev/catalog/v1.json";
 /// Default remote model catalog detached signature (sha256 digest string)
@@ -56,6 +61,14 @@ pub enum AiCommands {
         /// Force re-download even if model exists
         #[arg(short, long)]
         force: bool,
+    },
+    /// Select installed model as the default for llama-server and life ai
+    Select {
+        /// Installed GGUF filename
+        model: String,
+        /// Restart llama-server after applying the selection
+        #[arg(long)]
+        restart: bool,
     },
     /// Remove a model to free disk space
     Remove {
@@ -161,6 +174,19 @@ impl RuntimeExecutionMode {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ModelArtifactDownload {
+    url: String,
+    filename: String,
+}
+
+#[derive(Debug, Clone)]
+struct ModelDownload {
+    url: String,
+    filename: String,
+    companion_mmproj: Option<ModelArtifactDownload>,
+}
+
 pub async fn execute(args: AiCommands) -> anyhow::Result<()> {
     match args {
         AiCommands::Start { model, enable } => start_ai(model, enable).await,
@@ -169,6 +195,7 @@ pub async fn execute(args: AiCommands) -> anyhow::Result<()> {
         AiCommands::Do { action } => do_action(&action).await,
         AiCommands::Models { all } => list_models(all).await,
         AiCommands::Pull { model, force } => pull_model(&model, force).await,
+        AiCommands::Select { model, restart } => select_model(&model, restart).await,
         AiCommands::Remove { model, yes } => remove_model(&model, yes).await,
         AiCommands::Chat { model } => interactive_chat(model.as_deref()).await,
         AiCommands::Status { verbose } => check_status(verbose).await,
@@ -266,15 +293,8 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
     if let Some(ref model_name) = model {
         let model_path = format!("{}/{}", MODEL_DIR, model_name);
         if std::path::Path::new(&model_path).exists() {
-            // Update the env file
-            let _ = Command::new("sudo")
-                .args([
-                    "sed",
-                    "-i",
-                    &format!("s/^LIFEOS_AI_MODEL=.*/LIFEOS_AI_MODEL={}/", model_name),
-                    "/etc/lifeos/llama-server.env",
-                ])
-                .output();
+            ensure_companion_artifacts(model_name, false)?;
+            apply_model_selection(model_name)?;
             println!("  {} Model set to: {}", "->".dimmed(), model_name.cyan());
         } else {
             println!(
@@ -290,7 +310,18 @@ async fn start_ai(model: Option<String>, enable: bool) -> anyhow::Result<()> {
     print!("Starting llama-server service... ");
     let running = is_server_running().await;
 
-    if running {
+    if running && model.is_some() {
+        match Command::new("sudo")
+            .args(["systemctl", "restart", "llama-server"])
+            .output()
+        {
+            Ok(output) if output.status.success() => println!("{}", "restarted".green()),
+            _ => {
+                println!("{}", "FAILED".red());
+                anyhow::bail!("Could not restart llama-server with the selected model");
+            }
+        }
+    } else if running {
         println!("{}", "already running".green());
     } else {
         match Command::new("sudo")
@@ -539,6 +570,7 @@ async fn fetch_runtime_mode(client: &reqwest::Client, base_url: &str) -> Runtime
 async fn list_models(all: bool) -> anyhow::Result<()> {
     println!("{}", "AI Models".bold().blue());
     println!();
+    let active_model = configured_model();
 
     // List installed GGUF models
     let models = list_gguf_models();
@@ -549,15 +581,20 @@ async fn list_models(all: bool) -> anyhow::Result<()> {
         println!("  {}", "life ai pull qwen3.5-4b".cyan());
     } else {
         println!("{}", "Installed Models:".bold());
-        println!("{:<40} {:>10}", "Name", "Size");
-        println!("{}", "-".repeat(52).dimmed());
+        println!("{:<40} {:>10} {:>10}", "Name", "Size", "State");
+        println!("{}", "-".repeat(64).dimmed());
 
         for model in &models {
             let path = format!("{}/{}", MODEL_DIR, model);
             let size = std::fs::metadata(&path)
                 .map(|m| format_size(m.len()))
                 .unwrap_or_else(|_| "?".to_string());
-            println!("{:<40} {:>10}", model.cyan(), size.dimmed());
+            let state = if active_model.as_deref() == Some(model.as_str()) {
+                "default".green().to_string()
+            } else {
+                "-".dimmed().to_string()
+            };
+            println!("{:<40} {:>10} {:>10}", model.cyan(), size.dimmed(), state);
         }
     }
 
@@ -596,6 +633,7 @@ async fn list_models(all: bool) -> anyhow::Result<()> {
 
     println!();
     println!("Pull a model: {}", "life ai pull <model>".cyan());
+    println!("Set default:   {}", "life ai select <model>".cyan());
 
     Ok(())
 }
@@ -604,53 +642,95 @@ async fn pull_model(model: &str, force: bool) -> anyhow::Result<()> {
     println!("{}", format!("Pulling model: {}", model).bold().blue());
 
     // Determine the URL and filename
-    let (url, filename) = resolve_model_url(model);
+    let download = resolve_model_download(model);
 
-    let dest_path = format!("{}/{}", MODEL_DIR, filename);
+    let dest_path = format!("{}/{}", MODEL_DIR, download.filename);
+    let companion = download.companion_mmproj.clone();
 
     // Check if model already exists
-    if !force && std::path::Path::new(&dest_path).exists() {
-        println!("Model {} already installed", filename);
+    let model_exists = std::path::Path::new(&dest_path).exists();
+    let companion_exists = companion
+        .as_ref()
+        .map(|artifact| {
+            std::path::Path::new(&format!("{}/{}", MODEL_DIR, artifact.filename)).exists()
+        })
+        .unwrap_or(true);
+    if !force && model_exists && companion_exists {
+        println!("Model {} already installed", download.filename);
         println!("Use {} to re-download", "--force".cyan());
         return Ok(());
     }
 
-    println!("Downloading from: {}", url.dimmed());
+    println!("Downloading from: {}", download.url.dimmed());
     println!("This may take several minutes depending on your connection...");
     println!();
 
-    // Use curl for download with progress
-    let tmp_path = format!("{}.tmp", dest_path);
+    if force || !model_exists {
+        download_file_as_root(&download.url, &dest_path)?;
+    }
 
-    // Ensure directory exists
-    let _ = Command::new("sudo")
-        .args(["mkdir", "-p", MODEL_DIR])
-        .output();
+    if let Some(artifact) = companion {
+        let companion_path = format!("{}/{}", MODEL_DIR, artifact.filename);
+        if force || !std::path::Path::new(&companion_path).exists() {
+            println!(
+                "Downloading companion vision projector: {}",
+                artifact.filename.cyan()
+            );
+            download_file_as_root(&artifact.url, &companion_path)?;
+        }
+    }
 
-    let status = Command::new("sudo")
-        .args(["curl", "-fSL", "--progress-bar", "-o", &tmp_path, &url])
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .status()?;
+    clear_removed_model(&download.filename)?;
 
-    if status.success() {
-        let _ = Command::new("sudo")
-            .args(["mv", &tmp_path, &dest_path])
-            .output();
+    if std::path::Path::new(&dest_path).exists() {
         println!();
         println!(
             "{}",
-            format!("Model {} downloaded successfully", filename).green()
+            format!("Model {} downloaded successfully", download.filename).green()
         );
 
         // Show file size
         if let Ok(meta) = std::fs::metadata(&dest_path) {
             println!("  Size: {}", format_size(meta.len()));
         }
+        println!(
+            "  Set as default with: {}",
+            format!("life ai select {}", download.filename).cyan()
+        );
+        return Ok(());
+    }
+
+    anyhow::bail!("Failed to download model");
+}
+
+async fn select_model(model: &str, restart: bool) -> anyhow::Result<()> {
+    let model_path = format!("{}/{}", MODEL_DIR, model);
+    if !std::path::Path::new(&model_path).exists() {
+        anyhow::bail!("Model {} not found in {}", model, MODEL_DIR);
+    }
+
+    ensure_companion_artifacts(model, false)?;
+    apply_model_selection(model)?;
+    println!(
+        "{} {}",
+        "Default model updated:".green().bold(),
+        model.cyan()
+    );
+
+    if restart {
+        let output = Command::new("sudo")
+            .args(["systemctl", "restart", "llama-server"])
+            .output()?;
+        if output.status.success() {
+            println!("{}", "llama-server restarted".green());
+        } else {
+            println!("{}", "llama-server restart failed".yellow());
+        }
     } else {
-        let _ = Command::new("sudo").args(["rm", "-f", &tmp_path]).output();
-        anyhow::bail!("Failed to download model");
+        println!(
+            "Restart service with: {}",
+            "sudo systemctl restart llama-server".cyan()
+        );
     }
 
     Ok(())
@@ -658,6 +738,7 @@ async fn pull_model(model: &str, force: bool) -> anyhow::Result<()> {
 
 async fn remove_model(model: &str, yes: bool) -> anyhow::Result<()> {
     let model_path = format!("{}/{}", MODEL_DIR, model);
+    let was_default = configured_model().as_deref() == Some(model);
 
     if !std::path::Path::new(&model_path).exists() {
         anyhow::bail!("Model {} not found in {}", model, MODEL_DIR);
@@ -694,6 +775,54 @@ async fn remove_model(model: &str, yes: bool) -> anyhow::Result<()> {
     {
         Ok(output) if output.status.success() => {
             println!("{}", format!("Model {} removed", model).green());
+            if let Some(companion_name) = qwen_companion_mmproj_filename(model) {
+                let companion_path = format!("{}/{}", MODEL_DIR, companion_name);
+                if std::path::Path::new(&companion_path).exists() {
+                    let _ = Command::new("sudo")
+                        .args(["rm", "-f", &companion_path])
+                        .output();
+                    println!(
+                        "{}",
+                        format!("Companion asset {} removed", companion_name).green()
+                    );
+                }
+            }
+
+            mark_model_removed(model)?;
+
+            if was_default {
+                let _ = Command::new("sudo")
+                    .args(["systemctl", "stop", "llama-server"])
+                    .output();
+
+                if let Some(fallback) = list_gguf_models()
+                    .into_iter()
+                    .find(|candidate| candidate != model)
+                {
+                    apply_model_selection(&fallback)?;
+                    println!(
+                        "{} {}",
+                        "Fallback default selected:".green().bold(),
+                        fallback.cyan()
+                    );
+                    println!(
+                        "Restart service with: {}",
+                        "sudo systemctl start llama-server".cyan()
+                    );
+                } else {
+                    println!(
+                        "{}",
+                        "No heavy model remains installed. llama-server will stay unavailable until you pull/select another model."
+                            .yellow()
+                    );
+                }
+            } else {
+                println!(
+                    "{}",
+                    "Removal persisted. LifeOS will not auto-reinstall this heavy model unless you pull/select it again."
+                        .yellow()
+                );
+            }
         }
         _ => {
             anyhow::bail!("Failed to remove model file");
@@ -926,12 +1055,24 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
         println!("  {} No models installed", "->".dimmed());
         println!("  Download with: {}", "life ai pull qwen3.5-4b".cyan());
     } else {
+        let active_model = configured_model();
         for model in &models {
             let path = format!("{}/{}", MODEL_DIR, model);
             let size = std::fs::metadata(&path)
                 .map(|m| format_size(m.len()))
                 .unwrap_or_else(|_| "?".to_string());
-            println!("  {} {:<40} {}", "->".dimmed(), model.cyan(), size.dimmed());
+            let state = if active_model.as_deref() == Some(model.as_str()) {
+                "(default)".green().to_string()
+            } else {
+                String::new()
+            };
+            println!(
+                "  {} {:<40} {} {}",
+                "->".dimmed(),
+                model.cyan(),
+                size.dimmed(),
+                state
+            );
         }
     }
 
@@ -939,7 +1080,7 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
     if verbose {
         println!();
         println!("{}", "Configuration:".bold());
-        if let Ok(env) = std::fs::read_to_string("/etc/lifeos/llama-server.env") {
+        if let Ok(env) = std::fs::read_to_string(LLAMA_ENV_FILE) {
             for line in env.lines() {
                 if !line.starts_with('#') && !line.is_empty() {
                     println!("  {}", line.dimmed());
@@ -1603,7 +1744,10 @@ fn list_gguf_models() -> Vec<String> {
                 if let Some(ext) = path.extension() {
                     if ext == "gguf" {
                         if let Some(name) = path.file_name() {
-                            models.push(name.to_string_lossy().to_string());
+                            let candidate = name.to_string_lossy().to_string();
+                            if is_selectable_model_asset(&candidate) {
+                                models.push(candidate);
+                            }
                         }
                     }
                 }
@@ -1614,55 +1758,172 @@ fn list_gguf_models() -> Vec<String> {
     models
 }
 
-/// Resolve a model name or URL to (download_url, filename)
-fn resolve_model_url(model: &str) -> (String, String) {
+fn is_selectable_model_asset(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    !lower.starts_with("mmproj-")
+        && !lower.contains("-mmproj-")
+        && !lower.starts_with("nomic-embed-")
+        && !lower.starts_with("whisper")
+        && !lower.contains("embedding")
+}
+
+fn qwen_download(repo: &str, filename: &str, mmproj_filename: &str) -> ModelDownload {
+    ModelDownload {
+        url: format!("https://huggingface.co/unsloth/{repo}/resolve/main/{filename}"),
+        filename: filename.to_string(),
+        companion_mmproj: Some(ModelArtifactDownload {
+            url: format!("https://huggingface.co/unsloth/{repo}/resolve/main/mmproj-F16.gguf"),
+            filename: mmproj_filename.to_string(),
+        }),
+    }
+}
+
+fn basic_download(url: &str, filename: &str) -> ModelDownload {
+    ModelDownload {
+        url: url.to_string(),
+        filename: filename.to_string(),
+        companion_mmproj: None,
+    }
+}
+
+fn known_model_download(model: &str) -> Option<ModelDownload> {
+    match model {
+        "Qwen3.5-4B-Q4_K_M.gguf" | "qwen3.5-4b" | "qwen3.5:4b" | "qwen3.5" => {
+            Some(qwen_download(
+                "Qwen3.5-4B-GGUF",
+                "Qwen3.5-4B-Q4_K_M.gguf",
+                "Qwen3.5-4B-mmproj-F16.gguf",
+            ))
+        }
+        "Qwen3.5-9B-Q4_K_M.gguf" | "qwen3.5-9b" | "qwen3.5:9b" => Some(qwen_download(
+            "Qwen3.5-9B-GGUF",
+            "Qwen3.5-9B-Q4_K_M.gguf",
+            "Qwen3.5-9B-mmproj-F16.gguf",
+        )),
+        "Qwen3.5-27B-Q4_K_M.gguf" | "qwen3.5-27b" | "qwen3.5:27b" => {
+            Some(qwen_download(
+                "Qwen3.5-27B-GGUF",
+                "Qwen3.5-27B-Q4_K_M.gguf",
+                "Qwen3.5-27B-mmproj-F16.gguf",
+            ))
+        }
+        "llama3.2-3b" | "llama3.2:3b" => Some(basic_download(
+            "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            "llama-3.2-3b-instruct-q4_k_m.gguf",
+        )),
+        "llama3.2-1b" | "llama3.2:1b" => Some(basic_download(
+            "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+            "llama-3.2-1b-instruct-q4_k_m.gguf",
+        )),
+        "mistral" | "mistral-7b" | "mistral:7b" => Some(basic_download(
+            "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+            "mistral-7b-instruct-v0.3-q4_k_m.gguf",
+        )),
+        "codellama" | "codellama-7b" | "codellama:7b" => Some(basic_download(
+            "https://huggingface.co/bartowski/CodeLlama-7B-Instruct-GGUF/resolve/main/CodeLlama-7B-Instruct-Q4_K_M.gguf",
+            "codellama-7b-instruct-q4_k_m.gguf",
+        )),
+        _ => None,
+    }
+}
+
+fn qwen_companion_mmproj_filename(model: &str) -> Option<String> {
+    known_model_download(model)
+        .and_then(|download| download.companion_mmproj.map(|artifact| artifact.filename))
+}
+
+fn ensure_companion_artifacts(model: &str, force: bool) -> anyhow::Result<()> {
+    let Some(download) = known_model_download(model) else {
+        return Ok(());
+    };
+
+    let Some(companion) = download.companion_mmproj else {
+        return Ok(());
+    };
+
+    let companion_path = format!("{}/{}", MODEL_DIR, companion.filename);
+    if !force && std::path::Path::new(&companion_path).exists() {
+        return Ok(());
+    }
+
+    println!(
+        "  {} Ensuring companion asset {}",
+        "->".dimmed(),
+        companion.filename.cyan()
+    );
+    download_file_as_root(&companion.url, &companion_path)
+}
+
+fn download_file_as_root(url: &str, dest_path: &str) -> anyhow::Result<()> {
+    if let Some(parent) = std::path::Path::new(dest_path).parent() {
+        let _ = Command::new("sudo")
+            .args(["mkdir", "-p", &parent.display().to_string()])
+            .output();
+    }
+
+    let tmp_path = format!("{}.tmp", dest_path);
+    let status = Command::new("sudo")
+        .args(["curl", "-fSL", "--progress-bar", "-o", &tmp_path, url])
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()?;
+
+    if !status.success() {
+        let _ = Command::new("sudo").args(["rm", "-f", &tmp_path]).output();
+        anyhow::bail!("Failed to download {}", url);
+    }
+
+    let mv_status = Command::new("sudo")
+        .args(["mv", &tmp_path, dest_path])
+        .status()?;
+    if !mv_status.success() {
+        anyhow::bail!("Failed to install downloaded artifact at {}", dest_path);
+    }
+
+    Ok(())
+}
+
+/// Resolve a model name or URL to a download target.
+fn resolve_model_download(model: &str) -> ModelDownload {
     // If it's already a URL, use it directly
     if model.starts_with("http://") || model.starts_with("https://") {
         let filename = model.rsplit('/').next().unwrap_or("model.gguf").to_string();
-        return (model.to_string(), filename);
+        return ModelDownload {
+            url: model.to_string(),
+            filename,
+            companion_mmproj: None,
+        };
     }
 
     // If it ends with .gguf, assume it's a filename - check known models
     if model.ends_with(".gguf") {
-        let url = format!(
-            "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/{}",
-            model
-        );
-        return (url, model.to_string());
+        if let Some(download) = known_model_download(model) {
+            return download;
+        }
+
+        return ModelDownload {
+            url: format!(
+                "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/{}",
+                model
+            ),
+            filename: model.to_string(),
+            companion_mmproj: None,
+        };
     }
 
     // Map common short names to HuggingFace URLs
-    match model.to_lowercase().as_str() {
-        "qwen3.5-4b" | "qwen3.5:4b" | "qwen3.5" => (
-            "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf".to_string(),
-            "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
-        ),
-        "qwen3.5-9b" | "qwen3.5:9b" => (
-            "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf".to_string(),
-            "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
-        ),
-        "llama3.2-3b" | "llama3.2:3b" => (
-            "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf".to_string(),
-            "llama-3.2-3b-instruct-q4_k_m.gguf".to_string(),
-        ),
-        "llama3.2-1b" | "llama3.2:1b" => (
-            "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf".to_string(),
-            "llama-3.2-1b-instruct-q4_k_m.gguf".to_string(),
-        ),
-        "mistral" | "mistral-7b" | "mistral:7b" => (
-            "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf".to_string(),
-            "mistral-7b-instruct-v0.3-q4_k_m.gguf".to_string(),
-        ),
-        "codellama" | "codellama-7b" | "codellama:7b" => (
-            "https://huggingface.co/bartowski/CodeLlama-7B-Instruct-GGUF/resolve/main/CodeLlama-7B-Instruct-Q4_K_M.gguf".to_string(),
-            "codellama-7b-instruct-q4_k_m.gguf".to_string(),
-        ),
-        _ => {
-            // Assume it's a HuggingFace model path
-            let filename = format!("{}.gguf", model.replace(['/', ':'], "-"));
-            let url = format!("https://huggingface.co/{}", model);
-            (url, filename)
-        }
+    if let Some(download) = known_model_download(model.to_lowercase().as_str()) {
+        return download;
+    }
+
+    // Assume it's a HuggingFace model path
+    let filename = format!("{}.gguf", model.replace(['/', ':'], "-"));
+    let url = format!("https://huggingface.co/{}", model);
+    ModelDownload {
+        url,
+        filename,
+        companion_mmproj: None,
     }
 }
 
@@ -1711,18 +1972,117 @@ fn load_benchmark_report() -> anyhow::Result<BenchmarkReport> {
 }
 
 fn apply_model_selection(model_name: &str) -> anyhow::Result<()> {
-    let status = Command::new("sudo")
-        .args([
-            "sed",
-            "-i",
-            &format!("s/^LIFEOS_AI_MODEL=.*/LIFEOS_AI_MODEL={}/", model_name),
-            "/etc/lifeos/llama-server.env",
-        ])
-        .status()?;
+    upsert_llama_env_var("LIFEOS_AI_MODEL", model_name)?;
+    if let Some(mmproj) = qwen_companion_mmproj_filename(model_name) {
+        upsert_llama_env_var("LIFEOS_AI_MMPROJ", &mmproj)?;
+    }
+    clear_removed_model(model_name)?;
+    sync_selected_model_profile(model_name)?;
+    Ok(())
+}
+
+fn configured_model() -> Option<String> {
+    let content = std::fs::read_to_string(LLAMA_ENV_FILE).ok()?;
+    content.lines().find_map(|line| {
+        line.strip_prefix("LIFEOS_AI_MODEL=")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn upsert_llama_env_var(key: &str, value: &str) -> anyhow::Result<()> {
+    let existing = std::fs::read_to_string(LLAMA_ENV_FILE).unwrap_or_default();
+    let mut found = false;
+    let mut lines = existing
+        .lines()
+        .map(|line| {
+            if line.starts_with(&format!("{}=", key)) {
+                found = true;
+                format!("{}={}", key, value)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if !found {
+        lines.push(format!("{}={}", key, value));
+    }
+
+    let serialized = format!("{}\n", lines.join("\n"));
+    let status = write_root_file(LLAMA_ENV_FILE, &serialized)?;
     if !status.success() {
-        anyhow::bail!("Failed to update /etc/lifeos/llama-server.env");
+        anyhow::bail!("Failed to update {}", LLAMA_ENV_FILE);
     }
     Ok(())
+}
+
+fn sync_selected_model_profile(model_name: &str) -> anyhow::Result<()> {
+    let mut profile = match load_runtime_profile() {
+        Ok(profile) => profile,
+        Err(_) => return Ok(()),
+    };
+    profile.selected_model = Some(model_name.to_string());
+    profile.generated_at = chrono::Utc::now().to_rfc3339();
+    save_runtime_profile(&profile)
+}
+
+fn load_removed_models() -> BTreeSet<String> {
+    std::fs::read_to_string(REMOVED_MODELS_FILE)
+        .ok()
+        .map(|content| {
+            content
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_removed_models(models: &BTreeSet<String>) -> anyhow::Result<()> {
+    let serialized = if models.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{}\n",
+            models.iter().cloned().collect::<Vec<_>>().join("\n")
+        )
+    };
+    let status = write_root_file(REMOVED_MODELS_FILE, &serialized)?;
+    if !status.success() {
+        anyhow::bail!("Failed to update {}", REMOVED_MODELS_FILE);
+    }
+    Ok(())
+}
+
+fn mark_model_removed(model_name: &str) -> anyhow::Result<()> {
+    let mut removed = load_removed_models();
+    removed.insert(model_name.to_string());
+    write_removed_models(&removed)
+}
+
+fn clear_removed_model(model_name: &str) -> anyhow::Result<()> {
+    let mut removed = load_removed_models();
+    if removed.remove(model_name) {
+        write_removed_models(&removed)?;
+    }
+    Ok(())
+}
+
+fn write_root_file(path: &str, contents: &str) -> anyhow::Result<std::process::ExitStatus> {
+    let temp_path =
+        std::env::temp_dir().join(format!("lifeos-root-write-{}.tmp", std::process::id()));
+    std::fs::write(&temp_path, contents)?;
+
+    let temp_path_string = temp_path.to_string_lossy().into_owned();
+    let status = Command::new("sudo")
+        .args(["install", "-D", "-m", "0644", &temp_path_string, path])
+        .status()?;
+    let _ = std::fs::remove_file(&temp_path);
+    Ok(status)
 }
 
 fn model_profile_path() -> PathBuf {
@@ -1758,6 +2118,38 @@ fn load_runtime_profile() -> anyhow::Result<RuntimeProfileState> {
         anyhow::anyhow!("Failed to parse runtime profile {}: {}", path.display(), e)
     })?;
     Ok(profile)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_qwen_9b_exact_filename_uses_correct_repo_and_mmproj() {
+        let download = resolve_model_download("Qwen3.5-9B-Q4_K_M.gguf");
+        assert!(download.url.contains("Qwen3.5-9B-GGUF"));
+        assert_eq!(download.filename, "Qwen3.5-9B-Q4_K_M.gguf");
+        let companion = download
+            .companion_mmproj
+            .expect("Expected Qwen companion mmproj");
+        assert_eq!(companion.filename, "Qwen3.5-9B-mmproj-F16.gguf");
+        assert!(companion.url.contains("Qwen3.5-9B-GGUF"));
+    }
+
+    #[test]
+    fn test_resolve_qwen_27b_short_name_uses_correct_repo() {
+        let download = resolve_model_download("qwen3.5-27b");
+        assert!(download.url.contains("Qwen3.5-27B-GGUF"));
+        assert_eq!(download.filename, "Qwen3.5-27B-Q4_K_M.gguf");
+    }
+
+    #[test]
+    fn test_selectable_model_asset_filters_auxiliary_ggufs() {
+        assert!(is_selectable_model_asset("Qwen3.5-4B-Q4_K_M.gguf"));
+        assert!(!is_selectable_model_asset("Qwen3.5-4B-mmproj-F16.gguf"));
+        assert!(!is_selectable_model_asset("nomic-embed-text-v1.5.f16.gguf"));
+        assert!(!is_selectable_model_asset("whisper-small.gguf"));
+    }
 }
 
 fn total_ram_gb() -> u32 {

@@ -490,6 +490,7 @@ Notas operativas:
 3. Si vision grande no cabe, degradar a modelo menor y mantener UX estable. _Vision esta integrada en Qwen3.5 via mmproj — no requiere modelo separado._
 4. Los modelos se descargan on-demand; no bloquear onboarding por descargas largas.
 5. `embeddings`: `nomic-embed-text` es el modelo de referencia para busqueda semantica local (Fase 2). Se descarga bajo demanda cuando el usuario activa memoria de largo plazo.
+6. Los runtimes y assets pequenos de voz (STT/TTS) si pueden venir preinstalados; los LLM pesados deben tratarse como contenido gestionado por el usuario y persistido fuera de la imagen.
 
 ### 5.6 Criterios de eleccion del autoselector
 
@@ -1017,7 +1018,7 @@ Cada item tiene fase asignada. Son prerequisitos para la arquitectura agentica c
 **AI runtime:**
 
 - [x] llama-server (llama.cpp) como runtime AI por defecto con API OpenAI-compatible. _Compilado/descargado en Containerfile con fallback a compilacion desde fuente. **BUG CORREGIDO:** regex de asset matching mejorado para robustez contra cambios de naming en releases de llama.cpp._
-- [x] Modelo GGUF default (Qwen3.5-4B Q4*K_M) pre-bundled en la imagen. *`lifeos-ai-setup.sh` con fallback de descarga si el modelo no esta presente.\_
+- [x] Modelo fundacional Qwen3.5-4B disponible para bootstrap local con preload opcional y descarga on-demand. _`lifeos-ai-setup.sh` mantiene bootstrap local sin forzar que todas las ISOs carguen multi-GB de LLM por defecto._
 - [x] Deteccion automatica de GPU (NVIDIA/AMD/Intel) y configuracion de offload. _Implementada en first-boot, daemon y CLI._
 - [x] `llama-server.service` con security hardening. _Incluye `PrivateUsers`, `SystemCallFilter`, `MemoryMax` y bind loopback (`LIFEOS_AI_HOST=127.0.0.1`)._
 - [x] API REST del daemon (`lifeosd`) con endpoints de sistema, AI y health. _Chat conectado a `llama-server` real, metricas de recursos reales y token bootstrap enforceado._
@@ -1487,6 +1488,58 @@ Implementacion concreta:
 **Estado de salida:** **CUMPLIDO EN REPO (2026-03-10).**
 
 **Entregable:** LifeOS que se siente vivo — habla, escucha, ve y reacciona. Axi es un companero presente en el escritorio, no un chatbot escondido en la terminal.
+
+### Fase 4.5 (4-8 semanas): Gestor de modelos pesados y ciclo de vida local
+
+**Objetivo:** separar definitivamente el ciclo de vida del OS del ciclo de vida de los LLM pesados. La ISO debe traer runtimes, catalogo firmado y voces locales pequenas; los modelos pesados se descargan, seleccionan y eliminan bajo control explicito del usuario.
+
+**Estado:** **PLANIFICADA.** _Puente entre Fase 4 cerrada y Fase 5._
+
+**Reglas de producto obligatorias:**
+
+1. Los runtimes de voz y sus assets pequenos (`whisper`, `piper`, VAD, hotword) pueden venir preinstalados.
+2. Los LLM pesados viven en `/var/lib/lifeos/models` como contenido gestionado por el usuario, no como payload obligatorio de la ISO normal.
+3. La seleccion por defecto debe persistirse en una unica fuente de verdad: `/etc/lifeos/llama-server.env`.
+4. Cada modelo multimodal debe gestionar sus assets companeros (`mmproj`) de forma explicita; no se admite un `mmproj` generico compartido entre familias/tamanos incompatibles.
+5. Una actualizacion del OS no debe reinstalar automaticamente un modelo pesado que el usuario elimino.
+
+**Bloque 1 — Selector visual y catalogo firmado (P0):**
+
+- [ ] Panel visual de modelos en overlay/ajustes con roster inicial Qwen3.5: `4B`, `9B`, `27B`.
+- [ ] Catalogo firmado con metadata por modelo: tamano, RAM/VRAM recomendada, roles, `mmproj` asociado, checksum y politica de offload.
+- [ ] Descarga reanudable con progreso, verificacion de integridad y estimacion de espacio/tiempo.
+
+**Bloque 2 — Seleccion por defecto y coherencia runtime (P0):**
+
+- [ ] `life ai`, `llama-server`, overlay y daemon leen el mismo modelo activo desde `/etc/lifeos/llama-server.env`.
+- [ ] Al seleccionar un modelo, LifeOS actualiza tanto `LIFEOS_AI_MODEL` como `LIFEOS_AI_MMPROJ`.
+- [ ] Si el usuario elimina el modelo activo, LifeOS selecciona fallback seguro o deja el runtime pesado desactivado sin re-descarga implicita.
+
+**Bloque 3 — Politica de updates y respeto a la voluntad del usuario (P0):**
+
+- [ ] Tombstones/estado persistente para distinguir `installed`, `selected`, `pinned`, `removed_by_user`.
+- [ ] `bootc upgrade` y el primer arranque post-update no reinstalan modelos en estado `removed_by_user`.
+- [ ] La imagen solo actualiza runtime, catalogo y politicas; el contenido pesado del usuario permanece en `/var`.
+
+**Bloque 4 — NVIDIA / hardware awareness por modelo (P1):**
+
+- [ ] Al descargar o seleccionar un modelo, LifeOS recalcula `LIFEOS_AI_GPU_LAYERS` segun RAM, VRAM y presion termica.
+- [ ] En equipos con NVIDIA dedicada, el selector muestra si el modelo cabe completo, parcial o solo CPU.
+- [ ] El UI expone el costo esperado: VRAM, RAM, disco y autonomia/bateria.
+
+**Bloque 5 — UX y guardrails adicionales (P1):**
+
+- [ ] Indicadores de espacio en disco antes de descargar y opcion de limpieza de modelos no usados.
+- [ ] Politica `auto_manage_models = false` por defecto en el canal normal.
+- [ ] Import/export del inventario de modelos y pinning por dispositivo.
+
+**Criterios de salida de Fase 4.5:**
+
+1. El usuario puede descargar, eliminar y elegir visualmente su modelo pesado por defecto.
+2. `life ai` y `llama-server` comparten la misma seleccion activa sin configuraciones duplicadas.
+3. Cada Qwen3.5 soportado usa su `mmproj` correcto.
+4. Eliminar un modelo evita su reinstalacion automatica en updates posteriores.
+5. STT/TTS siguen operativos incluso cuando no hay ningun LLM pesado instalado.
 
 ### Fase 5 (18-30 meses): Ecosistema, sincronizacion y escala gobernada
 
@@ -2263,6 +2316,7 @@ embedding_model = "nomic-embed-text"   # Modelo para embeddings
 [ai.model_selector]
 enabled = true
 mode = "auto"                          # auto | manual
+auto_manage_models = false             # No reinstalar modelos pesados eliminados por el usuario
 catalog_url = "https://models.lifeos.dev/catalog/v1.json"
 catalog_signature_url = "https://models.lifeos.dev/catalog/v1.json.sig"
 rebenchmark_on_bootstrap = true

@@ -32,8 +32,10 @@ RUN dnf -y install \
     pkgconf-pkg-config \
     gcc \
     git \
-    gtk4-devel \
+    dbus-devel \
     glib2-devel \
+    gtk4-devel \
+    libadwaita-devel \
     pango-devel \
     gdk-pixbuf2-devel \
     graphene-devel \
@@ -60,7 +62,7 @@ COPY contracts/ contracts/
 
 # Build both sequentially (they don't share a workspace in the container)
 RUN cd cli && cargo build --release
-RUN cd daemon && cargo build --release
+RUN cd daemon && cargo build --release --all-features
 
 # ============================================================================
 # Stage 2: Build llama-server (static, CPU-only)
@@ -307,7 +309,7 @@ RUN set -eux && \
         MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf" && \
         MODEL_FILE="/usr/share/lifeos/models/Qwen3.5-4B-Q4_K_M.gguf" && \
         MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf" && \
-        MMPROJ_FILE="/usr/share/lifeos/models/mmproj-F16.gguf" && \
+        MMPROJ_FILE="/usr/share/lifeos/models/Qwen3.5-4B-mmproj-F16.gguf" && \
         echo ">>> LIFEOS_PRELOAD_MODEL=true: downloading Qwen3.5-4B assets..." && \
         curl -fSL --retry 3 --connect-timeout 60 -o "${MODEL_FILE}" "${MODEL_URL}" && \
         echo ">>> Model size: $(du -h "${MODEL_FILE}" | cut -f1)" && \

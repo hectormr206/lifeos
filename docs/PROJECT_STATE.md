@@ -26,7 +26,7 @@ Out of wedge for 1.0 hardening:
 - New ecosystem surfaces that do not improve daily-driver reliability.
 - B2B experimental swarm/RFC work.
 
-## Current Phase: Phase 4 Closed / Phase 5 Pending
+## Current Phase: Phase 4 Closed / Phase 4.5 Planned
 
 Phase 4 focused on making LifeOS feel alive through real sensory interaction:
 voice (bidirectional), vision (screen awareness), camera (presence detection),
@@ -40,6 +40,11 @@ Key deliverables:
 - Automatic NVIDIA GPU offload for LLM and vision models
 - Graceful degradation when hardware/consent is missing
 
+Phase 4.5 is the next corrective layer before Phase 5 scale work:
+heavy models move to an explicit user-managed lifecycle with signed catalog,
+default-model selection, companion mmproj mapping, and update-safe persistence
+so OS upgrades do not override model decisions the user already made.
+
 ## Execution Status
 
 - Phase 0: closed at baseline.
@@ -48,6 +53,7 @@ Key deliverables:
 - Phase 2.5: closed at baseline (visual identity + UX foundations).
 - Phase 3: closed (hardening + dogfooding + closeout). Evidence: `evidence/phase-3/phase-3-closeout.md`.
 - Phase 4: **CLOSED IN REPO** — LifeOS Alive complete. Evidence: `evidence/phase-4/phase-4-closeout.md`.
+- Phase 4.5: planned (heavy model manager, default-model UX, update-safe lifecycle).
 - Phase 5: pending (ecosystem, sync, scale).
 
 ## Phase 4 Closed Blocks

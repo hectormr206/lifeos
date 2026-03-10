@@ -1,7 +1,7 @@
 {
   "schema_version": "lifeos-model-catalog/v1",
-  "catalog_version": "2026.03.03",
-  "generated_at": "2026-03-03T00:00:00Z",
+  "catalog_version": "2026.03.10",
+  "generated_at": "2026-03-10T00:00:00Z",
   "models": [
     {
       "id": "Qwen3.5-4B-Q4_K_M.gguf",
@@ -13,8 +13,15 @@
     {
       "id": "Qwen3.5-9B-Q4_K_M.gguf",
       "download_url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
-      "size_bytes": 5900000000,
+      "size_bytes": 5680522464,
       "runtime_profiles": ["edge", "pro"],
+      "roles": ["general", "reasoning", "vision"]
+    },
+    {
+      "id": "Qwen3.5-27B-Q4_K_M.gguf",
+      "download_url": "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q4_K_M.gguf",
+      "size_bytes": 16740812704,
+      "runtime_profiles": ["pro", "workstation"],
       "roles": ["general", "reasoning", "vision"]
     },
     {

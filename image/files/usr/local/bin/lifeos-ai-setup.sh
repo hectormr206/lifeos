@@ -21,12 +21,14 @@ echo "llama-server binary: $LLAMA_BIN"
 MODEL_DIR="/var/lib/lifeos/models"
 PRELOAD_MODEL_DIR="/usr/share/lifeos/models"
 ENV_FILE="/etc/lifeos/llama-server.env"
+REMOVED_MODELS_FILE="${MODEL_DIR}/.removed-models"
 
-# Default model is pre-bundled in the image during build (see Containerfile).
-# This script only downloads if the configured model is missing (e.g. user changed it).
+# Default model can be optionally preloaded in the image during build (see Containerfile).
+# This script only downloads known heavy models when the configured model is missing
+# and the user did not explicitly remove it.
 DEFAULT_MODEL="Qwen3.5-4B-Q4_K_M.gguf"
 DEFAULT_MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
-DEFAULT_MMPROJ="mmproj-F16.gguf"
+DEFAULT_MMPROJ="Qwen3.5-4B-mmproj-F16.gguf"
 DEFAULT_MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"
 
 # Source env to get configured model
@@ -35,9 +37,11 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 MODEL="${LIFEOS_AI_MODEL:-$DEFAULT_MODEL}"
-MODEL_PATH="$MODEL_DIR/$MODEL"
+MODEL_URL="$DEFAULT_MODEL_URL"
 MMPROJ="${LIFEOS_AI_MMPROJ:-$DEFAULT_MMPROJ}"
-MMPROJ_PATH="$MODEL_DIR/$MMPROJ"
+MMPROJ_URL="$DEFAULT_MMPROJ_URL"
+MODEL_PATH=""
+MMPROJ_PATH=""
 
 ensure_writable_model_dir() {
     local target=""
@@ -61,6 +65,94 @@ ensure_writable_model_dir() {
     fi
 }
 
+set_env_value() {
+    local key="$1"
+    local value="$2"
+
+    mkdir -p "$(dirname "$ENV_FILE")"
+    touch "$ENV_FILE"
+
+    if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+        sed -i "s#^${key}=.*#${key}=${value}#" "$ENV_FILE"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+    fi
+}
+
+is_primary_model_candidate() {
+    case "$1" in
+        mmproj-*|*-mmproj-*|nomic-embed-*|whisper*|*embedding*)
+            return 1
+            ;;
+        *.gguf)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+find_existing_primary_model() {
+    find "$MODEL_DIR" -maxdepth 1 -type f -name "*.gguf" -printf '%f\n' 2>/dev/null | sort | while read -r candidate; do
+        if is_primary_model_candidate "$candidate"; then
+            printf '%s\n' "$candidate"
+            break
+        fi
+    done
+}
+
+is_removed_model() {
+    local candidate="$1"
+    [ -f "$REMOVED_MODELS_FILE" ] && grep -Fxq "$candidate" "$REMOVED_MODELS_FILE"
+}
+
+resolve_model_assets() {
+    local requested_mmproj="${LIFEOS_AI_MMPROJ:-}"
+
+    case "$MODEL" in
+        Qwen3.5-4B-Q4_K_M.gguf)
+            MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
+            MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"
+            if [ -z "$requested_mmproj" ] || [ "$requested_mmproj" = "mmproj-F16.gguf" ]; then
+                MMPROJ="Qwen3.5-4B-mmproj-F16.gguf"
+            else
+                MMPROJ="$requested_mmproj"
+            fi
+            ;;
+        Qwen3.5-9B-Q4_K_M.gguf)
+            MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
+            MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf"
+            if [ -z "$requested_mmproj" ] || [ "$requested_mmproj" = "mmproj-F16.gguf" ]; then
+                MMPROJ="Qwen3.5-9B-mmproj-F16.gguf"
+            else
+                MMPROJ="$requested_mmproj"
+            fi
+            ;;
+        Qwen3.5-27B-Q4_K_M.gguf)
+            MODEL_URL="https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q4_K_M.gguf"
+            MMPROJ_URL="https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/mmproj-F16.gguf"
+            if [ -z "$requested_mmproj" ] || [ "$requested_mmproj" = "mmproj-F16.gguf" ]; then
+                MMPROJ="Qwen3.5-27B-mmproj-F16.gguf"
+            else
+                MMPROJ="$requested_mmproj"
+            fi
+            ;;
+        *)
+            MODEL_URL=""
+            MMPROJ_URL=""
+            if [ -z "$requested_mmproj" ]; then
+                MMPROJ="$DEFAULT_MMPROJ"
+            else
+                MMPROJ="$requested_mmproj"
+            fi
+            ;;
+    esac
+
+    MODEL_PATH="$MODEL_DIR/$MODEL"
+    MMPROJ_PATH="$MODEL_DIR/$MMPROJ"
+}
+
 seed_from_preload() {
     if [ ! -d "$PRELOAD_MODEL_DIR" ]; then
         return
@@ -74,10 +166,16 @@ seed_from_preload() {
     if [ ! -f "$MMPROJ_PATH" ] && [ -f "$PRELOAD_MODEL_DIR/$MMPROJ" ]; then
         cp -n "$PRELOAD_MODEL_DIR/$MMPROJ" "$MMPROJ_PATH"
         echo "Seeded vision projector from image payload: $MMPROJ"
+    elif [ ! -f "$MMPROJ_PATH" ] && [ -f "$PRELOAD_MODEL_DIR/mmproj-F16.gguf" ]; then
+        cp -n "$PRELOAD_MODEL_DIR/mmproj-F16.gguf" "$MMPROJ_PATH"
+        echo "Seeded legacy vision projector from image payload: $MMPROJ"
     fi
 }
 
 ensure_writable_model_dir
+resolve_model_assets
+set_env_value "LIFEOS_AI_MODEL" "$MODEL"
+set_env_value "LIFEOS_AI_MMPROJ" "$MMPROJ"
 seed_from_preload
 
 # If model already exists, check mmproj too
@@ -89,7 +187,11 @@ if [ -f "$MODEL_PATH" ]; then
     fi
     # Model exists but mmproj missing — download it
     echo "Vision projector missing, downloading..."
-    if curl -fSL --retry 3 --connect-timeout 30 -o "$MMPROJ_PATH.tmp" "$DEFAULT_MMPROJ_URL"; then
+    if [ -z "$MMPROJ_URL" ]; then
+        echo "WARNING: No companion vision projector mapping for $MODEL. Visual features may be unavailable."
+        exit 0
+    fi
+    if curl -fSL --retry 3 --connect-timeout 30 -o "$MMPROJ_PATH.tmp" "$MMPROJ_URL"; then
         mv "$MMPROJ_PATH.tmp" "$MMPROJ_PATH"
         echo "Vision projector downloaded: $MMPROJ"
     else
@@ -99,16 +201,29 @@ if [ -f "$MODEL_PATH" ]; then
     exit 0
 fi
 
-# Check if any model exists (user may have placed a different one)
-EXISTING=$(find "$MODEL_DIR" -name "*.gguf" ! -name "mmproj-*" -type f 2>/dev/null | head -n 1)
+# Check if any primary model exists (user may have placed a different one)
+EXISTING=$(find_existing_primary_model)
 if [ -n "$EXISTING" ]; then
     echo "Found existing model: $EXISTING"
     BASENAME=$(basename "$EXISTING")
-    sed -i "s/^LIFEOS_AI_MODEL=.*/LIFEOS_AI_MODEL=$BASENAME/" "$ENV_FILE"
+    set_env_value "LIFEOS_AI_MODEL" "$BASENAME"
+    MODEL="$BASENAME"
+    resolve_model_assets
+    set_env_value "LIFEOS_AI_MMPROJ" "$MMPROJ"
     exit 0
 fi
 
-echo "Downloading default AI model: $MODEL (~2.74GB)"
+if is_removed_model "$MODEL"; then
+    echo "Configured model $MODEL was removed by the user; skipping auto-download."
+    exit 0
+fi
+
+if [ -z "$MODEL_URL" ]; then
+    echo "No auto-download mapping for model: $MODEL"
+    exit 0
+fi
+
+echo "Downloading configured AI model: $MODEL"
 echo "This may take several minutes..."
 
 # Download model with retry
@@ -124,8 +239,8 @@ done
 
 # Download mmproj
 if [ ! -f "$MMPROJ_PATH" ]; then
-    echo "Downloading vision projector: $MMPROJ (~672MB)"
-    if curl -fSL --retry 3 --connect-timeout 30 -o "$MMPROJ_PATH.tmp" "$DEFAULT_MMPROJ_URL"; then
+    echo "Downloading vision projector: $MMPROJ"
+    if curl -fSL --retry 3 --connect-timeout 30 -o "$MMPROJ_PATH.tmp" "$MMPROJ_URL"; then
         mv "$MMPROJ_PATH.tmp" "$MMPROJ_PATH"
         echo "Vision projector downloaded: $MMPROJ"
     else

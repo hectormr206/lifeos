@@ -13,7 +13,7 @@
 | Arquitectura            | Hibrida: Gated DeltaNet (75%) + Full Attention (25%)  |
 | Cuantizacion            | Q4_K_M (pesos) + F16 (vision projector)               |
 | Archivo modelo          | `Qwen3.5-4B-Q4_K_M.gguf` (~2.74GB)                   |
-| Archivo mmproj          | `mmproj-F16.gguf` (~672MB)                             |
+| Archivo mmproj          | `Qwen3.5-4B-mmproj-F16.gguf` (~672MB)                 |
 | Origen                  | https://huggingface.co/unsloth/Qwen3.5-4B-GGUF        |
 | Contexto nativo         | 262,144 tokens (extensible a 1,010,000 con YaRN)      |
 | Contexto configurado    | 16,384 tokens (por defecto, ajustable)                 |
@@ -189,7 +189,7 @@ La reduccion de 17.7GB a ~5.5GB (configuracion por defecto) es posible gracias a
 
 ```
 LIFEOS_AI_MODEL=Qwen3.5-4B-Q4_K_M.gguf
-LIFEOS_AI_MMPROJ=mmproj-F16.gguf
+LIFEOS_AI_MMPROJ=Qwen3.5-4B-mmproj-F16.gguf
 LIFEOS_AI_CTX_SIZE=16384
 LIFEOS_AI_THREADS=4
 LIFEOS_AI_GPU_LAYERS=0
@@ -203,7 +203,7 @@ LIFEOS_AI_ALIAS=lifeos
 ```bash
 llama-server \
     --model /var/lib/lifeos/models/Qwen3.5-4B-Q4_K_M.gguf \
-    --mmproj /var/lib/lifeos/models/mmproj-F16.gguf \
+    --mmproj /var/lib/lifeos/models/Qwen3.5-4B-mmproj-F16.gguf \
     --alias lifeos \
     --ctx-size 16384 \
     --threads 4 \
@@ -220,6 +220,14 @@ llama-server \
 | `--alias` | Nombre del modelo en respuestas de la API OpenAI-compatible |
 | `--mmproj` | Proyector de vision multimodal (F16 para maxima calidad) |
 | `--ctx-size` | 16384 por defecto (262K maximo nativo) |
+
+## Ciclo de vida recomendado para modelos pesados
+
+- El canal normal de LifeOS debe traer preinstalados los runtimes y assets pequenos de voz, no todos los LLM pesados.
+- Los modelos pesados deben gestionarse como contenido del usuario en `/var/lib/lifeos/models`.
+- La seleccion por defecto debe persistirse en `/etc/lifeos/llama-server.env`, y `life ai select <modelo>` debe mantener sincronizados `LIFEOS_AI_MODEL` y `LIFEOS_AI_MMPROJ`.
+- El roster inicial del selector visual debe priorizar `Qwen3.5-4B`, `Qwen3.5-9B` y `Qwen3.5-27B`, cada uno con su `mmproj` dedicado.
+- Si el usuario elimina un modelo pesado, una actualizacion del sistema no debe reinstalarlo automaticamente sin una accion explicita del usuario.
 
 ### Parametros de sampling recomendados (Unsloth)
 

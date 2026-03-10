@@ -57,9 +57,12 @@ impl AiManager {
         let server_running = self.is_running().await;
 
         let models = self.list_models().await.unwrap_or_default();
+        let active_model = self.active_model().await;
         let default_model = models
-            .first()
+            .iter()
+            .find(|m| active_model.as_deref() == Some(m.name.as_str()))
             .map(|m| m.name.clone())
+            .or(active_model)
             .unwrap_or_else(|| "none".to_string());
         let gpu_acceleration = self.check_gpu_acceleration().await;
 
@@ -80,17 +83,20 @@ impl AiManager {
             let mut entries = tokio::fs::read_dir(model_dir).await?;
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
-                if path.is_file() && path.extension().unwrap_or_default() == "gguf" {
+                let candidate = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if path.is_file()
+                    && path.extension().unwrap_or_default() == "gguf"
+                    && is_primary_model_candidate(&candidate)
+                {
                     let metadata = entry.metadata().await?;
-                    let name = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
                     let size_mb = metadata.len() / (1024 * 1024);
 
                     models.push(ModelInfo {
-                        name,
+                        name: candidate,
                         size_mb,
                         modified: "local".to_string(),
                     });
@@ -129,12 +135,17 @@ impl AiManager {
     /// Start llama-server
     pub async fn start_server(&self) -> anyhow::Result<()> {
         let models = self.list_models().await?;
-        let first_model = match models.first() {
+        let active_model = self.active_model().await;
+        let selected_model = match models
+            .iter()
+            .find(|m| active_model.as_deref() == Some(m.name.as_str()))
+            .or_else(|| models.first())
+        {
             Some(m) => m.name.clone(),
             None => anyhow::bail!("No models found in /var/lib/lifeos/models"),
         };
 
-        let model_path = format!("/var/lib/lifeos/models/{}", first_model);
+        let model_path = format!("/var/lib/lifeos/models/{}", selected_model);
 
         Command::new("llama-server")
             .env("GGML_BACKEND_PATH", "/usr/lib64")
@@ -449,4 +460,13 @@ impl Default for AiManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn is_primary_model_candidate(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    !lower.starts_with("mmproj-")
+        && !lower.contains("-mmproj-")
+        && !lower.starts_with("nomic-embed-")
+        && !lower.starts_with("whisper")
+        && !lower.contains("embedding")
 }

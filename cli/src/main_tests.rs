@@ -773,6 +773,24 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_ai_select_command() {
+        let cli = Cli::parse_from([
+            "life",
+            "ai",
+            "select",
+            "Qwen3.5-9B-Q4_K_M.gguf",
+            "--restart",
+        ]);
+        match cli.command.expect("Expected command") {
+            Commands::Ai(commands::ai::AiCommands::Select { model, restart }) => {
+                assert_eq!(model, "Qwen3.5-9B-Q4_K_M.gguf");
+                assert!(restart);
+            }
+            _ => panic!("Expected ai select command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_ai_bench_sensory_command() {
         let cli = Cli::parse_from([
             "life",

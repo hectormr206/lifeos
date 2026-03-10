@@ -104,14 +104,18 @@ impl Default for ModelRegistry {
         );
 
         models.insert(
-            "qwen3-14b-q4_k_m.gguf".to_string(),
+            "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
             ModelInfo {
-                id: "qwen3-14b-q4_k_m.gguf".to_string(),
-                name: "Qwen3 14B".to_string(),
-                description: "Larger Qwen3 with improved reasoning capabilities".to_string(),
-                parameter_size: "14B".to_string(),
-                size_gb: 8.5,
+                id: "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
+                name: "Qwen3.5 9B".to_string(),
+                description:
+                    "Balanced multimodal Qwen3.5 tier for larger local reasoning and vision tasks"
+                        .to_string(),
+                parameter_size: "9B".to_string(),
+                size_gb: 5.29,
                 tags: vec![
+                    "multimodal".to_string(),
+                    "vision".to_string(),
                     "multilingual".to_string(),
                     "reasoning".to_string(),
                     "advanced".to_string(),
@@ -120,7 +124,7 @@ impl Default for ModelRegistry {
                     chat: true,
                     code_generation: true,
                     reasoning: true,
-                    vision: false,
+                    vision: true,
                     multilingual: true,
                     function_calling: true,
                 },
@@ -130,14 +134,55 @@ impl Default for ModelRegistry {
                     min_vram_gb: Some(8),
                     recommended_vram_gb: Some(12),
                     gpu_required: false,
-                    quantization: vec!["q4_0".to_string(), "q5_0".to_string()],
+                    quantization: vec!["q4_k_m".to_string(), "q8_0".to_string()],
                 },
                 recommended_use: vec![
                     "complex_analysis".to_string(),
                     "advanced_coding".to_string(),
                     "document_processing".to_string(),
+                    "screen_awareness".to_string(),
                 ],
                 performance_tier: PerformanceTier::Capable,
+            },
+        );
+
+        models.insert(
+            "Qwen3.5-27B-Q4_K_M.gguf".to_string(),
+            ModelInfo {
+                id: "Qwen3.5-27B-Q4_K_M.gguf".to_string(),
+                name: "Qwen3.5 27B".to_string(),
+                description: "Large multimodal Qwen3.5 tier for workstation-class local autonomy"
+                    .to_string(),
+                parameter_size: "27B".to_string(),
+                size_gb: 15.59,
+                tags: vec![
+                    "multimodal".to_string(),
+                    "vision".to_string(),
+                    "reasoning".to_string(),
+                    "workstation".to_string(),
+                ],
+                capabilities: ModelCapabilities {
+                    chat: true,
+                    code_generation: true,
+                    reasoning: true,
+                    vision: true,
+                    multilingual: true,
+                    function_calling: true,
+                },
+                hardware_requirements: HardwareRequirements {
+                    min_ram_gb: 32,
+                    recommended_ram_gb: 64,
+                    min_vram_gb: Some(16),
+                    recommended_vram_gb: Some(24),
+                    gpu_required: false,
+                    quantization: vec!["q4_k_m".to_string(), "q8_0".to_string()],
+                },
+                recommended_use: vec![
+                    "deep_reasoning".to_string(),
+                    "complex_analysis".to_string(),
+                    "multimodal_agent".to_string(),
+                ],
+                performance_tier: PerformanceTier::Powerful,
             },
         );
 

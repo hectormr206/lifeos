@@ -973,7 +973,7 @@ async fn setup_ai(state: &FirstBootState) -> anyhow::Result<()> {
             "sed",
             "-i",
             &format!(
-                "s/^LLAMA_N_GPU_LAYERS=.*/LLAMA_N_GPU_LAYERS={}/",
+                "s/^LIFEOS_AI_GPU_LAYERS=.*/LIFEOS_AI_GPU_LAYERS={}/",
                 gpu_layers
             ),
             "/etc/lifeos/llama-server.env",
