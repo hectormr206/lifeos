@@ -89,7 +89,7 @@ impl RgbColor {
     }
 
     /// Calculate relative luminance per WCAG 2.2
-    /// https://www.w3.org/TR/WCAG22/#dfn-relative-luminance
+    /// <https://www.w3.org/TR/WCAG22/#dfn-relative-luminance>
     pub fn relative_luminance(&self) -> f64 {
         let r = srgb_to_linear(self.r as f64 / 255.0);
         let g = srgb_to_linear(self.g as f64 / 255.0);
