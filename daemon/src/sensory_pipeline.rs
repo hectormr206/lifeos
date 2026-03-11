@@ -1755,10 +1755,11 @@ async fn maybe_apply_gpu_rebalance(
 
 fn gpu_policy_for_vram(free_vram_gb: Option<u32>, active_gpu_layers: i32) -> GpuOffloadStatus {
     let vram = free_vram_gb.unwrap_or_default();
+    let gpu_enabled = active_gpu_layers != 0;
     let (
         profile_tier,
-        llm_offload,
-        vision_offload,
+        llm_offload_gpu,
+        vision_offload_gpu,
         tts_offload,
         stt_offload,
         recommended_gpu_layers,
@@ -1790,6 +1791,11 @@ fn gpu_policy_for_vram(free_vram_gb: Option<u32>, active_gpu_layers: i32) -> Gpu
             -1,
         ),
     };
+    let (llm_offload, vision_offload) = if gpu_enabled {
+        (llm_offload_gpu, vision_offload_gpu)
+    } else {
+        ("cpu only", "cpu only")
+    };
 
     GpuOffloadStatus {
         backend: if vram >= 4 {
@@ -1811,7 +1817,7 @@ fn gpu_policy_for_vram(free_vram_gb: Option<u32>, active_gpu_layers: i32) -> Gpu
 
 fn degraded_modes(capabilities: &SensoryCapabilities, gpu: &GpuOffloadStatus) -> Vec<String> {
     let mut degraded = Vec::new();
-    if gpu.backend == "cpu" {
+    if gpu.backend == "cpu" || gpu.active_gpu_layers == 0 {
         degraded.push("cpu_only_llm".to_string());
     }
     if capabilities.stt_binary.is_none() {

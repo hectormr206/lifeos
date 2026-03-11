@@ -34,7 +34,6 @@ SyslogIdentifier=llama-server
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-PrivateUsers=true
 ReadWritePaths=/var/lib/lifeos /etc/lifeos
 ProtectKernelTunables=true
 ProtectKernelModules=true
