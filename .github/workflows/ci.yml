@@ -278,7 +278,7 @@ jobs:
           toolchain: 1.85.1
 
       - name: Install tarpaulin
-        run: cargo install cargo-tarpaulin --locked
+        run: cargo install cargo-tarpaulin --version 0.32.2 --locked
 
       - name: Generate coverage report (CLI)
         working-directory: ./cli
