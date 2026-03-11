@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = FollowAlongConfig::default();
-        assert_eq!(config.enabled, false);
+        assert!(!config.enabled);
         assert_eq!(config.consent_status, ConsentStatus::NotAsked);
         assert_eq!(config.summary_interval_seconds, 300);
     }

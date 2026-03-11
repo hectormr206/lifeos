@@ -199,9 +199,8 @@ mod tests {
 
     #[test]
     fn test_system_monitor_creation() {
-        let _monitor = SystemMonitor::new();
-        // Just verify it doesn't panic
-        assert!(true);
+        let mut monitor = SystemMonitor::new();
+        assert!(monitor.collect_metrics().is_ok());
     }
 
     #[test]

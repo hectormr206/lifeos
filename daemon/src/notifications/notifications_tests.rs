@@ -6,15 +6,17 @@ mod tests {
 
     #[test]
     fn test_notification_manager_creation() {
-        let _manager = NotificationManager::new(true);
-        // Just verify it doesn't panic
-        assert!(true);
+        let manager = NotificationManager::new(true);
+        let debug_repr = format!("{manager:?}");
+        assert!(debug_repr.contains("enabled: true"));
     }
 
-    #[test]
-    fn test_notification_manager_disabled() {
-        let _manager = NotificationManager::new(false);
-        // Just verify it doesn't panic
-        assert!(true);
+    #[tokio::test]
+    async fn test_notification_manager_disabled() {
+        let manager = NotificationManager::new(false);
+        assert!(manager
+            .send_system_notification("title", "message")
+            .await
+            .is_ok());
     }
 }
