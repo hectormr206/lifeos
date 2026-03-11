@@ -85,8 +85,35 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Check runner prerequisites
+        id: host_prereqs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! sudo -n true >/dev/null 2>&1; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping bootc-upgrade-rollback: passwordless sudo is not available on this runner."
+            exit 0
+          fi
+
+          missing=()
+          for cmd in podman qemu-system-x86_64 virsh virt-install sshpass openssl xorriso mcopy; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              missing+=("$cmd")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping bootc-upgrade-rollback: missing host prerequisites: ${missing[*]}"
+            exit 0
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
       
       - name: Free disk space
+        if: steps.host_prereqs.outputs.ready == 'true'
         run: |
           sudo rm -rf /usr/share/dotnet || true
           sudo rm -rf /usr/local/lib/android/sdk || true
@@ -97,11 +124,13 @@ jobs:
           df -h
       
       - name: Install system dependencies
+        if: steps.host_prereqs.outputs.ready == 'true'
         run: |
           bash scripts/ci/install-linux-deps.sh daemon
           bash scripts/ci/install-linux-deps.sh e2e
       
       - name: Enable KVM
+        if: steps.host_prereqs.outputs.ready == 'true'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
@@ -109,12 +138,14 @@ jobs:
           ls -l /dev/kvm
       
       - name: Install Rust
+        if: steps.host_prereqs.outputs.ready == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.85.1
           components: clippy
       
       - name: Cache cargo
+        if: steps.host_prereqs.outputs.ready == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -124,10 +155,12 @@ jobs:
           key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock') }}
       
       - name: Build project
+        if: steps.host_prereqs.outputs.ready == 'true'
         run: |
           make build
       
       - name: Generate test ISO
+        if: steps.host_prereqs.outputs.ready == 'true'
         run: |
           chmod +x scripts/generate-iso-simple.sh
           sudo -E bash scripts/generate-iso-simple.sh --type iso --image localhost/lifeos:latest
@@ -137,6 +170,7 @@ jobs:
           LIFEOS_OUTPUT_DIR: ${{ github.workspace }}/output
       
       - name: Verify ISO exists
+        if: steps.host_prereqs.outputs.ready == 'true'
         run: |
           if [ ! -f "output/lifeos-latest.iso" ]; then
             echo "ISO not found at output/lifeos-latest.iso"
@@ -146,6 +180,7 @@ jobs:
           ls -lh output/lifeos-latest.iso
       
       - name: Run bootc upgrade/rollback test
+        if: steps.host_prereqs.outputs.ready == 'true'
         run: |
           chmod +x tests/e2e/test_bootc_upgrade_rollback.sh
           ./tests/e2e/test_bootc_upgrade_rollback.sh \
@@ -156,7 +191,7 @@ jobs:
         id: e2e_test
       
       - name: Capture VM logs
-        if: always()
+        if: always() && steps.host_prereqs.outputs.ready == 'true'
         run: |
           mkdir -p /tmp/bootc-test-logs
           
@@ -174,7 +209,7 @@ jobs:
           echo "Status: ${{ steps.e2e_test.outcome }}" >> /tmp/bootc-test-logs/summary.txt
       
       - name: Upload test logs
-        if: always()
+        if: always() && steps.host_prereqs.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: bootc-test-logs-${{ github.sha }}
@@ -182,7 +217,7 @@ jobs:
           retention-days: 7
       
       - name: Upload test results
-        if: always()
+        if: always() && steps.host_prereqs.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ github.sha }}
@@ -192,7 +227,7 @@ jobs:
           retention-days: 7
       
       - name: Check test result
-        if: steps.e2e_test.outcome == 'failure'
+        if: steps.host_prereqs.outputs.ready == 'true' && steps.e2e_test.outcome == 'failure'
         run: |
           echo "::error::E2E tests failed. Check the uploaded logs for details."
           exit 1
@@ -239,7 +274,10 @@ jobs:
   notify-failure:
     runs-on: [self-hosted, Linux, X64]
     needs: [bootc-upgrade-rollback]
-    if: failure() && github.event_name == 'schedule'
+    if: github.event_name == 'schedule' && needs.bootc-upgrade-rollback.result == 'failure'
+    permissions:
+      contents: read
+      issues: write
     
     steps:
       - name: Create issue on failure
@@ -249,7 +287,7 @@ jobs:
             github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: 'E2E Tests Failed - ${(new Date()).toDateString()}',
+              title: `E2E Tests Failed - ${(new Date()).toDateString()}`,
               body: `## E2E Test Failure
             
             The scheduled E2E tests failed on ${new Date().toISOString()}.
