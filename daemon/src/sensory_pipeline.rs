@@ -1647,6 +1647,7 @@ async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
 async fn detect_gpu_status(previous_tokens_per_second: Option<f32>) -> GpuOffloadStatus {
     let active_gpu_layers = read_gpu_layers().unwrap_or(0);
     let runtime_backend = detect_llama_runtime_backend().await;
+    let runtime_gpu_failure = detect_llama_runtime_gpu_failure().await;
 
     if let Ok(output) = Command::new("nvidia-smi")
         .args([
@@ -1691,6 +1692,22 @@ async fn detect_gpu_status(previous_tokens_per_second: Option<f32>) -> GpuOffloa
                             ),
                             ..GpuOffloadStatus::default()
                         };
+                    }
+                    if let Some(reason) = runtime_gpu_failure.clone() {
+                        let mut profile = gpu_policy_for_vram(free_vram_gb, 0);
+                        profile.backend =
+                            runtime_backend.clone().unwrap_or_else(|| "cpu".to_string());
+                        profile.gpu_name = name;
+                        profile.total_vram_gb = total_vram_gb;
+                        profile.free_vram_gb = free_vram_gb;
+                        profile.gpu_temp_celsius = gpu_temp_celsius;
+                        profile.throttling =
+                            gpu_temp_celsius.map(|temp| temp >= 86.0).unwrap_or(false);
+                        profile.updated_at = Some(Utc::now());
+                        profile.tokens_per_second = previous_tokens_per_second;
+                        profile.active_gpu_layers = active_gpu_layers;
+                        profile.rebalance_reason = Some(reason);
+                        return profile;
                     }
                     let mut profile = gpu_policy_for_vram(free_vram_gb, active_gpu_layers);
                     profile.backend = runtime_backend
@@ -1817,7 +1834,7 @@ fn gpu_policy_for_vram(free_vram_gb: Option<u32>, active_gpu_layers: i32) -> Gpu
 
 fn degraded_modes(capabilities: &SensoryCapabilities, gpu: &GpuOffloadStatus) -> Vec<String> {
     let mut degraded = Vec::new();
-    if gpu.backend == "cpu" || gpu.active_gpu_layers == 0 {
+    if gpu.backend == "cpu" || gpu.active_gpu_layers == 0 || gpu.llm_offload == "cpu only" {
         degraded.push("cpu_only_llm".to_string());
     }
     if capabilities.stt_binary.is_none() {
@@ -2263,6 +2280,34 @@ async fn detect_llama_runtime_backend() -> Option<String> {
         if let Some(backend) = parse_llama_runtime_backend(&libs) {
             return Some(backend);
         }
+    }
+
+    None
+}
+
+async fn detect_llama_runtime_gpu_failure() -> Option<String> {
+    let output = Command::new("journalctl")
+        .args(["-u", "llama-server.service", "-b", "-n", "80", "--no-pager"])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let journal = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .to_lowercase();
+
+    if journal.contains("no usable gpu found")
+        || journal.contains("ggml_vulkan: no devices found")
+        || journal.contains("clip using cpu backend")
+    {
+        return Some("llama_runtime_reported_no_gpu".to_string());
     }
 
     None

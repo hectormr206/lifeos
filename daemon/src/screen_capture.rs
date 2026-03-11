@@ -651,16 +651,19 @@ impl ScreenCapture {
             let session_type = props.get("Type").map(String::as_str).unwrap_or_default();
             let display_prop = props.get("Display").cloned().unwrap_or_default();
 
-            let wayland_display = session_env.get("WAYLAND_DISPLAY").cloned().or_else(|| {
-                if session_type == "wayland" {
-                    if !display_prop.is_empty() && !display_prop.starts_with(':') {
-                        Some(display_prop.clone())
-                    } else {
-                        Some("wayland-0".to_string())
-                    }
-                } else {
-                    None
+            let mut xdg_runtime_dir = session_env.get("XDG_RUNTIME_DIR").cloned();
+            if xdg_runtime_dir.is_none() {
+                if let Some(uid) = Self::lookup_user_uid(&user) {
+                    xdg_runtime_dir = Some(format!("/run/user/{}", uid));
                 }
+            }
+
+            let wayland_display = session_env.get("WAYLAND_DISPLAY").cloned().or_else(|| {
+                Self::detect_wayland_display(
+                    session_type,
+                    &display_prop,
+                    xdg_runtime_dir.as_deref(),
+                )
             });
 
             let x11_display = session_env.get("DISPLAY").cloned().or_else(|| {
@@ -673,13 +676,6 @@ impl ScreenCapture {
 
             if wayland_display.is_none() && x11_display.is_none() {
                 continue;
-            }
-
-            let mut xdg_runtime_dir = session_env.get("XDG_RUNTIME_DIR").cloned();
-            if xdg_runtime_dir.is_none() {
-                if let Some(uid) = Self::lookup_user_uid(&user) {
-                    xdg_runtime_dir = Some(format!("/run/user/{}", uid));
-                }
             }
 
             let dbus_session_bus_address = session_env
@@ -701,6 +697,49 @@ impl ScreenCapture {
         }
 
         None
+    }
+
+    fn detect_wayland_display(
+        session_type: &str,
+        display_prop: &str,
+        runtime_dir: Option<&str>,
+    ) -> Option<String> {
+        if session_type != "wayland" {
+            return None;
+        }
+
+        if !display_prop.is_empty() && !display_prop.starts_with(':') {
+            return Some(display_prop.to_string());
+        }
+
+        if let Some(runtime_dir) = runtime_dir {
+            if let Some(socket) = Self::discover_wayland_socket(runtime_dir) {
+                return Some(socket);
+            }
+        }
+
+        Some("wayland-0".to_string())
+    }
+
+    fn discover_wayland_socket(runtime_dir: &str) -> Option<String> {
+        let mut candidates = Vec::new();
+
+        for entry in std::fs::read_dir(runtime_dir).ok()?.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Some(suffix) = name.strip_prefix("wayland-") else {
+                continue;
+            };
+            if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+                continue;
+            }
+            if let Ok(index) = suffix.parse::<u32>() {
+                candidates.push((index, format!("wayland-{index}")));
+            }
+        }
+
+        candidates.sort_by_key(|(index, _)| *index);
+        candidates.pop().map(|(_, socket)| socket)
     }
 
     fn lookup_user_uid(user: &str) -> Option<String> {
