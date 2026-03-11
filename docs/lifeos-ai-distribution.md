@@ -1520,6 +1520,8 @@ Implementacion concreta:
 - [ ] Tombstones/estado persistente para distinguir `installed`, `selected`, `pinned`, `removed_by_user`.
 - [ ] `bootc upgrade` y el primer arranque post-update no reinstalan modelos en estado `removed_by_user`.
 - [ ] La imagen solo actualiza runtime, catalogo y politicas; el contenido pesado del usuario permanece en `/var`.
+- [x] Politica anti-reinicio inesperado aplicada por defecto: `bootc-fetch-apply-updates.timer` y `bootc-fetch-apply-updates.service` enmascarados via `/etc/systemd/system/* -> /dev/null`.
+- [x] Runbook operativo definido: `check/stage` automatico o manual, con `apply`/reboot siempre iniciado por el usuario en ventana de mantenimiento.
 
 **Bloque 4 — NVIDIA / hardware awareness por modelo (P1):**
 

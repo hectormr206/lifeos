@@ -121,7 +121,7 @@ metrics_collection_interval_secs = 60
 enable_notifications = true
 
 # Enable automatic update staging
-enable_auto_updates = false
+enable_auto_updates = true
 ```
 
 ### User Configuration

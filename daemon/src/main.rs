@@ -86,7 +86,7 @@ impl Default for DaemonConfig {
             update_check_interval: Duration::from_secs(3600), // 1 hour
             metrics_collection_interval: Duration::from_secs(60), // 1 minute
             enable_notifications: true,
-            enable_auto_updates: false,
+            enable_auto_updates: true,
             enable_api: true,
             api_bind_address: "127.0.0.1:8081".parse().unwrap(),
         }
@@ -454,7 +454,7 @@ struct DaemonConfigFile {
     metrics_collection_interval_secs: u64,
     #[serde(default = "default_true")]
     enable_notifications: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     enable_auto_updates: bool,
     #[serde(default = "default_true")]
     enable_api: bool,

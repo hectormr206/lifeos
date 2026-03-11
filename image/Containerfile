@@ -466,6 +466,12 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     done && \
     ln -sf /usr/lib/systemd/system/lifeosd.service        /usr/lib/systemd/system/lifeisd.service
 
+# --- Update policy: no surprise reboot ---
+# Mask bootc auto-apply units so updates are operator-driven.
+RUN mkdir -p /etc/systemd/system && \
+    ln -sf /dev/null /etc/systemd/system/bootc-fetch-apply-updates.timer && \
+    ln -sf /dev/null /etc/systemd/system/bootc-fetch-apply-updates.service
+
 # --- Branding y Personalización ---
 RUN rm -f /usr/lib/os-release && \
     printf '%s\n' \
@@ -590,6 +596,8 @@ RUN test -x /usr/bin/mpv && \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer && \
     test -f /usr/lib/systemd/system/lifeos-security-baseline.service && \
     test -f /usr/lib/systemd/system/lifeos-first-boot.service && \
+    test -L /etc/systemd/system/bootc-fetch-apply-updates.timer && \
+    test -L /etc/systemd/system/bootc-fetch-apply-updates.service && \
     test -f /etc/lifeos/llama-server.env && \
     test -f /etc/lifeos/tuf/root.json && \
     test -f /etc/lifeos/tuf/timestamp.json && \

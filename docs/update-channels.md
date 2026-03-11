@@ -25,7 +25,8 @@ If you only need private `stable` updates for your main laptop, use:
   - Cosign signature verified
   - SBOM generated and verified
   - Manual approval
-- **Auto-update**: Enabled by default
+- **Host auto-stage**: Enabled by default
+- **Host auto-apply**: Disabled by default (manual apply policy)
 - **Tag format**: `vX.Y.Z` or `stable`
 
 ### Candidate
@@ -91,6 +92,51 @@ auto_update = true
                            │   + no bugs       │
                            └───────────────────┘
 ```
+
+## Host Update Policy (No Surprise Reboot)
+
+For daily-driver hosts, LifeOS uses an operator-driven update policy:
+
+1. Automatic checks are allowed.
+2. Staging/download can be manual or daemon-assisted.
+3. `bootc upgrade --apply` is never run in background timers by default.
+4. Reboot is user-initiated during a maintenance window.
+
+Persisted controls on host:
+
+- `bootc-fetch-apply-updates` is masked via:
+  - `/etc/systemd/system/bootc-fetch-apply-updates.timer -> /dev/null`
+  - `/etc/systemd/system/bootc-fetch-apply-updates.service -> /dev/null`
+- `lifeosd` keeps staging-only behavior with:
+  - `/etc/lifeos/daemon.toml`
+  - `enable_auto_updates = true`
+
+Apply policy now (existing host):
+
+```bash
+sudo systemctl mask --now bootc-fetch-apply-updates.timer bootc-fetch-apply-updates.service
+sudo systemctl status bootc-fetch-apply-updates.timer bootc-fetch-apply-updates.service
+```
+
+Manual update runbook (recommended):
+
+```bash
+# 1) Observe current state
+life update status
+sudo bootc status
+
+# 2) Check availability
+sudo bootc upgrade --check
+
+# 3) Stage update without forcing immediate apply
+sudo bootc upgrade
+sudo bootc status
+
+# 4) Reboot when you decide
+sudo reboot
+```
+
+If you explicitly run `bootc upgrade --apply`, some environments may reboot immediately.
 
 ## Container Images
 
@@ -266,7 +312,8 @@ life status
 journalctl -u lifeosd -f
 
 # Manual update check
-life update check
+life update --dry-run
+sudo bootc upgrade --check
 ```
 
 Robust scripted path (recommended for large images/private GHCR):

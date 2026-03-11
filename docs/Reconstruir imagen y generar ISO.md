@@ -139,6 +139,37 @@ Con log personalizado para soporte:
 sudo ./scripts/update-lifeos.sh --channel stable --apply --log-file /var/tmp/lifeos-update.log
 ```
 
+## Politica anti-reinicio inesperado (host instalado)
+
+Para evitar reinicios sorpresa en equipos de uso diario, mantener deshabilitado el auto-apply de `bootc`:
+
+```bash
+sudo systemctl mask --now bootc-fetch-apply-updates.timer bootc-fetch-apply-updates.service
+sudo systemctl status bootc-fetch-apply-updates.timer bootc-fetch-apply-updates.service
+```
+
+Flujo recomendado de update manual:
+
+```bash
+# Ver estado
+life update status
+sudo bootc status
+
+# Verificar si hay update
+sudo bootc upgrade --check
+
+# Descargar/stage sin forzar apply inmediato
+sudo bootc upgrade
+sudo bootc status
+
+# Reiniciar solo en ventana de mantenimiento
+sudo reboot
+```
+
+Nota:
+- `bootc upgrade --apply` puede detonar reboot inmediato en algunos entornos.
+- `files/etc/lifeos/daemon.toml` mantiene `enable_auto_updates = true` por defecto en LifeOS (solo check/stage, sin auto-apply).
+
 ## Probar en maquina virtual (recomendado en Linux)
 
 ### Flujo recomendado (script unico, sin duplicar ISO)
