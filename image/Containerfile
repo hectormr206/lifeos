@@ -72,20 +72,21 @@ RUN set -eux && \
     rm -rf /build/target /root/.cargo/registry /root/.cargo/git
 
 # ============================================================================
-# Stage 2: Build llama-server (static, CPU-only)
+# Stage 2: Build llama-server (GPU-capable via Vulkan)
 # ============================================================================
 FROM fedora:${FEDORA_MAJOR} AS llama-builder
 
-RUN dnf install -y cmake make gcc-c++ git openssl-devel && \
+RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel glslc && \
     dnf clean all
 
 RUN set -eux && \
-    echo ">>> Building llama-server from source (static, CPU-only)..." && \
+    echo ">>> Building llama-server from source (Vulkan-enabled)..." && \
     git clone --depth=1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
     cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
         -DGGML_STATIC=ON \
+        -DGGML_VULKAN=ON \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_SERVER=ON && \
@@ -98,7 +99,34 @@ RUN set -eux && \
     rm -rf /tmp/llama.cpp
 
 # ============================================================================
-# Stage 3: Sistema Final
+# Stage 3: Build whisper-cli + ship a default STT model
+# ============================================================================
+FROM fedora:${FEDORA_MAJOR} AS whisper-builder
+
+RUN dnf install -y cmake make gcc-c++ git openssl-devel curl && \
+    dnf clean all
+
+RUN set -eux && \
+    echo ">>> Building whisper-cli from source..." && \
+    git clone --depth=1 https://github.com/ggml-org/whisper.cpp /tmp/whisper.cpp && \
+    cmake -S /tmp/whisper.cpp -B /tmp/whisper.cpp/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DWHISPER_BUILD_TESTS=OFF \
+        -DWHISPER_BUILD_EXAMPLES=ON && \
+    cmake --build /tmp/whisper.cpp/build -j"$(nproc)" --target whisper-cli && \
+    BUILD_BIN="$(find /tmp/whisper.cpp/build -name 'whisper-cli' -type f | head -1)" && \
+    echo ">>> Binary found at: ${BUILD_BIN}" && \
+    mkdir -p /out/models/whisper && \
+    install -m 0755 "${BUILD_BIN}" /out/whisper-cli && \
+    curl -fSL --retry 3 --connect-timeout 60 \
+      -o /out/models/whisper/ggml-base.bin \
+      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin && \
+    test -s /out/models/whisper/ggml-base.bin && \
+    rm -rf /tmp/whisper.cpp
+
+# ============================================================================
+# Stage 4: Sistema Final
 # ============================================================================
 FROM quay.io/fedora/fedora-bootc:${FEDORA_MAJOR}
 
@@ -145,6 +173,10 @@ RUN dnf -y install --skip-unavailable \
     pipewire wireplumber pipewire-alsa pipewire-pulseaudio pipewire-utils \
     alsa-utils alsa-sof-firmware alsa-ucm \
     v4l-utils libcamera \
+    gnome-screenshot grim scrot maim \
+    tesseract tesseract-langpack-eng tesseract-langpack-spa \
+    espeak-ng \
+    vulkan-loader \
     fwupd \
     && dnf clean all
 
@@ -295,17 +327,22 @@ RUN chmod +x /usr/bin/life /usr/bin/lifeosd && \
 # --- AI Runtime (llama.cpp / llama-server) ---
 # Built in isolated stage to avoid pulling/removing toolchains in the final image.
 COPY --from=llama-builder /out/llama-server /usr/sbin/llama-server
+COPY --from=whisper-builder /out/whisper-cli /usr/bin/whisper-cli
 RUN set -eux && \
     ln -f /usr/sbin/llama-server /usr/bin/llama-server 2>/dev/null || true && \
-    echo ">>> Verifying static binary..." && \
+    ln -f /usr/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null || true && \
+    echo ">>> Verifying AI runtime binaries..." && \
     /usr/sbin/llama-server --version && \
-    echo ">>> llama-server installed (static build) at /usr/sbin and /usr/bin" && \
-    ls -la /usr/sbin/llama-server /usr/bin/llama-server
+    /usr/bin/whisper-cli -h >/dev/null && \
+    echo ">>> llama-server installed at /usr/sbin and /usr/bin" && \
+    ls -la /usr/sbin/llama-server /usr/bin/llama-server /usr/bin/whisper-cli
 
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
 RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
     chmod 0700 /var/roothome
+
+COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
 
 # --- AI Model (pre-bundled) ---
 # Qwen3.5-4B: multimodal vision-language model with hybrid DeltaNet architecture.
@@ -559,7 +596,7 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     rm -f /var/cache/swcatalog/cache/C-local-metainfo.xb /var/cache/swcatalog/cache/C-os-catalog.xb
 
 # --- Final llama-server verification ---
-# Belt-and-suspenders: verify the static binary survived all dnf operations.
+# Belt-and-suspenders: verify the AI binaries survived all dnf operations.
 # Also clean up any stale .so files from previous pre-compiled builds.
 RUN set -eux && \
     rm -f /usr/lib64/libllama.so* /usr/lib64/libggml*.so* /usr/lib64/libmtmd.so* && \
@@ -574,8 +611,9 @@ RUN set -eux && \
             echo ">>> Linked to $dest"; \
         fi; \
     done && \
-    ls -la /usr/bin/llama-server /usr/sbin/llama-server && \
-    /usr/sbin/llama-server --version
+    ls -la /usr/bin/llama-server /usr/sbin/llama-server /usr/bin/whisper-cli && \
+    /usr/sbin/llama-server --version && \
+    /usr/bin/whisper-cli -h >/dev/null
 
 # --- Verificación final ---
 RUN test -x /usr/bin/mpv && \
@@ -585,6 +623,10 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/bin/lifeosd && \
     test -x /usr/local/bin/cargo-audit && \
     test -x /usr/bin/llama-server && \
+    test -x /usr/bin/whisper-cli && \
+    (test -x /usr/bin/gnome-screenshot || test -x /usr/bin/grim) && \
+    test -x /usr/bin/tesseract && \
+    test -x /usr/bin/espeak-ng && \
     test -x /usr/bin/spice-vdagent && \
     test -x /usr/bin/virsh && \
     test -x /usr/bin/pkg-config && \
@@ -609,6 +651,7 @@ RUN test -x /usr/bin/mpv && \
     test -f /etc/lifeos/cosmic-theme.toml && \
     test -f /etc/lifeos/design-tokens.toml && \
     test -f /etc/lifeos/design-tokens.json && \
+    test -f /usr/share/lifeos/models/whisper/ggml-base.bin && \
     test -d /usr/share/backgrounds/lifeos && \
     test -d /usr/share/icons/LifeOS && \
     test -f /usr/share/themes/LifeOS-Dark/index.theme && \

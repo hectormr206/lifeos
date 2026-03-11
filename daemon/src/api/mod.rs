@@ -1515,6 +1515,53 @@ async fn resolve_stt_binary_path() -> Option<String> {
     None
 }
 
+fn resolve_existing_stt_model_path(candidate: &str) -> Option<String> {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    if std::path::Path::new(candidate).exists() {
+        return Some(candidate.to_string());
+    }
+
+    let file_name = std::path::Path::new(candidate)
+        .file_name()
+        .and_then(|name| name.to_str())?;
+    [
+        "/var/lib/lifeos/models/whisper",
+        "/usr/share/lifeos/models/whisper",
+        "/var/lib/lifeos/models",
+        "/usr/share/lifeos/models",
+    ]
+    .iter()
+    .map(|dir| format!("{dir}/{file_name}"))
+    .find(|path| std::path::Path::new(path).exists())
+}
+
+fn resolve_stt_model_path(model: Option<&str>) -> Option<String> {
+    if let Some(path) = model.and_then(resolve_existing_stt_model_path) {
+        return Some(path);
+    }
+
+    if let Ok(model) = std::env::var("LIFEOS_STT_MODEL") {
+        if let Some(path) = resolve_existing_stt_model_path(&model) {
+            return Some(path);
+        }
+    }
+
+    [
+        "/var/lib/lifeos/models/whisper/ggml-base.bin",
+        "/usr/share/lifeos/models/whisper/ggml-base.bin",
+        "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
+        "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
+        "/var/lib/lifeos/models/whisper/ggml-small.bin",
+        "/usr/share/lifeos/models/whisper/ggml-small.bin",
+    ]
+    .iter()
+    .find(|candidate| std::path::Path::new(candidate).exists())
+    .map(|candidate| candidate.to_string())
+}
+
 fn output_stderr(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stderr).trim().to_string()
 }
@@ -1713,8 +1760,8 @@ async fn transcribe_with_whisper(
     })?;
 
     let mut cmd = Command::new(&binary);
-    if let Some(model) = model.map(str::trim).filter(|v| !v.is_empty()) {
-        cmd.args(["-m", model]);
+    if let Some(model) = resolve_stt_model_path(model) {
+        cmd.arg("-m").arg(model);
     }
     cmd.args(["-f", file]);
 
@@ -2616,8 +2663,9 @@ async fn overlay_chat(
     Json(request): Json<OverlayChatRequest>,
 ) -> Result<Json<OverlayChatResponse>, (StatusCode, Json<ApiError>)> {
     let overlay_mgr = state.overlay_manager.read().await.clone();
+    let start = std::time::Instant::now();
 
-    let response_content = match overlay_mgr
+    let response = match overlay_mgr
         .send_message(request.message, request.include_screen)
         .await
     {
@@ -2636,10 +2684,10 @@ async fn overlay_chat(
     };
 
     Ok(Json(OverlayChatResponse {
-        response: response_content,
-        model: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
-        tokens_used: None,
-        duration_ms: 0,
+        response: response.response,
+        model: response.model,
+        tokens_used: response.tokens_used,
+        duration_ms: start.elapsed().as_millis() as u64,
     }))
 }
 
@@ -3359,13 +3407,9 @@ async fn clear_schedule(
     tag = "followalong"
 )]
 async fn get_followalong_config(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<FollowAlongConfigResponse>, (StatusCode, Json<ApiError>)> {
-    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
-        .unwrap_or_else(|_| {
-            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        });
-
+    let manager = state.follow_along_manager.read().await.clone();
     let config = manager.get_config().await;
 
     Ok(Json(FollowAlongConfigResponse {
@@ -3392,14 +3436,10 @@ async fn get_followalong_config(
     tag = "followalong"
 )]
 async fn set_followalong_config(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(request): Json<SetFollowAlongConfigRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
-        .unwrap_or_else(|_| {
-            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        });
-
+    let manager = state.follow_along_manager.read().await.clone();
     let mut config = manager.get_config().await;
 
     if let Some(enabled) = request.enabled {
@@ -3444,14 +3484,10 @@ async fn set_followalong_config(
     tag = "followalong"
 )]
 async fn set_followalong_consent(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(request): Json<SetConsentRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
-        .unwrap_or_else(|_| {
-            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        });
-
+    let manager = state.follow_along_manager.read().await.clone();
     match manager.set_consent(request.granted).await {
         Ok(_) => Ok(StatusCode::OK),
         Err(e) => Err((
@@ -3476,13 +3512,9 @@ async fn set_followalong_consent(
     tag = "followalong"
 )]
 async fn get_followalong_context(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<ContextStateResponse>, (StatusCode, Json<ApiError>)> {
-    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
-        .unwrap_or_else(|_| {
-            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        });
-
+    let manager = state.follow_along_manager.read().await.clone();
     let context = manager.get_context().await;
 
     Ok(Json(ContextStateResponse {
@@ -3505,13 +3537,9 @@ async fn get_followalong_context(
     tag = "followalong"
 )]
 async fn get_followalong_stats(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<EventStatsResponse>, (StatusCode, Json<ApiError>)> {
-    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
-        .unwrap_or_else(|_| {
-            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        });
-
+    let manager = state.follow_along_manager.read().await.clone();
     let stats = manager.get_event_stats().await;
 
     let event_counts: Vec<EventCountInfo> = stats
@@ -3543,13 +3571,9 @@ async fn get_followalong_stats(
     tag = "followalong"
 )]
 async fn generate_followalong_summary(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<SummaryResponse>, (StatusCode, Json<ApiError>)> {
-    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
-        .unwrap_or_else(|_| {
-            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        });
-
+    let manager = state.follow_along_manager.read().await.clone();
     match manager.generate_summary().await {
         Ok(summary) => Ok(Json(SummaryResponse {
             summary,
@@ -3581,14 +3605,10 @@ async fn generate_followalong_summary(
     tag = "followalong"
 )]
 async fn translate_followalong_summary(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(request): Json<TranslateSummaryRequest>,
 ) -> Result<Json<SummaryResponse>, (StatusCode, Json<ApiError>)> {
-    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
-        .unwrap_or_else(|_| {
-            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        });
-
+    let manager = state.follow_along_manager.read().await.clone();
     match manager.translate_summary(&request.target_language).await {
         Ok(summary) => Ok(Json(SummaryResponse {
             summary,
@@ -3620,14 +3640,10 @@ async fn translate_followalong_summary(
     tag = "followalong"
 )]
 async fn explain_followalong_activity(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(request): Json<ExplainActivityRequest>,
 ) -> Result<Json<ExplanationResponse>, (StatusCode, Json<ApiError>)> {
-    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
-        .unwrap_or_else(|_| {
-            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        });
-
+    let manager = state.follow_along_manager.read().await.clone();
     match manager.explain_activity(&request.question).await {
         Ok(explanation) => Ok(Json(ExplanationResponse {
             explanation,
@@ -3656,13 +3672,9 @@ async fn explain_followalong_activity(
     tag = "followalong"
 )]
 async fn clear_followalong_events(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let manager = crate::follow_along::FollowAlongManager::new(PathBuf::from("/var/lib/lifeos"))
-        .unwrap_or_else(|_| {
-            crate::follow_along::FollowAlongManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        });
-
+    let manager = state.follow_along_manager.read().await.clone();
     match manager.clear_events().await {
         Ok(_) => Ok(StatusCode::OK),
         Err(e) => Err((

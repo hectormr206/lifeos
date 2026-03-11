@@ -110,16 +110,59 @@ impl ScreenCapture {
 
         // Capture based on display type
         match display_type {
-            DisplayType::Wayland => self.capture_wayland().await,
-            DisplayType::X11 => self.capture_x11().await,
-            DisplayType::Unknown => anyhow::bail!("Unsupported display type"),
+            DisplayType::Wayland => match self.capture_wayland().await {
+                Ok(screenshot) => Ok(screenshot),
+                Err(wayland_err) => {
+                    log::warn!(
+                        "Wayland capture failed, retrying with X11 tools: {}",
+                        wayland_err
+                    );
+                    self.capture_x11().await.map_err(|x11_err| {
+                        anyhow::anyhow!(
+                            "Wayland capture failed: {}. X11 fallback failed: {}",
+                            wayland_err,
+                            x11_err
+                        )
+                    })
+                }
+            },
+            DisplayType::X11 => match self.capture_x11().await {
+                Ok(screenshot) => Ok(screenshot),
+                Err(x11_err) => {
+                    log::warn!(
+                        "X11 capture failed, retrying with Wayland tools: {}",
+                        x11_err
+                    );
+                    self.capture_wayland().await.map_err(|wayland_err| {
+                        anyhow::anyhow!(
+                            "X11 capture failed: {}. Wayland fallback failed: {}",
+                            x11_err,
+                            wayland_err
+                        )
+                    })
+                }
+            },
+            DisplayType::Unknown => match self.capture_wayland().await {
+                Ok(screenshot) => Ok(screenshot),
+                Err(wayland_err) => self.capture_x11().await.map_err(|x11_err| {
+                    anyhow::anyhow!(
+                        "Could not detect display type. Wayland capture failed: {}. X11 fallback failed: {}",
+                        wayland_err,
+                        x11_err
+                    )
+                }),
+            },
         }
     }
 
     /// Detect display server type
     async fn detect_display_type(&self) -> Result<DisplayType> {
         // Check for WAYLAND_DISPLAY env var
-        if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        if std::env::var("WAYLAND_DISPLAY")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .is_some()
+        {
             return Ok(DisplayType::Wayland);
         }
 
@@ -128,21 +171,17 @@ impl ScreenCapture {
             if session.contains("wayland") {
                 return Ok(DisplayType::Wayland);
             }
+            if session.contains("x11") {
+                return Ok(DisplayType::X11);
+            }
         }
 
-        // Check for XDG_SESSION_ID (indicates X11)
-        if std::env::var("XDG_SESSION_ID").is_ok() {
-            return Ok(DisplayType::X11);
-        }
-
-        // Fallback: check for Xwayland
-        let xwayland = Command::new("ps")
-            .args(["-e"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains("Xwayland"))
-            .unwrap_or(false);
-
-        if xwayland {
+        // DISPLAY is a stronger X11 signal than session id in mixed Wayland/Xwayland sessions.
+        if std::env::var("DISPLAY")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .is_some()
+        {
             return Ok(DisplayType::X11);
         }
 
@@ -307,7 +346,16 @@ impl ScreenCapture {
             }
         }
 
-        anyhow::bail!("No X11 screenshot tool found. Please install scrot or maim.")
+        // gnome-screenshot also works on many desktop sessions and is a useful fallback.
+        if let Ok(output) = Command::new("which").arg("gnome-screenshot").output() {
+            if output.status.success() {
+                return self.capture_with_gnome_screenshot().await;
+            }
+        }
+
+        anyhow::bail!(
+            "No X11 screenshot tool found. Please install scrot, maim, or gnome-screenshot."
+        )
     }
 
     /// Capture using scrot

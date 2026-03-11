@@ -8,8 +8,9 @@
 //!
 //! Targets COSMIC desktop (Wayland-based) with GTK4.
 
+use crate::ai::{AiChatResponse, AiManager};
 use anyhow::{Context, Result};
-use log::info;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -285,7 +286,11 @@ impl OverlayManager {
     }
 
     /// Send message to AI chat
-    pub async fn send_message(&self, message: String, include_screen: bool) -> Result<String> {
+    pub async fn send_message(
+        &self,
+        message: String,
+        include_screen: bool,
+    ) -> Result<AiChatResponse> {
         let chat_msg = ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
             role: ChatRole::User,
@@ -294,40 +299,72 @@ impl OverlayManager {
             has_screen_context: include_screen,
         };
 
-        let mut state = self.state.write().await;
-        state.chat_history.push(chat_msg.clone());
-        state.last_message_timestamp = chat_msg.timestamp;
+        {
+            let mut state = self.state.write().await;
+            state.chat_history.push(chat_msg.clone());
+            state.last_message_timestamp = chat_msg.timestamp;
+        }
 
-        // Generate AI response
-        let response = self.generate_ai_response(&message, include_screen).await?;
+        let history = self.get_chat_history().await;
+        let response = self.generate_ai_response(&history, include_screen).await?;
 
         let assistant_msg = ChatMessage {
             id: uuid::Uuid::new_v4().to_string(),
             role: ChatRole::Assistant,
-            content: response,
+            content: response.response.clone(),
             timestamp: chrono::Utc::now().to_rfc3339(),
             has_screen_context: include_screen,
         };
 
-        state.chat_history.push(assistant_msg.clone());
+        let mut state = self.state.write().await;
+        state.chat_history.push(assistant_msg);
+        state.last_message_timestamp = chrono::Utc::now().to_rfc3339();
+        state.last_error = None;
 
-        Ok(assistant_msg.content)
+        Ok(response)
     }
 
-    /// Generate AI response (placeholder - will call actual llama-server)
-    async fn generate_ai_response(&self, message: &str, include_screen: bool) -> Result<String> {
-        // In production, this would call llama-server API
-        // For now, return a placeholder response
-        let screen_context = if include_screen {
-            " (with screen context)"
-        } else {
-            ""
-        };
+    async fn generate_ai_response(
+        &self,
+        history: &[ChatMessage],
+        include_screen: bool,
+    ) -> Result<AiChatResponse> {
+        const SYSTEM_PROMPT: &str = "You are Axi, the local LifeOS assistant. Be concise, practical, and prioritize the user's current desktop context.";
 
-        Ok(format!(
-            "I understand you're asking: {}{}",
-            message, screen_context
-        ))
+        let ai_manager = AiManager::new();
+        let latest_user_message = history
+            .iter()
+            .rev()
+            .find(|msg| msg.role == ChatRole::User)
+            .map(|msg| msg.content.trim().to_string())
+            .filter(|msg| !msg.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("No user message available for overlay chat"))?;
+
+        if include_screen {
+            let screenshot = self.include_screen_context().await?;
+            let prompt = format!(
+                "Recent overlay conversation:\n{}\n\nLatest request:\n{}",
+                summarize_overlay_history(history),
+                latest_user_message
+            );
+            let screenshot_path = screenshot.to_string_lossy().to_string();
+            return ai_manager
+                .chat_multimodal(None, Some(SYSTEM_PROMPT), &prompt, &screenshot_path)
+                .await;
+        }
+
+        let mut messages = vec![("system".to_string(), SYSTEM_PROMPT.to_string())];
+        messages.extend(history.iter().rev().take(12).rev().filter_map(|message| {
+            let role = match message.role {
+                ChatRole::User => "user",
+                ChatRole::Assistant => "assistant",
+                ChatRole::System => "system",
+            };
+            let content = message.content.trim();
+            (!content.is_empty()).then(|| (role.to_string(), content.to_string()))
+        }));
+
+        ai_manager.chat(None, messages).await
     }
 
     /// Clear chat history
@@ -596,6 +633,30 @@ impl OverlayManager {
         info!("Overlay position set to: {:?}", position);
         Ok(())
     }
+}
+
+fn summarize_overlay_history(history: &[ChatMessage]) -> String {
+    let mut summary = history
+        .iter()
+        .rev()
+        .take(8)
+        .rev()
+        .map(|message| {
+            let role = match message.role {
+                ChatRole::User => "user",
+                ChatRole::Assistant => "assistant",
+                ChatRole::System => "system",
+            };
+            format!("{}: {}", role, message.content.trim())
+        })
+        .collect::<Vec<_>>();
+
+    if summary.is_empty() {
+        warn!("Overlay multimodal chat invoked without prior history");
+        summary.push("system: no prior overlay history".to_string());
+    }
+
+    summary.join("\n")
 }
 
 /// Overlay statistics

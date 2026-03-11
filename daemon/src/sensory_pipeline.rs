@@ -1625,7 +1625,7 @@ async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
             &["ffmpeg", "arecord", "pw-record", "parecord"],
         )
         .await,
-        tts_binary: resolve_binary("LIFEOS_TTS_BIN", &["piper"]).await,
+        tts_binary: resolve_binary("LIFEOS_TTS_BIN", &["piper", "espeak-ng"]).await,
         tts_model: resolve_tts_model(None).await,
         playback_binary: resolve_binary("LIFEOS_PLAYBACK_BIN", &["pw-play", "aplay", "paplay"])
             .await,
@@ -1646,6 +1646,7 @@ async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
 
 async fn detect_gpu_status(previous_tokens_per_second: Option<f32>) -> GpuOffloadStatus {
     let active_gpu_layers = read_gpu_layers().unwrap_or(0);
+    let runtime_backend = detect_llama_runtime_backend().await;
 
     if let Ok(output) = Command::new("nvidia-smi")
         .args([
@@ -1665,8 +1666,36 @@ async fn detect_gpu_status(previous_tokens_per_second: Option<f32>) -> GpuOffloa
                     let free_vram_gb = parts[2].parse::<u32>().ok().map(|mb| mb / 1024);
                     let gpu_temp_celsius = parts[3].parse::<f32>().ok();
                     let utilization = parts[4].parse::<u32>().ok().unwrap_or_default();
+                    if !runtime_backend
+                        .as_deref()
+                        .map(gpu_backend_supports_offload)
+                        .unwrap_or(false)
+                    {
+                        return GpuOffloadStatus {
+                            gpu_name: name,
+                            total_vram_gb,
+                            free_vram_gb,
+                            active_gpu_layers,
+                            tokens_per_second: previous_tokens_per_second,
+                            gpu_temp_celsius,
+                            throttling: gpu_temp_celsius.map(|temp| temp >= 86.0).unwrap_or(false),
+                            updated_at: Some(Utc::now()),
+                            rebalance_reason: Some(
+                                runtime_backend
+                                    .map(|backend| {
+                                        format!("llama_runtime_backend_unsupported:{backend}")
+                                    })
+                                    .unwrap_or_else(|| {
+                                        "llama_runtime_gpu_backend_missing".to_string()
+                                    }),
+                            ),
+                            ..GpuOffloadStatus::default()
+                        };
+                    }
                     let mut profile = gpu_policy_for_vram(free_vram_gb, active_gpu_layers);
-                    profile.backend = "nvidia".to_string();
+                    profile.backend = runtime_backend
+                        .clone()
+                        .unwrap_or_else(|| "nvidia".to_string());
                     profile.gpu_name = name;
                     profile.total_vram_gb = total_vram_gb;
                     profile.free_vram_gb = free_vram_gb;
@@ -1696,7 +1725,7 @@ async fn maybe_apply_gpu_rebalance(
     status: &mut GpuOffloadStatus,
     llama_server_running: bool,
 ) -> Result<()> {
-    let target_layers = if status.backend == "nvidia" {
+    let target_layers = if gpu_backend_supports_offload(&status.backend) {
         status.recommended_gpu_layers
     } else {
         0
@@ -1791,7 +1820,10 @@ fn degraded_modes(capabilities: &SensoryCapabilities, gpu: &GpuOffloadStatus) ->
     if capabilities.audio_capture_binary.is_none() {
         degraded.push("mic_capture_unavailable".to_string());
     }
-    if capabilities.tts_binary.is_none() || capabilities.tts_model.is_none() {
+    if capabilities.tts_binary.is_none()
+        || (tts_binary_requires_model(capabilities.tts_binary.as_deref())
+            && capabilities.tts_model.is_none())
+    {
         degraded.push("tts_unavailable".to_string());
     }
     if capabilities.camera_device.is_none() {
@@ -1807,10 +1839,11 @@ async fn transcribe_audio(file: &str, model: Option<&str>) -> Result<(String, St
     let binary = resolve_binary("LIFEOS_STT_BIN", &["whisper-cli", "whisper", "whisper-cpp"])
         .await
         .ok_or_else(|| anyhow::anyhow!("no whisper.cpp binary found"))?;
+    let resolved_model = resolve_stt_model(model).await;
 
     let mut cmd = Command::new(&binary);
-    if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
-        cmd.args(["-m", model]);
+    if let Some(model) = resolved_model {
+        cmd.arg("-m").arg(model);
     }
     cmd.args(["-f", file]);
     let output = cmd
@@ -1890,12 +1923,18 @@ async fn multimodal_chat_with_fallback(
 async fn synthesize_tts(
     data_dir: &Path,
     text: &str,
-    _language: Option<&str>,
+    language: Option<&str>,
     voice_model: Option<&str>,
 ) -> Result<(String, String)> {
-    let binary = resolve_binary("LIFEOS_TTS_BIN", &["piper"])
+    let binary = resolve_binary("LIFEOS_TTS_BIN", &["piper", "espeak-ng"])
         .await
-        .ok_or_else(|| anyhow::anyhow!("piper not found"))?;
+        .ok_or_else(|| anyhow::anyhow!("no local TTS backend found"))?;
+
+    if binary_basename(&binary) == "espeak-ng" {
+        let audio_path = synthesize_with_espeak(data_dir, &binary, text, language).await?;
+        return Ok((audio_path, binary));
+    }
+
     let model = resolve_tts_model(voice_model)
         .await
         .ok_or_else(|| anyhow::anyhow!("no Piper voice model configured"))?;
@@ -1938,6 +1977,40 @@ async fn synthesize_tts(
     }
 
     Ok((audio_path.to_string_lossy().to_string(), binary))
+}
+
+async fn synthesize_with_espeak(
+    data_dir: &Path,
+    binary: &str,
+    text: &str,
+    language: Option<&str>,
+) -> Result<String> {
+    let tts_dir = data_dir.join("tts");
+    tokio::fs::create_dir_all(&tts_dir)
+        .await
+        .context("Failed to create TTS output dir")?;
+    let audio_path = tts_dir.join(format!("axi-{}.wav", uuid::Uuid::new_v4()));
+    let voice = espeak_voice_for_language(language);
+
+    let output = Command::new(binary)
+        .args([
+            "-w",
+            audio_path.to_string_lossy().as_ref(),
+            "-v",
+            voice,
+            text.trim(),
+        ])
+        .output()
+        .await
+        .with_context(|| format!("Failed to start espeak-ng via {}", binary))?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "espeak-ng synthesis failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(audio_path.to_string_lossy().to_string())
 }
 
 async fn capture_audio_snippet(data_dir: &Path, duration_seconds: u64) -> Result<String> {
@@ -2091,6 +2164,124 @@ async fn resolve_tts_model(override_model: Option<&str>) -> Option<String> {
     .iter()
     .find(|candidate| Path::new(candidate).exists())
     .map(|candidate| candidate.to_string())
+}
+
+async fn resolve_stt_model(override_model: Option<&str>) -> Option<String> {
+    if let Some(model) = override_model.and_then(resolve_existing_stt_model) {
+        return Some(model);
+    }
+
+    if let Ok(model) = std::env::var("LIFEOS_STT_MODEL") {
+        if let Some(model) = resolve_existing_stt_model(&model) {
+            return Some(model);
+        }
+    }
+
+    [
+        "/var/lib/lifeos/models/whisper/ggml-base.bin",
+        "/usr/share/lifeos/models/whisper/ggml-base.bin",
+        "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
+        "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
+        "/var/lib/lifeos/models/whisper/ggml-small.bin",
+        "/usr/share/lifeos/models/whisper/ggml-small.bin",
+    ]
+    .iter()
+    .find(|candidate| Path::new(candidate).exists())
+    .map(|candidate| candidate.to_string())
+}
+
+fn resolve_existing_stt_model(candidate: &str) -> Option<String> {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    if Path::new(candidate).exists() {
+        return Some(candidate.to_string());
+    }
+
+    let file_name = Path::new(candidate)
+        .file_name()
+        .and_then(|name| name.to_str())?;
+    [
+        "/var/lib/lifeos/models/whisper",
+        "/usr/share/lifeos/models/whisper",
+        "/var/lib/lifeos/models",
+        "/usr/share/lifeos/models",
+    ]
+    .iter()
+    .map(|dir| format!("{dir}/{file_name}"))
+    .find(|path| Path::new(path).exists())
+}
+
+fn binary_basename(path: &str) -> &str {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+}
+
+fn tts_binary_requires_model(binary: Option<&str>) -> bool {
+    binary.map(binary_basename) == Some("piper")
+}
+
+fn espeak_voice_for_language(language: Option<&str>) -> &'static str {
+    match language.unwrap_or("es").to_lowercase().as_str() {
+        value if value.starts_with("en") => "en-us",
+        value if value.starts_with("es-mx") => "es-mx",
+        value if value.starts_with("es") => "es",
+        value if value.starts_with("pt") => "pt",
+        _ => "es",
+    }
+}
+
+async fn detect_llama_runtime_backend() -> Option<String> {
+    let binary = resolve_binary("LIFEOS_LLAMA_BIN", &["llama-server"]).await?;
+
+    if let Ok(output) = Command::new(&binary).arg("--version").output().await {
+        let combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if let Some(backend) = parse_llama_runtime_backend(&combined) {
+            return Some(backend);
+        }
+    }
+
+    if let Ok(output) = Command::new("ldd").arg(&binary).output().await {
+        let libs = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if let Some(backend) = parse_llama_runtime_backend(&libs) {
+            return Some(backend);
+        }
+    }
+
+    None
+}
+
+fn parse_llama_runtime_backend(output: &str) -> Option<String> {
+    let lower = output.to_lowercase();
+    [
+        ("cuda", "cuda"),
+        ("cublas", "cuda"),
+        ("vulkan", "vulkan"),
+        ("opencl", "opencl"),
+        ("hip", "rocm"),
+        ("metal", "metal"),
+        ("sycl", "sycl"),
+    ]
+    .iter()
+    .find_map(|(needle, backend)| lower.contains(needle).then(|| (*backend).to_string()))
+}
+
+fn gpu_backend_supports_offload(backend: &str) -> bool {
+    matches!(
+        backend,
+        "cuda" | "vulkan" | "opencl" | "rocm" | "metal" | "sycl"
+    )
 }
 
 fn relevant_ocr_lines(ocr_text: &str, query: &str) -> Vec<String> {

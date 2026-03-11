@@ -9,6 +9,7 @@
 
 use anyhow::Result;
 use clap::Subcommand;
+use colored::Colorize;
 use log::{error, info, warn};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -286,8 +287,10 @@ async fn set_enabled(client: &Client, api_url: &str, enabled: bool) -> Result<()
     if response.status().is_success() {
         if enabled {
             info!("FollowAlong enabled");
+            println!("{}", "FollowAlong enabled".green());
         } else {
             info!("FollowAlong disabled");
+            println!("{}", "FollowAlong disabled".yellow());
         }
     } else {
         let error: ApiError = response.json().await?;
@@ -295,6 +298,7 @@ async fn set_enabled(client: &Client, api_url: &str, enabled: bool) -> Result<()
             "Failed to set enabled status: {} - {}",
             error.error, error.message
         );
+        anyhow::bail!("Failed to set FollowAlong state: {}", error.message);
     }
 
     Ok(())
@@ -315,12 +319,15 @@ async fn set_consent(client: &Client, api_url: &str, granted: bool) -> Result<()
     if response.status().is_success() {
         if granted {
             info!("FollowAlong consent granted - monitoring will start");
+            println!("{}", "FollowAlong consent granted".green());
         } else {
             info!("FollowAlong consent revoked - monitoring will stop");
+            println!("{}", "FollowAlong consent revoked".yellow());
         }
     } else {
         let error: ApiError = response.json().await?;
         error!("Failed to set consent: {} - {}", error.error, error.message);
+        anyhow::bail!("Failed to update FollowAlong consent: {}", error.message);
     }
 
     Ok(())
