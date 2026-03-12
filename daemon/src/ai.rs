@@ -4,11 +4,16 @@
 use anyhow::Context;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
+use image::{GenericImageView, ImageReader};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
+use tokio::sync::Semaphore;
 
 /// AI service status
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -312,6 +317,10 @@ impl AiManager {
         &self,
         payload: serde_json::Value,
     ) -> anyhow::Result<AiChatResponse> {
+        let _permit = chat_request_semaphore()
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("AI request limiter is unavailable"))?;
         let request_model = payload
             .get("model")
             .and_then(|value| value.as_str())
@@ -325,7 +334,13 @@ impl AiManager {
             .await?;
 
         if !response.status().is_success() {
-            anyhow::bail!("llama-server returned {}", response.status());
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let detail = truncate_error(&body);
+            if detail.is_empty() {
+                anyhow::bail!("llama-server returned {}", status);
+            }
+            anyhow::bail!("llama-server returned {}: {}", status, detail);
         }
 
         let body: serde_json::Value = response.json().await?;
@@ -440,6 +455,10 @@ impl AiManager {
 }
 
 fn image_path_to_data_url(path: &str) -> anyhow::Result<String> {
+    if let Ok(url) = optimized_image_data_url(path) {
+        return Ok(url);
+    }
+
     let bytes =
         std::fs::read(path).with_context(|| format!("Failed to read image file {}", path))?;
     let mime = match Path::new(path)
@@ -454,6 +473,44 @@ fn image_path_to_data_url(path: &str) -> anyhow::Result<String> {
         _ => "image/png",
     };
     Ok(format!("data:{};base64,{}", mime, B64.encode(bytes)))
+}
+
+fn optimized_image_data_url(path: &str) -> anyhow::Result<String> {
+    const MAX_EDGE: u32 = 1280;
+    const JPEG_QUALITY: u8 = 82;
+
+    let image = ImageReader::open(path)
+        .with_context(|| format!("Failed to open image {}", path))?
+        .decode()
+        .with_context(|| format!("Failed to decode image {}", path))?;
+
+    let (width, height) = image.dimensions();
+    let prepared = if width > MAX_EDGE || height > MAX_EDGE {
+        image.resize(MAX_EDGE, MAX_EDGE, FilterType::Triangle)
+    } else {
+        image
+    };
+
+    let mut bytes = Vec::new();
+    let mut encoder = JpegEncoder::new_with_quality(&mut bytes, JPEG_QUALITY);
+    encoder
+        .encode_image(&prepared)
+        .context("Failed to encode resized image as JPEG")?;
+
+    Ok(format!("data:image/jpeg;base64,{}", B64.encode(bytes)))
+}
+
+fn truncate_error(body: &str) -> String {
+    let cleaned = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if cleaned.len() <= 200 {
+        return cleaned;
+    }
+    format!("{}...", &cleaned[..200])
+}
+
+fn chat_request_semaphore() -> &'static Semaphore {
+    static SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
+    SEMAPHORE.get_or_init(|| Semaphore::new(1))
 }
 
 impl Default for AiManager {
