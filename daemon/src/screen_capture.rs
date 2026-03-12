@@ -865,6 +865,53 @@ impl ScreenCapture {
         Ok(removed)
     }
 
+    /// Keep only the newest `max_files` screenshots.
+    pub async fn cleanup_by_count(&self, max_files: usize) -> Result<u64> {
+        if max_files == 0 || !self.output_dir.exists() {
+            return Ok(0);
+        }
+
+        let mut files: Vec<(u64, PathBuf)> = Vec::new();
+        let mut entries = fs::read_dir(&self.output_dir).await?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .context("Failed to read directory entry")?
+        {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let modified_epoch = match fs::metadata(&path).await {
+                Ok(metadata) => metadata
+                    .modified()
+                    .ok()
+                    .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default(),
+                Err(_) => continue,
+            };
+            files.push((modified_epoch, path));
+        }
+
+        if files.len() <= max_files {
+            return Ok(0);
+        }
+
+        files.sort_by(|a, b| b.0.cmp(&a.0));
+        let mut removed = 0u64;
+        for (_, path) in files.into_iter().skip(max_files) {
+            fs::remove_file(&path)
+                .await
+                .with_context(|| format!("Failed to remove stale screenshot {}", path.display()))?;
+            removed += 1;
+            log::info!("Removed stale screenshot: {}", path.display());
+        }
+
+        Ok(removed)
+    }
+
     /// List all screenshots
     pub async fn list_screenshots(&self) -> Result<Vec<Screenshot>> {
         if !self.output_dir.exists() {

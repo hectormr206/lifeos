@@ -32,6 +32,8 @@ const MAX_RELEVANT_LINES: usize = 8;
 const MAX_MEMORY_BYTES: usize = 6 * 1024;
 const MIN_AUDIO_SIGNAL_BYTES: usize = 4096;
 const PCM_RMS_THRESHOLD: f64 = 450.0;
+const SCREENSHOT_RETENTION_COUNT: usize = 120;
+const SCREENSHOT_RETENTION_DAYS: u64 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -1211,6 +1213,30 @@ impl SensoryPipelineManager {
             .set_axi_state(AxiState::Idle, Some("awareness"))
             .await?;
         self.save_state().await?;
+
+        if let Ok(removed) = screen_capture
+            .cleanup_by_count(SCREENSHOT_RETENTION_COUNT)
+            .await
+        {
+            if removed > 0 {
+                log::info!(
+                    "Screen capture retention removed {} files (max={})",
+                    removed,
+                    SCREENSHOT_RETENTION_COUNT
+                );
+            }
+        }
+
+        if let Ok(removed) = screen_capture.cleanup_old(SCREENSHOT_RETENTION_DAYS).await {
+            if removed > 0 {
+                log::info!(
+                    "Screen capture retention removed {} files older than {} days",
+                    removed,
+                    SCREENSHOT_RETENTION_DAYS
+                );
+            }
+        }
+
         Ok(Some(snapshot))
     }
 
