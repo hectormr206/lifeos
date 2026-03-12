@@ -1,0 +1,12 @@
+[Unit]
+Description=LifeOS periodic maintenance cleanup
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=12h
+RandomizedDelaySec=15min
+Unit=lifeos-maintenance-cleanup.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

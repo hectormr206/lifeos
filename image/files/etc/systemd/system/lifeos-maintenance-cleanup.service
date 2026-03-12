@@ -1,0 +1,15 @@
+[Unit]
+Description=LifeOS Maintenance Cleanup
+Documentation=man:systemd.timer(5)
+ConditionPathExists=/usr/local/bin/lifeos-maintenance-cleanup.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lifeos-maintenance-cleanup.sh
+User=root
+Group=root
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

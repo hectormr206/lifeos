@@ -370,6 +370,7 @@ RUN set -eux && \
 COPY image/files/etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml.default
 COPY image/files/etc/lifeos/channels.toml       /etc/lifeos/channels.toml
 COPY image/files/etc/lifeos/llama-server.env    /etc/lifeos/llama-server.env
+COPY image/files/etc/lifeos/maintenance-cleanup.env /etc/lifeos/maintenance-cleanup.env
 COPY image/files/etc/lifeos/tuf/root.json       /etc/lifeos/tuf/root.json
 COPY image/files/etc/lifeos/tuf/timestamp.json  /etc/lifeos/tuf/timestamp.json
 COPY image/files/etc/lifeos/tuf/snapshot.json   /etc/lifeos/tuf/snapshot.json
@@ -428,6 +429,7 @@ COPY image/files/usr/local/bin/lifeos-btrfs-snapshot.sh    /usr/local/bin/lifeos
 COPY image/files/usr/local/bin/lifeos-integrity-check.sh   /usr/local/bin/lifeos-integrity-check.sh
 COPY image/files/usr/local/bin/lifeos-security-baseline-check.sh /usr/local/bin/lifeos-security-baseline-check.sh
 COPY image/files/usr/local/bin/lifeos-nvidia-secureboot.sh /usr/local/bin/lifeos-nvidia-secureboot.sh
+COPY image/files/usr/local/bin/lifeos-maintenance-cleanup.sh /usr/local/bin/lifeos-maintenance-cleanup.sh
 COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
@@ -435,6 +437,7 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-btrfs-snapshot.sh \
              /usr/local/bin/lifeos-integrity-check.sh \
              /usr/local/bin/lifeos-security-baseline-check.sh \
+             /usr/local/bin/lifeos-maintenance-cleanup.sh \
              /usr/local/bin/lifeos-nvidia-secureboot.sh \
              /usr/local/bin/lifeos-check
 
@@ -455,6 +458,8 @@ COPY image/files/etc/systemd/system/lifeos-first-boot.service /usr/lib/systemd/s
 COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.service /usr/lib/systemd/system/lifeos-btrfs-snapshot.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.timer   /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer
+COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.service /usr/lib/systemd/system/lifeos-maintenance-cleanup.service
+COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
 
@@ -484,6 +489,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeosd.service       /usr/lib/systemd/system/multi-user.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer /usr/lib/systemd/system/timers.target.wants/lifeos-maintenance-cleanup.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
     ln -sf /usr/lib/systemd/system/bluetooth.service      /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \
     ln -sf /usr/lib/systemd/system/NetworkManager.service /usr/lib/systemd/system/multi-user.target.wants/NetworkManager.service && \
@@ -632,10 +638,13 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/bin/pkg-config && \
     test -x /usr/sbin/llama-server && \
     test -x /usr/local/bin/lifeos-nvidia-secureboot.sh && \
+    test -x /usr/local/bin/lifeos-maintenance-cleanup.sh && \
     test -f /usr/lib/systemd/system/lifeosd.service && \
     test -f /usr/lib/systemd/system/llama-server.service && \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service && \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer && \
+    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.service && \
+    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer && \
     test -f /usr/lib/systemd/system/lifeos-security-baseline.service && \
     test -f /usr/lib/systemd/system/lifeos-first-boot.service && \
     test -L /etc/systemd/system/bootc-fetch-apply-updates.timer && \
@@ -648,6 +657,7 @@ RUN test -x /usr/bin/mpv && \
     test -f /etc/lifeos/lifeos.toml.default && \
     test -f /etc/lifeos/channels.toml && \
     test -f /etc/lifeos/channel && \
+    test -f /etc/lifeos/maintenance-cleanup.env && \
     test -f /etc/lifeos/cosmic-theme.toml && \
     test -f /etc/lifeos/design-tokens.toml && \
     test -f /etc/lifeos/design-tokens.json && \
