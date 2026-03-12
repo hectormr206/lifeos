@@ -34,6 +34,9 @@ const MIN_AUDIO_SIGNAL_BYTES: usize = 4096;
 const PCM_RMS_THRESHOLD: f64 = 450.0;
 const SCREENSHOT_RETENTION_COUNT: usize = 120;
 const SCREENSHOT_RETENTION_DAYS: u64 = 2;
+const OCR_SIMILARITY_SKIP_THRESHOLD: f32 = 0.92;
+const RELEVANT_SIMILARITY_SKIP_THRESHOLD: f32 = 0.60;
+const OCR_LENGTH_DELTA_TRIGGER: usize = 320;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -1131,9 +1134,17 @@ impl SensoryPipelineManager {
             .await?;
 
         let previous_ocr = state.vision.last_ocr_text.unwrap_or_default();
-        if normalize_whitespace(&previous_ocr) == normalize_whitespace(&context.ocr_text) {
+        if !has_meaningful_screen_change(
+            &previous_ocr,
+            &context.ocr_text,
+            &state.vision.last_relevant_text,
+            &context.relevant_text,
+        ) {
             let mut state = self.state.write().await;
             state.vision.last_capture_path = Some(context.screen_path);
+            state.vision.last_ocr_text = Some(context.ocr_text);
+            state.vision.last_relevant_text = context.relevant_text;
+            state.vision.last_multimodal_success = context.multimodal_used;
             state.vision.last_updated_at = Some(Utc::now());
             let snapshot = state.vision.clone();
             drop(state);
@@ -2401,6 +2412,76 @@ fn relevant_ocr_lines(ocr_text: &str, query: &str) -> Vec<String> {
     dedupe_strings(lines)
 }
 
+fn has_meaningful_screen_change(
+    previous_ocr: &str,
+    current_ocr: &str,
+    previous_relevant: &[String],
+    current_relevant: &[String],
+) -> bool {
+    let previous = normalize_whitespace(previous_ocr);
+    let current = normalize_whitespace(current_ocr);
+
+    if previous.is_empty() && current.is_empty() {
+        return false;
+    }
+    if previous.is_empty() || current.is_empty() {
+        return true;
+    }
+    if previous == current {
+        return false;
+    }
+
+    if previous.len().abs_diff(current.len()) >= OCR_LENGTH_DELTA_TRIGGER {
+        return true;
+    }
+
+    let ocr_similarity = text_jaccard_similarity(&previous, &current);
+    if ocr_similarity < OCR_SIMILARITY_SKIP_THRESHOLD {
+        return true;
+    }
+
+    let relevant_similarity = lines_jaccard_similarity(previous_relevant, current_relevant);
+    if !previous_relevant.is_empty() || !current_relevant.is_empty() {
+        return relevant_similarity < RELEVANT_SIMILARITY_SKIP_THRESHOLD;
+    }
+
+    false
+}
+
+fn text_jaccard_similarity(left: &str, right: &str) -> f32 {
+    let left_tokens = tokenize_for_similarity(left);
+    let right_tokens = tokenize_for_similarity(right);
+    if left_tokens.is_empty() && right_tokens.is_empty() {
+        return 1.0;
+    }
+
+    let left_set: std::collections::HashSet<_> = left_tokens.into_iter().collect();
+    let right_set: std::collections::HashSet<_> = right_tokens.into_iter().collect();
+    sets_jaccard_similarity(&left_set, &right_set)
+}
+
+fn lines_jaccard_similarity(left: &[String], right: &[String]) -> f32 {
+    let left_text = left.join(" ");
+    let right_text = right.join(" ");
+    text_jaccard_similarity(&left_text, &right_text)
+}
+
+fn sets_jaccard_similarity(
+    left: &std::collections::HashSet<String>,
+    right: &std::collections::HashSet<String>,
+) -> f32 {
+    if left.is_empty() && right.is_empty() {
+        return 1.0;
+    }
+    let intersection = left.intersection(right).count() as f32;
+    let union = left.union(right).count() as f32;
+    if union == 0.0 {
+        1.0
+    } else {
+        intersection / union
+    }
+}
+
 fn normalized_wake_word(wake_word: &str) -> String {
     let wake_word = normalize_whitespace(wake_word).to_lowercase();
     if wake_word.is_empty() {
@@ -2487,6 +2568,20 @@ fn tokenize(input: &str) -> Vec<String> {
         .split(|c: char| !c.is_alphanumeric())
         .map(|token| token.trim().to_lowercase())
         .filter(|token| token.len() >= 3)
+        .collect()
+}
+
+fn tokenize_for_similarity(input: &str) -> Vec<String> {
+    input
+        .split(|c: char| !c.is_alphanumeric())
+        .map(|token| token.trim().to_lowercase())
+        .filter(|token| token.len() >= 3)
+        .map(|token| {
+            token
+                .chars()
+                .map(|ch| if ch.is_ascii_digit() { '0' } else { ch })
+                .collect::<String>()
+        })
         .collect()
 }
 
@@ -2795,6 +2890,44 @@ mod tests {
             lines.first().map(String::as_str),
             Some("panic: crash in main")
         );
+    }
+
+    #[test]
+    fn screen_change_filter_ignores_minor_ocr_noise() {
+        let previous_ocr = "lifeos terminal build complete warning memory 78c";
+        let current_ocr = "lifeos terminal build complete warning memory 79c";
+        let previous_relevant = vec![
+            "warning memory 78c".to_string(),
+            "build complete".to_string(),
+        ];
+        let current_relevant = vec![
+            "warning memory 79c".to_string(),
+            "build complete".to_string(),
+        ];
+
+        let changed = has_meaningful_screen_change(
+            previous_ocr,
+            current_ocr,
+            &previous_relevant,
+            &current_relevant,
+        );
+        assert!(!changed);
+    }
+
+    #[test]
+    fn screen_change_filter_detects_context_shift() {
+        let previous_ocr = "cargo test running on project alpha no errors";
+        let current_ocr = "github actions failed release-channel missing artifact";
+        let previous_relevant = vec!["cargo test running".to_string()];
+        let current_relevant = vec!["release-channel missing artifact".to_string()];
+
+        let changed = has_meaningful_screen_change(
+            previous_ocr,
+            current_ocr,
+            &previous_relevant,
+            &current_relevant,
+        );
+        assert!(changed);
     }
 
     #[test]
