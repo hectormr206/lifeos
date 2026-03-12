@@ -196,7 +196,15 @@ RUN set -eux && \
         echo "INFO: broadcom-wl/akmod-wl not available in current repos; continuing without Broadcom proprietary module"; \
     fi && \
     if command -v akmods >/dev/null 2>&1; then \
-        akmods --force || echo "WARNING: akmods failed in build environment; will retry on target host"; \
+        for modules_dir in /usr/lib/modules/*; do \
+            [ -d "${modules_dir}" ] || continue; \
+            kernel_ver="$(basename "${modules_dir}")"; \
+            if [ ! -d "/usr/src/kernels/${kernel_ver}" ]; then \
+                echo "WARNING: kernel-devel missing for ${kernel_ver}; skipping akmods build for that kernel"; \
+                continue; \
+            fi; \
+            akmods --force --kernels "${kernel_ver}" || echo "WARNING: akmods failed for ${kernel_ver} in build environment; will retry on target host"; \
+        done; \
     fi && \
     install -d /usr/share/lifeos/secureboot && \
     if [ -n "${LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64:-}" ] && [ -n "${LIFEOS_NVIDIA_KMOD_CERT_DER_B64:-}" ]; then \
