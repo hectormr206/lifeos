@@ -29,6 +29,9 @@ TARGET_ARCH="${LIFEOS_ARCH:-x86_64}"
 BUILD_TYPE="${LIFEOS_BUILD_TYPE:-iso}"  # iso, raw, qcow2, vmdk
 ROOTFS_SIZE="${LIFEOS_ROOTFS_SIZE:-20}"
 INSTALL_MODE="${LIFEOS_INSTALL_MODE:-interactive}" # interactive (safe) | unattended (CI/lab)
+LOCK_FILE="${LIFEOS_BUILD_LOCK_FILE:-/run/lifeos/build-iso.lock}"
+LOCK_HELD_EXTERNALLY="${LIFEOS_BUILD_LOCK_HELD:-0}"
+BUILD_LOCK_OWNED=0
 
 # Show help
 show_help() {
@@ -93,6 +96,55 @@ resolve_image_tag() {
     else
         IMAGE_TAG="$DEFAULT_REMOTE_IMAGE"
     fi
+}
+
+is_truthy() {
+    case "${1,,}" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+acquire_build_lock() {
+    if is_truthy "$LOCK_HELD_EXTERNALLY"; then
+        echo -e "${YELLOW}Using existing build lock: ${LOCK_FILE}${NC}"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$LOCK_FILE")"
+
+    if [[ -f "$LOCK_FILE" ]]; then
+        local existing_pid
+        existing_pid="$(awk -F= '/^PID=/{print $2}' "$LOCK_FILE" 2>/dev/null || true)"
+        if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            echo -e "${RED}Error: Another LifeOS build is already running (PID ${existing_pid}). Lock: ${LOCK_FILE}${NC}"
+            exit 1
+        fi
+        echo -e "${YELLOW}Warning: Removing stale build lock: ${LOCK_FILE}${NC}"
+        rm -f "$LOCK_FILE"
+    fi
+
+    cat > "$LOCK_FILE" << EOF
+PID=$$
+SCRIPT=$(basename "$0")
+STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+TYPE=$BUILD_TYPE
+IMAGE=$IMAGE_TAG
+EOF
+    BUILD_LOCK_OWNED=1
+}
+
+release_build_lock() {
+    [[ "$BUILD_LOCK_OWNED" -eq 1 ]] || return 0
+
+    if [[ -f "$LOCK_FILE" ]]; then
+        local owner_pid
+        owner_pid="$(awk -F= '/^PID=/{print $2}' "$LOCK_FILE" 2>/dev/null || true)"
+        if [[ -z "$owner_pid" || "$owner_pid" == "$$" ]]; then
+            rm -f "$LOCK_FILE"
+        fi
+    fi
+    BUILD_LOCK_OWNED=0
 }
 
 # Parse arguments
@@ -530,6 +582,8 @@ main() {
     
     parse_args "$@"
     resolve_image_tag
+    acquire_build_lock
+    trap release_build_lock EXIT
     case "$INSTALL_MODE" in
         interactive|unattended) ;;
         *)

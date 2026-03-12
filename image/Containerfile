@@ -206,37 +206,45 @@ RUN set -eux && \
         echo "${LIFEOS_NVIDIA_KMOD_CERT_DER_B64}" | base64 -d > "${KMOD_SIGN_CERT}"; \
         chmod 0600 "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}"; \
         cp -f "${KMOD_SIGN_CERT}" /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der; \
-        SIGN_TOOL="/usr/src/kernels/$(uname -r)/scripts/sign-file"; \
-        if [ -x "${SIGN_TOOL}" ]; then \
-            SIGNED_COUNT=0; \
-            for mod in /usr/lib/modules/$(uname -r)/extra/nvidia/*.ko; do \
+        SIGNED_COUNT=0; \
+        KERNELS_WITH_MISSING_SIGN_TOOL=0; \
+        for modules_dir in /usr/lib/modules/*; do \
+            [ -d "${modules_dir}/extra/nvidia" ] || continue; \
+            kernel_ver="$(basename "${modules_dir}")"; \
+            SIGN_TOOL="/usr/src/kernels/${kernel_ver}/scripts/sign-file"; \
+            if [ ! -x "${SIGN_TOOL}" ]; then \
+                echo "ERROR: sign-file tool not found for kernel ${kernel_ver} at ${SIGN_TOOL}; cannot sign NVIDIA modules"; \
+                KERNELS_WITH_MISSING_SIGN_TOOL=$((KERNELS_WITH_MISSING_SIGN_TOOL + 1)); \
+                continue; \
+            fi; \
+            for mod in "${modules_dir}"/extra/nvidia/*.ko; do \
                 [ -e "${mod}" ] || continue; \
                 "${SIGN_TOOL}" sha256 "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}" "${mod}"; \
                 SIGNED_COUNT=$((SIGNED_COUNT + 1)); \
             done; \
-            if [ "${SIGNED_COUNT}" -gt 0 ]; then \
-                UNSIGNED_COUNT=0; \
-                for mod in /usr/lib/modules/$(uname -r)/extra/nvidia/*.ko; do \
-                    [ -e "${mod}" ] || continue; \
-                    if [ -z "$(modinfo -F signer "${mod}" 2>/dev/null || true)" ]; then \
-                        echo "ERROR: NVIDIA module still unsigned after signing: ${mod}"; \
-                        UNSIGNED_COUNT=$((UNSIGNED_COUNT + 1)); \
-                    fi; \
-                done; \
-                if [ "${UNSIGNED_COUNT}" -gt 0 ]; then \
-                    echo "ERROR: ${UNSIGNED_COUNT} NVIDIA modules are unsigned; refusing build"; \
-                    exit 1; \
-                fi; \
-                depmod "$(uname -r)" || true; \
-                echo "INFO: Signed ${SIGNED_COUNT} NVIDIA kernel modules for Secure Boot"; \
-            else \
-                echo "ERROR: No NVIDIA kernel modules found to sign"; \
-                exit 1; \
-            fi; \
-        else \
-            echo "ERROR: sign-file tool not found at ${SIGN_TOOL}; cannot sign NVIDIA modules"; \
+            depmod "${kernel_ver}" || true; \
+        done; \
+        if [ "${KERNELS_WITH_MISSING_SIGN_TOOL}" -gt 0 ]; then \
+            echo "ERROR: ${KERNELS_WITH_MISSING_SIGN_TOOL} kernel module trees could not be signed due to missing sign-file"; \
             exit 1; \
         fi; \
+        if [ "${SIGNED_COUNT}" -eq 0 ]; then \
+            echo "ERROR: No NVIDIA kernel modules found to sign"; \
+            exit 1; \
+        fi; \
+        UNSIGNED_COUNT=0; \
+        for mod in /usr/lib/modules/*/extra/nvidia/*.ko; do \
+            [ -e "${mod}" ] || continue; \
+            if [ -z "$(modinfo -F signer "${mod}" 2>/dev/null || true)" ]; then \
+                echo "ERROR: NVIDIA module still unsigned after signing: ${mod}"; \
+                UNSIGNED_COUNT=$((UNSIGNED_COUNT + 1)); \
+            fi; \
+        done; \
+        if [ "${UNSIGNED_COUNT}" -gt 0 ]; then \
+            echo "ERROR: ${UNSIGNED_COUNT} NVIDIA modules are unsigned; refusing build"; \
+            exit 1; \
+        fi; \
+        echo "INFO: Signed ${SIGNED_COUNT} NVIDIA kernel modules for Secure Boot"; \
         rm -f "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}"; \
     else \
         echo "INFO: NVIDIA module signing secrets not provided; Secure Boot may reject NVIDIA modules"; \

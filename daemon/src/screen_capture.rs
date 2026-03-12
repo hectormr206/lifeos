@@ -590,113 +590,164 @@ impl ScreenCapture {
             .arg("list-sessions")
             .arg("--no-legend")
             .output()
-            .ok()?;
+            .ok();
 
-        if !sessions_output.status.success() {
-            return None;
+        if let Some(sessions_output) = sessions_output {
+            if sessions_output.status.success() {
+                let sessions = String::from_utf8_lossy(&sessions_output.stdout);
+                for line in sessions.lines() {
+                    let Some(session_id) = line.split_whitespace().next() else {
+                        continue;
+                    };
+
+                    let Some(props_output) = Command::new("loginctl")
+                        .arg("show-session")
+                        .arg(session_id)
+                        .arg("-p")
+                        .arg("Active")
+                        .arg("-p")
+                        .arg("State")
+                        .arg("-p")
+                        .arg("Name")
+                        .arg("-p")
+                        .arg("Type")
+                        .arg("-p")
+                        .arg("Display")
+                        .arg("-p")
+                        .arg("Leader")
+                        .output()
+                        .ok()
+                    else {
+                        continue;
+                    };
+
+                    if !props_output.status.success() {
+                        continue;
+                    }
+
+                    let props =
+                        Self::parse_key_value_lines(&String::from_utf8_lossy(&props_output.stdout));
+                    if props.get("Active").map(String::as_str) != Some("yes") {
+                        continue;
+                    }
+
+                    let state = props.get("State").map(String::as_str).unwrap_or_default();
+                    if state != "active" && state != "online" {
+                        continue;
+                    }
+
+                    let user = props.get("Name").cloned().unwrap_or_default();
+                    if user.is_empty() || user == "root" {
+                        continue;
+                    }
+
+                    let leader_pid = props
+                        .get("Leader")
+                        .and_then(|value| value.parse::<u32>().ok())
+                        .unwrap_or(0);
+                    if leader_pid == 0 {
+                        continue;
+                    }
+
+                    let session_env = Self::read_proc_environ(leader_pid);
+                    let session_type = props.get("Type").map(String::as_str).unwrap_or_default();
+                    let display_prop = props.get("Display").cloned().unwrap_or_default();
+
+                    let mut xdg_runtime_dir = session_env.get("XDG_RUNTIME_DIR").cloned();
+                    if xdg_runtime_dir.is_none() {
+                        if let Some(uid) = Self::lookup_user_uid(&user) {
+                            xdg_runtime_dir = Some(format!("/run/user/{}", uid));
+                        }
+                    }
+
+                    let wayland_display =
+                        session_env.get("WAYLAND_DISPLAY").cloned().or_else(|| {
+                            Self::detect_wayland_display(
+                                session_type,
+                                &display_prop,
+                                xdg_runtime_dir.as_deref(),
+                            )
+                        });
+
+                    let x11_display = session_env.get("DISPLAY").cloned().or_else(|| {
+                        if !display_prop.is_empty() && display_prop.starts_with(':') {
+                            Some(display_prop.clone())
+                        } else {
+                            None
+                        }
+                    });
+
+                    if wayland_display.is_none() && x11_display.is_none() {
+                        continue;
+                    }
+
+                    let dbus_session_bus_address = session_env
+                        .get("DBUS_SESSION_BUS_ADDRESS")
+                        .cloned()
+                        .or_else(|| {
+                            xdg_runtime_dir
+                                .as_ref()
+                                .map(|runtime| format!("unix:path={}/bus", runtime))
+                        });
+
+                    return Some(DisplayContext {
+                        run_as_user: Some(user),
+                        wayland_display,
+                        x11_display,
+                        xdg_runtime_dir,
+                        dbus_session_bus_address,
+                    });
+                }
+            }
         }
 
-        let sessions = String::from_utf8_lossy(&sessions_output.stdout);
-        for line in sessions.lines() {
-            let Some(session_id) = line.split_whitespace().next() else {
+        self.fallback_display_context_from_runtime()
+    }
+
+    fn fallback_display_context_from_runtime(&self) -> Option<DisplayContext> {
+        let mut candidates: Vec<(u64, DisplayContext)> = Vec::new();
+
+        for entry in std::fs::read_dir("/run/user").ok()?.flatten() {
+            let uid = entry.file_name().to_string_lossy().to_string();
+            if uid.is_empty() || uid == "0" || !uid.bytes().all(|byte| byte.is_ascii_digit()) {
+                continue;
+            }
+
+            let runtime_dir = format!("/run/user/{}", uid);
+            let wayland_display = Self::discover_wayland_socket(&runtime_dir);
+            if wayland_display.is_none() {
+                continue;
+            }
+
+            let Some(user) = Self::lookup_uid_user(&uid) else {
                 continue;
             };
-
-            let props_output = Command::new("loginctl")
-                .arg("show-session")
-                .arg(session_id)
-                .arg("-p")
-                .arg("Active")
-                .arg("-p")
-                .arg("State")
-                .arg("-p")
-                .arg("Name")
-                .arg("-p")
-                .arg("Type")
-                .arg("-p")
-                .arg("Display")
-                .arg("-p")
-                .arg("Leader")
-                .output()
-                .ok()?;
-
-            if !props_output.status.success() {
+            if user == "root" {
                 continue;
             }
 
-            let props = Self::parse_key_value_lines(&String::from_utf8_lossy(&props_output.stdout));
-            if props.get("Active").map(String::as_str) != Some("yes") {
-                continue;
-            }
-
-            let state = props.get("State").map(String::as_str).unwrap_or_default();
-            if state != "active" && state != "online" {
-                continue;
-            }
-
-            let user = props.get("Name").cloned().unwrap_or_default();
-            if user.is_empty() || user == "root" {
-                continue;
-            }
-
-            let leader_pid = props
-                .get("Leader")
-                .and_then(|value| value.parse::<u32>().ok())
+            let modified = entry
+                .metadata()
+                .ok()
+                .and_then(|meta| meta.modified().ok())
+                .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs())
                 .unwrap_or(0);
-            if leader_pid == 0 {
-                continue;
-            }
 
-            let session_env = Self::read_proc_environ(leader_pid);
-            let session_type = props.get("Type").map(String::as_str).unwrap_or_default();
-            let display_prop = props.get("Display").cloned().unwrap_or_default();
-
-            let mut xdg_runtime_dir = session_env.get("XDG_RUNTIME_DIR").cloned();
-            if xdg_runtime_dir.is_none() {
-                if let Some(uid) = Self::lookup_user_uid(&user) {
-                    xdg_runtime_dir = Some(format!("/run/user/{}", uid));
-                }
-            }
-
-            let wayland_display = session_env.get("WAYLAND_DISPLAY").cloned().or_else(|| {
-                Self::detect_wayland_display(
-                    session_type,
-                    &display_prop,
-                    xdg_runtime_dir.as_deref(),
-                )
-            });
-
-            let x11_display = session_env.get("DISPLAY").cloned().or_else(|| {
-                if !display_prop.is_empty() && display_prop.starts_with(':') {
-                    Some(display_prop.clone())
-                } else {
-                    None
-                }
-            });
-
-            if wayland_display.is_none() && x11_display.is_none() {
-                continue;
-            }
-
-            let dbus_session_bus_address = session_env
-                .get("DBUS_SESSION_BUS_ADDRESS")
-                .cloned()
-                .or_else(|| {
-                    xdg_runtime_dir
-                        .as_ref()
-                        .map(|runtime| format!("unix:path={}/bus", runtime))
-                });
-
-            return Some(DisplayContext {
-                run_as_user: Some(user),
-                wayland_display,
-                x11_display,
-                xdg_runtime_dir,
-                dbus_session_bus_address,
-            });
+            candidates.push((
+                modified,
+                DisplayContext {
+                    run_as_user: Some(user),
+                    wayland_display,
+                    x11_display: None,
+                    xdg_runtime_dir: Some(runtime_dir.clone()),
+                    dbus_session_bus_address: Some(format!("unix:path={}/bus", runtime_dir)),
+                },
+            ));
         }
 
-        None
+        candidates.sort_by_key(|(modified, _)| *modified);
+        candidates.pop().map(|(_, context)| context)
     }
 
     fn detect_wayland_display(
@@ -750,6 +801,16 @@ impl ScreenCapture {
 
         let uid = String::from_utf8_lossy(&output.stdout).trim().to_string();
         (!uid.is_empty()).then_some(uid)
+    }
+
+    fn lookup_uid_user(uid: &str) -> Option<String> {
+        let output = Command::new("id").arg("-nu").arg(uid).output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        let user = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!user.is_empty()).then_some(user)
     }
 
     fn parse_key_value_lines(raw: &str) -> HashMap<String, String> {

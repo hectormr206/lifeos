@@ -28,6 +28,38 @@ success() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
 error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+acquire_build_lock() {
+    mkdir -p "$(dirname "$LOCK_FILE")"
+
+    if [[ -f "$LOCK_FILE" ]]; then
+        local existing_pid=""
+        existing_pid="$(awk -F= '/^PID=/{print $2}' "$LOCK_FILE" 2>/dev/null || true)"
+        if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            error "Another LifeOS build is already running (PID ${existing_pid}). Lock: ${LOCK_FILE}"
+        fi
+        warn "Removing stale build lock: ${LOCK_FILE}"
+        rm -f "$LOCK_FILE"
+    fi
+
+    cat > "$LOCK_FILE" << EOF
+PID=$$
+SCRIPT=$(basename "$0")
+STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+TYPE=$BUILD_TYPE
+IMAGE=$IMAGE_NAME
+EOF
+}
+
+release_build_lock() {
+    if [[ -f "$LOCK_FILE" ]]; then
+        local owner_pid=""
+        owner_pid="$(awk -F= '/^PID=/{print $2}' "$LOCK_FILE" 2>/dev/null || true)"
+        if [[ -z "$owner_pid" || "$owner_pid" == "$$" ]]; then
+            rm -f "$LOCK_FILE"
+        fi
+    fi
+}
+
 show_help() {
     cat << EOF
 Usage: sudo ./scripts/build-iso.sh [OPTIONS]
@@ -61,6 +93,7 @@ OUTPUT_DIR="${LIFEOS_OUTPUT_DIR:-${PROJECT_ROOT}/output}"
 PRELOAD_MODEL="${LIFEOS_PRELOAD_MODEL:-false}"
 NVIDIA_SIGN_KEY_B64="${LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64:-}"
 NVIDIA_SIGN_CERT_DER_B64="${LIFEOS_NVIDIA_KMOD_CERT_DER_B64:-}"
+LOCK_FILE="${LIFEOS_BUILD_LOCK_FILE:-/run/lifeos/build-iso.lock}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -113,6 +146,7 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 mkdir -p "$OUTPUT_DIR"
+acquire_build_lock
 LOG_FILE="${LIFEOS_BUILD_LOG_FILE:-${OUTPUT_DIR}/build-${BUILD_TYPE}.log}"
 LATEST_LOG_FILE="${OUTPUT_DIR}/build-iso.log"
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -124,7 +158,16 @@ else
     exec > >(tee "$LOG_FILE" "$LATEST_LOG_FILE") 2>&1
 fi
 
-trap 'status=$?; if [[ $status -ne 0 ]]; then echo -e "${RED}[ERROR]${NC} Build failed. See logs: ${LOG_FILE} and ${LATEST_LOG_FILE}"; else echo -e "${GREEN}[OK]${NC} Logs updated: ${LOG_FILE} and ${LATEST_LOG_FILE}"; fi' EXIT
+on_exit() {
+    local status=$?
+    release_build_lock
+    if [[ $status -ne 0 ]]; then
+        echo -e "${RED}[ERROR]${NC} Build failed. See logs: ${LOG_FILE} and ${LATEST_LOG_FILE}"
+    else
+        echo -e "${GREEN}[OK]${NC} Logs updated: ${LOG_FILE} and ${LATEST_LOG_FILE}"
+    fi
+}
+trap on_exit EXIT
 
 echo -e "${CYAN}${BOLD}"
 cat << 'BANNER'
@@ -229,6 +272,8 @@ echo
 
 log "Step 3/3: Generating ${BUILD_TYPE} artifact..."
 chmod +x "$PROJECT_ROOT/scripts/generate-iso-simple.sh"
+LIFEOS_BUILD_LOCK_HELD=1 \
+LIFEOS_BUILD_LOCK_FILE="$LOCK_FILE" \
 LIFEOS_OUTPUT_DIR="$OUTPUT_DIR" \
 LIFEOS_INSTALL_MODE="$INSTALL_MODE" \
 bash "$PROJECT_ROOT/scripts/generate-iso-simple.sh" \

@@ -47,6 +47,63 @@ success() { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
 error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
+LOCK_FILE="${LIFEOS_BUILD_LOCK_FILE:-/run/lifeos/build-iso.lock}"
+LOCK_HELD_EXTERNALLY="${LIFEOS_BUILD_LOCK_HELD:-0}"
+BUILD_LOCK_OWNED=0
+
+is_truthy() {
+    case "${1,,}" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+acquire_build_lock() {
+    if is_truthy "$LOCK_HELD_EXTERNALLY"; then
+        log "Using existing build lock: ${LOCK_FILE}"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$LOCK_FILE")"
+
+    if [[ -f "$LOCK_FILE" ]]; then
+        local existing_pid=""
+        existing_pid="$(awk -F= '/^PID=/{print $2}' "$LOCK_FILE" 2>/dev/null || true)"
+        if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            error "Another LifeOS build is already running (PID ${existing_pid}). Lock: ${LOCK_FILE}"
+        fi
+        warn "Removing stale build lock: ${LOCK_FILE}"
+        rm -f "$LOCK_FILE"
+    fi
+
+    cat > "$LOCK_FILE" << EOF
+PID=$$
+SCRIPT=$(basename "$0")
+STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+TYPE=$BUILD_TYPE
+IMAGE=$IMAGE_NAME
+EOF
+    BUILD_LOCK_OWNED=1
+}
+
+release_build_lock() {
+    [[ "$BUILD_LOCK_OWNED" -eq 1 ]] || return 0
+
+    if [[ -f "$LOCK_FILE" ]]; then
+        local owner_pid=""
+        owner_pid="$(awk -F= '/^PID=/{print $2}' "$LOCK_FILE" 2>/dev/null || true)"
+        if [[ -z "$owner_pid" || "$owner_pid" == "$$" ]]; then
+            rm -f "$LOCK_FILE"
+        fi
+    fi
+    BUILD_LOCK_OWNED=0
+}
+
+on_exit() {
+    release_build_lock
+}
+trap on_exit EXIT
+
 # --- Parsear argumentos ---
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -131,6 +188,7 @@ ISO_PUBLISHER="${LIFEOS_ISO_PUBLISHER:-LIFEOS}"
 
 success "Prerequisitos OK"
 log "Directorio de salida: $OUTPUT_DIR"
+acquire_build_lock
 
 # --- Paso 1: Construir la imagen si no existe ---
 log "Verificando imagen del contenedor..."

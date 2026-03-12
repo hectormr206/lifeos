@@ -1798,11 +1798,10 @@ async fn maybe_apply_gpu_rebalance(
 
 fn gpu_policy_for_vram(free_vram_gb: Option<u32>, active_gpu_layers: i32) -> GpuOffloadStatus {
     let vram = free_vram_gb.unwrap_or_default();
-    let gpu_enabled = active_gpu_layers != 0;
     let (
         profile_tier,
-        llm_offload_gpu,
-        vision_offload_gpu,
+        llm_offload,
+        vision_offload,
         tts_offload,
         stt_offload,
         recommended_gpu_layers,
@@ -1833,11 +1832,6 @@ fn gpu_policy_for_vram(free_vram_gb: Option<u32>, active_gpu_layers: i32) -> Gpu
             "cpu/npu",
             -1,
         ),
-    };
-    let (llm_offload, vision_offload) = if gpu_enabled {
-        (llm_offload_gpu, vision_offload_gpu)
-    } else {
-        ("cpu only", "cpu only")
     };
 
     GpuOffloadStatus {

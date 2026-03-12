@@ -24,11 +24,15 @@ DEV_TARGET_PRUNE_ON_HIGH_DISK="${DEV_TARGET_PRUNE_ON_HIGH_DISK:-true}"
 DEV_TARGET_PRUNE_THRESHOLD="${DEV_TARGET_PRUNE_THRESHOLD:-92}"
 
 TMP_PURGE_DAYS="${TMP_PURGE_DAYS:-3}"
-PODMAN_PRUNE_ENABLED="${PODMAN_PRUNE_ENABLED:-true}"
+PODMAN_PRUNE_ENABLED="${PODMAN_PRUNE_ENABLED:-false}"
+PODMAN_PRUNE_IMAGES="${PODMAN_PRUNE_IMAGES:-false}"
 PODMAN_PRUNE_UNTIL="${PODMAN_PRUNE_UNTIL:-168h}"
 BOOTC_CLEANUP_ENABLED="${BOOTC_CLEANUP_ENABLED:-true}"
-FLATPAK_PRUNE_ENABLED="${FLATPAK_PRUNE_ENABLED:-true}"
+FLATPAK_PRUNE_ENABLED="${FLATPAK_PRUNE_ENABLED:-false}"
 JOURNAL_VACUUM_DAYS="${JOURNAL_VACUUM_DAYS:-14}"
+BUILD_GUARD_ENABLED="${BUILD_GUARD_ENABLED:-true}"
+BUILD_LOCK_FILES="${BUILD_LOCK_FILES:-/run/lifeos/build-iso.lock /run/lifeos/iso-build.lock /tmp/lifeos-build.lock}"
+BUILD_PROCESS_PATTERN="${BUILD_PROCESS_PATTERN:-scripts/build-iso.sh|scripts/generate-iso-simple.sh|scripts/generate-iso.sh|bootc-image-builder|osbuild|xorriso|mkisofs|genisoimage|qemu-img}"
 
 log() {
     printf '[lifeos-cleanup] %s\n' "$*"
@@ -36,6 +40,25 @@ log() {
 
 run_cmd() {
     "$@" || true
+}
+
+is_build_guard_active() {
+    [ "${BUILD_GUARD_ENABLED}" = "true" ] || return 1
+
+    local lock_file
+    for lock_file in ${BUILD_LOCK_FILES}; do
+        if [ -f "${lock_file}" ]; then
+            log "Build guard active: lock detected at ${lock_file}"
+            return 0
+        fi
+    done
+
+    if pgrep -f "${BUILD_PROCESS_PATTERN}" >/dev/null 2>&1; then
+        log "Build guard active: matching build process is running"
+        return 0
+    fi
+
+    return 1
 }
 
 prune_files_older_than() {
@@ -150,8 +173,10 @@ cleanup_tmp() {
 cleanup_podman() {
     [ "${PODMAN_PRUNE_ENABLED}" = "true" ] || return 0
     command -v podman >/dev/null 2>&1 || return 0
-    log "Pruning podman dangling/old build data"
-    run_cmd podman image prune -f
+    log "Pruning podman stale build/runtime data"
+    if [ "${PODMAN_PRUNE_IMAGES}" = "true" ]; then
+        run_cmd podman image prune -f
+    fi
     run_cmd podman container prune -f --filter "until=${PODMAN_PRUNE_UNTIL}"
     run_cmd podman builder prune -f --filter "until=${PODMAN_PRUNE_UNTIL}"
 }
@@ -181,6 +206,10 @@ cleanup_journal() {
 
 main() {
     log "Starting maintenance cleanup"
+    if is_build_guard_active; then
+        log "Skipping cleanup because ISO/image build is in progress"
+        exit 0
+    fi
     cleanup_screenshots
     cleanup_runner
     cleanup_iso_outputs
