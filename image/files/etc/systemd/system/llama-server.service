@@ -49,11 +49,9 @@ SystemCallArchitectures=native
 LimitNOFILE=65536
 MemoryMax=16G
 
-# GPU device access (conditional)
-DeviceAllow=/dev/nvidia* rw
-DeviceAllow=/dev/kfd rw
-DeviceAllow=/dev/dri/* rw
-DeviceAllow=/dev/dxg rw
+# NOTE:
+# Keep systemd's default device policy here. Restrictive DeviceAllow filters
+# can hide dedicated Vulkan GPUs on hybrid systems and force CPU fallback.
 
 [Install]
 WantedBy=multi-user.target
