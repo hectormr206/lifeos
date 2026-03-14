@@ -345,15 +345,7 @@ impl AiManager {
 
         let body: serde_json::Value = response.json().await?;
 
-        let response_text = body
-            .get("choices")
-            .and_then(|v| v.as_array())
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("message"))
-            .and_then(|message| message.get("content"))
-            .and_then(|content| content.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_default();
+        let response_text = extract_chat_response_text(&body);
 
         let response_model = body
             .get("model")
@@ -508,6 +500,96 @@ fn truncate_error(body: &str) -> String {
     format!("{}...", &cleaned[..200])
 }
 
+fn extract_chat_response_text(body: &serde_json::Value) -> String {
+    let message = body
+        .get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("message"));
+
+    if let Some(message) = message {
+        if let Some(content) = message.get("content") {
+            let parsed = extract_text_from_content_value(content);
+            if !parsed.is_empty() {
+                return parsed;
+            }
+        }
+
+        for key in ["reasoning_content", "reasoning", "thinking", "text"] {
+            if let Some(value) = message.get(key).and_then(|v| v.as_str()) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+
+    body.get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|choice| choice.get("text"))
+        .and_then(|text| text.as_str())
+        .map(|text| text.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn extract_text_from_content_value(content: &serde_json::Value) -> String {
+    match content {
+        serde_json::Value::String(text) => text.trim().to_string(),
+        serde_json::Value::Array(items) => {
+            let segments: Vec<String> = items
+                .iter()
+                .filter_map(extract_text_segment)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect();
+            segments.join("\n")
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(|v| v.as_str()) {
+                return text.trim().to_string();
+            }
+            if let Some(text) = map
+                .get("text")
+                .and_then(|v| v.as_object())
+                .and_then(|obj| obj.get("value"))
+                .and_then(|v| v.as_str())
+            {
+                return text.trim().to_string();
+            }
+            if let Some(inner) = map.get("content") {
+                return extract_text_from_content_value(inner);
+            }
+            String::new()
+        }
+        _ => String::new(),
+    }
+}
+
+fn extract_text_segment(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(text) => Some(text.to_string()),
+        serde_json::Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(|v| v.as_str()) {
+                return Some(text.to_string());
+            }
+            if let Some(text) = map
+                .get("text")
+                .and_then(|v| v.as_object())
+                .and_then(|obj| obj.get("value"))
+                .and_then(|v| v.as_str())
+            {
+                return Some(text.to_string());
+            }
+            map.get("content")
+                .map(extract_text_from_content_value)
+                .filter(|v| !v.trim().is_empty())
+        }
+        _ => None,
+    }
+}
+
 fn chat_request_semaphore() -> &'static Semaphore {
     static SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
     SEMAPHORE.get_or_init(|| Semaphore::new(1))
@@ -526,4 +608,54 @@ fn is_primary_model_candidate(model: &str) -> bool {
         && !lower.starts_with("nomic-embed-")
         && !lower.starts_with("whisper")
         && !lower.contains("embedding")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_chat_response_text;
+
+    #[test]
+    fn extract_chat_response_handles_string_content() {
+        let body = serde_json::json!({
+            "choices": [
+                { "message": { "content": "Hola desde string" } }
+            ]
+        });
+
+        assert_eq!(extract_chat_response_text(&body), "Hola desde string");
+    }
+
+    #[test]
+    fn extract_chat_response_handles_array_content() {
+        let body = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            { "type": "text", "text": "Linea 1" },
+                            { "type": "output_text", "text": { "value": "Linea 2" } }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(extract_chat_response_text(&body), "Linea 1\nLinea 2");
+    }
+
+    #[test]
+    fn extract_chat_response_falls_back_to_reasoning_content() {
+        let body = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "reasoning_content": "fallback reasoning"
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(extract_chat_response_text(&body), "fallback reasoning");
+    }
 }
