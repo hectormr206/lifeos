@@ -20,6 +20,10 @@ on:
           - candidate
           - edge
 
+concurrency:
+  group: release-channels-${{ github.ref_name }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -92,14 +96,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          min_free_gb=20
+
+          free_gb_before="$(df --output=avail -BG /var | tail -n1 | tr -dc '0-9')"
+          echo "Free space before reclaim: ${free_gb_before}GB"
           df -h
           if [[ "${{ runner.environment }}" == "github-hosted" ]]; then
             sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
             docker system prune -af || true
           fi
-          podman system prune -af --volumes || true
-          rm -rf /var/tmp/buildah* /tmp/buildah* || true
+
+          # Keep cleanup deterministic on self-hosted without aggressively deleting
+          # resources that may be used by concurrent jobs.
+          podman image prune -af || true
+          podman volume prune -f || true
+          podman container prune -f || true
+          podman builder prune -af || true
+          sudo find /var/tmp -maxdepth 1 -type d -name 'buildah*' -mtime +1 -exec rm -rf {} + || true
+          find /tmp -maxdepth 1 -type d -name 'buildah*' -mtime +1 -exec rm -rf {} + || true
+
+          free_gb_after="$(df --output=avail -BG /var | tail -n1 | tr -dc '0-9')"
+          echo "Free space after reclaim: ${free_gb_after}GB"
           df -h
+          if (( free_gb_after < min_free_gb )); then
+            echo "::error::Insufficient disk space after cleanup (${free_gb_after}GB free, require >= ${min_free_gb}GB)"
+            exit 1
+          fi
       
       - name: Set build metadata
         id: meta-build

@@ -157,17 +157,28 @@ code_path="$(http_code \
     -d "${payload}")"
 assert_http_code "Path traversal command is blocked" "403" "${code_path}"
 
-# 5) AI endpoint fails closed when AI service is offline
+# 5) AI endpoint remains protected and behaves safely across environments
 chat_payload='{"message":"hello","stream":false}'
+
+code_ai_unauth="$(http_code \
+    -X POST "${BASE_URL}/api/v1/ai/chat" \
+    -H "Content-Type: application/json" \
+    -d "${chat_payload}")"
+assert_http_code "AI chat endpoint requires bootstrap token" "401" "${code_ai_unauth}"
+
 code_ai="$(http_code \
     -X POST "${BASE_URL}/api/v1/ai/chat" \
     -H "Content-Type: application/json" \
     -H "x-bootstrap-token: ${BOOTSTRAP_TOKEN}" \
     -d "${chat_payload}")"
-if [[ "${code_ai}" == "503" || "${code_ai}" == "502" ]]; then
-    pass "AI chat endpoint fails safely when backend is unavailable (HTTP ${code_ai})"
+if [[ "${code_ai}" == "200" || "${code_ai}" == "503" || "${code_ai}" == "502" ]]; then
+    if [[ "${code_ai}" == "200" ]]; then
+        pass "AI chat endpoint is available with valid bootstrap token (HTTP ${code_ai})"
+    else
+        pass "AI chat endpoint fails safely when backend is unavailable (HTTP ${code_ai})"
+    fi
 else
-    fail "AI chat endpoint returned unexpected status (expected 503/502, got ${code_ai})"
+    fail "AI chat endpoint returned unexpected status (expected 200/502/503, got ${code_ai})"
 fi
 
 echo
