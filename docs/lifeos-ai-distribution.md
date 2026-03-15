@@ -1504,7 +1504,7 @@ Implementacion concreta:
 
 **Estado:** **EN EJECUCION (2026-03-15).** _Puente activo tras cierre de Fase 4 en repo y validacion en hardware real._
 
-**Nota operativa:** esta fase ya arranco con ajustes de runtime y defaults de prueba en hardware real; aun faltan selector visual, catalogo firmado y politicas completas de ciclo de vida para declarar cierre.
+**Nota operativa:** esta fase ya arranco con ajustes de runtime y defaults de prueba en hardware real; el catalogo firmado y la coherencia de seleccion ya estan activos, pero aun faltan selector visual completo y politicas finales de ciclo de vida para declarar cierre.
 
 **Reglas de producto obligatorias:**
 
@@ -1517,14 +1517,14 @@ Implementacion concreta:
 **Bloque 1 — Selector visual y catalogo firmado (P0):**
 
 - [ ] Panel visual de modelos en overlay/ajustes con roster inicial Qwen3.5: `4B`, `9B`, `27B`.
-- [ ] Catalogo firmado con metadata por modelo: tamano, RAM/VRAM recomendada, roles, `mmproj` asociado, checksum y politica de offload.
-- [ ] Descarga reanudable con progreso, verificacion de integridad y estimacion de espacio/tiempo.
+- [x] Catalogo firmado con metadata por modelo: tamano, RAM/VRAM recomendada, roles, `mmproj` asociado, checksum y politica de offload. _Implementado en catalogo v1 firmado y propagado al selector overlay/API._
+- [x] Descarga reanudable con progreso, verificacion de integridad y estimacion de espacio/tiempo. _`overlay/models/pull` ahora soporta resume, reintentos, validacion por size/hash y expone estimaciones en selector._
 
 **Bloque 2 — Seleccion por defecto y coherencia runtime (P0):**
 
-- [ ] `life ai`, `llama-server`, overlay y daemon leen el mismo modelo activo desde `/etc/lifeos/llama-server.env`.
-- [ ] Al seleccionar un modelo, LifeOS actualiza tanto `LIFEOS_AI_MODEL` como `LIFEOS_AI_MMPROJ`.
-- [ ] Si el usuario elimina el modelo activo, LifeOS selecciona fallback seguro o deja el runtime pesado desactivado sin re-descarga implicita.
+- [x] `life ai`, `llama-server`, overlay y daemon leen el mismo modelo activo desde `/etc/lifeos/llama-server.env`. _Overlay/API y CLI exponen `configured_model` desde la misma fuente, y `llama-server` arranca desde ese env._
+- [x] Al seleccionar un modelo, LifeOS actualiza tanto `LIFEOS_AI_MODEL` como `LIFEOS_AI_MMPROJ`. _Seleccion overlay aplica ambos valores en una sola operacion y valida `mmproj` companion._
+- [x] Si el usuario elimina el modelo activo, LifeOS selecciona fallback seguro o deja el runtime pesado desactivado sin re-descarga implicita. _`overlay/models/remove` aplica fallback local o limpia `MODEL/MMPROJ` sin pull implicito._
 
 **Bloque 3 — Politica de updates y respeto a la voluntad del usuario (P0):**
 

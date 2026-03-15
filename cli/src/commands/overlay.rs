@@ -369,6 +369,13 @@ async fn show_models() -> anyhow::Result<()> {
         body["configured_model"].as_str().unwrap_or("none").yellow(),
         body["active_model"].as_str().unwrap_or("none").yellow()
     );
+    println!(
+        "  Configured mmproj: {}",
+        body["configured_mmproj"]
+            .as_str()
+            .unwrap_or("none")
+            .yellow()
+    );
 
     if let Some(models) = body["models"].as_array() {
         println!();
@@ -381,6 +388,20 @@ async fn show_models() -> anyhow::Result<()> {
             let pinned = model["pinned"].as_bool().unwrap_or(false);
             let removed = model["removed_by_user"].as_bool().unwrap_or(false);
             let featured = model["featured"].as_bool().unwrap_or(false);
+            let integrity = model["integrity_available"].as_bool().unwrap_or(false);
+            let resumable = model["download_resumable"].as_bool().unwrap_or(false);
+            let ram = model["recommended_ram_gb"]
+                .as_u64()
+                .map(|v| format!("{}GB", v))
+                .unwrap_or_else(|| "-".to_string());
+            let vram = model["recommended_vram_gb"]
+                .as_u64()
+                .map(|v| format!("{}GB", v))
+                .unwrap_or_else(|| "-".to_string());
+            let eta = model["estimated_download_seconds"]
+                .as_u64()
+                .map(|v| format!("{}s", v))
+                .unwrap_or_else(|| "-".to_string());
             let badge = if selected && pinned {
                 "default+pinned".green().bold().to_string()
             } else if selected {
@@ -400,6 +421,14 @@ async fn show_models() -> anyhow::Result<()> {
                 String::new()
             };
             println!("  - {} ({}) [{}]{}", id.cyan(), size, badge, featured_tag);
+            println!(
+                "      ram/vram: {}/{}  integrity:{}  resumable:{}  eta:{}",
+                ram,
+                vram,
+                if integrity { "yes".green() } else { "no".red() },
+                if resumable { "yes".green() } else { "no".red() },
+                eta
+            );
         }
     }
 

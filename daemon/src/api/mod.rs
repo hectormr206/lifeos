@@ -56,6 +56,7 @@ const MODEL_DIR: &str = "/var/lib/lifeos/models";
 const LLAMA_ENV_FILE: &str = "/etc/lifeos/llama-server.env";
 const REMOVED_MODELS_FILE: &str = "/var/lib/lifeos/models/.removed-models";
 const PINNED_MODELS_FILE: &str = "/var/lib/lifeos/models/.pinned-models";
+const DEFAULT_DOWNLOAD_MBIT_PER_SEC: u64 = 100;
 const EMBEDDED_MODEL_CATALOG_JSON: &str = include_str!("../../../contracts/models/v1/catalog.json");
 const EMBEDDED_MODEL_CATALOG_SIG: &str =
     include_str!("../../../contracts/models/v1/catalog.json.sig");
@@ -72,9 +73,29 @@ struct OverlayCatalogModel {
     download_url: String,
     size_bytes: u64,
     #[serde(default)]
+    checksum_sha256: Option<String>,
+    #[serde(default)]
+    recommended_ram_gb: Option<u32>,
+    #[serde(default)]
+    recommended_vram_gb: Option<u32>,
+    #[serde(default)]
+    offload_policy: Option<String>,
+    #[serde(default)]
+    companion_mmproj: Option<OverlayCatalogCompanionArtifact>,
+    #[serde(default)]
     runtime_profiles: Vec<String>,
     #[serde(default)]
     roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OverlayCatalogCompanionArtifact {
+    filename: String,
+    download_url: String,
+    #[serde(default)]
+    size_bytes: Option<u64>,
+    #[serde(default)]
+    checksum_sha256: Option<String>,
 }
 
 /// Shared API state
@@ -462,6 +483,7 @@ pub struct OverlayImportRequest {
 pub struct OverlayModelSelectorResponse {
     pub active_model: Option<String>,
     pub configured_model: Option<String>,
+    pub configured_mmproj: Option<String>,
     pub catalog_version: String,
     pub catalog_signature_valid: bool,
     pub models: Vec<OverlayModelCard>,
@@ -477,6 +499,14 @@ pub struct OverlayModelCard {
     pub pinned: bool,
     pub removed_by_user: bool,
     pub featured: bool,
+    pub integrity_available: bool,
+    pub checksum_sha256: Option<String>,
+    pub recommended_ram_gb: Option<u32>,
+    pub recommended_vram_gb: Option<u32>,
+    pub offload_policy: Option<String>,
+    pub required_disk_bytes: Option<u64>,
+    pub estimated_download_seconds: Option<u64>,
+    pub download_resumable: bool,
     pub runtime_profiles: Vec<String>,
     pub roles: Vec<String>,
     pub companion_mmproj: Option<String>,
@@ -520,6 +550,7 @@ pub struct OverlayModelActionResponse {
     pub message: String,
     pub selected_model: Option<String>,
     pub companion_mmproj: Option<String>,
+    pub selected_mmproj: Option<String>,
 }
 
 // ==================== UPDATE API STRUCTS ====================
@@ -2729,6 +2760,15 @@ fn digest_bytes(bytes: &[u8]) -> String {
     format!("{:x}", digest)
 }
 
+fn estimate_download_seconds(size_bytes: u64) -> u64 {
+    let bits = size_bytes.saturating_mul(8);
+    let bits_per_second = DEFAULT_DOWNLOAD_MBIT_PER_SEC.saturating_mul(1_000_000);
+    if bits_per_second == 0 {
+        return 0;
+    }
+    bits.div_ceil(bits_per_second)
+}
+
 fn embedded_catalog_signature_valid() -> bool {
     let expected = parse_signature(EMBEDDED_MODEL_CATALOG_SIG);
     if expected.is_empty() {
@@ -2742,7 +2782,21 @@ fn fallback_overlay_catalog_models() -> Vec<OverlayCatalogModel> {
         OverlayCatalogModel {
             id: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
             download_url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf".to_string(),
-            size_bytes: 2_940_000_000,
+            size_bytes: 2_740_937_888,
+            checksum_sha256: Some(
+                "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4".to_string(),
+            ),
+            recommended_ram_gb: Some(16),
+            recommended_vram_gb: Some(8),
+            offload_policy: Some("prefer_full_gpu".to_string()),
+            companion_mmproj: Some(OverlayCatalogCompanionArtifact {
+                filename: "Qwen3.5-4B-mmproj-F16.gguf".to_string(),
+                download_url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf".to_string(),
+                size_bytes: Some(672_423_616),
+                checksum_sha256: Some(
+                    "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864".to_string(),
+                ),
+            }),
             runtime_profiles: vec![
                 "lite".to_string(),
                 "edge".to_string(),
@@ -2759,6 +2813,20 @@ fn fallback_overlay_catalog_models() -> Vec<OverlayCatalogModel> {
             id: "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
             download_url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf".to_string(),
             size_bytes: 5_680_522_464,
+            checksum_sha256: Some(
+                "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8".to_string(),
+            ),
+            recommended_ram_gb: Some(24),
+            recommended_vram_gb: Some(12),
+            offload_policy: Some("prefer_full_gpu".to_string()),
+            companion_mmproj: Some(OverlayCatalogCompanionArtifact {
+                filename: "Qwen3.5-9B-mmproj-F16.gguf".to_string(),
+                download_url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf".to_string(),
+                size_bytes: Some(918_166_080),
+                checksum_sha256: Some(
+                    "f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f".to_string(),
+                ),
+            }),
             runtime_profiles: vec!["edge".to_string(), "pro".to_string()],
             roles: vec![
                 "general".to_string(),
@@ -2770,6 +2838,20 @@ fn fallback_overlay_catalog_models() -> Vec<OverlayCatalogModel> {
             id: "Qwen3.5-27B-Q4_K_M.gguf".to_string(),
             download_url: "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q4_K_M.gguf".to_string(),
             size_bytes: 16_740_812_704,
+            checksum_sha256: Some(
+                "84b5f7f112156d63836a01a69dc3f11a6ba63b10a23b8ca7a7efaf52d5a2d806".to_string(),
+            ),
+            recommended_ram_gb: Some(48),
+            recommended_vram_gb: Some(24),
+            offload_policy: Some("partial_gpu_or_cpu_fallback".to_string()),
+            companion_mmproj: Some(OverlayCatalogCompanionArtifact {
+                filename: "Qwen3.5-27B-mmproj-F16.gguf".to_string(),
+                download_url: "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/mmproj-F16.gguf".to_string(),
+                size_bytes: Some(927_607_040),
+                checksum_sha256: Some(
+                    "458bc46d8f275866fde5d88c9c554d9d462a6e8e3a028090d9850e17ab6a1217".to_string(),
+                ),
+            }),
             runtime_profiles: vec!["pro".to_string(), "workstation".to_string()],
             roles: vec![
                 "general".to_string(),
@@ -2839,14 +2921,24 @@ fn qwen_repo_for_model(model: &str) -> Option<&'static str> {
     }
 }
 
-fn configured_model() -> Option<String> {
-    let content = std::fs::read_to_string(LLAMA_ENV_FILE).ok()?;
+fn parse_env_var(content: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
     content.lines().find_map(|line| {
-        line.strip_prefix("LIFEOS_AI_MODEL=")
+        line.strip_prefix(&prefix)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     })
+}
+
+fn configured_model() -> Option<String> {
+    let content = std::fs::read_to_string(LLAMA_ENV_FILE).ok()?;
+    parse_env_var(&content, "LIFEOS_AI_MODEL")
+}
+
+fn configured_mmproj() -> Option<String> {
+    let content = std::fs::read_to_string(LLAMA_ENV_FILE).ok()?;
+    parse_env_var(&content, "LIFEOS_AI_MMPROJ")
 }
 
 fn read_env_lines() -> Vec<String> {
@@ -2882,6 +2974,12 @@ fn clear_env_var(key: &str) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(LLAMA_ENV_FILE, format!("{}\n", lines.join("\n")))?;
+    Ok(())
+}
+
+fn clear_overlay_model_selection() -> anyhow::Result<()> {
+    clear_env_var("LIFEOS_AI_MODEL")?;
+    clear_env_var("LIFEOS_AI_MMPROJ")?;
     Ok(())
 }
 
@@ -3030,14 +3128,68 @@ async fn restart_llama_server() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn apply_overlay_model_selection(model_name: &str) -> anyhow::Result<Option<String>> {
+fn sha256_file(path: &std::path::Path) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 1024 * 1024];
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn verify_artifact(
+    path: &std::path::Path,
+    expected_size: Option<u64>,
+    expected_sha256: Option<&str>,
+) -> anyhow::Result<()> {
+    if let Some(size) = expected_size {
+        let actual = std::fs::metadata(path)?.len();
+        if actual != size {
+            anyhow::bail!(
+                "Size mismatch for {} (expected {}, got {})",
+                path.display(),
+                size,
+                actual
+            );
+        }
+    }
+
+    if let Some(expected) = expected_sha256 {
+        let actual = sha256_file(path)?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            anyhow::bail!(
+                "Checksum mismatch for {} (expected {}, got {})",
+                path.display(),
+                expected,
+                actual
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_overlay_model_selection(
+    model_name: &str,
+    catalog_models: &[OverlayCatalogModel],
+) -> anyhow::Result<Option<String>> {
     let model_path = std::path::Path::new(MODEL_DIR).join(model_name);
     if !model_path.exists() {
         anyhow::bail!("Model {} not found in {}", model_name, MODEL_DIR);
     }
 
     upsert_env_var("LIFEOS_AI_MODEL", model_name)?;
-    let companion_mmproj = qwen_companion_mmproj_filename(model_name);
+    let companion_mmproj = resolve_catalog_model(model_name, catalog_models)
+        .and_then(|entry| entry.companion_mmproj.map(|artifact| artifact.filename))
+        .or_else(|| qwen_companion_mmproj_filename(model_name));
     if let Some(mmproj) = &companion_mmproj {
         let companion_path = std::path::Path::new(MODEL_DIR).join(mmproj);
         if companion_path.exists() {
@@ -3049,6 +3201,8 @@ fn apply_overlay_model_selection(model_name: &str) -> anyhow::Result<Option<Stri
                 model_name
             );
         }
+    } else {
+        clear_env_var("LIFEOS_AI_MMPROJ")?;
     }
     clear_removed_model(model_name)?;
     Ok(companion_mmproj)
@@ -3071,25 +3225,48 @@ fn is_featured_overlay_model(model_name: &str) -> bool {
 async fn download_model_with_curl(
     url: &str,
     dest_path: &std::path::Path,
+    expected_size: Option<u64>,
+    expected_sha256: Option<&str>,
     force: bool,
 ) -> anyhow::Result<()> {
+    let tmp_path = dest_path.with_extension("part");
+    if force {
+        let _ = tokio::fs::remove_file(dest_path).await;
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+    }
+
     if !force && dest_path.exists() {
-        return Ok(());
+        if verify_artifact(dest_path, expected_size, expected_sha256).is_ok() {
+            return Ok(());
+        }
+        let _ = tokio::fs::remove_file(dest_path).await;
     }
     if let Some(parent) = dest_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let tmp_path = dest_path.with_extension("gguf.tmp");
+
     let status = Command::new("curl")
-        .args(["-fL", "--progress-bar", "-o"])
+        .args([
+            "-fL",
+            "--retry",
+            "4",
+            "--retry-delay",
+            "2",
+            "--retry-connrefused",
+            "--continue-at",
+            "-",
+            "--progress-bar",
+            "-o",
+        ])
         .arg(&tmp_path)
         .arg(url)
         .status()
         .await?;
     if !status.success() {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
         anyhow::bail!("Failed to download {}", url);
     }
+
+    verify_artifact(&tmp_path, expected_size, expected_sha256)?;
     tokio::fs::rename(&tmp_path, dest_path).await?;
     Ok(())
 }
@@ -3462,6 +3639,7 @@ async fn overlay_models(
     State(state): State<ApiState>,
 ) -> Result<Json<OverlayModelSelectorResponse>, (StatusCode, Json<ApiError>)> {
     let configured = configured_model();
+    let configured_mmproj = configured_mmproj();
     let active = {
         let ai_manager = state.ai_manager.read().await;
         ai_manager.active_model().await
@@ -3483,6 +3661,23 @@ async fn overlay_models(
     let mut cards: Vec<OverlayModelCard> = catalog_models
         .iter()
         .map(|entry| {
+            let companion_name = entry
+                .companion_mmproj
+                .as_ref()
+                .map(|artifact| artifact.filename.clone())
+                .or_else(|| qwen_companion_mmproj_filename(&entry.id));
+            let companion_size = entry
+                .companion_mmproj
+                .as_ref()
+                .and_then(|artifact| artifact.size_bytes);
+            let required_disk_bytes =
+                Some(entry.size_bytes.saturating_add(companion_size.unwrap_or(0)));
+            let integrity_available = entry.checksum_sha256.is_some()
+                && entry
+                    .companion_mmproj
+                    .as_ref()
+                    .map(|artifact| artifact.checksum_sha256.is_some())
+                    .unwrap_or(true);
             let installed_size = installed.get(&entry.id).copied();
             OverlayModelCard {
                 id: entry.id.clone(),
@@ -3493,9 +3688,17 @@ async fn overlay_models(
                 pinned: pinned.contains(&entry.id),
                 removed_by_user: removed.contains(&entry.id),
                 featured: is_featured_overlay_model(&entry.id),
+                integrity_available,
+                checksum_sha256: entry.checksum_sha256.clone(),
+                recommended_ram_gb: entry.recommended_ram_gb,
+                recommended_vram_gb: entry.recommended_vram_gb,
+                offload_policy: entry.offload_policy.clone(),
+                required_disk_bytes,
+                estimated_download_seconds: required_disk_bytes.map(estimate_download_seconds),
+                download_resumable: true,
                 runtime_profiles: entry.runtime_profiles.clone(),
                 roles: entry.roles.clone(),
-                companion_mmproj: qwen_companion_mmproj_filename(&entry.id),
+                companion_mmproj: companion_name,
             }
         })
         .collect();
@@ -3513,6 +3716,14 @@ async fn overlay_models(
             pinned: pinned.contains(name),
             removed_by_user: removed.contains(name),
             featured: is_featured_overlay_model(name),
+            integrity_available: false,
+            checksum_sha256: None,
+            recommended_ram_gb: None,
+            recommended_vram_gb: None,
+            offload_policy: None,
+            required_disk_bytes: Some(*size_bytes),
+            estimated_download_seconds: Some(0),
+            download_resumable: true,
             runtime_profiles: Vec::new(),
             roles: vec!["local".to_string()],
             companion_mmproj: qwen_companion_mmproj_filename(name),
@@ -3530,6 +3741,7 @@ async fn overlay_models(
     Ok(Json(OverlayModelSelectorResponse {
         active_model: active,
         configured_model: configured,
+        configured_mmproj,
         catalog_version,
         catalog_signature_valid: signature_valid,
         models: cards,
@@ -3551,16 +3763,18 @@ async fn overlay_models(
 async fn overlay_models_select(
     Json(request): Json<OverlayModelSelectRequest>,
 ) -> Result<Json<OverlayModelActionResponse>, (StatusCode, Json<ApiError>)> {
-    let companion_mmproj = apply_overlay_model_selection(&request.model).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ApiError {
-                error: "Model Selection Error".to_string(),
-                message: e.to_string(),
-                code: 400,
-            }),
-        )
-    })?;
+    let (_catalog_version, _signature_valid, catalog_models) = load_overlay_catalog();
+    let companion_mmproj =
+        apply_overlay_model_selection(&request.model, &catalog_models).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError {
+                    error: "Model Selection Error".to_string(),
+                    message: e.to_string(),
+                    code: 400,
+                }),
+            )
+        })?;
 
     if request.restart {
         restart_llama_server().await.map_err(|e| {
@@ -3584,6 +3798,7 @@ async fn overlay_models_select(
         },
         selected_model: Some(request.model),
         companion_mmproj,
+        selected_mmproj: configured_mmproj(),
     }))
 }
 
@@ -3602,6 +3817,7 @@ async fn overlay_models_select(
 async fn overlay_models_remove(
     Json(request): Json<OverlayModelRemoveRequest>,
 ) -> Result<Json<OverlayModelActionResponse>, (StatusCode, Json<ApiError>)> {
+    let (_catalog_version, _signature_valid, catalog_models) = load_overlay_catalog();
     let model_path = std::path::Path::new(MODEL_DIR).join(&request.model);
     if !model_path.exists() {
         return Err((
@@ -3657,6 +3873,7 @@ async fn overlay_models_remove(
     })?;
 
     let mut selected_model = configured_model();
+    let mut selected_mmproj = configured_mmproj();
     if selected_model.as_deref() == Some(request.model.as_str()) {
         if request.select_fallback {
             if let Some(fallback) = pick_fallback_model(&request.model).map_err(|e| {
@@ -3669,7 +3886,7 @@ async fn overlay_models_remove(
                     }),
                 )
             })? {
-                apply_overlay_model_selection(&fallback).map_err(|e| {
+                apply_overlay_model_selection(&fallback, &catalog_models).map_err(|e| {
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(ApiError {
@@ -3680,31 +3897,34 @@ async fn overlay_models_remove(
                     )
                 })?;
                 selected_model = Some(fallback);
+                selected_mmproj = configured_mmproj();
             } else {
-                clear_env_var("LIFEOS_AI_MODEL").map_err(|e| {
+                clear_overlay_model_selection().map_err(|e| {
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(ApiError {
                             error: "Model Remove Error".to_string(),
-                            message: format!("Failed to clear selected model: {}", e),
+                            message: format!("Failed to clear selected model/mmproj: {}", e),
                             code: 500,
                         }),
                     )
                 })?;
                 selected_model = None;
+                selected_mmproj = None;
             }
         } else {
-            clear_env_var("LIFEOS_AI_MODEL").map_err(|e| {
+            clear_overlay_model_selection().map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiError {
                         error: "Model Remove Error".to_string(),
-                        message: format!("Failed to clear selected model: {}", e),
+                        message: format!("Failed to clear selected model/mmproj: {}", e),
                         code: 500,
                     }),
                 )
             })?;
             selected_model = None;
+            selected_mmproj = None;
         }
     }
 
@@ -3726,6 +3946,7 @@ async fn overlay_models_remove(
         message: format!("Removed {}", request.model),
         selected_model,
         companion_mmproj,
+        selected_mmproj,
     }))
 }
 
@@ -3760,38 +3981,61 @@ async fn overlay_models_pull(
     })?;
 
     let model_path = std::path::Path::new(MODEL_DIR).join(&model_entry.id);
-    download_model_with_curl(&model_entry.download_url, &model_path, request.force)
+    download_model_with_curl(
+        &model_entry.download_url,
+        &model_path,
+        Some(model_entry.size_bytes),
+        model_entry.checksum_sha256.as_deref(),
+        request.force,
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Pull Error".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )
+    })?;
+
+    let companion = model_entry.companion_mmproj.clone().or_else(|| {
+        qwen_repo_for_model(&model_entry.id).and_then(|repo| {
+            qwen_companion_mmproj_filename(&model_entry.id).map(|filename| {
+                OverlayCatalogCompanionArtifact {
+                    filename,
+                    download_url: format!(
+                        "https://huggingface.co/unsloth/{repo}/resolve/main/mmproj-F16.gguf"
+                    ),
+                    size_bytes: None,
+                    checksum_sha256: None,
+                }
+            })
+        })
+    });
+
+    let companion_mmproj = companion.as_ref().map(|artifact| artifact.filename.clone());
+    if let Some(companion_artifact) = companion {
+        let mmproj_path = std::path::Path::new(MODEL_DIR).join(&companion_artifact.filename);
+        download_model_with_curl(
+            &companion_artifact.download_url,
+            &mmproj_path,
+            companion_artifact.size_bytes,
+            companion_artifact.checksum_sha256.as_deref(),
+            request.force,
+        )
         .await
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiError {
                     error: "Model Pull Error".to_string(),
-                    message: e.to_string(),
+                    message: format!("Failed to pull companion mmproj: {}", e),
                     code: 500,
                 }),
             )
         })?;
-
-    let companion_mmproj = qwen_companion_mmproj_filename(&model_entry.id);
-    if let Some(companion_name) = &companion_mmproj {
-        if let Some(repo) = qwen_repo_for_model(&model_entry.id) {
-            let mmproj_url =
-                format!("https://huggingface.co/unsloth/{repo}/resolve/main/mmproj-F16.gguf");
-            let mmproj_path = std::path::Path::new(MODEL_DIR).join(companion_name);
-            download_model_with_curl(&mmproj_url, &mmproj_path, request.force)
-                .await
-                .map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ApiError {
-                            error: "Model Pull Error".to_string(),
-                            message: format!("Failed to pull companion mmproj: {}", e),
-                            code: 500,
-                        }),
-                    )
-                })?;
-        }
     }
 
     clear_removed_model(&model_entry.id).map_err(|e| {
@@ -3823,6 +4067,7 @@ async fn overlay_models_pull(
         message: format!("Pulled {}", model_entry.id),
         selected_model: configured_model(),
         companion_mmproj,
+        selected_mmproj: configured_mmproj(),
     }))
 }
 
@@ -3869,6 +4114,7 @@ async fn overlay_models_pin(
         message: format!("Pinned {}", request.model),
         selected_model: configured_model(),
         companion_mmproj: qwen_companion_mmproj_filename(&request.model),
+        selected_mmproj: configured_mmproj(),
     }))
 }
 
@@ -3903,6 +4149,7 @@ async fn overlay_models_unpin(
         message: format!("Unpinned {}", request.model),
         selected_model: configured_model(),
         companion_mmproj: qwen_companion_mmproj_filename(&request.model),
+        selected_mmproj: configured_mmproj(),
     }))
 }
 
@@ -7422,5 +7669,52 @@ mod tests {
             Some("Qwen3.5-4B-mmproj-F16.gguf".to_string())
         );
         assert_eq!(qwen_companion_mmproj_filename("llama-3.2-3b.gguf"), None);
+    }
+
+    #[test]
+    fn test_estimate_download_seconds_uses_default_rate() {
+        assert_eq!(estimate_download_seconds(0), 0);
+        assert_eq!(estimate_download_seconds(100_000_000), 8);
+    }
+
+    #[test]
+    fn test_verify_artifact_validates_size_and_checksum() {
+        let path =
+            std::env::temp_dir().join(format!("lifeos-artifact-test-{}.bin", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"abc").expect("should write temp artifact");
+        let expected_sha = digest_bytes(b"abc");
+
+        verify_artifact(&path, Some(3), Some(&expected_sha)).expect("artifact should validate");
+        assert!(verify_artifact(&path, Some(4), Some(&expected_sha)).is_err());
+        assert!(verify_artifact(&path, Some(3), Some("deadbeef")).is_err());
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_parse_env_var_reads_non_empty_values() {
+        let env = "LIFEOS_AI_MODEL=Qwen3.5-4B-Q4_K_M.gguf\nLIFEOS_AI_MMPROJ=Qwen3.5-4B-mmproj-F16.gguf\nEMPTY=\n";
+        assert_eq!(
+            parse_env_var(env, "LIFEOS_AI_MODEL"),
+            Some("Qwen3.5-4B-Q4_K_M.gguf".to_string())
+        );
+        assert_eq!(
+            parse_env_var(env, "LIFEOS_AI_MMPROJ"),
+            Some("Qwen3.5-4B-mmproj-F16.gguf".to_string())
+        );
+        assert_eq!(parse_env_var(env, "EMPTY"), None);
+        assert_eq!(parse_env_var(env, "MISSING"), None);
+    }
+
+    #[test]
+    fn test_catalog_companion_resolution_prefers_signed_catalog() {
+        let catalog_models = fallback_overlay_catalog_models();
+        let entry = resolve_catalog_model("qwen3.5:4b", &catalog_models).expect("catalog entry");
+        let companion = entry
+            .companion_mmproj
+            .as_ref()
+            .expect("companion should be present");
+        assert_eq!(companion.filename, "Qwen3.5-4B-mmproj-F16.gguf");
+        assert!(companion.checksum_sha256.is_some());
     }
 }

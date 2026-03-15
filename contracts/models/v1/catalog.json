@@ -1,12 +1,22 @@
 {
   "schema_version": "lifeos-model-catalog/v1",
-  "catalog_version": "2026.03.10",
-  "generated_at": "2026-03-10T00:00:00Z",
+  "catalog_version": "2026.03.15",
+  "generated_at": "2026-03-15T00:00:00Z",
   "models": [
     {
       "id": "Qwen3.5-4B-Q4_K_M.gguf",
       "download_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
-      "size_bytes": 2940000000,
+      "size_bytes": 2740937888,
+      "checksum_sha256": "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+      "recommended_ram_gb": 16,
+      "recommended_vram_gb": 8,
+      "offload_policy": "prefer_full_gpu",
+      "companion_mmproj": {
+        "filename": "Qwen3.5-4B-mmproj-F16.gguf",
+        "download_url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf",
+        "size_bytes": 672423616,
+        "checksum_sha256": "cd88edcf8d031894960bb0c9c5b9b7e1fea6ebee02b9f7ce925a00d12891f864"
+      },
       "runtime_profiles": ["lite", "edge", "secure", "pro"],
       "roles": ["general", "reasoning", "vision"]
     },
@@ -14,6 +24,16 @@
       "id": "Qwen3.5-9B-Q4_K_M.gguf",
       "download_url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
       "size_bytes": 5680522464,
+      "checksum_sha256": "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+      "recommended_ram_gb": 24,
+      "recommended_vram_gb": 12,
+      "offload_policy": "prefer_full_gpu",
+      "companion_mmproj": {
+        "filename": "Qwen3.5-9B-mmproj-F16.gguf",
+        "download_url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-F16.gguf",
+        "size_bytes": 918166080,
+        "checksum_sha256": "f70dc3509053962b0d0d3ee8a7eacebf5d60aa560cad78254ae8698516ae029f"
+      },
       "runtime_profiles": ["edge", "pro"],
       "roles": ["general", "reasoning", "vision"]
     },
@@ -21,6 +41,16 @@
       "id": "Qwen3.5-27B-Q4_K_M.gguf",
       "download_url": "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q4_K_M.gguf",
       "size_bytes": 16740812704,
+      "checksum_sha256": "84b5f7f112156d63836a01a69dc3f11a6ba63b10a23b8ca7a7efaf52d5a2d806",
+      "recommended_ram_gb": 48,
+      "recommended_vram_gb": 24,
+      "offload_policy": "partial_gpu_or_cpu_fallback",
+      "companion_mmproj": {
+        "filename": "Qwen3.5-27B-mmproj-F16.gguf",
+        "download_url": "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/mmproj-F16.gguf",
+        "size_bytes": 927607040,
+        "checksum_sha256": "458bc46d8f275866fde5d88c9c554d9d462a6e8e3a028090d9850e17ab6a1217"
+      },
       "runtime_profiles": ["pro", "workstation"],
       "roles": ["general", "reasoning", "vision"]
     },
@@ -28,6 +58,9 @@
       "id": "llama-3.2-3b-instruct-q4_k_m.gguf",
       "download_url": "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
       "size_bytes": 2100000000,
+      "recommended_ram_gb": 8,
+      "recommended_vram_gb": 4,
+      "offload_policy": "cpu_or_partial_gpu",
       "runtime_profiles": ["lite", "edge", "secure", "pro"],
       "roles": ["general", "code"]
     },
@@ -35,6 +68,8 @@
       "id": "llama-3.2-1b-instruct-q4_k_m.gguf",
       "download_url": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
       "size_bytes": 840000000,
+      "recommended_ram_gb": 6,
+      "offload_policy": "cpu_preferred",
       "runtime_profiles": ["lite", "edge", "secure", "pro"],
       "roles": ["general"]
     },
@@ -42,6 +77,9 @@
       "id": "mistral-7b-instruct-v0.3-q4_k_m.gguf",
       "download_url": "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
       "size_bytes": 4200000000,
+      "recommended_ram_gb": 16,
+      "recommended_vram_gb": 8,
+      "offload_policy": "cpu_or_partial_gpu",
       "runtime_profiles": ["edge", "secure", "pro"],
       "roles": ["general", "code"]
     },
@@ -49,6 +87,8 @@
       "id": "nomic-embed-text-v1.5.f16.gguf",
       "download_url": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.f16.gguf",
       "size_bytes": 275000000,
+      "recommended_ram_gb": 4,
+      "offload_policy": "cpu_preferred",
       "runtime_profiles": ["lite", "edge", "secure", "pro"],
       "roles": ["embeddings"]
     }
