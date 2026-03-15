@@ -1543,7 +1543,7 @@ Implementacion concreta:
 **Bloque 5 — UX y guardrails adicionales (P1):**
 
 - [ ] Indicadores de espacio en disco antes de descargar y opcion de limpieza de modelos no usados.
-- [ ] Politica `auto_manage_models = false` por defecto en el canal normal.
+- [x] Politica `auto_manage_models = false` por defecto en el canal normal. _`LIFEOS_AI_AUTO_MANAGE_MODELS=false` en `llama-server.env`; `lifeos-ai-setup.sh` omite auto-download si el flag no esta habilitado._
 - [ ] Import/export del inventario de modelos y pinning por dispositivo.
 
 **Criterios de salida de Fase 4.5:**

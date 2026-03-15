@@ -40,6 +40,7 @@ MODEL="${LIFEOS_AI_MODEL:-}"
 MODEL_URL="$DEFAULT_MODEL_URL"
 MMPROJ="${LIFEOS_AI_MMPROJ:-}"
 MMPROJ_URL="$DEFAULT_MMPROJ_URL"
+AUTO_MANAGE_MODELS="${LIFEOS_AI_AUTO_MANAGE_MODELS:-false}"
 MODEL_PATH=""
 MMPROJ_PATH=""
 
@@ -124,6 +125,17 @@ find_existing_primary_model_not_removed() {
 is_removed_model() {
     local candidate="$1"
     [ -f "$REMOVED_MODELS_FILE" ] && grep -Fxq "$candidate" "$REMOVED_MODELS_FILE"
+}
+
+is_truthy() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 resolve_model_assets() {
@@ -279,6 +291,13 @@ fi
 
 if is_removed_model "$MODEL"; then
     echo "Configured model $MODEL was removed by the user; skipping auto-download."
+    clear_env_value "LIFEOS_AI_MODEL"
+    clear_env_value "LIFEOS_AI_MMPROJ"
+    exit 0
+fi
+
+if ! is_truthy "$AUTO_MANAGE_MODELS"; then
+    echo "Auto model management disabled (LIFEOS_AI_AUTO_MANAGE_MODELS=$AUTO_MANAGE_MODELS); skipping auto-download."
     clear_env_value "LIFEOS_AI_MODEL"
     clear_env_value "LIFEOS_AI_MMPROJ"
     exit 0
