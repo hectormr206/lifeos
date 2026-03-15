@@ -2,7 +2,7 @@
 # Build automation for CLI, Daemon, and Container Image
 
 .PHONY: all build build-cli build-daemon test test-cli test-daemon test-integration \
-        lint lint-cli lint-daemon fmt fmt-check audit audit-cli audit-daemon \
+        lint lint-cli lint-daemon fmt fmt-check audit audit-workspace audit-cli audit-daemon \
         docker docker-build docker-lint docker-push clean install dev-setup help \
         check-daemon-prereqs phase3-hardening phase45-lifecycle
 
@@ -116,17 +116,18 @@ fmt-check:
 # =============================================================================
 
 ## Run security audit on all components
-audit: audit-cli audit-daemon
+audit: audit-workspace
+
+## Run cargo audit for workspace lockfile
+audit-workspace:
+	@echo "🔒 Auditing workspace dependencies..."
+	cargo audit --file Cargo.lock
 
 ## Run cargo audit on CLI
-audit-cli:
-	@echo "🔒 Auditing CLI dependencies..."
-	cd cli && cargo audit
+audit-cli: audit-workspace
 
 ## Run cargo audit on Daemon
-audit-daemon:
-	@echo "🔒 Auditing Daemon dependencies..."
-	cd daemon && cargo audit
+audit-daemon: audit-workspace
 
 # =============================================================================
 # Docker/Container Targets
