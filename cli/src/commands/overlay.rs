@@ -53,6 +53,14 @@ pub enum OverlayCommands {
     ModelPin { model: String },
     /// Unpin model to allow cleanup workflows
     ModelUnpin { model: String },
+    /// Export model inventory lifecycle state
+    ModelsExport { path: String },
+    /// Import model inventory lifecycle state
+    ModelsImport {
+        path: String,
+        #[arg(long, default_value_t = false)]
+        adopt_pinning: bool,
+    },
     /// Configure overlay settings
     Config {
         /// Overlay theme (dark/light/auto)
@@ -96,6 +104,11 @@ pub async fn execute(args: OverlayCommands) -> anyhow::Result<()> {
         } => model_remove(&model, remove_companion, select_fallback, restart).await,
         OverlayCommands::ModelPin { model } => model_pin(&model).await,
         OverlayCommands::ModelUnpin { model } => model_unpin(&model).await,
+        OverlayCommands::ModelsExport { path } => models_export(&path).await,
+        OverlayCommands::ModelsImport {
+            path,
+            adopt_pinning,
+        } => models_import(&path, adopt_pinning).await,
         OverlayCommands::Config {
             theme,
             shortcut,
@@ -551,6 +564,67 @@ async fn model_unpin(model: &str) -> anyhow::Result<()> {
     println!(
         "{}",
         body["message"].as_str().unwrap_or("Model unpinned").green()
+    );
+    Ok(())
+}
+
+async fn models_export(path: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let url = format!(
+        "{}/api/v1/overlay/models/export",
+        daemon_client::daemon_url()
+    );
+    let payload = serde_json::json!({
+        "path": path
+    });
+    let response = client.post(url).json(&payload).send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "Failed to export model inventory (status: {}): {}",
+            status,
+            body
+        );
+    }
+    let body = response.json::<serde_json::Value>().await?;
+    println!(
+        "{}",
+        body["message"]
+            .as_str()
+            .unwrap_or("Model inventory exported")
+            .green()
+    );
+    Ok(())
+}
+
+async fn models_import(path: &str, adopt_pinning: bool) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let url = format!(
+        "{}/api/v1/overlay/models/import",
+        daemon_client::daemon_url()
+    );
+    let payload = serde_json::json!({
+        "path": path,
+        "adopt_pinning": adopt_pinning
+    });
+    let response = client.post(url).json(&payload).send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "Failed to import model inventory (status: {}): {}",
+            status,
+            body
+        );
+    }
+    let body = response.json::<serde_json::Value>().await?;
+    println!(
+        "{}",
+        body["message"]
+            .as_str()
+            .unwrap_or("Model inventory imported")
+            .green()
     );
     Ok(())
 }

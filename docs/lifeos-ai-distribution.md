@@ -1544,7 +1544,7 @@ Implementacion concreta:
 
 - [ ] Indicadores de espacio en disco antes de descargar y opcion de limpieza de modelos no usados.
 - [x] Politica `auto_manage_models = false` por defecto en el canal normal. _`LIFEOS_AI_AUTO_MANAGE_MODELS=false` en `llama-server.env`; `lifeos-ai-setup.sh` omite auto-download si el flag no esta habilitado._
-- [ ] Import/export del inventario de modelos y pinning por dispositivo.
+- [x] Import/export del inventario de modelos y pinning por dispositivo. _API/CLI `overlay/models/export|import` incluye `device_id`; la importacion solo adopta pinning entre dispositivos cuando se solicita (`adopt_pinning=true`)._
 
 **Criterios de salida de Fase 4.5:**
 

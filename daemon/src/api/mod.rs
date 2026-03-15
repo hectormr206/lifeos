@@ -192,6 +192,8 @@ impl Default for ApiConfig {
         overlay_models_pull,
         overlay_models_pin,
         overlay_models_unpin,
+        overlay_models_export_inventory,
+        overlay_models_import_inventory,
         list_shortcuts,
         register_shortcuts,
         unregister_shortcuts,
@@ -565,6 +567,27 @@ pub struct OverlayModelPullRequest {
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
 pub struct OverlayModelPinRequest {
     pub model: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelInventoryExportRequest {
+    pub path: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelInventoryImportRequest {
+    pub path: String,
+    #[serde(default)]
+    pub adopt_pinning: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OverlayModelInventorySnapshot {
+    schema_version: String,
+    exported_at: String,
+    #[serde(default)]
+    device_id: Option<String>,
+    models: BTreeMap<String, OverlayModelLifecycleEntry>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -1124,6 +1147,14 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/overlay/models/pull", post(overlay_models_pull))
         .route("/overlay/models/pin", post(overlay_models_pin))
         .route("/overlay/models/unpin", post(overlay_models_unpin))
+        .route(
+            "/overlay/models/export",
+            post(overlay_models_export_inventory),
+        )
+        .route(
+            "/overlay/models/import",
+            post(overlay_models_import_inventory),
+        )
         // Notification endpoints
         .route("/notifications", get(get_notifications))
         .route("/notifications", post(post_notification))
@@ -3041,6 +3072,15 @@ fn model_lifecycle_marker() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+fn local_device_id() -> String {
+    std::fs::read_to_string("/etc/machine-id")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .unwrap_or_else(|| "unknown-device".to_string())
+}
+
 fn entry_has_state(entry: &OverlayModelLifecycleEntry) -> bool {
     entry.installed || entry.selected || entry.pinned || entry.removed_by_user
 }
@@ -4325,6 +4365,181 @@ async fn overlay_models_unpin(
         selected_model: configured_model(),
         companion_mmproj: qwen_companion_mmproj_filename(&request.model),
         selected_mmproj: configured_mmproj(),
+    }))
+}
+
+/// Export overlay model lifecycle inventory to disk
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/models/export",
+    request_body = OverlayModelInventoryExportRequest,
+    responses(
+        (status = 200, description = "Overlay model inventory exported", body = OverlayModelActionResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_models_export_inventory(
+    Json(request): Json<OverlayModelInventoryExportRequest>,
+) -> Result<Json<OverlayModelActionResponse>, (StatusCode, Json<ApiError>)> {
+    let path = PathBuf::from(&request.path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Model Inventory Export Error".to_string(),
+                    message: format!("Failed to create export directory: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
+    }
+
+    let state = load_model_lifecycle_state();
+    let snapshot = OverlayModelInventorySnapshot {
+        schema_version: "lifeos-model-inventory-v1".to_string(),
+        exported_at: chrono::Utc::now().to_rfc3339(),
+        device_id: Some(local_device_id()),
+        models: state.models,
+    };
+    let serialized = serde_json::to_string_pretty(&snapshot).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Inventory Export Error".to_string(),
+                message: format!("Failed to serialize inventory export: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+    std::fs::write(&path, serialized).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Inventory Export Error".to_string(),
+                message: format!("Failed to write export file: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    let selected_mmproj = configured_mmproj();
+    Ok(Json(OverlayModelActionResponse {
+        ok: true,
+        message: format!("Exported model inventory to {}", path.display()),
+        selected_model: configured_model(),
+        companion_mmproj: selected_mmproj.clone(),
+        selected_mmproj,
+    }))
+}
+
+/// Import overlay model lifecycle inventory from disk
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/models/import",
+    request_body = OverlayModelInventoryImportRequest,
+    responses(
+        (status = 200, description = "Overlay model inventory imported", body = OverlayModelActionResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_models_import_inventory(
+    Json(request): Json<OverlayModelInventoryImportRequest>,
+) -> Result<Json<OverlayModelActionResponse>, (StatusCode, Json<ApiError>)> {
+    let path = PathBuf::from(&request.path);
+    let raw = std::fs::read_to_string(&path).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Model Inventory Import Error".to_string(),
+                message: format!("Failed to read import file: {}", e),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let snapshot = match serde_json::from_str::<OverlayModelInventorySnapshot>(&raw) {
+        Ok(snapshot) => snapshot,
+        Err(_) => {
+            let legacy = serde_json::from_str::<OverlayModelLifecycleState>(&raw).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiError {
+                        error: "Model Inventory Import Error".to_string(),
+                        message: format!("Invalid inventory format: {}", e),
+                        code: 400,
+                    }),
+                )
+            })?;
+            OverlayModelInventorySnapshot {
+                schema_version: "lifeos-model-inventory-v1".to_string(),
+                exported_at: chrono::Utc::now().to_rfc3339(),
+                device_id: None,
+                models: legacy.models,
+            }
+        }
+    };
+
+    let local_device = local_device_id();
+    let same_device = snapshot.device_id.as_deref() == Some(local_device.as_str());
+    let apply_pinning = request.adopt_pinning || same_device || snapshot.device_id.is_none();
+
+    let mut state = load_model_lifecycle_state();
+    let mut imported_entries = 0usize;
+    for (model, imported) in snapshot.models {
+        let entry = state.models.entry(model).or_default();
+        let mut changed = false;
+
+        if imported.removed_by_user && !entry.removed_by_user {
+            entry.removed_by_user = true;
+            entry.selected = false;
+            entry.installed = false;
+            changed = true;
+        }
+
+        if apply_pinning && imported.pinned && !entry.pinned {
+            entry.pinned = true;
+            changed = true;
+        }
+
+        if changed {
+            entry.updated_at = Some(model_lifecycle_marker());
+            imported_entries += 1;
+        }
+    }
+
+    write_model_lifecycle_state(&state).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Inventory Import Error".to_string(),
+                message: format!("Failed to persist imported inventory: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    let selected_mmproj = configured_mmproj();
+    let pinning_note = if apply_pinning {
+        "pinning imported"
+    } else {
+        "pinning skipped (different device id)"
+    };
+    Ok(Json(OverlayModelActionResponse {
+        ok: true,
+        message: format!(
+            "Imported model inventory from {} ({} entries updated, {})",
+            path.display(),
+            imported_entries,
+            pinning_note
+        ),
+        selected_model: configured_model(),
+        companion_mmproj: selected_mmproj.clone(),
+        selected_mmproj,
     }))
 }
 
