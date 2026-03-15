@@ -36,9 +36,9 @@ if [ -f "$ENV_FILE" ]; then
     . "$ENV_FILE"
 fi
 
-MODEL="${LIFEOS_AI_MODEL:-$DEFAULT_MODEL}"
+MODEL="${LIFEOS_AI_MODEL:-}"
 MODEL_URL="$DEFAULT_MODEL_URL"
-MMPROJ="${LIFEOS_AI_MMPROJ:-$DEFAULT_MMPROJ}"
+MMPROJ="${LIFEOS_AI_MMPROJ:-}"
 MMPROJ_URL="$DEFAULT_MMPROJ_URL"
 MODEL_PATH=""
 MMPROJ_PATH=""
@@ -79,6 +79,16 @@ set_env_value() {
     fi
 }
 
+clear_env_value() {
+    local key="$1"
+
+    if [ ! -f "$ENV_FILE" ]; then
+        return
+    fi
+
+    sed -i "/^${key}=/d" "$ENV_FILE"
+}
+
 is_primary_model_candidate() {
     case "$1" in
         mmproj-*|*-mmproj-*|nomic-embed-*|whisper*|*embedding*)
@@ -96,6 +106,15 @@ is_primary_model_candidate() {
 find_existing_primary_model() {
     find "$MODEL_DIR" -maxdepth 1 -type f -name "*.gguf" -printf '%f\n' 2>/dev/null | sort | while read -r candidate; do
         if is_primary_model_candidate "$candidate"; then
+            printf '%s\n' "$candidate"
+            break
+        fi
+    done
+}
+
+find_existing_primary_model_not_removed() {
+    find "$MODEL_DIR" -maxdepth 1 -type f -name "*.gguf" -printf '%f\n' 2>/dev/null | sort | while read -r candidate; do
+        if is_primary_model_candidate "$candidate" && ! is_removed_model "$candidate"; then
             printf '%s\n' "$candidate"
             break
         fi
@@ -190,14 +209,41 @@ seed_from_preload() {
 }
 
 ensure_writable_model_dir
+if [ -z "$MODEL" ]; then
+    EXISTING=$(find_existing_primary_model_not_removed)
+    if [ -n "$EXISTING" ]; then
+        MODEL=$(basename "$EXISTING")
+        echo "Using existing local model as default: $MODEL"
+    else
+        MODEL="$DEFAULT_MODEL"
+    fi
+fi
+
 resolve_model_assets
 adopt_legacy_mmproj
-set_env_value "LIFEOS_AI_MODEL" "$MODEL"
-set_env_value "LIFEOS_AI_MMPROJ" "$MMPROJ"
 seed_from_preload
+
+if [ ! -f "$MODEL_PATH" ] && is_removed_model "$MODEL"; then
+    echo "Model $MODEL was removed by the user; skipping auto-download."
+    FALLBACK_EXISTING=$(find_existing_primary_model_not_removed)
+    if [ -n "$FALLBACK_EXISTING" ] && [ "$(basename "$FALLBACK_EXISTING")" != "$MODEL" ]; then
+        MODEL=$(basename "$FALLBACK_EXISTING")
+        echo "Using fallback local model: $MODEL"
+        resolve_model_assets
+        adopt_legacy_mmproj
+        seed_from_preload
+    else
+        clear_env_value "LIFEOS_AI_MODEL"
+        clear_env_value "LIFEOS_AI_MMPROJ"
+        echo "No local fallback model available. Heavy-model runtime remains disabled."
+        exit 0
+    fi
+fi
 
 # If model already exists, check mmproj too
 if [ -f "$MODEL_PATH" ]; then
+    set_env_value "LIFEOS_AI_MODEL" "$MODEL"
+    set_env_value "LIFEOS_AI_MMPROJ" "$MMPROJ"
     echo "Model $MODEL already present at $MODEL_PATH"
     if [ -f "$MMPROJ_PATH" ]; then
         echo "Vision projector $MMPROJ already present"
@@ -220,19 +266,21 @@ if [ -f "$MODEL_PATH" ]; then
 fi
 
 # Check if any primary model exists (user may have placed a different one)
-EXISTING=$(find_existing_primary_model)
+EXISTING=$(find_existing_primary_model_not_removed)
 if [ -n "$EXISTING" ]; then
     echo "Found existing model: $EXISTING"
     BASENAME=$(basename "$EXISTING")
-    set_env_value "LIFEOS_AI_MODEL" "$BASENAME"
     MODEL="$BASENAME"
     resolve_model_assets
+    set_env_value "LIFEOS_AI_MODEL" "$MODEL"
     set_env_value "LIFEOS_AI_MMPROJ" "$MMPROJ"
     exit 0
 fi
 
 if is_removed_model "$MODEL"; then
     echo "Configured model $MODEL was removed by the user; skipping auto-download."
+    clear_env_value "LIFEOS_AI_MODEL"
+    clear_env_value "LIFEOS_AI_MMPROJ"
     exit 0
 fi
 
@@ -267,10 +315,17 @@ if [ ! -f "$MMPROJ_PATH" ]; then
     fi
 fi
 
+if [ -f "$MODEL_PATH" ]; then
+    set_env_value "LIFEOS_AI_MODEL" "$MODEL"
+    set_env_value "LIFEOS_AI_MMPROJ" "$MMPROJ"
+fi
+
 if [ ! -f "$MODEL_PATH" ]; then
     echo "WARNING: Could not download AI model. llama-server will not serve requests until a model is available."
     echo "Download manually: curl -L -o $MODEL_DIR/$MODEL $MODEL_URL"
     rm -f "$MODEL_DIR/$MODEL.tmp"
+    clear_env_value "LIFEOS_AI_MODEL"
+    clear_env_value "LIFEOS_AI_MMPROJ"
 fi
 
 # Exit 0 so llama-server.service is not blocked
