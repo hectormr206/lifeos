@@ -762,6 +762,84 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_overlay_models_command() {
+        let cli = Cli::parse_from(["life", "overlay", "models"]);
+        match cli.command.expect("Expected command") {
+            Commands::Overlay(commands::overlay::OverlayCommands::Models) => (),
+            _ => panic!("Expected overlay models command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_overlay_model_select_restart() {
+        let cli = Cli::parse_from([
+            "life",
+            "overlay",
+            "model-select",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            "--restart",
+        ]);
+        match cli.command.expect("Expected command") {
+            Commands::Overlay(commands::overlay::OverlayCommands::ModelSelect {
+                model,
+                restart,
+            }) => {
+                assert_eq!(model, "Qwen3.5-0.8B-Q4_K_M.gguf");
+                assert!(restart);
+            }
+            _ => panic!("Expected overlay model-select command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_overlay_model_pull_flags() {
+        let cli = Cli::parse_from([
+            "life",
+            "overlay",
+            "model-pull",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+            "--force",
+            "--restart",
+        ]);
+        match cli.command.expect("Expected command") {
+            Commands::Overlay(commands::overlay::OverlayCommands::ModelPull {
+                model,
+                force,
+                restart,
+            }) => {
+                assert_eq!(model, "Qwen3.5-0.8B-Q4_K_M.gguf");
+                assert!(force);
+                assert!(restart);
+            }
+            _ => panic!("Expected overlay model-pull command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_overlay_model_remove_defaults() {
+        let cli = Cli::parse_from([
+            "life",
+            "overlay",
+            "model-remove",
+            "Qwen3.5-0.8B-Q4_K_M.gguf",
+        ]);
+        match cli.command.expect("Expected command") {
+            Commands::Overlay(commands::overlay::OverlayCommands::ModelRemove {
+                model,
+                remove_companion,
+                select_fallback,
+                restart,
+            }) => {
+                assert_eq!(model, "Qwen3.5-0.8B-Q4_K_M.gguf");
+                assert!(remove_companion);
+                assert!(select_fallback);
+                assert!(!restart);
+            }
+            _ => panic!("Expected overlay model-remove command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_ai_autotune_command() {
         let cli = Cli::parse_from(["life", "ai", "autotune", "--dry-run"]);
         match cli.command.expect("Expected command") {

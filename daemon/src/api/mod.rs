@@ -19,6 +19,7 @@ use axum::{
 };
 use log::error;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::process::Command;
@@ -50,6 +51,30 @@ use crate::system::SystemMonitor;
 use crate::update_scheduler::UpdateScheduler;
 use crate::visual_comfort::{ComfortProfile, VisualComfortManager};
 use std::path::PathBuf;
+
+const MODEL_DIR: &str = "/var/lib/lifeos/models";
+const LLAMA_ENV_FILE: &str = "/etc/lifeos/llama-server.env";
+const REMOVED_MODELS_FILE: &str = "/var/lib/lifeos/models/.removed-models";
+const EMBEDDED_MODEL_CATALOG_JSON: &str = include_str!("../../../contracts/models/v1/catalog.json");
+const EMBEDDED_MODEL_CATALOG_SIG: &str =
+    include_str!("../../../contracts/models/v1/catalog.json.sig");
+
+#[derive(Debug, Clone, Deserialize)]
+struct OverlayCatalog {
+    catalog_version: String,
+    models: Vec<OverlayCatalogModel>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OverlayCatalogModel {
+    id: String,
+    download_url: String,
+    size_bytes: u64,
+    #[serde(default)]
+    runtime_profiles: Vec<String>,
+    #[serde(default)]
+    roles: Vec<String>,
+}
 
 /// Shared API state
 #[derive(Clone)]
@@ -116,6 +141,10 @@ impl Default for ApiConfig {
         overlay_config,
         overlay_export,
         overlay_import,
+        overlay_models,
+        overlay_models_select,
+        overlay_models_remove,
+        overlay_models_pull,
         list_shortcuts,
         register_shortcuts,
         unregister_shortcuts,
@@ -164,6 +193,12 @@ impl Default for ApiConfig {
             ModelInfo,
             ChatRequest,
             ChatResponse,
+            OverlayModelSelectorResponse,
+            OverlayModelCard,
+            OverlayModelSelectRequest,
+            OverlayModelRemoveRequest,
+            OverlayModelPullRequest,
+            OverlayModelActionResponse,
             Notification,
             SystemInfo,
             CommandRequest,
@@ -417,6 +452,63 @@ pub struct ShortcutsListResponse {
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
 pub struct OverlayImportRequest {
     pub path: String,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelSelectorResponse {
+    pub active_model: Option<String>,
+    pub configured_model: Option<String>,
+    pub catalog_version: String,
+    pub catalog_signature_valid: bool,
+    pub models: Vec<OverlayModelCard>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelCard {
+    pub id: String,
+    pub size_bytes: Option<u64>,
+    pub size: String,
+    pub installed: bool,
+    pub selected: bool,
+    pub removed_by_user: bool,
+    pub runtime_profiles: Vec<String>,
+    pub roles: Vec<String>,
+    pub companion_mmproj: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelSelectRequest {
+    pub model: String,
+    #[serde(default)]
+    pub restart: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelRemoveRequest {
+    pub model: String,
+    #[serde(default = "default_true")]
+    pub remove_companion: bool,
+    #[serde(default = "default_true")]
+    pub select_fallback: bool,
+    #[serde(default)]
+    pub restart: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelPullRequest {
+    pub model: String,
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default)]
+    pub restart: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelActionResponse {
+    pub ok: bool,
+    pub message: String,
+    pub selected_model: Option<String>,
+    pub companion_mmproj: Option<String>,
 }
 
 // ==================== UPDATE API STRUCTS ====================
@@ -961,6 +1053,10 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/overlay/config", post(overlay_config))
         .route("/overlay/export", post(overlay_export))
         .route("/overlay/import", post(overlay_import))
+        .route("/overlay/models", get(overlay_models))
+        .route("/overlay/models/select", post(overlay_models_select))
+        .route("/overlay/models/remove", post(overlay_models_remove))
+        .route("/overlay/models/pull", post(overlay_models_pull))
         // Notification endpoints
         .route("/notifications", get(get_notifications))
         .route("/notifications", post(post_notification))
@@ -2581,6 +2677,359 @@ async fn mark_notification_read(
     StatusCode::OK
 }
 
+// ==================== OVERLAY MODEL SELECTOR HELPERS ====================
+
+fn default_true() -> bool {
+    true
+}
+
+fn format_size_bytes(size_bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = size_bytes as f64;
+    let mut unit = 0usize;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", size as u64, UNITS[unit])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit])
+    }
+}
+
+fn parse_signature(sig: &str) -> String {
+    sig.lines()
+        .find_map(|line| {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                return None;
+            }
+            Some(t.strip_prefix("sha256:").unwrap_or(t).trim().to_lowercase())
+        })
+        .unwrap_or_default()
+}
+
+fn digest_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    format!("{:x}", digest)
+}
+
+fn embedded_catalog_signature_valid() -> bool {
+    let expected = parse_signature(EMBEDDED_MODEL_CATALOG_SIG);
+    if expected.is_empty() {
+        return false;
+    }
+    digest_bytes(EMBEDDED_MODEL_CATALOG_JSON.as_bytes()) == expected
+}
+
+fn fallback_overlay_catalog_models() -> Vec<OverlayCatalogModel> {
+    vec![
+        OverlayCatalogModel {
+            id: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+            download_url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+            size_bytes: 2_940_000_000,
+            runtime_profiles: vec![
+                "lite".to_string(),
+                "edge".to_string(),
+                "secure".to_string(),
+                "pro".to_string(),
+            ],
+            roles: vec![
+                "general".to_string(),
+                "reasoning".to_string(),
+                "vision".to_string(),
+            ],
+        },
+        OverlayCatalogModel {
+            id: "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
+            download_url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf".to_string(),
+            size_bytes: 5_680_522_464,
+            runtime_profiles: vec!["edge".to_string(), "pro".to_string()],
+            roles: vec![
+                "general".to_string(),
+                "reasoning".to_string(),
+                "vision".to_string(),
+            ],
+        },
+        OverlayCatalogModel {
+            id: "Qwen3.5-27B-Q4_K_M.gguf".to_string(),
+            download_url: "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q4_K_M.gguf".to_string(),
+            size_bytes: 16_740_812_704,
+            runtime_profiles: vec!["pro".to_string(), "workstation".to_string()],
+            roles: vec![
+                "general".to_string(),
+                "reasoning".to_string(),
+                "vision".to_string(),
+            ],
+        },
+    ]
+}
+
+fn load_overlay_catalog() -> (String, bool, Vec<OverlayCatalogModel>) {
+    match serde_json::from_str::<OverlayCatalog>(EMBEDDED_MODEL_CATALOG_JSON) {
+        Ok(catalog) => (
+            catalog.catalog_version,
+            embedded_catalog_signature_valid(),
+            catalog.models,
+        ),
+        Err(_) => (
+            "fallback-local".to_string(),
+            false,
+            fallback_overlay_catalog_models(),
+        ),
+    }
+}
+
+fn is_selectable_model_asset(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower.ends_with(".gguf")
+        && !lower.starts_with("mmproj-")
+        && !lower.contains("-mmproj-")
+        && !lower.starts_with("nomic-embed-")
+        && !lower.starts_with("whisper")
+        && !lower.contains("embedding")
+}
+
+fn qwen_companion_mmproj_filename(model: &str) -> Option<String> {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("qwen3.5-4b") {
+        return Some("Qwen3.5-4B-mmproj-F16.gguf".to_string());
+    }
+    if lower.contains("qwen3.5-9b") {
+        return Some("Qwen3.5-9B-mmproj-F16.gguf".to_string());
+    }
+    if lower.contains("qwen3.5-27b") {
+        return Some("Qwen3.5-27B-mmproj-F16.gguf".to_string());
+    }
+    if lower.contains("qwen3.5-0.8b") || lower.contains("qwen3.5-2b") {
+        return Some("mmproj-F16.gguf".to_string());
+    }
+    None
+}
+
+fn qwen_repo_for_model(model: &str) -> Option<&'static str> {
+    let lower = model.to_ascii_lowercase();
+    if lower.contains("qwen3.5-4b") {
+        Some("Qwen3.5-4B-GGUF")
+    } else if lower.contains("qwen3.5-9b") {
+        Some("Qwen3.5-9B-GGUF")
+    } else if lower.contains("qwen3.5-27b") {
+        Some("Qwen3.5-27B-GGUF")
+    } else if lower.contains("qwen3.5-0.8b") {
+        Some("Qwen3.5-0.8B-GGUF")
+    } else if lower.contains("qwen3.5-2b") {
+        Some("Qwen3.5-2B-GGUF")
+    } else {
+        None
+    }
+}
+
+fn configured_model() -> Option<String> {
+    let content = std::fs::read_to_string(LLAMA_ENV_FILE).ok()?;
+    content.lines().find_map(|line| {
+        line.strip_prefix("LIFEOS_AI_MODEL=")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn read_env_lines() -> Vec<String> {
+    std::fs::read_to_string(LLAMA_ENV_FILE)
+        .ok()
+        .map(|content| content.lines().map(ToOwned::to_owned).collect())
+        .unwrap_or_default()
+}
+
+fn upsert_env_var(key: &str, value: &str) -> anyhow::Result<()> {
+    let mut lines = read_env_lines();
+    let mut found = false;
+    for line in &mut lines {
+        if line.starts_with(&format!("{key}=")) {
+            *line = format!("{key}={value}");
+            found = true;
+        }
+    }
+    if !found {
+        lines.push(format!("{key}={value}"));
+    }
+    if let Some(parent) = std::path::Path::new(LLAMA_ENV_FILE).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(LLAMA_ENV_FILE, format!("{}\n", lines.join("\n")))?;
+    Ok(())
+}
+
+fn clear_env_var(key: &str) -> anyhow::Result<()> {
+    let mut lines = read_env_lines();
+    lines.retain(|line| !line.starts_with(&format!("{key}=")));
+    if let Some(parent) = std::path::Path::new(LLAMA_ENV_FILE).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(LLAMA_ENV_FILE, format!("{}\n", lines.join("\n")))?;
+    Ok(())
+}
+
+fn load_removed_models() -> BTreeSet<String> {
+    std::fs::read_to_string(REMOVED_MODELS_FILE)
+        .ok()
+        .map(|content| {
+            content
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_removed_models(models: &BTreeSet<String>) -> anyhow::Result<()> {
+    if let Some(parent) = std::path::Path::new(REMOVED_MODELS_FILE).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let serialized = if models.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{}\n",
+            models.iter().cloned().collect::<Vec<_>>().join("\n")
+        )
+    };
+    std::fs::write(REMOVED_MODELS_FILE, serialized)?;
+    Ok(())
+}
+
+fn mark_model_removed(model_name: &str) -> anyhow::Result<()> {
+    let mut removed = load_removed_models();
+    removed.insert(model_name.to_string());
+    write_removed_models(&removed)
+}
+
+fn clear_removed_model(model_name: &str) -> anyhow::Result<()> {
+    let mut removed = load_removed_models();
+    if removed.remove(model_name) {
+        write_removed_models(&removed)?;
+    }
+    Ok(())
+}
+
+fn installed_models_map() -> anyhow::Result<BTreeMap<String, u64>> {
+    let mut models = BTreeMap::new();
+    let model_dir = std::path::Path::new(MODEL_DIR);
+    if !model_dir.exists() {
+        return Ok(models);
+    }
+    for entry in std::fs::read_dir(model_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if !path.is_file() || path.extension().and_then(|ext| ext.to_str()) != Some("gguf") {
+            continue;
+        }
+        if !is_selectable_model_asset(&file_name) {
+            continue;
+        }
+        let size_bytes = entry.metadata()?.len();
+        models.insert(file_name, size_bytes);
+    }
+    Ok(models)
+}
+
+fn resolve_catalog_model_alias(model: &str) -> Option<&'static str> {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "qwen3.5" | "qwen3.5:4b" | "qwen3.5-4b" => Some("Qwen3.5-4B-Q4_K_M.gguf"),
+        "qwen3.5:9b" | "qwen3.5-9b" => Some("Qwen3.5-9B-Q4_K_M.gguf"),
+        "qwen3.5:27b" | "qwen3.5-27b" => Some("Qwen3.5-27B-Q4_K_M.gguf"),
+        _ => None,
+    }
+}
+
+fn resolve_catalog_model(
+    requested: &str,
+    models: &[OverlayCatalogModel],
+) -> Option<OverlayCatalogModel> {
+    let canonical = resolve_catalog_model_alias(requested).unwrap_or(requested);
+    models
+        .iter()
+        .find(|model| model.id.eq_ignore_ascii_case(canonical))
+        .cloned()
+}
+
+async fn restart_llama_server() -> anyhow::Result<()> {
+    let status = Command::new("systemctl")
+        .args(["restart", "llama-server"])
+        .status()
+        .await?;
+    if !status.success() {
+        anyhow::bail!("systemctl restart llama-server failed");
+    }
+    Ok(())
+}
+
+fn apply_overlay_model_selection(model_name: &str) -> anyhow::Result<Option<String>> {
+    let model_path = std::path::Path::new(MODEL_DIR).join(model_name);
+    if !model_path.exists() {
+        anyhow::bail!("Model {} not found in {}", model_name, MODEL_DIR);
+    }
+
+    upsert_env_var("LIFEOS_AI_MODEL", model_name)?;
+    let companion_mmproj = qwen_companion_mmproj_filename(model_name);
+    if let Some(mmproj) = &companion_mmproj {
+        let companion_path = std::path::Path::new(MODEL_DIR).join(mmproj);
+        if companion_path.exists() {
+            upsert_env_var("LIFEOS_AI_MMPROJ", mmproj)?;
+        } else {
+            anyhow::bail!(
+                "Companion mmproj {} is required for {} but was not found",
+                mmproj,
+                model_name
+            );
+        }
+    }
+    clear_removed_model(model_name)?;
+    Ok(companion_mmproj)
+}
+
+fn pick_fallback_model(exclude: &str) -> anyhow::Result<Option<String>> {
+    let fallback = installed_models_map()?
+        .into_keys()
+        .find(|candidate| !candidate.eq_ignore_ascii_case(exclude));
+    Ok(fallback)
+}
+
+async fn download_model_with_curl(
+    url: &str,
+    dest_path: &std::path::Path,
+    force: bool,
+) -> anyhow::Result<()> {
+    if !force && dest_path.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = dest_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let tmp_path = dest_path.with_extension("gguf.tmp");
+    let status = Command::new("curl")
+        .args(["-fL", "--progress-bar", "-o"])
+        .arg(&tmp_path)
+        .arg(url)
+        .status()
+        .await?;
+    if !status.success() {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        anyhow::bail!("Failed to download {}", url);
+    }
+    tokio::fs::rename(&tmp_path, dest_path).await?;
+    Ok(())
+}
+
 // ==================== OVERLAY HANDLERS ====================
 
 /// Show overlay window
@@ -2933,6 +3382,363 @@ async fn overlay_import(
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
+}
+
+/// Get model selector data for overlay settings panel
+#[utoipa::path(
+    get,
+    path = "/api/v1/overlay/models",
+    responses(
+        (status = 200, description = "Overlay model selector data", body = OverlayModelSelectorResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_models(
+    State(state): State<ApiState>,
+) -> Result<Json<OverlayModelSelectorResponse>, (StatusCode, Json<ApiError>)> {
+    let configured = configured_model();
+    let active = {
+        let ai_manager = state.ai_manager.read().await;
+        ai_manager.active_model().await
+    };
+    let removed = load_removed_models();
+    let installed = installed_models_map().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Inventory Error".to_string(),
+                message: format!("Failed to read installed models: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+    let (catalog_version, signature_valid, catalog_models) = load_overlay_catalog();
+
+    let mut cards: Vec<OverlayModelCard> = catalog_models
+        .iter()
+        .map(|entry| {
+            let installed_size = installed.get(&entry.id).copied();
+            OverlayModelCard {
+                id: entry.id.clone(),
+                size_bytes: Some(entry.size_bytes),
+                size: format_size_bytes(installed_size.unwrap_or(entry.size_bytes)),
+                installed: installed.contains_key(&entry.id),
+                selected: configured.as_deref() == Some(entry.id.as_str()),
+                removed_by_user: removed.contains(&entry.id),
+                runtime_profiles: entry.runtime_profiles.clone(),
+                roles: entry.roles.clone(),
+                companion_mmproj: qwen_companion_mmproj_filename(&entry.id),
+            }
+        })
+        .collect();
+
+    for (name, size_bytes) in &installed {
+        if cards.iter().any(|card| card.id == *name) {
+            continue;
+        }
+        cards.push(OverlayModelCard {
+            id: name.clone(),
+            size_bytes: Some(*size_bytes),
+            size: format_size_bytes(*size_bytes),
+            installed: true,
+            selected: configured.as_deref() == Some(name.as_str()),
+            removed_by_user: removed.contains(name),
+            runtime_profiles: Vec::new(),
+            roles: vec!["local".to_string()],
+            companion_mmproj: qwen_companion_mmproj_filename(name),
+        });
+    }
+
+    cards.sort_by(|a, b| a.id.cmp(&b.id));
+
+    Ok(Json(OverlayModelSelectorResponse {
+        active_model: active,
+        configured_model: configured,
+        catalog_version,
+        catalog_signature_valid: signature_valid,
+        models: cards,
+    }))
+}
+
+/// Set default heavy model for overlay selector
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/models/select",
+    request_body = OverlayModelSelectRequest,
+    responses(
+        (status = 200, description = "Overlay model selected", body = OverlayModelActionResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_models_select(
+    Json(request): Json<OverlayModelSelectRequest>,
+) -> Result<Json<OverlayModelActionResponse>, (StatusCode, Json<ApiError>)> {
+    let companion_mmproj = apply_overlay_model_selection(&request.model).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Model Selection Error".to_string(),
+                message: e.to_string(),
+                code: 400,
+            }),
+        )
+    })?;
+
+    if request.restart {
+        restart_llama_server().await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Service Restart Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    }
+
+    Ok(Json(OverlayModelActionResponse {
+        ok: true,
+        message: if request.restart {
+            format!("Selected {} and restarted llama-server", request.model)
+        } else {
+            format!("Selected {}", request.model)
+        },
+        selected_model: Some(request.model),
+        companion_mmproj,
+    }))
+}
+
+/// Remove model through overlay selector lifecycle controls
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/models/remove",
+    request_body = OverlayModelRemoveRequest,
+    responses(
+        (status = 200, description = "Overlay model removed", body = OverlayModelActionResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_models_remove(
+    Json(request): Json<OverlayModelRemoveRequest>,
+) -> Result<Json<OverlayModelActionResponse>, (StatusCode, Json<ApiError>)> {
+    let model_path = std::path::Path::new(MODEL_DIR).join(&request.model);
+    if !model_path.exists() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Model Remove Error".to_string(),
+                message: format!("Model {} not found in {}", request.model, MODEL_DIR),
+                code: 400,
+            }),
+        ));
+    }
+
+    tokio::fs::remove_file(&model_path).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Remove Error".to_string(),
+                message: format!("Failed to remove model {}: {}", request.model, e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    let companion_mmproj = qwen_companion_mmproj_filename(&request.model);
+    if request.remove_companion {
+        if let Some(companion) = &companion_mmproj {
+            let companion_path = std::path::Path::new(MODEL_DIR).join(companion);
+            if companion_path.exists() {
+                let _ = tokio::fs::remove_file(companion_path).await;
+            }
+        }
+    }
+
+    mark_model_removed(&request.model).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Remove Error".to_string(),
+                message: format!("Failed to persist removed model state: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    let mut selected_model = configured_model();
+    if selected_model.as_deref() == Some(request.model.as_str()) {
+        if request.select_fallback {
+            if let Some(fallback) = pick_fallback_model(&request.model).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Model Remove Error".to_string(),
+                        message: e.to_string(),
+                        code: 500,
+                    }),
+                )
+            })? {
+                apply_overlay_model_selection(&fallback).map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiError {
+                            error: "Fallback Selection Error".to_string(),
+                            message: e.to_string(),
+                            code: 500,
+                        }),
+                    )
+                })?;
+                selected_model = Some(fallback);
+            } else {
+                clear_env_var("LIFEOS_AI_MODEL").map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiError {
+                            error: "Model Remove Error".to_string(),
+                            message: format!("Failed to clear selected model: {}", e),
+                            code: 500,
+                        }),
+                    )
+                })?;
+                selected_model = None;
+            }
+        } else {
+            clear_env_var("LIFEOS_AI_MODEL").map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Model Remove Error".to_string(),
+                        message: format!("Failed to clear selected model: {}", e),
+                        code: 500,
+                    }),
+                )
+            })?;
+            selected_model = None;
+        }
+    }
+
+    if request.restart {
+        restart_llama_server().await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Service Restart Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    }
+
+    Ok(Json(OverlayModelActionResponse {
+        ok: true,
+        message: format!("Removed {}", request.model),
+        selected_model,
+        companion_mmproj,
+    }))
+}
+
+/// Pull model artifacts through overlay selector using signed catalog
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/models/pull",
+    request_body = OverlayModelPullRequest,
+    responses(
+        (status = 200, description = "Overlay model pulled", body = OverlayModelActionResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_models_pull(
+    Json(request): Json<OverlayModelPullRequest>,
+) -> Result<Json<OverlayModelActionResponse>, (StatusCode, Json<ApiError>)> {
+    let (_catalog_version, _signature_valid, catalog_models) = load_overlay_catalog();
+    let model_entry = resolve_catalog_model(&request.model, &catalog_models).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Model Pull Error".to_string(),
+                message: format!(
+                    "Model {} is not available in the signed catalog",
+                    request.model
+                ),
+                code: 400,
+            }),
+        )
+    })?;
+
+    let model_path = std::path::Path::new(MODEL_DIR).join(&model_entry.id);
+    download_model_with_curl(&model_entry.download_url, &model_path, request.force)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Model Pull Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    let companion_mmproj = qwen_companion_mmproj_filename(&model_entry.id);
+    if let Some(companion_name) = &companion_mmproj {
+        if let Some(repo) = qwen_repo_for_model(&model_entry.id) {
+            let mmproj_url =
+                format!("https://huggingface.co/unsloth/{repo}/resolve/main/mmproj-F16.gguf");
+            let mmproj_path = std::path::Path::new(MODEL_DIR).join(companion_name);
+            download_model_with_curl(&mmproj_url, &mmproj_path, request.force)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiError {
+                            error: "Model Pull Error".to_string(),
+                            message: format!("Failed to pull companion mmproj: {}", e),
+                            code: 500,
+                        }),
+                    )
+                })?;
+        }
+    }
+
+    clear_removed_model(&model_entry.id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Pull Error".to_string(),
+                message: format!("Failed to clear removed model marker: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    if request.restart && configured_model().as_deref() == Some(model_entry.id.as_str()) {
+        restart_llama_server().await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Service Restart Error".to_string(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+    }
+
+    Ok(Json(OverlayModelActionResponse {
+        ok: true,
+        message: format!("Pulled {}", model_entry.id),
+        selected_model: configured_model(),
+        companion_mmproj,
+    }))
 }
 
 // ==================== UPDATE API HANDLERS ====================
@@ -6400,4 +7206,56 @@ pub async fn start_api_server(state: ApiState) -> anyhow::Result<()> {
     axum::serve(listener, router).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_signature_valid_hex() {
+        let parsed = parse_signature("deadbeef");
+        assert_eq!(parsed, "deadbeef");
+        let prefixed = parse_signature("sha256:DEADBEEF");
+        assert_eq!(prefixed, "deadbeef");
+    }
+
+    #[test]
+    fn test_parse_signature_invalid_hex() {
+        assert_eq!(parse_signature("not-hex"), "not-hex");
+        assert!(parse_signature("").is_empty());
+    }
+
+    #[test]
+    fn test_embedded_catalog_signature_matches() {
+        assert!(embedded_catalog_signature_valid());
+    }
+
+    #[test]
+    fn test_format_size_bytes_units() {
+        assert_eq!(format_size_bytes(900), "900 B");
+        assert_eq!(format_size_bytes(2048), "2.0 KB");
+        assert_eq!(format_size_bytes(10 * 1024 * 1024), "10.0 MB");
+    }
+
+    #[test]
+    fn test_is_selectable_model_asset_filters_non_models() {
+        assert!(is_selectable_model_asset("Qwen3.5-4B-Q4_K_M.gguf"));
+        assert!(!is_selectable_model_asset("mmproj-F16.gguf"));
+        assert!(!is_selectable_model_asset(".removed-models"));
+        assert!(!is_selectable_model_asset("readme.txt"));
+    }
+
+    #[test]
+    fn test_qwen_companion_mmproj_mapping() {
+        assert_eq!(
+            qwen_companion_mmproj_filename("Qwen3.5-0.8B-Q4_K_M.gguf"),
+            Some("mmproj-F16.gguf".to_string())
+        );
+        assert_eq!(
+            qwen_companion_mmproj_filename("Qwen3.5-4B-Q4_K_M.gguf"),
+            Some("Qwen3.5-4B-mmproj-F16.gguf".to_string())
+        );
+        assert_eq!(qwen_companion_mmproj_filename("llama-3.2-3b.gguf"), None);
+    }
 }

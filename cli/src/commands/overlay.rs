@@ -23,6 +23,32 @@ pub enum OverlayCommands {
     Import { path: String },
     /// Get overlay status
     Status,
+    /// List model selector state used by overlay settings
+    Models,
+    /// Select default heavy model from overlay selector
+    ModelSelect {
+        model: String,
+        #[arg(long)]
+        restart: bool,
+    },
+    /// Pull model artifacts through overlay selector
+    ModelPull {
+        model: String,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        restart: bool,
+    },
+    /// Remove model through overlay selector lifecycle controls
+    ModelRemove {
+        model: String,
+        #[arg(long, default_value_t = true)]
+        remove_companion: bool,
+        #[arg(long, default_value_t = true)]
+        select_fallback: bool,
+        #[arg(long)]
+        restart: bool,
+    },
     /// Configure overlay settings
     Config {
         /// Overlay theme (dark/light/auto)
@@ -51,6 +77,19 @@ pub async fn execute(args: OverlayCommands) -> anyhow::Result<()> {
         OverlayCommands::Export { path } => export_chat(&path).await,
         OverlayCommands::Import { path } => import_chat(&path).await,
         OverlayCommands::Status => show_status().await,
+        OverlayCommands::Models => show_models().await,
+        OverlayCommands::ModelSelect { model, restart } => model_select(&model, restart).await,
+        OverlayCommands::ModelPull {
+            model,
+            force,
+            restart,
+        } => model_pull(&model, force, restart).await,
+        OverlayCommands::ModelRemove {
+            model,
+            remove_companion,
+            select_fallback,
+            restart,
+        } => model_remove(&model, remove_companion, select_fallback, restart).await,
         OverlayCommands::Config {
             theme,
             shortcut,
@@ -292,6 +331,138 @@ async fn show_status() -> anyhow::Result<()> {
     println!("Keyboard Shortcut: {}", "Super+Space".cyan());
     println!("Toggle with: {}", "life overlay toggle".cyan());
 
+    Ok(())
+}
+
+async fn show_models() -> anyhow::Result<()> {
+    println!("{}", "Overlay Model Selector".bold().blue());
+    println!();
+
+    let client = daemon_client::authenticated_client();
+    let url = format!("{}/api/v1/overlay/models", daemon_client::daemon_url());
+    let response = client.get(url).send().await?;
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "Failed to load overlay models (status: {})",
+            response.status()
+        );
+    }
+
+    let body = response.json::<serde_json::Value>().await?;
+    println!(
+        "  Catalog: {} ({})",
+        body["catalog_version"].as_str().unwrap_or("-").cyan(),
+        if body["catalog_signature_valid"].as_bool().unwrap_or(false) {
+            "signature valid".green()
+        } else {
+            "signature invalid".red()
+        }
+    );
+    println!(
+        "  Configured/Active: {}/{}",
+        body["configured_model"].as_str().unwrap_or("none").yellow(),
+        body["active_model"].as_str().unwrap_or("none").yellow()
+    );
+
+    if let Some(models) = body["models"].as_array() {
+        println!();
+        println!("{}", "Models:".bold());
+        for model in models {
+            let id = model["id"].as_str().unwrap_or("-");
+            let size = model["size"].as_str().unwrap_or("-");
+            let installed = model["installed"].as_bool().unwrap_or(false);
+            let selected = model["selected"].as_bool().unwrap_or(false);
+            let removed = model["removed_by_user"].as_bool().unwrap_or(false);
+            let badge = if selected {
+                "default".green().bold().to_string()
+            } else if installed {
+                "installed".cyan().to_string()
+            } else if removed {
+                "removed_by_user".yellow().to_string()
+            } else {
+                "available".dimmed().to_string()
+            };
+            println!("  - {} ({}) [{}]", id.cyan(), size, badge);
+        }
+    }
+
+    Ok(())
+}
+
+async fn model_select(model: &str, restart: bool) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let url = format!(
+        "{}/api/v1/overlay/models/select",
+        daemon_client::daemon_url()
+    );
+    let payload = serde_json::json!({
+        "model": model,
+        "restart": restart
+    });
+    let response = client.post(url).json(&payload).send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to select model (status: {}): {}", status, body);
+    }
+    let body = response.json::<serde_json::Value>().await?;
+    println!(
+        "{}",
+        body["message"].as_str().unwrap_or("Model selected").green()
+    );
+    Ok(())
+}
+
+async fn model_pull(model: &str, force: bool, restart: bool) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let url = format!("{}/api/v1/overlay/models/pull", daemon_client::daemon_url());
+    let payload = serde_json::json!({
+        "model": model,
+        "force": force,
+        "restart": restart
+    });
+    let response = client.post(url).json(&payload).send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to pull model (status: {}): {}", status, body);
+    }
+    let body = response.json::<serde_json::Value>().await?;
+    println!(
+        "{}",
+        body["message"].as_str().unwrap_or("Model pulled").green()
+    );
+    Ok(())
+}
+
+async fn model_remove(
+    model: &str,
+    remove_companion: bool,
+    select_fallback: bool,
+    restart: bool,
+) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let url = format!(
+        "{}/api/v1/overlay/models/remove",
+        daemon_client::daemon_url()
+    );
+    let payload = serde_json::json!({
+        "model": model,
+        "remove_companion": remove_companion,
+        "select_fallback": select_fallback,
+        "restart": restart
+    });
+    let response = client.post(url).json(&payload).send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to remove model (status: {}): {}", status, body);
+    }
+    let body = response.json::<serde_json::Value>().await?;
+    println!(
+        "{}",
+        body["message"].as_str().unwrap_or("Model removed").yellow()
+    );
     Ok(())
 }
 
