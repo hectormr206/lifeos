@@ -1381,6 +1381,7 @@ Implementacion concreta:
 - Privacidad validada end-to-end: `life intents jarvis kill-switch` apaga sensores y reinicio de runtime recupera `axi_state: idle`.
 - Retencion de screenshots verificada y acotada a `120` archivos en `/var/lib/lifeos/screenshots`.
 - Warning no bloqueante observado en campo: errores D-Bus Portal/Broker (`Broken pipe`) al notificar.
+- Mitigacion integrada para audio UI: `lifeos-audio-route-heal.service` (user systemd) corrige sink/source por defecto cuando PipeWire/WirePlumber reinician o cambian nodos (incluyendo casos con Bluetooth inestable), evitando estados de "Ningun dispositivo seleccionado".
 
 **Principio rector:** cada componente sensorial (voz, vision, camara) debe funcionar de forma independiente y degradar gracefully si el hardware o el consentimiento no estan disponibles. Sin GPU → solo voz CPU; sin mic → solo texto; sin camara → sin presencia. Todo funciona parcialmente.
 

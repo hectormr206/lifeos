@@ -447,6 +447,7 @@ COPY image/files/usr/local/bin/lifeos-integrity-check.sh   /usr/local/bin/lifeos
 COPY image/files/usr/local/bin/lifeos-security-baseline-check.sh /usr/local/bin/lifeos-security-baseline-check.sh
 COPY image/files/usr/local/bin/lifeos-nvidia-secureboot.sh /usr/local/bin/lifeos-nvidia-secureboot.sh
 COPY image/files/usr/local/bin/lifeos-maintenance-cleanup.sh /usr/local/bin/lifeos-maintenance-cleanup.sh
+COPY image/files/usr/local/bin/lifeos-audio-route-heal.sh /usr/local/bin/lifeos-audio-route-heal.sh
 COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
@@ -456,6 +457,7 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-integrity-check.sh \
              /usr/local/bin/lifeos-security-baseline-check.sh \
              /usr/local/bin/lifeos-maintenance-cleanup.sh \
+             /usr/local/bin/lifeos-audio-route-heal.sh \
              /usr/local/bin/lifeos-nvidia-secureboot.sh \
              /usr/local/bin/lifeos-check
 
@@ -482,6 +484,7 @@ COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
 COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf /etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf
+COPY image/files/etc/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/lifeos-audio-route-heal.service
 
 # lifeosd.service (inline - es simple)
 RUN printf '%s\n' \
@@ -504,7 +507,11 @@ RUN printf '%s\n' \
 RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/system/graphical.target.wants \
              /usr/lib/systemd/system/timers.target.wants \
-             /usr/lib/systemd/system/sockets.target.wants && \
+             /usr/lib/systemd/system/sockets.target.wants \
+             /usr/lib/systemd/user/default.target.wants \
+             /usr/lib/systemd/user/pipewire.service.wants \
+             /usr/lib/systemd/user/pipewire-pulse.service.wants \
+             /usr/lib/systemd/user/wireplumber.service.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeosd.service       /usr/lib/systemd/system/multi-user.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
@@ -528,7 +535,11 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
             ln -sf "/usr/lib/systemd/system/${unit}" "/usr/lib/systemd/system/sockets.target.wants/${unit}"; \
         fi; \
     done && \
-    ln -sf /usr/lib/systemd/system/lifeosd.service        /usr/lib/systemd/system/lifeisd.service
+    ln -sf /usr/lib/systemd/system/lifeosd.service        /usr/lib/systemd/system/lifeisd.service && \
+    ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/default.target.wants/lifeos-audio-route-heal.service && \
+    ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/pipewire.service.wants/lifeos-audio-route-heal.service && \
+    ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/pipewire-pulse.service.wants/lifeos-audio-route-heal.service && \
+    ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/wireplumber.service.wants/lifeos-audio-route-heal.service
 
 # --- Update policy: no surprise reboot ---
 # Mask bootc auto-apply units so updates are operator-driven.

@@ -1,0 +1,15 @@
+[Unit]
+Description=LifeOS Audio Route Self-Heal
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service pipewire-pulse.service wireplumber.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lifeos-audio-route-heal.sh
+TimeoutStartSec=20
+
+[Install]
+WantedBy=default.target
+WantedBy=pipewire.service
+WantedBy=pipewire-pulse.service
+WantedBy=wireplumber.service
