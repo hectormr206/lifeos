@@ -481,6 +481,7 @@ COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.service /usr/lib/
 COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
+COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf /etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf
 
 # lifeosd.service (inline - es simple)
 RUN printf '%s\n' \

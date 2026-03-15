@@ -1058,7 +1058,7 @@ Cada item tiene fase asignada. Son prerequisitos para la arquitectura agentica c
 1. **[CORREGIDO] `lifeosd` no arrancaba por cadena de dependencias:** tenia `Requires=lifeos-security-baseline.service` que causaba fallo en cascada si no habia LUKS/SecureBoot. Fix: cambiado a `Wants=` (dependencia suave).
 2. **[CORREGIDO] `lifeos-security-baseline.service` corria con `--enforce` por defecto:** esto hacia `exit 1` en cualquier VM sin LUKS, matando toda la cadena. Fix: ahora corre sin `--enforce` por defecto (warning-only). Enforcement es opt-in.
 3. **[CORREGIDO] `llama-server` binario no encontrado en VM:** el regex de asset matching para releases de llama.cpp no matcheaba los nombres actuales de assets. Fix: regex mejorado con fallback mas agresivo y logs de debug.
-4. **[CONOCIDO] `systemd-remount-fs.service` failed:** puede aparecer en hosts image-mode/bootc (incluyendo VirtualBox y algunos equipos reales) por interaccion con root inmutable. No bloquea el uso normal.
+4. **[CORREGIDO] `systemd-remount-fs.service` failed en image-mode/bootc:** se agrega drop-in `ExecCondition` para saltar remount cuando `/` es `overlay`, evitando estado `failed` y marcando el servicio como `skipped` en estos hosts.
 5. **[CORREGIDO] `life recover` necesita root para `bootc status`:** el CLI ahora detecta si no es root y usa `sudo` como fallback automatico para comandos bootc (`status`, `upgrade`, `rollback`).
 6. **[CORREGIDO] `llama-server` backends no cargaban (`load_backend: failed to load /usr/lib64: Is a directory`):** el binario pre-compilado usaba backends dinamicos (.so) que al instalarse en `/usr/lib64/` causaban que intentara abrir el directorio como archivo. Fix: compilacion estatica desde fuente (`-DBUILD_SHARED_LIBS=OFF -DGGML_STATIC=ON`), eliminando toda dependencia de backends .so.
 7. **[CORREGIDO] Hardlink `cp`/`ln` error en Containerfile:** `/usr/bin/llama-server` y `/usr/sbin/llama-server` eran hardlinks al mismo inodo; `cp` y `ln -f` fallaban bajo `set -eux`. Fix: `ln -f ... 2>/dev/null || true`.
@@ -1380,7 +1380,7 @@ Implementacion concreta:
 - Bench sensorial estable: voice loop `986-1094 ms`, vision query `~3392 ms`, throughput `~341-346 tok/s`.
 - Privacidad validada end-to-end: `life intents jarvis kill-switch` apaga sensores y reinicio de runtime recupera `axi_state: idle`.
 - Retencion de screenshots verificada y acotada a `120` archivos en `/var/lib/lifeos/screenshots`.
-- Warnings conocidos no bloqueantes observados en campo: `systemd-remount-fs.service` y errores D-Bus Portal/Broker (`Broken pipe`) al notificar.
+- Warning no bloqueante observado en campo: errores D-Bus Portal/Broker (`Broken pipe`) al notificar.
 
 **Principio rector:** cada componente sensorial (voz, vision, camara) debe funcionar de forma independiente y degradar gracefully si el hardware o el consentimiento no estan disponibles. Sin GPU → solo voz CPU; sin mic → solo texto; sin camara → sin presencia. Todo funciona parcialmente.
 
