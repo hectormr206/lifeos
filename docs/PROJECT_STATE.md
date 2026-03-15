@@ -1,6 +1,6 @@
 # LifeOS Project State (Source Of Truth)
 
-Last updated: 2026-03-10
+Last updated: 2026-03-15
 
 ## Scope and Ownership
 
@@ -26,7 +26,7 @@ Out of wedge for 1.0 hardening:
 - New ecosystem surfaces that do not improve daily-driver reliability.
 - B2B experimental swarm/RFC work.
 
-## Current Phase: Phase 4 Closed / Phase 4.5 Planned
+## Current Phase: Phase 4 Closed (Field Validated) / Phase 4.5 In Progress
 
 Phase 4 focused on making LifeOS feel alive through real sensory interaction:
 voice (bidirectional), vision (screen awareness), camera (presence detection),
@@ -52,8 +52,8 @@ so OS upgrades do not override model decisions the user already made.
 - Phase 2: closed at baseline (multimodal + memory + runtime controls).
 - Phase 2.5: closed at baseline (visual identity + UX foundations).
 - Phase 3: closed (hardening + dogfooding + closeout). Evidence: `evidence/phase-3/phase-3-closeout.md`.
-- Phase 4: **CLOSED IN REPO** — LifeOS Alive complete. Evidence: `evidence/phase-4/phase-4-closeout.md`, `evidence/phase-4/iso-vm-regression-validation.md`.
-- Phase 4.5: planned (heavy model manager, default-model UX, update-safe lifecycle).
+- Phase 4: **CLOSED IN REPO + FIELD VALIDATED** — verified on image `edge-20260314-db06313` with full GPU offload and sensory bench in target hardware.
+- Phase 4.5: in progress (heavy model manager, default-model UX, update-safe lifecycle).
 - Phase 5: pending (ecosystem, sync, scale).
 
 ## Phase 4 Closed Blocks

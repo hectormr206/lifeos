@@ -1371,7 +1371,16 @@ Implementacion concreta:
 
 **Objetivo:** que LifeOS se sienta vivo. El usuario habla y Axi responde con voz. Mira la pantalla y entiende el contexto. La camara detecta presencia. El sistema escucha continuamente (post-consent). Todo end-to-end, no stubs.
 
-**Estado:** **CERRADA EN REPO (2026-03-10).** _Implementacion sensorial local completada con evidencia en `evidence/phase-4/phase-4-closeout.md` y verificacion reproducible en `verify-phase4.sh`._
+**Estado:** **CERRADA EN REPO + VALIDADA EN CAMPO (2026-03-15).** _Implementacion sensorial local completada con evidencia en `evidence/phase-4/phase-4-closeout.md`, verificacion reproducible en `verify-phase4.sh` y validacion en hardware real con build `edge-20260314-db06313`._
+
+**Validacion en hardware real (2026-03-15, laptop RTX 5070 Ti):**
+
+- Booted image validada: `containers-storage:localhost/lifeos:edge-20260314-db06313` (digest `sha256:f7469804c18d3d811393bb06b778ffbc7438541ba2438b1316ea17f5ff0b5e9f`).
+- `life ai status -v`: `Offload: full gpu / full gpu`, modelo activo `Qwen3.5-0.8B-Q4_K_M.gguf`, `mmproj-F16.gguf`, `LIFEOS_AI_CTX_SIZE=6144`.
+- Bench sensorial estable: voice loop `986-1094 ms`, vision query `~3392 ms`, throughput `~341-346 tok/s`.
+- Privacidad validada end-to-end: `life intents jarvis kill-switch` apaga sensores y reinicio de runtime recupera `axi_state: idle`.
+- Retencion de screenshots verificada y acotada a `120` archivos en `/var/lib/lifeos/screenshots`.
+- Warnings conocidos no bloqueantes observados en campo: `systemd-remount-fs.service` y errores D-Bus Portal/Broker (`Broken pipe`) al notificar.
 
 **Principio rector:** cada componente sensorial (voz, vision, camara) debe funcionar de forma independiente y degradar gracefully si el hardware o el consentimiento no estan disponibles. Sin GPU → solo voz CPU; sin mic → solo texto; sin camara → sin presencia. Todo funciona parcialmente.
 
@@ -1485,7 +1494,7 @@ Implementacion concreta:
 8. Benchmark `lifeos-bench` incluye suite sensorial: voice-loop latency, vision-query latency, GPU offload throughput.
 9. Degradacion graceful verificada: el sistema funciona (con features reducidas) en cada escenario de la tabla.
 
-**Estado de salida:** **CUMPLIDO EN REPO (2026-03-10).**
+**Estado de salida:** **CUMPLIDO EN REPO + VALIDADO EN CAMPO (2026-03-15).**
 
 **Entregable:** LifeOS que se siente vivo — habla, escucha, ve y reacciona. Axi es un companero presente en el escritorio, no un chatbot escondido en la terminal.
 
@@ -1493,7 +1502,9 @@ Implementacion concreta:
 
 **Objetivo:** separar definitivamente el ciclo de vida del OS del ciclo de vida de los LLM pesados. La ISO debe traer runtimes, catalogo firmado y voces locales pequenas; los modelos pesados se descargan, seleccionan y eliminan bajo control explicito del usuario.
 
-**Estado:** **PLANIFICADA.** _Puente entre Fase 4 cerrada y Fase 5._
+**Estado:** **EN EJECUCION (2026-03-15).** _Puente activo tras cierre de Fase 4 en repo y validacion en hardware real._
+
+**Nota operativa:** esta fase ya arranco con ajustes de runtime y defaults de prueba en hardware real; aun faltan selector visual, catalogo firmado y politicas completas de ciclo de vida para declarar cierre.
 
 **Reglas de producto obligatorias:**
 

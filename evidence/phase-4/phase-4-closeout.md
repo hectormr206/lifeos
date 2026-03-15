@@ -11,6 +11,32 @@ Phase 4 sensory interaction scope is closed in-repo:
 - NVIDIA-aware GPU routing/offload policy is implemented and persisted.
 - Overlay state, privacy indicators and proactive sensory UX are connected to the runtime.
 
+## Field Validation Addendum (2026-03-15)
+
+Target hardware:
+
+- NVIDIA GeForce RTX 5070 Ti Laptop GPU (driver 580.126.18)
+- Booted image: `containers-storage:localhost/lifeos:edge-20260314-db06313`
+- Digest: `sha256:f7469804c18d3d811393bb06b778ffbc7438541ba2438b1316ea17f5ff0b5e9f`
+
+Validated runtime state:
+
+- `life ai status -v` reported API OK and `Offload: full gpu / full gpu`.
+- Active model pair: `Qwen3.5-0.8B-Q4_K_M.gguf` + `mmproj-F16.gguf`.
+- Active context size for stable multimodal tests: `LIFEOS_AI_CTX_SIZE=6144`.
+
+Observed sensory performance:
+
+- `life ai bench-sensory --prompt "Di hola en una frase" --repeats 3`: avg voice loop `986 ms`.
+- `life ai bench-sensory --prompt "Resume la pantalla en una frase" --include-screen --repeats 3`:
+  avg voice loop `1094 ms`, avg vision query `3392 ms`, avg throughput `341.0 tok/s`.
+
+Behavior checks:
+
+- Kill switch validated end-to-end via `life intents jarvis kill-switch` and runtime recovery.
+- Screenshot retention trimmed and verified at `120` files under `/var/lib/lifeos/screenshots`.
+- Non-blocking warnings observed in journal: `systemd-remount-fs.service` and D-Bus Portal/Broker broken pipe notifications.
+
 ## Evidence Matrix
 
 | Area | Status | Evidence |
