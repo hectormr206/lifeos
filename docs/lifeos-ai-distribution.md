@@ -1530,7 +1530,7 @@ Implementacion concreta:
 
 - [x] Tombstones/estado persistente para distinguir `installed`, `selected`, `pinned`, `removed_by_user`. _Daemon ahora mantiene `/.model-lifecycle-state.json` (con compatibilidad legacy `.removed-models`/`.pinned-models`) y lo sincroniza con runtime/env en el selector._
 - [x] `bootc upgrade` y el primer arranque post-update no reinstalan modelos en estado `removed_by_user`. _`lifeos-ai-setup.sh` ahora respeta `.removed-models`, intenta fallback local no removido y, si no existe, limpia `MODEL/MMPROJ` sin auto-descarga._
-- [ ] La imagen solo actualiza runtime, catalogo y politicas; el contenido pesado del usuario permanece en `/var`.
+- [x] La imagen solo actualiza runtime, catalogo y politicas; el contenido pesado del usuario permanece en `/var`. _El flujo `bootc switch/upgrade` conserva `/var` y no existe limpieza automatica de `/var/lib/lifeos/models` fuera de acciones explicitas de usuario (`overlay/models/remove`)._
 - [x] Politica anti-reinicio inesperado aplicada por defecto: `bootc-fetch-apply-updates.timer` y `bootc-fetch-apply-updates.service` enmascarados via `/etc/systemd/system/* -> /dev/null`.
 - [x] Runbook operativo definido: `check/stage` automatico o manual, con `apply`/reboot siempre iniciado por el usuario en ventana de mantenimiento.
 
