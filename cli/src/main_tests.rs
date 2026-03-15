@@ -840,6 +840,28 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_overlay_model_pin_command() {
+        let cli = Cli::parse_from(["life", "overlay", "model-pin", "Qwen3.5-9B-Q4_K_M.gguf"]);
+        match cli.command.expect("Expected command") {
+            Commands::Overlay(commands::overlay::OverlayCommands::ModelPin { model }) => {
+                assert_eq!(model, "Qwen3.5-9B-Q4_K_M.gguf");
+            }
+            _ => panic!("Expected overlay model-pin command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_overlay_model_unpin_command() {
+        let cli = Cli::parse_from(["life", "overlay", "model-unpin", "Qwen3.5-9B-Q4_K_M.gguf"]);
+        match cli.command.expect("Expected command") {
+            Commands::Overlay(commands::overlay::OverlayCommands::ModelUnpin { model }) => {
+                assert_eq!(model, "Qwen3.5-9B-Q4_K_M.gguf");
+            }
+            _ => panic!("Expected overlay model-unpin command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_ai_autotune_command() {
         let cli = Cli::parse_from(["life", "ai", "autotune", "--dry-run"]);
         match cli.command.expect("Expected command") {

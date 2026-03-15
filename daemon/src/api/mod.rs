@@ -55,6 +55,7 @@ use std::path::PathBuf;
 const MODEL_DIR: &str = "/var/lib/lifeos/models";
 const LLAMA_ENV_FILE: &str = "/etc/lifeos/llama-server.env";
 const REMOVED_MODELS_FILE: &str = "/var/lib/lifeos/models/.removed-models";
+const PINNED_MODELS_FILE: &str = "/var/lib/lifeos/models/.pinned-models";
 const EMBEDDED_MODEL_CATALOG_JSON: &str = include_str!("../../../contracts/models/v1/catalog.json");
 const EMBEDDED_MODEL_CATALOG_SIG: &str =
     include_str!("../../../contracts/models/v1/catalog.json.sig");
@@ -145,6 +146,8 @@ impl Default for ApiConfig {
         overlay_models_select,
         overlay_models_remove,
         overlay_models_pull,
+        overlay_models_pin,
+        overlay_models_unpin,
         list_shortcuts,
         register_shortcuts,
         unregister_shortcuts,
@@ -198,6 +201,7 @@ impl Default for ApiConfig {
             OverlayModelSelectRequest,
             OverlayModelRemoveRequest,
             OverlayModelPullRequest,
+            OverlayModelPinRequest,
             OverlayModelActionResponse,
             Notification,
             SystemInfo,
@@ -470,7 +474,9 @@ pub struct OverlayModelCard {
     pub size: String,
     pub installed: bool,
     pub selected: bool,
+    pub pinned: bool,
     pub removed_by_user: bool,
+    pub featured: bool,
     pub runtime_profiles: Vec<String>,
     pub roles: Vec<String>,
     pub companion_mmproj: Option<String>,
@@ -501,6 +507,11 @@ pub struct OverlayModelPullRequest {
     pub force: bool,
     #[serde(default)]
     pub restart: bool,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelPinRequest {
+    pub model: String,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -1057,6 +1068,8 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/overlay/models/select", post(overlay_models_select))
         .route("/overlay/models/remove", post(overlay_models_remove))
         .route("/overlay/models/pull", post(overlay_models_pull))
+        .route("/overlay/models/pin", post(overlay_models_pin))
+        .route("/overlay/models/unpin", post(overlay_models_unpin))
         // Notification endpoints
         .route("/notifications", get(get_notifications))
         .route("/notifications", post(post_notification))
@@ -2886,6 +2899,20 @@ fn load_removed_models() -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
+fn load_pinned_models() -> BTreeSet<String> {
+    std::fs::read_to_string(PINNED_MODELS_FILE)
+        .ok()
+        .map(|content| {
+            content
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn write_removed_models(models: &BTreeSet<String>) -> anyhow::Result<()> {
     if let Some(parent) = std::path::Path::new(REMOVED_MODELS_FILE).parent() {
         std::fs::create_dir_all(parent)?;
@@ -2902,6 +2929,22 @@ fn write_removed_models(models: &BTreeSet<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn write_pinned_models(models: &BTreeSet<String>) -> anyhow::Result<()> {
+    if let Some(parent) = std::path::Path::new(PINNED_MODELS_FILE).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let serialized = if models.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{}\n",
+            models.iter().cloned().collect::<Vec<_>>().join("\n")
+        )
+    };
+    std::fs::write(PINNED_MODELS_FILE, serialized)?;
+    Ok(())
+}
+
 fn mark_model_removed(model_name: &str) -> anyhow::Result<()> {
     let mut removed = load_removed_models();
     removed.insert(model_name.to_string());
@@ -2912,6 +2955,20 @@ fn clear_removed_model(model_name: &str) -> anyhow::Result<()> {
     let mut removed = load_removed_models();
     if removed.remove(model_name) {
         write_removed_models(&removed)?;
+    }
+    Ok(())
+}
+
+fn mark_model_pinned(model_name: &str) -> anyhow::Result<()> {
+    let mut pinned = load_pinned_models();
+    pinned.insert(model_name.to_string());
+    write_pinned_models(&pinned)
+}
+
+fn clear_model_pinned(model_name: &str) -> anyhow::Result<()> {
+    let mut pinned = load_pinned_models();
+    if pinned.remove(model_name) {
+        write_pinned_models(&pinned)?;
     }
     Ok(())
 }
@@ -3002,6 +3059,13 @@ fn pick_fallback_model(exclude: &str) -> anyhow::Result<Option<String>> {
         .into_keys()
         .find(|candidate| !candidate.eq_ignore_ascii_case(exclude));
     Ok(fallback)
+}
+
+fn is_featured_overlay_model(model_name: &str) -> bool {
+    matches!(
+        model_name.to_ascii_lowercase().as_str(),
+        "qwen3.5-4b-q4_k_m.gguf" | "qwen3.5-9b-q4_k_m.gguf" | "qwen3.5-27b-q4_k_m.gguf"
+    )
 }
 
 async fn download_model_with_curl(
@@ -3403,6 +3467,7 @@ async fn overlay_models(
         ai_manager.active_model().await
     };
     let removed = load_removed_models();
+    let pinned = load_pinned_models();
     let installed = installed_models_map().map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3425,7 +3490,9 @@ async fn overlay_models(
                 size: format_size_bytes(installed_size.unwrap_or(entry.size_bytes)),
                 installed: installed.contains_key(&entry.id),
                 selected: configured.as_deref() == Some(entry.id.as_str()),
+                pinned: pinned.contains(&entry.id),
                 removed_by_user: removed.contains(&entry.id),
+                featured: is_featured_overlay_model(&entry.id),
                 runtime_profiles: entry.runtime_profiles.clone(),
                 roles: entry.roles.clone(),
                 companion_mmproj: qwen_companion_mmproj_filename(&entry.id),
@@ -3443,14 +3510,22 @@ async fn overlay_models(
             size: format_size_bytes(*size_bytes),
             installed: true,
             selected: configured.as_deref() == Some(name.as_str()),
+            pinned: pinned.contains(name),
             removed_by_user: removed.contains(name),
+            featured: is_featured_overlay_model(name),
             runtime_profiles: Vec::new(),
             roles: vec!["local".to_string()],
             companion_mmproj: qwen_companion_mmproj_filename(name),
         });
     }
 
-    cards.sort_by(|a, b| a.id.cmp(&b.id));
+    cards.sort_by(|a, b| {
+        b.featured
+            .cmp(&a.featured)
+            .then_with(|| b.selected.cmp(&a.selected))
+            .then_with(|| b.pinned.cmp(&a.pinned))
+            .then_with(|| a.id.cmp(&b.id))
+    });
 
     Ok(Json(OverlayModelSelectorResponse {
         active_model: active,
@@ -3566,6 +3641,16 @@ async fn overlay_models_remove(
             Json(ApiError {
                 error: "Model Remove Error".to_string(),
                 message: format!("Failed to persist removed model state: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+    clear_model_pinned(&request.model).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Remove Error".to_string(),
+                message: format!("Failed to clear pinned model state: {}", e),
                 code: 500,
             }),
         )
@@ -3738,6 +3823,86 @@ async fn overlay_models_pull(
         message: format!("Pulled {}", model_entry.id),
         selected_model: configured_model(),
         companion_mmproj,
+    }))
+}
+
+/// Pin model to protect it from accidental cleanup flows
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/models/pin",
+    request_body = OverlayModelPinRequest,
+    responses(
+        (status = 200, description = "Overlay model pinned", body = OverlayModelActionResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_models_pin(
+    Json(request): Json<OverlayModelPinRequest>,
+) -> Result<Json<OverlayModelActionResponse>, (StatusCode, Json<ApiError>)> {
+    let model_path = std::path::Path::new(MODEL_DIR).join(&request.model);
+    if !model_path.exists() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Model Pin Error".to_string(),
+                message: format!("Model {} not found in {}", request.model, MODEL_DIR),
+                code: 400,
+            }),
+        ));
+    }
+
+    mark_model_pinned(&request.model).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Pin Error".to_string(),
+                message: format!("Failed to persist pinned model state: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(OverlayModelActionResponse {
+        ok: true,
+        message: format!("Pinned {}", request.model),
+        selected_model: configured_model(),
+        companion_mmproj: qwen_companion_mmproj_filename(&request.model),
+    }))
+}
+
+/// Unpin model so cleanup policies can prune it when needed
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/models/unpin",
+    request_body = OverlayModelPinRequest,
+    responses(
+        (status = 200, description = "Overlay model unpinned", body = OverlayModelActionResponse),
+        (status = 400, description = "Invalid request", body = ApiError),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_models_unpin(
+    Json(request): Json<OverlayModelPinRequest>,
+) -> Result<Json<OverlayModelActionResponse>, (StatusCode, Json<ApiError>)> {
+    clear_model_pinned(&request.model).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Unpin Error".to_string(),
+                message: format!("Failed to update pinned model state: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    Ok(Json(OverlayModelActionResponse {
+        ok: true,
+        message: format!("Unpinned {}", request.model),
+        selected_model: configured_model(),
+        companion_mmproj: qwen_companion_mmproj_filename(&request.model),
     }))
 }
 

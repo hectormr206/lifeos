@@ -49,6 +49,10 @@ pub enum OverlayCommands {
         #[arg(long)]
         restart: bool,
     },
+    /// Pin model to protect it from cleanup workflows
+    ModelPin { model: String },
+    /// Unpin model to allow cleanup workflows
+    ModelUnpin { model: String },
     /// Configure overlay settings
     Config {
         /// Overlay theme (dark/light/auto)
@@ -90,6 +94,8 @@ pub async fn execute(args: OverlayCommands) -> anyhow::Result<()> {
             select_fallback,
             restart,
         } => model_remove(&model, remove_companion, select_fallback, restart).await,
+        OverlayCommands::ModelPin { model } => model_pin(&model).await,
+        OverlayCommands::ModelUnpin { model } => model_unpin(&model).await,
         OverlayCommands::Config {
             theme,
             shortcut,
@@ -372,9 +378,15 @@ async fn show_models() -> anyhow::Result<()> {
             let size = model["size"].as_str().unwrap_or("-");
             let installed = model["installed"].as_bool().unwrap_or(false);
             let selected = model["selected"].as_bool().unwrap_or(false);
+            let pinned = model["pinned"].as_bool().unwrap_or(false);
             let removed = model["removed_by_user"].as_bool().unwrap_or(false);
-            let badge = if selected {
+            let featured = model["featured"].as_bool().unwrap_or(false);
+            let badge = if selected && pinned {
+                "default+pinned".green().bold().to_string()
+            } else if selected {
                 "default".green().bold().to_string()
+            } else if pinned {
+                "pinned".yellow().bold().to_string()
             } else if installed {
                 "installed".cyan().to_string()
             } else if removed {
@@ -382,7 +394,12 @@ async fn show_models() -> anyhow::Result<()> {
             } else {
                 "available".dimmed().to_string()
             };
-            println!("  - {} ({}) [{}]", id.cyan(), size, badge);
+            let featured_tag = if featured {
+                " featured".magenta().to_string()
+            } else {
+                String::new()
+            };
+            println!("  - {} ({}) [{}]{}", id.cyan(), size, badge, featured_tag);
         }
     }
 
@@ -462,6 +479,49 @@ async fn model_remove(
     println!(
         "{}",
         body["message"].as_str().unwrap_or("Model removed").yellow()
+    );
+    Ok(())
+}
+
+async fn model_pin(model: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let url = format!("{}/api/v1/overlay/models/pin", daemon_client::daemon_url());
+    let payload = serde_json::json!({
+        "model": model
+    });
+    let response = client.post(url).json(&payload).send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to pin model (status: {}): {}", status, body);
+    }
+    let body = response.json::<serde_json::Value>().await?;
+    println!(
+        "{}",
+        body["message"].as_str().unwrap_or("Model pinned").green()
+    );
+    Ok(())
+}
+
+async fn model_unpin(model: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let url = format!(
+        "{}/api/v1/overlay/models/unpin",
+        daemon_client::daemon_url()
+    );
+    let payload = serde_json::json!({
+        "model": model
+    });
+    let response = client.post(url).json(&payload).send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to unpin model (status: {}): {}", status, body);
+    }
+    let body = response.json::<serde_json::Value>().await?;
+    println!(
+        "{}",
+        body["message"].as_str().unwrap_or("Model unpinned").green()
     );
     Ok(())
 }
