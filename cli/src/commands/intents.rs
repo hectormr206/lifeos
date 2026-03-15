@@ -912,9 +912,7 @@ async fn cmd_always_on(cmd: IntentAlwaysOnCommands) -> anyhow::Result<()> {
         IntentAlwaysOnCommands::Enable { wake_word, actor } => {
             cmd_always_on_set(true, &wake_word, &actor).await
         }
-        IntentAlwaysOnCommands::Disable { actor } => {
-            cmd_always_on_set(false, "axi", &actor).await
-        }
+        IntentAlwaysOnCommands::Disable { actor } => cmd_always_on_set(false, "axi", &actor).await,
         IntentAlwaysOnCommands::Classify { input } => cmd_always_on_classify(&input).await,
     }
 }

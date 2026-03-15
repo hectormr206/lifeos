@@ -20,6 +20,9 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+const DEFAULT_WAKE_WORD: &str = "axi";
+const DEFAULT_SENSORY_CAPTURE_INTERVAL_SECONDS: u64 = 10;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IntentStatus {
@@ -216,7 +219,7 @@ impl Default for AlwaysOnRuntimeState {
             vad_enabled: true,
             hotword_enabled: true,
             intent_classifier_enabled: true,
-            wake_word: "axi".to_string(),
+            wake_word: DEFAULT_WAKE_WORD.to_string(),
             last_inference_at: None,
             last_inference_label: None,
             updated_at: None,
@@ -360,7 +363,8 @@ impl AgentRuntimeManager {
     }
 
     pub async fn initialize(&self) -> Result<()> {
-        self.load_state().await
+        self.load_state().await?;
+        self.migrate_runtime_defaults().await
     }
 
     pub async fn plan_intent(&self, description: &str) -> Result<IntentRecord> {
@@ -1897,6 +1901,84 @@ impl AgentRuntimeManager {
         Ok(())
     }
 
+    async fn migrate_runtime_defaults(&self) -> Result<()> {
+        let mut state = self.state.write().await;
+        let mut migrated = false;
+        let mut detail = serde_json::Map::new();
+
+        if state.always_on_runtime.updated_at.is_none() && !state.always_on_runtime.enabled {
+            state.always_on_runtime.enabled = true;
+            state.always_on_runtime.vad_enabled = true;
+            state.always_on_runtime.hotword_enabled = true;
+            state.always_on_runtime.intent_classifier_enabled = true;
+            state.always_on_runtime.wake_word = DEFAULT_WAKE_WORD.to_string();
+            state.always_on_runtime.updated_at = Some(Utc::now());
+            detail.insert(
+                "always_on_default_enabled".to_string(),
+                serde_json::json!(true),
+            );
+            detail.insert(
+                "wake_word".to_string(),
+                serde_json::json!(DEFAULT_WAKE_WORD),
+            );
+            migrated = true;
+        } else if state.always_on_runtime.wake_word.trim().is_empty() {
+            state.always_on_runtime.wake_word = DEFAULT_WAKE_WORD.to_string();
+            detail.insert(
+                "wake_word".to_string(),
+                serde_json::json!(DEFAULT_WAKE_WORD),
+            );
+            migrated = true;
+        }
+
+        if state.sensory_capture_runtime.updated_at.is_none()
+            && !state.sensory_capture_runtime.enabled
+            && !state.sensory_capture_runtime.audio_enabled
+            && !state.sensory_capture_runtime.screen_enabled
+            && !state.sensory_capture_runtime.camera_enabled
+            && !state.sensory_capture_runtime.running
+            && !state.sensory_capture_runtime.kill_switch_active
+        {
+            state.sensory_capture_runtime.enabled = true;
+            state.sensory_capture_runtime.audio_enabled = true;
+            state.sensory_capture_runtime.screen_enabled = false;
+            state.sensory_capture_runtime.camera_enabled = false;
+            state.sensory_capture_runtime.running = true;
+            state.sensory_capture_runtime.capture_interval_seconds =
+                DEFAULT_SENSORY_CAPTURE_INTERVAL_SECONDS;
+            state.sensory_capture_runtime.updated_at = Some(Utc::now());
+
+            detail.insert(
+                "sensory_capture_defaults".to_string(),
+                serde_json::json!({
+                    "enabled": true,
+                    "audio_enabled": true,
+                    "screen_enabled": false,
+                    "camera_enabled": false,
+                    "capture_interval_seconds": DEFAULT_SENSORY_CAPTURE_INTERVAL_SECONDS,
+                }),
+            );
+            migrated = true;
+        }
+
+        if !migrated {
+            return Ok(());
+        }
+
+        append_ledger(
+            &mut state,
+            "runtime",
+            "bootstrap_defaults",
+            "always-on-sensory",
+            serde_json::json!({
+                "actor": "system://migration/defaults",
+                "details": detail,
+            }),
+        );
+        drop(state);
+        self.save_state().await
+    }
+
     async fn save_state(&self) -> Result<()> {
         let path = self.state_file();
         tokio::fs::create_dir_all(&self.data_dir).await?;
@@ -2586,13 +2668,73 @@ mod tests {
         assert!(state.enabled);
         assert_eq!(state.wake_word, "axi");
 
-        let classification = mgr
-            .classify_always_on_signal("axi open terminal now")
-            .await;
+        let classification = mgr.classify_always_on_signal("axi open terminal now").await;
         assert_eq!(classification["label"].as_str(), Some("action"));
         assert!(classification["hotword_detected"]
             .as_bool()
             .unwrap_or(false));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn initialize_bootstraps_axi_and_audio_defaults_once() {
+        let dir = temp_dir("agent-runtime-default-bootstrap");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        mgr.initialize().await.unwrap();
+
+        let always_on = mgr.always_on_runtime().await;
+        assert!(always_on.enabled);
+        assert_eq!(always_on.wake_word, "axi");
+        let sensory = mgr.sensory_capture_runtime().await;
+        assert!(sensory.enabled);
+        assert!(sensory.audio_enabled);
+        assert!(!sensory.screen_enabled);
+        assert!(!sensory.camera_enabled);
+        assert!(sensory.running);
+        assert_eq!(sensory.capture_interval_seconds, 10);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn initialize_keeps_user_runtime_preferences() {
+        let dir = temp_dir("agent-runtime-default-preserve");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let now = Utc::now();
+        let mut persisted = AgentRuntimeState::default();
+        persisted.always_on_runtime.enabled = false;
+        persisted.always_on_runtime.vad_enabled = false;
+        persisted.always_on_runtime.hotword_enabled = false;
+        persisted.always_on_runtime.intent_classifier_enabled = false;
+        persisted.always_on_runtime.wake_word = "hey life".to_string();
+        persisted.always_on_runtime.updated_at = Some(now);
+        persisted.sensory_capture_runtime.enabled = false;
+        persisted.sensory_capture_runtime.audio_enabled = false;
+        persisted.sensory_capture_runtime.screen_enabled = false;
+        persisted.sensory_capture_runtime.camera_enabled = false;
+        persisted.sensory_capture_runtime.running = false;
+        persisted.sensory_capture_runtime.updated_at = Some(now);
+
+        let state_file = mgr.state_file();
+        std::fs::create_dir_all(state_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &state_file,
+            serde_json::to_string_pretty(&persisted).unwrap(),
+        )
+        .unwrap();
+
+        mgr.initialize().await.unwrap();
+
+        let always_on = mgr.always_on_runtime().await;
+        assert!(!always_on.enabled);
+        assert_eq!(always_on.wake_word, "hey life");
+        let sensory = mgr.sensory_capture_runtime().await;
+        assert!(!sensory.enabled);
+        assert!(!sensory.audio_enabled);
+        assert!(!sensory.running);
 
         std::fs::remove_dir_all(dir).ok();
     }

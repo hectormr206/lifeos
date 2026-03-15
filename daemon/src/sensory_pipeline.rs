@@ -37,6 +37,7 @@ const SCREENSHOT_RETENTION_DAYS: u64 = 2;
 const OCR_SIMILARITY_SKIP_THRESHOLD: f32 = 0.92;
 const RELEVANT_SIMILARITY_SKIP_THRESHOLD: f32 = 0.60;
 const OCR_LENGTH_DELTA_TRIGGER: usize = 320;
+const TTS_CHUNK_MAX_CHARS: usize = 260;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -851,7 +852,7 @@ impl SensoryPipelineManager {
                     vec![
                         (
                             "system".to_string(),
-                            "You are Axi, the local LifeOS assistant. Answer briefly and helpfully.".to_string(),
+                            "You are Axi, the local LifeOS assistant. Respond in natural spoken Spanish suitable for TTS, avoid markdown/code formatting, and never expose internal reasoning.".to_string(),
                         ),
                         ("user".to_string(), transcript.clone()),
                     ],
@@ -860,6 +861,7 @@ impl SensoryPipelineManager {
         };
         let llm_duration_ms = llm_started.elapsed().as_millis() as u64;
         let tokens_per_second = tokens_per_second(chat.tokens_used, llm_duration_ms);
+        let response_text = sanitize_assistant_response(&chat.response);
         overlay
             .set_processing_feedback(
                 Some("thinking"),
@@ -879,7 +881,7 @@ impl SensoryPipelineManager {
                 .await?;
             match synthesize_tts(
                 &self.data_dir,
-                &chat.response,
+                &response_text,
                 request.language.as_deref(),
                 request.voice_model.as_deref(),
             )
@@ -914,7 +916,7 @@ impl SensoryPipelineManager {
             state.voice.active = playback_started;
             state.voice.session_id = Some(session_id.clone());
             state.voice.last_transcript = Some(transcript.clone());
-            state.voice.last_response = Some(chat.response.clone());
+            state.voice.last_response = Some(response_text.clone());
             state.voice.last_audio_path = audio_path.clone();
             state.voice.last_latency_ms = Some(latency_ms);
             state.voice.last_tts_engine = tts_engine.clone();
@@ -931,7 +933,7 @@ impl SensoryPipelineManager {
                 state.vision.last_capture_path = Some(ctx.screen_path.clone());
                 state.vision.last_ocr_text = Some(ctx.ocr_text.clone());
                 state.vision.last_relevant_text = ctx.relevant_text.clone();
-                state.vision.last_summary = Some(chat.response.clone());
+                state.vision.last_summary = Some(response_text.clone());
                 state.vision.last_query_latency_ms = Some(llm_duration_ms);
                 state.vision.last_multimodal_success = ctx.multimodal_used;
                 state.vision.last_updated_at = Some(Utc::now());
@@ -964,7 +966,7 @@ impl SensoryPipelineManager {
         Ok(VoiceLoopResult {
             session_id,
             transcript,
-            response: chat.response,
+            response: response_text,
             screen_path: screen_context.as_ref().map(|ctx| ctx.screen_path.clone()),
             relevant_text: screen_context
                 .as_ref()
@@ -1019,7 +1021,7 @@ impl SensoryPipelineManager {
                 ai_manager,
                 &question,
                 &screen_context.screen_path,
-                Some("Describe the user's screen and stay concise."),
+                Some("Describe the user's screen in concise spoken Spanish. Avoid markdown and never expose internal reasoning."),
             )
             .await?
         } else {
@@ -1029,7 +1031,7 @@ impl SensoryPipelineManager {
                     vec![
                         (
                             "system".to_string(),
-                            "You are Axi. Use OCR context to describe the current screen and answer directly."
+                            "You are Axi. Use OCR context to describe the current screen in spoken Spanish, answer directly, avoid markdown, and do not reveal internal reasoning."
                                 .to_string(),
                         ),
                         (
@@ -1045,13 +1047,14 @@ impl SensoryPipelineManager {
                 )
                 .await?
         };
+        let response_text = sanitize_assistant_response(&response.response);
 
         let mut degraded = degraded_modes(&state.capabilities, &state.gpu);
         let mut audio_path = None;
         if request.speak {
             match synthesize_tts(
                 &self.data_dir,
-                &response.response,
+                &response_text,
                 request.language.as_deref(),
                 request.voice_model.as_deref(),
             )
@@ -1077,7 +1080,7 @@ impl SensoryPipelineManager {
             state.vision.last_capture_path = Some(screen_context.screen_path.clone());
             state.vision.last_ocr_text = Some(screen_context.ocr_text.clone());
             state.vision.last_relevant_text = screen_context.relevant_text.clone();
-            state.vision.last_summary = Some(response.response.clone());
+            state.vision.last_summary = Some(response_text.clone());
             state.vision.last_query_latency_ms = Some(latency_ms);
             state.vision.last_multimodal_success = screen_context.multimodal_used;
             state.vision.last_updated_at = Some(Utc::now());
@@ -1099,7 +1102,7 @@ impl SensoryPipelineManager {
         }
 
         Ok(VisionDescribeResult {
-            response: response.response,
+            response: response_text,
             screen_path: Some(screen_context.screen_path),
             ocr_text: Some(screen_context.ocr_text),
             relevant_text: screen_context.relevant_text,
@@ -1654,6 +1657,14 @@ impl SensoryPipelineManager {
 }
 
 async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
+    let preferred_tts_binary = resolve_binary("LIFEOS_TTS_BIN", &["piper", "espeak-ng"]).await;
+    let tts_model = resolve_tts_model(None).await;
+    let tts_binary = select_tts_binary(
+        preferred_tts_binary,
+        tts_model.as_deref(),
+        resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await,
+    );
+
     SensoryCapabilities {
         stt_binary: resolve_binary("LIFEOS_STT_BIN", &["whisper-cli", "whisper", "whisper-cpp"])
             .await,
@@ -1662,8 +1673,8 @@ async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
             &["ffmpeg", "arecord", "pw-record", "parecord"],
         )
         .await,
-        tts_binary: resolve_binary("LIFEOS_TTS_BIN", &["piper", "espeak-ng"]).await,
-        tts_model: resolve_tts_model(None).await,
+        tts_binary,
+        tts_model,
         playback_binary: resolve_binary("LIFEOS_PLAYBACK_BIN", &["pw-play", "aplay", "paplay"])
             .await,
         screen_capture_available: true,
@@ -1980,18 +1991,27 @@ async fn synthesize_tts(
     language: Option<&str>,
     voice_model: Option<&str>,
 ) -> Result<(String, String)> {
+    let tts_text = prepare_tts_text(text);
     let binary = resolve_binary("LIFEOS_TTS_BIN", &["piper", "espeak-ng"])
         .await
         .ok_or_else(|| anyhow::anyhow!("no local TTS backend found"))?;
 
     if binary_basename(&binary) == "espeak-ng" {
-        let audio_path = synthesize_with_espeak(data_dir, &binary, text, language).await?;
+        let audio_path = synthesize_with_espeak(data_dir, &binary, &tts_text, language).await?;
         return Ok((audio_path, binary));
     }
 
-    let model = resolve_tts_model(voice_model)
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no Piper voice model configured"))?;
+    let model = if let Some(model) = resolve_tts_model(voice_model).await {
+        model
+    } else if let Some(fallback_binary) =
+        resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await
+    {
+        let audio_path =
+            synthesize_with_espeak(data_dir, &fallback_binary, &tts_text, language).await?;
+        return Ok((audio_path, fallback_binary));
+    } else {
+        anyhow::bail!("no Piper voice model configured");
+    };
 
     let tts_dir = data_dir.join("tts");
     tokio::fs::create_dir_all(&tts_dir)
@@ -2014,7 +2034,7 @@ async fn synthesize_tts(
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin
-            .write_all(text.trim().as_bytes())
+            .write_all(tts_text.trim().as_bytes())
             .await
             .context("Failed to send text to Piper stdin")?;
     }
@@ -2024,6 +2044,13 @@ async fn synthesize_tts(
         .await
         .context("Failed to wait for Piper output")?;
     if !output.status.success() {
+        if let Some(fallback_binary) =
+            resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await
+        {
+            let audio_path =
+                synthesize_with_espeak(data_dir, &fallback_binary, &tts_text, language).await?;
+            return Ok((audio_path, fallback_binary));
+        }
         anyhow::bail!(
             "piper synthesis failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -2276,6 +2303,17 @@ fn binary_basename(path: &str) -> &str {
 
 fn tts_binary_requires_model(binary: Option<&str>) -> bool {
     binary.map(binary_basename) == Some("piper")
+}
+
+fn select_tts_binary(
+    preferred: Option<String>,
+    tts_model: Option<&str>,
+    espeak_fallback: Option<String>,
+) -> Option<String> {
+    if tts_binary_requires_model(preferred.as_deref()) && tts_model.is_none() {
+        return espeak_fallback.or(preferred);
+    }
+    preferred
 }
 
 fn espeak_voice_for_language(language: Option<&str>) -> &'static str {
@@ -2561,6 +2599,170 @@ fn is_night_window(now: DateTime<Utc>) -> bool {
 
 fn normalize_whitespace(input: &str) -> String {
     input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn sanitize_assistant_response(raw: &str) -> String {
+    let mut text = strip_think_sections(raw);
+    text = text
+        .replace("<think>", " ")
+        .replace("</think>", " ")
+        .replace("<|im_start|>", " ")
+        .replace("<|im_end|>", " ");
+
+    let mut cleaned_lines = Vec::new();
+    let mut in_code_fence = false;
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence || line.is_empty() {
+            continue;
+        }
+        if looks_like_internal_reasoning_line(line) {
+            continue;
+        }
+        let line = strip_leading_list_marker(line)
+            .trim_start_matches('#')
+            .trim()
+            .trim_matches('`')
+            .trim();
+        if !line.is_empty() {
+            cleaned_lines.push(line.to_string());
+        }
+    }
+
+    let cleaned = normalize_whitespace(&cleaned_lines.join(" "));
+    if cleaned.is_empty() {
+        normalize_whitespace(raw)
+    } else {
+        cleaned
+    }
+}
+
+fn strip_think_sections(input: &str) -> String {
+    let mut output = String::new();
+    let mut rest = input;
+    loop {
+        if let Some(start) = rest.find("<think>") {
+            output.push_str(&rest[..start]);
+            let after_start = &rest[start + "<think>".len()..];
+            if let Some(end_rel) = after_start.find("</think>") {
+                rest = &after_start[end_rel + "</think>".len()..];
+            } else {
+                break;
+            }
+        } else {
+            output.push_str(rest);
+            break;
+        }
+    }
+    output
+}
+
+fn looks_like_internal_reasoning_line(line: &str) -> bool {
+    let normalized = normalize_whitespace(line).to_lowercase();
+    [
+        "the user wants",
+        "i need to",
+        "let me ",
+        "drafting the",
+        "reasoning:",
+        "analysis:",
+        "internal reasoning",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
+fn strip_leading_list_marker(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    let trimmed = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix("• "))
+        .unwrap_or(trimmed);
+
+    let bytes = trimmed.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    if idx > 0 && idx + 1 < bytes.len() && (bytes[idx] == b'.' || bytes[idx] == b')') {
+        let mut next = idx + 1;
+        while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+            next += 1;
+        }
+        return trimmed[next..].trim_start();
+    }
+
+    trimmed
+}
+
+fn prepare_tts_text(raw: &str) -> String {
+    let cleaned = sanitize_assistant_response(raw);
+    let base = if cleaned.is_empty() {
+        normalize_whitespace(raw)
+    } else {
+        cleaned
+    };
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for sentence in split_spoken_sentences(&base) {
+        if sentence.is_empty() {
+            continue;
+        }
+        if !current.is_empty() && current.len() + sentence.len() + 1 > TTS_CHUNK_MAX_CHARS {
+            chunks.push(current.trim().to_string());
+            current.clear();
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(&sentence);
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current.trim().to_string());
+    }
+
+    if chunks.is_empty() {
+        base
+    } else {
+        chunks.join("\n")
+    }
+}
+
+fn split_spoken_sentences(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+
+    for ch in text.chars() {
+        if ch == '\n' || ch == '\r' {
+            let normalized = normalize_whitespace(current.trim());
+            if !normalized.is_empty() {
+                out.push(normalized);
+            }
+            current.clear();
+            continue;
+        }
+
+        current.push(ch);
+        if matches!(ch, '.' | '!' | '?' | ';' | ':') {
+            let normalized = normalize_whitespace(current.trim());
+            if !normalized.is_empty() {
+                out.push(normalized);
+            }
+            current.clear();
+        }
+    }
+
+    let trailing = normalize_whitespace(current.trim());
+    if !trailing.is_empty() {
+        out.push(trailing);
+    }
+    out
 }
 
 fn tokenize(input: &str) -> Vec<String> {
@@ -2980,6 +3182,50 @@ mod tests {
         assert!(metrics.face_near_screen);
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn tts_binary_selection_falls_back_to_espeak_when_piper_model_missing() {
+        let selected = select_tts_binary(
+            Some("/usr/bin/piper".to_string()),
+            None,
+            Some("/usr/bin/espeak-ng".to_string()),
+        );
+        assert_eq!(selected.as_deref(), Some("/usr/bin/espeak-ng"));
+    }
+
+    #[test]
+    fn tts_binary_selection_keeps_piper_when_model_exists() {
+        let selected = select_tts_binary(
+            Some("/usr/bin/piper".to_string()),
+            Some("/var/lib/lifeos/models/piper/es_MX-claude-high.onnx"),
+            Some("/usr/bin/espeak-ng".to_string()),
+        );
+        assert_eq!(selected.as_deref(), Some("/usr/bin/piper"));
+    }
+
+    #[test]
+    fn sanitize_assistant_response_removes_reasoning_scaffolding() {
+        let raw = r#"
+The user wants me to describe the screen.
+I need to break down the content first.
+1. Pantalla con terminal abierta.
+2. Navegador con dashboard.
+Drafting the description:
+"#;
+
+        let cleaned = sanitize_assistant_response(raw);
+        let lowered = cleaned.to_lowercase();
+        assert!(!lowered.contains("the user wants"));
+        assert!(!lowered.contains("i need to"));
+        assert!(cleaned.contains("Pantalla con terminal abierta."));
+    }
+
+    #[test]
+    fn prepare_tts_text_chunks_long_content() {
+        let raw = "Primera frase con contexto largo para validar segmentacion y una salida hablada mas natural. ".repeat(8);
+        let prepared = prepare_tts_text(&raw);
+        assert!(prepared.contains('\n'));
     }
 
     #[tokio::test]

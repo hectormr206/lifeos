@@ -126,7 +126,26 @@ RUN set -eux && \
     rm -rf /tmp/whisper.cpp
 
 # ============================================================================
-# Stage 4: Sistema Final
+# Stage 4: Bundle Piper TTS assets (brand voice)
+# ============================================================================
+FROM fedora:${FEDORA_MAJOR} AS piper-voice-builder
+
+RUN dnf install -y curl && \
+    dnf clean all
+
+RUN set -eux && \
+    mkdir -p /out/models/piper && \
+    curl -fSL --retry 3 --connect-timeout 60 \
+      -o /out/models/piper/es_MX-claude-high.onnx \
+      https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx?download=true && \
+    curl -fSL --retry 3 --connect-timeout 60 \
+      -o /out/models/piper/es_MX-claude-high.onnx.json \
+      https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx.json?download=true && \
+    test -s /out/models/piper/es_MX-claude-high.onnx && \
+    test -s /out/models/piper/es_MX-claude-high.onnx.json
+
+# ============================================================================
+# Stage 5: Sistema Final
 # ============================================================================
 FROM quay.io/fedora/fedora-bootc:${FEDORA_MAJOR}
 
@@ -176,6 +195,7 @@ RUN dnf -y install --skip-unavailable \
     gnome-screenshot grim scrot maim \
     tesseract tesseract-langpack-eng tesseract-langpack-spa \
     espeak-ng \
+    piper \
     vulkan-loader \
     fwupd \
     && dnf clean all
@@ -359,6 +379,7 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /va
     chmod 0700 /var/roothome
 
 COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
+COPY --from=piper-voice-builder /out/models/piper /usr/share/lifeos/models/piper
 
 # --- AI Model (pre-bundled) ---
 # Qwen3.5-4B: multimodal vision-language model with hybrid DeltaNet architecture.
@@ -665,6 +686,7 @@ RUN test -x /usr/bin/mpv && \
     (test -x /usr/bin/gnome-screenshot || test -x /usr/bin/grim) && \
     test -x /usr/bin/tesseract && \
     test -x /usr/bin/espeak-ng && \
+    test -x /usr/bin/piper && \
     test -x /usr/bin/spice-vdagent && \
     test -x /usr/bin/virsh && \
     test -x /usr/bin/pkg-config && \
@@ -695,6 +717,8 @@ RUN test -x /usr/bin/mpv && \
     test -f /etc/lifeos/design-tokens.toml && \
     test -f /etc/lifeos/design-tokens.json && \
     test -f /usr/share/lifeos/models/whisper/ggml-base.bin && \
+    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx && \
+    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx.json && \
     test -d /usr/share/backgrounds/lifeos && \
     test -d /usr/share/icons/LifeOS && \
     test -f /usr/share/themes/LifeOS-Dark/index.theme && \
