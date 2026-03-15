@@ -1528,7 +1528,7 @@ Implementacion concreta:
 
 **Bloque 3 — Politica de updates y respeto a la voluntad del usuario (P0):**
 
-- [ ] Tombstones/estado persistente para distinguir `installed`, `selected`, `pinned`, `removed_by_user`.
+- [x] Tombstones/estado persistente para distinguir `installed`, `selected`, `pinned`, `removed_by_user`. _Daemon ahora mantiene `/.model-lifecycle-state.json` (con compatibilidad legacy `.removed-models`/`.pinned-models`) y lo sincroniza con runtime/env en el selector._
 - [x] `bootc upgrade` y el primer arranque post-update no reinstalan modelos en estado `removed_by_user`. _`lifeos-ai-setup.sh` ahora respeta `.removed-models`, intenta fallback local no removido y, si no existe, limpia `MODEL/MMPROJ` sin auto-descarga._
 - [ ] La imagen solo actualiza runtime, catalogo y politicas; el contenido pesado del usuario permanece en `/var`.
 - [x] Politica anti-reinicio inesperado aplicada por defecto: `bootc-fetch-apply-updates.timer` y `bootc-fetch-apply-updates.service` enmascarados via `/etc/systemd/system/* -> /dev/null`.

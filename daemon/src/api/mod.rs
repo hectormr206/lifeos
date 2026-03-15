@@ -56,10 +56,33 @@ const MODEL_DIR: &str = "/var/lib/lifeos/models";
 const LLAMA_ENV_FILE: &str = "/etc/lifeos/llama-server.env";
 const REMOVED_MODELS_FILE: &str = "/var/lib/lifeos/models/.removed-models";
 const PINNED_MODELS_FILE: &str = "/var/lib/lifeos/models/.pinned-models";
+const MODEL_LIFECYCLE_STATE_FILE: &str = "/var/lib/lifeos/models/.model-lifecycle-state.json";
 const DEFAULT_DOWNLOAD_MBIT_PER_SEC: u64 = 100;
 const EMBEDDED_MODEL_CATALOG_JSON: &str = include_str!("../../../contracts/models/v1/catalog.json");
 const EMBEDDED_MODEL_CATALOG_SIG: &str =
     include_str!("../../../contracts/models/v1/catalog.json.sig");
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct OverlayModelLifecycleEntry {
+    #[serde(default)]
+    installed: bool,
+    #[serde(default)]
+    selected: bool,
+    #[serde(default)]
+    pinned: bool,
+    #[serde(default)]
+    removed_by_user: bool,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct OverlayModelLifecycleState {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    models: BTreeMap<String, OverlayModelLifecycleEntry>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct OverlayCatalog {
@@ -2980,11 +3003,12 @@ fn clear_env_var(key: &str) -> anyhow::Result<()> {
 fn clear_overlay_model_selection() -> anyhow::Result<()> {
     clear_env_var("LIFEOS_AI_MODEL")?;
     clear_env_var("LIFEOS_AI_MMPROJ")?;
+    set_selected_model_in_lifecycle(None)?;
     Ok(())
 }
 
-fn load_removed_models() -> BTreeSet<String> {
-    std::fs::read_to_string(REMOVED_MODELS_FILE)
+fn read_legacy_model_set(path: &str) -> BTreeSet<String> {
+    std::fs::read_to_string(path)
         .ok()
         .map(|content| {
             content
@@ -2997,78 +3021,206 @@ fn load_removed_models() -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-fn load_pinned_models() -> BTreeSet<String> {
-    std::fs::read_to_string(PINNED_MODELS_FILE)
+fn write_legacy_model_set(path: &str, models: &BTreeSet<String>) -> anyhow::Result<()> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let serialized = if models.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "{}\n",
+            models.iter().cloned().collect::<Vec<_>>().join("\n")
+        )
+    };
+    std::fs::write(path, serialized)?;
+    Ok(())
+}
+
+fn model_lifecycle_marker() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+fn entry_has_state(entry: &OverlayModelLifecycleEntry) -> bool {
+    entry.installed || entry.selected || entry.pinned || entry.removed_by_user
+}
+
+fn cleanup_model_lifecycle_state(state: &mut OverlayModelLifecycleState) {
+    state.models.retain(|_, entry| entry_has_state(entry));
+}
+
+fn load_model_lifecycle_state() -> OverlayModelLifecycleState {
+    let mut state = std::fs::read_to_string(MODEL_LIFECYCLE_STATE_FILE)
         .ok()
-        .map(|content| {
-            content
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
+        .and_then(|raw| serde_json::from_str::<OverlayModelLifecycleState>(&raw).ok())
+        .unwrap_or_default();
+    if state.version == 0 {
+        state.version = 1;
+    }
+
+    // Migrate/merge legacy text tombstones for compatibility with older builds.
+    let removed_legacy = read_legacy_model_set(REMOVED_MODELS_FILE);
+    for model in removed_legacy {
+        let entry = state.models.entry(model).or_default();
+        if !entry.removed_by_user {
+            entry.removed_by_user = true;
+            entry.updated_at = Some(model_lifecycle_marker());
+        }
+    }
+
+    let pinned_legacy = read_legacy_model_set(PINNED_MODELS_FILE);
+    for model in pinned_legacy {
+        let entry = state.models.entry(model).or_default();
+        if !entry.pinned {
+            entry.pinned = true;
+            entry.updated_at = Some(model_lifecycle_marker());
+        }
+    }
+
+    cleanup_model_lifecycle_state(&mut state);
+    state
 }
 
-fn write_removed_models(models: &BTreeSet<String>) -> anyhow::Result<()> {
-    if let Some(parent) = std::path::Path::new(REMOVED_MODELS_FILE).parent() {
+fn write_model_lifecycle_state(state: &OverlayModelLifecycleState) -> anyhow::Result<()> {
+    if let Some(parent) = std::path::Path::new(MODEL_LIFECYCLE_STATE_FILE).parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let serialized = if models.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "{}\n",
-            models.iter().cloned().collect::<Vec<_>>().join("\n")
-        )
-    };
-    std::fs::write(REMOVED_MODELS_FILE, serialized)?;
+
+    let mut normalized = state.clone();
+    normalized.version = 1;
+    cleanup_model_lifecycle_state(&mut normalized);
+
+    let serialized = serde_json::to_string_pretty(&normalized)?;
+    std::fs::write(MODEL_LIFECYCLE_STATE_FILE, serialized)?;
+
+    // Keep legacy marker files in sync for compatibility with setup/runtime scripts.
+    let removed: BTreeSet<String> = normalized
+        .models
+        .iter()
+        .filter_map(|(model, entry)| entry.removed_by_user.then_some(model.clone()))
+        .collect();
+    let pinned: BTreeSet<String> = normalized
+        .models
+        .iter()
+        .filter_map(|(model, entry)| entry.pinned.then_some(model.clone()))
+        .collect();
+    write_legacy_model_set(REMOVED_MODELS_FILE, &removed)?;
+    write_legacy_model_set(PINNED_MODELS_FILE, &pinned)?;
+
     Ok(())
 }
 
-fn write_pinned_models(models: &BTreeSet<String>) -> anyhow::Result<()> {
-    if let Some(parent) = std::path::Path::new(PINNED_MODELS_FILE).parent() {
-        std::fs::create_dir_all(parent)?;
+fn sync_model_lifecycle_state_with_runtime(
+    installed_models: &BTreeMap<String, u64>,
+    selected_model: Option<&str>,
+) -> anyhow::Result<OverlayModelLifecycleState> {
+    let mut state = load_model_lifecycle_state();
+    let mut changed = false;
+
+    for entry in state.models.values_mut() {
+        if entry.installed {
+            entry.installed = false;
+            entry.updated_at = Some(model_lifecycle_marker());
+            changed = true;
+        }
+        if entry.selected {
+            entry.selected = false;
+            entry.updated_at = Some(model_lifecycle_marker());
+            changed = true;
+        }
     }
-    let serialized = if models.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "{}\n",
-            models.iter().cloned().collect::<Vec<_>>().join("\n")
-        )
-    };
-    std::fs::write(PINNED_MODELS_FILE, serialized)?;
-    Ok(())
+
+    for model in installed_models.keys() {
+        let entry = state.models.entry(model.clone()).or_default();
+        if !entry.installed {
+            entry.installed = true;
+            entry.updated_at = Some(model_lifecycle_marker());
+            changed = true;
+        }
+    }
+
+    if let Some(selected) = selected_model {
+        let entry = state.models.entry(selected.to_string()).or_default();
+        if !entry.selected {
+            entry.selected = true;
+            entry.updated_at = Some(model_lifecycle_marker());
+            changed = true;
+        }
+        if entry.removed_by_user {
+            entry.removed_by_user = false;
+            entry.updated_at = Some(model_lifecycle_marker());
+            changed = true;
+        }
+    }
+
+    if changed {
+        write_model_lifecycle_state(&state)?;
+    }
+    Ok(state)
 }
 
 fn mark_model_removed(model_name: &str) -> anyhow::Result<()> {
-    let mut removed = load_removed_models();
-    removed.insert(model_name.to_string());
-    write_removed_models(&removed)
+    let mut state = load_model_lifecycle_state();
+    let entry = state.models.entry(model_name.to_string()).or_default();
+    entry.removed_by_user = true;
+    entry.selected = false;
+    entry.pinned = false;
+    entry.installed = false;
+    entry.updated_at = Some(model_lifecycle_marker());
+    write_model_lifecycle_state(&state)
 }
 
 fn clear_removed_model(model_name: &str) -> anyhow::Result<()> {
-    let mut removed = load_removed_models();
-    if removed.remove(model_name) {
-        write_removed_models(&removed)?;
+    let mut state = load_model_lifecycle_state();
+    if let Some(entry) = state.models.get_mut(model_name) {
+        entry.removed_by_user = false;
+        entry.updated_at = Some(model_lifecycle_marker());
     }
-    Ok(())
+    write_model_lifecycle_state(&state)
 }
 
 fn mark_model_pinned(model_name: &str) -> anyhow::Result<()> {
-    let mut pinned = load_pinned_models();
-    pinned.insert(model_name.to_string());
-    write_pinned_models(&pinned)
+    let mut state = load_model_lifecycle_state();
+    let entry = state.models.entry(model_name.to_string()).or_default();
+    entry.pinned = true;
+    entry.updated_at = Some(model_lifecycle_marker());
+    write_model_lifecycle_state(&state)
 }
 
 fn clear_model_pinned(model_name: &str) -> anyhow::Result<()> {
-    let mut pinned = load_pinned_models();
-    if pinned.remove(model_name) {
-        write_pinned_models(&pinned)?;
+    let mut state = load_model_lifecycle_state();
+    if let Some(entry) = state.models.get_mut(model_name) {
+        entry.pinned = false;
+        entry.updated_at = Some(model_lifecycle_marker());
     }
-    Ok(())
+    write_model_lifecycle_state(&state)
+}
+
+fn set_selected_model_in_lifecycle(model_name: Option<&str>) -> anyhow::Result<()> {
+    let mut state = load_model_lifecycle_state();
+    for entry in state.models.values_mut() {
+        entry.selected = false;
+    }
+
+    if let Some(model) = model_name {
+        let entry = state.models.entry(model.to_string()).or_default();
+        entry.selected = true;
+        entry.removed_by_user = false;
+        entry.updated_at = Some(model_lifecycle_marker());
+    }
+
+    write_model_lifecycle_state(&state)
+}
+
+fn set_model_installed_in_lifecycle(model_name: &str, installed: bool) -> anyhow::Result<()> {
+    let mut state = load_model_lifecycle_state();
+    let entry = state.models.entry(model_name.to_string()).or_default();
+    entry.installed = installed;
+    if installed {
+        entry.removed_by_user = false;
+    }
+    entry.updated_at = Some(model_lifecycle_marker());
+    write_model_lifecycle_state(&state)
 }
 
 fn installed_models_map() -> anyhow::Result<BTreeMap<String, u64>> {
@@ -3205,6 +3357,8 @@ fn apply_overlay_model_selection(
         clear_env_var("LIFEOS_AI_MMPROJ")?;
     }
     clear_removed_model(model_name)?;
+    set_model_installed_in_lifecycle(model_name, true)?;
+    set_selected_model_in_lifecycle(Some(model_name))?;
     Ok(companion_mmproj)
 }
 
@@ -3644,8 +3798,6 @@ async fn overlay_models(
         let ai_manager = state.ai_manager.read().await;
         ai_manager.active_model().await
     };
-    let removed = load_removed_models();
-    let pinned = load_pinned_models();
     let installed = installed_models_map().map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3656,6 +3808,19 @@ async fn overlay_models(
             }),
         )
     })?;
+    let lifecycle_state =
+        sync_model_lifecycle_state_with_runtime(&installed, configured.as_deref())
+            .unwrap_or_else(|_| load_model_lifecycle_state());
+    let removed: BTreeSet<String> = lifecycle_state
+        .models
+        .iter()
+        .filter_map(|(model, entry)| entry.removed_by_user.then_some(model.clone()))
+        .collect();
+    let pinned: BTreeSet<String> = lifecycle_state
+        .models
+        .iter()
+        .filter_map(|(model, entry)| entry.pinned.then_some(model.clone()))
+        .collect();
     let (catalog_version, signature_valid, catalog_models) = load_overlay_catalog();
 
     let mut cards: Vec<OverlayModelCard> = catalog_models
@@ -4044,6 +4209,16 @@ async fn overlay_models_pull(
             Json(ApiError {
                 error: "Model Pull Error".to_string(),
                 message: format!("Failed to clear removed model marker: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+    set_model_installed_in_lifecycle(&model_entry.id, true).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Pull Error".to_string(),
+                message: format!("Failed to persist model lifecycle state: {}", e),
                 code: 500,
             }),
         )
