@@ -439,7 +439,7 @@ mod tests {
             "always-on",
             "enable",
             "--wake-word",
-            "hey life",
+            "axi",
             "--actor",
             "user://local/admin",
         ]);
@@ -447,7 +447,7 @@ mod tests {
             Commands::Intents(commands::intents::IntentsCommands::AlwaysOn(
                 commands::intents::IntentAlwaysOnCommands::Enable { wake_word, actor },
             )) => {
-                assert_eq!(wake_word, "hey life");
+                assert_eq!(wake_word, "axi");
                 assert_eq!(actor, "user://local/admin");
             }
             _ => panic!("Expected intents always-on enable command"),
@@ -704,7 +704,7 @@ mod tests {
             "voice",
             "session",
             "--prompt",
-            "hey axi status",
+            "axi status",
             "--include-screen",
             "--language",
             "es",
@@ -719,7 +719,7 @@ mod tests {
                 voice_model,
                 no_playback,
             }) => {
-                assert_eq!(prompt.as_deref(), Some("hey axi status"));
+                assert_eq!(prompt.as_deref(), Some("axi status"));
                 assert!(audio_file.is_none());
                 assert!(include_screen);
                 assert!(screen_source.is_none());

@@ -78,8 +78,8 @@ life intents sensory snapshot --audio-file /tmp/note.wav
 ## Always-On and Model Routing
 
 ```bash
-life intents always-on enable --wake-word "hey life"
-life intents always-on classify "hey life open terminal"
+life intents always-on enable --wake-word "axi"
+life intents always-on classify "axi open terminal"
 life intents model-route critical --preferred-model Qwen3.5-9B-Q4_K_M.gguf
 ```
 

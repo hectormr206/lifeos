@@ -220,7 +220,7 @@ async fn cmd_pipeline_status() -> anyhow::Result<()> {
     println!(
         "  always_on/wake_word: {}/{}",
         body["voice"]["always_on_active"].as_bool().unwrap_or(false),
-        body["voice"]["wake_word"].as_str().unwrap_or("hey axi")
+        body["voice"]["wake_word"].as_str().unwrap_or("axi")
     );
     println!(
         "  capture interval: {} s",

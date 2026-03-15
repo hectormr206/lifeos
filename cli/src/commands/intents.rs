@@ -144,7 +144,7 @@ pub enum IntentAlwaysOnCommands {
     Status,
     /// Enable always-on runtime with wake word
     Enable {
-        #[arg(long, default_value = "hey life")]
+        #[arg(long, default_value = "axi")]
         wake_word: String,
         #[arg(long, default_value = "user://local/default")]
         actor: String,
@@ -913,7 +913,7 @@ async fn cmd_always_on(cmd: IntentAlwaysOnCommands) -> anyhow::Result<()> {
             cmd_always_on_set(true, &wake_word, &actor).await
         }
         IntentAlwaysOnCommands::Disable { actor } => {
-            cmd_always_on_set(false, "hey life", &actor).await
+            cmd_always_on_set(false, "axi", &actor).await
         }
         IntentAlwaysOnCommands::Classify { input } => cmd_always_on_classify(&input).await,
     }

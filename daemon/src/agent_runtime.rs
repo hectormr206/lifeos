@@ -216,7 +216,7 @@ impl Default for AlwaysOnRuntimeState {
             vad_enabled: true,
             hotword_enabled: true,
             intent_classifier_enabled: true,
-            wake_word: "hey life".to_string(),
+            wake_word: "axi".to_string(),
             last_inference_at: None,
             last_inference_label: None,
             updated_at: None,
@@ -1159,7 +1159,7 @@ impl AgentRuntimeManager {
         let wake_word = wake_word
             .map(|v| v.trim())
             .filter(|v| !v.is_empty())
-            .unwrap_or("hey life")
+            .unwrap_or("axi")
             .to_lowercase();
 
         let mut state = self.state.write().await;
@@ -2580,14 +2580,14 @@ mod tests {
         let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
 
         let state = mgr
-            .set_always_on_runtime(true, Some("hey life"), Some("user://local/admin"))
+            .set_always_on_runtime(true, Some("axi"), Some("user://local/admin"))
             .await
             .unwrap();
         assert!(state.enabled);
-        assert_eq!(state.wake_word, "hey life");
+        assert_eq!(state.wake_word, "axi");
 
         let classification = mgr
-            .classify_always_on_signal("hey life open terminal now")
+            .classify_always_on_signal("axi open terminal now")
             .await;
         assert_eq!(classification["label"].as_str(), Some("action"));
         assert!(classification["hotword_detected"]

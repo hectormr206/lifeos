@@ -27,7 +27,7 @@ const STATE_FILE: &str = "sensory_pipeline_state.json";
 const BENCHMARK_FILE: &str = "sensory_benchmark.json";
 const DEFAULT_SCREEN_INTERVAL_SECONDS: u64 = 10;
 const ALWAYS_ON_CAPTURE_SECONDS: u64 = 4;
-const DEFAULT_WAKE_WORD: &str = "hey axi";
+const DEFAULT_WAKE_WORD: &str = "axi";
 const MAX_RELEVANT_LINES: usize = 8;
 const MAX_MEMORY_BYTES: usize = 6 * 1024;
 const MIN_AUDIO_SIGNAL_BYTES: usize = 4096;
@@ -2932,10 +2932,10 @@ mod tests {
 
     #[test]
     fn wake_word_detection_and_prompt_stripping_work() {
-        let transcript = "Hey Axi, que ves en mi pantalla ahora mismo?";
-        assert!(contains_wake_word(transcript, "hey axi"));
+        let transcript = "Axi, que ves en mi pantalla ahora mismo?";
+        assert!(contains_wake_word(transcript, "axi"));
         assert_eq!(
-            strip_wake_word(transcript, "hey axi").as_deref(),
+            strip_wake_word(transcript, "axi").as_deref(),
             Some("que ves en mi pantalla ahora mismo")
         );
         assert!(should_include_screen_for_prompt(
