@@ -1596,7 +1596,7 @@ Implementacion concreta:
 
 1. **Fases 0-2.5:** fundacion, UX, IA multimodal baseline, identidad visual (cerradas).
 2. **Fase 3:** hardening, dogfooding y cierre de producto (cerrada).
-3. **Fase 4:** interaccion sensorial real — voz, vision, camara, presencia, GPU offload (activa).
+3. **Fases 4 y 4.5:** interaccion sensorial real + ciclo de vida local de modelos pesados (cerradas en repo, validadas en campo).
 4. **Fase 5:** ecosistema, sincronizacion y escala gobernada (pendiente).
 5. **RFC B2B:** arquitectura multi-agente corporativa (experimental, fuera de compromiso).
 

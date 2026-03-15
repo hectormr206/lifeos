@@ -4,7 +4,7 @@
 .PHONY: all build build-cli build-daemon test test-cli test-daemon test-integration \
         lint lint-cli lint-daemon fmt fmt-check audit audit-cli audit-daemon \
         docker docker-build docker-lint docker-push clean install dev-setup help \
-        check-daemon-prereqs phase3-hardening
+        check-daemon-prereqs phase3-hardening phase45-lifecycle
 
 # =============================================================================
 # Default Target
@@ -70,6 +70,11 @@ check-daemon-prereqs:
 phase3-hardening:
 	@echo "🛡️  Running Phase 3 hardening checks..."
 	bash scripts/phase3-hardening-checks.sh
+
+## Run Phase 4.5 model lifecycle repository verification
+phase45-lifecycle:
+	@echo "🧭 Running Phase 4.5 model lifecycle checks..."
+	bash verify-phase45.sh
 
 ## Run all tests with coverage
 test-coverage:

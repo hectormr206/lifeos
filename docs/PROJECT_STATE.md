@@ -26,7 +26,7 @@ Out of wedge for 1.0 hardening:
 - New ecosystem surfaces that do not improve daily-driver reliability.
 - B2B experimental swarm/RFC work.
 
-## Current Phase: Phase 4 Closed (Field Validated) / Phase 4.5 In Progress
+## Current Phase: Phase 4 and 4.5 Closed (Field Validated) / Phase 5 Pending
 
 Phase 4 focused on making LifeOS feel alive through real sensory interaction:
 voice (bidirectional), vision (screen awareness), camera (presence detection),
@@ -40,10 +40,10 @@ Key deliverables:
 - Automatic NVIDIA GPU offload for LLM and vision models
 - Graceful degradation when hardware/consent is missing
 
-Phase 4.5 is the next corrective layer before Phase 5 scale work:
-heavy models move to an explicit user-managed lifecycle with signed catalog,
-default-model selection, companion mmproj mapping, and update-safe persistence
-so OS upgrades do not override model decisions the user already made.
+Phase 4.5 completed the model-lifecycle corrective layer before Phase 5 scale work:
+heavy models now run under explicit user lifecycle control with signed catalog,
+default-model coherence, companion mmproj mapping, and update-safe persistence
+so OS upgrades do not override model decisions already made by the user.
 
 ## Execution Status
 
@@ -53,7 +53,7 @@ so OS upgrades do not override model decisions the user already made.
 - Phase 2.5: closed at baseline (visual identity + UX foundations).
 - Phase 3: closed (hardening + dogfooding + closeout). Evidence: `evidence/phase-3/phase-3-closeout.md`.
 - Phase 4: **CLOSED IN REPO + FIELD VALIDATED** — verified on image `edge-20260314-db06313` with full GPU offload and sensory bench in target hardware.
-- Phase 4.5: in progress (heavy model manager, default-model UX, update-safe lifecycle).
+- Phase 4.5: **CLOSED IN REPO + FIELD VALIDATED** — selector/API lifecycle, fit and cleanup guardrails validated on target hardware with `Qwen3.5-0.8B-Q4_K_M`.
 - Phase 5: pending (ecosystem, sync, scale).
 
 ## Phase 4 Closed Blocks
@@ -67,12 +67,24 @@ so OS upgrades do not override model decisions the user already made.
 | Presence & camera | Closed | Presence detect + fatigue/posture alerts |
 | Axi alive in desktop | Closed | Animated states + proactive notifications |
 
+## Phase 4.5 Closed Blocks
+
+| Block | Priority | Focus |
+|-------|----------|-------|
+| Selector visual + catalogo firmado | Closed | Roster inicial, firma de catalogo y metadata de fit/costo |
+| Coherencia runtime por defecto | Closed | `MODEL`/`MMPROJ` sincronizados desde una sola fuente |
+| Persistencia y tombstones | Closed | `installed/selected/pinned/removed_by_user` resiliente a updates |
+| Awareness por hardware | Closed | `GPU_LAYERS` dinamico por RAM/VRAM/presion termica |
+| Guardrails de disco y cleanup | Closed | Pre-chequeo de espacio, cleanup seguro y dry-run |
+| Portabilidad de inventario | Closed | Export/import por dispositivo con pinning controlado |
+
 ## Reference Links
 
 - Normative spec: `docs/lifeos-ai-distribution.md` (Phase 4 section)
 - Phase 3 evidence: `evidence/phase-3/phase-3-closeout.md`
 - Phase 4 evidence: `evidence/phase-4/phase-4-closeout.md`
 - Phase 4 ISO/VM validation: `evidence/phase-4/iso-vm-regression-validation.md`
+- Phase 4.5 evidence: `evidence/phase-4.5/phase-4.5-closeout.md`
 - Recovery operations: `docs/incident-response-playbook.md`
 - Build and ISO workflow: `docs/Reconstruir imagen y generar ISO.md`
 - Update channels: `docs/update-channels.md`
