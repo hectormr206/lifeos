@@ -53,6 +53,15 @@ pub enum OverlayCommands {
     ModelPin { model: String },
     /// Unpin model to allow cleanup workflows
     ModelUnpin { model: String },
+    /// Cleanup non-selected and non-pinned models
+    ModelCleanup {
+        #[arg(long, default_value_t = true)]
+        dry_run: bool,
+        #[arg(long, default_value_t = true)]
+        remove_companion: bool,
+        #[arg(long)]
+        restart: bool,
+    },
     /// Export model inventory lifecycle state
     ModelsExport { path: String },
     /// Import model inventory lifecycle state
@@ -104,6 +113,11 @@ pub async fn execute(args: OverlayCommands) -> anyhow::Result<()> {
         } => model_remove(&model, remove_companion, select_fallback, restart).await,
         OverlayCommands::ModelPin { model } => model_pin(&model).await,
         OverlayCommands::ModelUnpin { model } => model_unpin(&model).await,
+        OverlayCommands::ModelCleanup {
+            dry_run,
+            remove_companion,
+            restart,
+        } => model_cleanup(dry_run, remove_companion, restart).await,
         OverlayCommands::ModelsExport { path } => models_export(&path).await,
         OverlayCommands::ModelsImport {
             path,
@@ -389,6 +403,88 @@ async fn show_models() -> anyhow::Result<()> {
             .unwrap_or("none")
             .yellow()
     );
+    if let Some(roster) = body["featured_roster"].as_array() {
+        let roster_display = roster
+            .iter()
+            .filter_map(|item| item.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        if !roster_display.is_empty() {
+            println!("  Roster inicial: {}", roster_display.magenta());
+        }
+    }
+    if let Some(hardware) = body["hardware"].as_object() {
+        println!();
+        println!("{}", "Host fit:".bold());
+        let ram = hardware["total_ram_gb"].as_u64().unwrap_or(0);
+        let vram = hardware["total_vram_gb"]
+            .as_u64()
+            .map(|v| format!("{}GB", v))
+            .unwrap_or_else(|| "N/A".to_string());
+        let gpu = hardware["gpu_name"].as_str().unwrap_or("none");
+        let temp = hardware["gpu_temp_celsius"]
+            .as_f64()
+            .map(|v| format!("{:.1}C", v))
+            .unwrap_or_else(|| "-".to_string());
+        let util = hardware["gpu_utilization_percent"]
+            .as_u64()
+            .map(|v| format!("{}%", v))
+            .unwrap_or_else(|| "-".to_string());
+        let thermal = if hardware["thermal_pressure"].as_bool().unwrap_or(false) {
+            "yes".red().to_string()
+        } else {
+            "no".green().to_string()
+        };
+        let battery = match hardware["on_battery"].as_bool() {
+            Some(true) => "battery".yellow().to_string(),
+            Some(false) => "ac".green().to_string(),
+            None => "unknown".dimmed().to_string(),
+        };
+        println!(
+            "  ram/vram: {}GB/{}  gpu:{}  temp:{} util:{}  thermal_pressure:{}  power:{}",
+            ram,
+            vram,
+            gpu.cyan(),
+            temp,
+            util,
+            thermal,
+            battery
+        );
+    }
+    if let Some(storage) = body["storage"].as_object() {
+        println!();
+        println!("{}", "Storage:".bold());
+        let model_dir = storage["model_dir"].as_str().unwrap_or("-");
+        let total = storage["filesystem_total_bytes"]
+            .as_u64()
+            .map(format_bytes_human)
+            .unwrap_or_else(|| "-".to_string());
+        let free = storage["filesystem_free_bytes"]
+            .as_u64()
+            .map(format_bytes_human)
+            .unwrap_or_else(|| "-".to_string());
+        let used = storage["filesystem_used_percent"]
+            .as_f64()
+            .map(|v| format!("{:.1}%", v))
+            .unwrap_or_else(|| "-".to_string());
+        let installed = storage["installed_model_bytes"]
+            .as_u64()
+            .map(format_bytes_human)
+            .unwrap_or_else(|| "-".to_string());
+        let reclaimable = storage["reclaimable_model_bytes"]
+            .as_u64()
+            .map(format_bytes_human)
+            .unwrap_or_else(|| "-".to_string());
+        println!(
+            "  {}  total:{} free:{} used:{}  installed:{} reclaimable:{}",
+            model_dir.dimmed(),
+            total,
+            free,
+            used,
+            installed,
+            reclaimable.yellow()
+        );
+    }
 
     if let Some(models) = body["models"].as_array() {
         println!();
@@ -415,6 +511,26 @@ async fn show_models() -> anyhow::Result<()> {
                 .as_u64()
                 .map(|v| format!("{}s", v))
                 .unwrap_or_else(|| "-".to_string());
+            let fit = model["fit_tier"].as_str().unwrap_or("cpu_only");
+            let gpu_layers = model["expected_gpu_layers"]
+                .as_i64()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "0".to_string());
+            let expected_ram = model["expected_ram_gb"]
+                .as_u64()
+                .map(|v| format!("{}GB", v))
+                .unwrap_or_else(|| "-".to_string());
+            let expected_vram = model["expected_vram_gb"]
+                .as_u64()
+                .map(|v| format!("{}GB", v))
+                .unwrap_or_else(|| "N/A".to_string());
+            let battery = model["expected_battery_impact"]
+                .as_str()
+                .unwrap_or("unknown");
+            let required_disk = model["required_disk_bytes"]
+                .as_u64()
+                .map(format_bytes_human)
+                .unwrap_or_else(|| "-".to_string());
             let badge = if selected && pinned {
                 "default+pinned".green().bold().to_string()
             } else if selected {
@@ -435,13 +551,16 @@ async fn show_models() -> anyhow::Result<()> {
             };
             println!("  - {} ({}) [{}]{}", id.cyan(), size, badge, featured_tag);
             println!(
-                "      ram/vram: {}/{}  integrity:{}  resumable:{}  eta:{}",
-                ram,
-                vram,
+                "      fit:{} gpu_layers:{}  ram/vram:{}/{}  disk:{}  battery:{}",
+                fit, gpu_layers, expected_ram, expected_vram, required_disk, battery
+            );
+            println!(
+                "      integrity:{}  resumable:{}  eta:{}",
                 if integrity { "yes".green() } else { "no".red() },
                 if resumable { "yes".green() } else { "no".red() },
                 eta
             );
+            println!("      recommended ram/vram: {}/{}", ram, vram,);
         }
     }
 
@@ -566,6 +685,64 @@ async fn model_unpin(model: &str) -> anyhow::Result<()> {
         body["message"].as_str().unwrap_or("Model unpinned").green()
     );
     Ok(())
+}
+
+async fn model_cleanup(dry_run: bool, remove_companion: bool, restart: bool) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let url = format!(
+        "{}/api/v1/overlay/models/cleanup",
+        daemon_client::daemon_url()
+    );
+    let payload = serde_json::json!({
+        "dry_run": dry_run,
+        "remove_companion": remove_companion,
+        "restart": restart
+    });
+    let response = client.post(url).json(&payload).send().await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to cleanup models (status: {}): {}", status, body);
+    }
+    let body = response.json::<serde_json::Value>().await?;
+    println!(
+        "{}",
+        body["message"]
+            .as_str()
+            .unwrap_or("Model cleanup completed")
+            .green()
+    );
+    if let Some(models) = body["removed_models"].as_array() {
+        if !models.is_empty() {
+            println!("  {}:", "models".bold());
+            for model in models.iter().filter_map(|entry| entry.as_str()) {
+                println!("    - {}", model.cyan());
+            }
+        }
+    }
+    if let Some(companions) = body["removed_companions"].as_array() {
+        if !companions.is_empty() {
+            println!("  {}:", "companions".bold());
+            for companion in companions.iter().filter_map(|entry| entry.as_str()) {
+                println!("    - {}", companion.dimmed());
+            }
+        }
+    }
+    if let Some(bytes) = body["reclaimed_bytes"].as_u64() {
+        println!("  reclaimed: {}", format_bytes_human(bytes).yellow());
+    }
+    Ok(())
+}
+
+fn format_bytes_human(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_idx = 0usize;
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+    format!("{:.1} {}", size, UNITS[unit_idx])
 }
 
 async fn models_export(path: &str) -> anyhow::Result<()> {

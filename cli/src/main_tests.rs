@@ -862,6 +862,30 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_overlay_model_cleanup_command() {
+        let cli = Cli::parse_from([
+            "life",
+            "overlay",
+            "model-cleanup",
+            "--dry-run",
+            "--remove-companion",
+            "--restart",
+        ]);
+        match cli.command.expect("Expected command") {
+            Commands::Overlay(commands::overlay::OverlayCommands::ModelCleanup {
+                dry_run,
+                remove_companion,
+                restart,
+            }) => {
+                assert!(dry_run);
+                assert!(remove_companion);
+                assert!(restart);
+            }
+            _ => panic!("Expected overlay model-cleanup command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_ai_autotune_command() {
         let cli = Cli::parse_from(["life", "ai", "autotune", "--dry-run"]);
         match cli.command.expect("Expected command") {

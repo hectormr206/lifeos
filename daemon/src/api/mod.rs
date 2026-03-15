@@ -121,6 +121,26 @@ struct OverlayCatalogCompanionArtifact {
     checksum_sha256: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct OverlayHardwareSnapshot {
+    total_ram_gb: u32,
+    total_vram_gb: Option<u32>,
+    gpu_name: Option<String>,
+    gpu_temp_celsius: Option<f32>,
+    gpu_utilization_percent: Option<u32>,
+    thermal_pressure: bool,
+    on_battery: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+struct OverlayModelFitAssessment {
+    fit_tier: String,
+    expected_gpu_layers: i32,
+    expected_ram_gb: Option<u32>,
+    expected_vram_gb: Option<u32>,
+    expected_battery_impact: String,
+}
+
 /// Shared API state
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -192,6 +212,7 @@ impl Default for ApiConfig {
         overlay_models_pull,
         overlay_models_pin,
         overlay_models_unpin,
+        overlay_models_cleanup,
         overlay_models_export_inventory,
         overlay_models_import_inventory,
         list_shortcuts,
@@ -511,6 +532,9 @@ pub struct OverlayModelSelectorResponse {
     pub configured_mmproj: Option<String>,
     pub catalog_version: String,
     pub catalog_signature_valid: bool,
+    pub featured_roster: Vec<String>,
+    pub hardware: OverlayModelHardwareSummary,
+    pub storage: OverlayModelStorageSummary,
     pub models: Vec<OverlayModelCard>,
 }
 
@@ -532,9 +556,36 @@ pub struct OverlayModelCard {
     pub required_disk_bytes: Option<u64>,
     pub estimated_download_seconds: Option<u64>,
     pub download_resumable: bool,
+    pub fit_tier: String,
+    pub expected_gpu_layers: i32,
+    pub expected_ram_gb: Option<u32>,
+    pub expected_vram_gb: Option<u32>,
+    pub expected_battery_impact: String,
     pub runtime_profiles: Vec<String>,
     pub roles: Vec<String>,
     pub companion_mmproj: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelHardwareSummary {
+    pub total_ram_gb: u32,
+    pub total_vram_gb: Option<u32>,
+    pub gpu_name: Option<String>,
+    pub gpu_temp_celsius: Option<f32>,
+    pub gpu_utilization_percent: Option<u32>,
+    pub thermal_pressure: bool,
+    pub on_battery: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelStorageSummary {
+    pub model_dir: String,
+    pub filesystem_total_bytes: u64,
+    pub filesystem_used_bytes: u64,
+    pub filesystem_free_bytes: u64,
+    pub filesystem_used_percent: f32,
+    pub installed_model_bytes: u64,
+    pub reclaimable_model_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -581,6 +632,16 @@ pub struct OverlayModelInventoryImportRequest {
     pub adopt_pinning: bool,
 }
 
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelCleanupRequest {
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default = "default_true")]
+    pub remove_companion: bool,
+    #[serde(default)]
+    pub restart: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct OverlayModelInventorySnapshot {
     schema_version: String,
@@ -597,6 +658,18 @@ pub struct OverlayModelActionResponse {
     pub selected_model: Option<String>,
     pub companion_mmproj: Option<String>,
     pub selected_mmproj: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct OverlayModelCleanupResponse {
+    pub ok: bool,
+    pub dry_run: bool,
+    pub removed_models: Vec<String>,
+    pub removed_companions: Vec<String>,
+    pub reclaimed_bytes: u64,
+    pub selected_model: Option<String>,
+    pub selected_mmproj: Option<String>,
+    pub message: String,
 }
 
 // ==================== UPDATE API STRUCTS ====================
@@ -1147,6 +1220,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/overlay/models/pull", post(overlay_models_pull))
         .route("/overlay/models/pin", post(overlay_models_pin))
         .route("/overlay/models/unpin", post(overlay_models_unpin))
+        .route("/overlay/models/cleanup", post(overlay_models_cleanup))
         .route(
             "/overlay/models/export",
             post(overlay_models_export_inventory),
@@ -2823,6 +2897,355 @@ fn estimate_download_seconds(size_bytes: u64) -> u64 {
     bits.div_ceil(bits_per_second)
 }
 
+fn bytes_to_gib_ceil(bytes: u64) -> u32 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    if bytes == 0 {
+        return 0;
+    }
+    bytes.div_ceil(GIB) as u32
+}
+
+fn detect_total_ram_gb() -> u32 {
+    if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+        for line in content.lines() {
+            if line.starts_with("MemTotal:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(kb_str) = parts.get(1) {
+                    if let Ok(kb) = kb_str.parse::<u64>() {
+                        return (kb / 1024 / 1024).max(1) as u32;
+                    }
+                }
+            }
+        }
+    }
+    8
+}
+
+fn detect_on_battery() -> Option<bool> {
+    let power_supply = std::path::Path::new("/sys/class/power_supply");
+    if !power_supply.exists() {
+        return None;
+    }
+
+    let mut has_battery = false;
+    let mut ac_online: Option<bool> = None;
+    let entries = std::fs::read_dir(power_supply).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(kind) = std::fs::read_to_string(path.join("type")) else {
+            continue;
+        };
+        let kind = kind.trim().to_ascii_lowercase();
+        if kind == "battery" {
+            has_battery = true;
+            if let Ok(status) = std::fs::read_to_string(path.join("status")) {
+                let status = status.trim().to_ascii_lowercase();
+                if status == "discharging" {
+                    return Some(true);
+                }
+                if status == "charging" || status == "full" {
+                    return Some(false);
+                }
+            }
+        }
+        if kind == "mains" || kind == "ac" {
+            if let Ok(online) = std::fs::read_to_string(path.join("online")) {
+                ac_online = Some(online.trim() == "1");
+            }
+        }
+    }
+
+    if has_battery {
+        ac_online.map(|online| !online)
+    } else {
+        None
+    }
+}
+
+async fn detect_overlay_hardware() -> OverlayHardwareSnapshot {
+    let mut snapshot = OverlayHardwareSnapshot {
+        total_ram_gb: detect_total_ram_gb(),
+        on_battery: detect_on_battery(),
+        ..OverlayHardwareSnapshot::default()
+    };
+
+    if let Ok(output) = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total,temperature.gpu,utilization.gpu",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines().next() {
+                let parts: Vec<&str> = line.split(',').map(|part| part.trim()).collect();
+                if parts.len() >= 4 {
+                    snapshot.gpu_name = Some(parts[0].to_string());
+                    snapshot.total_vram_gb = parts[1].parse::<u32>().ok().map(|mb| mb / 1024);
+                    snapshot.gpu_temp_celsius = parts[2].parse::<f32>().ok();
+                    snapshot.gpu_utilization_percent = parts[3].parse::<u32>().ok();
+                    snapshot.thermal_pressure = snapshot
+                        .gpu_temp_celsius
+                        .map(|temp| temp >= 82.0)
+                        .unwrap_or(false)
+                        || snapshot
+                            .gpu_utilization_percent
+                            .map(|util| util >= 92)
+                            .unwrap_or(false);
+                }
+            }
+        }
+    }
+
+    snapshot
+}
+
+fn derive_expected_ram_gb(size_bytes: u64, recommended_ram_gb: Option<u32>) -> u32 {
+    recommended_ram_gb.unwrap_or_else(|| bytes_to_gib_ceil(size_bytes).saturating_mul(2).max(6))
+}
+
+fn derive_expected_vram_gb(size_bytes: u64, recommended_vram_gb: Option<u32>) -> u32 {
+    recommended_vram_gb.unwrap_or_else(|| bytes_to_gib_ceil(size_bytes).saturating_add(1).max(2))
+}
+
+fn battery_impact_label(
+    size_bytes: u64,
+    fit_tier: &str,
+    on_battery: Option<bool>,
+    thermal_pressure: bool,
+) -> String {
+    let mut score = 0u8;
+    if fit_tier == "full_gpu" {
+        score = score.saturating_add(2);
+    } else if fit_tier == "partial_gpu" {
+        score = score.saturating_add(1);
+    }
+    if size_bytes >= 10 * 1024 * 1024 * 1024 {
+        score = score.saturating_add(2);
+    } else if size_bytes >= 4 * 1024 * 1024 * 1024 {
+        score = score.saturating_add(1);
+    }
+    if on_battery == Some(true) {
+        score = score.saturating_add(1);
+    }
+    if thermal_pressure {
+        score = score.saturating_add(1);
+    }
+    match score {
+        0..=1 => "low".to_string(),
+        2..=3 => "medium".to_string(),
+        _ => "high".to_string(),
+    }
+}
+
+fn assess_overlay_model_fit(
+    size_bytes: u64,
+    recommended_ram_gb: Option<u32>,
+    recommended_vram_gb: Option<u32>,
+    hardware: &OverlayHardwareSnapshot,
+) -> OverlayModelFitAssessment {
+    let expected_ram_gb = derive_expected_ram_gb(size_bytes, recommended_ram_gb);
+    let expected_vram_gb = derive_expected_vram_gb(size_bytes, recommended_vram_gb);
+    let has_nvidia = hardware.total_vram_gb.is_some();
+    let ram_ok = hardware.total_ram_gb >= expected_ram_gb;
+
+    let (mut fit_tier, mut expected_gpu_layers) = if let Some(vram_gb) = hardware.total_vram_gb {
+        let partial_vram = expected_vram_gb.saturating_div(2).max(4);
+        if ram_ok && vram_gb >= expected_vram_gb {
+            ("full_gpu".to_string(), -1)
+        } else if vram_gb >= partial_vram && hardware.total_ram_gb >= expected_ram_gb.max(8) / 2 {
+            ("partial_gpu".to_string(), 20)
+        } else {
+            ("cpu_only".to_string(), 0)
+        }
+    } else {
+        ("cpu_only".to_string(), 0)
+    };
+
+    if hardware.thermal_pressure {
+        if fit_tier == "full_gpu" {
+            fit_tier = "partial_gpu".to_string();
+            expected_gpu_layers = 20;
+        } else if fit_tier == "partial_gpu" {
+            fit_tier = "cpu_only".to_string();
+            expected_gpu_layers = 0;
+        }
+    }
+
+    OverlayModelFitAssessment {
+        expected_battery_impact: battery_impact_label(
+            size_bytes,
+            &fit_tier,
+            hardware.on_battery,
+            hardware.thermal_pressure,
+        ),
+        fit_tier,
+        expected_gpu_layers: if has_nvidia { expected_gpu_layers } else { 0 },
+        expected_ram_gb: Some(expected_ram_gb),
+        expected_vram_gb: if has_nvidia {
+            Some(expected_vram_gb)
+        } else {
+            None
+        },
+    }
+}
+
+fn read_filesystem_usage(path: &str) -> anyhow::Result<(u64, u64, u64, f32)> {
+    let output = std::process::Command::new("df")
+        .args(["-Pk", path])
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!("df command failed for {}", path);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout
+        .lines()
+        .nth(1)
+        .ok_or_else(|| anyhow::anyhow!("Unable to parse df output for {}", path))?;
+    let cols: Vec<&str> = line.split_whitespace().collect();
+    if cols.len() < 6 {
+        anyhow::bail!("Unexpected df output for {}", path);
+    }
+
+    let total_kb: u64 = cols[1].parse()?;
+    let used_kb: u64 = cols[2].parse()?;
+    let free_kb: u64 = cols[3].parse()?;
+    let used_percent = if total_kb == 0 {
+        0.0
+    } else {
+        (used_kb as f32 / total_kb as f32) * 100.0
+    };
+
+    Ok((
+        total_kb.saturating_mul(1024),
+        used_kb.saturating_mul(1024),
+        free_kb.saturating_mul(1024),
+        used_percent,
+    ))
+}
+
+fn build_storage_summary(
+    installed: &BTreeMap<String, u64>,
+    pinned: &BTreeSet<String>,
+    selected_model: Option<&str>,
+) -> OverlayModelStorageSummary {
+    let df_target = if std::path::Path::new(MODEL_DIR).exists() {
+        MODEL_DIR
+    } else {
+        "/var"
+    };
+    let (
+        filesystem_total_bytes,
+        filesystem_used_bytes,
+        filesystem_free_bytes,
+        filesystem_used_percent,
+    ) = read_filesystem_usage(df_target).unwrap_or((0, 0, 0, 0.0));
+    let installed_model_bytes = installed.values().copied().sum::<u64>();
+    let reclaimable_model_bytes = installed
+        .iter()
+        .filter(|(model, _)| !pinned.contains(*model) && selected_model != Some(model.as_str()))
+        .map(|(_, size)| *size)
+        .sum::<u64>();
+
+    OverlayModelStorageSummary {
+        model_dir: MODEL_DIR.to_string(),
+        filesystem_total_bytes,
+        filesystem_used_bytes,
+        filesystem_free_bytes,
+        filesystem_used_percent,
+        installed_model_bytes,
+        reclaimable_model_bytes,
+    }
+}
+
+fn featured_overlay_roster(catalog_models: &[OverlayCatalogModel]) -> Vec<String> {
+    let mut roster = Vec::new();
+    for family in [
+        "Qwen3.5-4B-Q4_K_M.gguf",
+        "Qwen3.5-9B-Q4_K_M.gguf",
+        "Qwen3.5-27B-Q4_K_M.gguf",
+    ] {
+        if let Some(model) = catalog_models
+            .iter()
+            .find(|entry| entry.id.eq_ignore_ascii_case(family))
+        {
+            roster.push(model.id.clone());
+        }
+    }
+    roster
+}
+
+fn select_model_size_and_requirements(
+    model_name: &str,
+    catalog_models: &[OverlayCatalogModel],
+) -> (u64, Option<u32>, Option<u32>) {
+    if let Some(model) = resolve_catalog_model(model_name, catalog_models) {
+        return (
+            model.size_bytes,
+            model.recommended_ram_gb,
+            model.recommended_vram_gb,
+        );
+    }
+    let path = std::path::Path::new(MODEL_DIR).join(model_name);
+    let size_bytes = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+    (size_bytes, None, None)
+}
+
+async fn recalculate_gpu_layers_for_model(
+    model_name: &str,
+    catalog_models: &[OverlayCatalogModel],
+    persist: bool,
+) -> anyhow::Result<OverlayModelFitAssessment> {
+    let hardware = detect_overlay_hardware().await;
+    let (size_bytes, recommended_ram_gb, recommended_vram_gb) =
+        select_model_size_and_requirements(model_name, catalog_models);
+    let assessment = assess_overlay_model_fit(
+        size_bytes,
+        recommended_ram_gb,
+        recommended_vram_gb,
+        &hardware,
+    );
+    if persist {
+        upsert_env_var(
+            "LIFEOS_AI_GPU_LAYERS",
+            &assessment.expected_gpu_layers.to_string(),
+        )?;
+    }
+    Ok(assessment)
+}
+
+fn ensure_model_storage_capacity(required_disk_bytes: u64) -> anyhow::Result<()> {
+    let df_target = if std::path::Path::new(MODEL_DIR).exists() {
+        MODEL_DIR
+    } else {
+        "/var"
+    };
+    let (_total, _used, free, _used_percent) = read_filesystem_usage(df_target)?;
+    let safety_margin = 256 * 1024 * 1024;
+    let required_with_margin = required_disk_bytes.saturating_add(safety_margin);
+    if free < required_with_margin {
+        anyhow::bail!(
+            "Insufficient disk space in {}: required {} (including safety margin), available {}",
+            MODEL_DIR,
+            format_size_bytes(required_with_margin),
+            format_size_bytes(free),
+        );
+    }
+    Ok(())
+}
+
+fn expected_companion_for_model(
+    model_name: &str,
+    catalog_models: &[OverlayCatalogModel],
+) -> Option<String> {
+    resolve_catalog_model(model_name, catalog_models)
+        .and_then(|entry| entry.companion_mmproj.map(|artifact| artifact.filename))
+        .or_else(|| qwen_companion_mmproj_filename(model_name))
+}
+
 fn embedded_catalog_signature_valid() -> bool {
     let expected = parse_signature(EMBEDDED_MODEL_CATALOG_SIG);
     if expected.is_empty() {
@@ -3832,6 +4255,7 @@ async fn overlay_import(
 async fn overlay_models(
     State(state): State<ApiState>,
 ) -> Result<Json<OverlayModelSelectorResponse>, (StatusCode, Json<ApiError>)> {
+    let hardware = detect_overlay_hardware().await;
     let configured = configured_model();
     let configured_mmproj = configured_mmproj();
     let active = {
@@ -3862,10 +4286,18 @@ async fn overlay_models(
         .filter_map(|(model, entry)| entry.pinned.then_some(model.clone()))
         .collect();
     let (catalog_version, signature_valid, catalog_models) = load_overlay_catalog();
+    let featured_roster = featured_overlay_roster(&catalog_models);
+    let storage = build_storage_summary(&installed, &pinned, configured.as_deref());
 
     let mut cards: Vec<OverlayModelCard> = catalog_models
         .iter()
         .map(|entry| {
+            let fit = assess_overlay_model_fit(
+                entry.size_bytes,
+                entry.recommended_ram_gb,
+                entry.recommended_vram_gb,
+                &hardware,
+            );
             let companion_name = entry
                 .companion_mmproj
                 .as_ref()
@@ -3901,6 +4333,11 @@ async fn overlay_models(
                 required_disk_bytes,
                 estimated_download_seconds: required_disk_bytes.map(estimate_download_seconds),
                 download_resumable: true,
+                fit_tier: fit.fit_tier,
+                expected_gpu_layers: fit.expected_gpu_layers,
+                expected_ram_gb: fit.expected_ram_gb,
+                expected_vram_gb: fit.expected_vram_gb,
+                expected_battery_impact: fit.expected_battery_impact,
                 runtime_profiles: entry.runtime_profiles.clone(),
                 roles: entry.roles.clone(),
                 companion_mmproj: companion_name,
@@ -3912,6 +4349,7 @@ async fn overlay_models(
         if cards.iter().any(|card| card.id == *name) {
             continue;
         }
+        let fit = assess_overlay_model_fit(*size_bytes, None, None, &hardware);
         cards.push(OverlayModelCard {
             id: name.clone(),
             size_bytes: Some(*size_bytes),
@@ -3929,6 +4367,11 @@ async fn overlay_models(
             required_disk_bytes: Some(*size_bytes),
             estimated_download_seconds: Some(0),
             download_resumable: true,
+            fit_tier: fit.fit_tier,
+            expected_gpu_layers: fit.expected_gpu_layers,
+            expected_ram_gb: fit.expected_ram_gb,
+            expected_vram_gb: fit.expected_vram_gb,
+            expected_battery_impact: fit.expected_battery_impact,
             runtime_profiles: Vec::new(),
             roles: vec!["local".to_string()],
             companion_mmproj: qwen_companion_mmproj_filename(name),
@@ -3949,6 +4392,17 @@ async fn overlay_models(
         configured_mmproj,
         catalog_version,
         catalog_signature_valid: signature_valid,
+        featured_roster,
+        hardware: OverlayModelHardwareSummary {
+            total_ram_gb: hardware.total_ram_gb,
+            total_vram_gb: hardware.total_vram_gb,
+            gpu_name: hardware.gpu_name,
+            gpu_temp_celsius: hardware.gpu_temp_celsius,
+            gpu_utilization_percent: hardware.gpu_utilization_percent,
+            thermal_pressure: hardware.thermal_pressure,
+            on_battery: hardware.on_battery,
+        },
+        storage,
         models: cards,
     }))
 }
@@ -3980,6 +4434,18 @@ async fn overlay_models_select(
                 }),
             )
         })?;
+    let layer_profile = recalculate_gpu_layers_for_model(&request.model, &catalog_models, true)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Model Selection Error".to_string(),
+                    message: format!("Failed to recalculate GPU layers: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
 
     if request.restart {
         restart_llama_server().await.map_err(|e| {
@@ -3997,9 +4463,15 @@ async fn overlay_models_select(
     Ok(Json(OverlayModelActionResponse {
         ok: true,
         message: if request.restart {
-            format!("Selected {} and restarted llama-server", request.model)
+            format!(
+                "Selected {} (fit: {}, gpu_layers={}) and restarted llama-server",
+                request.model, layer_profile.fit_tier, layer_profile.expected_gpu_layers
+            )
         } else {
-            format!("Selected {}", request.model)
+            format!(
+                "Selected {} (fit: {}, gpu_layers={})",
+                request.model, layer_profile.fit_tier, layer_profile.expected_gpu_layers
+            )
         },
         selected_model: Some(request.model),
         companion_mmproj,
@@ -4046,7 +4518,7 @@ async fn overlay_models_remove(
         )
     })?;
 
-    let companion_mmproj = qwen_companion_mmproj_filename(&request.model);
+    let companion_mmproj = expected_companion_for_model(&request.model, &catalog_models);
     if request.remove_companion {
         if let Some(companion) = &companion_mmproj {
             let companion_path = std::path::Path::new(MODEL_DIR).join(companion);
@@ -4184,6 +4656,24 @@ async fn overlay_models_pull(
             }),
         )
     })?;
+    let expected_companion_size = model_entry
+        .companion_mmproj
+        .as_ref()
+        .and_then(|artifact| artifact.size_bytes)
+        .unwrap_or(0);
+    let required_disk_bytes = model_entry
+        .size_bytes
+        .saturating_add(expected_companion_size);
+    ensure_model_storage_capacity(required_disk_bytes).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Model Pull Error".to_string(),
+                message: e.to_string(),
+                code: 400,
+            }),
+        )
+    })?;
 
     let model_path = std::path::Path::new(MODEL_DIR).join(&model_entry.id);
     download_model_with_curl(
@@ -4264,6 +4754,20 @@ async fn overlay_models_pull(
         )
     })?;
 
+    let layers_target = configured_model().unwrap_or_else(|| model_entry.id.clone());
+    let layer_profile = recalculate_gpu_layers_for_model(&layers_target, &catalog_models, true)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "Model Pull Error".to_string(),
+                    message: format!("Failed to recalculate GPU layers: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
+
     if request.restart && configured_model().as_deref() == Some(model_entry.id.as_str()) {
         restart_llama_server().await.map_err(|e| {
             (
@@ -4279,7 +4783,10 @@ async fn overlay_models_pull(
 
     Ok(Json(OverlayModelActionResponse {
         ok: true,
-        message: format!("Pulled {}", model_entry.id),
+        message: format!(
+            "Pulled {} (fit: {}, gpu_layers={})",
+            model_entry.id, layer_profile.fit_tier, layer_profile.expected_gpu_layers
+        ),
         selected_model: configured_model(),
         companion_mmproj,
         selected_mmproj: configured_mmproj(),
@@ -4365,6 +4872,175 @@ async fn overlay_models_unpin(
         selected_model: configured_model(),
         companion_mmproj: qwen_companion_mmproj_filename(&request.model),
         selected_mmproj: configured_mmproj(),
+    }))
+}
+
+/// Cleanup non-selected and non-pinned models to reclaim disk space
+#[utoipa::path(
+    post,
+    path = "/api/v1/overlay/models/cleanup",
+    request_body = OverlayModelCleanupRequest,
+    responses(
+        (status = 200, description = "Overlay model cleanup completed", body = OverlayModelCleanupResponse),
+        (status = 500, description = "Internal server error", body = ApiError),
+    ),
+    tag = "overlay"
+)]
+async fn overlay_models_cleanup(
+    Json(request): Json<OverlayModelCleanupRequest>,
+) -> Result<Json<OverlayModelCleanupResponse>, (StatusCode, Json<ApiError>)> {
+    let (_catalog_version, _signature_valid, catalog_models) = load_overlay_catalog();
+    let installed = installed_models_map().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Model Cleanup Error".to_string(),
+                message: format!("Failed to read installed models: {}", e),
+                code: 500,
+            }),
+        )
+    })?;
+
+    let selected_model = configured_model();
+    let lifecycle_state =
+        sync_model_lifecycle_state_with_runtime(&installed, selected_model.as_deref())
+            .unwrap_or_else(|_| load_model_lifecycle_state());
+    let pinned: BTreeSet<String> = lifecycle_state
+        .models
+        .iter()
+        .filter_map(|(model, entry)| entry.pinned.then_some(model.clone()))
+        .collect();
+
+    let removable_models: Vec<String> = installed
+        .keys()
+        .filter(|model| {
+            !pinned.contains(*model) && selected_model.as_deref() != Some(model.as_str())
+        })
+        .cloned()
+        .collect();
+
+    let mut removed_companions = BTreeSet::new();
+    if request.remove_companion && !removable_models.is_empty() {
+        let keep_models: BTreeSet<String> = installed
+            .keys()
+            .filter(|model| !removable_models.iter().any(|candidate| candidate == *model))
+            .cloned()
+            .collect();
+        let required_companions: BTreeSet<String> = keep_models
+            .iter()
+            .filter_map(|model| expected_companion_for_model(model, &catalog_models))
+            .collect();
+        for model in &removable_models {
+            if let Some(companion) = expected_companion_for_model(model, &catalog_models) {
+                if !required_companions.contains(&companion) {
+                    removed_companions.insert(companion);
+                }
+            }
+        }
+    }
+
+    let mut reclaimed_bytes = 0u64;
+    for model in &removable_models {
+        let path = std::path::Path::new(MODEL_DIR).join(model);
+        if let Ok(meta) = std::fs::metadata(&path) {
+            reclaimed_bytes = reclaimed_bytes.saturating_add(meta.len());
+        }
+    }
+    for companion in &removed_companions {
+        let path = std::path::Path::new(MODEL_DIR).join(companion);
+        if let Ok(meta) = std::fs::metadata(&path) {
+            reclaimed_bytes = reclaimed_bytes.saturating_add(meta.len());
+        }
+    }
+
+    if !request.dry_run {
+        for model in &removable_models {
+            let path = std::path::Path::new(MODEL_DIR).join(model);
+            if path.exists() {
+                tokio::fs::remove_file(&path).await.map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiError {
+                            error: "Model Cleanup Error".to_string(),
+                            message: format!("Failed to remove {}: {}", model, e),
+                            code: 500,
+                        }),
+                    )
+                })?;
+            }
+            mark_model_removed(model).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Model Cleanup Error".to_string(),
+                        message: format!("Failed to persist tombstone for {}: {}", model, e),
+                        code: 500,
+                    }),
+                )
+            })?;
+            clear_model_pinned(model).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Model Cleanup Error".to_string(),
+                        message: format!("Failed to clear pinned state for {}: {}", model, e),
+                        code: 500,
+                    }),
+                )
+            })?;
+        }
+
+        for companion in &removed_companions {
+            let path = std::path::Path::new(MODEL_DIR).join(companion);
+            if path.exists() {
+                tokio::fs::remove_file(path).await.map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiError {
+                            error: "Model Cleanup Error".to_string(),
+                            message: format!("Failed to remove companion {}: {}", companion, e),
+                            code: 500,
+                        }),
+                    )
+                })?;
+            }
+        }
+
+        if request.restart {
+            restart_llama_server().await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Service Restart Error".to_string(),
+                        message: e.to_string(),
+                        code: 500,
+                    }),
+                )
+            })?;
+        }
+    }
+
+    let removed_companions_vec = removed_companions.into_iter().collect::<Vec<_>>();
+    let selected_mmproj = configured_mmproj();
+    let action = if request.dry_run {
+        "Dry-run cleanup"
+    } else {
+        "Cleanup"
+    };
+    Ok(Json(OverlayModelCleanupResponse {
+        ok: true,
+        dry_run: request.dry_run,
+        removed_models: removable_models.clone(),
+        removed_companions: removed_companions_vec,
+        reclaimed_bytes,
+        selected_model,
+        selected_mmproj,
+        message: format!(
+            "{}: {} model(s) reclaimable, estimated {} freed",
+            action,
+            removable_models.len(),
+            format_size_bytes(reclaimed_bytes),
+        ),
     }))
 }
 
@@ -8106,5 +8782,52 @@ mod tests {
             .expect("companion should be present");
         assert_eq!(companion.filename, "Qwen3.5-4B-mmproj-F16.gguf");
         assert!(companion.checksum_sha256.is_some());
+    }
+
+    #[test]
+    fn test_featured_overlay_roster_contains_qwen_tiers() {
+        let roster = featured_overlay_roster(&fallback_overlay_catalog_models());
+        assert_eq!(
+            roster,
+            vec![
+                "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+                "Qwen3.5-9B-Q4_K_M.gguf".to_string(),
+                "Qwen3.5-27B-Q4_K_M.gguf".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn test_assess_overlay_model_fit_downgrades_when_thermal_pressure() {
+        let cool_hardware = OverlayHardwareSnapshot {
+            total_ram_gb: 32,
+            total_vram_gb: Some(12),
+            thermal_pressure: false,
+            ..OverlayHardwareSnapshot::default()
+        };
+        let cool_fit = assess_overlay_model_fit(2_740_937_888, Some(16), Some(8), &cool_hardware);
+        assert_eq!(cool_fit.fit_tier, "full_gpu");
+        assert_eq!(cool_fit.expected_gpu_layers, -1);
+
+        let hot_hardware = OverlayHardwareSnapshot {
+            thermal_pressure: true,
+            ..cool_hardware
+        };
+        let hot_fit = assess_overlay_model_fit(2_740_937_888, Some(16), Some(8), &hot_hardware);
+        assert_eq!(hot_fit.fit_tier, "partial_gpu");
+        assert_eq!(hot_fit.expected_gpu_layers, 20);
+    }
+
+    #[test]
+    fn test_storage_summary_reclaimable_respects_selected_and_pinned() {
+        let installed = BTreeMap::from([
+            ("a.gguf".to_string(), 100_u64),
+            ("b.gguf".to_string(), 200_u64),
+            ("c.gguf".to_string(), 300_u64),
+        ]);
+        let pinned = BTreeSet::from(["b.gguf".to_string()]);
+        let summary = build_storage_summary(&installed, &pinned, Some("c.gguf"));
+        assert_eq!(summary.installed_model_bytes, 600);
+        assert_eq!(summary.reclaimable_model_bytes, 100);
     }
 }

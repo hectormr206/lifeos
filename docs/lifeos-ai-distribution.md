@@ -1502,9 +1502,9 @@ Implementacion concreta:
 
 **Objetivo:** separar definitivamente el ciclo de vida del OS del ciclo de vida de los LLM pesados. La ISO debe traer runtimes, catalogo firmado y voces locales pequenas; los modelos pesados se descargan, seleccionan y eliminan bajo control explicito del usuario.
 
-**Estado:** **EN EJECUCION (2026-03-15).** _Puente activo tras cierre de Fase 4 en repo y validacion en hardware real._
+**Estado:** **CUMPLIDA (2026-03-15).** _Cierre tecnico del ciclo de vida local de modelos pesados tras validacion en hardware real._
 
-**Nota operativa:** esta fase ya arranco con ajustes de runtime y defaults de prueba en hardware real; el catalogo firmado y la coherencia de seleccion ya estan activos, pero aun faltan selector visual completo y politicas finales de ciclo de vida para declarar cierre.
+**Nota operativa:** Fase 4.5 queda cerrada en repo con selector enriquecido (fit/costo/disco), politicas de persistencia/tombstones y guardrails de cleanup; siguientes iteraciones pasan a Fase 5.
 
 **Reglas de producto obligatorias:**
 
@@ -1516,7 +1516,7 @@ Implementacion concreta:
 
 **Bloque 1 — Selector visual y catalogo firmado (P0):**
 
-- [ ] Panel visual de modelos en overlay/ajustes con roster inicial Qwen3.5: `4B`, `9B`, `27B`.
+- [x] Panel visual de modelos en overlay/ajustes con roster inicial Qwen3.5: `4B`, `9B`, `27B`. _`life overlay models` + API `overlay/models` exponen `featured_roster`, estado host/disco y tarjetas con fit/costo por modelo para operar desde ajustes/overlay._
 - [x] Catalogo firmado con metadata por modelo: tamano, RAM/VRAM recomendada, roles, `mmproj` asociado, checksum y politica de offload. _Implementado en catalogo v1 firmado y propagado al selector overlay/API._
 - [x] Descarga reanudable con progreso, verificacion de integridad y estimacion de espacio/tiempo. _`overlay/models/pull` ahora soporta resume, reintentos, validacion por size/hash y expone estimaciones en selector._
 
@@ -1536,13 +1536,13 @@ Implementacion concreta:
 
 **Bloque 4 — NVIDIA / hardware awareness por modelo (P1):**
 
-- [ ] Al descargar o seleccionar un modelo, LifeOS recalcula `LIFEOS_AI_GPU_LAYERS` segun RAM, VRAM y presion termica.
-- [ ] En equipos con NVIDIA dedicada, el selector muestra si el modelo cabe completo, parcial o solo CPU.
-- [ ] El UI expone el costo esperado: VRAM, RAM, disco y autonomia/bateria.
+- [x] Al descargar o seleccionar un modelo, LifeOS recalcula `LIFEOS_AI_GPU_LAYERS` segun RAM, VRAM y presion termica. _`overlay/models/select` y `overlay/models/pull` ahora recalculan y persisten `LIFEOS_AI_GPU_LAYERS` con deteccion de RAM/VRAM y degradacion por presion termica._
+- [x] En equipos con NVIDIA dedicada, el selector muestra si el modelo cabe completo, parcial o solo CPU. _Cada tarjeta del selector incluye `fit_tier` (`full_gpu`/`partial_gpu`/`cpu_only`) y capas GPU esperadas._
+- [x] El UI expone el costo esperado: VRAM, RAM, disco y autonomia/bateria. _El selector entrega `expected_ram_gb`, `expected_vram_gb`, `required_disk_bytes`, ETA de descarga e impacto esperado de bateria._
 
 **Bloque 5 — UX y guardrails adicionales (P1):**
 
-- [ ] Indicadores de espacio en disco antes de descargar y opcion de limpieza de modelos no usados.
+- [x] Indicadores de espacio en disco antes de descargar y opcion de limpieza de modelos no usados. _`overlay/models` incluye resumen de storage (`free/used/reclaimable`) y `overlay/models/cleanup` permite dry-run/ejecucion de limpieza de modelos no seleccionados ni pinneados._
 - [x] Politica `auto_manage_models = false` por defecto en el canal normal. _`LIFEOS_AI_AUTO_MANAGE_MODELS=false` en `llama-server.env`; `lifeos-ai-setup.sh` omite auto-download si el flag no esta habilitado._
 - [x] Import/export del inventario de modelos y pinning por dispositivo. _API/CLI `overlay/models/export|import` incluye `device_id`; la importacion solo adopta pinning entre dispositivos cuando se solicita (`adopt_pinning=true`)._
 
