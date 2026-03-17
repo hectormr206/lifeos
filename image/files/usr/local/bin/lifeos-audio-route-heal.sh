@@ -2,6 +2,7 @@
 # LifeOS audio route self-heal.
 # Repairs default sink/source when PipeWire/WirePlumber restarts or device IDs change.
 set -euo pipefail
+BT_HFP_UNSTABLE=0
 
 log() {
     echo "[lifeos-audio-heal] $*" >&2
@@ -13,6 +14,49 @@ list_sinks() {
 
 list_sources() {
     pactl list short sources | awk '{print $2}' | grep -Ev '(^auto_null\.monitor$|\.monitor$)' || true
+}
+
+extract_card_block() {
+    local card_name="$1"
+    pactl list cards | awk -v card="${card_name}" '
+        BEGIN { in_card=0 }
+        /^[[:space:]]*(Card|Tarjeta) #[0-9]+/ { in_card=0 }
+        /^[[:space:]]*(Name|Nombre): / {
+            line=$0
+            sub(/^[[:space:]]*(Name|Nombre): /, "", line)
+            if (line == card) {
+                in_card=1
+                print
+                next
+            }
+        }
+        in_card { print }
+    '
+}
+
+ensure_bluetooth_cards_a2dp() {
+    local bt_cards bt_card card_block active_profile
+    bt_cards="$(pactl list cards short | awk '$2 ~ /^bluez_card\./ {print $2}')"
+    if [ -z "${bt_cards}" ]; then
+        return 0
+    fi
+
+    for bt_card in ${bt_cards}; do
+        card_block="$(extract_card_block "${bt_card}")"
+        if ! printf '%s\n' "${card_block}" | grep -q 'a2dp-sink'; then
+            if printf '%s\n' "${card_block}" | awk -F': ' '/Active Profile:|Perfil Activo:/{print $2; exit}' | grep -Eq '^headset-head-unit(-cvsd)?$'; then
+                BT_HFP_UNSTABLE=1
+                log "Detected ${bt_card} in HFP/HSP without A2DP profile; will avoid Bluetooth sink fallback"
+            fi
+            continue
+        fi
+
+        active_profile="$(printf '%s\n' "${card_block}" | awk -F': ' '/Active Profile:|Perfil Activo:/{print $2; exit}')"
+        if printf '%s\n' "${active_profile}" | grep -Eq '^headset-head-unit(-cvsd)?$'; then
+            pactl set-card-profile "${bt_card}" a2dp-sink >/dev/null 2>&1 || true
+            log "Switched ${bt_card} from ${active_profile} to a2dp-sink"
+        fi
+    done
 }
 
 if ! command -v pactl >/dev/null 2>&1; then
@@ -31,6 +75,9 @@ if ! pactl info >/dev/null 2>&1; then
     log "pactl info unavailable; skipping."
     exit 0
 fi
+
+# If a BT headset is stuck in HFP/HSP profile, push it back to A2DP first.
+ensure_bluetooth_cards_a2dp
 
 # Wait until at least one real sink/source is visible so we do not pin auto_null
 # when PipeWire is still warming up.
@@ -60,6 +107,17 @@ fi
 
 if [ -z "${default_source}" ] || ! printf '%s\n' "${source_list}" | grep -Fxq "${default_source}"; then
     source_ok=0
+fi
+
+if [ "${BT_HFP_UNSTABLE}" -eq 1 ] && printf '%s\n' "${default_sink}" | grep -Eq '^bluez_output\.'; then
+    sink_ok=0
+    log "Bluetooth sink is in unstable HFP/HSP path; preferring non-Bluetooth sink"
+fi
+
+analog_source="$(printf '%s\n' "${source_list}" | grep -E '^alsa_input\..*analog-stereo$' | head -n1 || true)"
+if [ -n "${analog_source}" ] && printf '%s\n' "${default_source}" | grep -Eq '^bluez_input\.'; then
+    source_ok=0
+    log "Default source is Bluetooth; preferring analog source (${analog_source}) for stability"
 fi
 
 if [ "${sink_ok}" -eq 1 ] && [ "${source_ok}" -eq 1 ]; then
