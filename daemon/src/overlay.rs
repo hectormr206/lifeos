@@ -329,7 +329,7 @@ impl OverlayManager {
         history: &[ChatMessage],
         include_screen: bool,
     ) -> Result<AiChatResponse> {
-        const SYSTEM_PROMPT: &str = "You are Axi, the local LifeOS assistant. Be concise, practical, and prioritize the user's current desktop context.";
+        const SYSTEM_PROMPT: &str = "You are Axi, the local LifeOS assistant. Respond in natural spoken Spanish, concise and practical. Treat the attached screenshot as the source of truth for this turn, describe only what is currently visible, do not claim memory of previous screens, avoid markdown/code, and never expose internal reasoning.";
 
         let ai_manager = AiManager::new();
         let latest_user_message = history
@@ -343,7 +343,7 @@ impl OverlayManager {
         if include_screen {
             let screenshot = self.include_screen_context().await?;
             let prompt = format!(
-                "Recent overlay conversation:\n{}\n\nLatest request:\n{}",
+                "Recent overlay conversation:\n{}\n\nLatest request:\n{}\n\nIf the user asks to describe the screen, answer with what is visible in this screenshot right now.",
                 summarize_overlay_history(history),
                 latest_user_message
             );

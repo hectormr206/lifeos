@@ -507,31 +507,57 @@ fn extract_chat_response_text(body: &serde_json::Value) -> String {
         .and_then(|choices| choices.first())
         .and_then(|choice| choice.get("message"));
 
+    let mut candidates: Vec<String> = Vec::new();
+
     if let Some(message) = message {
         if let Some(content) = message.get("content") {
             let parsed = extract_text_from_content_value(content);
             if !parsed.is_empty() {
-                return parsed;
+                candidates.push(parsed);
             }
         }
 
-        for key in ["reasoning_content", "reasoning", "thinking", "text"] {
+        for key in ["text", "response", "output_text"] {
             if let Some(value) = message.get(key).and_then(|v| v.as_str()) {
                 let trimmed = value.trim();
                 if !trimmed.is_empty() {
-                    return trimmed.to_string();
+                    candidates.push(trimmed.to_string());
+                }
+            }
+        }
+
+        // Last-resort fields used by some models to expose chain-of-thought.
+        // Keep them as candidates only after sanitization.
+        for key in ["reasoning_content", "reasoning", "thinking"] {
+            if let Some(value) = message.get(key).and_then(|v| v.as_str()) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    candidates.push(trimmed.to_string());
                 }
             }
         }
     }
 
-    body.get("choices")
+    if let Some(choice_text) = body
+        .get("choices")
         .and_then(|v| v.as_array())
         .and_then(|choices| choices.first())
         .and_then(|choice| choice.get("text"))
         .and_then(|text| text.as_str())
         .map(|text| text.trim().to_string())
-        .unwrap_or_default()
+        .filter(|text| !text.is_empty())
+    {
+        candidates.push(choice_text);
+    }
+
+    for candidate in candidates {
+        let cleaned = sanitize_generated_response(&candidate);
+        if !cleaned.is_empty() {
+            return cleaned;
+        }
+    }
+
+    "Lo siento, no pude generar una respuesta clara.".to_string()
 }
 
 fn extract_text_from_content_value(content: &serde_json::Value) -> String {
@@ -590,6 +616,149 @@ fn extract_text_segment(value: &serde_json::Value) -> Option<String> {
     }
 }
 
+fn sanitize_generated_response(raw: &str) -> String {
+    let mut text = strip_think_sections(raw);
+    text = text
+        .replace("<think>", " ")
+        .replace("</think>", " ")
+        .replace("<|im_start|>", " ")
+        .replace("<|im_end|>", " ");
+
+    let mut cleaned_lines = Vec::new();
+    let mut in_code_fence = false;
+    for raw_line in text.lines() {
+        let mut line = raw_line.trim();
+        if line.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence || line.is_empty() {
+            continue;
+        }
+        line = strip_leading_list_marker(line)
+            .trim_start_matches('#')
+            .trim()
+            .trim_matches('`')
+            .trim();
+        if line.is_empty() {
+            continue;
+        }
+        if looks_like_internal_reasoning_line(line) {
+            continue;
+        }
+        cleaned_lines.push(line.to_string());
+    }
+
+    let cleaned = normalize_whitespace(&cleaned_lines.join(" "));
+    if !cleaned.is_empty() {
+        return cleaned;
+    }
+
+    extract_quoted_spoken_text(raw)
+}
+
+fn strip_think_sections(input: &str) -> String {
+    let mut output = String::new();
+    let mut rest = input;
+    loop {
+        if let Some(start) = rest.find("<think>") {
+            output.push_str(&rest[..start]);
+            let after_start = &rest[start + "<think>".len()..];
+            if let Some(end_rel) = after_start.find("</think>") {
+                rest = &after_start[end_rel + "</think>".len()..];
+            } else {
+                break;
+            }
+        } else {
+            output.push_str(rest);
+            break;
+        }
+    }
+    output
+}
+
+fn normalize_whitespace(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn looks_like_internal_reasoning_line(line: &str) -> bool {
+    let normalized = normalize_whitespace(line)
+        .trim_start_matches(['*', '-', '#', '`', '>', ' '])
+        .to_lowercase();
+    [
+        "thinking process",
+        "analysis:",
+        "reasoning:",
+        "internal reasoning",
+        "the user wants",
+        "i need to",
+        "let me ",
+        "analyze the request",
+        "determine the output",
+        "drafting the response",
+        "selection:",
+        "check constraints",
+        "final polish",
+        "goal:",
+        "constraints:",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
+fn strip_leading_list_marker(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    let trimmed = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix("• "))
+        .unwrap_or(trimmed);
+
+    let bytes = trimmed.as_bytes();
+    let mut idx = 0usize;
+    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
+        idx += 1;
+    }
+    if idx > 0 && idx + 1 < bytes.len() && (bytes[idx] == b'.' || bytes[idx] == b')') {
+        let mut next = idx + 1;
+        while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+            next += 1;
+        }
+        return trimmed[next..].trim_start();
+    }
+
+    trimmed
+}
+
+fn extract_quoted_spoken_text(raw: &str) -> String {
+    let mut best = String::new();
+    let mut current = String::new();
+    let mut in_quote = false;
+
+    for ch in raw.chars() {
+        if matches!(ch, '"' | '“' | '”') {
+            if in_quote {
+                let candidate = normalize_whitespace(current.trim());
+                if candidate.len() > best.len() {
+                    best = candidate;
+                }
+                current.clear();
+                in_quote = false;
+            } else {
+                in_quote = true;
+                current.clear();
+            }
+            continue;
+        }
+
+        if in_quote {
+            current.push(ch);
+        }
+    }
+
+    best
+}
+
 fn chat_request_semaphore() -> &'static Semaphore {
     static SEMAPHORE: OnceLock<Semaphore> = OnceLock::new();
     SEMAPHORE.get_or_init(|| Semaphore::new(1))
@@ -644,18 +813,37 @@ mod tests {
     }
 
     #[test]
-    fn extract_chat_response_falls_back_to_reasoning_content() {
+    fn extract_chat_response_prefers_quoted_final_text_over_reasoning() {
         let body = serde_json::json!({
             "choices": [
                 {
                     "message": {
                         "content": "",
-                        "reasoning_content": "fallback reasoning"
+                        "reasoning_content": "Thinking Process: Analyze the request. **Final Polish:** \"Hola, claro que si.\""
                     }
                 }
             ]
         });
 
-        assert_eq!(extract_chat_response_text(&body), "fallback reasoning");
+        assert_eq!(extract_chat_response_text(&body), "Hola, claro que si.");
+    }
+
+    #[test]
+    fn extract_chat_response_discards_reasoning_only_payload() {
+        let body = serde_json::json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "reasoning_content": "Thinking Process: Analyze constraints and draft output."
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(
+            extract_chat_response_text(&body),
+            "Lo siento, no pude generar una respuesta clara."
+        );
     }
 }

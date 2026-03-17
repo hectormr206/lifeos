@@ -2741,10 +2741,15 @@ fn sanitize_assistant_response(raw: &str) -> String {
     }
 
     let cleaned = normalize_whitespace(&cleaned_lines.join(" "));
-    if cleaned.is_empty() {
-        normalize_whitespace(raw)
-    } else {
+    if !cleaned.is_empty() {
         cleaned
+    } else {
+        let quoted = extract_quoted_spoken_text(raw);
+        if !quoted.is_empty() {
+            quoted
+        } else {
+            "Lo siento, no pude generar una respuesta clara.".to_string()
+        }
     }
 }
 
@@ -2769,18 +2774,57 @@ fn strip_think_sections(input: &str) -> String {
 }
 
 fn looks_like_internal_reasoning_line(line: &str) -> bool {
-    let normalized = normalize_whitespace(line).to_lowercase();
+    let normalized = normalize_whitespace(line)
+        .trim_start_matches(['*', '-', '#', '`', '>', ' '])
+        .to_lowercase();
     [
+        "thinking process",
         "the user wants",
         "i need to",
         "let me ",
+        "analyze the request",
+        "determine the output",
         "drafting the",
+        "selection:",
+        "check constraints",
+        "final polish",
+        "constraints:",
+        "goal:",
         "reasoning:",
         "analysis:",
         "internal reasoning",
     ]
     .iter()
     .any(|prefix| normalized.starts_with(prefix))
+}
+
+fn extract_quoted_spoken_text(raw: &str) -> String {
+    let mut best = String::new();
+    let mut current = String::new();
+    let mut in_quote = false;
+
+    for ch in raw.chars() {
+        if matches!(ch, '"' | '“' | '”') {
+            if in_quote {
+                let candidate = normalize_whitespace(current.trim());
+                if candidate.len() > best.len() {
+                    best = candidate;
+                }
+                current.clear();
+                in_quote = false;
+            } else {
+                in_quote = true;
+                current.clear();
+            }
+            continue;
+        }
+
+        if in_quote {
+            current.push(ch);
+        }
+    }
+
+    best
 }
 
 fn strip_leading_list_marker(line: &str) -> &str {
@@ -3374,6 +3418,20 @@ Drafting the description:
         assert!(!lowered.contains("the user wants"));
         assert!(!lowered.contains("i need to"));
         assert!(cleaned.contains("Pantalla con terminal abierta."));
+    }
+
+    #[test]
+    fn sanitize_assistant_response_extracts_quoted_final_text() {
+        let raw = r#"Thinking Process: Analyze the request. **Final Polish:** "Hola, listo para ayudarte.""#;
+        let cleaned = sanitize_assistant_response(raw);
+        assert_eq!(cleaned, "Hola, listo para ayudarte.");
+    }
+
+    #[test]
+    fn sanitize_assistant_response_uses_safe_fallback_when_only_reasoning_exists() {
+        let raw = "Thinking Process: Analyze constraints and draft output.";
+        let cleaned = sanitize_assistant_response(raw);
+        assert_eq!(cleaned, "Lo siento, no pude generar una respuesta clara.");
     }
 
     #[test]
