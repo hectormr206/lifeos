@@ -7,6 +7,14 @@ log() {
     echo "[lifeos-audio-heal] $*" >&2
 }
 
+list_sinks() {
+    pactl list short sinks | awk '{print $2}' | grep -Ev '^(auto_null)$' || true
+}
+
+list_sources() {
+    pactl list short sources | awk '{print $2}' | grep -Ev '(^auto_null\.monitor$|\.monitor$)' || true
+}
+
 if ! command -v pactl >/dev/null 2>&1; then
     exit 0
 fi
@@ -24,11 +32,24 @@ if ! pactl info >/dev/null 2>&1; then
     exit 0
 fi
 
+# Wait until at least one real sink/source is visible so we do not pin auto_null
+# when PipeWire is still warming up.
+for _ in $(seq 1 20); do
+    if [ -n "$(list_sinks)" ] && [ -n "$(list_sources)" ]; then
+        break
+    fi
+    sleep 0.5
+done
+
+sink_list="$(list_sinks)"
+source_list="$(list_sources)"
+if [ -z "${sink_list}" ] || [ -z "${source_list}" ]; then
+    log "No real sink/source available yet; skipping."
+    exit 0
+fi
+
 default_sink="$(pactl info | awk -F': ' '/^Default Sink:|^Destino por defecto:/{print $2; exit}')"
 default_source="$(pactl info | awk -F': ' '/^Default Source:|^Fuente por defecto:/{print $2; exit}')"
-
-sink_list="$(pactl list short sinks | awk '{print $2}')"
-source_list="$(pactl list short sources | awk '{print $2}')"
 
 sink_ok=1
 source_ok=1
@@ -65,6 +86,9 @@ if [ "${sink_ok}" -eq 0 ]; then
         candidate_sink="$(printf '%s\n' "${sink_list}" | grep -E '^alsa_output\.' | head -n1 || true)"
     fi
     if [ -z "${candidate_sink}" ]; then
+        candidate_sink="$(printf '%s\n' "${sink_list}" | grep -E '^bluez_output\.' | head -n1 || true)"
+    fi
+    if [ -z "${candidate_sink}" ]; then
         candidate_sink="$(printf '%s\n' "${sink_list}" | head -n1 || true)"
     fi
     if [ -n "${candidate_sink}" ]; then
@@ -79,7 +103,7 @@ if [ "${source_ok}" -eq 0 ]; then
         candidate_source="$(printf '%s\n' "${source_list}" | grep -E '^alsa_input\.' | head -n1 || true)"
     fi
     if [ -z "${candidate_source}" ]; then
-        candidate_source="$(printf '%s\n' "${source_list}" | grep -Ev '\\.monitor$' | head -n1 || true)"
+        candidate_source="$(printf '%s\n' "${source_list}" | grep -E '^bluez_input\.' | head -n1 || true)"
     fi
     if [ -z "${candidate_source}" ]; then
         candidate_source="$(printf '%s\n' "${source_list}" | head -n1 || true)"

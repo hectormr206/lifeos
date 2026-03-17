@@ -145,7 +145,27 @@ RUN set -eux && \
     test -s /out/models/piper/es_MX-claude-high.onnx.json
 
 # ============================================================================
-# Stage 5: Sistema Final
+# Stage 5: Bundle Piper TTS runtime binary (Rhasspy Piper CLI)
+# ============================================================================
+FROM fedora:${FEDORA_MAJOR} AS piper-runtime-builder
+
+ARG PIPER_RUNTIME_VERSION=2023.11.14-2
+
+RUN dnf install -y curl tar gzip && \
+    dnf clean all
+
+RUN set -eux && \
+    mkdir -p /out/opt/lifeos/piper-tts && \
+    curl -fSL --retry 3 --connect-timeout 60 \
+      -o /tmp/piper_linux_x86_64.tar.gz \
+      "https://github.com/rhasspy/piper/releases/download/${PIPER_RUNTIME_VERSION}/piper_linux_x86_64.tar.gz" && \
+    tar -xzf /tmp/piper_linux_x86_64.tar.gz -C /tmp && \
+    cp -a /tmp/piper/. /out/opt/lifeos/piper-tts/ && \
+    test -x /out/opt/lifeos/piper-tts/piper && \
+    /out/opt/lifeos/piper-tts/piper --help 2>&1 | grep -q -- '--model'
+
+# ============================================================================
+# Stage 6: Sistema Final
 # ============================================================================
 FROM quay.io/fedora/fedora-bootc:${FEDORA_MAJOR}
 
@@ -195,7 +215,6 @@ RUN dnf -y install --skip-unavailable \
     gnome-screenshot grim scrot maim \
     tesseract tesseract-langpack-eng tesseract-langpack-spa \
     espeak-ng \
-    piper \
     vulkan-loader \
     fwupd \
     && dnf clean all
@@ -380,6 +399,9 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /va
 
 COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
 COPY --from=piper-voice-builder /out/models/piper /usr/share/lifeos/models/piper
+COPY --from=piper-runtime-builder /out/opt/lifeos/piper-tts /opt/lifeos/piper-tts
+
+RUN ln -sf /opt/lifeos/piper-tts/piper /usr/local/bin/lifeos-piper
 
 # --- AI Model (pre-bundled) ---
 # Qwen3.5-4B: multimodal vision-language model with hybrid DeltaNet architecture.
@@ -450,6 +472,7 @@ COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland
 COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
 COPY image/files/etc/containers/containers.conf /etc/containers/containers.conf
 COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
+COPY image/files/etc/wireplumber/wireplumber.conf.d/90-lifeos-bluez.conf /etc/wireplumber/wireplumber.conf.d/90-lifeos-bluez.conf
 COPY image/files/usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml
 
 # Firefox desktop entry with Wayland flags
@@ -516,6 +539,9 @@ RUN printf '%s\n' \
     '' \
     '[Service]' \
     'Type=simple' \
+    'Environment=LIFEOS_TTS_BIN=/usr/local/bin/lifeos-piper' \
+    'Environment=LIFEOS_TTS_MODEL=/usr/share/lifeos/models/piper/es_MX-claude-high.onnx' \
+    'Environment=LIFEOS_TTS_FALLBACK_BIN=/usr/bin/espeak-ng' \
     'ExecStart=/usr/bin/lifeosd' \
     'Restart=on-failure' \
     'RestartSec=5' \
@@ -686,7 +712,8 @@ RUN test -x /usr/bin/mpv && \
     (test -x /usr/bin/gnome-screenshot || test -x /usr/bin/grim) && \
     test -x /usr/bin/tesseract && \
     test -x /usr/bin/espeak-ng && \
-    test -x /usr/bin/piper && \
+    test -x /usr/local/bin/lifeos-piper && \
+    /usr/local/bin/lifeos-piper --help 2>&1 | grep -q -- '--model' && \
     test -x /usr/bin/spice-vdagent && \
     test -x /usr/bin/virsh && \
     test -x /usr/bin/pkg-config && \

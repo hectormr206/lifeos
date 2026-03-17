@@ -1657,13 +1657,16 @@ impl SensoryPipelineManager {
 }
 
 async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
-    let preferred_tts_binary = resolve_binary("LIFEOS_TTS_BIN", &["piper", "espeak-ng"]).await;
+    let preferred_tts_binary =
+        resolve_binary("LIFEOS_TTS_BIN", &["lifeos-piper", "piper", "espeak-ng"]).await;
     let tts_model = resolve_tts_model(None).await;
+    let fallback_tts_binary = resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await;
     let tts_binary = select_tts_binary(
         preferred_tts_binary,
         tts_model.as_deref(),
-        resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await,
+        fallback_tts_binary.clone(),
     );
+    let tts_binary = sanitize_tts_binary(tts_binary, fallback_tts_binary).await;
 
     SensoryCapabilities {
         stt_binary: resolve_binary("LIFEOS_STT_BIN", &["whisper-cli", "whisper", "whisper-cpp"])
@@ -1992,7 +1995,14 @@ async fn synthesize_tts(
     voice_model: Option<&str>,
 ) -> Result<(String, String)> {
     let tts_text = prepare_tts_text(text);
-    let binary = resolve_binary("LIFEOS_TTS_BIN", &["piper", "espeak-ng"])
+    let piper_models = resolve_tts_models(voice_model).await;
+    let fallback_binary = resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await;
+    let binary = select_tts_binary(
+        resolve_binary("LIFEOS_TTS_BIN", &["lifeos-piper", "piper", "espeak-ng"]).await,
+        piper_models.first().map(|value| value.as_str()),
+        fallback_binary.clone(),
+    );
+    let binary = sanitize_tts_binary(binary, fallback_binary.clone())
         .await
         .ok_or_else(|| anyhow::anyhow!("no local TTS backend found"))?;
 
@@ -2001,18 +2011,39 @@ async fn synthesize_tts(
         return Ok((audio_path, binary));
     }
 
-    let model = if let Some(model) = resolve_tts_model(voice_model).await {
-        model
-    } else if let Some(fallback_binary) =
-        resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await
-    {
+    let mut piper_errors = Vec::new();
+    for model in piper_models {
+        match synthesize_with_piper(data_dir, &binary, &tts_text, &model).await {
+            Ok(audio_path) => return Ok((audio_path, binary.clone())),
+            Err(err) => {
+                log::warn!("Piper synthesis failed with model {}: {}", model, err);
+                piper_errors.push(format!("{model}: {err}"));
+            }
+        }
+    }
+
+    if let Some(fallback_binary) = fallback_binary {
         let audio_path =
             synthesize_with_espeak(data_dir, &fallback_binary, &tts_text, language).await?;
         return Ok((audio_path, fallback_binary));
-    } else {
-        anyhow::bail!("no Piper voice model configured");
     };
 
+    if !piper_errors.is_empty() {
+        anyhow::bail!(
+            "piper synthesis failed for all configured models: {}",
+            piper_errors.join(" | ")
+        );
+    }
+
+    anyhow::bail!("no Piper voice model configured");
+}
+
+async fn synthesize_with_piper(
+    data_dir: &Path,
+    binary: &str,
+    text: &str,
+    model: &str,
+) -> Result<String> {
     let tts_dir = data_dir.join("tts");
     tokio::fs::create_dir_all(&tts_dir)
         .await
@@ -2022,7 +2053,7 @@ async fn synthesize_tts(
     let mut child = Command::new(&binary)
         .args([
             "--model",
-            &model,
+            model,
             "--output_file",
             audio_path.to_string_lossy().as_ref(),
         ])
@@ -2034,7 +2065,7 @@ async fn synthesize_tts(
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin
-            .write_all(tts_text.trim().as_bytes())
+            .write_all(text.trim().as_bytes())
             .await
             .context("Failed to send text to Piper stdin")?;
     }
@@ -2044,20 +2075,13 @@ async fn synthesize_tts(
         .await
         .context("Failed to wait for Piper output")?;
     if !output.status.success() {
-        if let Some(fallback_binary) =
-            resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await
-        {
-            let audio_path =
-                synthesize_with_espeak(data_dir, &fallback_binary, &tts_text, language).await?;
-            return Ok((audio_path, fallback_binary));
-        }
         anyhow::bail!(
             "piper synthesis failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
 
-    Ok((audio_path.to_string_lossy().to_string(), binary))
+    Ok(audio_path.to_string_lossy().to_string())
 }
 
 async fn synthesize_with_espeak(
@@ -2218,33 +2242,83 @@ async fn audio_has_voice_activity(path: &Path) -> Result<bool> {
 }
 
 async fn resolve_tts_model(override_model: Option<&str>) -> Option<String> {
-    let override_model = override_model
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
-    if let Some(model) = override_model {
-        if Path::new(&model).exists() {
-            return Some(model);
-        }
+    resolve_tts_models(override_model).await.into_iter().next()
+}
+
+async fn resolve_tts_models(override_model: Option<&str>) -> Vec<String> {
+    let mut models = Vec::new();
+
+    if let Some(model) = override_model.and_then(resolve_existing_tts_model) {
+        models.push(model);
     }
 
     if let Ok(model) = std::env::var("LIFEOS_TTS_MODEL") {
-        let model = model.trim().to_string();
-        if !model.is_empty() && Path::new(&model).exists() {
-            return Some(model);
+        if let Some(model) = resolve_existing_tts_model(&model) {
+            if !models.iter().any(|existing| existing == &model) {
+                models.push(model);
+            }
         }
     }
 
-    [
+    for candidate in [
         "/var/lib/lifeos/models/piper/es_MX-claude-high.onnx",
         "/var/lib/lifeos/models/piper/es_ES-sharvard-medium.onnx",
         "/var/lib/lifeos/models/piper/en_US-lessac-medium.onnx",
         "/usr/share/lifeos/models/piper/es_MX-claude-high.onnx",
         "/usr/share/lifeos/models/piper/en_US-lessac-medium.onnx",
+    ] {
+        if !models.iter().any(|existing| existing == candidate) && tts_model_is_ready(candidate) {
+            models.push(candidate.to_string());
+        }
+    }
+
+    models
+}
+
+fn resolve_existing_tts_model(candidate: &str) -> Option<String> {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    if tts_model_is_ready(candidate) {
+        return Some(candidate.to_string());
+    }
+
+    let file_name = Path::new(candidate)
+        .file_name()
+        .and_then(|name| name.to_str())?;
+    [
+        "/var/lib/lifeos/models/piper",
+        "/usr/share/lifeos/models/piper",
+        "/var/lib/lifeos/models",
+        "/usr/share/lifeos/models",
     ]
     .iter()
-    .find(|candidate| Path::new(candidate).exists())
-    .map(|candidate| candidate.to_string())
+    .map(|dir| format!("{dir}/{file_name}"))
+    .find(|path| tts_model_is_ready(path))
+}
+
+fn tts_model_is_ready(candidate: &str) -> bool {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return false;
+    }
+    let path = Path::new(candidate);
+    if !path.exists() {
+        return false;
+    }
+
+    let is_onnx = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("onnx"))
+        .unwrap_or(false);
+    if !is_onnx {
+        return true;
+    }
+
+    let metadata = format!("{candidate}.json");
+    Path::new(&metadata).exists()
 }
 
 async fn resolve_stt_model(override_model: Option<&str>) -> Option<String> {
@@ -2302,7 +2376,7 @@ fn binary_basename(path: &str) -> &str {
 }
 
 fn tts_binary_requires_model(binary: Option<&str>) -> bool {
-    binary.map(binary_basename) == Some("piper")
+    matches!(binary.map(binary_basename), Some("piper" | "lifeos-piper"))
 }
 
 fn select_tts_binary(
@@ -2314,6 +2388,41 @@ fn select_tts_binary(
         return espeak_fallback.or(preferred);
     }
     preferred
+}
+
+async fn sanitize_tts_binary(
+    selected: Option<String>,
+    espeak_fallback: Option<String>,
+) -> Option<String> {
+    let Some(binary) = selected else {
+        return None;
+    };
+
+    if tts_binary_requires_model(Some(binary.as_str())) && !supports_piper_cli(&binary).await {
+        log::warn!(
+            "Configured Piper binary '{}' does not support Piper CLI flags; falling back",
+            binary
+        );
+        return espeak_fallback;
+    }
+
+    Some(binary)
+}
+
+async fn supports_piper_cli(binary: &str) -> bool {
+    let output = match Command::new(binary).arg("--help").output().await {
+        Ok(output) => output,
+        Err(_) => return false,
+    };
+
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .to_lowercase();
+
+    combined.contains("--model")
 }
 
 fn espeak_voice_for_language(language: Option<&str>) -> &'static str {
@@ -3202,6 +3311,54 @@ mod tests {
             Some("/usr/bin/espeak-ng".to_string()),
         );
         assert_eq!(selected.as_deref(), Some("/usr/bin/piper"));
+    }
+
+    #[test]
+    fn tts_binary_selection_treats_lifeos_piper_as_model_backend() {
+        let selected = select_tts_binary(
+            Some("/usr/local/bin/lifeos-piper".to_string()),
+            None,
+            Some("/usr/bin/espeak-ng".to_string()),
+        );
+        assert_eq!(selected.as_deref(), Some("/usr/bin/espeak-ng"));
+    }
+
+    #[test]
+    fn tts_model_readiness_requires_companion_json_for_onnx() {
+        let dir = std::env::temp_dir().join(format!("lifeos-tts-model-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = dir.join("es_MX-test.onnx");
+        std::fs::write(&model, b"fake").unwrap();
+
+        assert!(!tts_model_is_ready(model.to_string_lossy().as_ref()));
+
+        let metadata = dir.join("es_MX-test.onnx.json");
+        std::fs::write(&metadata, br#"{"audio":{"sample_rate":22050}}"#).unwrap();
+        assert!(tts_model_is_ready(model.to_string_lossy().as_ref()));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn resolve_existing_tts_model_rejects_incomplete_onnx_asset() {
+        let dir = std::env::temp_dir().join(format!("lifeos-tts-resolve-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = dir.join("es_MX-broken.onnx");
+        std::fs::write(&model, b"fake").unwrap();
+
+        assert!(resolve_existing_tts_model(model.to_string_lossy().as_ref()).is_none());
+
+        std::fs::write(
+            dir.join("es_MX-broken.onnx.json"),
+            br#"{"audio":{"sample_rate":22050}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_existing_tts_model(model.to_string_lossy().as_ref()).as_deref(),
+            Some(model.to_string_lossy().as_ref())
+        );
+
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
