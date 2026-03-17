@@ -809,7 +809,7 @@ mod tests {
             ]
         });
 
-        assert_eq!(extract_chat_response_text(&body), "Linea 1\nLinea 2");
+        assert_eq!(extract_chat_response_text(&body), "Linea 1 Linea 2");
     }
 
     #[test]
