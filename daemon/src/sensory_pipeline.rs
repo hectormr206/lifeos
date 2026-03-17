@@ -2050,7 +2050,7 @@ async fn synthesize_with_piper(
         .context("Failed to create TTS output dir")?;
     let audio_path = tts_dir.join(format!("axi-{}.wav", uuid::Uuid::new_v4()));
 
-    let mut child = Command::new(&binary)
+    let mut child = Command::new(binary)
         .args([
             "--model",
             model,
@@ -2394,9 +2394,7 @@ async fn sanitize_tts_binary(
     selected: Option<String>,
     espeak_fallback: Option<String>,
 ) -> Option<String> {
-    let Some(binary) = selected else {
-        return None;
-    };
+    let binary = selected?;
 
     if tts_binary_requires_model(Some(binary.as_str())) && !supports_piper_cli(&binary).await {
         log::warn!(
