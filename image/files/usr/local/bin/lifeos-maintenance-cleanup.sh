@@ -10,6 +10,13 @@ SCREENSHOT_DIR="${SCREENSHOT_DIR:-/var/lib/lifeos/screenshots}"
 SCREENSHOT_KEEP_COUNT="${SCREENSHOT_KEEP_COUNT:-120}"
 SCREENSHOT_KEEP_DAYS="${SCREENSHOT_KEEP_DAYS:-2}"
 
+AUDIO_DIR="${AUDIO_DIR:-/var/lib/lifeos/audio}"
+AUDIO_KEEP_COUNT="${AUDIO_KEEP_COUNT:-120}"
+AUDIO_KEEP_DAYS="${AUDIO_KEEP_DAYS:-2}"
+TTS_DIR="${TTS_DIR:-/var/lib/lifeos/tts}"
+TTS_KEEP_COUNT="${TTS_KEEP_COUNT:-120}"
+TTS_KEEP_DAYS="${TTS_KEEP_DAYS:-2}"
+
 RUNNER_DIR="${RUNNER_DIR:-/var/lib/lifeos/actions-runner}"
 RUNNER_DIAG_KEEP_DAYS="${RUNNER_DIAG_KEEP_DAYS:-14}"
 RUNNER_TEMP_KEEP_DAYS="${RUNNER_TEMP_KEEP_DAYS:-2}"
@@ -97,6 +104,20 @@ cleanup_screenshots() {
     log "Cleaning screenshots in ${SCREENSHOT_DIR}"
     prune_files_older_than "${SCREENSHOT_DIR}" "${SCREENSHOT_KEEP_DAYS}" "lifeos_screenshot_*.jpg"
     prune_keep_latest_files "${SCREENSHOT_DIR}" "lifeos_screenshot_*.jpg" "${SCREENSHOT_KEEP_COUNT}"
+}
+
+cleanup_voice_artifacts() {
+    if [ -d "${AUDIO_DIR}" ]; then
+        log "Cleaning always-on audio snippets in ${AUDIO_DIR}"
+        prune_files_older_than "${AUDIO_DIR}" "${AUDIO_KEEP_DAYS}" "*.wav"
+        prune_keep_latest_files "${AUDIO_DIR}" "*.wav" "${AUDIO_KEEP_COUNT}"
+    fi
+
+    if [ -d "${TTS_DIR}" ]; then
+        log "Cleaning TTS outputs in ${TTS_DIR}"
+        prune_files_older_than "${TTS_DIR}" "${TTS_KEEP_DAYS}" "*.wav"
+        prune_keep_latest_files "${TTS_DIR}" "*.wav" "${TTS_KEEP_COUNT}"
+    fi
 }
 
 runner_is_busy() {
@@ -211,6 +232,7 @@ main() {
         exit 0
     fi
     cleanup_screenshots
+    cleanup_voice_artifacts
     cleanup_runner
     cleanup_iso_outputs
     cleanup_dev_targets_on_high_disk

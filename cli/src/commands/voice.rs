@@ -1,5 +1,6 @@
 use clap::Subcommand;
 use colored::Colorize;
+use tokio::process::Command;
 
 use crate::daemon_client;
 
@@ -9,6 +10,10 @@ pub enum VoiceCommands {
     Status,
     /// Show unified sensory voice/vision pipeline status
     PipelineStatus,
+    /// Show the current system audio devices Axi will use for playback/capture
+    DeviceStatus,
+    /// Show a combined voice/audio diagnostic report
+    Doctor,
     /// Start STT daemon service
     Start {
         #[arg(long)]
@@ -75,6 +80,8 @@ pub async fn execute(cmd: VoiceCommands) -> anyhow::Result<()> {
     match cmd {
         VoiceCommands::Status => cmd_status().await,
         VoiceCommands::PipelineStatus => cmd_pipeline_status().await,
+        VoiceCommands::DeviceStatus => cmd_device_status().await,
+        VoiceCommands::Doctor => cmd_doctor().await,
         VoiceCommands::Start { enable } => cmd_start(enable).await,
         VoiceCommands::Stop => cmd_stop().await,
         VoiceCommands::Transcribe { file, model } => cmd_transcribe(&file, model.as_deref()).await,
@@ -244,6 +251,238 @@ async fn cmd_pipeline_status() -> anyhow::Result<()> {
             .dimmed()
     );
     Ok(())
+}
+
+async fn cmd_device_status() -> anyhow::Result<()> {
+    let info = run_pactl(&["info"]).await?;
+    let sinks = run_pactl(&["list", "short", "sinks"]).await?;
+    let sources = run_pactl(&["list", "short", "sources"]).await?;
+
+    let default_sink = parse_default_route(&info, &["Default Sink:", "Destino por defecto:"])
+        .unwrap_or_else(|| "unknown".to_string());
+    let default_source = parse_default_route(&info, &["Default Source:", "Fuente por defecto:"])
+        .unwrap_or_else(|| "unknown".to_string());
+
+    println!("{}", "Voice device status".bold().blue());
+    println!("  axi playback: {}", default_sink.cyan());
+    println!("  axi capture: {}", default_source.cyan());
+    println!(
+        "  tts/stt routing: {}/{}",
+        "system default sink".dimmed(),
+        "system default source".dimmed()
+    );
+
+    if let Some(line) = find_route_line(&sinks, &default_sink) {
+        println!("  active sink: {}", summarize_pactl_route(&line));
+    }
+    if let Some(line) = find_route_line(&sources, &default_source) {
+        println!("  active source: {}", summarize_pactl_route(&line));
+    }
+
+    let available_sinks = summarize_short_routes(&sinks, false);
+    let available_sources = summarize_short_routes(&sources, true);
+
+    println!(
+        "  available sinks: {}",
+        if available_sinks.is_empty() {
+            "none".dimmed().to_string()
+        } else {
+            available_sinks.join(", ")
+        }
+    );
+    println!(
+        "  available sources: {}",
+        if available_sources.is_empty() {
+            "none".dimmed().to_string()
+        } else {
+            available_sources.join(", ")
+        }
+    );
+
+    Ok(())
+}
+
+async fn cmd_doctor() -> anyhow::Result<()> {
+    let pipeline = fetch_pipeline_status().await?;
+    let info = run_pactl(&["info"]).await?;
+    let sinks = run_pactl(&["list", "short", "sinks"]).await?;
+    let sources = run_pactl(&["list", "short", "sources"]).await?;
+
+    let default_sink = parse_default_route(&info, &["Default Sink:", "Destino por defecto:"])
+        .unwrap_or_else(|| "unknown".to_string());
+    let default_source = parse_default_route(&info, &["Default Source:", "Fuente por defecto:"])
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let sink_line = find_route_line(&sinks, &default_sink);
+    let source_line = find_route_line(&sources, &default_source);
+    let sink_ok = sink_line.is_some();
+    let source_ok = source_line.is_some();
+
+    println!("{}", "Voice doctor".bold().blue());
+    println!(
+        "  pipeline: {}",
+        pipeline["axi_state"].as_str().unwrap_or("unknown").cyan()
+    );
+    println!(
+        "  always_on/wake_word: {}/{}",
+        pipeline["voice"]["always_on_active"]
+            .as_bool()
+            .unwrap_or(false),
+        pipeline["voice"]["wake_word"].as_str().unwrap_or("axi")
+    );
+    println!(
+        "  sensory leds mic/cam/screen: {}/{}/{}",
+        pipeline["leds"]["mic_active"].as_bool().unwrap_or(false),
+        pipeline["leds"]["camera_active"].as_bool().unwrap_or(false),
+        pipeline["leds"]["screen_active"].as_bool().unwrap_or(false)
+    );
+    println!("  axi playback: {}", default_sink.cyan());
+    println!("  axi capture: {}", default_source.cyan());
+    println!(
+        "  routing health: sink={} source={}",
+        if sink_ok {
+            "ok".green()
+        } else {
+            "missing".red()
+        },
+        if source_ok {
+            "ok".green()
+        } else {
+            "missing".red()
+        }
+    );
+
+    if let Some(line) = sink_line {
+        println!("  active sink: {}", summarize_pactl_route(&line));
+    }
+    if let Some(line) = source_line {
+        println!("  active source: {}", summarize_pactl_route(&line));
+    }
+
+    let bt_sink_count = summarize_short_routes(&sinks, false)
+        .iter()
+        .filter(|item| item.starts_with("bluez_output."))
+        .count();
+    let bt_source_count = summarize_short_routes(&sources, true)
+        .iter()
+        .filter(|item| item.starts_with("bluez_input."))
+        .count();
+
+    println!(
+        "  bluetooth io: sinks={} sources={}",
+        bt_sink_count.to_string().cyan(),
+        bt_source_count.to_string().cyan()
+    );
+    println!(
+        "  available sinks: {}",
+        render_available_routes(&sinks, false)
+    );
+    println!(
+        "  available sources: {}",
+        render_available_routes(&sources, true)
+    );
+
+    if !sink_ok || !source_ok {
+        println!(
+            "  recommendation: {}",
+            "rerun your desired pactl defaults, then restart sensory".yellow()
+        );
+    } else {
+        println!(
+            "  recommendation: {}",
+            "Axi should respect the current system defaults shown above".green()
+        );
+    }
+
+    Ok(())
+}
+
+async fn fetch_pipeline_status() -> anyhow::Result<serde_json::Value> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!(
+            "{}/api/v1/sensory/status",
+            daemon_client::daemon_url()
+        ))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to get sensory status: {}", body);
+    }
+    Ok(resp.json().await?)
+}
+
+async fn run_pactl(args: &[&str]) -> anyhow::Result<String> {
+    let output = Command::new("pactl").args(args).output().await?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "pactl {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn parse_default_route(info: &str, prefixes: &[&str]) -> Option<String> {
+    info.lines().find_map(|line| {
+        prefixes.iter().find_map(|prefix| {
+            line.strip_prefix(prefix)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+    })
+}
+
+fn find_route_line(routes: &str, route_name: &str) -> Option<String> {
+    routes.lines().find_map(|line| {
+        let columns: Vec<&str> = line.split_whitespace().collect();
+        if columns.len() >= 2 && columns[1] == route_name {
+            Some(line.to_string())
+        } else {
+            None
+        }
+    })
+}
+
+fn summarize_pactl_route(line: &str) -> String {
+    let columns: Vec<&str> = line.split_whitespace().collect();
+    if columns.len() >= 5 {
+        format!(
+            "{} {} {}",
+            columns[1].cyan(),
+            format!("[{}]", columns[3]).dimmed(),
+            columns[4..].join(" ")
+        )
+    } else {
+        line.to_string()
+    }
+}
+
+fn summarize_short_routes(routes: &str, is_source: bool) -> Vec<String> {
+    routes
+        .lines()
+        .filter_map(|line| {
+            let columns: Vec<&str> = line.split_whitespace().collect();
+            if columns.len() < 2 {
+                return None;
+            }
+            if is_source && columns[1].ends_with(".monitor") {
+                return None;
+            }
+            Some(columns[1].to_string())
+        })
+        .collect()
+}
+
+fn render_available_routes(routes: &str, is_source: bool) -> String {
+    let items = summarize_short_routes(routes, is_source);
+    if items.is_empty() {
+        "none".dimmed().to_string()
+    } else {
+        items.join(", ")
+    }
 }
 
 async fn cmd_start(enable: bool) -> anyhow::Result<()> {

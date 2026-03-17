@@ -34,6 +34,8 @@ const MIN_AUDIO_SIGNAL_BYTES: usize = 4096;
 const PCM_RMS_THRESHOLD: f64 = 450.0;
 const SCREENSHOT_RETENTION_COUNT: usize = 120;
 const SCREENSHOT_RETENTION_DAYS: u64 = 2;
+const AUDIO_RETENTION_COUNT: usize = 120;
+const TTS_RETENTION_COUNT: usize = 120;
 const OCR_SIMILARITY_SKIP_THRESHOLD: f32 = 0.92;
 const RELEVANT_SIMILARITY_SKIP_THRESHOLD: f32 = 0.60;
 const OCR_LENGTH_DELTA_TRIGGER: usize = 320;
@@ -2081,6 +2083,9 @@ async fn synthesize_with_piper(
         );
     }
 
+    cleanup_dir_by_count(&tts_dir, TTS_RETENTION_COUNT, "tts")
+        .await
+        .ok();
     Ok(audio_path.to_string_lossy().to_string())
 }
 
@@ -2115,6 +2120,9 @@ async fn synthesize_with_espeak(
         );
     }
 
+    cleanup_dir_by_count(&tts_dir, TTS_RETENTION_COUNT, "tts")
+        .await
+        .ok();
     Ok(audio_path.to_string_lossy().to_string())
 }
 
@@ -2208,7 +2216,67 @@ async fn capture_audio_snippet(data_dir: &Path, duration_seconds: u64) -> Result
         );
     }
 
+    cleanup_dir_by_count(&audio_dir, AUDIO_RETENTION_COUNT, "audio")
+        .await
+        .ok();
     Ok(output_path)
+}
+
+async fn cleanup_dir_by_count(dir: &Path, max_files: usize, label: &str) -> Result<u64> {
+    if max_files == 0 || !dir.exists() {
+        return Ok(0);
+    }
+
+    let mut files: Vec<(u64, PathBuf)> = Vec::new();
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .with_context(|| format!("Failed to read {} directory {}", label, dir.display()))?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .with_context(|| format!("Failed to read {} directory entry", label))?
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let modified_epoch = match tokio::fs::metadata(&path).await {
+            Ok(metadata) => metadata
+                .modified()
+                .ok()
+                .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or_default(),
+            Err(_) => continue,
+        };
+        files.push((modified_epoch, path));
+    }
+
+    if files.len() <= max_files {
+        return Ok(0);
+    }
+
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut removed = 0u64;
+    for (_, path) in files.into_iter().skip(max_files) {
+        tokio::fs::remove_file(&path)
+            .await
+            .with_context(|| format!("Failed to remove stale {} file {}", label, path.display()))?;
+        removed += 1;
+    }
+
+    if removed > 0 {
+        log::info!(
+            "{} retention removed {} files (max={})",
+            label,
+            removed,
+            max_files
+        );
+    }
+
+    Ok(removed)
 }
 
 async fn audio_has_voice_activity(path: &Path) -> Result<bool> {

@@ -762,6 +762,24 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_voice_device_status() {
+        let cli = Cli::parse_from(["life", "voice", "device-status"]);
+        match cli.command.expect("Expected command") {
+            Commands::Voice(commands::voice::VoiceCommands::DeviceStatus) => (),
+            _ => panic!("Expected voice device-status command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_voice_doctor() {
+        let cli = Cli::parse_from(["life", "voice", "doctor"]);
+        match cli.command.expect("Expected command") {
+            Commands::Voice(commands::voice::VoiceCommands::Doctor) => (),
+            _ => panic!("Expected voice doctor command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_overlay_models_command() {
         let cli = Cli::parse_from(["life", "overlay", "models"]);
         match cli.command.expect("Expected command") {
