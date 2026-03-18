@@ -1,0 +1,5 @@
+# Workaround for games/runtime stacks that trigger split-lock detection stalls.
+# Applied at image build time so deployments boot with this kernel argument by default.
+kargs = [
+  "split_lock_detect=off",
+]

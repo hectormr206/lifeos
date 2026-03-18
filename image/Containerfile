@@ -299,10 +299,18 @@ RUN set -eux && \
     fi && \
     dnf clean all
 
-# --- Steam/Proton (default via RPM Fusion) ---
-RUN dnf -y install \
-    steam steam-devices \
-    && dnf clean all
+# --- Steam/Proton (default via RPM Fusion) + ProtonUp-Qt ---
+RUN set -eux && \
+    dnf -y install steam steam-devices && \
+    if dnf -q repoquery --available --qf '%{name}' protonup-qt 2>/dev/null | grep -Fxq protonup-qt; then \
+        dnf -y install protonup-qt; \
+    else \
+        echo "INFO: protonup-qt RPM not available; installing official Flatpak app (net.davidotek.pupgui2)"; \
+        dnf -y install flatpak && \
+        flatpak remote-add --if-not-exists --system flathub https://flathub.org/repo/flathub.flatpakrepo && \
+        flatpak install --system -y --noninteractive flathub net.davidotek.pupgui2; \
+    fi && \
+    dnf clean all
 
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \
@@ -474,6 +482,7 @@ COPY image/files/etc/containers/containers.conf /etc/containers/containers.conf
 COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
 COPY image/files/etc/wireplumber/wireplumber.conf.d/90-lifeos-bluez.conf /etc/wireplumber/wireplumber.conf.d/90-lifeos-bluez.conf
 COPY image/files/usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml
+COPY image/files/usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml
 
 # Firefox desktop entry with Wayland flags
 COPY image/files/usr/share/applications/firefox-lifeos.desktop /usr/share/applications/firefox-lifeos.desktop
@@ -743,6 +752,8 @@ RUN test -x /usr/bin/mpv && \
     test -f /etc/lifeos/cosmic-theme.toml && \
     test -f /etc/lifeos/design-tokens.toml && \
     test -f /etc/lifeos/design-tokens.json && \
+    (test -x /usr/bin/protonup-qt || flatpak info --system net.davidotek.pupgui2 >/dev/null 2>&1) && \
+    test -f /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml && \
     test -f /usr/share/lifeos/models/whisper/ggml-base.bin && \
     test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx && \
     test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx.json && \
