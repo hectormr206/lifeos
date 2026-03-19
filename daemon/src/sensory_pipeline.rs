@@ -3674,8 +3674,7 @@ fn contains_wake_word(transcript: &str, wake_word: &str) -> bool {
     // Check phonetic variants that Whisper commonly produces for "axi".
     if wake_word == "axi" {
         let variants = [
-            "axi", "aksi", "axie", "oxy", "aksie", "acsi",
-            "ahxi", "asi", "ahi", "ahsi",
+            "axi", "aksi", "axie", "oxy", "aksie", "acsi", "ahxi", "asi", "ahi", "ahsi",
             // Spanish Whisper mishearings
             "exi", "oxi", "acci", "aquí",
         ];
@@ -3722,8 +3721,8 @@ fn strip_wake_word(transcript: &str, wake_word: &str) -> Option<String> {
         // Fall back to phonetic variants for "axi".
         if wake_word == "axi" {
             let variants = [
-                "axi", "aksi", "axie", "oxy", "aksie", "acsi", "ahxi", "asi", "ahi", "ahsi",
-                "exi", "oxi", "acci", "aquí",
+                "axi", "aksi", "axie", "oxy", "aksie", "acsi", "ahxi", "asi", "ahi", "ahsi", "exi",
+                "oxi", "acci", "aquí",
             ];
             variants
                 .iter()
@@ -3740,8 +3739,8 @@ fn strip_wake_word(transcript: &str, wake_word: &str) -> Option<String> {
         wake_word.len()
     } else if wake_word == "axi" {
         let variants = [
-            "axi", "aksi", "axie", "oxy", "aksie", "acsi", "ahxi", "asi", "ahi", "ahsi",
-            "exi", "oxi", "acci", "aquí",
+            "axi", "aksi", "axie", "oxy", "aksie", "acsi", "ahxi", "asi", "ahi", "ahsi", "exi",
+            "oxi", "acci", "aquí",
         ];
         variants
             .iter()
@@ -4515,7 +4514,15 @@ fn strip_inline_tags(scene: &str) -> String {
                 .skip(1)
                 .collect::<Vec<_>>()
                 .join(" ");
-            result = format!("{}{}", before.trim_end(), if remaining.is_empty() { String::new() } else { format!(" {remaining}") });
+            result = format!(
+                "{}{}",
+                before.trim_end(),
+                if remaining.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {remaining}")
+                }
+            );
         }
     }
     // Remove "PEOPLE: <number>".
@@ -4528,11 +4535,22 @@ fn strip_inline_tags(scene: &str) -> String {
                 .skip(1)
                 .collect::<Vec<_>>()
                 .join(" ");
-            result = format!("{}{}", before.trim_end(), if remaining.is_empty() { String::new() } else { format!(" {remaining}") });
+            result = format!(
+                "{}{}",
+                before.trim_end(),
+                if remaining.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {remaining}")
+                }
+            );
         }
     }
     // Clean up trailing punctuation/whitespace.
-    result.trim_end_matches(['.', ',', ';', ' ']).trim().to_string()
+    result
+        .trim_end_matches(['.', ',', ';', ' '])
+        .trim()
+        .to_string()
 }
 
 /// Strip markdown bold labels like "**Subject:** actual text" → "actual text"
@@ -4817,8 +4835,7 @@ mod tests {
     #[test]
     fn wake_word_with_timestamps_and_noise() {
         // Whisper-cli output with timestamps
-        let transcript =
-            "[00:00:00.000 --> 00:00:04.000]  [Música] Oxi, dime la hora por favor.";
+        let transcript = "[00:00:00.000 --> 00:00:04.000]  [Música] Oxi, dime la hora por favor.";
         assert!(contains_wake_word(transcript, "axi"));
         assert_eq!(
             strip_wake_word(transcript, "axi").as_deref(),

@@ -88,9 +88,7 @@ impl ShortcutManager {
             ShortcutAction::OpenDashboard => {
                 format!("xdg-open {}", self.dashboard_url)
             }
-            ShortcutAction::CaptureScreen => {
-                "life voice describe-screen".to_string()
-            }
+            ShortcutAction::CaptureScreen => "life voice describe-screen".to_string(),
             ShortcutAction::Execute(cmd) => cmd.clone(),
         };
 

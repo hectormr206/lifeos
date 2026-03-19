@@ -306,9 +306,7 @@ async fn main() -> anyhow::Result<()> {
                 MemoryPlaneManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
             }),
         )),
-        visual_comfort_manager: Arc::new(RwLock::new(VisualComfortManager::new(
-            data_dir.clone(),
-        ))),
+        visual_comfort_manager: Arc::new(RwLock::new(VisualComfortManager::new(data_dir.clone()))),
         accessibility_manager: Arc::new(RwLock::new(AccessibilityManager::new())),
         lab_manager: Arc::new(RwLock::new(
             LabManager::new(lab::LabConfig::default()).unwrap_or_else(|e| {

@@ -95,58 +95,58 @@ impl HealthMonitor {
 
         // Bootc check
         if is_bootc {
-        match check_bootc().await {
-            Ok((passed, msg)) => {
-                if !passed {
-                    issues.push(HealthIssue {
-                        severity: Severity::Warning,
-                        component: "bootc".to_string(),
-                        message: msg.clone(),
-                        suggestion: Some("Verify bootc installation".to_string()),
+            match check_bootc().await {
+                Ok((passed, msg)) => {
+                    if !passed {
+                        issues.push(HealthIssue {
+                            severity: Severity::Warning,
+                            component: "bootc".to_string(),
+                            message: msg.clone(),
+                            suggestion: Some("Verify bootc installation".to_string()),
+                        });
+                    }
+                    check_results.push(CheckResult {
+                        name: "bootc".to_string(),
+                        passed,
+                        message: msg,
                     });
                 }
-                check_results.push(CheckResult {
-                    name: "bootc".to_string(),
-                    passed,
-                    message: msg,
-                });
+                Err(e) => {
+                    check_results.push(CheckResult {
+                        name: "bootc".to_string(),
+                        passed: false,
+                        message: format!("Error: {}", e),
+                    });
+                }
             }
-            Err(e) => {
-                check_results.push(CheckResult {
-                    name: "bootc".to_string(),
-                    passed: false,
-                    message: format!("Error: {}", e),
-                });
-            }
-        }
 
-        // Disk space check
-        match check_filesystem_integrity().await {
-            Ok((passed, msg)) => {
-                if !passed {
-                    issues.push(HealthIssue {
-                        severity: Severity::Critical,
-                        component: "filesystem-integrity".to_string(),
-                        message: msg.clone(),
-                        suggestion: Some(
-                            "Verify composefs/fs-verity configuration for /usr".to_string(),
-                        ),
+            // Disk space check
+            match check_filesystem_integrity().await {
+                Ok((passed, msg)) => {
+                    if !passed {
+                        issues.push(HealthIssue {
+                            severity: Severity::Critical,
+                            component: "filesystem-integrity".to_string(),
+                            message: msg.clone(),
+                            suggestion: Some(
+                                "Verify composefs/fs-verity configuration for /usr".to_string(),
+                            ),
+                        });
+                    }
+                    check_results.push(CheckResult {
+                        name: "filesystem-integrity".to_string(),
+                        passed,
+                        message: msg,
                     });
                 }
-                check_results.push(CheckResult {
-                    name: "filesystem-integrity".to_string(),
-                    passed,
-                    message: msg,
-                });
+                Err(e) => {
+                    check_results.push(CheckResult {
+                        name: "filesystem-integrity".to_string(),
+                        passed: false,
+                        message: format!("Error: {}", e),
+                    });
+                }
             }
-            Err(e) => {
-                check_results.push(CheckResult {
-                    name: "filesystem-integrity".to_string(),
-                    passed: false,
-                    message: format!("Error: {}", e),
-                });
-            }
-        }
         } // end if is_bootc
 
         // Platform baseline check (Secure Boot + LUKS2)
