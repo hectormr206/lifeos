@@ -4320,27 +4320,42 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
         }
     }
 
-    // If the model didn't follow the format, try to extract STATE/PEOPLE
-    // from inline occurrences like "...STATE: focused PEOPLE: 1"
+    // Extract inline STATE:/PEOPLE: from anywhere in the text (some models
+    // put everything on one line or embed them in the scene description).
+    let full_text = cleaned.replace('\n', " ");
     if state == "unknown" {
-        let lower = cleaned.to_lowercase();
-        for candidate in ["focused", "distracted", "away", "talking", "resting"] {
-            if lower.contains(candidate) {
-                state = candidate.to_string();
-                break;
+        if let Some(idx) = full_text.find("STATE:") {
+            let after = full_text[idx + 6..].trim();
+            let word = after.split_whitespace().next().unwrap_or("");
+            let lower_word = word.to_lowercase();
+            for candidate in ["focused", "distracted", "away", "talking", "resting"] {
+                if lower_word == candidate {
+                    state = candidate.to_string();
+                    break;
+                }
+            }
+        }
+        // Still unknown? Try loose matching.
+        if state == "unknown" {
+            let lower = full_text.to_lowercase();
+            for candidate in ["focused", "distracted", "away", "talking", "resting"] {
+                if lower.contains(candidate) {
+                    state = candidate.to_string();
+                    break;
+                }
             }
         }
     }
     if people == 0 {
-        // Look for "PEOPLE: N" or "N person" patterns anywhere.
-        for line in cleaned.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.to_uppercase().strip_prefix("PEOPLE:") {
-                people = rest.trim().parse().unwrap_or(0);
-                break;
-            }
+        if let Some(idx) = full_text.find("PEOPLE:") {
+            let after = full_text[idx + 7..].trim();
+            let num_str = after.split_whitespace().next().unwrap_or("0");
+            people = num_str.parse().unwrap_or(0);
         }
     }
+
+    // Strip trailing "STATE: ... PEOPLE: ..." from the scene description.
+    scene = strip_inline_tags(&scene);
 
     if scene.is_empty() {
         // Fallback: build scene from non-junk lines.
@@ -4353,7 +4368,7 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
 
         // Take the first substantive line, stripping markdown labels.
         if let Some(first) = useful_lines.first() {
-            scene = strip_markdown_label(first);
+            scene = strip_inline_tags(&strip_markdown_label(first));
         }
         if scene.is_empty() {
             scene = "unknown scene".to_string();
@@ -4395,6 +4410,40 @@ fn is_scene_junk_line(line: &str) -> bool {
         || line.starts_with('<')
         // Section headers with no content (e.g. "**Subject:**")
         || (line.contains("**") && !line.contains(' '))
+}
+
+/// Remove inline "STATE: …" and "PEOPLE: …" tags from a scene description.
+fn strip_inline_tags(scene: &str) -> String {
+    let mut result = scene.to_string();
+    // Remove "STATE: <word>" (case-insensitive).
+    for prefix in ["STATE:", "State:", "state:"] {
+        if let Some(idx) = result.find(prefix) {
+            let before = &result[..idx];
+            let after = &result[idx + prefix.len()..];
+            // Skip the next word (the state value).
+            let remaining = after
+                .split_whitespace()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join(" ");
+            result = format!("{}{}", before.trim_end(), if remaining.is_empty() { String::new() } else { format!(" {remaining}") });
+        }
+    }
+    // Remove "PEOPLE: <number>".
+    for prefix in ["PEOPLE:", "People:", "people:"] {
+        if let Some(idx) = result.find(prefix) {
+            let before = &result[..idx];
+            let after = &result[idx + prefix.len()..];
+            let remaining = after
+                .split_whitespace()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join(" ");
+            result = format!("{}{}", before.trim_end(), if remaining.is_empty() { String::new() } else { format!(" {remaining}") });
+        }
+    }
+    // Clean up trailing punctuation/whitespace.
+    result.trim_end_matches(['.', ',', ';', ' ']).trim().to_string()
 }
 
 /// Strip markdown bold labels like "**Subject:** actual text" → "actual text"

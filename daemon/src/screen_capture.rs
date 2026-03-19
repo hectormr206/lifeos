@@ -221,24 +221,18 @@ impl ScreenCapture {
     /// Capture screenshot on Wayland (COSMIC)
     async fn capture_wayland(&self, context: Option<&DisplayContext>) -> Result<Screenshot> {
         // Try grim (modern Wayland screenshot tool)
-        if let Ok(output) = Command::new("which").arg("grim").output() {
-            if output.status.success() {
-                return self.capture_with_grim(context).await;
-            }
+        if self.tool_available("grim") {
+            return self.capture_with_grim(context).await;
         }
 
         // Try swaygrab for wlroots-based compositors
-        if let Ok(output) = Command::new("which").arg("swaygrab").output() {
-            if output.status.success() {
-                return self.capture_with_swaygrab(context).await;
-            }
+        if self.tool_available("swaygrab") {
+            return self.capture_with_swaygrab(context).await;
         }
 
         // Fallback: try gnome-screenshot
-        if let Ok(output) = Command::new("which").arg("gnome-screenshot").output() {
-            if output.status.success() {
-                return self.capture_with_gnome_screenshot(context).await;
-            }
+        if self.tool_available("gnome-screenshot") {
+            return self.capture_with_gnome_screenshot(context).await;
         }
 
         anyhow::bail!("No Wayland screenshot tool found. Please install grim.")
@@ -389,25 +383,14 @@ impl ScreenCapture {
 
     /// Capture screenshot on X11
     async fn capture_x11(&self, context: Option<&DisplayContext>) -> Result<Screenshot> {
-        // Try scrot (X11 screenshot tool)
-        if let Ok(output) = Command::new("which").arg("scrot").output() {
-            if output.status.success() {
-                return self.capture_with_scrot(context).await;
-            }
+        if self.tool_available("scrot") {
+            return self.capture_with_scrot(context).await;
         }
-
-        // Try maim (modern X11 screenshot tool)
-        if let Ok(output) = Command::new("which").arg("maim").output() {
-            if output.status.success() {
-                return self.capture_with_maim(context).await;
-            }
+        if self.tool_available("maim") {
+            return self.capture_with_maim(context).await;
         }
-
-        // gnome-screenshot also works on many desktop sessions and is a useful fallback.
-        if let Ok(output) = Command::new("which").arg("gnome-screenshot").output() {
-            if output.status.success() {
-                return self.capture_with_gnome_screenshot(context).await;
-            }
+        if self.tool_available("gnome-screenshot") {
+            return self.capture_with_gnome_screenshot(context).await;
         }
 
         anyhow::bail!(
@@ -879,6 +862,41 @@ impl ScreenCapture {
             }
         }
 
+        // If running inside a Flatpak sandbox and the program isn't available
+        // locally, use flatpak-spawn --host to call it on the host system.
+        let in_flatpak = std::path::Path::new("/.flatpak-info").exists();
+        let program_available = Command::new("which")
+            .arg(program)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if in_flatpak && !program_available {
+            let mut cmd = Command::new("flatpak-spawn");
+            cmd.arg("--host");
+            if let Some(context) = context {
+                if let Some(runtime) = &context.xdg_runtime_dir {
+                    cmd.arg(format!("--env=XDG_RUNTIME_DIR={}", runtime));
+                }
+                if let Some(display) = &context.wayland_display {
+                    cmd.arg(format!("--env=WAYLAND_DISPLAY={}", display));
+                }
+                if let Some(display) = &context.x11_display {
+                    cmd.arg(format!("--env=DISPLAY={}", display));
+                }
+                if let Some(bus) = &context.dbus_session_bus_address {
+                    cmd.arg(format!("--env=DBUS_SESSION_BUS_ADDRESS={}", bus));
+                }
+            }
+            cmd.arg(program);
+            for arg in args {
+                cmd.arg(arg);
+            }
+            return cmd;
+        }
+
         let mut cmd = Command::new(program);
         if let Some(context) = context {
             if let Some(runtime) = &context.xdg_runtime_dir {
@@ -898,6 +916,32 @@ impl ScreenCapture {
             cmd.arg(arg);
         }
         cmd
+    }
+
+    /// Check if a tool is available (locally or on the host via flatpak-spawn).
+    fn tool_available(&self, tool: &str) -> bool {
+        // Check locally first.
+        if Command::new("which")
+            .arg(tool)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        // Inside a Flatpak sandbox, check the host.
+        if std::path::Path::new("/.flatpak-info").exists() {
+            return Command::new("flatpak-spawn")
+                .args(["--host", "which", tool])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        }
+        false
     }
 
     /// Clean old screenshots
