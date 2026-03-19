@@ -435,16 +435,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Launch the floating mini-widget ("Eye of Axi") on a GTK thread.
+    // Only when a graphical display is available (skip in CI / headless).
     #[cfg(feature = "ui-overlay")]
     {
-        let token_for_widget = state.bootstrap_token.clone().unwrap_or_default();
-        let dashboard_url = format!(
-            "http://127.0.0.1:{}/dashboard?token={}",
-            state.config.api_bind_address.port(),
-            token_for_widget,
-        );
-        mini_widget::spawn_mini_widget(state.event_bus.clone(), dashboard_url);
-        info!("Mini-widget (Eye of Axi) launched");
+        let has_display =
+            std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok();
+        if has_display {
+            let token_for_widget = state.bootstrap_token.clone().unwrap_or_default();
+            let dashboard_url = format!(
+                "http://127.0.0.1:{}/dashboard?token={}",
+                state.config.api_bind_address.port(),
+                token_for_widget,
+            );
+            mini_widget::spawn_mini_widget(state.event_bus.clone(), dashboard_url);
+            info!("Mini-widget (Eye of Axi) launched");
+        } else {
+            info!("No graphical display detected — mini-widget disabled");
+        }
     }
 
     // Start background tasks
