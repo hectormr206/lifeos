@@ -1505,14 +1505,14 @@ impl SensoryPipelineManager {
         }
 
         // Phase 3: structured memory content with app metadata.
-        let ocr_excerpt_len = context.ocr_text.len().min(2048);
+        let ocr_excerpt: String = context.ocr_text.chars().take(2048).collect();
         let memory_content = truncate_for_memory(&format!(
             "app: {}\nwindow: {}\nsummary: {}\nrelevant_lines:\n{}\nocr_excerpt:\n{}",
             state.vision.current_app.as_deref().unwrap_or("unknown"),
             state.vision.current_window.as_deref().unwrap_or("unknown"),
             summary,
             context.relevant_text.join("\n"),
-            &context.ocr_text[..ocr_excerpt_len],
+            &ocr_excerpt,
         ));
         memory_plane
             .add_entry(
@@ -4310,6 +4310,7 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
 
     for line in cleaned.lines() {
         let line = line.trim();
+        // Standard format: SCENE: / STATE: / PEOPLE:
         if let Some(rest) = line.strip_prefix("SCENE:") {
             scene = rest.trim().to_string();
         } else if let Some(rest) = line.strip_prefix("STATE:") {
@@ -4319,42 +4320,113 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
         }
     }
 
-    // Truncate overly long scene descriptions (LLM verbosity).
-    if scene.len() > 120 {
-        scene = scene.chars().take(120).collect::<String>();
-        if let Some(last_space) = scene.rfind(' ') {
-            scene.truncate(last_space);
+    // If the model didn't follow the format, try to extract STATE/PEOPLE
+    // from inline occurrences like "...STATE: focused PEOPLE: 1"
+    if state == "unknown" {
+        let lower = cleaned.to_lowercase();
+        for candidate in ["focused", "distracted", "away", "talking", "resting"] {
+            if lower.contains(candidate) {
+                state = candidate.to_string();
+                break;
+            }
         }
-        scene.push('…');
+    }
+    if people == 0 {
+        // Look for "PEOPLE: N" or "N person" patterns anywhere.
+        for line in cleaned.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.to_uppercase().strip_prefix("PEOPLE:") {
+                people = rest.trim().parse().unwrap_or(0);
+                break;
+            }
+        }
     }
 
     if scene.is_empty() {
-        // Fallback: pick the first non-empty, non-reasoning line.
-        scene = cleaned
+        // Fallback: build scene from non-junk lines.
+        let useful_lines: Vec<&str> = cleaned
             .lines()
             .map(|l| l.trim())
-            .find(|l| {
-                !l.is_empty()
-                    && !l.starts_with('<')
-                    && !l.to_lowercase().starts_with("let me")
-                    && !l.to_lowercase().starts_with("i need")
-                    && !l.to_lowercase().starts_with("the image")
-                    && !l.to_lowercase().starts_with("analyzing")
-            })
-            .unwrap_or("unknown scene")
-            .to_string();
-        // Still truncate the fallback.
-        if scene.len() > 120 {
-            scene = scene.chars().take(120).collect::<String>();
-            scene.push('…');
+            .map(|l| l.trim_start_matches(['*', '#', '-', '>']).trim())
+            .filter(|l| !l.is_empty() && !is_scene_junk_line(l))
+            .collect();
+
+        // Take the first substantive line, stripping markdown labels.
+        if let Some(first) = useful_lines.first() {
+            scene = strip_markdown_label(first);
+        }
+        if scene.is_empty() {
+            scene = "unknown scene".to_string();
         }
     }
+
+    // Truncate overly long scene descriptions.
+    scene = truncate_scene(&scene, 120);
 
     Ok(CameraSceneAnalysis {
         scene_description: scene,
         user_state: state,
         people_count: people,
     })
+}
+
+/// Returns true for lines that look like LLM reasoning / structural headers.
+fn is_scene_junk_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    let lower = lower.trim_start_matches(['*', '#', '-', '>']).trim();
+    // Structural / reasoning prefixes
+    lower.starts_with("analyze")
+        || lower.starts_with("let me")
+        || lower.starts_with("i need")
+        || lower.starts_with("the image")
+        || lower.starts_with("looking at")
+        || lower.starts_with("observation")
+        || lower.starts_with("note:")
+        || lower.starts_with("action")
+        || lower.starts_with("context")
+        || lower.starts_with("assessment")
+        || lower.starts_with("summary")
+        || lower.starts_with("conclusion")
+        || lower.starts_with("step ")
+        || lower.starts_with("first,")
+        || lower.starts_with("next,")
+        || lower.starts_with("finally,")
+        || lower.starts_with("overall")
+        || line.starts_with('<')
+        // Section headers with no content (e.g. "**Subject:**")
+        || (line.contains("**") && !line.contains(' '))
+}
+
+/// Strip markdown bold labels like "**Subject:** actual text" → "actual text"
+fn strip_markdown_label(line: &str) -> String {
+    // Pattern: **Label:** rest
+    if let Some(idx) = line.find(":**") {
+        let after = &line[idx + 3..];
+        let trimmed = after.trim().trim_start_matches(['*', ' ']).trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    // Pattern: **Label** rest (no colon)
+    let stripped = line
+        .trim_start_matches('*')
+        .trim()
+        .trim_end_matches('*')
+        .trim();
+    stripped.to_string()
+}
+
+/// Truncate a scene string to `max_chars` on a char boundary.
+fn truncate_scene(scene: &str, max_chars: usize) -> String {
+    if scene.chars().count() <= max_chars {
+        return scene.to_string();
+    }
+    let mut truncated: String = scene.chars().take(max_chars).collect();
+    if let Some(last_space) = truncated.rfind(' ') {
+        truncated.truncate(last_space);
+    }
+    truncated.push('…');
+    truncated
 }
 
 /// Strip `<think>…</think>` sections from LLM output.

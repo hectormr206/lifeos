@@ -320,8 +320,8 @@ function populateScreenDiag(sensory) {
   setVal('d-screen-ocr', yn(hasOcr), ynClass(hasOcr));
   setVal('d-screen-multimodal', hasMultimodal ? (cap.llama_server_running ? 'Si (llama-server activo)' : 'Si (llama-server inactivo)') : 'No', hasMultimodal ? (cap.llama_server_running ? 'val-ok' : 'val-warn') : 'val-error');
   setVal('d-screen-app', (vision.current_app || '—') + (vision.current_window ? ' — ' + vision.current_window : ''));
-  setVal('d-screen-summary', vision.last_summary || '(sin datos)');
-  setVal('d-screen-ocrtext', vision.last_ocr_text ? vision.last_ocr_text.substring(0, 150) : '(sin datos)');
+  setVal('d-screen-summary', vision.last_summary ? vision.last_summary.substring(0, 200) : '(sin datos)');
+  setVal('d-screen-ocrtext', vision.last_ocr_text ? vision.last_ocr_text.substring(0, 200) : '(sin datos)');
   setVal('d-screen-latency', vision.last_query_latency_ms ? vision.last_query_latency_ms + 'ms' : '—');
   setVal('d-screen-last', timeAgo(vision.last_updated_at));
 
@@ -561,6 +561,52 @@ async function fetchInitialState() {
     addFeedItem('&#9888;', 'Error al cargar estado inicial: ' + err.message);
   }
 }
+
+// --- Periodic full state refresh (catch anything SSE missed) ---
+async function refreshFullState() {
+  try {
+    const [overlay, sensory, runtime, alwaysOn, context] = await Promise.all([
+      api('GET', '/overlay/status'),
+      api('GET', '/sensory/status'),
+      api('GET', '/runtime/sensory'),
+      api('GET', '/runtime/always-on'),
+      api('GET', '/followalong/context'),
+    ]);
+
+    if (overlay?.axi_state) updateOrb(overlay.axi_state);
+    if (runtime) updateSensoryToggles(runtime);
+    if (alwaysOn) updateAlwaysOn(alwaysOn);
+    if (context) updateContext(context);
+
+    if (sensory) {
+      diagCache = { sensory, stt: diagCache.stt, lastFetch: Date.now() };
+      updateVoice(sensory.voice);
+      updatePresence(sensory.presence);
+      updateMeeting(sensory.meeting);
+
+      // Refresh expanded diagnostic panel
+      const expanded = document.querySelector('.control-card.expanded');
+      if (expanded) {
+        const sensor = expanded.dataset.sensor;
+        switch (sensor) {
+          case 'audio': populateAudioDiag(sensory, diagCache.stt); break;
+          case 'always-on': populateAlwaysOnDiag(sensory); break;
+          case 'screen': populateScreenDiag(sensory); break;
+          case 'camera': populateCameraDiag(sensory); break;
+        }
+      }
+      // Always update health dots
+      populateAudioDiag(sensory, diagCache.stt);
+      populateAlwaysOnDiag(sensory);
+      populateScreenDiag(sensory);
+      populateCameraDiag(sensory);
+    }
+  } catch (e) {
+    console.warn('periodic refresh failed:', e);
+  }
+}
+
+setInterval(refreshFullState, 3000);
 
 // --- Boot ---
 fetchInitialState();
