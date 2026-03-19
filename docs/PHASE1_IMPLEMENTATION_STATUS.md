@@ -24,7 +24,7 @@ Experiencia diaria usable, rápida y estable para usuario final.
 - [x] **Arquitectura de Screen Capture**
   - Módulo `daemon/src/screen_capture.rs` creado
   - Soporte multi-plataforma (X11 y Wayland/COSMIC)
-  - Herramientas de captura: grim, swaygrab, gnome-screenshot, scrot, maim
+  - Herramientas de captura: grim, swaygrab, maim
   - Soporte para múltiples formatos: JPEG, PNG, WebP
   - Gestión de metadatos de capturas
 

@@ -230,11 +230,6 @@ impl ScreenCapture {
             return self.capture_with_swaygrab(context).await;
         }
 
-        // Fallback: try gnome-screenshot
-        if self.tool_available("gnome-screenshot") {
-            return self.capture_with_gnome_screenshot(context).await;
-        }
-
         anyhow::bail!("No Wayland screenshot tool found. Please install grim.")
     }
 
@@ -337,113 +332,13 @@ impl ScreenCapture {
         })
     }
 
-    /// Capture using gnome-screenshot
-    async fn capture_with_gnome_screenshot(
-        &self,
-        context: Option<&DisplayContext>,
-    ) -> Result<Screenshot> {
-        let filename = self.generate_filename();
-        let output_path = self.output_dir.join(&filename);
-        let temp_path = self.capture_output_path(context, &filename);
-
-        let output = self
-            .command_for_display_context(
-                context,
-                "gnome-screenshot",
-                &["-f".to_string(), temp_path.to_string_lossy().to_string()],
-            )
-            .output()
-            .context("Failed to execute gnome-screenshot")?;
-
-        if !output.status.success() {
-            anyhow::bail!(
-                "gnome-screenshot failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-
-        self.finalize_capture_file(&temp_path, &output_path)
-            .await
-            .context("Failed to persist gnome-screenshot capture")?;
-
-        let metadata = fs::metadata(&output_path).await?;
-        let timestamp = chrono::Local::now().to_rfc3339();
-
-        Ok(Screenshot {
-            filename: filename.clone(),
-            path: output_path,
-            width: 1920,
-            height: 1080,
-            format: self.config.format.clone(),
-            size_bytes: metadata.len(),
-            timestamp,
-            monitor: None,
-        })
-    }
-
     /// Capture screenshot on X11
     async fn capture_x11(&self, context: Option<&DisplayContext>) -> Result<Screenshot> {
-        if self.tool_available("scrot") {
-            return self.capture_with_scrot(context).await;
-        }
         if self.tool_available("maim") {
             return self.capture_with_maim(context).await;
         }
-        if self.tool_available("gnome-screenshot") {
-            return self.capture_with_gnome_screenshot(context).await;
-        }
 
-        anyhow::bail!(
-            "No X11 screenshot tool found. Please install scrot, maim, or gnome-screenshot."
-        )
-    }
-
-    /// Capture using scrot
-    async fn capture_with_scrot(&self, context: Option<&DisplayContext>) -> Result<Screenshot> {
-        let filename = self.generate_filename();
-        let output_path = self.output_dir.join(&filename);
-        let temp_path = self.capture_output_path(context, &filename);
-
-        let mut args = vec![];
-
-        // Add resolution
-        match &self.config.resolution {
-            Resolution::Full => {}
-            Resolution::Hd => args.push("--select=1920,0,1920,1080".to_string()),
-            Resolution::Sd => args.push("--select=1280,0,1280,720".to_string()),
-            Resolution::Custom { width, height } => {
-                args.push(format!("--select=0,0,{},{}", width, height));
-            }
-        }
-
-        args.push(temp_path.to_string_lossy().to_string());
-
-        let output = self
-            .command_for_display_context(context, "scrot", &args)
-            .output()
-            .context("Failed to execute scrot")?;
-
-        if !output.status.success() {
-            anyhow::bail!("scrot failed: {}", String::from_utf8_lossy(&output.stderr));
-        }
-
-        self.finalize_capture_file(&temp_path, &output_path)
-            .await
-            .context("Failed to persist scrot screenshot")?;
-
-        let metadata = fs::metadata(&output_path).await?;
-        let timestamp = chrono::Local::now().to_rfc3339();
-
-        Ok(Screenshot {
-            filename: filename.clone(),
-            path: output_path,
-            width: 1920,
-            height: 1080,
-            format: self.config.format.clone(),
-            size_bytes: metadata.len(),
-            timestamp,
-            monitor: None,
-        })
+        anyhow::bail!("No X11 screenshot tool found. Please install maim.")
     }
 
     /// Capture using maim
