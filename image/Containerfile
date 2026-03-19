@@ -485,7 +485,6 @@ COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland
 COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
 COPY image/files/etc/containers/containers.conf /etc/containers/containers.conf
 COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
-COPY image/files/etc/wireplumber/wireplumber.conf.d/90-lifeos-bluez.conf /etc/wireplumber/wireplumber.conf.d/90-lifeos-bluez.conf
 COPY image/files/usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml
 COPY image/files/usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml
 
@@ -516,7 +515,6 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-integrity-check.sh \
              /usr/local/bin/lifeos-security-baseline-check.sh \
              /usr/local/bin/lifeos-maintenance-cleanup.sh \
-             /usr/local/bin/lifeos-audio-route-heal.sh \
              /usr/local/bin/lifeos-nvidia-secureboot.sh \
              /usr/local/bin/lifeos-screenshot-clipboard.sh \
              /usr/local/bin/lifeos-check
@@ -544,8 +542,6 @@ COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
 COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf /etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf
-COPY image/files/etc/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/lifeos-audio-route-heal.service
-
 # lifeosd.service — user service so it inherits Wayland, PipeWire, D-Bus
 # This lets the GTK4 mini-widget (Eye of Axi) render on the desktop and
 # gives native access to audio, camera, and screen capture.
@@ -576,10 +572,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/system/graphical.target.wants \
              /usr/lib/systemd/system/timers.target.wants \
              /usr/lib/systemd/system/sockets.target.wants \
-             /usr/lib/systemd/user/default.target.wants \
-             /usr/lib/systemd/user/pipewire.service.wants \
-             /usr/lib/systemd/user/pipewire-pulse.service.wants \
-             /usr/lib/systemd/user/wireplumber.service.wants && \
+             /usr/lib/systemd/user/default.target.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
@@ -603,11 +596,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
             ln -sf "/usr/lib/systemd/system/${unit}" "/usr/lib/systemd/system/sockets.target.wants/${unit}"; \
         fi; \
     done && \
-    ln -sf /usr/lib/systemd/user/lifeosd.service           /usr/lib/systemd/user/lifeisd.service && \
-    ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/default.target.wants/lifeos-audio-route-heal.service && \
-    ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/pipewire.service.wants/lifeos-audio-route-heal.service && \
-    ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/pipewire-pulse.service.wants/lifeos-audio-route-heal.service && \
-    ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/wireplumber.service.wants/lifeos-audio-route-heal.service
+    ln -sf /usr/lib/systemd/user/lifeosd.service           /usr/lib/systemd/user/lifeisd.service
 
 # --- Update policy: no surprise reboot ---
 # Mask bootc auto-apply units so updates are operator-driven.
