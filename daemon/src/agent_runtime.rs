@@ -2193,7 +2193,7 @@ impl AgentRuntimeManager {
         tokio::fs::create_dir_all(&self.data_dir).await?;
         let snapshot = self.state.read().await.clone();
         let serialized = serde_json::to_string_pretty(&snapshot)?;
-        tokio::fs::write(&path, serialized)
+        write_atomic(&path, &serialized)
             .await
             .with_context(|| format!("Failed to write {}", path.display()))?;
         Ok(())
@@ -2202,6 +2202,21 @@ impl AgentRuntimeManager {
     fn state_file(&self) -> PathBuf {
         self.data_dir.join("agent_runtime_state.json")
     }
+}
+
+async fn write_atomic(path: &PathBuf, contents: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Missing parent directory for {}", path.display()))?;
+    let tmp_path = parent.join(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("agent-runtime-state")
+    ));
+    tokio::fs::write(&tmp_path, contents).await?;
+    tokio::fs::rename(&tmp_path, path).await?;
+    Ok(())
 }
 
 fn append_ledger(

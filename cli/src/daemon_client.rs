@@ -18,25 +18,10 @@ pub fn daemon_url() -> String {
 
 /// Read the bootstrap token from the runtime directory.
 ///
-/// Search order: `$LIFEOS_RUNTIME_DIR`, `$XDG_RUNTIME_DIR/lifeos`, `/run/lifeos`.
+/// Search order: `$LIFEOS_RUNTIME_DIR`, `$XDG_RUNTIME_DIR/lifeos`,
+/// `$HOME/.local/state/lifeos/runtime`, `/run/lifeos`.
 fn read_bootstrap_token() -> Option<String> {
-    let runtime_dir = std::env::var("LIFEOS_RUNTIME_DIR").unwrap_or_else(|_| {
-        std::env::var("XDG_RUNTIME_DIR")
-            .map(|xdg| format!("{}/lifeos", xdg))
-            .unwrap_or_else(|_| "/run/lifeos".to_string())
-    });
-    let token_path = PathBuf::from(runtime_dir).join(TOKEN_FILENAME);
-
-    // 1) Direct read (works when running as root or token is world/group readable)
-    if let Some(token) = std::fs::read_to_string(&token_path)
-        .ok()
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-    {
-        return Some(token);
-    }
-
-    // 2) Explicit token override for automation/testing
+    // 1) Explicit token override for automation/testing
     if let Ok(token) = std::env::var("LIFEOS_BOOTSTRAP_TOKEN") {
         let token = token.trim().to_string();
         if !token.is_empty() {
@@ -44,25 +29,19 @@ fn read_bootstrap_token() -> Option<String> {
         }
     }
 
-    // 3) Best-effort privileged read without prompting (fails fast if sudo is unavailable)
-    if let Some(token) = Command::new("sudo")
-        .arg("-n")
-        .arg("cat")
-        .arg(&token_path)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-    {
-        return Some(token);
-    }
+    for token_path in bootstrap_token_candidates() {
+        // 2) Direct read (works when running as root or token is world/group readable)
+        if let Some(token) = std::fs::read_to_string(&token_path)
+            .ok()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+        {
+            return Some(token);
+        }
 
-    // 4) Interactive sudo fallback for terminal users.
-    // This resolves 401 errors on systems where the token is root-only.
-    if std::io::stdin().is_terminal() {
-        return Command::new("sudo")
+        // 3) Best-effort privileged read without prompting (fails fast if sudo is unavailable)
+        if let Some(token) = Command::new("sudo")
+            .arg("-n")
             .arg("cat")
             .arg(&token_path)
             .output()
@@ -70,10 +49,66 @@ fn read_bootstrap_token() -> Option<String> {
             .filter(|output| output.status.success())
             .and_then(|output| String::from_utf8(output.stdout).ok())
             .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty());
+            .filter(|t| !t.is_empty())
+        {
+            return Some(token);
+        }
+
+        // 4) Interactive sudo fallback for terminal users.
+        // This resolves 401 errors on systems where the token is root-only.
+        if std::io::stdin().is_terminal() {
+            if let Some(token) = Command::new("sudo")
+                .arg("cat")
+                .arg(&token_path)
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+            {
+                return Some(token);
+            }
+        }
     }
 
     None
+}
+
+fn bootstrap_token_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(runtime_dir) = std::env::var("LIFEOS_RUNTIME_DIR") {
+        let runtime_dir = runtime_dir.trim();
+        if !runtime_dir.is_empty() {
+            candidates.push(PathBuf::from(runtime_dir).join(TOKEN_FILENAME));
+        }
+    }
+
+    if let Ok(xdg_runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        let xdg_runtime_dir = xdg_runtime_dir.trim();
+        if !xdg_runtime_dir.is_empty() {
+            candidates.push(
+                PathBuf::from(xdg_runtime_dir)
+                    .join("lifeos")
+                    .join(TOKEN_FILENAME),
+            );
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let home = home.trim();
+        if !home.is_empty() {
+            candidates.push(
+                PathBuf::from(home)
+                    .join(".local/state/lifeos/runtime")
+                    .join(TOKEN_FILENAME),
+            );
+        }
+    }
+
+    candidates.push(PathBuf::from("/run/lifeos").join(TOKEN_FILENAME));
+    candidates
 }
 
 /// Build a reqwest client that includes the bootstrap token header.

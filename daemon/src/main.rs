@@ -110,31 +110,23 @@ fn generate_bootstrap_token() -> std::io::Result<String> {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     }
 
-    let runtime_dir = std::env::var("LIFEOS_RUNTIME_DIR").unwrap_or_else(|_| {
-        // Prefer $XDG_RUNTIME_DIR/lifeos (user service, production) then
-        // fall back to /run/lifeos (legacy system service / root).
-        if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-            let user_dir = format!("{}/lifeos", xdg);
-            if std::fs::create_dir_all(&user_dir).is_ok() {
-                return user_dir;
-            }
-        }
-        let prod = "/run/lifeos";
-        if std::fs::create_dir_all(prod).is_ok() {
-            let probe = std::path::Path::new(prod).join(".probe");
-            if std::fs::write(&probe, b"ok").is_ok() {
-                let _ = std::fs::remove_file(&probe);
-                return prod.to_string();
-            }
-        }
-        prod.to_string()
-    });
-    let dir = std::path::Path::new(&runtime_dir);
+    let runtime_dir = bootstrap_runtime_dir_candidates()
+        .into_iter()
+        .find(|candidate| runtime_dir_is_writable(candidate))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "No writable bootstrap runtime directory found",
+            )
+        })?;
+    let dir = runtime_dir.as_path();
     let path = dir.join("bootstrap.token");
     std::fs::create_dir_all(dir)?;
-    let mut dir_perms = std::fs::metadata(dir)?.permissions();
-    dir_perms.set_mode(0o700);
-    std::fs::set_permissions(dir, dir_perms)?;
+    if let Ok(metadata) = std::fs::metadata(dir) {
+        let mut dir_perms = metadata.permissions();
+        dir_perms.set_mode(0o700);
+        let _ = std::fs::set_permissions(dir, dir_perms);
+    }
 
     std::fs::write(&path, &token)?;
 
@@ -144,6 +136,75 @@ fn generate_bootstrap_token() -> std::io::Result<String> {
 
     log::info!("Bootstrap token generated at {}", path.display());
     Ok(token)
+}
+
+fn bootstrap_runtime_dir_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(runtime_dir) = std::env::var("LIFEOS_RUNTIME_DIR") {
+        let runtime_dir = runtime_dir.trim();
+        if !runtime_dir.is_empty() {
+            candidates.push(PathBuf::from(runtime_dir));
+        }
+    }
+
+    if let Ok(xdg_runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        let xdg_runtime_dir = xdg_runtime_dir.trim();
+        if !xdg_runtime_dir.is_empty() {
+            candidates.push(PathBuf::from(xdg_runtime_dir).join("lifeos"));
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let home = home.trim();
+        if !home.is_empty() {
+            candidates.push(PathBuf::from(home).join(".local/state/lifeos/runtime"));
+        }
+    }
+
+    candidates.push(PathBuf::from("/run/lifeos"));
+    candidates
+}
+
+fn runtime_dir_is_writable(path: &PathBuf) -> bool {
+    if std::fs::create_dir_all(path).is_err() {
+        return false;
+    }
+    let probe = path.join(".probe");
+    match std::fs::write(&probe, b"ok") {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(feature = "ui-overlay")]
+fn ensure_graphical_environment() {
+    if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
+        return;
+    }
+
+    let runtime_dir = match std::env::var("XDG_RUNTIME_DIR") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => return,
+    };
+
+    let mut sockets = match std::fs::read_dir(&runtime_dir) {
+        Ok(entries) => entries
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.starts_with("wayland-"))
+            .collect::<Vec<_>>(),
+        Err(_) => return,
+    };
+
+    sockets.sort();
+    if let Some(socket) = sockets.into_iter().next() {
+        std::env::set_var("WAYLAND_DISPLAY", &socket);
+        info!("Recovered graphical session via {}", socket);
+    }
 }
 
 /// Daemon state shared across tasks
@@ -438,16 +499,21 @@ async fn main() -> anyhow::Result<()> {
     // Only when a graphical display is available (skip in CI / headless).
     #[cfg(feature = "ui-overlay")]
     {
+        ensure_graphical_environment();
         let has_display =
             std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok();
         if has_display {
             let token_for_widget = state.bootstrap_token.clone().unwrap_or_default();
+            let widget_visible = {
+                let overlay = state.overlay_manager.read().await;
+                overlay.get_state().await.mini_widget.visible
+            };
             let dashboard_url = format!(
                 "http://127.0.0.1:{}/dashboard?token={}",
                 state.config.api_bind_address.port(),
                 token_for_widget,
             );
-            mini_widget::spawn_mini_widget(state.event_bus.clone(), dashboard_url);
+            mini_widget::spawn_mini_widget(state.event_bus.clone(), dashboard_url, widget_visible);
             info!("Mini-widget (Eye of Axi) launched");
         } else {
             info!("No graphical display detected — mini-widget disabled");

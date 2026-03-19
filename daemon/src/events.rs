@@ -54,4 +54,7 @@ pub enum DaemonEvent {
         priority: String,
         message: String,
     },
+    MiniWidgetVisibilityChanged {
+        visible: bool,
+    },
 }

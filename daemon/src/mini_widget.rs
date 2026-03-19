@@ -6,7 +6,7 @@
 //!
 //! Gated behind the `ui-overlay` feature flag (via `mod` in main.rs).
 
-use gtk4::gdk::Display;
+use gtk4::gdk::{self, Display};
 use gtk4::prelude::*;
 use gtk4::{self as gtk, CssProvider};
 use std::cell::RefCell;
@@ -37,7 +37,11 @@ fn aura_to_rgba(aura: &str) -> (f64, f64, f64) {
 /// Launch the mini-widget GTK application on its own thread.
 ///
 /// `dashboard_url` is the full URL including token query param.
-pub fn spawn_mini_widget(event_bus: broadcast::Sender<DaemonEvent>, dashboard_url: String) {
+pub fn spawn_mini_widget(
+    event_bus: broadcast::Sender<DaemonEvent>,
+    dashboard_url: String,
+    initial_visible: bool,
+) {
     std::thread::spawn(move || {
         let app = gtk::Application::builder()
             .application_id("org.lifeos.axi-eye")
@@ -45,9 +49,10 @@ pub fn spawn_mini_widget(event_bus: broadcast::Sender<DaemonEvent>, dashboard_ur
 
         let rx = event_bus.subscribe();
         let url = dashboard_url;
+        let visible = initial_visible;
 
         app.connect_activate(move |app| {
-            build_ui(app, rx.resubscribe(), url.clone());
+            build_ui(app, rx.resubscribe(), url.clone(), visible);
         });
 
         // Suppress GTK command-line parsing.
@@ -55,7 +60,12 @@ pub fn spawn_mini_widget(event_bus: broadcast::Sender<DaemonEvent>, dashboard_ur
     });
 }
 
-fn build_ui(app: &gtk::Application, rx: broadcast::Receiver<DaemonEvent>, dashboard_url: String) {
+fn build_ui(
+    app: &gtk::Application,
+    rx: broadcast::Receiver<DaemonEvent>,
+    dashboard_url: String,
+    initial_visible: bool,
+) {
     // CSS for transparent background.
     let css = CssProvider::new();
     css.load_from_data(
@@ -87,6 +97,7 @@ fn build_ui(app: &gtk::Application, rx: broadcast::Receiver<DaemonEvent>, dashbo
 
     // Shared aura colour state.
     let aura_color: Rc<RefCell<(f64, f64, f64)>> = Rc::new(RefCell::new(aura_to_rgba("gray")));
+    let was_dragged = Rc::new(RefCell::new(false));
 
     // Draw callback.
     let color_ref = aura_color.clone();
@@ -121,13 +132,61 @@ fn build_ui(app: &gtk::Application, rx: broadcast::Receiver<DaemonEvent>, dashbo
     // Left-click → open dashboard.
     let click = gtk::GestureClick::new();
     click.set_button(1);
+    let drag_flag = was_dragged.clone();
+    click.connect_pressed(move |_, _, _, _| {
+        *drag_flag.borrow_mut() = false;
+    });
     let url_clone = dashboard_url.clone();
+    let drag_flag = was_dragged.clone();
     click.connect_released(move |_, _, _, _| {
+        let dragged = *drag_flag.borrow();
+        *drag_flag.borrow_mut() = false;
+        if dragged {
+            return;
+        }
         let _ = std::process::Command::new("xdg-open")
             .arg(&url_clone)
             .spawn();
     });
     drawing_area.add_controller(click);
+
+    // Dragging the orb asks the compositor to move the floating window.
+    let drag = gtk::GestureDrag::new();
+    drag.set_button(1);
+    let drag_flag = was_dragged.clone();
+    let window_weak = window.downgrade();
+    drag.connect_drag_begin(move |gesture, start_x, start_y| {
+        *drag_flag.borrow_mut() = true;
+        let Some(window) = window_weak.upgrade() else {
+            return;
+        };
+        let Some(native) = window.native() else {
+            return;
+        };
+        let Some(surface) = native.surface() else {
+            return;
+        };
+        let Some(sequence) = gesture.last_updated_sequence() else {
+            return;
+        };
+        let Some(event) = gesture.last_event(Some(&sequence)) else {
+            return;
+        };
+        let Some(device) = gesture.device().or_else(|| event.device()) else {
+            return;
+        };
+        let Ok(toplevel) = surface.dynamic_cast::<gdk::Toplevel>() else {
+            return;
+        };
+        toplevel.begin_move(
+            &device,
+            gesture.current_button() as i32,
+            start_x,
+            start_y,
+            event.time(),
+        );
+    });
+    drawing_area.add_controller(drag);
 
     // Right-click → also open dashboard (quick actions in future).
     let right_click = gtk::GestureClick::new();
@@ -141,34 +200,56 @@ fn build_ui(app: &gtk::Application, rx: broadcast::Receiver<DaemonEvent>, dashbo
     drawing_area.add_controller(right_click);
 
     // Bridge tokio broadcast → glib via std::sync::mpsc (Send-safe).
-    let (mpsc_tx, mpsc_rx) = std::sync::mpsc::channel::<String>();
+    enum WidgetMessage {
+        Aura(String),
+        Visibility(bool),
+    }
+
+    let (mpsc_tx, mpsc_rx) = std::sync::mpsc::channel::<WidgetMessage>();
     let rx = Arc::new(std::sync::Mutex::new(rx));
     std::thread::spawn(move || loop {
         let event = {
             let mut guard = rx.lock().unwrap();
             guard.blocking_recv()
         };
-        let new_aura = match event {
-            Ok(DaemonEvent::AxiStateChanged { ref aura, .. }) => Some(aura.clone()),
+        let message = match event {
+            Ok(DaemonEvent::AxiStateChanged { ref aura, .. }) => {
+                Some(WidgetMessage::Aura(aura.clone()))
+            }
             Ok(DaemonEvent::SensorChanged {
                 kill_switch: true, ..
-            }) => Some("gray".to_string()),
+            }) => Some(WidgetMessage::Aura("gray".to_string())),
+            Ok(DaemonEvent::MiniWidgetVisibilityChanged { visible }) => {
+                Some(WidgetMessage::Visibility(visible))
+            }
             Err(broadcast::error::RecvError::Closed) => break,
             _ => None,
         };
-        if let Some(aura) = new_aura {
-            let _ = mpsc_tx.send(aura);
+        if let Some(message) = message {
+            let _ = mpsc_tx.send(message);
         }
     });
 
     // Poll the mpsc channel from the glib main loop (every 200ms).
     let color_for_poll = aura_color;
     let da = drawing_area;
+    let widget_window = window.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
         let mut redraw = false;
-        while let Ok(aura) = mpsc_rx.try_recv() {
-            *color_for_poll.borrow_mut() = aura_to_rgba(&aura);
-            redraw = true;
+        while let Ok(message) = mpsc_rx.try_recv() {
+            match message {
+                WidgetMessage::Aura(aura) => {
+                    *color_for_poll.borrow_mut() = aura_to_rgba(&aura);
+                    redraw = true;
+                }
+                WidgetMessage::Visibility(visible) => {
+                    if visible {
+                        widget_window.present();
+                    } else {
+                        widget_window.set_visible(false);
+                    }
+                }
+            }
         }
         if redraw {
             da.queue_draw();
@@ -177,4 +258,7 @@ fn build_ui(app: &gtk::Application, rx: broadcast::Receiver<DaemonEvent>, dashbo
     });
 
     window.present();
+    if !initial_visible {
+        window.set_visible(false);
+    }
 }

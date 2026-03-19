@@ -557,6 +557,9 @@ RUN printf '%s\n' \
     'Environment=LIFEOS_TTS_MODEL=/usr/share/lifeos/models/piper/es_MX-claude-high.onnx' \
     'Environment=LIFEOS_TTS_FALLBACK_BIN=/usr/bin/espeak-ng' \
     'Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard' \
+    'Environment=LIFEOS_RUNTIME_DIR=%t/lifeos' \
+    'RuntimeDirectory=lifeos' \
+    'RuntimeDirectoryMode=0700' \
     'ExecStart=/usr/bin/lifeosd' \
     'Restart=on-failure' \
     'RestartSec=5' \

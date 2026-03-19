@@ -416,17 +416,13 @@ impl DaemonClient {
     async fn new() -> Result<Self> {
         let _config = config::load_config().ok();
 
-        let runtime_dir = std::env::var("LIFEOS_RUNTIME_DIR").unwrap_or_else(|_| {
-            std::env::var("XDG_RUNTIME_DIR")
-                .map(|xdg| format!("{}/lifeos", xdg))
-                .unwrap_or_else(|_| "/run/lifeos".to_string())
-        });
-        let token_path = std::path::Path::new(&runtime_dir).join("bootstrap.token");
-        let token = if token_path.exists() {
-            Some(tokio::fs::read_to_string(&token_path).await?)
-        } else {
-            None
-        };
+        let mut token = None;
+        for token_path in bootstrap_token_candidates() {
+            if token_path.exists() {
+                token = Some(tokio::fs::read_to_string(&token_path).await?);
+                break;
+            }
+        }
 
         let base_url =
             std::env::var("LIFEOS_API_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
@@ -473,4 +469,40 @@ impl DaemonClient {
         let data = response.json().await?;
         Ok(data)
     }
+}
+
+fn bootstrap_token_candidates() -> Vec<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(runtime_dir) = std::env::var("LIFEOS_RUNTIME_DIR") {
+        let runtime_dir = runtime_dir.trim();
+        if !runtime_dir.is_empty() {
+            candidates.push(std::path::Path::new(runtime_dir).join("bootstrap.token"));
+        }
+    }
+
+    if let Ok(xdg_runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        let xdg_runtime_dir = xdg_runtime_dir.trim();
+        if !xdg_runtime_dir.is_empty() {
+            candidates.push(
+                std::path::Path::new(xdg_runtime_dir)
+                    .join("lifeos")
+                    .join("bootstrap.token"),
+            );
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let home = home.trim();
+        if !home.is_empty() {
+            candidates.push(
+                std::path::Path::new(home)
+                    .join(".local/state/lifeos/runtime")
+                    .join("bootstrap.token"),
+            );
+        }
+    }
+
+    candidates.push(std::path::Path::new("/run/lifeos").join("bootstrap.token"));
+    candidates
 }

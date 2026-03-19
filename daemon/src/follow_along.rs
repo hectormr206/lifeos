@@ -193,7 +193,7 @@ impl FollowAlongManager {
         let config_file = self.config_dir.join("follow_along.conf");
         let config_content = serde_json::to_string_pretty(&*config)?;
 
-        tokio::fs::write(&config_file, config_content)
+        write_atomic(&config_file, &config_content)
             .await
             .context("Failed to save FollowAlong config")?;
 
@@ -571,6 +571,21 @@ impl FollowAlongManager {
 
         Ok(())
     }
+}
+
+async fn write_atomic(path: &PathBuf, contents: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Missing parent directory for {}", path.display()))?;
+    let tmp_path = parent.join(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("follow-along")
+    ));
+    tokio::fs::write(&tmp_path, contents).await?;
+    tokio::fs::rename(&tmp_path, path).await?;
+    Ok(())
 }
 
 /// Event statistics

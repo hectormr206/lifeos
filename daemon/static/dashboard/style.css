@@ -257,6 +257,24 @@ h2 {
   text-overflow: ellipsis;
 }
 
+.inline-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.setting-inline-value {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.setting-hint {
+  margin-top: 10px;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 /* Health indicators in values */
 .val-ok { color: var(--success); }
 .val-warn { color: var(--warning); }

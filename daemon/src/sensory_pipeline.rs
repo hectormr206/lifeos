@@ -2200,11 +2200,26 @@ impl SensoryPipelineManager {
         let path = self.state_path();
         let raw = serde_json::to_string_pretty(&*self.state.read().await)
             .context("Failed to serialize sensory pipeline state")?;
-        tokio::fs::write(&path, raw)
+        write_atomic(&path, &raw)
             .await
             .context("Failed to persist sensory pipeline state")?;
         Ok(())
     }
+}
+
+async fn write_atomic(path: &PathBuf, contents: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Missing parent directory for {}", path.display()))?;
+    let tmp_path = parent.join(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("sensory-pipeline-state")
+    ));
+    tokio::fs::write(&tmp_path, contents).await?;
+    tokio::fs::rename(&tmp_path, path).await?;
+    Ok(())
 }
 
 async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {

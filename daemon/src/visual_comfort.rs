@@ -271,7 +271,7 @@ impl VisualComfortManager {
         let config_path = self.data_dir.join(CONFIG_FILE);
         std::fs::create_dir_all(&self.data_dir)?;
         let content = toml::to_string_pretty(&*config)?;
-        std::fs::write(&config_path, content)?;
+        write_atomic(&config_path, &content)?;
         Ok(())
     }
 
@@ -903,4 +903,19 @@ impl VisualComfortManager {
         log::info!("Visual comfort session reset");
         Ok(())
     }
+}
+
+fn write_atomic(path: &std::path::Path, contents: &str) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Missing parent directory for {}", path.display()))?;
+    let tmp_path = parent.join(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("visual-comfort")
+    ));
+    std::fs::write(&tmp_path, contents)?;
+    std::fs::rename(&tmp_path, path)?;
+    Ok(())
 }

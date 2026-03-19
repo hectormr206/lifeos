@@ -207,6 +207,17 @@
           <input type="range" id="interval-slider" min="5" max="30" value="10">
           <span id="interval-value">10s</span>
         </div>
+        <div class="setting-item">
+          <label for="toggle-widget">Widget flotante</label>
+          <div class="inline-setting-row">
+            <label class="toggle" onclick="event.stopPropagation()">
+              <input type="checkbox" id="toggle-widget">
+              <span class="slider"></span>
+            </label>
+            <span id="widget-status" class="setting-inline-value">Oculto</span>
+          </div>
+          <p id="widget-note" class="setting-hint">Arrastra la orb en el escritorio para moverla. Click abre este panel.</p>
+        </div>
       </div>
     </section>
   </main>

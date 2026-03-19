@@ -32,6 +32,8 @@ pub struct OverlayConfig {
     pub theme: OverlayTheme,
     /// Whether to show screen preview in overlay
     pub show_preview: bool,
+    /// Whether the compact desktop widget should remain visible.
+    pub mini_widget_visible: bool,
 }
 
 impl Default for OverlayConfig {
@@ -43,6 +45,7 @@ impl Default for OverlayConfig {
             opacity: 0.95,
             theme: OverlayTheme::Dark,
             show_preview: true,
+            mini_widget_visible: true,
         }
     }
 }
@@ -204,26 +207,42 @@ pub struct OverlayManager {
     config: Arc<RwLock<OverlayConfig>>,
     state: Arc<RwLock<OverlayState>>,
     screenshot_dir: PathBuf,
+    config_path: PathBuf,
     event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
 }
 
 impl OverlayManager {
     /// Create new overlay manager
     pub fn new(screenshot_dir: PathBuf) -> Self {
+        let config_path = overlay_config_path(&screenshot_dir);
+        let config = load_overlay_config(&config_path).unwrap_or_default();
+        let mut state = OverlayState::default();
+        state.mini_widget.visible = config.mini_widget_visible;
+        if let WindowPosition::Custom { x, y } = config.default_position.clone() {
+            state.window_position = Some((x, y));
+        }
         Self {
-            config: Arc::new(RwLock::new(OverlayConfig::default())),
-            state: Arc::new(RwLock::new(OverlayState::default())),
+            config: Arc::new(RwLock::new(config)),
+            state: Arc::new(RwLock::new(state)),
             screenshot_dir,
+            config_path,
             event_bus: None,
         }
     }
 
     /// Create with custom config
     pub fn with_config(screenshot_dir: PathBuf, config: OverlayConfig) -> Self {
+        let config_path = overlay_config_path(&screenshot_dir);
+        let mut state = OverlayState::default();
+        state.mini_widget.visible = config.mini_widget_visible;
+        if let WindowPosition::Custom { x, y } = config.default_position.clone() {
+            state.window_position = Some((x, y));
+        }
         Self {
             config: Arc::new(RwLock::new(config)),
-            state: Arc::new(RwLock::new(OverlayState::default())),
+            state: Arc::new(RwLock::new(state)),
             screenshot_dir,
+            config_path,
             event_bus: None,
         }
     }
@@ -413,10 +432,23 @@ impl OverlayManager {
 
     /// Update overlay configuration
     pub async fn update_config(&self, config: OverlayConfig) -> Result<()> {
+        let mini_widget_visible = config.mini_widget_visible;
         let mut current = self.config.write().await;
         let enabled = config.enabled;
         let shortcut = config.shortcut.clone();
-        *current = config;
+        *current = config.clone();
+        let serialized =
+            serde_json::to_string_pretty(&config).context("Failed to serialize overlay config")?;
+        write_atomic(&self.config_path, &serialized)
+            .await
+            .context("Failed to persist overlay config")?;
+        drop(current);
+        let mut state = self.state.write().await;
+        state.mini_widget.visible = mini_widget_visible;
+        drop(state);
+        self.emit(crate::events::DaemonEvent::MiniWidgetVisibilityChanged {
+            visible: mini_widget_visible,
+        });
         info!(
             "Overlay configuration updated: enabled={}, shortcut={}",
             enabled, shortcut
@@ -575,6 +607,8 @@ impl OverlayManager {
     pub async fn move_window(&self, x: i32, y: i32) -> Result<()> {
         let mut state = self.state.write().await;
         state.window_position = Some((x, y));
+        drop(state);
+        self.set_position(WindowPosition::Custom { x, y }).await?;
         info!("Overlay window moved to: {}, {}", x, y);
         Ok(())
     }
@@ -583,6 +617,11 @@ impl OverlayManager {
     pub async fn set_theme(&self, theme: OverlayTheme) -> Result<()> {
         let mut config = self.config.write().await;
         config.theme = theme.clone();
+        let serialized =
+            serde_json::to_string_pretty(&*config).context("Failed to serialize overlay config")?;
+        write_atomic(&self.config_path, &serialized)
+            .await
+            .context("Failed to persist overlay config")?;
         info!("Overlay theme set to: {:?}", theme);
         Ok(())
     }
@@ -600,6 +639,8 @@ impl OverlayManager {
             shortcut: config.shortcut.clone(),
             enabled: config.enabled,
             axi_state: state.axi_state.clone(),
+            widget_visible: state.mini_widget.visible,
+            widget_badge: state.mini_widget.badge.clone(),
             widget_aura: state.mini_widget.aura.clone(),
             active_notifications: state.proactive_notifications.len(),
         }
@@ -657,6 +698,11 @@ impl OverlayManager {
     pub async fn set_position(&self, position: WindowPosition) -> Result<()> {
         let mut config = self.config.write().await;
         config.default_position = position.clone();
+        let serialized =
+            serde_json::to_string_pretty(&*config).context("Failed to serialize overlay config")?;
+        write_atomic(&self.config_path, &serialized)
+            .await
+            .context("Failed to persist overlay config")?;
         drop(config);
         match position {
             WindowPosition::Custom { x, y } => {
@@ -707,8 +753,38 @@ pub struct OverlayStats {
     pub shortcut: String,
     pub enabled: bool,
     pub axi_state: AxiState,
+    pub widget_visible: bool,
+    pub widget_badge: Option<String>,
     pub widget_aura: String,
     pub active_notifications: usize,
+}
+
+fn overlay_config_path(screenshot_dir: &std::path::Path) -> PathBuf {
+    screenshot_dir
+        .parent()
+        .unwrap_or(screenshot_dir)
+        .join("overlay_config.json")
+}
+
+fn load_overlay_config(path: &std::path::Path) -> Option<OverlayConfig> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+async fn write_atomic(path: &std::path::Path, contents: &str) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Missing parent directory for {}", path.display()))?;
+    tokio::fs::create_dir_all(parent).await?;
+    let tmp_path = parent.join(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("overlay-config")
+    ));
+    tokio::fs::write(&tmp_path, contents).await?;
+    tokio::fs::rename(&tmp_path, path).await?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -365,6 +365,15 @@ pub struct OverlayStatusResponse {
     pub eta_ms: Option<u64>,
     pub last_error: Option<String>,
     pub notifications: Vec<crate::overlay::ProactiveNotification>,
+    pub widget_visible: bool,
+    pub widget_badge: Option<String>,
+    pub window_position: Option<(i32, i32)>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct DashboardBootstrapResponse {
+    pub token: Option<String>,
+    pub auth_required: bool,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -376,6 +385,8 @@ pub struct OverlayStats {
     pub shortcut: String,
     pub enabled: bool,
     pub axi_state: String,
+    pub widget_visible: bool,
+    pub widget_badge: Option<String>,
     pub widget_aura: String,
     pub active_notifications: usize,
 }
@@ -499,6 +510,8 @@ pub struct OverlayConfigRequest {
     pub opacity: Option<f32>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub widget_visible: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -1410,13 +1423,26 @@ pub fn create_router(state: ApiState) -> Router {
     let dashboard_dir = std::env::var("LIFEOS_DASHBOARD_DIR")
         .unwrap_or_else(|_| "daemon/static/dashboard".to_string());
     let dashboard_service = ServeDir::new(&dashboard_dir).append_index_html_on_directories(true);
+    let dashboard_bootstrap_route = Router::new()
+        .route("/dashboard/bootstrap", get(dashboard_bootstrap))
+        .with_state(state.clone());
 
     Router::new()
         .nest("/api/v1", api_v1)
         .merge(sse_route)
+        .merge(dashboard_bootstrap_route)
         .nest_service("/dashboard", dashboard_service)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state)
+}
+
+async fn dashboard_bootstrap(
+    State(state): State<ApiState>,
+) -> Result<Json<DashboardBootstrapResponse>, (StatusCode, Json<ApiError>)> {
+    Ok(Json(DashboardBootstrapResponse {
+        token: state.config.api_key.clone(),
+        auth_required: state.config.api_key.is_some(),
+    }))
 }
 
 async fn require_bootstrap_token(
@@ -4190,6 +4216,8 @@ async fn overlay_status(
             shortcut: stats.shortcut,
             enabled: stats.enabled,
             axi_state: format!("{:?}", stats.axi_state),
+            widget_visible: stats.widget_visible,
+            widget_badge: stats.widget_badge.clone(),
             widget_aura: stats.widget_aura,
             active_notifications: stats.active_notifications,
         },
@@ -4204,6 +4232,9 @@ async fn overlay_status(
         eta_ms: state.feedback.eta_ms,
         last_error: state.last_error,
         notifications: state.proactive_notifications,
+        widget_visible: state.mini_widget.visible,
+        widget_badge: state.mini_widget.badge,
+        window_position: state.window_position,
     }))
 }
 
@@ -4244,6 +4275,10 @@ async fn overlay_config(
 
     if let Some(enabled) = request.enabled {
         config.enabled = enabled;
+    }
+
+    if let Some(widget_visible) = request.widget_visible {
+        config.mini_widget_visible = widget_visible;
     }
 
     match overlay_mgr.update_config(config).await {

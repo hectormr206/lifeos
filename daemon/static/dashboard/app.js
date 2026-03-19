@@ -3,13 +3,18 @@
 
 // --- Token management ---
 const params = new URLSearchParams(location.search);
-const token = params.get('token') || sessionStorage.getItem('lifeos_token') || '';
+let token = params.get('token') || sessionStorage.getItem('lifeos_token') || '';
 if (token) sessionStorage.setItem('lifeos_token', token);
 
-const headers = { 'x-bootstrap-token': token, 'Content-Type': 'application/json' };
 const API = '/api/v1';
 let feedCount = 0;
 const MAX_FEED = 100;
+
+function apiHeaders() {
+  const next = { 'Content-Type': 'application/json' };
+  if (token) next['x-bootstrap-token'] = token;
+  return next;
+}
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
@@ -59,7 +64,7 @@ function setVal(id, text, cls) {
 
 // --- API helpers ---
 async function api(method, path, body) {
-  const opts = { method, headers };
+  const opts = { method, headers: apiHeaders() };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(API + path, opts);
   if (!res.ok) {
@@ -69,11 +74,42 @@ async function api(method, path, body) {
   return res.json();
 }
 
+async function ensureBootstrapToken() {
+  if (token) return token;
+  try {
+    const res = await fetch('/dashboard/bootstrap');
+    if (!res.ok) return '';
+    const data = await res.json().catch(() => ({}));
+    if (data?.token) {
+      token = data.token;
+      sessionStorage.setItem('lifeos_token', token);
+      return token;
+    }
+  } catch (err) {
+    console.warn('Bootstrap token fetch failed:', err);
+  }
+  return '';
+}
+
 // --- Update UI from state ---
 function updateOrb(state, aura) {
   const key = (state || 'offline').toLowerCase();
   orb.className = 'orb ' + (AURA_MAP[key] || 'aura-gray');
   stateLabel.textContent = STATE_LABELS[key] || key;
+}
+
+function updateOverlayDetails(overlay) {
+  if (!overlay) return;
+  const widgetVisible = overlay.widget_visible !== false;
+  $('#toggle-widget').checked = widgetVisible;
+  $('#widget-status').textContent = widgetVisible ? 'Visible' : 'Oculto';
+  const note = document.getElementById('widget-note');
+  if (note) {
+    const parts = ['Arrastra la orb en el escritorio para moverla.'];
+    if (overlay.widget_badge) parts.push(`Estado actual: ${overlay.widget_badge}.`);
+    parts.push('Click abre este panel.');
+    note.textContent = parts.join(' ');
+  }
 }
 
 function updateSensoryToggles(runtime) {
@@ -487,6 +523,16 @@ $('#toggle-always-on').addEventListener('change', async (e) => {
   catch (err) { addFeedItem('&#10060;', `Error toggle always-on: ${err.message}`); }
 });
 
+$('#toggle-widget').addEventListener('change', async (e) => {
+  try {
+    await api('POST', '/overlay/config', { widget_visible: e.target.checked });
+    $('#widget-status').textContent = e.target.checked ? 'Visible' : 'Oculto';
+  } catch (err) {
+    e.target.checked = !e.target.checked;
+    addFeedItem('&#10060;', `Error widget flotante: ${err.message}`);
+  }
+});
+
 $('#kill-switch').addEventListener('click', async () => {
   if (!confirm('Desactivar TODOS los sentidos?')) return;
   await api('POST', '/sensory/kill-switch', { actor: 'dashboard' });
@@ -519,6 +565,7 @@ if (savedTheme) document.documentElement.dataset.theme = savedTheme;
 
 async function fetchInitialState() {
   try {
+    await ensureBootstrapToken();
     const [overlay, sensory, runtime, alwaysOn, context] = await Promise.all([
       api('GET', '/overlay/status'),
       api('GET', '/sensory/status'),
@@ -528,6 +575,7 @@ async function fetchInitialState() {
     ]);
 
     if (overlay.axi_state) updateOrb(overlay.axi_state);
+    updateOverlayDetails(overlay);
     if (runtime) updateSensoryToggles(runtime);
     if (alwaysOn) updateAlwaysOn(alwaysOn);
     if (context) updateContext(context);
@@ -565,6 +613,7 @@ async function fetchInitialState() {
 // --- Periodic full state refresh (catch anything SSE missed) ---
 async function refreshFullState() {
   try {
+    await ensureBootstrapToken();
     const [overlay, sensory, runtime, alwaysOn, context] = await Promise.all([
       api('GET', '/overlay/status'),
       api('GET', '/sensory/status'),
@@ -574,6 +623,7 @@ async function refreshFullState() {
     ]);
 
     if (overlay?.axi_state) updateOrb(overlay.axi_state);
+    updateOverlayDetails(overlay);
     if (runtime) updateSensoryToggles(runtime);
     if (alwaysOn) updateAlwaysOn(alwaysOn);
     if (context) updateContext(context);
@@ -609,5 +659,8 @@ async function refreshFullState() {
 setInterval(refreshFullState, 3000);
 
 // --- Boot ---
-fetchInitialState();
-connectSSE();
+(async () => {
+  await ensureBootstrapToken();
+  await fetchInitialState();
+  connectSSE();
+})();
