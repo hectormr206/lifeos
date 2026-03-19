@@ -1444,12 +1444,6 @@ async fn require_bootstrap_token(
         return Ok(next.run(request).await);
     }
 
-    // Allow localhost requests without token when server is bound to loopback.
-    // This enables the dashboard to work without manual token management.
-    if state.config.bind_address.ip().is_loopback() {
-        return Ok(next.run(request).await);
-    }
-
     Err((
         StatusCode::UNAUTHORIZED,
         Json(ApiError {
