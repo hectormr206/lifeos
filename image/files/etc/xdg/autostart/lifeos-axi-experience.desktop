@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Axi Experience
+Comment=Open the Axi command center after a new LifeOS update
+Exec=/usr/local/bin/lifeos-open-axi-dashboard.sh --boot --once-per-version
+Type=Application
+Terminal=false
+Categories=System;
+X-GNOME-Autostart-enabled=true
+NoDisplay=true

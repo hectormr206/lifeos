@@ -3,6 +3,7 @@
 
 // --- Token management ---
 const params = new URLSearchParams(location.search);
+const bootMode = params.get('boot') === '1';
 let token = params.get('token') || sessionStorage.getItem('lifeos_token') || '';
 if (token) sessionStorage.setItem('lifeos_token', token);
 
@@ -27,6 +28,36 @@ const feedbackTps = $('#feedback-tps');
 const connectionBadge = $('#connection-badge');
 const activityFeed = $('#activity-feed');
 const feedCountEl = $('#feed-count');
+const heroSummary = $('#hero-summary');
+const heroMode = $('#hero-mode');
+const heroConnection = $('#hero-connection');
+const heroContext = $('#hero-context');
+const heroLastEvent = $('#hero-last-event');
+const heroChipState = $('#hero-chip-state');
+const heroChipSensors = $('#hero-chip-sensors');
+const heroChipMeeting = $('#hero-chip-meeting');
+const heroChipPresence = $('#hero-chip-presence');
+const heroTelemetryAudio = $('#hero-telemetry-audio');
+const heroTelemetryScreen = $('#hero-telemetry-screen');
+const heroTelemetryCamera = $('#hero-telemetry-camera');
+const heroTelemetryWakeword = $('#hero-telemetry-wakeword');
+const bootSequence = $('#boot-sequence');
+
+const dashboardState = {
+  axiState: 'offline',
+  axiReason: '',
+  connected: false,
+  overlay: null,
+  runtime: null,
+  alwaysOn: null,
+  context: null,
+  presence: null,
+  voice: null,
+  meeting: null,
+  lastSignal: '',
+  lastSignalAt: null,
+  bootMode,
+};
 
 // --- Aura map ---
 const AURA_MAP = {
@@ -62,6 +93,158 @@ function setVal(id, text, cls) {
   el.className = 'diag-value' + (cls ? ' ' + cls : '');
 }
 
+function setHeroChip(el, text, state) {
+  if (!el) return;
+  el.textContent = text || '—';
+  el.className = 'hero-chip ' + (state || 'chip-neutral');
+}
+
+function formatStateLabel(state) {
+  const key = (state || 'offline').toLowerCase();
+  return STATE_LABELS[key] || key;
+}
+
+function formatContext(context) {
+  if (!context) return 'Sin foco';
+  const parts = [];
+  if (context.current_application) parts.push(context.current_application);
+  if (context.current_window) parts.push(context.current_window);
+  return parts.join(' · ') || 'Sin foco';
+}
+
+function formatSignalLine() {
+  if (!dashboardState.lastSignal) return 'Sin eventos recientes';
+  const age = dashboardState.lastSignalAt ? ` · ${timeAgo(dashboardState.lastSignalAt)}` : '';
+  return `${dashboardState.lastSignal}${age}`;
+}
+
+function buildSummaryText() {
+  const parts = [];
+  const stateLabel = formatStateLabel(dashboardState.axiState).toLowerCase();
+  const sensory = diagCache.sensory || {};
+  const cap = sensory.capabilities || {};
+  const runtime = dashboardState.runtime || {};
+  const presence = dashboardState.presence || {};
+  const meeting = dashboardState.meeting || {};
+  const context = dashboardState.context || {};
+  const voice = dashboardState.voice || {};
+  const stt = diagCache.stt || {};
+
+  if (dashboardState.connected) {
+    parts.push(`Axi esta ${stateLabel}.`);
+  } else {
+    parts.push('Axi esta esperando conexion segura.');
+  }
+
+  const activeSensors = [];
+  if (runtime.audio_enabled) activeSensors.push('audio');
+  if (runtime.screen_enabled) activeSensors.push('pantalla');
+  if (runtime.camera_enabled) activeSensors.push('camara');
+  if (activeSensors.length) parts.push(`Sensores activos: ${activeSensors.join(', ')}.`);
+
+  const readiness = [];
+  if (cap.stt_binary && stt.running) readiness.push('voz lista');
+  if (cap.screen_capture_available && sensory.vision?.enabled) readiness.push('vision activa');
+  if (cap.camera_capture_binary && presence.camera_active) readiness.push('camara activa');
+  if (readiness.length) parts.push(`Estado AI: ${readiness.join(' · ')}.`);
+
+  if (meeting.active) {
+    parts.push(`Reunion detectada en ${meeting.conferencing_app || 'una app de videollamada'}.`);
+  }
+
+  if (presence.present != null) {
+    parts.push(presence.present ? 'Presencia confirmada.' : 'Sin presencia detectada.');
+  }
+
+  if (context.current_application || context.current_window) {
+    parts.push(`Contexto actual: ${formatContext(context)}.`);
+  }
+
+  if (voice.last_transcript) {
+    parts.push(`Ultimo comando: ${voice.last_transcript}.`);
+  }
+
+  if (dashboardState.lastSignal) {
+    parts.push(`Ultima señal: ${dashboardState.lastSignal}.`);
+  }
+
+  return parts.join(' ');
+}
+
+function renderHero() {
+  if (heroSummary) heroSummary.textContent = buildSummaryText();
+  if (heroMode) heroMode.textContent = formatStateLabel(dashboardState.axiState);
+  if (heroConnection) heroConnection.textContent = dashboardState.connected ? 'Conectado' : 'Desconectado';
+  if (heroContext) heroContext.textContent = formatContext(dashboardState.context);
+  if (heroLastEvent) heroLastEvent.textContent = formatSignalLine();
+
+  const sensory = diagCache.sensory || {};
+  const cap = sensory.capabilities || {};
+  const runtime = dashboardState.runtime || {};
+  const presence = dashboardState.presence || {};
+  const meeting = dashboardState.meeting || {};
+  const voice = dashboardState.voice || {};
+  const stt = diagCache.stt || {};
+
+  const activeSensors = [runtime.audio_enabled, runtime.screen_enabled, runtime.camera_enabled].filter(Boolean).length;
+  const sensorText = activeSensors
+    ? `${activeSensors} activo${activeSensors === 1 ? '' : 's'}`
+    : 'Sin sensores activos';
+  const sensorState = activeSensors ? (activeSensors === 3 ? 'chip-ok' : 'chip-warn') : 'chip-error';
+  setHeroChip(heroChipState, formatStateLabel(dashboardState.axiState), {
+    offline: 'chip-error',
+    error: 'chip-error',
+    listening: 'chip-ok',
+    speaking: 'chip-ok',
+    watching: 'chip-warn',
+    thinking: 'chip-warn',
+    idle: 'chip-ok',
+    night: 'chip-neutral',
+  }[dashboardState.axiState] || 'chip-neutral');
+  setHeroChip(heroChipSensors, sensorText, sensorState);
+  setHeroChip(heroChipMeeting, meeting.active ? `Reunion: ${meeting.conferencing_app || 'activa'}` : 'Reunion: No', meeting.active ? 'chip-warn' : 'chip-neutral');
+  setHeroChip(heroChipPresence, presence.present == null ? 'Presencia: Sin datos' : presence.present ? 'Presencia: Detectada' : 'Presencia: Ausente', presence.present == null ? 'chip-neutral' : presence.present ? 'chip-ok' : 'chip-warn');
+
+  if (heroTelemetryAudio) {
+    const audioOk = !!(cap.stt_binary && stt.running);
+    heroTelemetryAudio.textContent = runtime.audio_enabled ? (audioOk ? 'STT listo' : 'Audio activo') : 'Inactivo';
+  }
+  if (heroTelemetryScreen) {
+    heroTelemetryScreen.textContent = runtime.screen_enabled
+      ? (sensory.vision?.enabled ? 'Vision activa' : 'Captura armada')
+      : 'Inactiva';
+  }
+  if (heroTelemetryCamera) {
+    heroTelemetryCamera.textContent = runtime.camera_enabled
+      ? (presence.camera_active ? 'Analizando' : 'Armada')
+      : 'Inactiva';
+  }
+  if (heroTelemetryWakeword) {
+    heroTelemetryWakeword.textContent = voice.wake_word || 'axi';
+  }
+}
+
+function trackSignal(text) {
+  dashboardState.lastSignal = text || '';
+  dashboardState.lastSignalAt = new Date().toISOString();
+  renderHero();
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function openSensorCard(sensor) {
+  const card = document.querySelector(`.control-card[data-sensor="${sensor}"]`);
+  const header = card?.querySelector('.control-header.clickable');
+  if (!card || !header) return;
+  const wasExpanded = card.classList.contains('expanded');
+  document.querySelectorAll('.control-card.expanded').forEach(c => c.classList.remove('expanded'));
+  if (!wasExpanded) card.classList.add('expanded');
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (!wasExpanded) refreshDiagPanel(sensor).catch(() => {});
+}
+
 // --- API helpers ---
 async function api(method, path, body) {
   const opts = { method, headers: apiHeaders() };
@@ -92,14 +275,19 @@ async function ensureBootstrapToken() {
 }
 
 // --- Update UI from state ---
-function updateOrb(state, aura) {
+function updateOrb(state, aura, reason) {
   const key = (state || 'offline').toLowerCase();
+  dashboardState.axiState = key;
+  dashboardState.axiReason = reason || '';
   orb.className = 'orb ' + (AURA_MAP[key] || 'aura-gray');
   stateLabel.textContent = STATE_LABELS[key] || key;
+  if (reason !== undefined) stateReason.textContent = reason || '';
+  renderHero();
 }
 
 function updateOverlayDetails(overlay) {
   if (!overlay) return;
+  dashboardState.overlay = overlay;
   const widgetVisible = overlay.widget_visible !== false;
   $('#toggle-widget').checked = widgetVisible;
   $('#widget-status').textContent = widgetVisible ? 'Visible' : 'Oculto';
@@ -110,49 +298,62 @@ function updateOverlayDetails(overlay) {
     parts.push('Click abre este panel.');
     note.textContent = parts.join(' ');
   }
+  renderHero();
 }
 
 function updateSensoryToggles(runtime) {
+  dashboardState.runtime = runtime;
   $('#toggle-audio').checked = runtime.audio_enabled;
   $('#toggle-screen').checked = runtime.screen_enabled;
   $('#toggle-camera').checked = runtime.camera_enabled;
   $('#audio-status').textContent = runtime.audio_enabled ? 'Activo' : 'Inactivo';
   $('#screen-status').textContent = runtime.screen_enabled ? 'Activo' : 'Inactivo';
   $('#camera-status').textContent = runtime.camera_enabled ? 'Activo' : 'Inactivo';
+  renderHero();
 }
 
 function updateAlwaysOn(ao) {
+  dashboardState.alwaysOn = ao;
   $('#toggle-always-on').checked = ao.enabled;
   $('#always-on-status').textContent = ao.enabled ? 'Activo' : 'Inactivo';
   if (ao.wake_word) $('#wake-word-input').value = ao.wake_word;
+  renderHero();
 }
 
 function updateContext(ctx) {
+  dashboardState.context = ctx;
   $('#current-app').textContent = ctx.current_application || '—';
   $('#current-window').textContent = ctx.current_window || '—';
+  renderHero();
 }
 
 function updatePresence(p) {
   if (!p) return;
+  dashboardState.presence = p;
   $('#presence-status').textContent = p.present ? 'Presente' : 'Ausente';
   const details = [];
   if (p.user_state) details.push(p.user_state);
   if (p.people_count != null) details.push(p.people_count + ' persona(s)');
   $('#presence-detail').textContent = details.join(' · ') || '—';
+  renderHero();
 }
 
 function updateVoice(voice) {
   if (!voice) return;
+  dashboardState.voice = voice;
   $('#last-transcript').textContent = voice.last_transcript || '—';
   $('#last-response').textContent = voice.last_response
     ? voice.last_response.substring(0, 120) + (voice.last_response.length > 120 ? '...' : '')
     : '—';
+  renderHero();
 }
 
 function updateMeeting(m) {
   if (!m) return;
+  dashboardState.meeting = m;
   $('#meeting-status').textContent = m.active ? 'En reunion' : 'Sin reunion';
   $('#meeting-app').textContent = m.conferencing_app || '';
+  renderHero();
 }
 
 // --- Activity feed ---
@@ -165,6 +366,7 @@ function addFeedItem(icon, text) {
   activityFeed.prepend(item);
   feedCount++;
   feedCountEl.textContent = feedCount;
+  trackSignal(text);
   while (activityFeed.children.length > MAX_FEED) {
     activityFeed.removeChild(activityFeed.lastChild);
   }
@@ -176,13 +378,17 @@ function connectSSE() {
   const sse = new EventSource(url);
 
   sse.onopen = () => {
+    dashboardState.connected = true;
     connectionBadge.textContent = 'Conectado';
     connectionBadge.className = 'badge badge-online';
+    renderHero();
   };
 
   sse.onerror = () => {
+    dashboardState.connected = false;
     connectionBadge.textContent = 'Desconectado';
     connectionBadge.className = 'badge badge-offline';
+    renderHero();
   };
 
   sse.onmessage = (e) => {
@@ -198,20 +404,28 @@ function connectSSE() {
 function handleEvent(event) {
   switch (event.type) {
     case 'axi_state_changed':
-      updateOrb(event.data.state, event.data.aura);
-      if (event.data.reason) stateReason.textContent = event.data.reason;
+      updateOrb(event.data.state, event.data.aura, event.data.reason);
       addFeedItem('&#9679;', `Axi → ${event.data.state}`);
       break;
     case 'sensor_changed':
+      dashboardState.runtime = {
+        ...(dashboardState.runtime || {}),
+        audio_enabled: event.data.mic,
+        screen_enabled: event.data.screen,
+        camera_enabled: event.data.camera,
+      };
       $('#toggle-audio').checked = event.data.mic;
       $('#toggle-screen').checked = event.data.screen;
       $('#toggle-camera').checked = event.data.camera;
       $('#audio-status').textContent = event.data.mic ? 'Activo' : 'Inactivo';
       $('#screen-status').textContent = event.data.screen ? 'Activo' : 'Inactivo';
       $('#camera-status').textContent = event.data.camera ? 'Activo' : 'Inactivo';
+      renderHero();
       if (event.data.kill_switch) addFeedItem('&#9888;', 'Kill switch activado');
       break;
     case 'feedback_update':
+      dashboardState.lastSignal = `Feedback ${event.data.stage || 'actualizado'}`;
+      dashboardState.lastSignalAt = new Date().toISOString();
       if (event.data.stage) {
         feedbackBar.classList.remove('hidden');
         feedbackStage.textContent = event.data.stage;
@@ -220,8 +434,14 @@ function handleEvent(event) {
       } else {
         feedbackBar.classList.add('hidden');
       }
+      renderHero();
       break;
     case 'window_changed':
+      dashboardState.context = {
+        ...(dashboardState.context || {}),
+        current_application: event.data.app || dashboardState.context?.current_application || '',
+        current_window: event.data.title || dashboardState.context?.current_window || '',
+      };
       $('#current-app').textContent = event.data.app || '—';
       $('#current-window').textContent = event.data.title || '—';
       addFeedItem('&#128421;', `${event.data.app}: ${event.data.title}`);
@@ -233,6 +453,11 @@ function handleEvent(event) {
       addFeedItem('&#128483;', 'Sesion de voz iniciada');
       break;
     case 'voice_session_end':
+      dashboardState.voice = {
+        ...(dashboardState.voice || {}),
+        last_transcript: event.data.transcript || dashboardState.voice?.last_transcript || '',
+        last_response: event.data.response || dashboardState.voice?.last_response || '',
+      };
       if (event.data.transcript) {
         $('#last-transcript').textContent = event.data.transcript;
         addFeedItem('&#128172;', event.data.transcript);
@@ -241,18 +466,29 @@ function handleEvent(event) {
         const short = event.data.response.substring(0, 80);
         $('#last-response').textContent = short;
       }
+      renderHero();
       break;
     case 'screen_capture':
       addFeedItem('&#128247;', event.data.summary || 'Captura de pantalla');
       break;
     case 'meeting_state_changed':
+      dashboardState.meeting = {
+        ...(dashboardState.meeting || {}),
+        active: !!event.data.active,
+        conferencing_app: event.data.app || dashboardState.meeting?.conferencing_app || '',
+      };
       $('#meeting-status').textContent = event.data.active ? 'En reunion' : 'Sin reunion';
       $('#meeting-app').textContent = event.data.app || '';
       addFeedItem('&#128222;', event.data.active
         ? `Reunion detectada (${event.data.app || '?'})` : 'Reunion finalizada');
       break;
     case 'presence_update':
+      dashboardState.presence = {
+        ...(dashboardState.presence || {}),
+        present: event.data.present,
+      };
       $('#presence-status').textContent = event.data.present ? 'Presente' : 'Ausente';
+      renderHero();
       break;
     case 'notification':
       addFeedItem('&#128276;', `[${event.data.priority}] ${event.data.message}`);
@@ -274,6 +510,7 @@ async function fetchDiagnostics() {
       api('GET', '/audio/stt/status').catch(() => null),
     ]);
     diagCache = { sensory, stt, lastFetch: now };
+    renderHero();
   } catch (e) {
     console.error('Diagnostics fetch failed:', e);
   }
@@ -436,6 +673,50 @@ setInterval(() => {
   if (expanded) refreshDiagPanel(expanded.dataset.sensor);
 }, 5000);
 
+document.querySelectorAll('[data-quick-action]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    switch (btn.dataset.quickAction) {
+      case 'open-controls':
+        document.querySelector('.controls-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        break;
+      case 'focus-audio':
+        openSensorCard('audio');
+        break;
+      case 'run-audio-test':
+        document.querySelector('.diag-test-btn[data-test="audio"]')?.click();
+        break;
+      case 'run-screen-test':
+        document.querySelector('.diag-test-btn[data-test="screen"]')?.click();
+        break;
+      case 'refresh-state':
+        await refreshFullState();
+        break;
+    }
+  });
+});
+
+let bootSequenceRan = false;
+async function runWelcomeSequence() {
+  if (!bootMode || bootSequenceRan || !bootSequence) return;
+  bootSequenceRan = true;
+
+  const steps = [
+    'Boot solicitado. Despertando Axi...',
+    'Sincronizando telemetria segura...',
+    'Leyendo audio, pantalla y presencia...',
+    'Listo. El panel ya esta operativo.',
+  ];
+
+  bootSequence.classList.remove('hidden');
+  for (const step of steps) {
+    bootSequence.textContent = step;
+    addFeedItem('&#9889;', step);
+    await delay(step.endsWith('...') ? 850 : 1100);
+  }
+  await delay(600);
+  bootSequence.classList.add('hidden');
+}
+
 // --- Test buttons ---
 async function runSensorTest(sensor) {
   switch (sensor) {
@@ -574,7 +855,7 @@ async function fetchInitialState() {
       api('GET', '/followalong/context'),
     ]);
 
-    if (overlay.axi_state) updateOrb(overlay.axi_state);
+    if (overlay.axi_state) updateOrb(overlay.axi_state, null, overlay.reason || overlay.state_reason || overlay.axi_reason || '');
     updateOverlayDetails(overlay);
     if (runtime) updateSensoryToggles(runtime);
     if (alwaysOn) updateAlwaysOn(alwaysOn);
@@ -600,13 +881,18 @@ async function fetchInitialState() {
     api('GET', '/audio/stt/status').then(stt => {
       diagCache.stt = stt;
       populateAudioDiag(diagCache.sensory, stt);
+      renderHero();
     }).catch(() => {});
 
+    dashboardState.connected = true;
     connectionBadge.textContent = 'Conectado';
     connectionBadge.className = 'badge badge-online';
+    renderHero();
   } catch (err) {
     console.error('Failed to fetch initial state:', err);
+    dashboardState.connected = false;
     addFeedItem('&#9888;', 'Error al cargar estado inicial: ' + err.message);
+    renderHero();
   }
 }
 
@@ -622,7 +908,7 @@ async function refreshFullState() {
       api('GET', '/followalong/context'),
     ]);
 
-    if (overlay?.axi_state) updateOrb(overlay.axi_state);
+    if (overlay?.axi_state) updateOrb(overlay.axi_state, null, overlay.reason || overlay.state_reason || overlay.axi_reason || '');
     updateOverlayDetails(overlay);
     if (runtime) updateSensoryToggles(runtime);
     if (alwaysOn) updateAlwaysOn(alwaysOn);
@@ -650,6 +936,7 @@ async function refreshFullState() {
       populateAlwaysOnDiag(sensory);
       populateScreenDiag(sensory);
       populateCameraDiag(sensory);
+      renderHero();
     }
   } catch (e) {
     console.warn('periodic refresh failed:', e);
@@ -663,4 +950,5 @@ setInterval(refreshFullState, 3000);
   await ensureBootstrapToken();
   await fetchInitialState();
   connectSSE();
+  runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();

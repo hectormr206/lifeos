@@ -11,7 +11,7 @@
   <header>
     <div class="header-left">
       <h1>LifeOS</h1>
-      <span class="header-subtitle">Panel de Control</span>
+      <span class="header-subtitle">AI-first control plane de Axi</span>
     </div>
     <div class="header-right">
       <span id="connection-badge" class="badge badge-offline">Desconectado</span>
@@ -20,16 +20,79 @@
   </header>
 
   <main>
-    <!-- Axi Orb + State -->
-    <section class="orb-section">
-      <div id="axi-orb" class="orb aura-gray">
-        <span class="orb-inner">Axi</span>
+    <section class="hero-panel">
+      <div class="hero-copy">
+        <p class="hero-kicker">AI-first orchestration</p>
+        <h2>Axi piensa, observa y actua en tiempo real</h2>
+        <p id="hero-summary" class="hero-summary" aria-live="polite">Conectando telemetria segura...</p>
+
+        <div class="hero-stats">
+          <div class="hero-stat">
+            <span>Estado</span>
+            <strong id="hero-mode">—</strong>
+          </div>
+          <div class="hero-stat">
+            <span>Conexion</span>
+            <strong id="hero-connection">—</strong>
+          </div>
+          <div class="hero-stat">
+            <span>Contexto</span>
+            <strong id="hero-context">—</strong>
+          </div>
+          <div class="hero-stat">
+            <span>Ultima señal</span>
+            <strong id="hero-last-event">—</strong>
+          </div>
+        </div>
+
+        <div class="hero-chips">
+          <span id="hero-chip-state" class="hero-chip">Estado: —</span>
+          <span id="hero-chip-sensors" class="hero-chip">Sensores: —</span>
+          <span id="hero-chip-meeting" class="hero-chip">Reunion: —</span>
+          <span id="hero-chip-presence" class="hero-chip">Presencia: —</span>
+        </div>
+
+        <div class="hero-actions" role="group" aria-label="Acciones rapidas seguras">
+          <button type="button" class="quick-action-btn" data-quick-action="open-controls">Abrir controles</button>
+          <button type="button" class="quick-action-btn" data-quick-action="focus-audio">Ver oido</button>
+          <button type="button" class="quick-action-btn" data-quick-action="run-audio-test">Probar oido</button>
+          <button type="button" class="quick-action-btn" data-quick-action="run-screen-test">Captura segura</button>
+          <button type="button" class="quick-action-btn quick-action-secondary" data-quick-action="refresh-state">Refrescar estado</button>
+        </div>
+
+        <p id="boot-sequence" class="boot-sequence hidden" aria-live="polite"></p>
       </div>
-      <p id="axi-state-label" class="state-label">Offline</p>
-      <p id="axi-reason" class="state-reason"></p>
-      <div id="feedback-bar" class="feedback-bar hidden">
-        <span id="feedback-stage"></span>
-        <span id="feedback-tps"></span>
+      <div class="hero-core">
+        <div class="orb-section hero-orb-section">
+          <div id="axi-orb" class="orb aura-gray">
+            <span class="orb-inner">Axi</span>
+          </div>
+          <p id="axi-state-label" class="state-label">Offline</p>
+          <p id="axi-reason" class="state-reason"></p>
+          <div id="feedback-bar" class="feedback-bar hidden">
+            <span id="feedback-stage"></span>
+            <span id="feedback-tps"></span>
+          </div>
+        </div>
+
+        <div class="hero-telemetry">
+          <div class="telemetry-row">
+            <span>Audio</span>
+            <strong id="hero-telemetry-audio">—</strong>
+          </div>
+          <div class="telemetry-row">
+            <span>Pantalla</span>
+            <strong id="hero-telemetry-screen">—</strong>
+          </div>
+          <div class="telemetry-row">
+            <span>Camara</span>
+            <strong id="hero-telemetry-camera">—</strong>
+          </div>
+          <div class="telemetry-row">
+            <span>Wake word</span>
+            <strong id="hero-telemetry-wakeword">axi</strong>
+          </div>
+        </div>
       </div>
     </section>
 

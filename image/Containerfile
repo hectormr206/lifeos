@@ -506,6 +506,7 @@ COPY image/files/usr/local/bin/lifeos-security-baseline-check.sh /usr/local/bin/
 COPY image/files/usr/local/bin/lifeos-nvidia-secureboot.sh /usr/local/bin/lifeos-nvidia-secureboot.sh
 COPY image/files/usr/local/bin/lifeos-maintenance-cleanup.sh /usr/local/bin/lifeos-maintenance-cleanup.sh
 COPY image/files/usr/local/bin/lifeos-screenshot-clipboard.sh /usr/local/bin/lifeos-screenshot-clipboard.sh
+COPY image/files/usr/local/bin/lifeos-open-axi-dashboard.sh /usr/local/bin/lifeos-open-axi-dashboard.sh
 COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
@@ -517,6 +518,7 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-maintenance-cleanup.sh \
              /usr/local/bin/lifeos-nvidia-secureboot.sh \
              /usr/local/bin/lifeos-screenshot-clipboard.sh \
+             /usr/local/bin/lifeos-open-axi-dashboard.sh \
              /usr/local/bin/lifeos-check
 
 # xdg-desktop-portal LifeOS integration
@@ -542,6 +544,8 @@ COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
 COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf /etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf
+COPY image/files/etc/xdg/autostart/lifeos-axi-experience.desktop /etc/xdg/autostart/lifeos-axi-experience.desktop
+COPY image/files/usr/share/applications/lifeos-axi-dashboard.desktop /usr/share/applications/lifeos-axi-dashboard.desktop
 # lifeosd.service — user service so it inherits Wayland, PipeWire, D-Bus
 # This lets the GTK4 mini-widget (Eye of Axi) render on the desktop and
 # gives native access to audio, camera, and screen capture.
@@ -736,9 +740,12 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/local/bin/lifeos-nvidia-secureboot.sh && \
     test -x /usr/local/bin/lifeos-maintenance-cleanup.sh && \
     test -x /usr/local/bin/lifeos-screenshot-clipboard.sh && \
+    test -x /usr/local/bin/lifeos-open-axi-dashboard.sh && \
     test -f /usr/share/lifeos/dashboard/index.html && \
     test -f /usr/share/lifeos/dashboard/app.js && \
     test -f /usr/share/lifeos/dashboard/style.css && \
+    test -f /etc/xdg/autostart/lifeos-axi-experience.desktop && \
+    test -f /usr/share/applications/lifeos-axi-dashboard.desktop && \
     test -f /usr/lib/systemd/user/lifeosd.service && \
     test -f /usr/lib/systemd/system/llama-server.service && \
     test -f /usr/lib/systemd/system/whisper-stt.service && \

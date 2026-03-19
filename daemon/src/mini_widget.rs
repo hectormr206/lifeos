@@ -1,8 +1,8 @@
 //! Floating mini-widget — "Eye of Axi".
 //!
 //! A small, always-on-top, undecorated GTK4 window that renders a colored orb
-//! matching `AxiState`. Left-click opens the web dashboard; right-click shows
-//! a quick-action popup menu.
+//! matching `AxiState`. Left-click opens the web dashboard and dragging lets
+//! the compositor reposition the widget on the desktop.
 //!
 //! Gated behind the `ui-overlay` feature flag (via `mod` in main.rs).
 
@@ -16,8 +16,10 @@ use tokio::sync::broadcast;
 
 use crate::events::DaemonEvent;
 
-/// Size of the floating orb window.
+/// Size of the floating orb inside the widget window.
 const ORB_SIZE: i32 = 48;
+const WIDGET_WIDTH: i32 = 208;
+const WIDGET_HEIGHT: i32 = 64;
 
 /// Aura colour table — matches `AxiState::aura()` strings.
 fn aura_to_rgba(aura: &str) -> (f64, f64, f64) {
@@ -34,6 +36,21 @@ fn aura_to_rgba(aura: &str) -> (f64, f64, f64) {
     }
 }
 
+fn pretty_state_label(state: &str) -> String {
+    match state.to_ascii_lowercase().as_str() {
+        "idle" => "En espera".to_string(),
+        "listening" => "Escuchando".to_string(),
+        "thinking" => "Pensando".to_string(),
+        "speaking" => "Hablando".to_string(),
+        "watching" => "Observando".to_string(),
+        "error" => "Atencion".to_string(),
+        "offline" => "Desconectado".to_string(),
+        "night" => "Modo nocturno".to_string(),
+        other if !other.is_empty() => other.to_string(),
+        _ => "Axi".to_string(),
+    }
+}
+
 /// Launch the mini-widget GTK application on its own thread.
 ///
 /// `dashboard_url` is the full URL including token query param.
@@ -41,6 +58,9 @@ pub fn spawn_mini_widget(
     event_bus: broadcast::Sender<DaemonEvent>,
     dashboard_url: String,
     initial_visible: bool,
+    initial_state: String,
+    initial_badge: Option<String>,
+    initial_aura: String,
 ) {
     std::thread::spawn(move || {
         let app = gtk::Application::builder()
@@ -50,9 +70,20 @@ pub fn spawn_mini_widget(
         let rx = event_bus.subscribe();
         let url = dashboard_url;
         let visible = initial_visible;
+        let state = initial_state;
+        let badge = initial_badge;
+        let aura = initial_aura;
 
         app.connect_activate(move |app| {
-            build_ui(app, rx.resubscribe(), url.clone(), visible);
+            build_ui(
+                app,
+                rx.resubscribe(),
+                url.clone(),
+                visible,
+                state.clone(),
+                badge.clone(),
+                aura.clone(),
+            );
         });
 
         // Suppress GTK command-line parsing.
@@ -65,12 +96,38 @@ fn build_ui(
     rx: broadcast::Receiver<DaemonEvent>,
     dashboard_url: String,
     initial_visible: bool,
+    initial_state: String,
+    initial_badge: Option<String>,
+    initial_aura: String,
 ) {
-    // CSS for transparent background.
     let css = CssProvider::new();
     css.load_from_data(
         "window.orb-window { background: transparent; } \
-         window.orb-window decoration { background: transparent; border: none; box-shadow: none; }",
+         window.orb-window decoration { background: transparent; border: none; box-shadow: none; } \
+         box.widget-shell { \
+           background: rgba(12, 15, 24, 0.84); \
+           border: 1px solid rgba(132, 153, 198, 0.22); \
+           border-radius: 999px; \
+           padding: 8px 12px; \
+           box-shadow: 0 16px 40px rgba(2, 6, 23, 0.36); \
+         } \
+         box.widget-copy { min-width: 112px; } \
+         label.widget-title { \
+           color: rgba(248, 250, 252, 0.96); \
+           font-weight: 700; \
+           letter-spacing: 0.08em; \
+           text-transform: uppercase; \
+           font-size: 12px; \
+         } \
+         label.widget-status { \
+           color: rgba(226, 232, 240, 0.88); \
+           font-weight: 600; \
+           font-size: 12px; \
+         } \
+         label.widget-badge { \
+           color: rgba(148, 163, 184, 0.92); \
+           font-size: 11px; \
+         }",
     );
     if let Some(display) = Display::default() {
         gtk::style_context_add_provider_for_display(
@@ -82,24 +139,58 @@ fn build_ui(
 
     let window = gtk::Window::builder()
         .application(app)
-        .default_width(ORB_SIZE)
-        .default_height(ORB_SIZE)
+        .default_width(WIDGET_WIDTH)
+        .default_height(WIDGET_HEIGHT)
         .decorated(false)
         .resizable(false)
         .title("Axi")
         .build();
     window.add_css_class("orb-window");
+    window.set_tooltip_text(Some("Arrastra para mover · click para abrir Axi"));
+
+    let shell = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    shell.add_css_class("widget-shell");
+    shell.set_margin_top(6);
+    shell.set_margin_bottom(6);
+    shell.set_margin_start(6);
+    shell.set_margin_end(6);
 
     let drawing_area = gtk::DrawingArea::new();
     drawing_area.set_content_width(ORB_SIZE);
     drawing_area.set_content_height(ORB_SIZE);
-    window.set_child(Some(&drawing_area));
 
-    // Shared aura colour state.
-    let aura_color: Rc<RefCell<(f64, f64, f64)>> = Rc::new(RefCell::new(aura_to_rgba("gray")));
+    let copy_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    copy_box.add_css_class("widget-copy");
+
+    let title_label = gtk::Label::new(Some("AXI"));
+    title_label.add_css_class("widget-title");
+    title_label.set_xalign(0.0);
+
+    let status_label = gtk::Label::new(Some(&pretty_state_label(&initial_state)));
+    status_label.add_css_class("widget-status");
+    status_label.set_xalign(0.0);
+
+    let initial_badge_text = initial_badge
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "LifeOS AI Core".to_string());
+    let badge_label = gtk::Label::new(Some(&initial_badge_text));
+    badge_label.add_css_class("widget-badge");
+    badge_label.set_xalign(0.0);
+    badge_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    badge_label.set_max_width_chars(18);
+
+    copy_box.append(&title_label);
+    copy_box.append(&status_label);
+    copy_box.append(&badge_label);
+
+    shell.append(&drawing_area);
+    shell.append(&copy_box);
+    window.set_child(Some(&shell));
+
+    let aura_color: Rc<RefCell<(f64, f64, f64)>> =
+        Rc::new(RefCell::new(aura_to_rgba(&initial_aura)));
     let was_dragged = Rc::new(RefCell::new(false));
 
-    // Draw callback.
     let color_ref = aura_color.clone();
     drawing_area.set_draw_func(move |_area, cr, width, height| {
         let (r, g, b) = *color_ref.borrow();
@@ -107,17 +198,14 @@ fn build_ui(
         let cy = height as f64 / 2.0;
         let radius = (width.min(height) as f64 / 2.0) - 4.0;
 
-        // Outer glow.
         cr.set_source_rgba(r, g, b, 0.25);
         cr.arc(cx, cy, radius + 3.0, 0.0, 2.0 * std::f64::consts::PI);
         let _ = cr.fill();
 
-        // Main circle.
         cr.set_source_rgba(r, g, b, 0.9);
         cr.arc(cx, cy, radius, 0.0, 2.0 * std::f64::consts::PI);
         let _ = cr.fill();
 
-        // Inner highlight.
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.15);
         cr.arc(
             cx,
@@ -129,7 +217,6 @@ fn build_ui(
         let _ = cr.fill();
     });
 
-    // Left-click → open dashboard.
     let click = gtk::GestureClick::new();
     click.set_button(1);
     let drag_flag = was_dragged.clone();
@@ -148,9 +235,8 @@ fn build_ui(
             .arg(&url_clone)
             .spawn();
     });
-    drawing_area.add_controller(click);
+    shell.add_controller(click);
 
-    // Dragging the orb asks the compositor to move the floating window.
     let drag = gtk::GestureDrag::new();
     drag.set_button(1);
     let drag_flag = was_dragged.clone();
@@ -186,9 +272,8 @@ fn build_ui(
             event.time(),
         );
     });
-    drawing_area.add_controller(drag);
+    shell.add_controller(drag);
 
-    // Right-click → also open dashboard (quick actions in future).
     let right_click = gtk::GestureClick::new();
     right_click.set_button(3);
     let url_clone2 = dashboard_url;
@@ -197,11 +282,14 @@ fn build_ui(
             .arg(&url_clone2)
             .spawn();
     });
-    drawing_area.add_controller(right_click);
+    shell.add_controller(right_click);
 
-    // Bridge tokio broadcast → glib via std::sync::mpsc (Send-safe).
     enum WidgetMessage {
-        Aura(String),
+        State {
+            aura: String,
+            label: String,
+            badge: String,
+        },
         Visibility(bool),
     }
 
@@ -213,12 +301,46 @@ fn build_ui(
             guard.blocking_recv()
         };
         let message = match event {
-            Ok(DaemonEvent::AxiStateChanged { ref aura, .. }) => {
-                Some(WidgetMessage::Aura(aura.clone()))
+            Ok(DaemonEvent::AxiStateChanged {
+                ref state,
+                ref aura,
+                ref reason,
+            }) => Some(WidgetMessage::State {
+                aura: aura.clone(),
+                label: pretty_state_label(state),
+                badge: reason
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "LifeOS AI Core".to_string()),
+            }),
+            Ok(DaemonEvent::FeedbackUpdate { ref stage, .. }) => {
+                stage.as_ref().map(|value| WidgetMessage::State {
+                    aura: "yellow".to_string(),
+                    label: "Procesando".to_string(),
+                    badge: value.clone(),
+                })
             }
+            Ok(DaemonEvent::Notification {
+                ref priority,
+                ref message,
+            }) => Some(WidgetMessage::State {
+                aura: if priority.eq_ignore_ascii_case("critical")
+                    || priority.eq_ignore_ascii_case("error")
+                {
+                    "red".to_string()
+                } else {
+                    "teal".to_string()
+                },
+                label: "Axi aviso".to_string(),
+                badge: message.clone(),
+            }),
             Ok(DaemonEvent::SensorChanged {
                 kill_switch: true, ..
-            }) => Some(WidgetMessage::Aura("gray".to_string())),
+            }) => Some(WidgetMessage::State {
+                aura: "gray".to_string(),
+                label: "Privacidad".to_string(),
+                badge: "Kill switch activo".to_string(),
+            }),
             Ok(DaemonEvent::MiniWidgetVisibilityChanged { visible }) => {
                 Some(WidgetMessage::Visibility(visible))
             }
@@ -230,16 +352,19 @@ fn build_ui(
         }
     });
 
-    // Poll the mpsc channel from the glib main loop (every 200ms).
     let color_for_poll = aura_color;
     let da = drawing_area;
     let widget_window = window.clone();
+    let widget_status = status_label.clone();
+    let widget_badge = badge_label.clone();
     glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
         let mut redraw = false;
         while let Ok(message) = mpsc_rx.try_recv() {
             match message {
-                WidgetMessage::Aura(aura) => {
+                WidgetMessage::State { aura, label, badge } => {
                     *color_for_poll.borrow_mut() = aura_to_rgba(&aura);
+                    widget_status.set_text(&label);
+                    widget_badge.set_text(&badge);
                     redraw = true;
                 }
                 WidgetMessage::Visibility(visible) => {
