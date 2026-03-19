@@ -1471,18 +1471,20 @@ async fn event_stream(
     Sse<impl futures_lite::Stream<Item = Result<Event, std::convert::Infallible>>>,
     (StatusCode, Json<ApiError>),
 > {
-    // Validate token from query param.
-    let expected = state.config.api_key.as_deref().unwrap_or_default();
-    let provided = params.get("token").map(|s| s.as_str()).unwrap_or_default();
-    if provided != expected {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(ApiError {
-                error: "Unauthorized".to_string(),
-                message: "Missing or invalid token query parameter".to_string(),
-                code: 401,
-            }),
-        ));
+    // Allow unauthenticated SSE on localhost (same policy as the REST middleware).
+    if !state.config.bind_address.ip().is_loopback() {
+        let expected = state.config.api_key.as_deref().unwrap_or_default();
+        let provided = params.get("token").map(|s| s.as_str()).unwrap_or_default();
+        if provided != expected {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(ApiError {
+                    error: "Unauthorized".to_string(),
+                    message: "Missing or invalid token query parameter".to_string(),
+                    code: 401,
+                }),
+            ));
+        }
     }
 
     let rx = state.event_bus.subscribe();

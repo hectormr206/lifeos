@@ -2466,6 +2466,18 @@ async fn transcribe_audio(file: &str, model: Option<&str>) -> Result<(String, St
     if let Some(model) = resolved_model {
         cmd.arg("-m").arg(model);
     }
+    // Auto-detect language from system locale for better wake word recognition.
+    let lang = std::env::var("LIFEOS_STT_LANG").unwrap_or_else(|_| {
+        std::env::var("LANG")
+            .unwrap_or_default()
+            .split('_')
+            .next()
+            .unwrap_or("es")
+            .to_string()
+    });
+    if !lang.is_empty() && lang != "C" && lang != "POSIX" {
+        cmd.args(["-l", &lang]);
+    }
     cmd.args(["-f", file]);
     let output = cmd
         .output()
