@@ -59,6 +59,7 @@ COPY tests/integration tests/integration/
 COPY cli/src cli/src/
 COPY cli/assets cli/assets/
 COPY daemon/src daemon/src/
+COPY daemon/static daemon/static/
 
 # Copy contracts for model catalog (needed by CLI include_str!)
 COPY contracts/ contracts/
@@ -382,6 +383,10 @@ RUN set -eux && \
 COPY --from=builder /out/life /usr/bin/life
 COPY --from=builder /out/lifeosd /usr/bin/lifeosd
 COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
+
+# --- Dashboard web (Axi control panel) ---
+COPY daemon/static/dashboard /usr/share/lifeos/dashboard
+
 RUN chmod +x /usr/bin/life /usr/bin/lifeosd && \
     ln -sf /usr/bin/life /usr/local/bin/life && \
     ln -sf /usr/bin/lifeosd /usr/local/bin/lifeosd && \
@@ -551,6 +556,7 @@ RUN printf '%s\n' \
     'Environment=LIFEOS_TTS_BIN=/usr/local/bin/lifeos-piper' \
     'Environment=LIFEOS_TTS_MODEL=/usr/share/lifeos/models/piper/es_MX-claude-high.onnx' \
     'Environment=LIFEOS_TTS_FALLBACK_BIN=/usr/bin/espeak-ng' \
+    'Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard' \
     'ExecStart=/usr/bin/lifeosd' \
     'Restart=on-failure' \
     'RestartSec=5' \
@@ -729,6 +735,9 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/sbin/llama-server && \
     test -x /usr/local/bin/lifeos-nvidia-secureboot.sh && \
     test -x /usr/local/bin/lifeos-maintenance-cleanup.sh && \
+    test -f /usr/share/lifeos/dashboard/index.html && \
+    test -f /usr/share/lifeos/dashboard/app.js && \
+    test -f /usr/share/lifeos/dashboard/style.css && \
     test -f /usr/lib/systemd/system/lifeosd.service && \
     test -f /usr/lib/systemd/system/llama-server.service && \
     test -f /usr/lib/systemd/system/whisper-stt.service && \

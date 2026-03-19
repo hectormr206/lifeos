@@ -204,6 +204,7 @@ pub struct OverlayManager {
     config: Arc<RwLock<OverlayConfig>>,
     state: Arc<RwLock<OverlayState>>,
     screenshot_dir: PathBuf,
+    event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
 }
 
 impl OverlayManager {
@@ -213,6 +214,7 @@ impl OverlayManager {
             config: Arc::new(RwLock::new(OverlayConfig::default())),
             state: Arc::new(RwLock::new(OverlayState::default())),
             screenshot_dir,
+            event_bus: None,
         }
     }
 
@@ -222,6 +224,21 @@ impl OverlayManager {
             config: Arc::new(RwLock::new(config)),
             state: Arc::new(RwLock::new(OverlayState::default())),
             screenshot_dir,
+            event_bus: None,
+        }
+    }
+
+    /// Attach the daemon event bus so state changes are broadcast to SSE clients.
+    pub fn set_event_bus(
+        &mut self,
+        tx: tokio::sync::broadcast::Sender<crate::events::DaemonEvent>,
+    ) {
+        self.event_bus = Some(tx);
+    }
+
+    fn emit(&self, event: crate::events::DaemonEvent) {
+        if let Some(tx) = &self.event_bus {
+            let _ = tx.send(event);
         }
     }
 
@@ -429,6 +446,11 @@ impl OverlayManager {
         if axi_state != AxiState::Error {
             state.last_error = None;
         }
+        self.emit(crate::events::DaemonEvent::AxiStateChanged {
+            state: format!("{:?}", axi_state),
+            aura: axi_state.aura().to_string(),
+            reason: reason.map(|s| s.to_string()),
+        });
         Ok(())
     }
 
@@ -451,6 +473,12 @@ impl OverlayManager {
             state.mini_widget.aura = AxiState::Offline.aura().to_string();
             state.mini_widget.badge = Some("kill-switch".to_string());
         }
+        self.emit(crate::events::DaemonEvent::SensorChanged {
+            mic: mic_active,
+            camera: camera_active,
+            screen: screen_active,
+            kill_switch: kill_switch_active,
+        });
         Ok(())
     }
 
@@ -472,6 +500,12 @@ impl OverlayManager {
             audio_level,
             updated_at: Some(chrono::Utc::now().to_rfc3339()),
         };
+        self.emit(crate::events::DaemonEvent::FeedbackUpdate {
+            stage: stage.map(|s| s.to_string()),
+            tokens_per_second,
+            eta_ms,
+            audio_level,
+        });
         Ok(())
     }
 
@@ -510,7 +544,7 @@ impl OverlayManager {
         }
 
         state.proactive_notifications.push(ProactiveNotification {
-            priority: normalized_priority,
+            priority: normalized_priority.clone(),
             message: message.to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
         });
@@ -518,6 +552,10 @@ impl OverlayManager {
             let remove = state.proactive_notifications.len() - 20;
             state.proactive_notifications.drain(0..remove);
         }
+        self.emit(crate::events::DaemonEvent::Notification {
+            priority: normalized_priority,
+            message: message.to_string(),
+        });
         Ok(())
     }
 

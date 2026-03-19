@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <base href="/dashboard/">
+  <title>LifeOS — Panel de Control</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <h1>LifeOS</h1>
+      <span class="header-subtitle">Panel de Control</span>
+    </div>
+    <div class="header-right">
+      <span id="connection-badge" class="badge badge-offline">Desconectado</span>
+      <button id="theme-toggle" class="icon-btn" title="Cambiar tema">&#9789;</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Axi Orb + State -->
+    <section class="orb-section">
+      <div id="axi-orb" class="orb aura-gray">
+        <span class="orb-inner">Axi</span>
+      </div>
+      <p id="axi-state-label" class="state-label">Offline</p>
+      <p id="axi-reason" class="state-reason"></p>
+      <div id="feedback-bar" class="feedback-bar hidden">
+        <span id="feedback-stage"></span>
+        <span id="feedback-tps"></span>
+      </div>
+    </section>
+
+    <!-- Sensory Controls -->
+    <section class="controls-section">
+      <h2>Sentidos</h2>
+      <div class="controls-grid">
+
+        <!-- Oido -->
+        <div class="control-card" data-sensor="audio">
+          <div class="control-header clickable">
+            <span class="control-icon">&#127908;</span>
+            <span class="control-name">Oido</span>
+            <span class="diag-dot" id="dot-audio"></span>
+            <span class="expand-chevron">&#9660;</span>
+          </div>
+          <p id="audio-status" class="control-status">—</p>
+          <label class="toggle" onclick="event.stopPropagation()">
+            <input type="checkbox" id="toggle-audio">
+            <span class="slider"></span>
+          </label>
+          <div class="diagnostic-panel" id="diag-audio">
+            <div class="diag-details">
+              <div class="diag-row"><span class="diag-label">STT servicio</span><span class="diag-value" id="d-audio-stt">—</span></div>
+              <div class="diag-row"><span class="diag-label">Binario STT</span><span class="diag-value" id="d-audio-binary">—</span></div>
+              <div class="diag-row"><span class="diag-label">Captura audio</span><span class="diag-value" id="d-audio-capture">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultimo texto</span><span class="diag-value" id="d-audio-transcript">—</span></div>
+              <div class="diag-row"><span class="diag-label">Latencia</span><span class="diag-value" id="d-audio-latency">—</span></div>
+              <div class="diag-row"><span class="diag-label">TTS motor</span><span class="diag-value" id="d-audio-tts">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultima escucha</span><span class="diag-value" id="d-audio-last">—</span></div>
+              <div class="diag-row diag-error-row hidden" id="d-audio-error-row"><span class="diag-label">Error</span><span class="diag-value diag-error-text" id="d-audio-error">—</span></div>
+            </div>
+            <button class="diag-test-btn" data-test="audio">&#9654; Probar Oido</button>
+            <p class="diag-test-result" id="test-result-audio"></p>
+          </div>
+        </div>
+
+        <!-- Always-On -->
+        <div class="control-card" data-sensor="always-on">
+          <div class="control-header clickable">
+            <span class="control-icon">&#128483;</span>
+            <span class="control-name">Always-On</span>
+            <span class="diag-dot" id="dot-always-on"></span>
+            <span class="expand-chevron">&#9660;</span>
+          </div>
+          <p id="always-on-status" class="control-status">—</p>
+          <label class="toggle" onclick="event.stopPropagation()">
+            <input type="checkbox" id="toggle-always-on">
+            <span class="slider"></span>
+          </label>
+          <div class="diagnostic-panel" id="diag-always-on">
+            <div class="diag-details">
+              <div class="diag-row"><span class="diag-label">Wake word</span><span class="diag-value" id="d-ao-word">—</span></div>
+              <div class="diag-row"><span class="diag-label">Modelo rustpotter</span><span class="diag-value" id="d-ao-model">—</span></div>
+              <div class="diag-row"><span class="diag-label">Fuente</span><span class="diag-value" id="d-ao-source">—</span></div>
+              <div class="diag-row"><span class="diag-label">Sesion activa</span><span class="diag-value" id="d-ao-active">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultimo hotword</span><span class="diag-value" id="d-ao-last-hotword">—</span></div>
+              <div class="diag-row"><span class="diag-label">Interrupciones</span><span class="diag-value" id="d-ao-bargein">—</span></div>
+            </div>
+            <p class="diag-hint">Di "<strong id="d-ao-hint-word">axi</strong>" para probar la deteccion</p>
+          </div>
+        </div>
+
+        <!-- Escritorio -->
+        <div class="control-card" data-sensor="screen">
+          <div class="control-header clickable">
+            <span class="control-icon">&#128421;</span>
+            <span class="control-name">Escritorio</span>
+            <span class="diag-dot" id="dot-screen"></span>
+            <span class="expand-chevron">&#9660;</span>
+          </div>
+          <p id="screen-status" class="control-status">—</p>
+          <label class="toggle" onclick="event.stopPropagation()">
+            <input type="checkbox" id="toggle-screen">
+            <span class="slider"></span>
+          </label>
+          <div class="diagnostic-panel" id="diag-screen">
+            <div class="diag-details">
+              <div class="diag-row"><span class="diag-label">Captura disponible</span><span class="diag-value" id="d-screen-available">—</span></div>
+              <div class="diag-row"><span class="diag-label">Tesseract OCR</span><span class="diag-value" id="d-screen-ocr">—</span></div>
+              <div class="diag-row"><span class="diag-label">Vision multimodal</span><span class="diag-value" id="d-screen-multimodal">—</span></div>
+              <div class="diag-row"><span class="diag-label">App activa</span><span class="diag-value" id="d-screen-app">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultimo resumen</span><span class="diag-value diag-value-long" id="d-screen-summary">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultimo OCR</span><span class="diag-value diag-value-long" id="d-screen-ocrtext">—</span></div>
+              <div class="diag-row"><span class="diag-label">Latencia vision</span><span class="diag-value" id="d-screen-latency">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultima captura</span><span class="diag-value" id="d-screen-last">—</span></div>
+              <div class="diag-row diag-error-row hidden" id="d-screen-error-row"><span class="diag-label">Error</span><span class="diag-value diag-error-text" id="d-screen-error">—</span></div>
+            </div>
+            <button class="diag-test-btn" data-test="screen">&#128247; Capturar Pantalla</button>
+            <p class="diag-test-result" id="test-result-screen"></p>
+          </div>
+        </div>
+
+        <!-- Camara -->
+        <div class="control-card" data-sensor="camera">
+          <div class="control-header clickable">
+            <span class="control-icon">&#128247;</span>
+            <span class="control-name">Camara</span>
+            <span class="diag-dot" id="dot-camera"></span>
+            <span class="expand-chevron">&#9660;</span>
+          </div>
+          <p id="camera-status" class="control-status">—</p>
+          <label class="toggle" onclick="event.stopPropagation()">
+            <input type="checkbox" id="toggle-camera">
+            <span class="slider"></span>
+          </label>
+          <div class="diagnostic-panel" id="diag-camera">
+            <div class="diag-details">
+              <div class="diag-row"><span class="diag-label">Dispositivo</span><span class="diag-value" id="d-cam-device">—</span></div>
+              <div class="diag-row"><span class="diag-label">Binario captura</span><span class="diag-value" id="d-cam-binary">—</span></div>
+              <div class="diag-row"><span class="diag-label">Disponible</span><span class="diag-value" id="d-cam-available">—</span></div>
+              <div class="diag-row"><span class="diag-label">Consentimiento</span><span class="diag-value" id="d-cam-consent">—</span></div>
+              <div class="diag-row"><span class="diag-label">Reunion activa</span><span class="diag-value" id="d-cam-meeting">—</span></div>
+              <div class="diag-row"><span class="diag-label">Camara ocupada</span><span class="diag-value" id="d-cam-busy">—</span></div>
+              <div class="diag-row"><span class="diag-label">Usuario</span><span class="diag-value" id="d-cam-userstate">—</span></div>
+              <div class="diag-row"><span class="diag-label">Personas</span><span class="diag-value" id="d-cam-people">—</span></div>
+              <div class="diag-row"><span class="diag-label">Escena</span><span class="diag-value diag-value-long" id="d-cam-scene">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultima deteccion</span><span class="diag-value" id="d-cam-last">—</span></div>
+              <div class="diag-row diag-alert-row hidden" id="d-cam-fatigue-row"><span class="diag-label">Alerta</span><span class="diag-value diag-warn-text">Fatiga detectada</span></div>
+              <div class="diag-row diag-alert-row hidden" id="d-cam-posture-row"><span class="diag-label">Alerta</span><span class="diag-value diag-warn-text">Postura incorrecta</span></div>
+            </div>
+            <button class="diag-test-btn" data-test="camera">&#128247; Capturar Camara</button>
+            <p class="diag-test-result" id="test-result-camera"></p>
+          </div>
+        </div>
+
+      </div>
+      <button id="kill-switch" class="kill-switch-btn">KILL SWITCH</button>
+    </section>
+
+    <!-- Status Cards -->
+    <section class="status-section">
+      <h2>Estado</h2>
+      <div class="status-grid">
+        <div class="status-card">
+          <h3>Ventana Activa</h3>
+          <p id="current-app" class="status-value">—</p>
+          <p id="current-window" class="status-detail">—</p>
+        </div>
+        <div class="status-card">
+          <h3>Reunion</h3>
+          <p id="meeting-status" class="status-value">Sin reunion</p>
+          <p id="meeting-app" class="status-detail"></p>
+        </div>
+        <div class="status-card">
+          <h3>Presencia</h3>
+          <p id="presence-status" class="status-value">—</p>
+          <p id="presence-detail" class="status-detail"></p>
+        </div>
+        <div class="status-card">
+          <h3>Ultimo Comando</h3>
+          <p id="last-transcript" class="status-value">—</p>
+          <p id="last-response" class="status-detail"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Activity Feed -->
+    <section class="feed-section">
+      <h2>Actividad <span id="feed-count" class="feed-count">0</span></h2>
+      <div id="activity-feed" class="activity-feed"></div>
+    </section>
+
+    <!-- Settings -->
+    <section class="settings-section">
+      <h2>Configuracion</h2>
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label for="wake-word-input">Wake Word</label>
+          <input type="text" id="wake-word-input" value="axi" placeholder="axi">
+          <button id="wake-word-save" class="btn-small">Guardar</button>
+        </div>
+        <div class="setting-item">
+          <label for="interval-slider">Intervalo captura (s)</label>
+          <input type="range" id="interval-slider" min="5" max="30" value="10">
+          <span id="interval-value">10s</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

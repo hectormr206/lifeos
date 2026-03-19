@@ -464,6 +464,17 @@ impl FollowAlongManager {
         Ok(explanation)
     }
 
+    /// Record a window change from the compositor.
+    ///
+    /// Unlike `record_event`, this always updates context (no consent gate)
+    /// because it's passive system-level awareness, not user-event recording.
+    pub async fn record_window_change(&self, app_id: &str, title: &str) {
+        let mut context = self.context_state.write().await;
+        context.current_application = Some(app_id.to_string());
+        context.current_window = Some(title.to_string());
+        context.last_event = Some(Utc::now());
+    }
+
     /// Get current context state
     pub async fn get_context(&self) -> ContextState {
         self.context_state.read().await.clone()

@@ -364,7 +364,10 @@ impl AgentRuntimeManager {
 
     pub async fn initialize(&self) -> Result<()> {
         self.load_state().await?;
-        self.migrate_runtime_defaults().await
+        self.migrate_runtime_defaults().await?;
+        self.migrate_disable_sensory_v1().await?;
+        self.migrate_reenable_sensory_v2().await?;
+        self.migrate_enable_all_senses_v3().await
     }
 
     pub async fn plan_intent(&self, description: &str) -> Result<IntentRecord> {
@@ -1941,8 +1944,8 @@ impl AgentRuntimeManager {
         {
             state.sensory_capture_runtime.enabled = true;
             state.sensory_capture_runtime.audio_enabled = true;
-            state.sensory_capture_runtime.screen_enabled = false;
-            state.sensory_capture_runtime.camera_enabled = false;
+            state.sensory_capture_runtime.screen_enabled = true;
+            state.sensory_capture_runtime.camera_enabled = true;
             state.sensory_capture_runtime.running = true;
             state.sensory_capture_runtime.capture_interval_seconds =
                 DEFAULT_SENSORY_CAPTURE_INTERVAL_SECONDS;
@@ -1953,8 +1956,8 @@ impl AgentRuntimeManager {
                 serde_json::json!({
                     "enabled": true,
                     "audio_enabled": true,
-                    "screen_enabled": false,
-                    "camera_enabled": false,
+                    "screen_enabled": true,
+                    "camera_enabled": true,
                     "capture_interval_seconds": DEFAULT_SENSORY_CAPTURE_INTERVAL_SECONDS,
                 }),
             );
@@ -1972,6 +1975,212 @@ impl AgentRuntimeManager {
             "always-on-sensory",
             serde_json::json!({
                 "actor": "system://migration/defaults",
+                "details": detail,
+            }),
+        );
+        drop(state);
+        self.save_state().await
+    }
+
+    /// One-time migration: disable sensory & always-on on existing systems
+    /// that were persisted with enabled=true before we changed defaults.
+    /// Idempotent — checks ledger for prior execution.
+    async fn migrate_disable_sensory_v1(&self) -> Result<()> {
+        const MIGRATION_TARGET: &str = "migrate-disable-sensory-v1";
+
+        let mut state = self.state.write().await;
+
+        let already_applied = state
+            .ledger
+            .iter()
+            .any(|e| e.action == "migration" && e.target == MIGRATION_TARGET);
+        if already_applied {
+            return Ok(());
+        }
+
+        let mut changed = false;
+        let mut detail = serde_json::Map::new();
+
+        if state.always_on_runtime.enabled
+            || state.always_on_runtime.vad_enabled
+            || state.always_on_runtime.hotword_enabled
+            || state.always_on_runtime.intent_classifier_enabled
+        {
+            detail.insert(
+                "always_on_before".to_string(),
+                serde_json::json!({
+                    "enabled": state.always_on_runtime.enabled,
+                    "vad_enabled": state.always_on_runtime.vad_enabled,
+                    "hotword_enabled": state.always_on_runtime.hotword_enabled,
+                    "intent_classifier_enabled": state.always_on_runtime.intent_classifier_enabled,
+                }),
+            );
+            state.always_on_runtime.enabled = false;
+            state.always_on_runtime.vad_enabled = false;
+            state.always_on_runtime.hotword_enabled = false;
+            state.always_on_runtime.intent_classifier_enabled = false;
+            state.always_on_runtime.updated_at = Some(Utc::now());
+            changed = true;
+        }
+
+        if state.sensory_capture_runtime.enabled
+            || state.sensory_capture_runtime.audio_enabled
+            || state.sensory_capture_runtime.running
+        {
+            detail.insert(
+                "sensory_before".to_string(),
+                serde_json::json!({
+                    "enabled": state.sensory_capture_runtime.enabled,
+                    "audio_enabled": state.sensory_capture_runtime.audio_enabled,
+                    "running": state.sensory_capture_runtime.running,
+                }),
+            );
+            state.sensory_capture_runtime.enabled = false;
+            state.sensory_capture_runtime.audio_enabled = false;
+            state.sensory_capture_runtime.running = false;
+            state.sensory_capture_runtime.updated_at = Some(Utc::now());
+            changed = true;
+        }
+
+        if !changed {
+            return Ok(());
+        }
+
+        append_ledger(
+            &mut state,
+            "runtime",
+            "migration",
+            MIGRATION_TARGET,
+            serde_json::json!({
+                "actor": "system://migration/disable-sensory-v1",
+                "reason": "sensory/always-on disabled by default to prevent Bluetooth audio conflicts",
+                "details": detail,
+            }),
+        );
+        drop(state);
+        self.save_state().await
+    }
+
+    /// Re-enable sensory after v1 disabled it. The BT audio conflict is now
+    /// resolved via smart source selection (internal mic for always-on capture).
+    async fn migrate_reenable_sensory_v2(&self) -> Result<()> {
+        const MIGRATION_TARGET: &str = "migrate-reenable-sensory-v2";
+
+        let mut state = self.state.write().await;
+
+        let already_applied = state
+            .ledger
+            .iter()
+            .any(|e| e.action == "migration" && e.target == MIGRATION_TARGET);
+        if already_applied {
+            return Ok(());
+        }
+
+        let v1_was_applied = state
+            .ledger
+            .iter()
+            .any(|e| e.action == "migration" && e.target == "migrate-disable-sensory-v1");
+
+        let mut changed = false;
+        let mut detail = serde_json::Map::new();
+
+        if v1_was_applied && !state.always_on_runtime.enabled {
+            detail.insert(
+                "always_on_before".to_string(),
+                serde_json::json!({"enabled": false}),
+            );
+            state.always_on_runtime.enabled = true;
+            state.always_on_runtime.vad_enabled = true;
+            state.always_on_runtime.hotword_enabled = true;
+            state.always_on_runtime.intent_classifier_enabled = true;
+            state.always_on_runtime.updated_at = Some(Utc::now());
+            changed = true;
+        }
+
+        if v1_was_applied
+            && !state.sensory_capture_runtime.enabled
+            && !state.sensory_capture_runtime.audio_enabled
+        {
+            detail.insert(
+                "sensory_before".to_string(),
+                serde_json::json!({"enabled": false, "audio_enabled": false}),
+            );
+            state.sensory_capture_runtime.enabled = true;
+            state.sensory_capture_runtime.audio_enabled = true;
+            state.sensory_capture_runtime.screen_enabled = true;
+            state.sensory_capture_runtime.camera_enabled = true;
+            state.sensory_capture_runtime.running = true;
+            state.sensory_capture_runtime.updated_at = Some(Utc::now());
+            changed = true;
+        }
+
+        if !changed {
+            detail.insert("status".to_string(), serde_json::json!("no_change_needed"));
+        }
+
+        append_ledger(
+            &mut state,
+            "runtime",
+            "migration",
+            MIGRATION_TARGET,
+            serde_json::json!({
+                "actor": "system://migration/reenable-sensory-v2",
+                "reason": "BT audio conflict resolved via smart source selection; re-enabling sensory pipeline",
+                "details": detail,
+            }),
+        );
+        drop(state);
+        self.save_state().await
+    }
+
+    /// Enable all four senses (audio, screen, camera) for dashboard control panel.
+    /// v2 only re-enabled audio; this adds screen + camera.
+    async fn migrate_enable_all_senses_v3(&self) -> Result<()> {
+        const MIGRATION_TARGET: &str = "migrate-enable-all-senses-v3";
+
+        let mut state = self.state.write().await;
+
+        let already_applied = state
+            .ledger
+            .iter()
+            .any(|e| e.action == "migration" && e.target == MIGRATION_TARGET);
+        if already_applied {
+            return Ok(());
+        }
+
+        let mut changed = false;
+        let mut detail = serde_json::Map::new();
+
+        if state.sensory_capture_runtime.enabled
+            && (!state.sensory_capture_runtime.screen_enabled
+                || !state.sensory_capture_runtime.camera_enabled)
+        {
+            detail.insert(
+                "sensory_before".to_string(),
+                serde_json::json!({
+                    "screen_enabled": state.sensory_capture_runtime.screen_enabled,
+                    "camera_enabled": state.sensory_capture_runtime.camera_enabled,
+                }),
+            );
+            state.sensory_capture_runtime.screen_enabled = true;
+            state.sensory_capture_runtime.camera_enabled = true;
+            state.sensory_capture_runtime.running = true;
+            state.sensory_capture_runtime.updated_at = Some(Utc::now());
+            changed = true;
+        }
+
+        if !changed {
+            detail.insert("status".to_string(), serde_json::json!("no_change_needed"));
+        }
+
+        append_ledger(
+            &mut state,
+            "runtime",
+            "migration",
+            MIGRATION_TARGET,
+            serde_json::json!({
+                "actor": "system://migration/enable-all-senses-v3",
+                "reason": "enable screen + camera senses for dashboard control panel",
                 "details": detail,
             }),
         );
@@ -2690,8 +2899,8 @@ mod tests {
         let sensory = mgr.sensory_capture_runtime().await;
         assert!(sensory.enabled);
         assert!(sensory.audio_enabled);
-        assert!(!sensory.screen_enabled);
-        assert!(!sensory.camera_enabled);
+        assert!(sensory.screen_enabled);
+        assert!(sensory.camera_enabled);
         assert!(sensory.running);
         assert_eq!(sensory.capture_interval_seconds, 10);
 
@@ -2733,6 +2942,137 @@ mod tests {
         assert_eq!(always_on.wake_word, "hey life");
         let sensory = mgr.sensory_capture_runtime().await;
         assert!(!sensory.enabled);
+        assert!(!sensory.audio_enabled);
+        assert!(!sensory.running);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn migrate_v1_then_v2_reenables_sensory() {
+        let dir = temp_dir("agent-runtime-migrate-v1v2");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let now = Utc::now();
+        let mut persisted = AgentRuntimeState::default();
+        // Simulate an existing system with everything enabled (old defaults)
+        persisted.always_on_runtime.enabled = true;
+        persisted.always_on_runtime.vad_enabled = true;
+        persisted.always_on_runtime.hotword_enabled = true;
+        persisted.always_on_runtime.intent_classifier_enabled = true;
+        persisted.always_on_runtime.wake_word = "axi".to_string();
+        persisted.always_on_runtime.updated_at = Some(now);
+        persisted.sensory_capture_runtime.enabled = true;
+        persisted.sensory_capture_runtime.audio_enabled = true;
+        persisted.sensory_capture_runtime.screen_enabled = false;
+        persisted.sensory_capture_runtime.camera_enabled = false;
+        persisted.sensory_capture_runtime.running = true;
+        persisted.sensory_capture_runtime.updated_at = Some(now);
+
+        let state_file = mgr.state_file();
+        std::fs::create_dir_all(state_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &state_file,
+            serde_json::to_string_pretty(&persisted).unwrap(),
+        )
+        .unwrap();
+
+        // initialize() runs: defaults → v1 (disables) → v2 (re-enables)
+        mgr.initialize().await.unwrap();
+
+        // After full migration chain, everything should be re-enabled
+        let always_on = mgr.always_on_runtime().await;
+        assert!(
+            always_on.enabled,
+            "v2 should re-enable always_on after v1 disabled it"
+        );
+        assert!(always_on.vad_enabled);
+        assert!(always_on.hotword_enabled);
+        assert!(always_on.intent_classifier_enabled);
+        assert_eq!(always_on.wake_word, "axi");
+
+        let sensory = mgr.sensory_capture_runtime().await;
+        assert!(
+            sensory.enabled,
+            "v2 should re-enable sensory after v1 disabled it"
+        );
+        assert!(sensory.audio_enabled);
+        assert!(sensory.running);
+
+        // Both migrations should be in the ledger
+        let state = mgr.state.read().await;
+        assert!(state
+            .ledger
+            .iter()
+            .any(|e| e.target == "migrate-disable-sensory-v1"));
+        assert!(state
+            .ledger
+            .iter()
+            .any(|e| e.target == "migrate-reenable-sensory-v2"));
+        drop(state);
+
+        // Re-initialize should be idempotent
+        let mgr2 = AgentRuntimeManager::new(dir.clone()).unwrap();
+        mgr2.initialize().await.unwrap();
+        let state2 = mgr2.state.read().await;
+        let v1_count = state2
+            .ledger
+            .iter()
+            .filter(|e| e.target == "migrate-disable-sensory-v1")
+            .count();
+        let v2_count = state2
+            .ledger
+            .iter()
+            .filter(|e| e.target == "migrate-reenable-sensory-v2")
+            .count();
+        assert_eq!(v1_count, 1, "v1 migration must be idempotent");
+        assert_eq!(v2_count, 1, "v2 migration must be idempotent");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn migrate_v2_respects_user_disabled() {
+        let dir = temp_dir("agent-runtime-migrate-v2-noop");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+
+        let now = Utc::now();
+        let mut persisted = AgentRuntimeState::default();
+        // User explicitly disabled sensory (no v1 migration in ledger)
+        persisted.always_on_runtime.enabled = false;
+        persisted.always_on_runtime.vad_enabled = false;
+        persisted.always_on_runtime.hotword_enabled = false;
+        persisted.always_on_runtime.intent_classifier_enabled = false;
+        persisted.always_on_runtime.wake_word = "axi".to_string();
+        persisted.always_on_runtime.updated_at = Some(now);
+        persisted.sensory_capture_runtime.enabled = false;
+        persisted.sensory_capture_runtime.audio_enabled = false;
+        persisted.sensory_capture_runtime.screen_enabled = false;
+        persisted.sensory_capture_runtime.camera_enabled = false;
+        persisted.sensory_capture_runtime.running = false;
+        persisted.sensory_capture_runtime.updated_at = Some(now);
+
+        let state_file = mgr.state_file();
+        std::fs::create_dir_all(state_file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &state_file,
+            serde_json::to_string_pretty(&persisted).unwrap(),
+        )
+        .unwrap();
+
+        mgr.initialize().await.unwrap();
+
+        // v2 should NOT re-enable because v1 was never applied (user chose to disable)
+        let always_on = mgr.always_on_runtime().await;
+        assert!(
+            !always_on.enabled,
+            "v2 must not override user's explicit disable"
+        );
+        let sensory = mgr.sensory_capture_runtime().await;
+        assert!(
+            !sensory.enabled,
+            "v2 must not override user's explicit disable"
+        );
         assert!(!sensory.audio_enabled);
         assert!(!sensory.running);
 

@@ -22,6 +22,8 @@ chrono = { version = "0.4", features = ["clock", "serde"] }
 notify-rust = { version = "=4.12.0", default-features = false, features = ["d"] }
 reqwest = { version = "0.12", features = ["json"] }
 axum = { version = "0.7", features = ["tokio"], optional = true }
+tower-http = { version = "0.6", features = ["fs", "cors"], optional = true }
+async-stream = "0.3"
 sysinfo = "0.30"
 zbus = { version = "4", default-features = false, features = ["tokio"], optional = true }
 async-trait = "0.1"
@@ -43,8 +45,12 @@ rand = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sqlite-vec = "0.1"
 zerocopy = "0.8"
+# Wake word detection (half pinned to avoid rand 0.8/0.9 conflict with candle-core 0.2)
+half = "=2.4.1"
+rustpotter = { version = "3", optional = true, default-features = false }
 [features]
 default = ["dbus", "http-api"]
 dbus = ["zbus"]
-http-api = ["axum"]
+http-api = ["axum", "tower-http"]
 ui-overlay = ["gtk4", "glib"]
+wake-word = ["rustpotter"]

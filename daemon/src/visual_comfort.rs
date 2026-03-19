@@ -627,7 +627,14 @@ impl VisualComfortManager {
     }
 
     fn command_for_context(context: &DisplayContext, program: &str, args: &[String]) -> Command {
-        if let Some(user) = &context.run_as_user {
+        let current_user = std::env::var("USER").unwrap_or_default();
+        let needs_runuser = context
+            .run_as_user
+            .as_ref()
+            .map(|u| !u.is_empty() && *u != current_user)
+            .unwrap_or(false);
+        if needs_runuser {
+            let user = context.run_as_user.as_ref().unwrap();
             let mut cmd = Command::new("runuser");
             cmd.arg("-u").arg(user).arg("--").arg("env");
 

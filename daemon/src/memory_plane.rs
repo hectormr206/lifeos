@@ -55,6 +55,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(
 CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory_entries(kind);
 CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory_entries(scope);
 CREATE INDEX IF NOT EXISTS idx_memory_created ON memory_entries(created_at);
+CREATE INDEX IF NOT EXISTS idx_memory_kind_created ON memory_entries(kind, created_at);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -656,6 +657,61 @@ impl MemoryPlaneManager {
         .await??;
 
         Ok(deleted)
+    }
+
+    /// Clean up vision memory entries with tiered retention.
+    ///
+    /// - Routine entries (importance < 70): deleted after `routine_max_hours`.
+    /// - Key entries (importance >= 70): deleted after `key_max_days`.
+    pub async fn cleanup_vision_entries(
+        &self,
+        routine_max_hours: u64,
+        key_max_days: u64,
+    ) -> Result<u64> {
+        let db_path = self.db_path.clone();
+        let now = Utc::now();
+        let routine_cutoff = (now - chrono::Duration::hours(routine_max_hours as i64)).to_rfc3339();
+        let key_cutoff = (now - chrono::Duration::days(key_max_days as i64)).to_rfc3339();
+
+        let removed = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let tx = db.unchecked_transaction()?;
+
+            // Collect entry_ids to delete from both tables.
+            let mut stmt = tx.prepare(
+                "SELECT entry_id FROM memory_entries
+                 WHERE kind IN ('vision-snapshot', 'vision-context', 'screen-ocr')
+                   AND (
+                     (importance < 70 AND created_at < ?1)
+                     OR (importance >= 70 AND created_at < ?2)
+                   )",
+            )?;
+            let ids: Vec<String> = stmt
+                .query_map(params![routine_cutoff, key_cutoff], |row| {
+                    row.get::<_, String>(0)
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            drop(stmt);
+
+            let count = ids.len() as u64;
+            for entry_id in &ids {
+                tx.execute(
+                    "DELETE FROM memory_entries WHERE entry_id = ?",
+                    params![entry_id],
+                )?;
+                tx.execute(
+                    "DELETE FROM memory_embeddings WHERE entry_id = ?",
+                    params![entry_id],
+                )?;
+            }
+
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(count)
+        })
+        .await??;
+
+        Ok(removed)
     }
 
     pub async fn stats(&self) -> MemoryStats {

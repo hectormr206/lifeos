@@ -70,7 +70,31 @@ impl HealthMonitor {
         let mut issues = Vec::new();
         let mut check_results = Vec::new();
 
+        // Skip bootc-specific checks when not running in a bootc environment.
+        let is_bootc = std::path::Path::new("/run/bootc").exists()
+            || std::process::Command::new("bootc")
+                .args(["status", "--json"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+
+        if !is_bootc {
+            check_results.push(CheckResult {
+                name: "bootc".to_string(),
+                passed: true,
+                message: "Skipped (not a bootc system)".to_string(),
+            });
+            check_results.push(CheckResult {
+                name: "filesystem-integrity".to_string(),
+                passed: true,
+                message: "Skipped (not a bootc system)".to_string(),
+            });
+        }
+
         // Bootc check
+        if is_bootc {
         match check_bootc().await {
             Ok((passed, msg)) => {
                 if !passed {
@@ -123,6 +147,7 @@ impl HealthMonitor {
                 });
             }
         }
+        } // end if is_bootc
 
         // Platform baseline check (Secure Boot + LUKS2)
         match check_security_baseline().await {

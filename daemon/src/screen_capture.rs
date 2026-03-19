@@ -846,7 +846,17 @@ impl ScreenCapture {
         args: &[String],
     ) -> Command {
         if let Some(context) = context {
-            if let Some(user) = &context.run_as_user {
+            // Only use runuser when the daemon runs as root and needs to switch
+            // to the graphical-session user.  When running as the same user
+            // (dev mode) we can call the tool directly with env vars.
+            let current_user = std::env::var("USER").unwrap_or_default();
+            let needs_runuser = context
+                .run_as_user
+                .as_ref()
+                .map(|u| !u.is_empty() && *u != current_user)
+                .unwrap_or(false);
+            if needs_runuser {
+                let user = context.run_as_user.as_ref().unwrap();
                 let mut cmd = Command::new("runuser");
                 cmd.arg("-u").arg(user).arg("--").arg("env");
                 if let Some(runtime) = &context.xdg_runtime_dir {

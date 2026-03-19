@@ -32,8 +32,22 @@ const MAX_RELEVANT_LINES: usize = 8;
 const MAX_MEMORY_BYTES: usize = 6 * 1024;
 const MIN_AUDIO_SIGNAL_BYTES: usize = 4096;
 const PCM_RMS_THRESHOLD: f64 = 450.0;
-const SCREENSHOT_RETENTION_COUNT: usize = 120;
+/// How long to wait for the user to start speaking after wake word (seconds).
+const UTTERANCE_PRE_SPEECH_TIMEOUT_SECS: f64 = 4.0;
+/// How long of silence after speech to consider the utterance complete (seconds).
+/// Set to 2.5 s to tolerate natural thinking pauses (~1-2 s) without cutting off.
+const UTTERANCE_SILENCE_AFTER_SPEECH_SECS: f64 = 2.5;
+/// Absolute maximum recording time to prevent infinite capture (seconds).
+const UTTERANCE_MAX_DURATION_SECS: f64 = 30.0;
+/// Size of each analysis window for streaming VAD (seconds).
+const UTTERANCE_WINDOW_SECS: f64 = 0.25;
+/// Sample rate for all audio capture.
+const AUDIO_SAMPLE_RATE: u32 = 16000;
+const SCREENSHOT_RETENTION_COUNT: usize = 50;
 const SCREENSHOT_RETENTION_DAYS: u64 = 2;
+const IDLE_SCREEN_INTERVAL_SECONDS: u64 = 45;
+const VISION_MEMORY_ROUTINE_HOURS: u64 = 4;
+const VISION_MEMORY_KEY_DAYS: u64 = 7;
 const AUDIO_RETENTION_COUNT: usize = 120;
 const TTS_RETENTION_COUNT: usize = 120;
 const OCR_SIMILARITY_SKIP_THRESHOLD: f32 = 0.92;
@@ -64,6 +78,8 @@ pub struct SensoryCapabilities {
     pub camera_device: Option<String>,
     pub camera_capture_binary: Option<String>,
     pub llama_server_running: bool,
+    pub always_on_source: Option<String>,
+    pub rustpotter_model_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +184,9 @@ pub struct VisionRuntime {
     pub last_query_latency_ms: Option<u64>,
     pub last_multimodal_success: bool,
     pub last_updated_at: Option<DateTime<Utc>>,
+    pub current_app: Option<String>,
+    pub current_window: Option<String>,
+    pub last_window_change_at: Option<DateTime<Utc>>,
 }
 
 impl Default for VisionRuntime {
@@ -182,6 +201,9 @@ impl Default for VisionRuntime {
             last_query_latency_ms: None,
             last_multimodal_success: false,
             last_updated_at: None,
+            current_app: None,
+            current_window: None,
+            last_window_change_at: None,
         }
     }
 }
@@ -200,6 +222,14 @@ pub struct PresenceRuntime {
     pub away_seconds: u64,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub last_checked_at: Option<DateTime<Utc>>,
+    /// AI-generated description of what the camera sees (when multimodal available).
+    pub scene_description: Option<String>,
+    /// Detected user state: focused, distracted, away, talking, etc.
+    pub user_state: Option<String>,
+    /// Number of people detected in frame (0 = nobody, 1 = user alone, 2+ = meeting).
+    pub people_count: Option<u8>,
+    /// Last frame path for multimodal analysis.
+    pub last_frame_path: Option<String>,
 }
 
 impl Default for PresenceRuntime {
@@ -216,6 +246,10 @@ impl Default for PresenceRuntime {
             away_seconds: 0,
             last_seen_at: None,
             last_checked_at: None,
+            scene_description: None,
+            user_state: None,
+            people_count: None,
+            last_frame_path: None,
         }
     }
 }
@@ -233,6 +267,7 @@ pub struct SensoryPipelineState {
     pub voice: VoiceSessionRuntime,
     pub vision: VisionRuntime,
     pub presence: PresenceRuntime,
+    pub meeting: MeetingState,
     pub last_error: Option<String>,
     pub last_updated_at: Option<DateTime<Utc>>,
 }
@@ -250,10 +285,28 @@ impl Default for SensoryPipelineState {
             voice: VoiceSessionRuntime::default(),
             vision: VisionRuntime::default(),
             presence: PresenceRuntime::default(),
+            meeting: MeetingState::default(),
             last_error: None,
             last_updated_at: None,
         }
     }
+}
+
+/// Tracks whether the user is in a video/voice call.
+///
+/// When active, Axi pauses wake word detection, skips camera capture,
+/// and disables audio ducking to avoid interfering with the call.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct MeetingState {
+    /// Whether a meeting/call is currently detected.
+    pub active: bool,
+    /// The app producing audio (e.g. "chrome", "firefox", "zoom", "discord").
+    pub conferencing_app: Option<String>,
+    /// Whether the camera device is busy (another process has it open).
+    pub camera_busy: bool,
+    /// Last time meeting state was checked.
+    pub last_checked_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -491,14 +544,78 @@ impl SensoryPipelineManager {
         Ok(snapshot)
     }
 
-    pub async fn is_screen_awareness_due(&self, interval_seconds: u64) -> bool {
+    pub async fn is_screen_awareness_due(&self, base_interval_seconds: u64) -> bool {
         let state = self.state.read().await;
-        let interval_seconds = interval_seconds.clamp(5, 30);
+        let now = Utc::now();
+
+        // Window changed since last capture — capture immediately.
+        if let Some(change_at) = state.vision.last_window_change_at {
+            let last_capture = state.vision.last_updated_at.unwrap_or(change_at);
+            if change_at > last_capture {
+                return true;
+            }
+        }
+
+        // Adaptive interval: if last OCR was identical to previous, stretch to idle.
+        let interval = if state.vision.last_window_change_at.is_none()
+            && state.vision.last_ocr_text.is_some()
+        {
+            IDLE_SCREEN_INTERVAL_SECONDS
+        } else {
+            base_interval_seconds.clamp(5, 30)
+        };
+
         state
             .vision
             .last_updated_at
-            .map(|last| (Utc::now() - last).num_seconds().max(0) as u64 >= interval_seconds)
+            .map(|last| (now - last).num_seconds().max(0) as u64 >= interval)
             .unwrap_or(true)
+    }
+
+    /// Poll the compositor for the active window and update vision state.
+    ///
+    /// Returns `Some((app_id, title))` if the window changed since last poll.
+    pub async fn update_active_window(&self) -> Option<(String, String)> {
+        let (app, title) = match poll_active_window().await {
+            Ok(result) => result,
+            Err(_) => return None,
+        };
+
+        let mut state = self.state.write().await;
+        let changed = state.vision.current_app.as_deref() != Some(&app)
+            || state.vision.current_window.as_deref() != Some(&title);
+
+        state.vision.current_app = Some(app.clone());
+        state.vision.current_window = Some(title.clone());
+
+        if changed {
+            state.vision.last_window_change_at = Some(Utc::now());
+            Some((app, title))
+        } else {
+            None
+        }
+    }
+
+    /// Refresh meeting/call detection state.
+    ///
+    /// Returns the updated `MeetingState`. When `active == true`, the caller
+    /// should pause wake word detection and skip camera capture + audio ducking.
+    pub async fn refresh_meeting_state(&self) -> MeetingState {
+        let camera_device = {
+            let state = self.state.read().await;
+            state.capabilities.camera_device.clone()
+        };
+        let meeting = refresh_meeting_state(camera_device.as_deref()).await;
+        {
+            let mut state = self.state.write().await;
+            state.meeting = meeting.clone();
+        }
+        meeting
+    }
+
+    /// Whether a meeting/call is currently active.
+    pub async fn is_meeting_active(&self) -> bool {
+        self.state.read().await.meeting.active
     }
 
     pub async fn is_presence_refresh_due(&self, interval_seconds: u64) -> bool {
@@ -664,11 +781,20 @@ impl SensoryPipelineManager {
             }
         }
 
-        let audio_path =
-            match capture_audio_snippet(&self.data_dir, ALWAYS_ON_CAPTURE_SECONDS).await {
-                Ok(path) => path,
-                Err(_) => return Ok(None),
-            };
+        let always_on_source = {
+            let st = self.state.read().await;
+            st.capabilities.always_on_source.clone()
+        };
+        let audio_path = match capture_audio_snippet(
+            &self.data_dir,
+            ALWAYS_ON_CAPTURE_SECONDS,
+            always_on_source.as_deref(),
+        )
+        .await
+        {
+            Ok(path) => path,
+            Err(_) => return Ok(None),
+        };
         {
             let mut state = self.state.write().await;
             state.voice.last_listen_at = Some(Utc::now());
@@ -739,6 +865,126 @@ impl SensoryPipelineManager {
         let prompt = strip_wake_word(&transcript, &hotword)
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "Estoy escuchando. Dime como puedo ayudarte.".to_string());
+        let include_screen = cycle.screen_enabled && should_include_screen_for_prompt(&prompt);
+        let result = self
+            .run_voice_loop(
+                cycle.ai_manager,
+                cycle.overlay,
+                cycle.screen_capture,
+                cycle.memory_plane,
+                cycle.telemetry,
+                VoiceLoopRequest {
+                    audio_file: None,
+                    prompt: Some(prompt),
+                    include_screen,
+                    screen_source: None,
+                    language: Some("es".to_string()),
+                    voice_model: None,
+                    playback: true,
+                },
+            )
+            .await?;
+
+        Ok(Some(result))
+    }
+
+    /// Handle the post-detection flow when rustpotter already confirmed the
+    /// wake word. Captures command audio, transcribes via Whisper, and runs
+    /// the voice loop — without re-checking for the wake word.
+    pub async fn run_post_wakeword_cycle(
+        &self,
+        cycle: AlwaysOnCycle<'_>,
+    ) -> Result<Option<VoiceLoopResult>> {
+        let state = self.status().await;
+        if state.kill_switch_active || !state.leds.mic_active || state.voice.active {
+            return Ok(None);
+        }
+
+        {
+            let mut st = self.state.write().await;
+            st.voice.last_hotword_at = Some(Utc::now());
+            st.voice.wake_word = normalized_wake_word(cycle.wake_word);
+            st.last_updated_at = Some(Utc::now());
+        }
+        self.save_state().await?;
+
+        cycle
+            .telemetry
+            .record_event(
+                MetricCategory::AiRuntime,
+                "wake_word_rustpotter_detected",
+                serde_json::json!({ "wake_word": cycle.wake_word }),
+                None,
+            )
+            .await
+            .ok();
+
+        // Capture command audio — listen until the user stops speaking.
+        let always_on_source = {
+            let st = self.state.read().await;
+            st.capabilities.always_on_source.clone()
+        };
+        let audio_path =
+            match capture_until_silence(&self.data_dir, always_on_source.as_deref()).await {
+                Ok(path) => path,
+                Err(_) => return Ok(None),
+            };
+
+        {
+            let mut st = self.state.write().await;
+            st.voice.last_listen_at = Some(Utc::now());
+            st.voice.last_audio_path = Some(audio_path.clone());
+            st.last_updated_at = Some(Utc::now());
+        }
+        self.save_state().await?;
+
+        // Check if the captured audio actually contains voice
+        if !audio_has_voice_activity(Path::new(&audio_path)).await? {
+            // User said "Axi" but didn't follow up — respond with a prompt
+            let result = self
+                .run_voice_loop(
+                    cycle.ai_manager,
+                    cycle.overlay,
+                    cycle.screen_capture,
+                    cycle.memory_plane,
+                    cycle.telemetry,
+                    VoiceLoopRequest {
+                        audio_file: None,
+                        prompt: Some("Estoy escuchando. Dime como puedo ayudarte.".to_string()),
+                        include_screen: false,
+                        screen_source: None,
+                        language: Some("es".to_string()),
+                        voice_model: None,
+                        playback: true,
+                    },
+                )
+                .await?;
+            return Ok(Some(result));
+        }
+
+        // Transcribe the command
+        let (transcript, _binary) = match transcribe_audio(&audio_path, None).await {
+            Ok(result) => result,
+            Err(_) => return Ok(None),
+        };
+        let transcript = normalize_whitespace(&transcript);
+        if transcript.is_empty() {
+            return Ok(None);
+        }
+
+        {
+            let mut st = self.state.write().await;
+            st.voice.last_transcript = Some(transcript.clone());
+            st.last_updated_at = Some(Utc::now());
+        }
+        self.save_state().await?;
+
+        // Strip any residual wake word from the transcript
+        let hotword = normalized_wake_word(cycle.wake_word);
+        let prompt = strip_wake_word(&transcript, &hotword)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(transcript);
+
         let include_screen = cycle.screen_enabled && should_include_screen_for_prompt(&prompt);
         let result = self
             .run_voice_loop(
@@ -881,41 +1127,61 @@ impl SensoryPipelineManager {
             overlay
                 .set_axi_state(AxiState::Speaking, Some("tts"))
                 .await?;
-            match synthesize_tts(
-                &self.data_dir,
-                &response_text,
-                request.language.as_deref(),
-                request.voice_model.as_deref(),
-            )
-            .await
+            // Progressive TTS: synthesize + play sentence by sentence, with audio ducking.
+            match self
+                .synthesize_and_play_progressive(
+                    overlay,
+                    &session_id,
+                    &response_text,
+                    request.language.as_deref(),
+                    request.voice_model.as_deref(),
+                )
+                .await
             {
-                Ok((path, engine)) => {
-                    tts_engine = Some(engine);
-                    audio_path = Some(path.clone());
-                    let playback = self
-                        .spawn_playback(overlay.clone(), session_id.clone(), &path)
-                        .await?;
-                    playback_backend = playback.0;
-                    playback_started = playback.1;
+                Ok((path, engine, backend, played)) => {
+                    audio_path = path;
+                    tts_engine = engine;
+                    playback_backend = backend;
+                    playback_started = played;
                 }
-                Err(_) => degraded.push("tts_unavailable".to_string()),
+                Err(e) => {
+                    log::warn!("Progressive TTS failed, trying single-shot: {}", e);
+                    // Fallback to single-shot TTS if progressive fails.
+                    match synthesize_tts(
+                        &self.data_dir,
+                        &response_text,
+                        request.language.as_deref(),
+                        request.voice_model.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok((path, engine)) => {
+                            duck_system_audio(true).await;
+                            tts_engine = Some(engine);
+                            audio_path = Some(path.clone());
+                            let playback = self
+                                .spawn_playback(overlay.clone(), session_id.clone(), &path)
+                                .await?;
+                            playback_backend = playback.0;
+                            playback_started = playback.1;
+                        }
+                        Err(_) => degraded.push("tts_unavailable".to_string()),
+                    }
+                }
             }
         }
 
         let latency_ms = session_started.elapsed().as_millis() as u64;
         {
             let mut state = self.state.write().await;
-            state.axi_state = if playback_started {
-                AxiState::Speaking
-            } else {
-                AxiState::Idle
-            };
+            // Progressive TTS completes synchronously, so we are always Idle here.
+            state.axi_state = AxiState::Idle;
             state.heavy_slot = if screen_context.is_some() {
                 "vision".to_string()
             } else {
                 "llm".to_string()
             };
-            state.voice.active = playback_started;
+            state.voice.active = false;
             state.voice.session_id = Some(session_id.clone());
             state.voice.last_transcript = Some(transcript.clone());
             state.voice.last_response = Some(response_text.clone());
@@ -960,9 +1226,7 @@ impl SensoryPipelineManager {
             .await
             .ok();
 
-        if !playback_started {
-            overlay.set_axi_state(AxiState::Idle, Some("ready")).await?;
-        }
+        overlay.set_axi_state(AxiState::Idle, Some("ready")).await?;
         overlay.clear_processing_feedback().await?;
 
         Ok(VoiceLoopResult {
@@ -1128,15 +1392,47 @@ impl SensoryPipelineManager {
             return Ok(None);
         }
 
-        let context = self
-            .prepare_screen_context(
+        // Determine if a window change triggered this capture.
+        let window_changed = state
+            .vision
+            .last_window_change_at
+            .map(|change_at| {
+                state
+                    .vision
+                    .last_updated_at
+                    .map(|last| change_at > last)
+                    .unwrap_or(true)
+            })
+            .unwrap_or(false);
+
+        // Phase 5: skip OCR if window unchanged and recent OCR exists (<30s).
+        let skip_ocr = !window_changed
+            && state.vision.last_ocr_text.is_some()
+            && state
+                .vision
+                .last_updated_at
+                .map(|t| (Utc::now() - t).num_seconds() < 30)
+                .unwrap_or(false);
+
+        let context = if skip_ocr {
+            // Capture screenshot but reuse previous OCR.
+            let shot = screen_capture.capture().await?;
+            ScreenContextResult {
+                screen_path: shot.path.to_string_lossy().to_string(),
+                ocr_text: state.vision.last_ocr_text.clone().unwrap_or_default(),
+                relevant_text: state.vision.last_relevant_text.clone(),
+                multimodal_used: state.vision.last_multimodal_success,
+            }
+        } else {
+            self.prepare_screen_context(
                 ai_manager,
                 screen_capture,
                 memory_plane,
                 None,
                 "Resume brevemente la pantalla actual para memoria operativa.",
             )
-            .await?;
+            .await?
+        };
 
         let previous_ocr = state.vision.last_ocr_text.unwrap_or_default();
         if !has_meaningful_screen_change(
@@ -1151,55 +1447,80 @@ impl SensoryPipelineManager {
             state.vision.last_relevant_text = context.relevant_text;
             state.vision.last_multimodal_success = context.multimodal_used;
             state.vision.last_updated_at = Some(Utc::now());
+            state.vision.last_window_change_at = None;
             let snapshot = state.vision.clone();
             drop(state);
             self.save_state().await?;
             return Ok(Some(snapshot));
         }
 
+        // Phase 3: compute importance and build richer context.
+        let importance =
+            compute_vision_importance(&context.ocr_text, &context.relevant_text, window_changed);
+
         overlay
             .set_axi_state(AxiState::Watching, Some("awareness"))
             .await?;
-        let summary = ai_manager
-            .chat(
-                None,
-                vec![
-                    (
-                        "system".to_string(),
-                        "Summarize the current screen for short-term assistant memory in one compact sentence."
-                            .to_string(),
-                    ),
-                    (
-                        "user".to_string(),
-                        format!(
-                            "OCR:\n{}\n\nRelevant lines:\n{}",
-                            context.ocr_text,
-                            context.relevant_text.join("\n")
-                        ),
-                    ),
-                ],
-            )
-            .await
-            .map(|result| result.response)
-            .unwrap_or_else(|_| context.relevant_text.join(" | "));
 
-        let tags = vec![
+        // Only call LLM for high-importance snapshots (saves GPU).
+        let summary = if importance >= 65 {
+            ai_manager
+                .chat(
+                    None,
+                    vec![
+                        (
+                            "system".to_string(),
+                            "Resume la pantalla actual para la memoria del asistente en una o dos oraciones concisas."
+                                .to_string(),
+                        ),
+                        (
+                            "user".to_string(),
+                            format!(
+                                "App: {}\nVentana: {}\nOCR:\n{}\n\nLineas relevantes:\n{}",
+                                state.vision.current_app.as_deref().unwrap_or("unknown"),
+                                state.vision.current_window.as_deref().unwrap_or("unknown"),
+                                context.ocr_text,
+                                context.relevant_text.join("\n")
+                            ),
+                        ),
+                    ],
+                )
+                .await
+                .map(|result| result.response)
+                .unwrap_or_else(|_| context.relevant_text.join(" | "))
+        } else {
+            context.relevant_text.join(" | ")
+        };
+
+        let mut tags = vec![
             "vision".to_string(),
             "screen".to_string(),
             "awareness".to_string(),
         ];
+        if let Some(ref app) = state.vision.current_app {
+            tags.push(format!("app:{}", app));
+        }
+        if window_changed {
+            tags.push("window-change".to_string());
+        }
+
+        // Phase 3: structured memory content with app metadata.
+        let ocr_excerpt_len = context.ocr_text.len().min(2048);
         let memory_content = truncate_for_memory(&format!(
-            "summary: {}\nrelevant_lines:\n{}",
+            "app: {}\nwindow: {}\nsummary: {}\nrelevant_lines:\n{}\nocr_excerpt:\n{}",
+            state.vision.current_app.as_deref().unwrap_or("unknown"),
+            state.vision.current_window.as_deref().unwrap_or("unknown"),
             summary,
-            context.relevant_text.join("\n")
+            context.relevant_text.join("\n"),
+            &context.ocr_text[..ocr_excerpt_len],
         ));
         memory_plane
             .add_entry(
-                "vision-context",
+                "vision-snapshot",
                 "short-term",
                 &tags,
                 Some("sensor://screen-awareness"),
-                55,
+                importance,
                 &memory_content,
             )
             .await
@@ -1212,6 +1533,7 @@ impl SensoryPipelineManager {
         state.vision.last_summary = Some(summary);
         state.vision.last_multimodal_success = context.multimodal_used;
         state.vision.last_updated_at = Some(Utc::now());
+        state.vision.last_window_change_at = None;
         state.axi_state = AxiState::Idle;
         let snapshot = state.vision.clone();
         drop(state);
@@ -1253,21 +1575,37 @@ impl SensoryPipelineManager {
             }
         }
 
+        // Phase 6: tiered memory retention cleanup.
+        if let Err(e) = memory_plane
+            .cleanup_vision_entries(VISION_MEMORY_ROUTINE_HOURS, VISION_MEMORY_KEY_DAYS)
+            .await
+        {
+            log::warn!("Vision memory cleanup failed: {}", e);
+        }
+
         Ok(Some(snapshot))
     }
 
     pub async fn update_presence(
         &self,
+        ai_manager: &AiManager,
         overlay: &OverlayManager,
         follow_along: &FollowAlongManager,
+        memory_plane: &MemoryPlaneManager,
     ) -> Result<PresenceRuntime> {
         let mut snapshot = self.state.read().await.clone();
         let was_present = snapshot.presence.present;
         let camera_available = snapshot.capabilities.camera_device.is_some();
         let camera_consented = snapshot.presence.camera_consented;
+        let meeting_active = snapshot.meeting.active;
+        let camera_busy = snapshot.meeting.camera_busy;
         let now = Utc::now();
 
-        let (present, face_near_screen, source) = if camera_available && camera_consented {
+        // Skip camera capture when in a meeting or camera is busy (another app has it).
+        let can_use_camera =
+            camera_available && camera_consented && !meeting_active && !camera_busy;
+
+        let (present, face_near_screen, source, frame_path) = if can_use_camera {
             match capture_camera_presence(
                 &self.data_dir,
                 snapshot.capabilities.camera_capture_binary.as_deref(),
@@ -1279,11 +1617,33 @@ impl SensoryPipelineManager {
                     metrics.present,
                     metrics.face_near_screen,
                     "camera-heuristic",
+                    metrics.frame_path,
                 ),
-                Err(_) => presence_from_activity(follow_along).await,
+                Err(_) => {
+                    let (p, f, s) = presence_from_activity(follow_along).await;
+                    (p, f, s, None)
+                }
+            }
+        } else if meeting_active || camera_busy {
+            // During a meeting, assume user is present (they're on a call).
+            (true, false, "meeting-inferred", None)
+        } else {
+            let (p, f, s) = presence_from_activity(follow_along).await;
+            (p, f, s, None)
+        };
+
+        // AI-powered scene analysis when camera captured a frame and multimodal is available.
+        let (scene_description, user_state, people_count) = if let Some(ref frame) = frame_path {
+            match analyze_camera_scene(ai_manager, frame).await {
+                Ok(analysis) => (
+                    Some(analysis.scene_description),
+                    Some(analysis.user_state),
+                    Some(analysis.people_count),
+                ),
+                Err(_) => (None, None, None),
             }
         } else {
-            presence_from_activity(follow_along).await
+            (None, None, None)
         };
 
         let stats = follow_along.get_event_stats().await;
@@ -1305,6 +1665,42 @@ impl SensoryPipelineManager {
         snapshot.presence.fatigue_alert = fatigue_alert;
         snapshot.presence.posture_alert = posture_alert;
         snapshot.presence.last_checked_at = Some(now);
+        snapshot.presence.scene_description = scene_description.clone();
+        snapshot.presence.user_state = user_state.clone();
+        snapshot.presence.people_count = people_count;
+        snapshot.presence.last_frame_path = frame_path;
+
+        // Store camera context in memory for later recall.
+        if let Some(ref desc) = scene_description {
+            let importance = if people_count.unwrap_or(0) >= 2 {
+                70 // meeting
+            } else if user_state.as_deref() == Some("away") {
+                40
+            } else {
+                50
+            };
+            let mut tags = vec!["camera".to_string(), "presence".to_string()];
+            if let Some(ref state_str) = user_state {
+                tags.push(format!("state:{}", state_str));
+            }
+            let memory_content = truncate_for_memory(&format!(
+                "scene: {}\nuser_state: {}\npeople: {}",
+                desc,
+                user_state.as_deref().unwrap_or("unknown"),
+                people_count.unwrap_or(0),
+            ));
+            memory_plane
+                .add_entry(
+                    "camera-presence",
+                    "short-term",
+                    &tags,
+                    Some("sensor://camera-presence"),
+                    importance,
+                    &memory_content,
+                )
+                .await
+                .ok();
+        }
 
         if fatigue_alert {
             overlay
@@ -1529,7 +1925,8 @@ impl SensoryPipelineManager {
             shot.path.to_string_lossy().to_string()
         };
 
-        let ocr_text = extract_ocr(&screen_path, Some("eng"))
+        let ocr_lang = detect_ocr_languages();
+        let ocr_text = extract_ocr(&screen_path, Some(&ocr_lang))
             .await
             .unwrap_or_default();
         let relevant_text = relevant_ocr_lines(&ocr_text, query);
@@ -1628,6 +2025,158 @@ impl SensoryPipelineManager {
         Ok((Some(player), true))
     }
 
+    /// Synthesize and play response text progressively, sentence by sentence.
+    ///
+    /// Flow:
+    /// 1. Split response into spoken sentences.
+    /// 2. Synthesize sentence 1 → start playback.
+    /// 3. While sentence 1 plays, synthesize sentence 2 in parallel.
+    /// 4. When sentence 1 finishes → play sentence 2 (already ready).
+    /// 5. Repeat until all sentences are spoken.
+    ///
+    /// Falls back to the old single-shot path if progressive synthesis fails.
+    async fn synthesize_and_play_progressive(
+        &self,
+        _overlay: &OverlayManager,
+        session_id: &str,
+        text: &str,
+        language: Option<&str>,
+        voice_model: Option<&str>,
+    ) -> Result<(Option<String>, Option<String>, Option<String>, bool)> {
+        let sentences = split_tts_chunks(text);
+        if sentences.is_empty() {
+            return Ok((None, None, None, false));
+        }
+
+        // Resolve TTS toolchain once.
+        let piper_models = resolve_tts_models(voice_model).await;
+        let fallback_binary = resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await;
+        let binary = select_tts_binary(
+            resolve_binary("LIFEOS_TTS_BIN", &["lifeos-piper", "piper", "espeak-ng"]).await,
+            piper_models.first().map(|v| v.as_str()),
+            fallback_binary.clone(),
+        );
+        let binary = sanitize_tts_binary(binary, fallback_binary.clone())
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no local TTS backend found"))?;
+
+        let player = resolve_binary("LIFEOS_PLAYBACK_BIN", &["pw-play", "aplay", "paplay"])
+            .await
+            .ok_or_else(|| anyhow::anyhow!("no playback backend found"))?;
+
+        // Duck system audio before speaking.
+        duck_system_audio(true).await;
+
+        let mut first_audio_path: Option<String> = None;
+        let tts_engine = binary.clone();
+        let playback_backend = player.clone();
+        let mut any_played = false;
+
+        // Pre-synthesize the first sentence.
+        let mut next_audio = synthesize_single_chunk(
+            &self.data_dir,
+            &binary,
+            &sentences[0],
+            language,
+            piper_models.first().map(|v| v.as_str()),
+        )
+        .await
+        .ok();
+
+        for i in 0..sentences.len() {
+            let current_audio = match next_audio.take() {
+                Some(path) => path,
+                None => continue,
+            };
+
+            if first_audio_path.is_none() {
+                first_audio_path = Some(current_audio.clone());
+            }
+
+            // Start synthesizing the NEXT sentence in the background.
+            let next_synth = if i + 1 < sentences.len() {
+                let data_dir = self.data_dir.clone();
+                let bin = binary.clone();
+                let sent = sentences[i + 1].clone();
+                let lang = language.map(str::to_string);
+                let model = piper_models.first().cloned();
+                Some(tokio::spawn(async move {
+                    synthesize_single_chunk(
+                        &data_dir,
+                        &bin,
+                        &sent,
+                        lang.as_deref(),
+                        model.as_deref(),
+                    )
+                    .await
+                    .ok()
+                }))
+            } else {
+                None
+            };
+
+            // Play the current sentence (blocking until done).
+            let mut child = Command::new(&player)
+                .arg(&current_audio)
+                .spawn()
+                .context("Failed to start playback")?;
+
+            if let Some(pid) = child.id() {
+                let mut playback = self.playback.lock().await;
+                *playback = Some(ActivePlayback {
+                    session_id: session_id.to_string(),
+                    pid,
+                    backend: player.clone(),
+                    audio_path: current_audio.clone(),
+                });
+            }
+            any_played = true;
+            let _ = child.wait().await;
+
+            // Check if we were interrupted (barge-in).
+            let was_interrupted = {
+                let pb = self.playback.lock().await;
+                pb.as_ref()
+                    .map(|active| active.session_id != session_id)
+                    .unwrap_or(true)
+            };
+            if was_interrupted {
+                // User interrupted — stop progressive playback.
+                if let Some(handle) = next_synth {
+                    handle.abort();
+                }
+                break;
+            }
+
+            // Collect the pre-synthesized next sentence.
+            if let Some(handle) = next_synth {
+                next_audio = handle.await.ok().flatten();
+            }
+        }
+
+        // Clear playback slot.
+        {
+            let mut pb = self.playback.lock().await;
+            if pb
+                .as_ref()
+                .map(|a| a.session_id == session_id)
+                .unwrap_or(false)
+            {
+                pb.take();
+            }
+        }
+
+        // Restore system audio.
+        duck_system_audio(false).await;
+
+        Ok((
+            first_audio_path,
+            Some(tts_engine),
+            Some(playback_backend),
+            any_played,
+        ))
+    }
+
     fn state_path(&self) -> PathBuf {
         self.data_dir.join(STATE_FILE)
     }
@@ -1694,6 +2243,8 @@ async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
         )
         .await,
         llama_server_running: ai_manager.is_running().await,
+        always_on_source: resolve_always_on_source().await,
+        rustpotter_model_available: Path::new(crate::wake_word::RUSTPOTTER_MODEL_PATH).exists(),
     }
 }
 
@@ -1955,6 +2506,114 @@ async fn extract_ocr(source_path: &str, language: Option<&str>) -> Result<String
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Detect OCR languages from system locale.
+fn detect_ocr_languages() -> String {
+    let lang = std::env::var("LANG").unwrap_or_default().to_lowercase();
+    if lang.starts_with("es") {
+        "eng+spa".to_string()
+    } else if lang.starts_with("pt") {
+        "eng+por".to_string()
+    } else if lang.starts_with("fr") {
+        "eng+fra".to_string()
+    } else if lang.starts_with("de") {
+        "eng+deu".to_string()
+    } else {
+        "eng".to_string()
+    }
+}
+
+/// Poll the active window from the Wayland compositor.
+///
+/// Tries swaymsg (works on COSMIC/Sway) then hyprctl as fallback.
+/// Returns `(app_id, window_title)`.
+async fn poll_active_window() -> Result<(String, String)> {
+    // Try swaymsg first (COSMIC/Sway).
+    if let Ok(output) = Command::new("swaymsg")
+        .args(["-t", "get_tree"])
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let json_str = String::from_utf8_lossy(&output.stdout);
+            if let Ok(tree) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                if let Some((app, title)) = find_focused_node(&tree) {
+                    return Ok((app, title));
+                }
+            }
+        }
+    }
+
+    // Fallback: hyprctl.
+    if let Ok(output) = Command::new("hyprctl")
+        .args(["activewindow", "-j"])
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let json_str = String::from_utf8_lossy(&output.stdout);
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                let class = val["class"].as_str().unwrap_or("unknown").to_string();
+                let title = val["title"].as_str().unwrap_or("").to_string();
+                return Ok((class, title));
+            }
+        }
+    }
+
+    anyhow::bail!("no compositor window info available")
+}
+
+/// Recursively find the focused node in a swaymsg tree.
+fn find_focused_node(node: &serde_json::Value) -> Option<(String, String)> {
+    if node["focused"].as_bool() == Some(true) && node["type"].as_str() == Some("con") {
+        let app = node["app_id"]
+            .as_str()
+            .or_else(|| node["window_properties"]["class"].as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let title = node["name"].as_str().unwrap_or("").to_string();
+        return Some((app, title));
+    }
+    if let Some(nodes) = node["nodes"].as_array() {
+        for child in nodes {
+            if let Some(result) = find_focused_node(child) {
+                return Some(result);
+            }
+        }
+    }
+    if let Some(nodes) = node["floating_nodes"].as_array() {
+        for child in nodes {
+            if let Some(result) = find_focused_node(child) {
+                return Some(result);
+            }
+        }
+    }
+    None
+}
+
+/// Compute importance score for a vision snapshot.
+fn compute_vision_importance(
+    ocr_text: &str,
+    relevant_lines: &[String],
+    window_changed: bool,
+) -> u8 {
+    let mut score: u8 = 35;
+    let lower = ocr_text.to_lowercase();
+
+    if window_changed {
+        score = score.saturating_add(20);
+    }
+    if lower.contains("error") || lower.contains("failed") || lower.contains("panic") {
+        score = score.saturating_add(25);
+    }
+    if lower.contains("warning") {
+        score = score.saturating_add(10);
+    }
+    if relevant_lines.len() >= 4 {
+        score = score.saturating_add(5);
+    }
+    score.min(100)
+}
+
 async fn multimodal_chat_with_fallback(
     ai_manager: &AiManager,
     prompt: &str,
@@ -2126,7 +2785,115 @@ async fn synthesize_with_espeak(
     Ok(audio_path.to_string_lossy().to_string())
 }
 
-async fn capture_audio_snippet(data_dir: &Path, duration_seconds: u64) -> Result<String> {
+/// Synthesize a single text chunk to a WAV file. Used by progressive playback.
+async fn synthesize_single_chunk(
+    data_dir: &Path,
+    binary: &str,
+    text: &str,
+    language: Option<&str>,
+    piper_model: Option<&str>,
+) -> Result<String> {
+    if binary_basename(binary) == "espeak-ng" {
+        return synthesize_with_espeak(data_dir, binary, text, language).await;
+    }
+    if let Some(model) = piper_model {
+        return synthesize_with_piper(data_dir, binary, text, model).await;
+    }
+    anyhow::bail!("no TTS model available for progressive synthesis")
+}
+
+/// Split response text into sentence-level chunks suitable for progressive TTS.
+fn split_tts_chunks(raw: &str) -> Vec<String> {
+    let cleaned = sanitize_assistant_response(raw);
+    let base = if cleaned.is_empty() {
+        normalize_whitespace(raw)
+    } else {
+        cleaned
+    };
+    let sentences = split_spoken_sentences(&base);
+
+    // Group very short sentences together (avoid choppy playback for fragments).
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for sentence in sentences {
+        if sentence.is_empty() {
+            continue;
+        }
+        if !current.is_empty() && current.len() + sentence.len() + 1 > TTS_CHUNK_MAX_CHARS {
+            chunks.push(current.trim().to_string());
+            current.clear();
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(&sentence);
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current.trim().to_string());
+    }
+    chunks
+}
+
+/// Lower or restore system audio volume via PulseAudio/PipeWire.
+///
+/// When `duck` is true, saves the current volume and sets it to 30%.
+/// When `duck` is false, restores to the saved volume (or 100% as fallback).
+async fn duck_system_audio(duck: bool) {
+    /// File used to persist the original volume between duck and restore calls.
+    const DUCK_VOLUME_FILE: &str = "/tmp/lifeos-duck-volume";
+
+    // Never duck during an active call — it would lower the call's audio.
+    if duck && detect_active_meeting().await.is_some() {
+        log::info!("Skipping audio ducking — meeting/call detected");
+        return;
+    }
+
+    if duck {
+        // Read current volume before lowering it.
+        if let Ok(output) = Command::new("pactl")
+            .args(["get-sink-volume", "@DEFAULT_SINK@"])
+            .output()
+            .await
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Extract percentage (e.g. "Volume: front-left: ... / 72% / ...")
+                if let Some(pct) = stdout
+                    .split('/')
+                    .find(|part| part.trim().ends_with('%'))
+                    .and_then(|part| part.trim().strip_suffix('%'))
+                    .and_then(|val| val.trim().parse::<u32>().ok())
+                {
+                    // Only duck if the volume is above the duck level.
+                    if pct > 30 {
+                        let _ = tokio::fs::write(DUCK_VOLUME_FILE, pct.to_string()).await;
+                        let _ = Command::new("pactl")
+                            .args(["set-sink-volume", "@DEFAULT_SINK@", "30%"])
+                            .output()
+                            .await;
+                    }
+                }
+            }
+        }
+    } else {
+        // Restore to the saved volume.
+        let restore_pct = match tokio::fs::read_to_string(DUCK_VOLUME_FILE).await {
+            Ok(val) => format!("{}%", val.trim()),
+            Err(_) => "100%".to_string(),
+        };
+        let _ = Command::new("pactl")
+            .args(["set-sink-volume", "@DEFAULT_SINK@", &restore_pct])
+            .output()
+            .await;
+        let _ = tokio::fs::remove_file(DUCK_VOLUME_FILE).await;
+    }
+}
+
+async fn capture_audio_snippet(
+    data_dir: &Path,
+    duration_seconds: u64,
+    source: Option<&str>,
+) -> Result<String> {
     let binary = resolve_binary(
         "LIFEOS_AUDIO_CAPTURE_BIN",
         &["ffmpeg", "arecord", "pw-record", "parecord"],
@@ -2149,12 +2916,13 @@ async fn capture_audio_snippet(data_dir: &Path, duration_seconds: u64) -> Result
     let mut cmd = match program {
         "ffmpeg" => {
             let mut cmd = Command::new(&binary);
+            let input_source = source.unwrap_or("default");
             cmd.args([
                 "-y",
                 "-f",
                 "pulse",
                 "-i",
-                "default",
+                input_source,
                 "-t",
                 &duration_seconds.to_string(),
                 "-ac",
@@ -2163,6 +2931,9 @@ async fn capture_audio_snippet(data_dir: &Path, duration_seconds: u64) -> Result
                 "16000",
                 &output_path,
             ]);
+            if let Some(src) = source {
+                cmd.env("PULSE_SOURCE", src);
+            }
             cmd
         }
         "arecord" => {
@@ -2179,6 +2950,9 @@ async fn capture_audio_snippet(data_dir: &Path, duration_seconds: u64) -> Result
                 "16000",
                 &output_path,
             ]);
+            if let Some(src) = source {
+                cmd.env("PULSE_SOURCE", src);
+            }
             cmd
         }
         "pw-record" | "parecord" => {
@@ -2188,8 +2962,14 @@ async fn capture_audio_snippet(data_dir: &Path, duration_seconds: u64) -> Result
             let mut cmd = Command::new(timeout);
             cmd.arg(format!("{}s", duration_seconds)).arg(&binary);
             if program == "pw-record" {
+                if let Some(src) = source {
+                    cmd.args(["--target", src]);
+                }
                 cmd.args(["--rate", "16000", "--channels", "1", &output_path]);
             } else {
+                if let Some(src) = source {
+                    cmd.args(["-d", src]);
+                }
                 cmd.args([
                     "--rate=16000",
                     "--channels=1",
@@ -2307,6 +3087,175 @@ async fn audio_has_voice_activity(path: &Path) -> Result<bool> {
 
     let rms = (squared / samples as f64).sqrt();
     Ok(rms >= PCM_RMS_THRESHOLD)
+}
+
+/// Capture audio from the microphone until the user stops speaking.
+///
+/// Behaviour:
+/// 1. Starts `pw-record` (or fallback) streaming to stdout.
+/// 2. Reads audio in 250 ms windows, computing RMS for each.
+/// 3. Waits up to [`UTTERANCE_PRE_SPEECH_TIMEOUT_SECS`] for speech to start.
+/// 4. Once speech is detected, keeps recording until
+///    [`UTTERANCE_SILENCE_AFTER_SPEECH_SECS`] of silence is observed.
+/// 5. Hard-caps at [`UTTERANCE_MAX_DURATION_SECS`] to prevent runaway capture.
+/// 6. Writes the complete WAV file and returns its path.
+async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<String> {
+    use tokio::io::AsyncReadExt;
+
+    let binary = resolve_binary(
+        "LIFEOS_AUDIO_CAPTURE_BIN",
+        &["pw-record", "parecord", "ffmpeg", "arecord"],
+    )
+    .await
+    .ok_or_else(|| anyhow::anyhow!("no audio capture backend for streaming"))?;
+
+    let audio_dir = data_dir.join("audio");
+    tokio::fs::create_dir_all(&audio_dir).await?;
+    let audio_path = audio_dir.join(format!("utterance-{}.wav", uuid::Uuid::new_v4()));
+
+    let program = Path::new(&binary)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(binary.as_str());
+
+    // Build a long-running pw-record / parecord that writes to stdout.
+    // We use a generous timeout and kill it ourselves when done.
+    let max_secs = UTTERANCE_MAX_DURATION_SECS as u64 + 2;
+    let mut cmd = match program {
+        "pw-record" => {
+            let mut c = Command::new(&binary);
+            if let Some(src) = source {
+                c.args(["--target", src]);
+            }
+            c.args(["--rate", "16000", "--channels", "1", "--format", "s16", "-"]);
+            c
+        }
+        "parecord" => {
+            let mut c = Command::new(&binary);
+            if let Some(src) = source {
+                c.args(["-d", src]);
+            }
+            c.args(["--rate=16000", "--channels=1", "--format=s16le", "--raw"]);
+            c.arg("-"); // stdout
+            c
+        }
+        _ => {
+            // ffmpeg / arecord don't stream well to stdout — fall back to fixed capture.
+            return capture_audio_snippet(data_dir, UTTERANCE_MAX_DURATION_SECS as u64, source)
+                .await;
+        }
+    };
+
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::null());
+
+    let mut child = cmd
+        .spawn()
+        .context("failed to spawn audio capture for utterance")?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .context("failed to take audio capture stdout")?;
+
+    // 250 ms window at 16 kHz mono 16-bit = 8000 bytes.
+    let window_bytes = (AUDIO_SAMPLE_RATE as f64 * 2.0 * UTTERANCE_WINDOW_SECS) as usize;
+    let mut buf = vec![0u8; window_bytes];
+    let mut all_pcm: Vec<u8> = Vec::with_capacity(AUDIO_SAMPLE_RATE as usize * 2 * 10);
+
+    let start = Instant::now();
+    let mut speech_detected = false;
+    let mut last_speech_at = Instant::now();
+
+    loop {
+        let elapsed = start.elapsed().as_secs_f64();
+
+        // Hard cap — stop no matter what.
+        if elapsed >= UTTERANCE_MAX_DURATION_SECS {
+            break;
+        }
+
+        // Read one window with a timeout to avoid blocking forever.
+        let read_result = tokio::time::timeout(
+            std::time::Duration::from_secs(max_secs),
+            stdout.read_exact(&mut buf),
+        )
+        .await;
+
+        match read_result {
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break, // EOF or timeout
+        }
+
+        all_pcm.extend_from_slice(&buf);
+
+        // Compute RMS for this window.
+        let mut sum_sq = 0f64;
+        let mut count = 0usize;
+        for chunk in buf.chunks_exact(2) {
+            let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f64;
+            sum_sq += sample * sample;
+            count += 1;
+        }
+        let rms = if count > 0 {
+            (sum_sq / count as f64).sqrt()
+        } else {
+            0.0
+        };
+
+        let is_speech = rms >= PCM_RMS_THRESHOLD;
+
+        if is_speech {
+            speech_detected = true;
+            last_speech_at = Instant::now();
+        }
+
+        if !speech_detected {
+            // Waiting for user to start speaking.
+            if elapsed >= UTTERANCE_PRE_SPEECH_TIMEOUT_SECS {
+                break; // User didn't say anything.
+            }
+        } else {
+            // User has spoken — check for end-of-utterance silence.
+            let silence_duration = last_speech_at.elapsed().as_secs_f64();
+            if silence_duration >= UTTERANCE_SILENCE_AFTER_SPEECH_SECS {
+                break; // Done — user stopped talking.
+            }
+        }
+    }
+
+    // Kill the capture process.
+    let _ = child.kill().await;
+
+    if all_pcm.is_empty() {
+        anyhow::bail!("no audio captured");
+    }
+
+    // Write WAV file (16 kHz, mono, 16-bit PCM).
+    let data_len = all_pcm.len() as u32;
+    let file_len = data_len + 36;
+    let mut wav = Vec::with_capacity(44 + all_pcm.len());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&file_len.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&AUDIO_SAMPLE_RATE.to_le_bytes()); // sample rate
+    wav.extend_from_slice(&(AUDIO_SAMPLE_RATE * 2).to_le_bytes()); // byte rate
+    wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.extend_from_slice(&all_pcm);
+
+    tokio::fs::write(&audio_path, &wav).await?;
+
+    cleanup_dir_by_count(&audio_dir, AUDIO_RETENTION_COUNT, "audio")
+        .await
+        .ok();
+
+    Ok(audio_path.to_string_lossy().to_string())
 }
 
 async fn resolve_tts_model(override_model: Option<&str>) -> Option<String> {
@@ -3069,6 +4018,69 @@ fn resolve_camera_device() -> Option<String> {
     None
 }
 
+/// Resolve the audio source for always-on wake word capture.
+/// When the default PulseAudio source is a Bluetooth device, this returns a
+/// non-Bluetooth alternative (internal mic) to avoid A2DP→HSP/HFP profile
+/// switching that degrades audio quality system-wide.
+async fn resolve_always_on_source() -> Option<String> {
+    if let Ok(val) = std::env::var("LIFEOS_ALWAYS_ON_SOURCE") {
+        let val = val.trim().to_string();
+        if !val.is_empty() && val != "auto" {
+            return Some(val);
+        }
+    }
+
+    let info_output = Command::new("pactl").arg("info").output().await.ok()?;
+    if !info_output.status.success() {
+        return None;
+    }
+    let info = String::from_utf8_lossy(&info_output.stdout);
+    let default_source = info
+        .lines()
+        .find(|l| l.starts_with("Default Source:") || l.starts_with("Fuente por defecto:"))
+        .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))?;
+
+    if !default_source.starts_with("bluez_input.") {
+        return None;
+    }
+
+    let list_output = Command::new("pactl")
+        .args(["list", "short", "sources"])
+        .output()
+        .await
+        .ok()?;
+    if !list_output.status.success() {
+        return None;
+    }
+    let list = String::from_utf8_lossy(&list_output.stdout);
+    let sources: Vec<String> = list
+        .lines()
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() >= 2 {
+                Some(cols[1].to_string())
+            } else {
+                None
+            }
+        })
+        .filter(|name| !name.contains(".monitor"))
+        .collect();
+
+    if let Some(s) = sources
+        .iter()
+        .find(|s| s.starts_with("alsa_input.") && s.contains("analog-stereo"))
+    {
+        return Some(s.clone());
+    }
+    if let Some(s) = sources.iter().find(|s| s.starts_with("alsa_input.usb-")) {
+        return Some(s.clone());
+    }
+    if let Some(s) = sources.iter().find(|s| s.starts_with("alsa_input.")) {
+        return Some(s.clone());
+    }
+    None
+}
+
 fn read_gpu_layers() -> Option<i32> {
     let env_file = llama_env_path();
     let content = std::fs::read_to_string(env_file).ok()?;
@@ -3193,13 +4205,16 @@ async fn capture_camera_presence(
         );
     }
 
-    analyze_camera_frame(&frame_path)
+    let mut metrics = analyze_camera_frame(&frame_path)?;
+    metrics.frame_path = Some(frame_path.to_string_lossy().to_string());
+    Ok(metrics)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct CameraPresenceMetrics {
     present: bool,
     face_near_screen: bool,
+    frame_path: Option<String>,
 }
 
 fn analyze_camera_frame(path: &Path) -> Result<CameraPresenceMetrics> {
@@ -3251,7 +4266,117 @@ fn analyze_camera_frame(path: &Path) -> Result<CameraPresenceMetrics> {
     Ok(CameraPresenceMetrics {
         present,
         face_near_screen,
+        frame_path: None,
     })
+}
+
+/// AI-powered camera scene analysis result.
+struct CameraSceneAnalysis {
+    scene_description: String,
+    user_state: String,
+    people_count: u8,
+}
+
+/// Use the multimodal LLM to analyze a camera frame for richer presence context.
+async fn analyze_camera_scene(
+    ai_manager: &AiManager,
+    frame_path: &str,
+) -> Result<CameraSceneAnalysis> {
+    let response = ai_manager
+        .chat_multimodal(
+            None,
+            Some(
+                "You are a presence sensor. Output ONLY these three lines, nothing else:\n\
+                 SCENE: <10 words max describing the scene>\n\
+                 STATE: <focused|distracted|away|talking|resting>\n\
+                 PEOPLE: <number>\n\n\
+                 Do NOT explain your reasoning. Do NOT add any other text.",
+            ),
+            "Describe what you see in this webcam frame.",
+            frame_path,
+        )
+        .await?;
+
+    parse_camera_scene_response(&response.response)
+}
+
+fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
+    // Strip <think>…</think> blocks that some models emit before the answer.
+    let cleaned = strip_think_blocks(text);
+
+    let mut scene = String::new();
+    let mut state = String::from("unknown");
+    let mut people: u8 = 0;
+
+    for line in cleaned.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("SCENE:") {
+            scene = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("STATE:") {
+            state = rest.trim().to_lowercase();
+        } else if let Some(rest) = line.strip_prefix("PEOPLE:") {
+            people = rest.trim().parse().unwrap_or(0);
+        }
+    }
+
+    // Truncate overly long scene descriptions (LLM verbosity).
+    if scene.len() > 120 {
+        scene = scene.chars().take(120).collect::<String>();
+        if let Some(last_space) = scene.rfind(' ') {
+            scene.truncate(last_space);
+        }
+        scene.push('…');
+    }
+
+    if scene.is_empty() {
+        // Fallback: pick the first non-empty, non-reasoning line.
+        scene = cleaned
+            .lines()
+            .map(|l| l.trim())
+            .find(|l| {
+                !l.is_empty()
+                    && !l.starts_with('<')
+                    && !l.to_lowercase().starts_with("let me")
+                    && !l.to_lowercase().starts_with("i need")
+                    && !l.to_lowercase().starts_with("the image")
+                    && !l.to_lowercase().starts_with("analyzing")
+            })
+            .unwrap_or("unknown scene")
+            .to_string();
+        // Still truncate the fallback.
+        if scene.len() > 120 {
+            scene = scene.chars().take(120).collect::<String>();
+            scene.push('…');
+        }
+    }
+
+    Ok(CameraSceneAnalysis {
+        scene_description: scene,
+        user_state: state,
+        people_count: people,
+    })
+}
+
+/// Strip `<think>…</think>` sections from LLM output.
+fn strip_think_blocks(input: &str) -> String {
+    let mut output = String::new();
+    let mut rest = input;
+    loop {
+        if let Some(start) = rest.find("<think>") {
+            output.push_str(&rest[..start]);
+            let after = &rest[start + "<think>".len()..];
+            if let Some(end) = after.find("</think>") {
+                rest = &after[end + "</think>".len()..];
+            } else {
+                // Unclosed think tag — discard the rest as reasoning.
+                break;
+            }
+        } else {
+            output.push_str(rest);
+            break;
+        }
+    }
+    output
 }
 
 fn is_skin_like(r: u8, g: u8, b: u8) -> bool {
@@ -3259,6 +4384,121 @@ fn is_skin_like(r: u8, g: u8, b: u8) -> bool {
     let g = g as i32;
     let b = b as i32;
     r > 95 && g > 40 && b > 20 && (r - g).abs() > 15 && r > g && r > b
+}
+
+// ── Meeting / call detection ────────────────────────────────────────────
+
+/// Known conferencing app binary names (lowercase).
+const CONFERENCING_APPS: &[&str] = &[
+    "chrome",
+    "chromium",
+    "firefox",
+    "google-chrome",
+    "brave",
+    "vivaldi",
+    "microsoft-edge",
+    "zoom",
+    "zoom.real",
+    "teams",
+    "teams-for-linux",
+    "slack",
+    "discord",
+    "skype",
+    "webex",
+    "obs",
+    "telegram-desktop",
+    "signal-desktop",
+];
+
+/// Detect whether the user is in a voice/video call by checking PulseAudio
+/// sink-inputs for audio streams from known conferencing applications.
+///
+/// Logic: if a conferencing app (Chrome, Zoom, Teams, Discord, etc.) has an
+/// active sink-input AND a source-output (mic capture), the user is almost
+/// certainly in a call.
+async fn detect_active_meeting() -> Option<String> {
+    // Check sink-inputs (apps playing audio).
+    let sink_output = Command::new("pactl")
+        .args(["list", "sink-inputs"])
+        .output()
+        .await
+        .ok()?;
+    if !sink_output.status.success() {
+        return None;
+    }
+    let sink_text = String::from_utf8_lossy(&sink_output.stdout).to_lowercase();
+
+    // Check source-outputs (apps capturing mic).
+    let source_output = Command::new("pactl")
+        .args(["list", "source-outputs"])
+        .output()
+        .await
+        .ok()?;
+    let source_text = if source_output.status.success() {
+        String::from_utf8_lossy(&source_output.stdout).to_lowercase()
+    } else {
+        String::new()
+    };
+
+    // A conferencing app playing audio AND capturing mic = very likely a call.
+    for app in CONFERENCING_APPS {
+        let app_playing_audio = sink_text.contains(app);
+        let app_capturing_mic = source_text.contains(app);
+        if app_playing_audio && app_capturing_mic {
+            return Some(app.to_string());
+        }
+    }
+
+    // Fallback: WebRTC in browsers often shows up as "AudioCallbackDriver".
+    // If a browser is playing audio and ANY source-output exists, likely a call.
+    let browser_names = [
+        "chrome",
+        "chromium",
+        "firefox",
+        "brave",
+        "vivaldi",
+        "microsoft-edge",
+    ];
+    let any_mic_active = !source_text.is_empty()
+        && source_output.status.success()
+        && source_text.contains("application.name");
+    if any_mic_active {
+        for browser in &browser_names {
+            if sink_text.contains(browser) {
+                return Some(browser.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Check if the camera device is currently in use by another process.
+///
+/// On Linux, V4L2 devices are exclusive — only one process can open them.
+/// We try to open the device file; if it fails with EBUSY, it's in use.
+fn is_camera_busy(device: &str) -> bool {
+    use std::fs::OpenOptions;
+    match OpenOptions::new().read(true).open(device) {
+        Ok(_) => false, // We could open it → not busy.
+        Err(e) => {
+            // EBUSY (errno 16) = device in use by another process.
+            e.raw_os_error() == Some(16)
+        }
+    }
+}
+
+/// Update meeting state by checking PulseAudio streams and camera availability.
+async fn refresh_meeting_state(camera_device: Option<&str>) -> MeetingState {
+    let conferencing_app = detect_active_meeting().await;
+    let camera_busy = camera_device.map(is_camera_busy).unwrap_or(false);
+
+    MeetingState {
+        active: conferencing_app.is_some() || camera_busy,
+        conferencing_app,
+        camera_busy,
+        last_checked_at: Some(Utc::now()),
+    }
 }
 
 async fn presence_from_activity(follow_along: &FollowAlongManager) -> (bool, bool, &'static str) {
