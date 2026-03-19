@@ -111,20 +111,23 @@ fn generate_bootstrap_token() -> std::io::Result<String> {
     }
 
     let runtime_dir = std::env::var("LIFEOS_RUNTIME_DIR").unwrap_or_else(|_| {
-        // Prefer /run/lifeos (production, systemd service) but fall back to
-        // $XDG_RUNTIME_DIR/lifeos when running as unprivileged user (dev mode).
+        // Prefer $XDG_RUNTIME_DIR/lifeos (user service, production) then
+        // fall back to /run/lifeos (legacy system service / root).
+        if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+            let user_dir = format!("{}/lifeos", xdg);
+            if std::fs::create_dir_all(&user_dir).is_ok() {
+                return user_dir;
+            }
+        }
         let prod = "/run/lifeos";
         if std::fs::create_dir_all(prod).is_ok() {
-            // Verify we can actually write to it
             let probe = std::path::Path::new(prod).join(".probe");
             if std::fs::write(&probe, b"ok").is_ok() {
                 let _ = std::fs::remove_file(&probe);
                 return prod.to_string();
             }
         }
-        std::env::var("XDG_RUNTIME_DIR")
-            .map(|xdg| format!("{}/lifeos", xdg))
-            .unwrap_or_else(|_| prod.to_string())
+        prod.to_string()
     });
     let dir = std::path::Path::new(&runtime_dir);
     let path = dir.join("bootstrap.token");

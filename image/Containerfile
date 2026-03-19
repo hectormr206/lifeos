@@ -544,12 +544,14 @@ COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-cond
 COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf /etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf
 COPY image/files/etc/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/lifeos-audio-route-heal.service
 
-# lifeosd.service (inline - es simple)
+# lifeosd.service — user service so it inherits Wayland, PipeWire, D-Bus
+# This lets the GTK4 mini-widget (Eye of Axi) render on the desktop and
+# gives native access to audio, camera, and screen capture.
 RUN printf '%s\n' \
     '[Unit]' \
-    'Description=LifeOS System Daemon' \
-    'After=network-online.target lifeos-security-baseline.service' \
-    'Wants=network-online.target lifeos-security-baseline.service' \
+    'Description=LifeOS AI Daemon (Axi)' \
+    'After=graphical-session.target pipewire.service' \
+    'Wants=pipewire.service' \
     '' \
     '[Service]' \
     'Type=simple' \
@@ -562,8 +564,10 @@ RUN printf '%s\n' \
     'RestartSec=5' \
     '' \
     '[Install]' \
-    'WantedBy=multi-user.target' \
-    > /usr/lib/systemd/system/lifeosd.service
+    'WantedBy=default.target' \
+    > /usr/lib/systemd/user/lifeosd.service
+# Keep a system-level alias so `systemctl status lifeosd` still works for debugging
+RUN ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/system/lifeosd.service
 
 # Habilitar servicios via symlinks
 RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
@@ -575,7 +579,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/user/pipewire-pulse.service.wants \
              /usr/lib/systemd/user/wireplumber.service.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
-    ln -sf /usr/lib/systemd/system/lifeosd.service       /usr/lib/systemd/system/multi-user.target.wants/lifeosd.service && \
+    ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
@@ -597,7 +601,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
             ln -sf "/usr/lib/systemd/system/${unit}" "/usr/lib/systemd/system/sockets.target.wants/${unit}"; \
         fi; \
     done && \
-    ln -sf /usr/lib/systemd/system/lifeosd.service        /usr/lib/systemd/system/lifeisd.service && \
+    ln -sf /usr/lib/systemd/user/lifeosd.service           /usr/lib/systemd/user/lifeisd.service && \
     ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/default.target.wants/lifeos-audio-route-heal.service && \
     ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/pipewire.service.wants/lifeos-audio-route-heal.service && \
     ln -sf /usr/lib/systemd/user/lifeos-audio-route-heal.service /usr/lib/systemd/user/pipewire-pulse.service.wants/lifeos-audio-route-heal.service && \
@@ -681,13 +685,13 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     'd /var/lib/greetd/.config 0755 greetd greetd - -' \
     'd /var/lib/greetd/.config/systemd 0755 greetd greetd - -' \
     'd /var/lib/greetd/.config/systemd/user 0755 greetd greetd - -' \
-    'd /var/lib/lifeos 0755 root root - -' \
+    'd /var/lib/lifeos 0755 1000 1000 - -' \
     'd /var/lib/rpm-state 0755 root root - -' \
     'd /var/lib/rpm-state/kernel 0755 root root - -' \
     'd /var/lib/unbound 0755 unbound unbound - -' \
     'd /var/lib/smartmontools 0755 root root - -' \
     'd /var/lib/tuned 0755 root root - -' \
-    'd /var/log/lifeos 0755 root root - -' \
+    'd /var/log/lifeos 0755 1000 1000 - -' \
     'd /var/log/tuned 0755 root root - -' \
     > /usr/lib/tmpfiles.d/lifeos-var.conf && \
     rm -f /var/lib/dnf/repos/*/countme && \
@@ -738,7 +742,7 @@ RUN test -x /usr/bin/mpv && \
     test -f /usr/share/lifeos/dashboard/index.html && \
     test -f /usr/share/lifeos/dashboard/app.js && \
     test -f /usr/share/lifeos/dashboard/style.css && \
-    test -f /usr/lib/systemd/system/lifeosd.service && \
+    test -f /usr/lib/systemd/user/lifeosd.service && \
     test -f /usr/lib/systemd/system/llama-server.service && \
     test -f /usr/lib/systemd/system/whisper-stt.service && \
     test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service && \

@@ -16,10 +16,15 @@ pub fn daemon_url() -> String {
     std::env::var("LIFEOS_API_URL").unwrap_or_else(|_| DEFAULT_DAEMON_URL.to_string())
 }
 
-/// Read the bootstrap token from the runtime directory
+/// Read the bootstrap token from the runtime directory.
+///
+/// Search order: `$LIFEOS_RUNTIME_DIR`, `$XDG_RUNTIME_DIR/lifeos`, `/run/lifeos`.
 fn read_bootstrap_token() -> Option<String> {
-    let runtime_dir =
-        std::env::var("LIFEOS_RUNTIME_DIR").unwrap_or_else(|_| "/run/lifeos".to_string());
+    let runtime_dir = std::env::var("LIFEOS_RUNTIME_DIR").unwrap_or_else(|_| {
+        std::env::var("XDG_RUNTIME_DIR")
+            .map(|xdg| format!("{}/lifeos", xdg))
+            .unwrap_or_else(|_| "/run/lifeos".to_string())
+    });
     let token_path = PathBuf::from(runtime_dir).join(TOKEN_FILENAME);
 
     // 1) Direct read (works when running as root or token is world/group readable)

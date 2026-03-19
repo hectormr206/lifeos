@@ -416,8 +416,11 @@ impl DaemonClient {
     async fn new() -> Result<Self> {
         let _config = config::load_config().ok();
 
-        let runtime_dir =
-            std::env::var("LIFEOS_RUNTIME_DIR").unwrap_or_else(|_| "/run/lifeos".to_string());
+        let runtime_dir = std::env::var("LIFEOS_RUNTIME_DIR").unwrap_or_else(|_| {
+            std::env::var("XDG_RUNTIME_DIR")
+                .map(|xdg| format!("{}/lifeos", xdg))
+                .unwrap_or_else(|_| "/run/lifeos".to_string())
+        });
         let token_path = std::path::Path::new(&runtime_dir).join("bootstrap.token");
         let token = if token_path.exists() {
             Some(tokio::fs::read_to_string(&token_path).await?)
