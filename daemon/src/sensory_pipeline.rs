@@ -3666,16 +3666,93 @@ fn normalized_wake_word(wake_word: &str) -> String {
 }
 
 fn contains_wake_word(transcript: &str, wake_word: &str) -> bool {
-    let transcript = transcript.to_lowercase();
+    let transcript = clean_transcript(transcript).to_lowercase();
     let wake_word = normalized_wake_word(wake_word);
-    transcript.contains(&wake_word)
+    if transcript.contains(&wake_word) {
+        return true;
+    }
+    // Check phonetic variants that Whisper commonly produces for "axi".
+    if wake_word == "axi" {
+        let variants = [
+            "axi", "aksi", "axie", "oxy", "aksie", "acsi",
+            "ahxi", "asi", "ahi", "ahsi",
+            // Spanish Whisper mishearings
+            "exi", "oxi", "acci", "aquí",
+        ];
+        return variants.iter().any(|v| transcript.contains(v));
+    }
+    false
+}
+
+/// Remove whisper-cli timestamp markers and noise tags from transcript text.
+fn clean_transcript(text: &str) -> String {
+    let mut cleaned = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('[') {
+        cleaned.push_str(&rest[..start]);
+        if let Some(end) = rest[start..].find(']') {
+            let bracket_content = &rest[start + 1..start + end];
+            // Keep content that isn't a timestamp or noise marker.
+            let is_timestamp = bracket_content.contains("-->");
+            let is_noise = bracket_content.starts_with("Música")
+                || bracket_content.starts_with("música")
+                || bracket_content.starts_with("Music")
+                || bracket_content.starts_with("BLANK");
+            if !is_timestamp && !is_noise {
+                cleaned.push_str(bracket_content);
+            }
+            rest = &rest[start + end + 1..];
+        } else {
+            cleaned.push_str(&rest[start..]);
+            rest = "";
+            break;
+        }
+    }
+    cleaned.push_str(rest);
+    normalize_whitespace(&cleaned)
 }
 
 fn strip_wake_word(transcript: &str, wake_word: &str) -> Option<String> {
     let wake_word = normalized_wake_word(wake_word);
-    let transcript_lower = transcript.to_lowercase();
-    let wake_index = transcript_lower.find(&wake_word)?;
-    let suffix = transcript[wake_index + wake_word.len()..]
+    let cleaned = clean_transcript(transcript);
+    let cleaned_lower = cleaned.to_lowercase();
+
+    // Try exact wake word first.
+    let wake_index = cleaned_lower.find(&wake_word).or_else(|| {
+        // Fall back to phonetic variants for "axi".
+        if wake_word == "axi" {
+            let variants = [
+                "axi", "aksi", "axie", "oxy", "aksie", "acsi", "ahxi", "asi", "ahi", "ahsi",
+                "exi", "oxi", "acci", "aquí",
+            ];
+            variants
+                .iter()
+                .filter_map(|v| cleaned_lower.find(v).map(|pos| (pos, v.len())))
+                .min_by_key(|(pos, _)| *pos)
+                .map(|(pos, _)| pos)
+        } else {
+            None
+        }
+    })?;
+
+    // Find the actual variant length at that position.
+    let variant_len = if cleaned_lower[wake_index..].starts_with(&wake_word) {
+        wake_word.len()
+    } else if wake_word == "axi" {
+        let variants = [
+            "axi", "aksi", "axie", "oxy", "aksie", "acsi", "ahxi", "asi", "ahi", "ahsi",
+            "exi", "oxi", "acci", "aquí",
+        ];
+        variants
+            .iter()
+            .find(|v| cleaned_lower[wake_index..].starts_with(*v))
+            .map(|v| v.len())
+            .unwrap_or(wake_word.len())
+    } else {
+        wake_word.len()
+    };
+
+    let suffix = cleaned[wake_index + variant_len..]
         .trim_matches(|ch: char| matches!(ch, ',' | '.' | ':' | ';' | '!' | '?'))
         .trim();
     Some(normalize_whitespace(suffix))
@@ -4735,6 +4812,30 @@ mod tests {
         assert!(should_include_screen_for_prompt(
             "que ves en mi pantalla ahora mismo"
         ));
+    }
+
+    #[test]
+    fn wake_word_with_timestamps_and_noise() {
+        // Whisper-cli output with timestamps
+        let transcript =
+            "[00:00:00.000 --> 00:00:04.000]  [Música] Oxi, dime la hora por favor.";
+        assert!(contains_wake_word(transcript, "axi"));
+        assert_eq!(
+            strip_wake_word(transcript, "axi").as_deref(),
+            Some("dime la hora por favor")
+        );
+
+        // Pure noise — no wake word
+        let noise = "[00:00:00.000 --> 00:00:04.000]  [Música]";
+        assert!(!contains_wake_word(noise, "axi"));
+
+        // Phonetic variant "aquí" (common Spanish mishearing)
+        let transcript2 = "[00:00:00.000 --> 00:00:02.000]  Aquí, ayúdame.";
+        assert!(contains_wake_word(transcript2, "axi"));
+        assert_eq!(
+            strip_wake_word(transcript2, "axi").as_deref(),
+            Some("ayúdame")
+        );
     }
 
     #[test]

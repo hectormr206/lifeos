@@ -27,7 +27,10 @@
       "Bash(wsl -d Ubuntu -- bash -lc \"cd ~/personalProjects/gama/lifeos && cargo check --manifest-path daemon/Cargo.toml 2>&1 | tail -10\")",
       "Bash(wsl:*)",
       "WebFetch(domain:qwen.readthedocs.io)",
-      "WebFetch(domain:unsloth.ai)"
+      "WebFetch(domain:unsloth.ai)",
+      "Bash(source ~/.cargo/env)",
+      "Bash(cargo search:*)",
+      "Bash(cargo info:*)"
     ]
   }
 }
