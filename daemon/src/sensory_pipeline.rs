@@ -1100,7 +1100,7 @@ impl SensoryPipelineManager {
                     vec![
                         (
                             "system".to_string(),
-                            "You are Axi, the local LifeOS assistant. Respond in natural spoken Spanish suitable for TTS, avoid markdown/code formatting, and never expose internal reasoning.".to_string(),
+                            "You are Axi, the local LifeOS assistant. Answer in ONE or TWO short sentences in natural spoken Spanish. Be direct and concise — this will be read aloud via TTS. No markdown, no code, no lists, no internal reasoning.".to_string(),
                         ),
                         ("user".to_string(), transcript.clone()),
                     ],
@@ -2944,6 +2944,11 @@ async fn capture_audio_snippet(
         "ffmpeg" => {
             let mut cmd = Command::new(&binary);
             let input_source = source.unwrap_or("default");
+            let gain_db = std::env::var("LIFEOS_MIC_GAIN_DB")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(8.0);
+            let af_filter = format!("volume={}dB", gain_db);
             cmd.args([
                 "-y",
                 "-f",
@@ -2952,6 +2957,8 @@ async fn capture_audio_snippet(
                 input_source,
                 "-t",
                 &duration_seconds.to_string(),
+                "-af",
+                &af_filter,
                 "-ac",
                 "1",
                 "-ar",
