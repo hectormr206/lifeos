@@ -362,7 +362,16 @@ function addFeedItem(icon, text) {
   const time = now.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   const item = document.createElement('div');
   item.className = 'feed-item';
-  item.innerHTML = `<span class="feed-time">${time}</span><span class="feed-icon">${icon}</span><span class="feed-text">${text}</span>`;
+  const timeSpan = document.createElement('span');
+  timeSpan.className = 'feed-time';
+  timeSpan.textContent = time;
+  const iconSpan = document.createElement('span');
+  iconSpan.className = 'feed-icon';
+  iconSpan.innerHTML = icon; // safe: icon is always a static HTML entity from our code
+  const textSpan = document.createElement('span');
+  textSpan.className = 'feed-text';
+  textSpan.textContent = text; // textContent prevents XSS from event data
+  item.append(timeSpan, iconSpan, textSpan);
   activityFeed.prepend(item);
   feedCount++;
   feedCountEl.textContent = feedCount;
@@ -698,6 +707,7 @@ document.querySelectorAll('[data-quick-action]').forEach(btn => {
 let bootSequenceRan = false;
 async function runWelcomeSequence() {
   if (!bootMode || bootSequenceRan || !bootSequence) return;
+  if (!dashboardState.connected) return; // skip cinematic if daemon is unreachable
   bootSequenceRan = true;
 
   const steps = [
@@ -761,8 +771,8 @@ document.querySelectorAll('.diag-test-btn').forEach(btn => {
     } finally {
       btn.disabled = false;
       setTimeout(() => {
-        const labels = { audio: '&#9654; Probar Oido', screen: '&#128247; Capturar Pantalla', camera: '&#128247; Capturar Camara' };
-        btn.innerHTML = labels[sensor] || 'Probar';
+        const labels = { audio: '\u25B6 Probar Oido', screen: '\uD83D\uDCF7 Capturar Pantalla', camera: '\uD83D\uDCF7 Capturar Camara' };
+        btn.textContent = labels[sensor] || 'Probar';
         btn.className = 'diag-test-btn';
       }, 4000);
     }

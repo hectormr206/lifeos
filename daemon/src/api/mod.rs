@@ -1438,7 +1438,28 @@ pub fn create_router(state: ApiState) -> Router {
 
 async fn dashboard_bootstrap(
     State(state): State<ApiState>,
+    request: Request<Body>,
 ) -> Result<Json<DashboardBootstrapResponse>, (StatusCode, Json<ApiError>)> {
+    // Only serve bootstrap token when the server is bound to loopback.
+    // This prevents token leakage if the daemon is ever exposed externally.
+    if !state.config.bind_address.ip().is_loopback() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "Bootstrap endpoint is only available on localhost".to_string(),
+                code: 403,
+            }),
+        ));
+    }
+    let peer = request
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0);
+    log::info!(
+        "Dashboard bootstrap token served to {:?} — local-only endpoint",
+        peer
+    );
     Ok(Json(DashboardBootstrapResponse {
         token: state.config.api_key.clone(),
         auth_required: state.config.api_key.is_some(),

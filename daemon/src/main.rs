@@ -112,7 +112,7 @@ fn generate_bootstrap_token() -> std::io::Result<String> {
 
     let runtime_dir = bootstrap_runtime_dir_candidates()
         .into_iter()
-        .find(|candidate| runtime_dir_is_writable(candidate))
+        .find(|candidate| runtime_dir_is_writable(candidate.as_path()))
         .ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
@@ -166,7 +166,7 @@ fn bootstrap_runtime_dir_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-fn runtime_dir_is_writable(path: &PathBuf) -> bool {
+fn runtime_dir_is_writable(path: &std::path::Path) -> bool {
     if std::fs::create_dir_all(path).is_err() {
         return false;
     }
@@ -202,7 +202,8 @@ fn ensure_graphical_environment() {
 
     sockets.sort();
     if let Some(socket) = sockets.into_iter().next() {
-        std::env::set_var("WAYLAND_DISPLAY", &socket);
+        // SAFETY: called early in main() before any threads are spawned.
+        unsafe { std::env::set_var("WAYLAND_DISPLAY", &socket) };
         info!("Recovered graphical session via {}", socket);
     }
 }

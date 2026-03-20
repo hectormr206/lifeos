@@ -603,7 +603,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
             ln -sf "/usr/lib/systemd/system/${unit}" "/usr/lib/systemd/system/sockets.target.wants/${unit}"; \
         fi; \
     done && \
-    ln -sf /usr/lib/systemd/user/lifeosd.service           /usr/lib/systemd/user/lifeisd.service
+    true  # removed stale lifeisd typo symlink
 
 # --- Update policy: no surprise reboot ---
 # Mask bootc auto-apply units so updates are operator-driven.

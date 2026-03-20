@@ -59,6 +59,7 @@ fi
 dashboard_url="${dashboard_base}${query}"
 
 i=0
+consecutive_failures=0
 while [ "${i}" -lt 45 ]; do
     if curl -fsS "${bootstrap_url}" >/dev/null 2>&1; then
         [ "${once_per_version}" -eq 1 ] && printf '%s' "${version_key}" > "${marker_file}"
@@ -72,6 +73,20 @@ while [ "${i}" -lt 45 ]; do
         fi
         exit 1
     fi
+
+    # After initial grace period, check if the daemon is actually running.
+    # If it has crashed, exit early instead of polling for 90 seconds.
+    if [ "${i}" -gt 10 ]; then
+        if ! systemctl --user is-active --quiet lifeosd 2>/dev/null; then
+            consecutive_failures=$((consecutive_failures + 1))
+            if [ "${consecutive_failures}" -ge 3 ]; then
+                exit 1
+            fi
+        else
+            consecutive_failures=0
+        fi
+    fi
+
     i=$((i + 1))
     sleep 2
 done
