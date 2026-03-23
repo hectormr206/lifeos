@@ -252,12 +252,12 @@ impl Supervisor {
         // Pre-flight risk check: block dangerous objectives BEFORE planning
         if Self::objective_is_dangerous(&task.objective) {
             let msg = format!(
-                "BLOCKED: The objective '{}' contains a dangerous command pattern. \
-                 Execute manually if truly intended.",
+                "BLOCKED: '{}' contains a dangerous command pattern. Execute manually if intended.",
                 &task.objective[..task.objective.len().min(100)]
             );
             warn!("{}", msg);
-            self.queue.mark_failed(&task.id, &msg)?;
+            // Cancel permanently — do NOT use mark_failed (which retries)
+            self.queue.cancel(&task.id)?;
             let _ = self.notify_tx.send(SupervisorNotification::TaskFailed {
                 task_id: task.id,
                 objective: task.objective,
