@@ -659,8 +659,8 @@ lifeos/
 - [x] Clasificacion de riesgo: low/medium/high. High (rm -rf, sudo, git push --force) se BLOQUEA
 - [x] Learning loop: planner consulta memory_plane antes de planificar
 - [x] AI summarization: resultados largos se resumen antes de enviar a Telegram
-- [ ] Browser automation real: elevar browser.rs de stub a operador funcional
-- [ ] Loop visual completo: screenshot -> LLM analiza -> computer_use ejecuta -> verifica
+- [x] Browser automation: fetch_url_text() + browse_url action + HTML stripping
+- [x] Visual loop: screen_analyze action (screenshot -> LLM analiza -> devuelve descripcion)
 
 ### Fase C — COMPLETADA 2026-03-23
 
@@ -671,8 +671,8 @@ lifeos/
 - [x] 6 tests para role classification
 - [x] Dashboard de operaciones: nueva seccion "Supervisor" con tareas pendientes/running/completed/failed
 - [x] Dashboard: lista de tareas recientes con status, resultado, auto-refresh 10s
-- [ ] Metricas detalladas por agente y tipo de tarea
-- [ ] Runbooks automaticos de fallo
+- [x] Metricas por agente: per-role tracking (completed/failed/avg_duration), GET /api/v1/supervisor/metrics
+- [x] Runbooks automaticos: pattern matching de errores con sugerencias de recuperacion en Telegram
 
 ### Post Fase C — Lanzamiento Publico
 
