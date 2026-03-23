@@ -1420,6 +1420,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/tasks/:id/cancel", post(cancel_task))
         // Supervisor endpoints
         .route("/supervisor/status", get(get_supervisor_status))
+        .route("/supervisor/metrics", get(get_supervisor_metrics))
         // Lab endpoints
         .nest("/lab", lab::lab_routes())
         .route_layer(middleware::from_fn_with_state(
@@ -8958,6 +8959,13 @@ async fn get_supervisor_status(
         "running": running,
         "queue": summary,
     })))
+}
+
+async fn get_supervisor_metrics(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let metrics = state.supervisor.metrics();
+    Ok(Json(serde_json::to_value(metrics).unwrap_or_default()))
 }
 
 // ==================== LLM ROUTER ENDPOINTS ====================

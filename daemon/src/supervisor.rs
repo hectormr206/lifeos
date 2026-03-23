@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 
-use crate::agent_roles::AgentRole;
+use crate::agent_roles::{AgentRole, AllAgentMetrics, Runbook};
 use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
 use crate::memory_plane::MemoryPlaneManager;
 use crate::privacy_filter::PrivacyFilter;
@@ -70,6 +70,10 @@ pub enum StepAction {
     /// Run a command inside an isolated git worktree (safe self-modification).
     SandboxCommand { command: String },
     AiQuery { prompt: String },
+    /// Fetch a URL and return its text content (HTML stripped).
+    BrowseUrl { url: String },
+    /// Take a screenshot, analyze it with local LLM, and return description.
+    ScreenAnalyze { prompt: Option<String> },
     ScreenCapture,
     ReadFile { path: String },
     WriteFile { path: String, content: String },
@@ -108,6 +112,7 @@ pub struct Supervisor {
     work_dir: PathBuf,
     notify_tx: broadcast::Sender<SupervisorNotification>,
     started_at: std::time::Instant,
+    metrics: std::sync::Mutex<AllAgentMetrics>,
 }
 
 impl Supervisor {
@@ -154,7 +159,13 @@ impl Supervisor {
             work_dir,
             notify_tx,
             started_at: std::time::Instant::now(),
+            metrics: std::sync::Mutex::new(AllAgentMetrics::default()),
         }
+    }
+
+    /// Get agent metrics snapshot.
+    pub fn metrics(&self) -> AllAgentMetrics {
+        self.metrics.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Subscribe to supervisor notifications.
@@ -244,6 +255,7 @@ impl Supervisor {
             objective: task.objective.clone(),
         });
 
+        let role = AgentRole::suggest_for(&task.objective);
         let start = std::time::Instant::now();
 
         match self.execute_task(&task.id, &task.objective).await {
@@ -268,13 +280,19 @@ impl Supervisor {
                 )
                 .await;
 
+                let duration_ms = start.elapsed().as_millis() as u64;
+
+                if let Ok(mut m) = self.metrics.lock() {
+                    m.record(role, true, duration_ms);
+                }
+
                 let _ = self.notify_tx.send(SupervisorNotification::TaskCompleted {
                     task_id: task.id,
                     objective: task.objective,
                     result: summary,
                     steps_total,
                     steps_ok,
-                    duration_ms: start.elapsed().as_millis() as u64,
+                    duration_ms,
                 });
             }
             Err(e) => {
@@ -293,10 +311,20 @@ impl Supervisor {
                 )
                 .await;
 
+                if let Ok(mut m) = self.metrics.lock() {
+                    m.record(role, false, start.elapsed().as_millis() as u64);
+                }
+
+                // Apply runbook: suggest recovery if we recognize the error pattern
+                let mut error_with_hint = error_msg.clone();
+                if let Some(hint) = Runbook::suggest_recovery(&error_msg) {
+                    error_with_hint = format!("{}\n\nSugerencia: {}", error_msg, hint);
+                }
+
                 let _ = self.notify_tx.send(SupervisorNotification::TaskFailed {
                     task_id: task.id,
                     objective: task.objective,
-                    error: error_msg,
+                    error: error_with_hint,
                     will_retry,
                 });
             }
@@ -510,6 +538,96 @@ impl Supervisor {
         }
     }
 
+    /// Fetch a URL and return its text content.
+    async fn execute_browse(&self, url: &str) -> Result<String> {
+        info!("Browsing: {}", url);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .user_agent("LifeOS-Axi/0.1")
+            .build()?;
+
+        let resp = client.get(url).send().await.context(format!("Failed to fetch {}", url))?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("HTTP {} for {}", status, url);
+        }
+
+        let body = resp.text().await?;
+        // Strip HTML tags to get clean text
+        let text = strip_html(&body);
+
+        if text.len() > 6000 {
+            Ok(format!("{}...\n[truncated, {} chars]", &text[..6000], text.len()))
+        } else {
+            Ok(text)
+        }
+    }
+
+    /// Take a screenshot, analyze it with local LLM, and return the analysis.
+    async fn execute_screen_analyze(&self, prompt: Option<&str>) -> Result<String> {
+        // Step 1: Capture screenshot
+        let screenshot_path = self.capture_screenshot().await?;
+
+        // Step 2: Analyze with LLM
+        let analysis_prompt = prompt.unwrap_or("Describe what you see on the screen. Is there any error, dialog, or notification visible?");
+
+        let request = RouterRequest {
+            messages: vec![
+                ChatMessage {
+                    role: "system".into(),
+                    content: serde_json::Value::String(
+                        "You are a visual analyst for LifeOS. Describe what you see concisely in Spanish.".into(),
+                    ),
+                },
+                ChatMessage {
+                    role: "user".into(),
+                    content: serde_json::Value::String(format!(
+                        "{}\n\n[Screenshot captured at: {}]",
+                        analysis_prompt, screenshot_path
+                    )),
+                },
+            ],
+            complexity: Some(TaskComplexity::Vision),
+            sensitivity: None,
+            preferred_provider: None,
+            max_tokens: Some(512),
+        };
+
+        let router = self.router.read().await;
+        match router.chat(&request).await {
+            Ok(response) => Ok(format!("Screenshot: {}\nAnalysis: {}", screenshot_path, response.text)),
+            Err(e) => Ok(format!("Screenshot saved: {}\nAnalysis failed: {}", screenshot_path, e)),
+        }
+    }
+
+    /// Capture a screenshot and return its path.
+    async fn capture_screenshot(&self) -> Result<String> {
+        let screenshot_dir = std::env::temp_dir().join("lifeos-screenshots");
+        tokio::fs::create_dir_all(&screenshot_dir).await.ok();
+        let filename = format!("sv-{}.png", chrono::Local::now().format("%H%M%S"));
+        let path = screenshot_dir.join(&filename);
+
+        let output = tokio::process::Command::new("grim")
+            .arg(&path)
+            .output()
+            .await;
+
+        match output {
+            Ok(o) if o.status.success() => Ok(path.to_string_lossy().to_string()),
+            _ => {
+                // Fallback
+                let output = tokio::process::Command::new("gnome-screenshot")
+                    .args(["-f", &path.to_string_lossy()])
+                    .output()
+                    .await;
+                match output {
+                    Ok(o) if o.status.success() => Ok(path.to_string_lossy().to_string()),
+                    _ => anyhow::bail!("No screenshot tool available (grim or gnome-screenshot)"),
+                }
+            }
+        }
+    }
+
     /// Execute a command inside a temporary git worktree (isolated sandbox).
     /// The worktree is created, the command runs in it, and then it's cleaned up.
     async fn execute_in_sandbox(&self, command: &str) -> Result<String> {
@@ -622,9 +740,11 @@ Respond ONLY with a JSON object like:
 
 Available action types:
 - shell_command: Run a shell command. Use for git, cargo, system commands. Commands run in the working directory above.
-- sandbox_command: Run a command in an isolated git worktree. Use for code changes that might break things. The worktree is auto-cleaned.
+- sandbox_command: Run a command in an isolated git worktree. Use for code changes that might break things.
 - ai_query: Ask an AI a question. Use for analysis, summarization, reasoning.
-- screen_capture: Take a screenshot of the current desktop.
+- browse_url: Fetch a URL and return its text content (HTML stripped). Provide "url".
+- screen_analyze: Take a screenshot and analyze it with AI. Optionally provide "prompt".
+- screen_capture: Take a screenshot of the current desktop (returns file path).
 - read_file: Read a file from disk. Use absolute paths or paths relative to working directory.
 - write_file: Write content to a file. Provide "path" and "content".
 - respond: Send a text response back to the user. Use as the last step.
@@ -697,7 +817,9 @@ Always end with a "respond" step summarizing what was done."#,
                 }
                 RiskLevel::Low
             }
-            StepAction::SandboxCommand { .. } => RiskLevel::Low, // sandboxed = safe
+            StepAction::SandboxCommand { .. } => RiskLevel::Low,
+            StepAction::BrowseUrl { .. } => RiskLevel::Low,
+            StepAction::ScreenAnalyze { .. } => RiskLevel::Low,
             StepAction::WriteFile { .. } => RiskLevel::Medium,
             StepAction::ReadFile { .. } | StepAction::AiQuery { .. } => RiskLevel::Low,
             StepAction::ScreenCapture | StepAction::Respond { .. } => RiskLevel::Low,
@@ -724,6 +846,8 @@ Always end with a "respond" step summarizing what was done."#,
         match &step.action {
             StepAction::ShellCommand { command } => self.execute_shell(command).await,
             StepAction::SandboxCommand { command } => self.execute_in_sandbox(command).await,
+            StepAction::BrowseUrl { url } => self.execute_browse(url).await,
+            StepAction::ScreenAnalyze { prompt } => self.execute_screen_analyze(prompt.as_deref()).await,
             StepAction::AiQuery { prompt } => self.execute_ai_query(prompt).await,
             StepAction::ScreenCapture => self.execute_screen_capture().await,
             StepAction::ReadFile { path } => {
@@ -877,6 +1001,45 @@ fn parse_plan_from_response(text: &str) -> Result<Plan> {
             }
         }
     }
+}
+
+/// Strip HTML tags to get plain text (simple approach).
+fn strip_html(html: &str) -> String {
+    let mut result = String::with_capacity(html.len() / 2);
+    let mut in_tag = false;
+    let in_script = false;
+
+    for ch in html.chars() {
+        if ch == '<' {
+            in_tag = true;
+            continue;
+        }
+        if ch == '>' {
+            in_tag = false;
+            continue;
+        }
+        if in_tag {
+            continue;
+        }
+        if !in_script {
+            if ch == '\n' || ch == '\r' {
+                if !result.ends_with('\n') {
+                    result.push('\n');
+                }
+            } else {
+                result.push(ch);
+            }
+        }
+    }
+    // Collapse multiple blank lines
+    let mut prev_blank = false;
+    let lines: Vec<&str> = result.lines().filter(|l| {
+        let blank = l.trim().is_empty();
+        if blank && prev_blank { return false; }
+        prev_blank = blank;
+        true
+    }).collect();
+    lines.join("\n").trim().to_string()
 }
 
 fn extract_json(text: &str) -> String {

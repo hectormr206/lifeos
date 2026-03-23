@@ -281,6 +281,114 @@ fn append_audit(entry: BrowserAuditEntry) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Fetch a URL and return its text content (HTML stripped to plain text).
+/// Used by the supervisor for web browsing tasks.
+pub async fn fetch_url_text(url: &str, timeout_secs: u64) -> anyhow::Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_secs.max(5)))
+        .user_agent("LifeOS-Axi/0.1")
+        .build()?;
+
+    let resp = client.get(url).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("HTTP {} for {}", status, url);
+    }
+
+    let body = resp.text().await?;
+    let text = html_to_text(&body);
+
+    // Truncate to reasonable size for LLM context
+    if text.len() > 8000 {
+        Ok(format!("{}...\n[truncated, {} chars total]", &text[..8000], text.len()))
+    } else {
+        Ok(text)
+    }
+}
+
+/// Crude HTML-to-text conversion: strips tags, decodes common entities.
+fn html_to_text(html: &str) -> String {
+    let mut result = String::with_capacity(html.len() / 2);
+    let mut in_tag = false;
+    let mut in_script = false;
+    let mut last_was_space = false;
+
+    let lower = html.to_lowercase();
+    let chars: Vec<char> = html.chars().collect();
+    let lower_chars: Vec<char> = lower.chars().collect();
+
+    let mut i = 0;
+    while i < chars.len() {
+        if !in_tag && !in_script && chars[i] == '<' {
+            // Check for <script or <style
+            let rest: String = lower_chars[i..].iter().take(10).collect();
+            if rest.starts_with("<script") || rest.starts_with("<style") {
+                in_script = true;
+            }
+            in_tag = true;
+            i += 1;
+            continue;
+        }
+        if in_tag && chars[i] == '>' {
+            if in_script {
+                let rest: String = lower_chars[i.saturating_sub(8)..=i].iter().collect();
+                if rest.contains("/script>") || rest.contains("/style>") {
+                    in_script = false;
+                }
+            }
+            in_tag = false;
+            i += 1;
+            continue;
+        }
+        if in_tag || in_script {
+            i += 1;
+            continue;
+        }
+        // Entity decoding
+        if chars[i] == '&' {
+            let rest: String = chars[i..].iter().take(10).collect();
+            if rest.starts_with("&amp;") {
+                result.push('&');
+                i += 5;
+                last_was_space = false;
+                continue;
+            } else if rest.starts_with("&lt;") {
+                result.push('<');
+                i += 4;
+                last_was_space = false;
+                continue;
+            } else if rest.starts_with("&gt;") {
+                result.push('>');
+                i += 4;
+                last_was_space = false;
+                continue;
+            } else if rest.starts_with("&quot;") {
+                result.push('"');
+                i += 6;
+                last_was_space = false;
+                continue;
+            } else if rest.starts_with("&nbsp;") {
+                result.push(' ');
+                i += 6;
+                last_was_space = true;
+                continue;
+            }
+        }
+        // Collapse whitespace
+        if chars[i].is_whitespace() {
+            if !last_was_space {
+                result.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            result.push(chars[i]);
+            last_was_space = false;
+        }
+        i += 1;
+    }
+    result.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

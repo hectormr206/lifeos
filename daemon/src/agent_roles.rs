@@ -149,6 +149,93 @@ pub enum SubAgentStatus {
     Failed,
 }
 
+// ---------------------------------------------------------------------------
+// Per-agent metrics
+// ---------------------------------------------------------------------------
+
+/// Tracks success/failure metrics per agent role.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct AgentMetrics {
+    pub tasks_completed: u64,
+    pub tasks_failed: u64,
+    pub total_duration_ms: u64,
+    pub avg_duration_ms: u64,
+}
+
+/// Aggregate metrics for all roles.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct AllAgentMetrics {
+    pub by_role: std::collections::HashMap<String, AgentMetrics>,
+    pub total_tasks: u64,
+    pub total_completed: u64,
+    pub total_failed: u64,
+}
+
+impl AllAgentMetrics {
+    pub fn record(&mut self, role: AgentRole, success: bool, duration_ms: u64) {
+        let role_name = format!("{:?}", role).to_lowercase();
+        let entry = self.by_role.entry(role_name).or_default();
+
+        self.total_tasks += 1;
+        if success {
+            entry.tasks_completed += 1;
+            self.total_completed += 1;
+        } else {
+            entry.tasks_failed += 1;
+            self.total_failed += 1;
+        }
+        entry.total_duration_ms += duration_ms;
+        let total = entry.tasks_completed + entry.tasks_failed;
+        if total > 0 {
+            entry.avg_duration_ms = entry.total_duration_ms / total;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Automatic failure runbooks
+// ---------------------------------------------------------------------------
+
+/// Known failure patterns and suggested recovery actions.
+pub struct Runbook;
+
+impl Runbook {
+    /// Given an error message, suggest a recovery action.
+    pub fn suggest_recovery(error: &str) -> Option<&'static str> {
+        let lower = error.to_lowercase();
+
+        if lower.contains("connection refused") || lower.contains("connect error") {
+            return Some("Network issue. Check internet connectivity: ping 8.8.8.8");
+        }
+        if lower.contains("rate limit") || lower.contains("429") || lower.contains("too many requests") {
+            return Some("Rate limited. Wait 60 seconds and retry, or switch to a different LLM provider.");
+        }
+        if lower.contains("out of memory") || lower.contains("oom") {
+            return Some("Out of memory. Try: reduce context size, close other apps, or use a smaller model.");
+        }
+        if lower.contains("permission denied") || lower.contains("eacces") {
+            return Some("Permission denied. Check file ownership. May need to run with correct user.");
+        }
+        if lower.contains("no space left") || lower.contains("disk full") {
+            return Some("Disk full. Run: df -h && du -sh /var/lib/lifeos/ && lifeos-maintenance-cleanup.sh");
+        }
+        if lower.contains("llama-server") || lower.contains("model") && lower.contains("not found") {
+            return Some("AI model issue. Check: systemctl status llama-server && ls /var/lib/lifeos/models/");
+        }
+        if lower.contains("cargo") && lower.contains("error") {
+            return Some("Build error. Run: cargo clean && cargo build 2>&1 | head -30");
+        }
+        if lower.contains("git") && lower.contains("conflict") {
+            return Some("Git conflict. Run: git status && git diff to inspect, then resolve manually.");
+        }
+        if lower.contains("timeout") || lower.contains("timed out") {
+            return Some("Request timed out. The LLM provider may be slow. Retry or switch provider.");
+        }
+
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
