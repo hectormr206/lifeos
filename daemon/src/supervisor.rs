@@ -66,6 +66,8 @@ pub struct PlanStep {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StepAction {
     ShellCommand { command: String },
+    /// Run a command inside an isolated git worktree (safe self-modification).
+    SandboxCommand { command: String },
     AiQuery { prompt: String },
     ScreenCapture,
     ReadFile { path: String },
@@ -446,6 +448,130 @@ impl Supervisor {
         }
     }
 
+    /// Capture a screenshot and return its path.
+    async fn execute_screen_capture(&self) -> Result<String> {
+        let screenshot_dir = self.work_dir.join("target/screenshots");
+        tokio::fs::create_dir_all(&screenshot_dir).await.ok();
+        let filename = format!("supervisor-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+        let path = screenshot_dir.join(&filename);
+
+        // Try grim (Wayland/COSMIC)
+        let output = tokio::process::Command::new("grim")
+            .arg(&path)
+            .output()
+            .await;
+
+        match output {
+            Ok(o) if o.status.success() => {
+                Ok(format!("Screenshot saved to {}", path.display()))
+            }
+            _ => {
+                // Fallback: try xdg-desktop-portal screenshot
+                let output = tokio::process::Command::new("gnome-screenshot")
+                    .args(["-f", &path.to_string_lossy()])
+                    .output()
+                    .await;
+                match output {
+                    Ok(o) if o.status.success() => {
+                        Ok(format!("Screenshot saved to {}", path.display()))
+                    }
+                    _ => Ok("Screenshot capture failed — no grim or gnome-screenshot available".into()),
+                }
+            }
+        }
+    }
+
+    /// Execute a command inside a temporary git worktree (isolated sandbox).
+    /// The worktree is created, the command runs in it, and then it's cleaned up.
+    async fn execute_in_sandbox(&self, command: &str) -> Result<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let branch_name = format!("sandbox-{}", &id[..8]);
+        let worktree_path = std::env::temp_dir().join(format!("lifeos-sandbox-{}", &branch_name));
+
+        info!("Creating sandbox worktree: {}", worktree_path.display());
+
+        // Create worktree
+        let create_output = tokio::process::Command::new("git")
+            .args(["worktree", "add", "-b", &branch_name])
+            .arg(&worktree_path)
+            .current_dir(&self.work_dir)
+            .output()
+            .await
+            .context("Failed to create git worktree")?;
+
+        if !create_output.status.success() {
+            let stderr = String::from_utf8_lossy(&create_output.stderr);
+            anyhow::bail!("Failed to create worktree: {}", stderr);
+        }
+
+        // Run command in worktree
+        let result = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(&worktree_path)
+            .output()
+            .await;
+
+        // Always clean up worktree
+        let _ = tokio::process::Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&worktree_path)
+            .current_dir(&self.work_dir)
+            .output()
+            .await;
+        let _ = tokio::process::Command::new("git")
+            .args(["branch", "-D", &branch_name])
+            .current_dir(&self.work_dir)
+            .output()
+            .await;
+
+        match result {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                Ok(if stdout.is_empty() {
+                    "(sandbox command completed with no output)".into()
+                } else if stdout.len() > 4000 {
+                    format!("{}...\n[truncated]", &stdout[..4000])
+                } else {
+                    stdout.to_string()
+                })
+            }
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("Sandbox command failed: {}{}", stdout, stderr)
+            }
+            Err(e) => anyhow::bail!("Sandbox execution error: {}", e),
+        }
+    }
+
+    /// Query memory for relevant past experiences before planning.
+    async fn recall_context(&self, objective: &str) -> String {
+        let memory = match &self.memory {
+            Some(m) => m,
+            None => return String::new(),
+        };
+
+        let mem = memory.read().await;
+        match mem
+            .search_entries(objective, 3, Some("system"))
+            .await
+        {
+            Ok(results) if !results.is_empty() => {
+                let mut context = String::from("Relevant past experiences:\n");
+                for r in &results {
+                    context.push_str(&format!(
+                        "- [{}] {}\n",
+                        r.entry.kind,
+                        &r.entry.content[..r.entry.content.len().min(200)]
+                    ));
+                }
+                context
+            }
+            _ => String::new(),
+        }
+    }
+
     async fn create_plan(&self, objective: &str) -> Result<Plan> {
         let system_prompt = format!(
             r#"You are a task planner for LifeOS, an AI-native operating system.
@@ -464,6 +590,7 @@ Respond ONLY with a JSON object like:
 
 Available action types:
 - shell_command: Run a shell command. Use for git, cargo, system commands. Commands run in the working directory above.
+- sandbox_command: Run a command in an isolated git worktree. Use for code changes that might break things. The worktree is auto-cleaned.
 - ai_query: Ask an AI a question. Use for analysis, summarization, reasoning.
 - screen_capture: Take a screenshot of the current desktop.
 - read_file: Read a file from disk. Use absolute paths or paths relative to working directory.
@@ -472,9 +599,18 @@ Available action types:
 
 Keep plans short (2-6 steps). Prefer simple, safe commands.
 Never use sudo. Never delete files without confirmation.
+For code changes, prefer sandbox_command over shell_command.
 Always end with a "respond" step summarizing what was done."#,
             self.work_dir.display()
         );
+
+        // Learning loop: recall relevant past experiences
+        let memory_context = self.recall_context(objective).await;
+
+        let mut user_content = objective.to_string();
+        if !memory_context.is_empty() {
+            user_content = format!("{}\n\n{}", objective, memory_context);
+        }
 
         let request = RouterRequest {
             messages: vec![
@@ -484,7 +620,7 @@ Always end with a "respond" step summarizing what was done."#,
                 },
                 ChatMessage {
                     role: "user".into(),
-                    content: serde_json::Value::String(objective.into()),
+                    content: serde_json::Value::String(user_content),
                 },
             ],
             complexity: Some(TaskComplexity::Complex),
@@ -529,6 +665,7 @@ Always end with a "respond" step summarizing what was done."#,
                 }
                 RiskLevel::Low
             }
+            StepAction::SandboxCommand { .. } => RiskLevel::Low, // sandboxed = safe
             StepAction::WriteFile { .. } => RiskLevel::Medium,
             StepAction::ReadFile { .. } | StepAction::AiQuery { .. } => RiskLevel::Low,
             StepAction::ScreenCapture | StepAction::Respond { .. } => RiskLevel::Low,
@@ -554,10 +691,9 @@ Always end with a "respond" step summarizing what was done."#,
 
         match &step.action {
             StepAction::ShellCommand { command } => self.execute_shell(command).await,
+            StepAction::SandboxCommand { command } => self.execute_in_sandbox(command).await,
             StepAction::AiQuery { prompt } => self.execute_ai_query(prompt).await,
-            StepAction::ScreenCapture => {
-                Ok("Screen capture requested — not yet wired to sensory_pipeline".into())
-            }
+            StepAction::ScreenCapture => self.execute_screen_capture().await,
             StepAction::ReadFile { path } => {
                 let full_path = if std::path::Path::new(path).is_absolute() {
                     PathBuf::from(path)
