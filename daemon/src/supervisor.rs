@@ -371,25 +371,48 @@ impl Supervisor {
             );
         }
 
-        let summary = format!(
-            "{}/{} steps completed. Result: {}",
-            steps_ok, steps_total, last_output
-        );
+        // Build a clean summary from all step outputs (not just last)
+        let mut summary_parts = Vec::new();
+        for (i, r) in results.iter().enumerate() {
+            let step_desc = plan
+                .steps
+                .get(r.step_index)
+                .map(|s| s.description.as_str())
+                .unwrap_or("step");
+            let icon = if r.success { "OK" } else { "FAIL" };
+            let output_preview = if r.output.len() > 500 {
+                format!("{}...", &r.output[..500])
+            } else {
+                r.output.clone()
+            };
+            summary_parts.push(format!(
+                "[{} {}/{}] {}\n{}",
+                icon,
+                i + 1,
+                steps_total,
+                step_desc,
+                output_preview.trim()
+            ));
+        }
+
+        let summary = summary_parts.join("\n\n");
 
         Ok((summary, steps_total, steps_ok))
     }
 
     /// Use AI to produce a clean, human-readable summary of a raw task result.
     async fn summarize_result(&self, objective: &str, raw_result: &str) -> Result<String> {
-        // Skip summarization for short results — they're already readable
-        if raw_result.len() < 300 {
+        // Skip summarization for short/clean results
+        if raw_result.len() < 500 {
             return Ok(raw_result.to_string());
         }
 
         let prompt = format!(
-            "Resumen conciso en español (max 500 chars) del resultado de esta tarea:\n\
+            "Resume en español en maximo 800 caracteres el resultado de esta tarea. \
+             Incluye los datos clave (output de comandos, archivos encontrados, etc). \
+             No repitas la tarea, solo el resultado.\n\
              Tarea: {}\n\
-             Resultado crudo:\n{}",
+             Resultado:\n{}",
             objective,
             &raw_result[..raw_result.len().min(3000)]
         );
@@ -823,16 +846,36 @@ fn parse_plan_from_response(text: &str) -> Result<Plan> {
     let json_str = extract_json(text);
 
     match serde_json::from_str::<Plan>(&json_str) {
-        Ok(plan) if !plan.steps.is_empty() => Ok(plan),
-        Ok(_) | Err(_) => Ok(Plan {
-            steps: vec![PlanStep {
-                description: "Direct LLM response".into(),
-                action: StepAction::Respond {
-                    message: text.to_string(),
-                },
-                expected_outcome: "User receives response".into(),
-            }],
-        }),
+        Ok(plan) if !plan.steps.is_empty() => {
+            log::debug!("Parsed plan with {} steps", plan.steps.len());
+            Ok(plan)
+        }
+        Ok(_) | Err(_) => {
+            // If text looks like it contains a useful response, wrap it
+            let clean = text.trim();
+            if clean.is_empty() {
+                Ok(Plan {
+                    steps: vec![PlanStep {
+                        description: "No response from LLM".into(),
+                        action: StepAction::Respond {
+                            message: "(empty response)".into(),
+                        },
+                        expected_outcome: "User informed".into(),
+                    }],
+                })
+            } else {
+                log::info!("Could not parse plan JSON, wrapping as direct response ({} chars)", clean.len());
+                Ok(Plan {
+                    steps: vec![PlanStep {
+                        description: "Direct LLM response".into(),
+                        action: StepAction::Respond {
+                            message: clean.to_string(),
+                        },
+                        expected_outcome: "User receives response".into(),
+                    }],
+                })
+            }
+        }
     }
 }
 

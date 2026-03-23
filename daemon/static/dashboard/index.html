@@ -250,6 +250,28 @@
       </div>
     </section>
 
+    <!-- Supervisor & Tasks -->
+    <section class="supervisor-section">
+      <h2>Supervisor <span id="supervisor-badge" class="badge badge-offline">Detenido</span></h2>
+      <div class="supervisor-grid">
+        <div class="supervisor-summary">
+          <div class="hero-stats">
+            <div class="hero-stat"><span>Pendientes</span><strong id="sv-pending">0</strong></div>
+            <div class="hero-stat"><span>Corriendo</span><strong id="sv-running">0</strong></div>
+            <div class="hero-stat"><span>Completadas</span><strong id="sv-completed">0</strong></div>
+            <div class="hero-stat"><span>Fallidas</span><strong id="sv-failed">0</strong></div>
+          </div>
+        </div>
+        <div class="task-list" id="task-list">
+          <p class="task-empty">Sin tareas recientes</p>
+        </div>
+        <div class="supervisor-actions">
+          <button type="button" class="quick-action-btn" data-quick-action="refresh-tasks">Refrescar tareas</button>
+          <button type="button" class="quick-action-btn" data-quick-action="trigger-heartbeat">Heartbeat manual</button>
+        </div>
+      </div>
+    </section>
+
     <!-- Activity Feed -->
     <section class="feed-section">
       <h2>Actividad <span id="feed-count" class="feed-count">0</span></h2>

@@ -955,10 +955,102 @@ async function refreshFullState() {
 
 setInterval(refreshFullState, 3000);
 
+// --- Supervisor & Task Queue ---
+const svBadge = $('#supervisor-badge');
+const svPending = $('#sv-pending');
+const svRunning = $('#sv-running');
+const svCompleted = $('#sv-completed');
+const svFailed = $('#sv-failed');
+const taskListEl = $('#task-list');
+
+async function refreshSupervisor() {
+  try {
+    const res = await fetch(`${API}/supervisor/status`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (svBadge) {
+      svBadge.textContent = data.running ? 'Activo' : 'Detenido';
+      svBadge.className = data.running ? 'badge badge-ok' : 'badge badge-offline';
+    }
+    const q = data.queue || {};
+    if (svPending) svPending.textContent = q.pending || 0;
+    if (svRunning) svRunning.textContent = q.running || 0;
+    if (svCompleted) svCompleted.textContent = q.completed || 0;
+    if (svFailed) svFailed.textContent = q.failed || 0;
+  } catch (e) {
+    console.warn('supervisor status fetch failed:', e);
+  }
+}
+
+async function refreshTasks() {
+  try {
+    const res = await fetch(`${API}/tasks?limit=10`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (!taskListEl) return;
+    if (!data.tasks || data.tasks.length === 0) {
+      taskListEl.innerHTML = '<p class="task-empty">Sin tareas recientes</p>';
+      return;
+    }
+
+    taskListEl.innerHTML = data.tasks.map(t => {
+      const statusIcon = {
+        completed: '\u2705', running: '\u23F3', failed: '\u274C',
+        pending: '\u23F1', retrying: '\u{1F504}', cancelled: '\u26D4'
+      }[t.status] || '\u2753';
+      const result = t.result
+        ? `<div class="task-result">${escapeHtml(t.result.substring(0, 500))}</div>`
+        : '';
+      return `<div class="task-item" data-status="${t.status}">
+        <div>
+          <div class="task-objective">${statusIcon} ${escapeHtml(t.objective.substring(0, 120))}</div>
+          <div class="task-meta">${t.status} \u00B7 ${t.source} \u00B7 ${t.updated_at?.substring(0, 19) || ''}</div>
+          ${result}
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.warn('tasks fetch failed:', e);
+  }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Poll supervisor every 10s
+setInterval(() => {
+  refreshSupervisor();
+  refreshTasks();
+}, 10000);
+
+// Handle new quick actions
+document.querySelectorAll('[data-quick-action]').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    switch (btn.dataset.quickAction) {
+      case 'refresh-tasks':
+        await refreshSupervisor();
+        await refreshTasks();
+        break;
+      case 'trigger-heartbeat':
+        await fetch(`${API}/supervisor/status`, { headers: apiHeaders() });
+        btn.textContent = 'Enviado';
+        setTimeout(() => { btn.textContent = 'Heartbeat manual'; }, 2000);
+        break;
+    }
+  });
+});
+
 // --- Boot ---
 (async () => {
   await ensureBootstrapToken();
   await fetchInitialState();
   connectSSE();
+  refreshSupervisor();
+  refreshTasks();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();
