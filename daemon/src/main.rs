@@ -29,6 +29,7 @@ mod health;
 #[cfg(feature = "ui-overlay")]
 #[allow(dead_code)]
 mod keyboard_shortcut;
+mod agent_roles;
 mod lab;
 mod llm_router;
 mod memory_plane;

@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 
+use crate::agent_roles::AgentRole;
 use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
 use crate::memory_plane::MemoryPlaneManager;
 use crate::privacy_filter::PrivacyFilter;
@@ -310,14 +311,19 @@ impl Supervisor {
         task_id: &str,
         objective: &str,
     ) -> Result<(String, usize, usize)> {
-        let plan = self.create_plan(objective).await?;
+        // Select the best agent role for this task
+        let role = AgentRole::suggest_for(objective);
+        info!("Task {} assigned to role: {:?}", task_id, role);
+
+        let plan = self.create_plan_with_role(objective, role).await?;
         let plan_json = serde_json::to_string_pretty(&plan)?;
         self.queue.set_plan(task_id, &plan_json)?;
 
         info!(
-            "Task {} planned with {} steps",
+            "Task {} planned with {} steps (role: {:?})",
             task_id,
-            plan.steps.len()
+            plan.steps.len(),
+            role
         );
 
         let mut results = Vec::new();
@@ -572,9 +578,12 @@ impl Supervisor {
         }
     }
 
-    async fn create_plan(&self, objective: &str) -> Result<Plan> {
+    async fn create_plan_with_role(&self, objective: &str, role: AgentRole) -> Result<Plan> {
+        let role_context = role.system_prompt();
         let system_prompt = format!(
-            r#"You are a task planner for LifeOS, an AI-native operating system.
+            r#"{role_context}
+
+You are working inside LifeOS, an AI-native operating system.
 The working directory is: {}
 Given an objective, decompose it into concrete executable steps.
 Respond ONLY with a JSON object like:
