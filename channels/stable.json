@@ -1,0 +1,9 @@
+{
+  "channel": "stable",
+  "version": "2026.03.23",
+  "tag": "stable",
+  "digest": "sha256:556641306a3bf8613f8f1d220385475755f0e521393b7cf23dc5e26fc449db5a",
+  "image": "ghcr.io/hectormr206/lifeos:stable",
+  "released_at": "2026-03-23T17:45:28Z",
+  "commit": "7864b26944652b0283f5fa2b17538f841d2c231f"
+}
