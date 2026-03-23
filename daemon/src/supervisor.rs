@@ -248,6 +248,25 @@ impl Supervisor {
             "Supervisor picked up task: {} — {}",
             task.id, task.objective
         );
+
+        // Pre-flight risk check: block dangerous objectives BEFORE planning
+        if Self::objective_is_dangerous(&task.objective) {
+            let msg = format!(
+                "BLOCKED: The objective '{}' contains a dangerous command pattern. \
+                 Execute manually if truly intended.",
+                &task.objective[..task.objective.len().min(100)]
+            );
+            warn!("{}", msg);
+            self.queue.mark_failed(&task.id, &msg)?;
+            let _ = self.notify_tx.send(SupervisorNotification::TaskFailed {
+                task_id: task.id,
+                objective: task.objective,
+                error: msg,
+                will_retry: false,
+            });
+            return Ok(true);
+        }
+
         self.queue.mark_running(&task.id)?;
 
         let _ = self.notify_tx.send(SupervisorNotification::TaskStarted {
@@ -788,6 +807,35 @@ Always end with a "respond" step summarizing what was done."#,
             .context("Failed to get plan from LLM")?;
 
         parse_plan_from_response(&response.text)
+    }
+
+    /// Check if the objective itself contains dangerous commands.
+    /// This runs BEFORE the LLM even sees the task.
+    fn objective_is_dangerous(objective: &str) -> bool {
+        let lower = objective.to_lowercase();
+        let dangerous = [
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -rf ~",
+            "mkfs",
+            "dd if=",
+            "> /dev/sd",
+            "> /dev/nvme",
+            "chmod -r 777 /",
+            ":(){ :|:& };:",
+            "fork bomb",
+            "sudo rm",
+            "sudo dd",
+            "sudo mkfs",
+            "shutdown",
+            "reboot",
+            "init 0",
+            "init 6",
+            "kill -9 1",
+            "git push --force origin main",
+            "git push -f origin main",
+        ];
+        dangerous.iter().any(|p| lower.contains(p))
     }
 
     /// Classify risk level of an action.
