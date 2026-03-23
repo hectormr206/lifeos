@@ -4,7 +4,7 @@
 //! evaluates results, retries on failure, and reports via notification channel.
 
 use anyhow::{Context, Result};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
+use crate::memory_plane::MemoryPlaneManager;
 use crate::privacy_filter::PrivacyFilter;
 use crate::task_queue::TaskQueue;
 
@@ -99,6 +100,7 @@ pub struct Supervisor {
     queue: Arc<TaskQueue>,
     router: Arc<RwLock<LlmRouter>>,
     privacy: Arc<PrivacyFilter>,
+    memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
     running: Arc<std::sync::atomic::AtomicBool>,
     work_dir: PathBuf,
     notify_tx: broadcast::Sender<SupervisorNotification>,
@@ -110,6 +112,15 @@ impl Supervisor {
         queue: Arc<TaskQueue>,
         router: Arc<RwLock<LlmRouter>>,
         privacy: Arc<PrivacyFilter>,
+    ) -> Self {
+        Self::with_memory(queue, router, privacy, None)
+    }
+
+    pub fn with_memory(
+        queue: Arc<TaskQueue>,
+        router: Arc<RwLock<LlmRouter>>,
+        privacy: Arc<PrivacyFilter>,
+        memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
     ) -> Self {
         let (notify_tx, _) = broadcast::channel(64);
 
@@ -135,6 +146,7 @@ impl Supervisor {
             queue,
             router,
             privacy,
+            memory,
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             work_dir,
             notify_tx,
@@ -233,16 +245,30 @@ impl Supervisor {
 
         match self.execute_task(&task.id, &task.objective).await {
             Ok((result, steps_total, steps_ok)) => {
-                self.queue.mark_completed(&task.id, &result)?;
+                // Summarize the raw result with AI for cleaner Telegram output
+                let summary = self
+                    .summarize_result(&task.objective, &result)
+                    .await
+                    .unwrap_or_else(|_| result.clone());
 
-                // Log to audit file
-                self.audit_log(&task.id, &task.objective, "completed", &result)
+                self.queue.mark_completed(&task.id, &summary)?;
+
+                self.audit_log(&task.id, &task.objective, "completed", &summary)
                     .await;
+
+                // Save to memory: what was done, what worked
+                self.memory_writeback(
+                    &task.objective,
+                    "completed",
+                    &summary,
+                    &format!("{}/{} steps OK in {}ms", steps_ok, steps_total, start.elapsed().as_millis()),
+                )
+                .await;
 
                 let _ = self.notify_tx.send(SupervisorNotification::TaskCompleted {
                     task_id: task.id,
                     objective: task.objective,
-                    result,
+                    result: summary,
                     steps_total,
                     steps_ok,
                     duration_ms: start.elapsed().as_millis() as u64,
@@ -254,6 +280,15 @@ impl Supervisor {
 
                 self.audit_log(&task.id, &task.objective, "failed", &error_msg)
                     .await;
+
+                // Save to memory: what failed and why
+                self.memory_writeback(
+                    &task.objective,
+                    "failed",
+                    &error_msg,
+                    if will_retry { "will retry" } else { "permanent failure" },
+                )
+                .await;
 
                 let _ = self.notify_tx.send(SupervisorNotification::TaskFailed {
                     task_id: task.id,
@@ -334,6 +369,81 @@ impl Supervisor {
         );
 
         Ok((summary, steps_total, steps_ok))
+    }
+
+    /// Use AI to produce a clean, human-readable summary of a raw task result.
+    async fn summarize_result(&self, objective: &str, raw_result: &str) -> Result<String> {
+        // Skip summarization for short results — they're already readable
+        if raw_result.len() < 300 {
+            return Ok(raw_result.to_string());
+        }
+
+        let prompt = format!(
+            "Resumen conciso en español (max 500 chars) del resultado de esta tarea:\n\
+             Tarea: {}\n\
+             Resultado crudo:\n{}",
+            objective,
+            &raw_result[..raw_result.len().min(3000)]
+        );
+
+        let request = RouterRequest {
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(prompt),
+            }],
+            complexity: Some(TaskComplexity::Simple),
+            sensitivity: None,
+            preferred_provider: None,
+            max_tokens: Some(256),
+        };
+
+        let router = self.router.read().await;
+        let response = router.chat(&request).await?;
+        Ok(response.text)
+    }
+
+    /// Save task outcome to the memory plane for future context.
+    async fn memory_writeback(
+        &self,
+        objective: &str,
+        status: &str,
+        detail: &str,
+        meta: &str,
+    ) {
+        let memory = match &self.memory {
+            Some(m) => m,
+            None => return,
+        };
+
+        let content = format!(
+            "Tarea: {}\nEstado: {}\nDetalle: {}\nMeta: {}\nFecha: {}",
+            objective,
+            status,
+            &detail[..detail.len().min(2000)],
+            meta,
+            chrono::Local::now().to_rfc3339(),
+        );
+
+        let importance = match status {
+            "failed" => 70u8,
+            "completed" => 40,
+            _ => 30,
+        };
+
+        let tags = vec![
+            "supervisor".to_string(),
+            format!("status:{}", status),
+        ];
+
+        let mem = memory.read().await;
+        if let Err(e) = mem
+            .add_entry("decision", "system", &tags, Some("supervisor"), importance, &content)
+            .await
+        {
+            warn!("Memory writeback failed: {}", e);
+        } else {
+            debug!("Memory writeback: {} — {}", status, &objective[..objective.len().min(60)]);
+        }
     }
 
     async fn create_plan(&self, objective: &str) -> Result<Plan> {

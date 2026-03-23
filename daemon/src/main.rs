@@ -338,6 +338,12 @@ async fn main() -> anyhow::Result<()> {
                 .expect("fallback task queue must work")
         }),
     );
+    let shared_memory = Arc::new(RwLock::new(
+        MemoryPlaneManager::new(data_dir.clone()).unwrap_or_else(|e| {
+            warn!("Failed to initialize MemoryPlaneManager: {}", e);
+            MemoryPlaneManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
+        }),
+    ));
 
     // Initialize state
     let state = Arc::new(DaemonState {
@@ -385,12 +391,7 @@ async fn main() -> anyhow::Result<()> {
                 AgentRuntimeManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
             }),
         )),
-        memory_plane_manager: Arc::new(RwLock::new(
-            MemoryPlaneManager::new(data_dir.clone()).unwrap_or_else(|e| {
-                warn!("Failed to initialize MemoryPlaneManager: {}", e);
-                MemoryPlaneManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-            }),
-        )),
+        memory_plane_manager: shared_memory.clone(),
         visual_comfort_manager: Arc::new(RwLock::new(VisualComfortManager::new(data_dir.clone()))),
         accessibility_manager: Arc::new(RwLock::new(AccessibilityManager::new())),
         lab_manager: Arc::new(RwLock::new(
@@ -405,10 +406,11 @@ async fn main() -> anyhow::Result<()> {
         )),
         llm_router: shared_router.clone(),
         task_queue: shared_tq.clone(),
-        supervisor: Arc::new(supervisor::Supervisor::new(
+        supervisor: Arc::new(supervisor::Supervisor::with_memory(
             shared_tq.clone(),
             shared_router.clone(),
             shared_privacy.clone(),
+            Some(shared_memory.clone()),
         )),
         bootstrap_token,
         last_health_check: RwLock::new(None),
