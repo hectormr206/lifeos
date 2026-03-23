@@ -1,0 +1,643 @@
+//! Supervisor — Autonomous task execution loop.
+//!
+//! Pulls tasks from the queue, uses the LLM router to plan and execute steps,
+//! evaluates results, retries on failure, and reports via notification channel.
+
+use anyhow::{Context, Result};
+use log::{error, info, warn};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{broadcast, RwLock};
+
+use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
+use crate::privacy_filter::PrivacyFilter;
+use crate::task_queue::TaskQueue;
+
+// ---------------------------------------------------------------------------
+// Notification types — consumed by Telegram bridge and other listeners
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SupervisorNotification {
+    TaskStarted {
+        task_id: String,
+        objective: String,
+    },
+    TaskCompleted {
+        task_id: String,
+        objective: String,
+        result: String,
+        steps_total: usize,
+        steps_ok: usize,
+        duration_ms: u64,
+    },
+    TaskFailed {
+        task_id: String,
+        objective: String,
+        error: String,
+        will_retry: bool,
+    },
+    Heartbeat {
+        summary: serde_json::Value,
+        uptime_hours: f64,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Plan types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Plan {
+    pub steps: Vec<PlanStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanStep {
+    pub description: String,
+    pub action: StepAction,
+    pub expected_outcome: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StepAction {
+    ShellCommand { command: String },
+    AiQuery { prompt: String },
+    ScreenCapture,
+    ReadFile { path: String },
+    WriteFile { path: String, content: String },
+    Respond { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepResult {
+    pub success: bool,
+    pub output: String,
+    pub step_index: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Risk classification
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+// ---------------------------------------------------------------------------
+// Supervisor
+// ---------------------------------------------------------------------------
+
+pub struct Supervisor {
+    queue: Arc<TaskQueue>,
+    router: Arc<RwLock<LlmRouter>>,
+    privacy: Arc<PrivacyFilter>,
+    running: Arc<std::sync::atomic::AtomicBool>,
+    work_dir: PathBuf,
+    notify_tx: broadcast::Sender<SupervisorNotification>,
+    started_at: std::time::Instant,
+}
+
+impl Supervisor {
+    pub fn new(
+        queue: Arc<TaskQueue>,
+        router: Arc<RwLock<LlmRouter>>,
+        privacy: Arc<PrivacyFilter>,
+    ) -> Self {
+        let (notify_tx, _) = broadcast::channel(64);
+
+        // Determine working directory: prefer the LifeOS repo if it exists
+        let work_dir = std::env::var("LIFEOS_REPO_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+                let candidates = [
+                    PathBuf::from(&home).join("personalProjects/gama/lifeos"),
+                    PathBuf::from("/var/home/lifeos/personalProjects/gama/lifeos"),
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+                ];
+                candidates
+                    .into_iter()
+                    .find(|p| p.join("Cargo.toml").exists())
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")))
+            });
+
+        info!("Supervisor working directory: {}", work_dir.display());
+
+        Self {
+            queue,
+            router,
+            privacy,
+            running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            work_dir,
+            notify_tx,
+            started_at: std::time::Instant::now(),
+        }
+    }
+
+    /// Subscribe to supervisor notifications.
+    pub fn subscribe(&self) -> broadcast::Receiver<SupervisorNotification> {
+        self.notify_tx.subscribe()
+    }
+
+    /// Start the supervisor loop. Runs until stopped.
+    pub async fn run(&self) {
+        use std::sync::atomic::Ordering;
+
+        if self.running.swap(true, Ordering::SeqCst) {
+            warn!("Supervisor already running");
+            return;
+        }
+
+        info!("Supervisor started — polling task queue");
+
+        let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(86400)); // 24h
+        heartbeat_interval.tick().await; // skip first immediate tick
+
+        loop {
+            if !self.running.load(Ordering::Relaxed) {
+                info!("Supervisor stopping");
+                break;
+            }
+
+            tokio::select! {
+                _ = heartbeat_interval.tick() => {
+                    self.send_heartbeat().await;
+                }
+                result = self.tick() => {
+                    match result {
+                        Ok(true) => continue,
+                        Ok(false) => {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                        }
+                        Err(e) => {
+                            error!("Supervisor tick error: {}", e);
+                            tokio::time::sleep(Duration::from_secs(10)).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn stop(&self) {
+        self.running
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Send a heartbeat notification with queue summary.
+    async fn send_heartbeat(&self) {
+        let summary = self.queue.summary().unwrap_or_default();
+        let uptime = self.started_at.elapsed().as_secs_f64() / 3600.0;
+        let _ = self.notify_tx.send(SupervisorNotification::Heartbeat {
+            summary,
+            uptime_hours: uptime,
+        });
+    }
+
+    /// Manually trigger a heartbeat (callable from API).
+    pub async fn trigger_heartbeat(&self) {
+        self.send_heartbeat().await;
+    }
+
+    /// Process one task if available. Returns true if a task was processed.
+    async fn tick(&self) -> Result<bool> {
+        let task = match self.queue.dequeue()? {
+            Some(t) => t,
+            None => return Ok(false),
+        };
+
+        info!(
+            "Supervisor picked up task: {} — {}",
+            task.id, task.objective
+        );
+        self.queue.mark_running(&task.id)?;
+
+        let _ = self.notify_tx.send(SupervisorNotification::TaskStarted {
+            task_id: task.id.clone(),
+            objective: task.objective.clone(),
+        });
+
+        let start = std::time::Instant::now();
+
+        match self.execute_task(&task.id, &task.objective).await {
+            Ok((result, steps_total, steps_ok)) => {
+                self.queue.mark_completed(&task.id, &result)?;
+
+                // Log to audit file
+                self.audit_log(&task.id, &task.objective, "completed", &result)
+                    .await;
+
+                let _ = self.notify_tx.send(SupervisorNotification::TaskCompleted {
+                    task_id: task.id,
+                    objective: task.objective,
+                    result,
+                    steps_total,
+                    steps_ok,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                });
+            }
+            Err(e) => {
+                let error_msg = format!("{:#}", e);
+                let will_retry = self.queue.mark_failed(&task.id, &error_msg)?;
+
+                self.audit_log(&task.id, &task.objective, "failed", &error_msg)
+                    .await;
+
+                let _ = self.notify_tx.send(SupervisorNotification::TaskFailed {
+                    task_id: task.id,
+                    objective: task.objective,
+                    error: error_msg,
+                    will_retry,
+                });
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Execute a single task: plan -> execute steps -> return result + step counts.
+    async fn execute_task(
+        &self,
+        task_id: &str,
+        objective: &str,
+    ) -> Result<(String, usize, usize)> {
+        let plan = self.create_plan(objective).await?;
+        let plan_json = serde_json::to_string_pretty(&plan)?;
+        self.queue.set_plan(task_id, &plan_json)?;
+
+        info!(
+            "Task {} planned with {} steps",
+            task_id,
+            plan.steps.len()
+        );
+
+        let mut results = Vec::new();
+        let mut last_output = String::new();
+
+        for (i, step) in plan.steps.iter().enumerate() {
+            info!(
+                "Task {} step {}/{}: {}",
+                task_id,
+                i + 1,
+                plan.steps.len(),
+                step.description
+            );
+
+            match self.execute_step(step).await {
+                Ok(output) => {
+                    last_output = output.clone();
+                    results.push(StepResult {
+                        success: true,
+                        output,
+                        step_index: i,
+                    });
+                }
+                Err(e) => {
+                    let error = format!("Step {} failed: {}", i + 1, e);
+                    warn!("Task {} — {}", task_id, error);
+                    results.push(StepResult {
+                        success: false,
+                        output: error.clone(),
+                        step_index: i,
+                    });
+                    last_output = error;
+                }
+            }
+        }
+
+        let steps_total = plan.steps.len();
+        let steps_ok = results.iter().filter(|r| r.success).count();
+
+        if steps_ok == 0 && steps_total > 0 {
+            anyhow::bail!(
+                "All {} steps failed. Last error: {}",
+                steps_total,
+                last_output
+            );
+        }
+
+        let summary = format!(
+            "{}/{} steps completed. Result: {}",
+            steps_ok, steps_total, last_output
+        );
+
+        Ok((summary, steps_total, steps_ok))
+    }
+
+    async fn create_plan(&self, objective: &str) -> Result<Plan> {
+        let system_prompt = format!(
+            r#"You are a task planner for LifeOS, an AI-native operating system.
+The working directory is: {}
+Given an objective, decompose it into concrete executable steps.
+Respond ONLY with a JSON object like:
+{{
+  "steps": [
+    {{
+      "description": "what this step does",
+      "action": {{"type": "shell_command", "command": "the command to run"}},
+      "expected_outcome": "what success looks like"
+    }}
+  ]
+}}
+
+Available action types:
+- shell_command: Run a shell command. Use for git, cargo, system commands. Commands run in the working directory above.
+- ai_query: Ask an AI a question. Use for analysis, summarization, reasoning.
+- screen_capture: Take a screenshot of the current desktop.
+- read_file: Read a file from disk. Use absolute paths or paths relative to working directory.
+- write_file: Write content to a file. Provide "path" and "content".
+- respond: Send a text response back to the user. Use as the last step.
+
+Keep plans short (2-6 steps). Prefer simple, safe commands.
+Never use sudo. Never delete files without confirmation.
+Always end with a "respond" step summarizing what was done."#,
+            self.work_dir.display()
+        );
+
+        let request = RouterRequest {
+            messages: vec![
+                ChatMessage {
+                    role: "system".into(),
+                    content: serde_json::Value::String(system_prompt),
+                },
+                ChatMessage {
+                    role: "user".into(),
+                    content: serde_json::Value::String(objective.into()),
+                },
+            ],
+            complexity: Some(TaskComplexity::Complex),
+            sensitivity: Some(self.privacy.classify(objective)),
+            preferred_provider: None,
+            max_tokens: Some(2048),
+        };
+
+        let router = self.router.read().await;
+        let response = router
+            .chat(&request)
+            .await
+            .context("Failed to get plan from LLM")?;
+
+        parse_plan_from_response(&response.text)
+    }
+
+    /// Classify risk level of an action.
+    fn classify_risk(action: &StepAction) -> RiskLevel {
+        match action {
+            StepAction::ShellCommand { command } => {
+                let cmd = command.to_lowercase();
+                // High risk: destructive or irreversible commands
+                let high_risk = [
+                    "rm -rf", "rm -r", "rmdir", "mkfs", "dd if=",
+                    "git push", "git reset --hard", "git checkout .",
+                    "git clean", "reboot", "shutdown", "systemctl stop",
+                    "pkill", "killall", "chmod 777", "> /dev/",
+                    "curl.*| sh", "wget.*| sh", "sudo",
+                ];
+                if high_risk.iter().any(|p| cmd.contains(p)) {
+                    return RiskLevel::High;
+                }
+                // Medium risk: file modification, git operations
+                let medium_risk = [
+                    "git commit", "git merge", "git rebase",
+                    "cargo publish", "npm publish",
+                    "mv ", "cp -r",
+                ];
+                if medium_risk.iter().any(|p| cmd.contains(p)) {
+                    return RiskLevel::Medium;
+                }
+                RiskLevel::Low
+            }
+            StepAction::WriteFile { .. } => RiskLevel::Medium,
+            StepAction::ReadFile { .. } | StepAction::AiQuery { .. } => RiskLevel::Low,
+            StepAction::ScreenCapture | StepAction::Respond { .. } => RiskLevel::Low,
+        }
+    }
+
+    async fn execute_step(&self, step: &PlanStep) -> Result<String> {
+        let risk = Self::classify_risk(&step.action);
+        if risk == RiskLevel::High {
+            let desc = match &step.action {
+                StepAction::ShellCommand { command } => command.clone(),
+                _ => step.description.clone(),
+            };
+            warn!("BLOCKED high-risk action: {}", desc);
+            let _ = self.notify_tx.send(SupervisorNotification::TaskFailed {
+                task_id: "risk-block".into(),
+                objective: format!("High-risk action blocked: {}", desc),
+                error: "This action was classified as high-risk and requires manual execution.".into(),
+                will_retry: false,
+            });
+            anyhow::bail!("High-risk action blocked: {}. Execute manually if intended.", desc);
+        }
+
+        match &step.action {
+            StepAction::ShellCommand { command } => self.execute_shell(command).await,
+            StepAction::AiQuery { prompt } => self.execute_ai_query(prompt).await,
+            StepAction::ScreenCapture => {
+                Ok("Screen capture requested — not yet wired to sensory_pipeline".into())
+            }
+            StepAction::ReadFile { path } => {
+                let full_path = if std::path::Path::new(path).is_absolute() {
+                    PathBuf::from(path)
+                } else {
+                    self.work_dir.join(path)
+                };
+                let content = tokio::fs::read_to_string(&full_path)
+                    .await
+                    .with_context(|| format!("Failed to read {}", full_path.display()))?;
+                if content.len() > 8000 {
+                    Ok(format!(
+                        "{}...\n[truncated, {} bytes total]",
+                        &content[..8000],
+                        content.len()
+                    ))
+                } else {
+                    Ok(content)
+                }
+            }
+            StepAction::WriteFile { path, content } => {
+                let full_path = if std::path::Path::new(path).is_absolute() {
+                    PathBuf::from(path)
+                } else {
+                    self.work_dir.join(path)
+                };
+                tokio::fs::write(&full_path, content)
+                    .await
+                    .with_context(|| format!("Failed to write {}", full_path.display()))?;
+                Ok(format!("Wrote {} bytes to {}", content.len(), full_path.display()))
+            }
+            StepAction::Respond { message } => Ok(message.clone()),
+        }
+    }
+
+    async fn execute_shell(&self, command: &str) -> Result<String> {
+        info!("Executing shell: {}", command);
+
+        let output = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(&self.work_dir)
+            .output()
+            .await
+            .with_context(|| format!("Failed to execute: {}", command))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if output.status.success() {
+            let result = if stdout.is_empty() {
+                "(no output)".to_string()
+            } else if stdout.len() > 4000 {
+                format!("{}...\n[truncated]", &stdout[..4000])
+            } else {
+                stdout.to_string()
+            };
+            Ok(result)
+        } else {
+            anyhow::bail!(
+                "Command exited with {}: {}{}",
+                output.status,
+                stdout,
+                stderr
+            )
+        }
+    }
+
+    async fn execute_ai_query(&self, prompt: &str) -> Result<String> {
+        let sensitivity = self.privacy.classify(prompt);
+        let request = RouterRequest {
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(prompt.into()),
+            }],
+            complexity: Some(TaskComplexity::Medium),
+            sensitivity: Some(sensitivity),
+            preferred_provider: None,
+            max_tokens: Some(1024),
+        };
+
+        let router = self.router.read().await;
+        let response = router.chat(&request).await?;
+        Ok(response.text)
+    }
+
+    async fn audit_log(&self, task_id: &str, objective: &str, status: &str, detail: &str) {
+        let log_dir = PathBuf::from("/var/log/lifeos");
+        if std::fs::create_dir_all(&log_dir).is_err() {
+            // Fallback to data dir
+            return;
+        }
+        let path = log_dir.join("supervisor-audit.log");
+        let entry = format!(
+            "{}\t{}\t{}\t{}\t{}\n",
+            chrono::Local::now().to_rfc3339(),
+            task_id,
+            status,
+            objective.chars().take(100).collect::<String>(),
+            detail.chars().take(200).collect::<String>(),
+        );
+        use tokio::io::AsyncWriteExt;
+        if let Ok(mut f) = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+        {
+            let _ = f.write_all(entry.as_bytes()).await;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Plan parsing
+// ---------------------------------------------------------------------------
+
+fn parse_plan_from_response(text: &str) -> Result<Plan> {
+    let json_str = extract_json(text);
+
+    match serde_json::from_str::<Plan>(&json_str) {
+        Ok(plan) if !plan.steps.is_empty() => Ok(plan),
+        Ok(_) | Err(_) => Ok(Plan {
+            steps: vec![PlanStep {
+                description: "Direct LLM response".into(),
+                action: StepAction::Respond {
+                    message: text.to_string(),
+                },
+                expected_outcome: "User receives response".into(),
+            }],
+        }),
+    }
+}
+
+fn extract_json(text: &str) -> String {
+    if let Some(start) = text.find("```json") {
+        let after = &text[start + 7..];
+        if let Some(end) = after.find("```") {
+            return after[..end].trim().to_string();
+        }
+    }
+    if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            return text[start..=end].to_string();
+        }
+    }
+    text.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_plan_json() {
+        let response = r#"```json
+{
+  "steps": [
+    {
+      "description": "Check git status",
+      "action": {"type": "shell_command", "command": "git status"},
+      "expected_outcome": "See current repo state"
+    },
+    {
+      "description": "Report result",
+      "action": {"type": "respond", "message": "Done checking status"},
+      "expected_outcome": "User informed"
+    }
+  ]
+}
+```"#;
+        let plan = parse_plan_from_response(response).unwrap();
+        assert_eq!(plan.steps.len(), 2);
+        assert!(matches!(
+            plan.steps[0].action,
+            StepAction::ShellCommand { .. }
+        ));
+    }
+
+    #[test]
+    fn parse_plan_fallback() {
+        let response = "I couldn't understand that, but here's some info...";
+        let plan = parse_plan_from_response(response).unwrap();
+        assert_eq!(plan.steps.len(), 1);
+        assert!(matches!(plan.steps[0].action, StepAction::Respond { .. }));
+    }
+
+    #[test]
+    fn extract_json_from_markdown() {
+        let text = "Here's the plan:\n```json\n{\"steps\":[]}\n```\nDone.";
+        let json = extract_json(text);
+        assert_eq!(json, "{\"steps\":[]}");
+    }
+}

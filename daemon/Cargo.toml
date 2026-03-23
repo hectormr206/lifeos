@@ -45,6 +45,8 @@ rand = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sqlite-vec = "0.1"
 zerocopy = "0.8"
+# Telegram bot
+teloxide = { version = "0.13", features = ["macros"], optional = true }
 # Wake word detection (half pinned to avoid rand 0.8/0.9 conflict with candle-core 0.2)
 half = "=2.4.1"
 rustpotter = { version = "3", optional = true, default-features = false }
@@ -54,3 +56,4 @@ dbus = ["zbus"]
 http-api = ["axum", "tower-http"]
 ui-overlay = ["gtk4", "glib"]
 wake-word = ["rustpotter"]
+telegram = ["teloxide"]

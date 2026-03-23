@@ -30,7 +30,9 @@ mod health;
 #[allow(dead_code)]
 mod keyboard_shortcut;
 mod lab;
+mod llm_router;
 mod memory_plane;
+mod privacy_filter;
 #[cfg(feature = "ui-overlay")]
 mod mini_widget;
 mod models;
@@ -42,7 +44,10 @@ mod permissions;
 mod portal;
 mod screen_capture;
 mod sensory_pipeline;
+mod supervisor;
 mod system;
+mod task_queue;
+mod telegram_bridge;
 mod telemetry;
 mod tuf;
 mod update_scheduler;
@@ -230,6 +235,9 @@ pub struct DaemonState {
     pub visual_comfort_manager: Arc<RwLock<VisualComfortManager>>,
     pub accessibility_manager: Arc<RwLock<AccessibilityManager>>,
     pub lab_manager: Arc<RwLock<LabManager>>,
+    pub llm_router: Arc<RwLock<llm_router::LlmRouter>>,
+    pub task_queue: Arc<task_queue::TaskQueue>,
+    pub supervisor: Arc<supervisor::Supervisor>,
     pub bootstrap_token: Option<String>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
@@ -316,6 +324,21 @@ async fn main() -> anyhow::Result<()> {
             fallback
         });
 
+    // Shared instances for supervisor integration
+    let shared_privacy = Arc::new(privacy_filter::PrivacyFilter::new(
+        privacy_filter::PrivacyLevel::default(),
+    ));
+    let shared_router = Arc::new(RwLock::new(llm_router::LlmRouter::new(
+        privacy_filter::PrivacyLevel::default(),
+    )));
+    let shared_tq = Arc::new(
+        task_queue::TaskQueue::new(&data_dir).unwrap_or_else(|e| {
+            warn!("Failed to open task queue, using /tmp fallback: {}", e);
+            task_queue::TaskQueue::new(std::path::Path::new("/tmp/lifeos"))
+                .expect("fallback task queue must work")
+        }),
+    );
+
     // Initialize state
     let state = Arc::new(DaemonState {
         config: config.clone(),
@@ -379,6 +402,13 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .unwrap()
             }),
+        )),
+        llm_router: shared_router.clone(),
+        task_queue: shared_tq.clone(),
+        supervisor: Arc::new(supervisor::Supervisor::new(
+            shared_tq.clone(),
+            shared_router.clone(),
+            shared_privacy.clone(),
         )),
         bootstrap_token,
         last_health_check: RwLock::new(None),
@@ -534,6 +564,50 @@ async fn main() -> anyhow::Result<()> {
     let metrics_handle = tokio::spawn(run_metrics_collection(state.clone()));
     let sensory_handle = tokio::spawn(run_sensory_runtime(state.clone()));
 
+    // Start supervisor loop with self-healing (restarts on panic)
+    let supervisor_state = state.clone();
+    let supervisor_handle = tokio::spawn(async move {
+        let mut restart_count = 0u32;
+        loop {
+            info!("Starting supervisor loop (restart #{})", restart_count);
+            let sv = supervisor_state.supervisor.clone();
+            let result = tokio::spawn(async move { sv.run().await }).await;
+            match result {
+                Ok(()) => {
+                    info!("Supervisor loop exited cleanly");
+                    break;
+                }
+                Err(e) => {
+                    error!("Supervisor panicked: {}. Restarting in 5s...", e);
+                    restart_count += 1;
+                    if restart_count > 10 {
+                        error!("Supervisor restarted {} times, giving up", restart_count);
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+        }
+    });
+
+    // Start Telegram bridge if configured
+    #[cfg(feature = "telegram")]
+    let telegram_handle = {
+        if let Some(tg_config) = telegram_bridge::TelegramConfig::from_env() {
+            let tq = state.task_queue.clone();
+            let router = state.llm_router.clone();
+            let notify_rx = state.supervisor.subscribe();
+            Some(tokio::spawn(async move {
+                telegram_bridge::run_telegram_bot(tg_config, tq, router, notify_rx).await;
+            }))
+        } else {
+            info!("Telegram bridge: LIFEOS_TELEGRAM_BOT_TOKEN not set, skipping");
+            None
+        }
+    };
+    #[cfg(not(feature = "telegram"))]
+    let telegram_handle: Option<tokio::task::JoinHandle<()>> = None;
+
     // Wait for shutdown signal
     info!("Daemon running. Press Ctrl+C to stop.");
 
@@ -557,6 +631,11 @@ async fn main() -> anyhow::Result<()> {
     update_handle.abort();
     metrics_handle.abort();
     sensory_handle.abort();
+    state.supervisor.stop();
+    supervisor_handle.abort();
+    if let Some(h) = telegram_handle {
+        h.abort();
+    }
     dbus_handle.abort();
     portal_handle.abort();
 
@@ -588,6 +667,9 @@ async fn start_api_server(state: Arc<DaemonState>) {
         visual_comfort_manager: state.visual_comfort_manager.clone(),
         accessibility_manager: state.accessibility_manager.clone(),
         lab_manager: state.lab_manager.clone(),
+        llm_router: state.llm_router.clone(),
+        task_queue: state.task_queue.clone(),
+        supervisor: state.supervisor.clone(),
         event_bus: state.event_bus.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,

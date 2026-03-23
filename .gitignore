@@ -38,3 +38,4 @@ build/
 .env.local
 *.pem
 *.key
+files/etc/lifeos/llm-providers.env

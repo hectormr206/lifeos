@@ -166,6 +166,9 @@ pub struct ApiState {
     pub visual_comfort_manager: Arc<RwLock<VisualComfortManager>>,
     pub accessibility_manager: Arc<RwLock<AccessibilityManager>>,
     pub lab_manager: Arc<RwLock<LabManager>>,
+    pub llm_router: Arc<RwLock<crate::llm_router::LlmRouter>>,
+    pub task_queue: Arc<crate::task_queue::TaskQueue>,
+    pub supervisor: Arc<crate::supervisor::Supervisor>,
     pub event_bus: tokio::sync::broadcast::Sender<crate::events::DaemonEvent>,
     pub config: ApiConfig,
 }
@@ -1406,6 +1409,17 @@ pub fn create_router(state: ApiState) -> Router {
         // Accessibility endpoints
         .route("/accessibility/audit", get(run_accessibility_audit))
         .route("/accessibility/settings", get(get_accessibility_settings))
+        // LLM Router endpoints
+        .route("/llm/chat", post(post_llm_chat))
+        .route("/llm/providers", get(get_llm_providers))
+        // Task Queue endpoints
+        .route("/tasks", get(get_tasks))
+        .route("/tasks", post(post_task))
+        .route("/tasks/summary", get(get_tasks_summary))
+        .route("/tasks/:id", get(get_task_by_id))
+        .route("/tasks/:id/cancel", post(cancel_task))
+        // Supervisor endpoints
+        .route("/supervisor/status", get(get_supervisor_status))
         // Lab endpoints
         .nest("/lab", lab::lab_routes())
         .route_layer(middleware::from_fn_with_state(
@@ -8792,6 +8806,250 @@ async fn get_accessibility_settings(
         "screen_reader_support": settings.screen_reader_support,
         "keyboard_navigation": settings.keyboard_navigation,
     })))
+}
+
+// ==================== TASK QUEUE ENDPOINTS ====================
+
+async fn post_task(
+    State(state): State<ApiState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let objective = body
+        .get("objective")
+        .and_then(|o| o.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if objective.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "bad_request".into(),
+                message: "objective is required".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let priority = body
+        .get("priority")
+        .and_then(|p| serde_json::from_value(p.clone()).ok())
+        .unwrap_or(crate::task_queue::TaskPriority::Normal);
+
+    let source = body
+        .get("source")
+        .and_then(|s| s.as_str())
+        .unwrap_or("api")
+        .to_string();
+
+    let create = crate::task_queue::TaskCreate {
+        objective,
+        priority,
+        source,
+        max_attempts: body
+            .get("max_attempts")
+            .and_then(|m| m.as_u64())
+            .unwrap_or(3) as u32,
+    };
+
+    match state.task_queue.enqueue(create) {
+        Ok(task) => Ok(Json(serde_json::to_value(task).unwrap_or_default())),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "enqueue_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_tasks(
+    State(state): State<ApiState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let limit = params
+        .get("limit")
+        .and_then(|l| l.parse::<u32>().ok())
+        .unwrap_or(50);
+
+    let status_filter = params
+        .get("status")
+        .and_then(|s| serde_json::from_value(serde_json::Value::String(s.clone())).ok());
+
+    match state.task_queue.list(status_filter, limit) {
+        Ok(tasks) => Ok(Json(serde_json::json!({ "tasks": tasks, "count": tasks.len() }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "list_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_tasks_summary(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.task_queue.summary() {
+        Ok(summary) => Ok(Json(summary)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "summary_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_task_by_id(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.task_queue.get(&id) {
+        Ok(Some(task)) => Ok(Json(serde_json::to_value(task).unwrap_or_default())),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "not_found".into(),
+                message: format!("Task {} not found", id),
+                code: 404,
+            }),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "get_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn cancel_task(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.task_queue.cancel(&id) {
+        Ok(()) => Ok(Json(serde_json::json!({"status": "cancelled", "id": id}))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "cancel_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_supervisor_status(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let running = state.supervisor.is_running();
+    let summary = state.task_queue.summary().unwrap_or_default();
+    Ok(Json(serde_json::json!({
+        "running": running,
+        "queue": summary,
+    })))
+}
+
+// ==================== LLM ROUTER ENDPOINTS ====================
+
+async fn post_llm_chat(
+    State(state): State<ApiState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    use crate::llm_router::{ChatMessage, RouterRequest, TaskComplexity};
+    use crate::privacy_filter::SensitivityLevel;
+
+    let messages: Vec<ChatMessage> = body
+        .get("messages")
+        .and_then(|m| serde_json::from_value(m.clone()).ok())
+        .unwrap_or_default();
+
+    if messages.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "bad_request".into(),
+                message: "messages array is required".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let complexity = body
+        .get("complexity")
+        .and_then(|c| serde_json::from_value::<TaskComplexity>(c.clone()).ok());
+
+    let sensitivity = body
+        .get("sensitivity")
+        .and_then(|s| serde_json::from_value::<SensitivityLevel>(s.clone()).ok());
+
+    let preferred_provider = body
+        .get("provider")
+        .and_then(|p| p.as_str())
+        .map(String::from);
+
+    let max_tokens = body
+        .get("max_tokens")
+        .and_then(|t| t.as_u64())
+        .and_then(|t| u32::try_from(t).ok());
+
+    let request = RouterRequest {
+        messages,
+        complexity,
+        sensitivity,
+        preferred_provider,
+        max_tokens,
+    };
+
+    let router = state.llm_router.read().await;
+    match router.chat(&request).await {
+        Ok(response) => Ok(Json(serde_json::json!({
+            "text": response.text,
+            "provider": response.provider,
+            "model": response.model,
+            "tokens_used": response.tokens_used,
+            "latency_ms": response.latency_ms,
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "llm_routing_failed".into(),
+                message: format!("LLM routing failed: {}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_llm_providers(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let router = state.llm_router.read().await;
+    let summary = router.cost_summary();
+
+    let providers: Vec<serde_json::Value> = summary
+        .into_iter()
+        .map(|(name, requests, tokens, failures)| {
+            serde_json::json!({
+                "name": name,
+                "total_requests": requests,
+                "total_output_tokens": tokens,
+                "total_failures": failures,
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "providers": providers })))
 }
 
 // ==================== SERVER STARTUP ====================
