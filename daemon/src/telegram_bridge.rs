@@ -75,10 +75,33 @@ mod inner {
             loop {
                 match notify_rx.recv().await {
                     Ok(notification) => {
-                        let text = format_notification(&notification);
-                        for &chat_id in &notify_chat_ids {
-                            if let Err(e) = notify_bot.send_message(ChatId(chat_id), &text).await {
-                                error!("Telegram notification failed: {}", e);
+                        // Approval requests get inline keyboard buttons
+                        if let SupervisorNotification::ApprovalRequired {
+                            ref task_id,
+                            ref action_description,
+                            ..
+                        } = notification
+                        {
+                            for &chat_id in &notify_chat_ids {
+                                if let Err(e) = send_approval_request(
+                                    &notify_bot,
+                                    ChatId(chat_id),
+                                    action_description,
+                                    task_id,
+                                )
+                                .await
+                                {
+                                    error!("Telegram approval request failed: {}", e);
+                                }
+                            }
+                        } else {
+                            let text = format_notification(&notification);
+                            for &chat_id in &notify_chat_ids {
+                                if let Err(e) =
+                                    notify_bot.send_message(ChatId(chat_id), &text).await
+                                {
+                                    error!("Telegram notification failed: {}", e);
+                                }
                             }
                         }
                     }
@@ -827,6 +850,14 @@ mod inner {
                     "Reporte diario de LifeOS\nUptime: {:.1}h\nTareas: {}",
                     uptime_hours,
                     serde_json::to_string_pretty(summary).unwrap_or_else(|_| "{}".into()),
+                )
+            }
+            SupervisorNotification::ApprovalRequired {
+                action_description, ..
+            } => {
+                format!(
+                    "Aprobacion requerida:\n{}",
+                    truncate(action_description, 500)
                 )
             }
         }

@@ -55,6 +55,12 @@ pub struct HealthTracker {
     hydration_interval_minutes: u64,
 }
 
+impl Default for HealthTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HealthTracker {
     pub fn new() -> Self {
         Self {

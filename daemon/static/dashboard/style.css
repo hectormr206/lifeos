@@ -123,6 +123,48 @@ main {
   gap: 24px;
 }
 
+/* === Tabs Navigation === */
+.dashboard-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 8px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: calc(var(--radius) * 1.2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+[data-theme="light"] .dashboard-tabs { background: rgba(0, 0, 0, 0.04); border-color: rgba(0,0,0,0.06); }
+.dashboard-tabs::-webkit-scrollbar { display: none; }
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 10px 20px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: all var(--transition);
+  white-space: nowrap;
+  flex: 1;
+  text-align: center;
+}
+.tab-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+[data-theme="light"] .tab-btn:hover { background: rgba(0, 0, 0, 0.05); }
+
+.tab-btn.active {
+  color: #fff;
+  background: linear-gradient(180deg, rgba(108, 99, 255, 1), rgba(90, 84, 232, 1));
+  box-shadow: 0 4px 12px rgba(108, 99, 255, 0.3);
+}
+
+.tab-contents { width: 100%; }
+.tab-pane { display: none; flex-direction: column; gap: 24px; animation: fadeIn 0.4s ease; }
+.tab-pane.active { display: flex; }
+
 h2 {
   font-size: 1.1rem;
   font-weight: 600;
@@ -461,8 +503,10 @@ section { scroll-margin-top: 92px; }
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
   transition: background var(--transition), border-color var(--transition);
 }
+[data-theme="light"] .control-card { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.03); }
 .control-card:hover { background: var(--bg-card-hover); }
 .control-card.expanded { border-color: var(--accent); }
 
@@ -779,8 +823,10 @@ section { scroll-margin-top: 92px; }
   padding: 1.5rem;
   background: var(--bg-card);
   border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
   margin-bottom: 1.5rem;
 }
+.supervisor-section h2 {
 .supervisor-section h2 {
   display: flex;
   align-items: center;
@@ -841,7 +887,7 @@ section { scroll-margin-top: 92px; }
 }
 
 /* === Chat Section === */
-.chat-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 1.5rem; }
+.chat-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
 .chat-container { display: flex; flex-direction: column; height: 350px; }
 .chat-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; background: var(--bg); border-radius: 8px; margin-bottom: 0.75rem; }
 .chat-msg { padding: 0.5rem 0.75rem; border-radius: 12px; max-width: 85%; font-size: 0.9rem; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
@@ -854,9 +900,18 @@ section { scroll-margin-top: 92px; }
 .chat-send-btn { padding: 0.6rem 1.2rem; border-radius: 20px; background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: 600; }
 .chat-send-btn:hover { opacity: 0.9; }
 
+/* === OS Config Section === */
+.os-config-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
+.os-config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
+.os-card { padding: 1rem; background: var(--bg); border-radius: 8px; display: flex; flex-direction: column; gap: 0.5rem; }
+.os-card h3 { font-size: 0.95rem; margin-bottom: 0.25rem; }
+.os-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+
 /* === Resources Section === */
-.resources-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 1.5rem; }
+.resources-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
 .resources-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+.resource-item { padding: 1rem; background: var(--bg); border-radius: 8px; }
+.resource-label { font-weight: 600; margin-bottom: 0.5rem; font-size: 0.85rem; display: block; }
 .resource-card { padding: 1rem; background: var(--bg); border-radius: 8px; }
 .resource-header { font-weight: 600; margin-bottom: 0.5rem; font-size: 0.85rem; }
 .resource-bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin-bottom: 0.4rem; }
@@ -865,7 +920,7 @@ section { scroll-margin-top: 92px; }
 .resource-value { font-size: 0.8rem; color: var(--text-muted); }
 
 /* === Providers Section === */
-.providers-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 1.5rem; }
+.providers-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
 .providers-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
 .provider-card { padding: 0.75rem; background: var(--bg); border-radius: 8px; border-left: 3px solid var(--border); }
 .provider-card[data-tier="free"] { border-left-color: var(--success); }
@@ -883,7 +938,7 @@ section { scroll-margin-top: 92px; }
 .key-status { font-size: 1.1rem; text-align: center; }
 
 /* === Models Section === */
-.models-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 1.5rem; }
+.models-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
 .models-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 0.75rem; }
 .model-card { padding: 0.75rem; background: var(--bg); border-radius: 8px; display: flex; flex-direction: column; gap: 0.25rem; }
 .model-card.active { border: 1px solid var(--accent); }
@@ -892,14 +947,14 @@ section { scroll-margin-top: 92px; }
 .model-badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.7rem; background: var(--accent); color: #fff; width: fit-content; }
 
 /* === Metrics Section === */
-.metrics-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 1.5rem; }
+.metrics-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
 .metrics-roles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.5rem; margin-top: 1rem; }
 .metric-role-card { padding: 0.6rem; background: var(--bg); border-radius: 8px; font-size: 0.8rem; }
 .metric-role-name { font-weight: 600; text-transform: capitalize; }
 .metric-role-stats { color: var(--text-muted); font-size: 0.75rem; }
 
 /* === Memory Section === */
-.memory-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 1.5rem; }
+.memory-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
 .memory-search { display: flex; gap: 0.5rem; margin: 1rem 0; }
 .memory-search input { flex: 1; padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
 .memory-entries { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
@@ -909,7 +964,7 @@ section { scroll-margin-top: 92px; }
 .memory-entry-meta { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; }
 
 /* === Local AI Section === */
-.localai-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 1.5rem; }
+.localai-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
 .localai-grid { display: flex; flex-direction: column; gap: 1.5rem; }
 .localai-config { display: flex; flex-direction: column; gap: 0.75rem; }
 .localai-config h3, .localai-models h3, .localai-catalog h3 { font-size: 0.95rem; margin-bottom: 0.5rem; }
@@ -923,7 +978,7 @@ section { scroll-margin-top: 92px; }
 .catalog-desc { font-size: 0.75rem; color: var(--text-muted); }
 
 /* === Scheduled Tasks === */
-.sched-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 1.5rem; }
+.sched-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
 .sched-list { max-height: 200px; overflow-y: auto; margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.4rem; }
 .sched-item { padding: 0.5rem; background: var(--bg); border-radius: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; }
 .sched-item-info { flex: 1; }

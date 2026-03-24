@@ -269,20 +269,15 @@ fn has_medium_sensitivity_patterns(text: &str) -> bool {
     medium_keywords.iter().any(|kw| lower.contains(kw))
 }
 
-/// Replace all matches of the given regex-like patterns with [REDACTED].
+/// Replace all matches of sensitive patterns with [REDACTED].
 /// Returns the count of replacements made.
-///
-/// NOTE: We use simple string matching for now to avoid adding the `regex`
-/// crate. For production, consider switching to `regex` for more robust
-/// pattern matching.
+/// Uses manual string scanning to avoid the `regex` crate dependency.
 fn redact_pattern(text: &mut String, patterns: &[&str]) -> u32 {
     let mut count = 0u32;
 
     for pattern in patterns {
-        // For simple keyword-based patterns, do substring replacement
-        // This is a simplified approach — a full regex would be more robust
         if pattern.starts_with("(?i)") {
-            // Case-insensitive keyword match
+            // Case-insensitive keyword match for key=value / key: value lines
             let keyword = pattern
                 .trim_start_matches("(?i)")
                 .split("\\s")
@@ -292,7 +287,6 @@ fn redact_pattern(text: &mut String, patterns: &[&str]) -> u32 {
                 .replace("[_-]?", "")
                 .to_lowercase();
             if !keyword.is_empty() && text.to_lowercase().contains(&keyword) {
-                // Find lines containing the keyword and redact the value part
                 let lines: Vec<String> = text
                     .lines()
                     .map(|line| {
@@ -311,16 +305,273 @@ fn redact_pattern(text: &mut String, patterns: &[&str]) -> u32 {
                 *text = lines.join("\n");
             }
         } else if pattern.contains("Bearer") {
-            if let Some(pos) = text.find("Bearer ") {
-                let end = text[pos + 7..]
+            // Redact Bearer tokens — search from an advancing offset to avoid infinite loop
+            let mut search_from = 0;
+            while let Some(rel_pos) = text[search_from..].find("Bearer ") {
+                let pos = search_from + rel_pos;
+                let after = pos + 7;
+                // Skip already-redacted tokens
+                if text[after..].starts_with("[REDACTED]") {
+                    search_from = after + 10;
+                    continue;
+                }
+                let end = text[after..]
                     .find(|c: char| c.is_whitespace())
-                    .map(|p| pos + 7 + p)
+                    .map(|p| after + p)
                     .unwrap_or(text.len());
                 text.replace_range(pos..end, "Bearer [REDACTED]");
                 count += 1;
+                search_from = pos + 17; // len("Bearer [REDACTED]")
+            }
+        } else if pattern.contains("@") {
+            // Email redaction: find word@word.tld patterns
+            count += redact_emails(text);
+        } else if pattern.contains("\\d{4}") && pattern.contains("\\d{4}") {
+            // Credit card redaction: find 4-4-4-4 digit groups
+            count += redact_credit_cards(text);
+        } else if pattern.contains("\\+?\\d") {
+            // Phone number redaction
+            count += redact_phone_numbers(text);
+        } else if pattern.contains("192\\.168") {
+            // Private IP redaction
+            count += redact_private_ips(text);
+        }
+    }
+    count
+}
+
+/// Redact email addresses (word@domain.tld)
+fn redact_emails(text: &mut String) -> u32 {
+    let mut count = 0u32;
+    let chars: Vec<char> = text.chars().collect();
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '@' && i > 0 {
+            // Find start of local part
+            let mut start = i;
+            while start > 0
+                && (chars[start - 1].is_alphanumeric() || "._%+-".contains(chars[start - 1]))
+            {
+                start -= 1;
+            }
+            // Find end of domain
+            let mut end = i + 1;
+            while end < chars.len() && (chars[end].is_alphanumeric() || ".-".contains(chars[end])) {
+                end += 1;
+            }
+            // Must have local part, @, and domain with dot
+            let domain = &text[text.char_indices().nth(i + 1).map(|x| x.0).unwrap_or(i)
+                ..text
+                    .char_indices()
+                    .nth(end)
+                    .map(|x| x.0)
+                    .unwrap_or(text.len())];
+            if start < i && domain.contains('.') {
+                // Replace everything from start to end
+                let before_len = result.len() - (i - start);
+                result.truncate(before_len);
+                result.push_str("[EMAIL_REDACTED]");
+                count += 1;
+                i = end;
+                continue;
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    if count > 0 {
+        *text = result;
+    }
+    count
+}
+
+/// Redact credit card numbers (groups of 4 digits separated by spaces or dashes)
+fn redact_credit_cards(text: &mut String) -> u32 {
+    let mut count = 0u32;
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            // Try to match 4-4-4-4 pattern
+            let start = i;
+            let mut groups = 0;
+            let mut j = i;
+            while groups < 4 && j < chars.len() {
+                let mut digits = 0;
+                while j < chars.len() && chars[j].is_ascii_digit() {
+                    digits += 1;
+                    j += 1;
+                }
+                if digits == 4 {
+                    groups += 1;
+                    if groups < 4 && j < chars.len() && (chars[j] == ' ' || chars[j] == '-') {
+                        j += 1; // skip separator
+                    }
+                } else {
+                    break;
+                }
+            }
+            if groups == 4 {
+                result.push_str("[CC_REDACTED]");
+                count += 1;
+                i = j;
+                continue;
+            }
+            // Not a CC, emit the chars normally
+            result.push(chars[start]);
+            i = start + 1;
+            continue;
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    if count > 0 {
+        *text = result;
+    }
+    count
+}
+
+/// Redact phone numbers (sequences of 7+ digits with optional + prefix, spaces, dashes, parens)
+fn redact_phone_numbers(text: &mut String) -> u32 {
+    let mut count = 0u32;
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '+'
+            || (chars[i].is_ascii_digit() && (i == 0 || !chars[i - 1].is_alphanumeric()))
+        {
+            let start = i;
+            let mut j = i;
+            let mut digit_count = 0;
+            if chars[j] == '+' {
+                j += 1;
+            }
+            while j < chars.len()
+                && (chars[j].is_ascii_digit()
+                    || chars[j] == ' '
+                    || chars[j] == '-'
+                    || chars[j] == '('
+                    || chars[j] == ')')
+            {
+                if chars[j].is_ascii_digit() {
+                    digit_count += 1;
+                }
+                j += 1;
+            }
+            // Phone numbers have 7-15 digits
+            if (7..=15).contains(&digit_count) {
+                // Don't match if preceded/followed by alphanumeric (might be hex or other data)
+                let preceded_ok = start == 0 || !chars[start - 1].is_alphanumeric();
+                let followed_ok = j >= chars.len() || !chars[j].is_alphanumeric();
+                if preceded_ok && followed_ok {
+                    result.push_str("[PHONE_REDACTED]");
+                    count += 1;
+                    i = j;
+                    continue;
+                }
+            }
+            result.push(chars[start]);
+            i = start + 1;
+            continue;
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    if count > 0 {
+        *text = result;
+    }
+    count
+}
+
+/// Redact private IP addresses (192.168.x.x, 10.x.x.x, 172.16-31.x.x)
+fn redact_private_ips(text: &mut String) -> u32 {
+    let mut count = 0u32;
+    let prefixes = ["192.168.", "10."];
+
+    for prefix in &prefixes {
+        while let Some(pos) = text.find(prefix) {
+            let preceded_ok = pos == 0 || !text.as_bytes()[pos - 1].is_ascii_digit();
+            if !preceded_ok {
+                break;
+            }
+            let mut end = pos + prefix.len();
+            let bytes = text.as_bytes();
+            // Consume remaining octets (up to 2 more groups of digits.digits)
+            let mut octets = 0;
+            while end < bytes.len() && octets < 2 {
+                let digit_start = end;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if end == digit_start {
+                    break;
+                }
+                octets += 1;
+                if octets < 2 && end < bytes.len() && bytes[end] == b'.' {
+                    end += 1;
+                }
+            }
+            if octets >= 1 {
+                text.replace_range(pos..end, "[IP_REDACTED]");
+                count += 1;
+            } else {
+                break;
             }
         }
     }
+
+    // 172.16-31.x.x
+    let mut search_from = 0;
+    while let Some(pos) = text[search_from..].find("172.") {
+        let abs_pos = search_from + pos;
+        let preceded_ok = abs_pos == 0 || !text.as_bytes()[abs_pos - 1].is_ascii_digit();
+        if !preceded_ok {
+            search_from = abs_pos + 4;
+            continue;
+        }
+        // Check second octet is 16-31
+        let rest = &text[abs_pos + 4..];
+        let dot_pos = rest.find('.');
+        if let Some(dp) = dot_pos {
+            if let Ok(second) = rest[..dp].parse::<u8>() {
+                if (16..=31).contains(&second) {
+                    // Find end of IP
+                    let mut end = abs_pos + 4 + dp + 1;
+                    let bytes = text.as_bytes();
+                    let mut octets = 0;
+                    while end < bytes.len() && octets < 2 {
+                        let digit_start = end;
+                        while end < bytes.len() && bytes[end].is_ascii_digit() {
+                            end += 1;
+                        }
+                        if end == digit_start {
+                            break;
+                        }
+                        octets += 1;
+                        if octets < 2 && end < bytes.len() && bytes[end] == b'.' {
+                            end += 1;
+                        }
+                    }
+                    if octets >= 1 {
+                        text.replace_range(abs_pos..end, "[IP_REDACTED]");
+                        count += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        search_from = abs_pos + 4;
+    }
+
     count
 }
 
@@ -361,6 +612,38 @@ mod tests {
         let result = filter.sanitize("Authorization: Bearer sk-abc123xyz");
         assert!(result.sanitized_text.contains("[REDACTED]"));
         assert!(!result.sanitized_text.contains("sk-abc123xyz"));
+    }
+
+    #[test]
+    fn test_sanitize_email() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("contact me at user@example.com please");
+        assert!(result.sanitized_text.contains("[EMAIL_REDACTED]"));
+        assert!(!result.sanitized_text.contains("user@example.com"));
+    }
+
+    #[test]
+    fn test_sanitize_credit_card() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("my card is 4111 1111 1111 1111 ok");
+        assert!(result.sanitized_text.contains("[CC_REDACTED]"));
+        assert!(!result.sanitized_text.contains("4111"));
+    }
+
+    #[test]
+    fn test_sanitize_phone() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("call me at +52 55 1234 5678");
+        assert!(result.sanitized_text.contains("[PHONE_REDACTED]"));
+        assert!(!result.sanitized_text.contains("1234"));
+    }
+
+    #[test]
+    fn test_sanitize_private_ip() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("server at 192.168.1.100 internal");
+        assert!(result.sanitized_text.contains("[IP_REDACTED]"));
+        assert!(!result.sanitized_text.contains("192.168"));
     }
 
     #[test]

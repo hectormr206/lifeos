@@ -46,6 +46,11 @@ pub enum SupervisorNotification {
         summary: serde_json::Value,
         uptime_hours: f64,
     },
+    ApprovalRequired {
+        task_id: String,
+        objective: String,
+        action_description: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +147,7 @@ pub struct Supervisor {
     router: Arc<RwLock<LlmRouter>>,
     privacy: Arc<PrivacyFilter>,
     memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
-    scheduler: Option<Arc<ScheduledTaskManager>>,
+    scheduler: std::sync::Mutex<Option<Arc<ScheduledTaskManager>>>,
     running: Arc<std::sync::atomic::AtomicBool>,
     work_dir: PathBuf,
     notify_tx: broadcast::Sender<SupervisorNotification>,
@@ -192,7 +197,7 @@ impl Supervisor {
             router,
             privacy,
             memory,
-            scheduler: None,
+            scheduler: std::sync::Mutex::new(None),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             work_dir,
             notify_tx,
@@ -202,8 +207,8 @@ impl Supervisor {
     }
 
     /// Attach a scheduled task manager.
-    pub fn set_scheduler(&mut self, scheduler: Arc<ScheduledTaskManager>) {
-        self.scheduler = Some(scheduler);
+    pub fn set_scheduler(&self, scheduler: Arc<ScheduledTaskManager>) {
+        *self.scheduler.lock().unwrap_or_else(|e| e.into_inner()) = Some(scheduler);
     }
 
     /// Get agent metrics snapshot.
@@ -285,7 +290,12 @@ impl Supervisor {
 
     /// Check for due scheduled tasks and enqueue them.
     async fn check_scheduled_tasks(&self) {
-        let scheduler = match &self.scheduler {
+        let scheduler = match self
+            .scheduler
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
             Some(s) => s,
             None => return,
         };
@@ -1144,11 +1154,13 @@ Always end with a "respond" step summarizing what was done."#,
 
     async fn execute_step(&self, step: &PlanStep) -> Result<String> {
         let risk = Self::classify_risk(&step.action);
+        let desc = match &step.action {
+            StepAction::ShellCommand { command } => command.clone(),
+            StepAction::WriteFile { path, .. } => format!("write_file: {}", path),
+            _ => step.description.clone(),
+        };
+
         if risk == RiskLevel::High {
-            let desc = match &step.action {
-                StepAction::ShellCommand { command } => command.clone(),
-                _ => step.description.clone(),
-            };
             warn!("BLOCKED high-risk action: {}", desc);
             let _ = self.notify_tx.send(SupervisorNotification::TaskFailed {
                 task_id: "risk-block".into(),
@@ -1161,6 +1173,24 @@ Always end with a "respond" step summarizing what was done."#,
                 "High-risk action blocked: {}. Execute manually if intended.",
                 desc
             );
+        }
+
+        if risk == RiskLevel::Medium {
+            info!(
+                "Medium-risk action detected, notifying for approval: {}",
+                desc
+            );
+            let _ = self
+                .notify_tx
+                .send(SupervisorNotification::ApprovalRequired {
+                    task_id: "medium-risk".into(),
+                    objective: desc.clone(),
+                    action_description: format!(
+                        "Accion de riesgo medio: {}\n{}",
+                        step.description, desc
+                    ),
+                });
+            // Execute but notify — the notification allows user to track what happened
         }
 
         match &step.action {

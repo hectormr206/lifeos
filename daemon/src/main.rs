@@ -198,6 +198,122 @@ fn runtime_dir_is_writable(path: &std::path::Path) -> bool {
     }
 }
 
+/// Load LLM provider API keys from env files, creating the template if it doesn't exist.
+///
+/// Reads from two locations (system-wide + per-user override):
+///   /etc/lifeos/llm-providers.env
+///   ~/.config/lifeos/llm-providers.env
+///
+/// For each KEY=VALUE line where the env var is not yet set, injects it into the process.
+/// Creates the file with an empty template on first run so future edits or dashboard
+/// updates have a canonical location to write to.
+fn ensure_llm_provider_env() {
+    // Search paths in priority order: system → user config → repo dev copy
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let config_dir =
+        std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| format!("{}/.config", home));
+    let env_paths = [
+        PathBuf::from("/etc/lifeos/llm-providers.env"),
+        PathBuf::from(&config_dir).join("lifeos/llm-providers.env"),
+        // Dev/repo copy — keys file the user edited during development
+        PathBuf::from(&home)
+            .join("personalProjects/gama/lifeos/files/etc/lifeos/llm-providers.env"),
+    ];
+
+    let mut loaded_any = false;
+
+    for path in &env_paths {
+        if path.exists() {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    if let Some((key, value)) = line.split_once('=') {
+                        let key = key.trim();
+                        let value = value.trim();
+                        if !value.is_empty() && std::env::var(key).unwrap_or_default().is_empty() {
+                            // SAFETY: called early in main() before threads are spawned.
+                            unsafe { std::env::set_var(key, value) };
+                            info!("Loaded {} from {}", key, path.display());
+                            loaded_any = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Create the system-wide template if it doesn't exist (for dashboard/user to fill in).
+    let system_env = &env_paths[0];
+    if !system_env.exists() {
+        if let Some(parent) = system_env.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let template = "\
+# LifeOS LLM Provider API Keys
+# Edita este archivo o usa el Dashboard para configurar las keys.
+# El daemon se reinicia automaticamente al detectar cambios.
+
+# Cerebras (gratis, zero data retention, 2000+ tok/s)
+CEREBRAS_API_KEY=
+
+# Groq (gratis, zero data retention, 500-1000 tok/s)
+GROQ_API_KEY=
+
+# OpenRouter (multiple providers)
+OPENROUTER_API_KEY=
+
+# Telegram Bot (obten tu token de @BotFather)
+LIFEOS_TELEGRAM_BOT_TOKEN=
+LIFEOS_TELEGRAM_CHAT_ID=
+
+# Email (opcional, para bridge de email)
+LIFEOS_EMAIL_IMAP_HOST=
+LIFEOS_EMAIL_IMAP_USER=
+LIFEOS_EMAIL_IMAP_PASS=
+LIFEOS_EMAIL_SMTP_HOST=
+";
+        match std::fs::write(system_env, template) {
+            Ok(()) => {
+                let _ = std::fs::set_permissions(
+                    system_env,
+                    std::os::unix::fs::PermissionsExt::from_mode(0o600),
+                );
+                info!(
+                    "Created LLM providers template at {} — edit it to enable Telegram, Cerebras, etc.",
+                    system_env.display()
+                );
+            }
+            Err(e) => {
+                // /etc may be read-only on bootc — try user config dir instead
+                let user_env = &env_paths[1];
+                if !user_env.exists() {
+                    if let Some(parent) = user_env.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    if let Err(e2) = std::fs::write(user_env, template) {
+                        warn!(
+                            "Could not create LLM providers env at {} or {}: {}, {}",
+                            system_env.display(),
+                            user_env.display(),
+                            e,
+                            e2
+                        );
+                    } else {
+                        info!("Created LLM providers template at {}", user_env.display());
+                    }
+                }
+            }
+        }
+    }
+
+    if !loaded_any {
+        info!("No LLM provider keys found. Configure them in /etc/lifeos/llm-providers.env or via the Dashboard.");
+    }
+}
+
 #[cfg(feature = "ui-overlay")]
 fn ensure_graphical_environment() {
     if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
@@ -251,6 +367,9 @@ pub struct DaemonState {
     pub llm_router: Arc<RwLock<llm_router::LlmRouter>>,
     pub task_queue: Arc<task_queue::TaskQueue>,
     pub supervisor: Arc<supervisor::Supervisor>,
+    pub scheduled_tasks: Arc<scheduled_tasks::ScheduledTaskManager>,
+    pub health_tracker: Arc<tokio::sync::Mutex<health_tracking::HealthTracker>>,
+    pub calendar: Arc<calendar::CalendarManager>,
     pub bootstrap_token: Option<String>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
@@ -273,6 +392,11 @@ async fn main() -> anyhow::Result<()> {
     info!("║                        v0.1.0                                ║");
     info!("║                                                              ║");
     info!("╚══════════════════════════════════════════════════════════════╝");
+
+    // Auto-load LLM provider keys from env files (creates template if missing).
+    // This ensures keys are available even when systemd EnvironmentFile didn't load
+    // (e.g. first boot before the file existed, or when running outside systemd).
+    ensure_llm_provider_env();
 
     // Load configuration
     let config = load_config().await?;
@@ -423,6 +547,21 @@ async fn main() -> anyhow::Result<()> {
             shared_privacy.clone(),
             Some(shared_memory.clone()),
         )),
+        scheduled_tasks: Arc::new(
+            scheduled_tasks::ScheduledTaskManager::new(&data_dir).unwrap_or_else(|e| {
+                warn!("Failed to init ScheduledTaskManager: {}", e);
+                scheduled_tasks::ScheduledTaskManager::new(&std::env::temp_dir()).unwrap()
+            }),
+        ),
+        health_tracker: Arc::new(tokio::sync::Mutex::new(
+            health_tracking::HealthTracker::new(),
+        )),
+        calendar: Arc::new(
+            calendar::CalendarManager::new(&data_dir).unwrap_or_else(|e| {
+                warn!("Failed to init CalendarManager: {}", e);
+                calendar::CalendarManager::new(&std::env::temp_dir()).unwrap()
+            }),
+        ),
         bootstrap_token,
         last_health_check: RwLock::new(None),
         last_update_check: RwLock::new(None),
@@ -430,6 +569,11 @@ async fn main() -> anyhow::Result<()> {
         wake_word_notify: wake_word_notify.clone(),
         event_bus: event_tx,
     });
+
+    // Attach scheduled tasks manager to supervisor.
+    state
+        .supervisor
+        .set_scheduler(state.scheduled_tasks.clone());
 
     // Attach event bus to overlay manager for real-time UI broadcasts.
     {
@@ -577,6 +721,72 @@ async fn main() -> anyhow::Result<()> {
     let metrics_handle = tokio::spawn(run_metrics_collection(state.clone()));
     let sensory_handle = tokio::spawn(run_sensory_runtime(state.clone()));
 
+    // Proactive notifications loop — checks every 5 minutes
+    let proactive_state = state.clone();
+    let _proactive_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            let alerts = proactive::check_all(Some(&proactive_state.task_queue)).await;
+            for alert in &alerts {
+                warn!("Proactive alert [{:?}]: {}", alert.severity, alert.message);
+                // Send as notification via event bus
+                let _ = proactive_state
+                    .event_bus
+                    .send(events::DaemonEvent::Notification {
+                        priority: match alert.severity {
+                            proactive::AlertSeverity::Critical => "critical".into(),
+                            proactive::AlertSeverity::Warning => "warning".into(),
+                            proactive::AlertSeverity::Info => "info".into(),
+                        },
+                        message: alert.message.clone(),
+                    });
+            }
+        }
+    });
+
+    // Health tracking tick — increments active minutes every 60s
+    let health_tracking_state = state.clone();
+    let _health_tracking_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let mut tracker = health_tracking_state.health_tracker.lock().await;
+            tracker.tick_active();
+            let reminders = tracker.check_reminders();
+            for reminder in &reminders {
+                let _ = health_tracking_state
+                    .event_bus
+                    .send(events::DaemonEvent::Notification {
+                        priority: "info".into(),
+                        message: reminder.message.clone(),
+                    });
+            }
+        }
+    });
+
+    // Calendar reminder check — every 60s checks for due reminders
+    let calendar_state = state.clone();
+    let _calendar_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            if let Ok(reminders) = calendar_state.calendar.due_reminders() {
+                for event in &reminders {
+                    let _ = calendar_state
+                        .event_bus
+                        .send(events::DaemonEvent::Notification {
+                            priority: "info".into(),
+                            message: format!(
+                                "Recordatorio: {} a las {}",
+                                event.title, event.start_time
+                            ),
+                        });
+                }
+            }
+        }
+    });
+
     // Start supervisor loop with self-healing (restarts on panic)
     let supervisor_state = state.clone();
     let supervisor_handle = tokio::spawn(async move {
@@ -683,6 +893,9 @@ async fn start_api_server(state: Arc<DaemonState>) {
         llm_router: state.llm_router.clone(),
         task_queue: state.task_queue.clone(),
         supervisor: state.supervisor.clone(),
+        scheduled_tasks: state.scheduled_tasks.clone(),
+        health_tracker: state.health_tracker.clone(),
+        calendar: state.calendar.clone(),
         event_bus: state.event_bus.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,

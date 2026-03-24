@@ -1,12 +1,13 @@
 //! Proactive notifications — Monitors system state and generates alerts.
 //!
-//! Checks disk space, memory pressure, long sessions, and system health,
-//! then sends notifications via the supervisor notification channel.
+//! Checks disk space, memory pressure, long sessions, stuck tasks, and
+//! system health, then sends notifications via the supervisor notification channel.
 
-// log used when integrated with supervisor
+use log::info;
 #[allow(unused_imports)]
-use log::{info, warn};
+use log::warn;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProactiveAlert {
@@ -35,27 +36,31 @@ pub enum AlertSeverity {
 }
 
 /// Run all proactive checks and return any alerts.
-pub async fn check_all() -> Vec<ProactiveAlert> {
+pub async fn check_all(
+    task_queue: Option<&Arc<crate::task_queue::TaskQueue>>,
+) -> Vec<ProactiveAlert> {
     let mut alerts = Vec::new();
 
-    // Disk space check
     if let Some(alert) = check_disk_space().await {
         alerts.push(alert);
     }
 
-    // Memory pressure
     if let Some(alert) = check_memory().await {
         alerts.push(alert);
     }
 
-    // Long session (uptime without break)
     if let Some(alert) = check_session_duration().await {
         alerts.push(alert);
     }
 
-    // Stuck tasks
-    if let Some(alert) = check_stuck_tasks().await {
-        alerts.push(alert);
+    if let Some(tq) = task_queue {
+        if let Some(alert) = check_stuck_tasks(tq).await {
+            alerts.push(alert);
+        }
+    }
+
+    if !alerts.is_empty() {
+        info!("Proactive check found {} alert(s)", alerts.len());
     }
 
     alerts
@@ -166,9 +171,41 @@ async fn check_session_duration() -> Option<ProactiveAlert> {
     None
 }
 
-async fn check_stuck_tasks() -> Option<ProactiveAlert> {
+async fn check_stuck_tasks(
+    task_queue: &Arc<crate::task_queue::TaskQueue>,
+) -> Option<ProactiveAlert> {
     // Check for tasks stuck in "running" for more than 30 minutes
-    // This would need access to the task queue — for now, skip
-    // (will be connected when integrated with supervisor)
-    None
+    let tasks = task_queue
+        .list(Some(crate::task_queue::TaskStatus::Running), 100)
+        .ok()?;
+    let now = chrono::Utc::now();
+
+    let mut stuck_count = 0u32;
+    for task in &tasks {
+        if let Some(ref started) = task.started_at {
+            if let Ok(started_dt) = chrono::DateTime::parse_from_rfc3339(started) {
+                let elapsed = now.signed_duration_since(started_dt);
+                if elapsed.num_minutes() > 30 {
+                    stuck_count += 1;
+                }
+            }
+        }
+    }
+
+    if stuck_count > 0 {
+        Some(ProactiveAlert {
+            category: AlertCategory::TaskStuck,
+            message: format!(
+                "{} tarea(s) llevan mas de 30 minutos en estado 'running'. Posible bloqueo.",
+                stuck_count
+            ),
+            severity: if stuck_count >= 3 {
+                AlertSeverity::Critical
+            } else {
+                AlertSeverity::Warning
+            },
+        })
+    } else {
+        None
+    }
 }

@@ -213,7 +213,7 @@ RUN dnf -y install --skip-unavailable \
     pipewire wireplumber pipewire-alsa pipewire-pulseaudio pipewire-utils \
     alsa-utils alsa-sof-firmware alsa-ucm \
     v4l-utils libcamera \
-    grim slurp wl-clipboard maim \
+    grim wl-clipboard \
     tesseract tesseract-langpack-eng tesseract-langpack-spa \
     espeak-ng \
     vulkan-loader \
@@ -494,7 +494,6 @@ COPY image/files/usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml /usr/lib
 
 # Firefox desktop entry with Wayland flags
 COPY image/files/usr/share/applications/firefox-lifeos.desktop /usr/share/applications/firefox-lifeos.desktop
-COPY image/files/usr/share/applications/org.gnome.Screenshot.desktop /usr/share/applications/org.gnome.Screenshot.desktop
 
 # Keep only the LifeOS Firefox launcher to avoid duplicate app entries.
 RUN find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' ! -name 'firefox-lifeos.desktop' -delete || true
@@ -509,7 +508,6 @@ COPY image/files/usr/local/bin/lifeos-integrity-check.sh   /usr/local/bin/lifeos
 COPY image/files/usr/local/bin/lifeos-security-baseline-check.sh /usr/local/bin/lifeos-security-baseline-check.sh
 COPY image/files/usr/local/bin/lifeos-nvidia-secureboot.sh /usr/local/bin/lifeos-nvidia-secureboot.sh
 COPY image/files/usr/local/bin/lifeos-maintenance-cleanup.sh /usr/local/bin/lifeos-maintenance-cleanup.sh
-COPY image/files/usr/local/bin/lifeos-screenshot-clipboard.sh /usr/local/bin/lifeos-screenshot-clipboard.sh
 COPY image/files/usr/local/bin/lifeos-open-axi-dashboard.sh /usr/local/bin/lifeos-open-axi-dashboard.sh
 COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
@@ -521,7 +519,6 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-security-baseline-check.sh \
              /usr/local/bin/lifeos-maintenance-cleanup.sh \
              /usr/local/bin/lifeos-nvidia-secureboot.sh \
-             /usr/local/bin/lifeos-screenshot-clipboard.sh \
              /usr/local/bin/lifeos-open-axi-dashboard.sh \
              /usr/local/bin/lifeos-check
 
@@ -733,7 +730,6 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/bin/llama-server && \
     test -x /usr/bin/whisper-cli && \
     test -x /usr/bin/grim && \
-    test -x /usr/bin/slurp && \
     test -x /usr/bin/wl-copy && \
     test -x /usr/bin/tesseract && \
     test -x /usr/bin/espeak-ng && \
@@ -745,7 +741,6 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/sbin/llama-server && \
     test -x /usr/local/bin/lifeos-nvidia-secureboot.sh && \
     test -x /usr/local/bin/lifeos-maintenance-cleanup.sh && \
-    test -x /usr/local/bin/lifeos-screenshot-clipboard.sh && \
     test -x /usr/local/bin/lifeos-open-axi-dashboard.sh && \
     test -f /usr/share/lifeos/dashboard/index.html && \
     test -f /usr/share/lifeos/dashboard/app.js && \

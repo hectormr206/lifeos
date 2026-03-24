@@ -393,11 +393,17 @@ function connectSSE() {
     renderHero();
   };
 
-  sse.onerror = () => {
-    dashboardState.connected = false;
-    connectionBadge.textContent = 'Desconectado';
-    connectionBadge.className = 'badge badge-offline';
-    renderHero();
+  sse.onerror = (e) => {
+    if (sse.readyState === EventSource.CLOSED) {
+      dashboardState.connected = false;
+      connectionBadge.textContent = 'Desconectado';
+      connectionBadge.className = 'badge badge-offline';
+      renderHero();
+    } else if (sse.readyState === EventSource.CONNECTING) {
+      connectionBadge.textContent = 'Reconectando...';
+      connectionBadge.className = 'badge badge-warn';
+      renderHero();
+    }
   };
 
   sse.onmessage = (e) => {
@@ -700,6 +706,15 @@ document.querySelectorAll('[data-quick-action]').forEach(btn => {
       case 'refresh-state':
         await refreshFullState();
         break;
+      case 'refresh-tasks':
+        await refreshSupervisor();
+        await refreshTasks();
+        break;
+      case 'trigger-heartbeat':
+        await fetch(`${API}/supervisor/status`, { headers: apiHeaders() });
+        btn.textContent = 'Enviado';
+        setTimeout(() => { btn.textContent = 'Heartbeat manual'; }, 2000);
+        break;
     }
   });
 });
@@ -786,7 +801,7 @@ async function ensureConsent() {
   catch (e) { console.warn('consent grant failed:', e); }
 }
 
-async function toggleSensory(field, value) {
+async function toggleSensory(field, value, elId) {
   try {
     await ensureConsent();
     const current = await api('GET', '/runtime/sensory');
@@ -800,18 +815,29 @@ async function toggleSensory(field, value) {
     // If enabling any sensor, ensure the master enabled flag is on
     if (value && field !== 'capture_interval_seconds') body.enabled = true;
     await api('POST', '/runtime/sensory', body);
+    
+    // Refresh panel immediately if expanded to show state
+    const expanded = document.querySelector('.control-card.expanded');
+    if (expanded) refreshDiagPanel(expanded.dataset.sensor);
   } catch (err) {
+    if (elId) {
+      const el = $(`#${elId}`);
+      if (el) el.checked = !value;
+    }
     addFeedItem('&#10060;', `Error toggle ${field}: ${err.message}`);
   }
 }
 
-$('#toggle-audio').addEventListener('change', (e) => toggleSensory('audio_enabled', e.target.checked));
-$('#toggle-screen').addEventListener('change', (e) => toggleSensory('screen_enabled', e.target.checked));
-$('#toggle-camera').addEventListener('change', (e) => toggleSensory('camera_enabled', e.target.checked));
+$('#toggle-audio').addEventListener('change', (e) => toggleSensory('audio_enabled', e.target.checked, 'toggle-audio'));
+$('#toggle-screen').addEventListener('change', (e) => toggleSensory('screen_enabled', e.target.checked, 'toggle-screen'));
+$('#toggle-camera').addEventListener('change', (e) => toggleSensory('camera_enabled', e.target.checked, 'toggle-camera'));
 
 $('#toggle-always-on').addEventListener('change', async (e) => {
   try { await api('POST', '/runtime/always-on', { enabled: e.target.checked }); }
-  catch (err) { addFeedItem('&#10060;', `Error toggle always-on: ${err.message}`); }
+  catch (err) { 
+    e.target.checked = !e.target.checked;
+    addFeedItem('&#10060;', `Error toggle always-on: ${err.message}`); 
+  }
 });
 
 $('#toggle-widget').addEventListener('change', async (e) => {
@@ -830,9 +856,22 @@ $('#kill-switch').addEventListener('click', async () => {
   addFeedItem('&#9888;', 'KILL SWITCH activado desde el dashboard');
 });
 
-$('#wake-word-save').addEventListener('click', async () => {
+$('#wake-word-save').addEventListener('click', async (e) => {
+  const btn = e.target;
   const word = $('#wake-word-input').value.trim();
-  if (word) await api('POST', '/runtime/always-on', { enabled: true, wake_word: word });
+  if (word) {
+    btn.textContent = '...';
+    try {
+      await api('POST', '/runtime/always-on', { enabled: true, wake_word: word });
+      btn.textContent = '¡Guardado!';
+      btn.style.background = 'var(--success)';
+    } catch (err) {
+      btn.textContent = 'Error';
+      btn.style.background = 'var(--danger)';
+    } finally {
+      setTimeout(() => { btn.textContent = 'Guardar'; btn.style.background = ''; }, 2000);
+    }
+  }
 });
 
 $('#interval-slider').addEventListener('input', (e) => {
@@ -897,6 +936,8 @@ async function fetchInitialState() {
     dashboardState.connected = true;
     connectionBadge.textContent = 'Conectado';
     connectionBadge.className = 'badge badge-online';
+    
+    searchMemory(''); // Populate memory pane initially
     renderHero();
   } catch (err) {
     console.error('Failed to fetch initial state:', err);
@@ -1017,33 +1058,13 @@ async function refreshTasks() {
 }
 
 function escapeHtml(s) {
+  if (!s) return '';
   const d = document.createElement('div');
   d.textContent = s;
   return d.innerHTML;
 }
 
-// Poll supervisor every 10s
-setInterval(() => {
-  refreshSupervisor();
-  refreshTasks();
-}, 10000);
 
-// Handle new quick actions
-document.querySelectorAll('[data-quick-action]').forEach(btn => {
-  btn.addEventListener('click', async () => {
-    switch (btn.dataset.quickAction) {
-      case 'refresh-tasks':
-        await refreshSupervisor();
-        await refreshTasks();
-        break;
-      case 'trigger-heartbeat':
-        await fetch(`${API}/supervisor/status`, { headers: apiHeaders() });
-        btn.textContent = 'Enviado';
-        setTimeout(() => { btn.textContent = 'Heartbeat manual'; }, 2000);
-        break;
-    }
-  });
-});
 
 // --- Chat with Axi ---
 const chatMessages = $('#chat-messages');
@@ -1071,6 +1092,8 @@ if (chatForm) {
         if (res.ok) {
           const task = await res.json();
           appendChat('axi', `Tarea creada: ${objective}\nID: ${task.id}\nEl supervisor la ejecutara.`);
+          refreshTasks(); // Update UI immediately
+          refreshSupervisor(); // Update UI immediately
         } else {
           appendChat('axi', 'Error al crear tarea.');
         }
@@ -1115,13 +1138,27 @@ function appendChat(role, text) {
 }
 
 // --- System Resources ---
+let resourcesGridInitialized = false;
+function ensureResourcesGrid() {
+  if (resourcesGridInitialized) return;
+  const grid = $('#resources-grid');
+  if (!grid) return;
+  grid.innerHTML = `
+    <div class="resource-item"><span class="resource-label">CPU</span><div class="resource-bar"><div class="resource-fill" id="res-cpu-bar"></div></div><span class="resource-value" id="res-cpu">—</span></div>
+    <div class="resource-item"><span class="resource-label">RAM</span><div class="resource-bar"><div class="resource-fill" id="res-ram-bar"></div></div><span class="resource-value" id="res-ram">—</span></div>
+    <div class="resource-item"><span class="resource-label">Disco</span><div class="resource-bar"><div class="resource-fill" id="res-disk-bar"></div></div><span class="resource-value" id="res-disk">—</span></div>
+    <div class="resource-item"><span class="resource-label">GPU</span><div class="resource-bar"><div class="resource-fill resource-fill-gpu" id="res-gpu-bar"></div></div><span class="resource-value" id="res-gpu">—</span></div>
+  `;
+  resourcesGridInitialized = true;
+}
+
 async function refreshResources() {
   try {
     const res = await fetch(`${API}/system/resources`, { headers: apiHeaders() });
     if (!res.ok) return;
     const d = await res.json();
+    ensureResourcesGrid();
 
-    // API returns: cpu_percent, memory_percent, memory_used_gb, memory_total_gb, disk_percent, disk_used_gb, disk_total_gb
     const cpuPct = d.cpu_percent || 0;
     const ramPct = d.memory_percent || 0;
     const diskPct = d.disk_percent || 0;
@@ -1136,7 +1173,6 @@ async function refreshResources() {
     setBar('res-disk-bar', 'res-disk', diskPct,
       `${diskUsed.toFixed(0)} / ${diskTotal.toFixed(0)} GB (${diskPct.toFixed(0)}%)`);
 
-    // GPU detection via nvidia-smi (separate call for real GPU data)
     refreshGpu();
   } catch (e) { /* silent */ }
 }
@@ -1151,8 +1187,8 @@ async function refreshGpu() {
     if (gpuName && gpuName !== 'N/A' && gpuName !== '') {
       const gpuEl = $('#res-gpu');
       if (gpuEl) gpuEl.textContent = gpuName;
-      // Try sensory status for VRAM usage
-      const sensory = await fetch(`${API}/sensory/status`, { headers: apiHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null);
+      // Try sensory status for VRAM usage from cache to save an API call
+      const sensory = diagCache.sensory;
       if (sensory && sensory.gpu) {
         const gpuUsed = sensory.gpu.memory_used_mb || 0;
         const gpuTotal = sensory.gpu.memory_total_mb || 0;
@@ -1176,13 +1212,6 @@ function setBar(barId, labelId, pct, label) {
   if (bar) {
     bar.style.background = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning)' : 'var(--accent)';
   }
-}
-
-function formatBytes(b) {
-  if (b < 1024) return b + ' B';
-  if (b < 1048576) return (b / 1024).toFixed(0) + ' KB';
-  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
-  return (b / 1073741824).toFixed(1) + ' GB';
 }
 
 // --- LLM Providers ---
@@ -1213,7 +1242,7 @@ async function refreshProviders() {
                            privacy.startsWith('Media') ? 'var(--warning)' :
                            privacy.startsWith('Baja') ? 'var(--danger)' : 'var(--text-muted)';
       return `<div class="provider-card" data-tier="${tier}">
-        <div class="provider-name">${escHtml(n)}</div>
+        <div class="provider-name">${escapeHtml(n)}</div>
         <div class="provider-stats">${p.total_requests} req | ${p.total_output_tokens} tok | ${p.total_failures} err</div>
         <div class="provider-stats" style="color:${privacyColor}">Privacidad: ${privacy}</div>
       </div>`;
@@ -1232,10 +1261,67 @@ function updateKeyStatus(name, working) {
   if (el) el.textContent = working ? '\u2705' : '\u26A0\uFE0F';
 }
 
-function escHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
+// --- API Keys Status & Save ---
+async function refreshKeyStatus() {
+  try {
+    const res = await fetch(`${API}/settings/keys`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    const keys = data.keys || {};
+    const map = {
+      'CEREBRAS_API_KEY': 'cerebras',
+      'GROQ_API_KEY': 'groq',
+      'OPENROUTER_API_KEY': 'openrouter',
+      'LIFEOS_TELEGRAM_BOT_TOKEN': 'telegram',
+      'LIFEOS_TELEGRAM_CHAT_ID': 'telegram-chatid',
+    };
+    for (const [env, name] of Object.entries(map)) {
+      const el = $(`#key-status-${name}`);
+      if (el) el.textContent = keys[env] ? '\u2705' : '\u274C';
+    }
+  } catch (e) { /* silent */ }
+}
+
+const saveKeysBtn = $('#save-keys-btn');
+if (saveKeysBtn) {
+  saveKeysBtn.addEventListener('click', async () => {
+    const keys = {};
+    document.querySelectorAll('.provider-key-form input[data-env]').forEach(input => {
+      const val = input.value.trim();
+      if (val) keys[input.dataset.env] = val;
+    });
+
+    if (Object.keys(keys).length === 0) {
+      $('#keys-hint').textContent = 'No hay keys para guardar. Escribe al menos una.';
+      return;
+    }
+
+    saveKeysBtn.textContent = 'Guardando...';
+    try {
+      const res = await fetch(`${API}/settings/keys`, {
+        method: 'POST', headers: apiHeaders(),
+        body: JSON.stringify({ keys })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        saveKeysBtn.textContent = 'Guardado!';
+        saveKeysBtn.style.background = 'var(--success)';
+        $('#keys-hint').textContent = `${data.updated} key(s) guardadas en ${data.path}. ${data.note}`;
+        // Clear inputs after save
+        document.querySelectorAll('.provider-key-form input[data-env]').forEach(i => { i.value = ''; });
+        refreshKeyStatus();
+      } else {
+        saveKeysBtn.textContent = 'Error';
+        saveKeysBtn.style.background = 'var(--danger)';
+      }
+    } catch (err) {
+      saveKeysBtn.textContent = 'Error';
+      saveKeysBtn.style.background = 'var(--danger)';
+      $('#keys-hint').textContent = 'Error: ' + err.message;
+    } finally {
+      setTimeout(() => { saveKeysBtn.textContent = 'Guardar Keys'; saveKeysBtn.style.background = ''; }, 3000);
+    }
+  });
 }
 
 // --- Local Models ---
@@ -1259,7 +1345,7 @@ async function refreshModels() {
     grid.innerHTML = models.map(m => {
       const isActive = m.name === activeModel;
       return `<div class="model-card ${isActive ? 'active' : ''}">
-        <div class="model-name">${escHtml(m.name)}</div>
+        <div class="model-name">${escapeHtml(m.name)}</div>
         <div class="model-size">${m.size_mb} MB</div>
         ${isActive ? '<span class="model-badge">Activo</span>' : ''}
       </div>`;
@@ -1352,7 +1438,7 @@ async function refreshMetrics() {
     if (rolesDiv && data.by_role) {
       rolesDiv.innerHTML = Object.entries(data.by_role).map(([role, m]) => {
         return `<div class="metric-role-card">
-          <div class="metric-role-name">${role}</div>
+          <div class="metric-role-name">${escapeHtml(role)}</div>
           <div class="metric-role-stats">${m.tasks_completed} OK | ${m.tasks_failed} fail | avg ${m.avg_duration_ms}ms</div>
         </div>`;
       }).join('');
@@ -1397,8 +1483,8 @@ async function searchMemory(query) {
     container.innerHTML = entries.map(e => {
       const entry = e.entry || e;
       return `<div class="memory-entry">
-        <div class="memory-entry-kind">${escHtml(entry.kind || '?')}</div>
-        <div class="memory-entry-content">${escHtml((entry.content || '').substring(0, 400))}</div>
+        <div class="memory-entry-kind">${escapeHtml(entry.kind || '?')}</div>
+        <div class="memory-entry-content">${escapeHtml((entry.content || '').substring(0, 400))}</div>
         <div class="memory-entry-meta">${entry.created_at || ''} | importancia: ${entry.importance || 0} | tags: ${(entry.tags || []).join(', ')}</div>
       </div>`;
     }).join('');
@@ -1425,12 +1511,96 @@ if (memSearchInput) {
   });
 }
 
+// --- Scheduled Tasks ---
+async function refreshScheduledTasks() {
+  try {
+    const res = await fetch(`${API}/tasks/scheduled`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    const list = $('#sched-list');
+    if (!list) return;
+
+    if (!data.tasks || data.tasks.length === 0) {
+      list.innerHTML = '<p class="task-empty">Sin tareas programadas</p>';
+      return;
+    }
+
+    list.innerHTML = data.tasks.map(t => `
+      <div class="sched-item">
+        <div class="sched-item-info">
+          <strong>${escapeHtml(t.objective)}</strong>
+          <div class="sched-item-schedule">${t.schedule_type === 'interval' ? 'Cada N min' : 'Diario'}: ${escapeHtml(t.schedule_param)}</div>
+        </div>
+        <button class="icon-btn" style="color:var(--danger); width:28px; height:28px; font-size:1rem; display:flex; align-items:center; justify-content:center;" onclick="deleteScheduledTask('${t.id}')" title="Eliminar">&times;</button>
+      </div>
+    `).join('');
+  } catch (e) { /* silent */ }
+}
+
+window.deleteScheduledTask = async (id) => {
+  try {
+    await api('DELETE', `/tasks/scheduled/${id}`);
+    await refreshScheduledTasks();
+  } catch (err) { addFeedItem('&#10060;', 'Error al eliminar tarea programada'); }
+};
+
+const schedAddBtn = $('#sched-add-btn');
+if (schedAddBtn) {
+  schedAddBtn.addEventListener('click', async () => {
+    const objective = $('#sched-objective').value.trim();
+    const type = $('#sched-type').value;
+    const param = $('#sched-param').value.trim();
+    if (!objective || !param) return;
+
+    schedAddBtn.textContent = '...';
+    try {
+      await api('POST', '/tasks/scheduled', { objective, schedule_type: type, schedule_param: param });
+      $('#sched-objective').value = '';
+      $('#sched-param').value = '';
+      await refreshScheduledTasks();
+    } catch (err) {
+      addFeedItem('&#10060;', `Error al programar: ${err.message}`);
+    } finally {
+      schedAddBtn.textContent = 'Programar';
+    }
+  });
+}
+
+// --- OS Actions ---
+window.setOsMode = async (mode) => {
+  try {
+    addFeedItem('&#9881;', `Cambiando a modo: ${mode}...`);
+    // Simulando llamada a la API (o a implementar en el backend Rust: POST /system/mode)
+    await api('POST', '/system/mode', { mode });
+    addFeedItem('&#9989;', `Modo ${mode} activado`);
+  } catch (err) {
+    addFeedItem('&#10060;', `Error al cambiar modo: ${err.message}`);
+  }
+};
+
+window.triggerSystemAction = async (action) => {
+  const confirmMsg = action === 'rollback' ? '¿Seguro que deseas volver a la imagen anterior del sistema (Rollback)?' : 
+                     action === 'recover' ? '¿Ejecutar diagnostico y auto-reparacion del OS?' : null;
+                     
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  
+  try {
+    addFeedItem('&#9881;', `Iniciando accion: ${action}...`);
+    // Llamar endpoints que orquesten comandos CLI equivalentes
+    await api('POST', `/system/actions/${action}`, {});
+    addFeedItem('&#9989;', `Accion ${action} completada`);
+  } catch (err) {
+    addFeedItem('&#10060;', `Error en accion ${action}: ${err.message}`);
+  }
+};
+
 // --- Polling ---
 setInterval(() => {
   refreshSupervisor();
   refreshTasks();
   refreshResources();
   refreshMetrics();
+  refreshScheduledTasks();
 }, 10000);
 
 // Less frequent polls
@@ -1439,10 +1609,64 @@ setInterval(() => {
   refreshModels();
   refreshMemory();
   refreshAiStatus();
+  refreshKeyStatus();
 }, 30000);
+
+// --- Tabs Initialization ---
+function initTabs() {
+  const main = document.querySelector('main');
+  if (!main) return;
+
+  const nav = document.createElement('nav');
+  nav.className = 'dashboard-tabs';
+
+  const tabs = [
+    { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['hero-panel', 'orb-section', 'controls-section', 'status-section', 'chat-section'] },
+    { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'metrics-section', 'sched-section', 'feed-section'] },
+    { id: 'tab-memory', icon: '&#128450;', label: 'Memoria', keywords: ['memory-section'] },
+    { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'localai-section', 'models-section', 'providers-section', 'settings-section'] }
+  ];
+
+  const tabContents = document.createElement('div');
+  tabContents.className = 'tab-contents';
+
+  const children = Array.from(main.children);
+
+  tabs.forEach((tab, index) => {
+    const btn = document.createElement('button');
+    btn.className = 'tab-btn' + (index === 0 ? ' active' : '');
+    btn.innerHTML = `<span style="margin-right:4px">${tab.icon}</span> ${tab.label}`;
+    btn.dataset.target = tab.id;
+
+    const content = document.createElement('div');
+    content.id = tab.id;
+    content.className = 'tab-pane' + (index === 0 ? ' active' : '');
+
+    children.forEach(child => {
+      if (tab.keywords.some(kw => (child.className && child.className.includes(kw)) || (child.id && child.id.includes(kw)))) {
+        content.appendChild(child);
+      }
+    });
+
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      content.classList.add('active');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    nav.appendChild(btn);
+    tabContents.appendChild(content);
+  });
+
+  main.insertBefore(nav, main.firstChild);
+  main.appendChild(tabContents);
+}
 
 // --- Boot ---
 (async () => {
+  initTabs();
   await ensureBootstrapToken();
   await fetchInitialState();
   connectSSE();
@@ -1453,6 +1677,8 @@ setInterval(() => {
   refreshModels();
   refreshMetrics();
   refreshMemory();
+  refreshScheduledTasks();
   refreshAiStatus();
+  refreshKeyStatus();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();

@@ -2863,10 +2863,12 @@ fn split_tts_chunks(raw: &str) -> Vec<String> {
 
 /// Lower or restore system audio volume via PulseAudio/PipeWire.
 ///
-/// When `duck` is true, saves the current volume and sets it to 30%.
-/// When `duck` is false, restores to the saved volume (or 100% as fallback).
+/// When `duck` is true, saves the current sink name + volume and sets it to 30%.
+/// When `duck` is false, restores the saved volume ONLY if the same sink is still active.
+/// This prevents volume corruption when the user switches audio devices (e.g. BT headphones).
 async fn duck_system_audio(duck: bool) {
-    /// File used to persist the original volume between duck and restore calls.
+    /// File used to persist the original sink name and volume between duck and restore calls.
+    /// Format: "sink_name\nvolume_percent"
     const DUCK_VOLUME_FILE: &str = "/tmp/lifeos-duck-volume";
 
     // Never duck during an active call — it would lower the call's audio.
@@ -2875,43 +2877,84 @@ async fn duck_system_audio(duck: bool) {
         return;
     }
 
-    if duck {
-        // Read current volume before lowering it.
-        if let Ok(output) = Command::new("pactl")
+    // Helper: get the current default sink name
+    async fn get_default_sink() -> Option<String> {
+        let output = Command::new("pactl")
+            .args(["get-default-sink"])
+            .output()
+            .await
+            .ok()?;
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+        None
+    }
+
+    // Helper: get current volume percentage of the default sink
+    async fn get_sink_volume() -> Option<u32> {
+        let output = Command::new("pactl")
             .args(["get-sink-volume", "@DEFAULT_SINK@"])
             .output()
             .await
-        {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                // Extract percentage (e.g. "Volume: front-left: ... / 72% / ...")
-                if let Some(pct) = stdout
-                    .split('/')
-                    .find(|part| part.trim().ends_with('%'))
-                    .and_then(|part| part.trim().strip_suffix('%'))
-                    .and_then(|val| val.trim().parse::<u32>().ok())
-                {
-                    // Only duck if the volume is above the duck level.
-                    if pct > 30 {
-                        let _ = tokio::fs::write(DUCK_VOLUME_FILE, pct.to_string()).await;
-                        let _ = Command::new("pactl")
-                            .args(["set-sink-volume", "@DEFAULT_SINK@", "30%"])
-                            .output()
-                            .await;
-                    }
-                }
+            .ok()?;
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return stdout
+                .split('/')
+                .find(|part| part.trim().ends_with('%'))
+                .and_then(|part| part.trim().strip_suffix('%'))
+                .and_then(|val| val.trim().parse::<u32>().ok());
+        }
+        None
+    }
+
+    if duck {
+        let sink_name = get_default_sink().await.unwrap_or_default();
+        if let Some(pct) = get_sink_volume().await {
+            // Only duck if the volume is above the duck level.
+            if pct > 30 {
+                let save_data = format!("{}\n{}", sink_name, pct);
+                let _ = tokio::fs::write(DUCK_VOLUME_FILE, save_data).await;
+                let _ = Command::new("pactl")
+                    .args(["set-sink-volume", "@DEFAULT_SINK@", "30%"])
+                    .output()
+                    .await;
             }
         }
     } else {
-        // Restore to the saved volume.
-        let restore_pct = match tokio::fs::read_to_string(DUCK_VOLUME_FILE).await {
-            Ok(val) => format!("{}%", val.trim()),
-            Err(_) => "100%".to_string(),
-        };
-        let _ = Command::new("pactl")
-            .args(["set-sink-volume", "@DEFAULT_SINK@", &restore_pct])
-            .output()
-            .await;
+        // Restore to the saved volume — but only if the same sink is still the default.
+        // If the user switched to a different device (e.g. BT headphones), do NOT touch volume.
+        if let Ok(saved) = tokio::fs::read_to_string(DUCK_VOLUME_FILE).await {
+            let mut lines = saved.trim().lines();
+            let saved_sink = lines.next().unwrap_or("").trim();
+            let saved_pct = lines.next().unwrap_or("").trim();
+
+            if !saved_sink.is_empty() && !saved_pct.is_empty() {
+                let current_sink = get_default_sink().await.unwrap_or_default();
+
+                if current_sink == saved_sink {
+                    // Same sink — safe to restore volume
+                    let _ = Command::new("pactl")
+                        .args([
+                            "set-sink-volume",
+                            "@DEFAULT_SINK@",
+                            &format!("{}%", saved_pct),
+                        ])
+                        .output()
+                        .await;
+                } else {
+                    log::info!(
+                        "Audio sink changed ({} -> {}), skipping volume restore to avoid overwriting user's volume",
+                        saved_sink, current_sink
+                    );
+                }
+            }
+            // else: corrupted/empty file — do nothing, don't fallback to 100%
+        }
+        // else: no duck file — nothing to restore, do NOT set 100%
         let _ = tokio::fs::remove_file(DUCK_VOLUME_FILE).await;
     }
 }

@@ -169,6 +169,9 @@ pub struct ApiState {
     pub llm_router: Arc<RwLock<crate::llm_router::LlmRouter>>,
     pub task_queue: Arc<crate::task_queue::TaskQueue>,
     pub supervisor: Arc<crate::supervisor::Supervisor>,
+    pub scheduled_tasks: Arc<crate::scheduled_tasks::ScheduledTaskManager>,
+    pub health_tracker: Arc<tokio::sync::Mutex<crate::health_tracking::HealthTracker>>,
+    pub calendar: Arc<crate::calendar::CalendarManager>,
     pub event_bus: tokio::sync::broadcast::Sender<crate::events::DaemonEvent>,
     pub config: ApiConfig,
 }
@@ -1418,6 +1421,35 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/tasks/summary", get(get_tasks_summary))
         .route("/tasks/:id", get(get_task_by_id))
         .route("/tasks/:id/cancel", post(cancel_task))
+        // Scheduled tasks endpoints
+        .route("/tasks/scheduled", get(get_scheduled_tasks))
+        .route("/tasks/scheduled", post(post_scheduled_task))
+        .route("/tasks/scheduled/:id", delete(delete_scheduled_task))
+        .route("/tasks/scheduled/:id/enable", post(toggle_scheduled_task))
+        // Health tracking endpoints
+        .route("/health/tracking", get(get_health_tracking))
+        .route("/health/tracking/break", post(post_health_break))
+        .route("/health/tracking/reminders", get(get_health_reminders))
+        // Proactive alerts endpoint
+        .route("/proactive/alerts", get(get_proactive_alerts))
+        // Email endpoints
+        .route("/email/inbox", get(get_email_inbox))
+        .route("/email/send", post(post_email_send))
+        .route("/email/status", get(get_email_status))
+        // Calendar endpoints
+        .route("/calendar/today", get(get_calendar_today))
+        .route("/calendar/upcoming", get(get_calendar_upcoming))
+        .route("/calendar/events", post(post_calendar_event))
+        .route("/calendar/events/:id", delete(delete_calendar_event))
+        .route("/calendar/reminders", get(get_calendar_reminders))
+        // File management endpoints
+        .route("/files/search", get(get_file_search))
+        .route("/files/content-search", get(get_file_content_search))
+        // Clipboard endpoint
+        .route("/clipboard/copy", post(post_clipboard_copy))
+        // Settings: API keys management
+        .route("/settings/keys", get(get_api_keys_status))
+        .route("/settings/keys", post(post_api_keys))
         // Supervisor endpoints
         .route("/supervisor/status", get(get_supervisor_status))
         .route("/supervisor/metrics", get(get_supervisor_metrics))
@@ -8968,6 +9000,650 @@ async fn get_supervisor_metrics(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let metrics = state.supervisor.metrics();
     Ok(Json(serde_json::to_value(metrics).unwrap_or_default()))
+}
+
+// ==================== SCHEDULED TASKS ENDPOINTS ====================
+
+async fn get_scheduled_tasks(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.scheduled_tasks.list() {
+        Ok(tasks) => Ok(Json(serde_json::json!({ "tasks": tasks }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "list_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn post_scheduled_task(
+    State(state): State<ApiState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let objective = body
+        .get("objective")
+        .and_then(|o| o.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if objective.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "bad_request".into(),
+                message: "objective is required".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let schedule_type = body
+        .get("schedule_type")
+        .and_then(|s| s.as_str())
+        .unwrap_or("interval");
+
+    let schedule_param = body
+        .get("schedule_param")
+        .and_then(|s| s.as_str())
+        .unwrap_or("30")
+        .to_string();
+
+    let schedule = match schedule_type {
+        "daily" => crate::scheduled_tasks::Schedule::Daily {
+            time: schedule_param,
+        },
+        "weekly" => {
+            let days = body
+                .get("days")
+                .and_then(|d| serde_json::from_value::<Vec<u8>>(d.clone()).ok())
+                .unwrap_or_else(|| vec![0, 1, 2, 3, 4]); // Mon-Fri default
+            crate::scheduled_tasks::Schedule::Weekly {
+                days,
+                time: schedule_param,
+            }
+        }
+        _ => {
+            let minutes: u32 = schedule_param.parse().unwrap_or(30);
+            crate::scheduled_tasks::Schedule::Interval { minutes }
+        }
+    };
+
+    match state.scheduled_tasks.add(&objective, schedule) {
+        Ok(task) => Ok(Json(serde_json::to_value(task).unwrap_or_default())),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "add_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn delete_scheduled_task(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.scheduled_tasks.delete(&id) {
+        Ok(()) => Ok(Json(serde_json::json!({ "deleted": true }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "delete_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn toggle_scheduled_task(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let enabled = body
+        .get("enabled")
+        .and_then(|e| e.as_bool())
+        .unwrap_or(true);
+    match state.scheduled_tasks.set_enabled(&id, enabled) {
+        Ok(()) => Ok(Json(serde_json::json!({ "enabled": enabled }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "toggle_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+// ==================== HEALTH TRACKING ENDPOINTS ====================
+
+async fn get_health_tracking(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let tracker = state.health_tracker.lock().await;
+    let health_state = tracker.state();
+    let summary = tracker.daily_summary();
+    Ok(Json(serde_json::json!({
+        "state": health_state,
+        "summary": summary,
+    })))
+}
+
+async fn post_health_break(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mut tracker = state.health_tracker.lock().await;
+    tracker.record_break();
+    Ok(Json(
+        serde_json::json!({ "break_recorded": true, "break_count": tracker.state().break_count }),
+    ))
+}
+
+async fn get_health_reminders(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mut tracker = state.health_tracker.lock().await;
+    let reminders = tracker.check_reminders();
+    Ok(Json(serde_json::json!({ "reminders": reminders })))
+}
+
+// ==================== PROACTIVE ALERTS ENDPOINT ====================
+
+async fn get_proactive_alerts(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let alerts = crate::proactive::check_all(Some(&state.task_queue)).await;
+    Ok(Json(serde_json::json!({ "alerts": alerts })))
+}
+
+// ==================== EMAIL ENDPOINTS ====================
+
+async fn get_email_status() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    Ok(Json(serde_json::json!({
+        "configured": crate::email_bridge::EmailConfig::is_configured(),
+    })))
+}
+
+async fn get_email_inbox(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let limit: usize = params
+        .get("limit")
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(10);
+
+    match crate::email_bridge::list_recent_emails(limit).await {
+        Ok(emails) => Ok(Json(serde_json::json!({ "emails": emails }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "email_fetch_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn post_email_send(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let to = body.get("to").and_then(|t| t.as_str()).unwrap_or("");
+    let subject = body.get("subject").and_then(|s| s.as_str()).unwrap_or("");
+    let email_body = body.get("body").and_then(|b| b.as_str()).unwrap_or("");
+
+    if to.is_empty() || subject.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "bad_request".into(),
+                message: "to and subject are required".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    match crate::email_bridge::send_email(to, subject, email_body).await {
+        Ok(()) => Ok(Json(serde_json::json!({ "sent": true }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "email_send_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+// ==================== CALENDAR ENDPOINTS ====================
+
+async fn get_calendar_today(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.calendar.today() {
+        Ok(events) => Ok(Json(serde_json::json!({ "events": events }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "calendar_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_calendar_upcoming(
+    State(state): State<ApiState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let days: u32 = params.get("days").and_then(|d| d.parse().ok()).unwrap_or(7);
+    match state.calendar.upcoming(days) {
+        Ok(events) => Ok(Json(serde_json::json!({ "events": events, "days": days }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "calendar_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn post_calendar_event(
+    State(state): State<ApiState>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let title = body.get("title").and_then(|t| t.as_str()).unwrap_or("");
+    let start_time = body
+        .get("start_time")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+
+    if title.is_empty() || start_time.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "bad_request".into(),
+                message: "title and start_time are required".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let end_time = body.get("end_time").and_then(|e| e.as_str());
+    let description = body
+        .get("description")
+        .and_then(|d| d.as_str())
+        .unwrap_or("");
+    let reminder_minutes = body
+        .get("reminder_minutes")
+        .and_then(|r| r.as_i64())
+        .map(|r| r as i32);
+
+    match state
+        .calendar
+        .add_event(title, start_time, end_time, description, reminder_minutes)
+    {
+        Ok(event) => Ok(Json(serde_json::to_value(event).unwrap_or_default())),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "calendar_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn delete_calendar_event(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.calendar.delete(&id) {
+        Ok(()) => Ok(Json(serde_json::json!({ "deleted": true }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "calendar_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_calendar_reminders(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.calendar.due_reminders() {
+        Ok(events) => Ok(Json(serde_json::json!({ "reminders": events }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "calendar_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+// ==================== FILE MANAGEMENT ENDPOINTS ====================
+
+async fn get_file_search(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let pattern = params.get("pattern").cloned().unwrap_or_default();
+    let path = params
+        .get("path")
+        .cloned()
+        .unwrap_or_else(|| ".".to_string());
+
+    if pattern.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "bad_request".into(),
+                message: "pattern query param is required".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let output = tokio::process::Command::new("find")
+        .args([
+            &path,
+            "-name",
+            &pattern,
+            "-not",
+            "-path",
+            "*/target/*",
+            "-not",
+            "-path",
+            "*/.git/*",
+            "-type",
+            "f",
+        ])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let files: Vec<&str> = stdout.lines().take(100).collect();
+            Ok(Json(
+                serde_json::json!({ "files": files, "count": files.len() }),
+            ))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "search_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_file_content_search(
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let query = params.get("query").cloned().unwrap_or_default();
+    let path = params
+        .get("path")
+        .cloned()
+        .unwrap_or_else(|| ".".to_string());
+
+    if query.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "bad_request".into(),
+                message: "query param is required".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    let output = tokio::process::Command::new("grep")
+        .args([
+            "-rl",
+            "--include=*.rs",
+            "--include=*.toml",
+            "--include=*.md",
+            "--include=*.json",
+            "--include=*.yaml",
+            "--include=*.yml",
+            "--include=*.txt",
+            "--include=*.sh",
+            &query,
+            &path,
+        ])
+        .output()
+        .await;
+
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let files: Vec<&str> = stdout.lines().take(50).collect();
+            Ok(Json(
+                serde_json::json!({ "files": files, "count": files.len(), "query": query }),
+            ))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "search_failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+// ==================== API KEYS MANAGEMENT ====================
+
+/// Get the status of configured API keys (configured/not configured, never the actual values).
+async fn get_api_keys_status() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let keys = [
+        "CEREBRAS_API_KEY",
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "LIFEOS_TELEGRAM_BOT_TOKEN",
+        "LIFEOS_TELEGRAM_CHAT_ID",
+        "LIFEOS_EMAIL_IMAP_HOST",
+    ];
+
+    let status: serde_json::Map<String, serde_json::Value> = keys
+        .iter()
+        .map(|&k| {
+            let configured = std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false);
+            (k.to_string(), serde_json::json!(configured))
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "keys": status })))
+}
+
+/// Save API keys to the user env file and reload them into the process.
+async fn post_api_keys(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let allowed_keys = [
+        "CEREBRAS_API_KEY",
+        "GROQ_API_KEY",
+        "OPENROUTER_API_KEY",
+        "LIFEOS_TELEGRAM_BOT_TOKEN",
+        "LIFEOS_TELEGRAM_CHAT_ID",
+        "LIFEOS_EMAIL_IMAP_HOST",
+        "LIFEOS_EMAIL_IMAP_USER",
+        "LIFEOS_EMAIL_IMAP_PASS",
+        "LIFEOS_EMAIL_SMTP_HOST",
+    ];
+
+    // Determine writable env file path
+    let env_path = if std::path::Path::new("/etc/lifeos/llm-providers.env").exists() {
+        std::path::PathBuf::from("/etc/lifeos/llm-providers.env")
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        std::path::PathBuf::from(format!("{}/.config/lifeos/llm-providers.env", home))
+    };
+
+    // Read existing file content
+    let existing = tokio::fs::read_to_string(&env_path)
+        .await
+        .unwrap_or_default();
+
+    let mut lines: Vec<String> = existing.lines().map(String::from).collect();
+    let mut updated_count = 0u32;
+
+    if let Some(keys_obj) = body.get("keys").and_then(|k| k.as_object()) {
+        for (key, value) in keys_obj {
+            // Only allow whitelisted keys to prevent arbitrary env injection
+            if !allowed_keys.contains(&key.as_str()) {
+                continue;
+            }
+            let val_str = value.as_str().unwrap_or("").trim().to_string();
+
+            // Update or append the key in the file
+            let key_prefix = format!("{}=", key);
+            let mut found = false;
+            for line in &mut lines {
+                if line.starts_with(&key_prefix) {
+                    *line = format!("{}={}", key, val_str);
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                lines.push(format!("{}={}", key, val_str));
+            }
+
+            // Also set in current process env for immediate effect
+            if !val_str.is_empty() {
+                // SAFETY: single-threaded write path, keys are whitelisted
+                unsafe { std::env::set_var(key, &val_str) };
+            }
+            updated_count += 1;
+        }
+    }
+
+    // Write back
+    if let Some(parent) = env_path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let content = lines.join("\n") + "\n";
+    if let Err(e) = tokio::fs::write(&env_path, &content).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "write_failed".into(),
+                message: format!("Failed to write {}: {}", env_path.display(), e),
+                code: 500,
+            }),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({
+        "updated": updated_count,
+        "path": env_path.display().to_string(),
+        "note": "Keys saved. Restart the daemon (systemctl --user restart lifeosd) for Telegram to take effect."
+    })))
+}
+
+// ==================== CLIPBOARD ENDPOINT ====================
+
+async fn post_clipboard_copy(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let text = body
+        .get("text")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if text.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "bad_request".into(),
+                message: "text is required".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    // Try wl-copy (Wayland) first, then xclip (X11)
+    let wl_result = tokio::process::Command::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .spawn();
+
+    if let Ok(mut child) = wl_result {
+        if let Some(mut stdin) = child.stdin.take() {
+            use tokio::io::AsyncWriteExt;
+            let _ = stdin.write_all(text.as_bytes()).await;
+            drop(stdin);
+        }
+        if child.wait().await.map(|s| s.success()).unwrap_or(false) {
+            return Ok(Json(serde_json::json!({
+                "copied": true,
+                "chars": text.len(),
+                "method": "wl-copy"
+            })));
+        }
+    }
+
+    // Fallback to xclip
+    let mut xclip = tokio::process::Command::new("xclip")
+        .args(["-selection", "clipboard"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "clipboard_failed".into(),
+                    message: format!("No clipboard tool: {}", e),
+                    code: 500,
+                }),
+            )
+        })?;
+
+    if let Some(mut stdin) = xclip.stdin.take() {
+        use tokio::io::AsyncWriteExt;
+        let _ = stdin.write_all(text.as_bytes()).await;
+        drop(stdin);
+    }
+
+    match xclip.wait().await {
+        Ok(status) if status.success() => Ok(Json(serde_json::json!({
+            "copied": true,
+            "chars": text.len(),
+            "method": "xclip"
+        }))),
+        _ => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "clipboard_failed".into(),
+                message: "Both wl-copy and xclip failed".into(),
+                code: 500,
+            }),
+        )),
+    }
 }
 
 // ==================== LLM ROUTER ENDPOINTS ====================
