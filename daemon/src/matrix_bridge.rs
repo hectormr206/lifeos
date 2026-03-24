@@ -144,7 +144,11 @@ mod inner {
                 Ok(r) => {
                     let status = r.status();
                     let body_text = r.text().await.unwrap_or_default();
-                    error!("Matrix sync HTTP {}: {}", status, &body_text[..body_text.len().min(200)]);
+                    error!(
+                        "Matrix sync HTTP {}: {}",
+                        status,
+                        &body_text[..body_text.len().min(200)]
+                    );
                     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                     continue;
                 }
@@ -176,15 +180,8 @@ mod inner {
 
                         if let Some(events) = events {
                             for event in events {
-                                handle_event(
-                                    &http,
-                                    &config,
-                                    room_id,
-                                    event,
-                                    &task_queue,
-                                    &router,
-                                )
-                                .await;
+                                handle_event(&http, &config, room_id, event, &task_queue, &router)
+                                    .await;
                             }
                         }
                     }
@@ -455,11 +452,7 @@ mod inner {
         }
     }
 
-    async fn handle_help_command(
-        http: &reqwest::Client,
-        config: &MatrixConfig,
-        room_id: &str,
-    ) {
+    async fn handle_help_command(http: &reqwest::Client, config: &MatrixConfig, room_id: &str) {
         let help = "Soy Axi, tu asistente de LifeOS.\n\n\
                     Comandos:\n\
                     /do <tarea> — Crear tarea para el supervisor\n\
@@ -589,7 +582,11 @@ mod inner {
             .map_err(|e| e.to_string())?;
 
         if response.status().is_success() {
-            response.bytes().await.map(|b| b.to_vec()).map_err(|e| e.to_string())
+            response
+                .bytes()
+                .await
+                .map(|b| b.to_vec())
+                .map_err(|e| e.to_string())
         } else {
             let status = response.status();
             Err(format!("Media download HTTP {}", status))

@@ -174,8 +174,7 @@ impl GameAssistant {
         let start = Instant::now();
 
         // --- Detect game name ---
-        let game_name =
-            detect_game_name(game_info.pid, game_info.window_title.as_deref()).await;
+        let game_name = detect_game_name(game_info.pid, game_info.window_title.as_deref()).await;
         info!("GameAssistant: detected game = {:?}", game_name);
 
         // --- 1. Capture game window screenshot ---
@@ -226,7 +225,12 @@ impl GameAssistant {
             };
 
         // --- 4. Build prompt ---
-        let messages = build_game_help_prompt(question, &game_name, &web_results, screenshot_bytes.as_deref());
+        let messages = build_game_help_prompt(
+            question,
+            &game_name,
+            &web_results,
+            screenshot_bytes.as_deref(),
+        );
 
         // --- Choose a ZDR provider (prefer Cerebras 235B, fallback Groq) ---
         let preferred_provider = self
@@ -295,10 +299,7 @@ pub async fn capture_game_window(pid: u32, max_width: u32) -> Result<Vec<u8>> {
     // Build the grim capture command.
     let grim_output = if geometry.is_fullscreen {
         // Fullscreen: capture only the specific output.
-        let output = geometry
-            .output_name
-            .as_deref()
-            .unwrap_or("eDP-1");
+        let output = geometry.output_name.as_deref().unwrap_or("eDP-1");
         Command::new("grim")
             .arg("-o")
             .arg(output)
@@ -333,7 +334,10 @@ pub async fn capture_game_window(pid: u32, max_width: u32) -> Result<Vec<u8>> {
 
     // Delete temp file immediately — we don't keep screenshots on disk.
     if let Err(e) = fs::remove_file(&tmp_path).await {
-        warn!("GameAssistant: failed to delete temp screenshot {}: {}", tmp_path, e);
+        warn!(
+            "GameAssistant: failed to delete temp screenshot {}: {}",
+            tmp_path, e
+        );
     }
 
     // Optionally downscale if wider than max_width.
@@ -432,7 +436,10 @@ fn find_node_by_pid(node: &serde_json::Value, target_pid: u32) -> Option<&serde_
 /// Find the currently focused leaf node in the compositor tree.
 fn find_focused_node(node: &serde_json::Value) -> Option<&serde_json::Value> {
     // A focused leaf node has "focused": true and no children with windows.
-    let focused = node.get("focused").and_then(|v| v.as_bool()).unwrap_or(false);
+    let focused = node
+        .get("focused")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let node_type = node.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
     if focused && (node_type == "con" || node_type == "floating_con") {
@@ -566,9 +573,9 @@ async fn steam_game_name(pid: u32) -> Option<String> {
 /// Unknown IDs are returned as `"Steam Game {appid}"`.
 fn steam_appid_to_name(appid: &str) -> String {
     let name = match appid {
-        "570"    => "Dota 2",
-        "730"    => "Counter-Strike 2",
-        "440"    => "Team Fortress 2",
+        "570" => "Dota 2",
+        "730" => "Counter-Strike 2",
+        "440" => "Team Fortress 2",
         "271590" => "Grand Theft Auto V",
         "1172470" => "Apex Legends",
         "578080" => "PUBG: Battlegrounds",
@@ -586,7 +593,7 @@ fn steam_appid_to_name(appid: &str) -> String {
         "1145360" => "Hades",
         "1623730" => "Vampire Survivors",
         "2379780" => "Balatro",
-        _        => return format!("Steam Game {}", appid),
+        _ => return format!("Steam Game {}", appid),
     };
     name.to_string()
 }
@@ -601,9 +608,7 @@ async fn cmdline_game_name(pid: u32) -> Option<String> {
     let exe_str = std::str::from_utf8(exe).ok()?;
 
     // Extract the last path component.
-    let base = std::path::Path::new(exe_str)
-        .file_name()?
-        .to_str()?;
+    let base = std::path::Path::new(exe_str).file_name()?.to_str()?;
 
     let cleaned = clean_process_name(base);
     if cleaned.is_empty() {
@@ -621,9 +626,16 @@ fn clean_process_name(name: &str) -> String {
 
     // Skip well-known Wine/Proton runtime wrappers.
     for skip in &[
-        "wine", "wine64", "wineserver", "wineboot",
-        "proton", "steam-runtime",
-        "python", "python3", "bash", "sh",
+        "wine",
+        "wine64",
+        "wineserver",
+        "wineboot",
+        "proton",
+        "steam-runtime",
+        "python",
+        "python3",
+        "bash",
+        "sh",
     ] {
         if lower == *skip || lower.starts_with(&format!("{}.", skip)) {
             return String::new();
@@ -717,10 +729,7 @@ pub async fn web_search_game(
     game_name: &str,
     question: &str,
 ) -> Result<String> {
-    let query = format!(
-        "{} {} walkthrough guide solution",
-        game_name, question
-    );
+    let query = format!("{} {} walkthrough guide solution", game_name, question);
 
     // --- Try Serper (simpler, no streaming) ---
     if let Ok(key) = std::env::var("SERPER_API_KEY") {
@@ -778,7 +787,10 @@ async fn serper_search(http: &reqwest::Client, api_key: &str, query: &str) -> Re
         bail!("Serper API returned HTTP {}", status);
     }
 
-    let data: SerperResponse = resp.json().await.context("failed to parse Serper response")?;
+    let data: SerperResponse = resp
+        .json()
+        .await
+        .context("failed to parse Serper response")?;
 
     let mut parts = Vec::new();
     for r in &data.organic {
@@ -946,9 +958,7 @@ pub fn build_game_help_prompt(
 /// Accepted prefixes: `cerebras`, `groq`, `local`.
 pub fn validate_provider_zdr(provider_name: &str) -> bool {
     let lower = provider_name.to_lowercase();
-    lower.starts_with("cerebras")
-        || lower.starts_with("groq")
-        || lower.starts_with("local")
+    lower.starts_with("cerebras") || lower.starts_with("groq") || lower.starts_with("local")
 }
 
 /// Write an audit log entry for a screenshot event.
@@ -1056,11 +1066,26 @@ mod tests {
 
     #[test]
     fn test_classify_question_locally() {
-        assert_eq!(classify_question_locally("how to beat the boss?"), QuestionType::Strategy);
-        assert_eq!(classify_question_locally("what is the safe combination?"), QuestionType::Combination);
-        assert_eq!(classify_question_locally("where is the item?"), QuestionType::Location);
-        assert_eq!(classify_question_locally("solve this puzzle"), QuestionType::Puzzle);
-        assert_eq!(classify_question_locally("what year was this released?"), QuestionType::General);
+        assert_eq!(
+            classify_question_locally("how to beat the boss?"),
+            QuestionType::Strategy
+        );
+        assert_eq!(
+            classify_question_locally("what is the safe combination?"),
+            QuestionType::Combination
+        );
+        assert_eq!(
+            classify_question_locally("where is the item?"),
+            QuestionType::Location
+        );
+        assert_eq!(
+            classify_question_locally("solve this puzzle"),
+            QuestionType::Puzzle
+        );
+        assert_eq!(
+            classify_question_locally("what year was this released?"),
+            QuestionType::General
+        );
     }
 
     #[test]

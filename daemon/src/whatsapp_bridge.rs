@@ -48,18 +48,16 @@ mod inner {
             if phone_id.is_empty() {
                 return None;
             }
-            let verify_token =
-                std::env::var("LIFEOS_WHATSAPP_VERIFY_TOKEN").unwrap_or_else(|_| {
-                    warn!("LIFEOS_WHATSAPP_VERIFY_TOKEN not set — webhook verification disabled");
-                    String::new()
-                });
-            let allowed_numbers: Vec<String> =
-                std::env::var("LIFEOS_WHATSAPP_ALLOWED_NUMBERS")
-                    .unwrap_or_default()
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+            let verify_token = std::env::var("LIFEOS_WHATSAPP_VERIFY_TOKEN").unwrap_or_else(|_| {
+                warn!("LIFEOS_WHATSAPP_VERIFY_TOKEN not set — webhook verification disabled");
+                String::new()
+            });
+            let allowed_numbers: Vec<String> = std::env::var("LIFEOS_WHATSAPP_ALLOWED_NUMBERS")
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
             Some(Self {
                 token,
                 phone_id,
@@ -261,8 +259,8 @@ mod inner {
         let challenge = params.challenge.as_deref().unwrap_or("").to_string();
 
         if mode == "subscribe" {
-            let token_ok = state.config.verify_token.is_empty()
-                || token == state.config.verify_token;
+            let token_ok =
+                state.config.verify_token.is_empty() || token == state.config.verify_token;
             if token_ok {
                 info!("WhatsApp webhook verification succeeded");
                 return (StatusCode::OK, challenge);
@@ -315,13 +313,9 @@ mod inner {
                         let phone_id = state.config.phone_id.clone();
                         let from = msg.from.clone();
                         tokio::spawn(async move {
-                            let _ = send_whatsapp_message(
-                                &token,
-                                &phone_id,
-                                &from,
-                                "No autorizado.",
-                            )
-                            .await;
+                            let _ =
+                                send_whatsapp_message(&token, &phone_id, &from, "No autorizado.")
+                                    .await;
                         });
                         continue;
                     }
@@ -333,8 +327,7 @@ mod inner {
                         "text" => {
                             if let Some(text_content) = msg.text {
                                 tokio::spawn(async move {
-                                    handle_text_message(state_clone, from, text_content.body)
-                                        .await;
+                                    handle_text_message(state_clone, from, text_content.body).await;
                                 });
                             }
                         }
@@ -346,10 +339,7 @@ mod inner {
                             }
                         }
                         other => {
-                            info!(
-                                "WhatsApp: unhandled message type '{}' from {}",
-                                other, from
-                            );
+                            info!("WhatsApp: unhandled message type '{}' from {}", other, from);
                             let token = state.config.token.clone();
                             let phone_id = state.config.phone_id.clone();
                             tokio::spawn(async move {
@@ -667,10 +657,7 @@ mod inner {
     ///
     /// Step 1 — resolve the temporary download URL via the media ID endpoint.
     /// Step 2 — fetch the bytes from that URL (also requires the bearer token).
-    pub async fn download_whatsapp_media(
-        token: &str,
-        media_id: &str,
-    ) -> Result<Vec<u8>, String> {
+    pub async fn download_whatsapp_media(token: &str, media_id: &str) -> Result<Vec<u8>, String> {
         let client = reqwest::Client::new();
 
         // Step 1 — resolve media URL.
@@ -799,8 +786,7 @@ mod inner {
                 )
             }
             SupervisorNotification::ApprovalRequired {
-                action_description,
-                ..
+                action_description, ..
             } => {
                 format!(
                     "Aprobacion requerida:\n{}\n\nResponde /do approve:<id> para aprobar.",

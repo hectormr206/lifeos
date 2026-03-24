@@ -168,10 +168,7 @@ pub mod homeassistant {
             format!("Bearer {}", self.config.token)
         }
 
-        async fn get_json<T: for<'de> Deserialize<'de>>(
-            &self,
-            path: &str,
-        ) -> Result<T, HaError> {
+        async fn get_json<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, HaError> {
             let url = format!("{}{}", self.base_url(), path);
             let resp = self
                 .client
@@ -215,7 +212,9 @@ pub mod homeassistant {
                 return Err(HaError::ApiError(status, body_text));
             }
 
-            resp.json::<serde_json::Value>().await.map_err(HaError::Decode)
+            resp.json::<serde_json::Value>()
+                .await
+                .map_err(HaError::Decode)
         }
 
         // ------------------------------------------------------------------
@@ -265,21 +264,24 @@ pub mod homeassistant {
         pub async fn toggle(&self, entity_id: &str) -> Result<serde_json::Value, HaError> {
             info!("[HomeAssistant] toggle {entity_id}");
             let domain = domain_from_entity_id(entity_id);
-            self.call_service(domain, "toggle", Some(entity_id), None).await
+            self.call_service(domain, "toggle", Some(entity_id), None)
+                .await
         }
 
         /// Turn an entity on.
         pub async fn turn_on(&self, entity_id: &str) -> Result<serde_json::Value, HaError> {
             info!("[HomeAssistant] turn_on {entity_id}");
             let domain = domain_from_entity_id(entity_id);
-            self.call_service(domain, "turn_on", Some(entity_id), None).await
+            self.call_service(domain, "turn_on", Some(entity_id), None)
+                .await
         }
 
         /// Turn an entity off.
         pub async fn turn_off(&self, entity_id: &str) -> Result<serde_json::Value, HaError> {
             info!("[HomeAssistant] turn_off {entity_id}");
             let domain = domain_from_entity_id(entity_id);
-            self.call_service(domain, "turn_off", Some(entity_id), None).await
+            self.call_service(domain, "turn_off", Some(entity_id), None)
+                .await
         }
 
         /// Set target temperature on a `climate` entity.
@@ -312,8 +314,7 @@ pub mod homeassistant {
                         "[HomeAssistant] area_registry/list failed ({e:?}), falling back to /api/config"
                     );
                     // Fall back: parse areas from config blob
-                    let config: serde_json::Value =
-                        self.get_json("/api/config").await?;
+                    let config: serde_json::Value = self.get_json("/api/config").await?;
                     let areas = config
                         .get("areas")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -510,7 +511,10 @@ pub mod homeassistant {
             ],
         ) {
             "set_temperature"
-        } else if contains_any(lower, &["activa automatización", "run automation", "ejecuta"]) {
+        } else if contains_any(
+            lower,
+            &["activa automatización", "run automation", "ejecuta"],
+        ) {
             "trigger_automation"
         } else {
             return None;
@@ -533,8 +537,8 @@ pub mod homeassistant {
         // ---- Automation trigger ---------------------------------------------
 
         if action == "trigger_automation" {
-            let automation_id = find_automation_id(lower)
-                .unwrap_or_else(|| "automation.default".to_string());
+            let automation_id =
+                find_automation_id(lower).unwrap_or_else(|| "automation.default".to_string());
             return Some(HaServiceCall {
                 domain: "automation".to_string(),
                 service: "trigger".to_string(),
@@ -570,13 +574,29 @@ pub mod homeassistant {
     /// Classify the device mentioned in the command.
     /// Returns (domain, entity_id_prefix).
     fn classify_device(text: &str) -> (&'static str, &'static str) {
-        if contains_any(text, &["luz", "luces", "foco", "lampara", "light", "lámpara"]) {
+        if contains_any(
+            text,
+            &["luz", "luces", "foco", "lampara", "light", "lámpara"],
+        ) {
             ("light", "light")
         } else if contains_any(text, &["ventilador", "fan"]) {
             ("fan", "fan")
-        } else if contains_any(text, &["aire", "clima", "ac", "climate", "calefactor", "calefacción"]) {
+        } else if contains_any(
+            text,
+            &[
+                "aire",
+                "clima",
+                "ac",
+                "climate",
+                "calefactor",
+                "calefacción",
+            ],
+        ) {
             ("climate", "climate")
-        } else if contains_any(text, &["enchufe", "tomacorriente", "switch", "plug", "outlet"]) {
+        } else if contains_any(
+            text,
+            &["enchufe", "tomacorriente", "switch", "plug", "outlet"],
+        ) {
             ("switch", "switch")
         } else if contains_any(text, &["cortina", "persiana", "cover", "blind", "roller"]) {
             ("cover", "cover")
@@ -584,7 +604,17 @@ pub mod homeassistant {
             ("alarm_control_panel", "alarm_control_panel")
         } else if contains_any(text, &["cerradura", "puerta", "lock", "door"]) {
             ("lock", "lock")
-        } else if contains_any(text, &["tv", "televisión", "television", "media", "altavoz", "speaker"]) {
+        } else if contains_any(
+            text,
+            &[
+                "tv",
+                "televisión",
+                "television",
+                "media",
+                "altavoz",
+                "speaker",
+            ],
+        ) {
             ("media_player", "media_player")
         } else {
             ("homeassistant", "homeassistant")
@@ -596,11 +626,17 @@ pub mod homeassistant {
         // Common room keywords → canonical slug
         let rooms: &[(&[&str], &str)] = &[
             (&["sala", "living", "sala de estar"], "sala"),
-            (&["cuarto", "habitación", "dormitorio", "bedroom", "recámara"], "cuarto"),
+            (
+                &["cuarto", "habitación", "dormitorio", "bedroom", "recámara"],
+                "cuarto",
+            ),
             (&["cocina", "kitchen"], "cocina"),
             (&["baño", "bathroom", "aseo"], "bano"),
             (&["garage", "garaje", "cochera"], "garage"),
-            (&["jardín", "jardin", "patio", "garden", "exterior"], "jardin"),
+            (
+                &["jardín", "jardin", "patio", "garden", "exterior"],
+                "jardin",
+            ),
             (&["oficina", "office", "despacho", "estudio"], "oficina"),
             (&["pasillo", "hallway", "corridor"], "pasillo"),
             (&["comedor", "dining"], "comedor"),

@@ -169,14 +169,12 @@ mod inner {
                         if !config.allowed_numbers.is_empty()
                             && !config.allowed_numbers.contains(&sender)
                         {
-                            warn!("Signal: rejected message from unauthorized number {}", sender);
-                            if let Err(e) = send_signal_message(
-                                &config,
-                                &http,
-                                &sender,
-                                "No autorizado.",
-                            )
-                            .await
+                            warn!(
+                                "Signal: rejected message from unauthorized number {}",
+                                sender
+                            );
+                            if let Err(e) =
+                                send_signal_message(&config, &http, &sender, "No autorizado.").await
                             {
                                 error!("Signal: failed to send rejection to {}: {}", sender, e);
                             }
@@ -204,12 +202,7 @@ mod inner {
                             for attachment in &data.attachments {
                                 if attachment.content_type.starts_with("image/") {
                                     handle_image_attachment(
-                                        &config,
-                                        &http,
-                                        &sender,
-                                        attachment,
-                                        &caption,
-                                        &router,
+                                        &config, &http, &sender, attachment, &caption, &router,
                                     )
                                     .await;
                                 }
@@ -223,11 +216,7 @@ mod inner {
                             _ => continue,
                         };
 
-                        info!(
-                            "Signal [{}]: {}",
-                            sender,
-                            &text[..text.len().min(100)]
-                        );
+                        info!("Signal [{}]: {}", sender, &text[..text.len().min(100)]);
 
                         if text.starts_with("/do ") || text.starts_with("/task ") {
                             let objective = text
@@ -277,7 +266,10 @@ mod inner {
                     objective, task.id
                 );
                 if let Err(e) = send_signal_message(config, http, sender, &reply).await {
-                    error!("Signal: failed to confirm task creation to {}: {}", sender, e);
+                    error!(
+                        "Signal: failed to confirm task creation to {}: {}",
+                        sender, e
+                    );
                 }
             }
             Err(e) => {
@@ -359,7 +351,10 @@ mod inner {
         caption: &str,
         router: &Arc<RwLock<LlmRouter>>,
     ) {
-        info!("Signal [{}]: image attachment received (id: {})", sender, attachment.id);
+        info!(
+            "Signal [{}]: image attachment received (id: {})",
+            sender, attachment.id
+        );
 
         // signal-cli stores attachments under its data directory
         // The `id` field is the local filename/path signal-cli provides
@@ -393,7 +388,10 @@ mod inner {
                     send_signal_message(config, http, sender, "No pude leer el archivo adjunto.")
                         .await
                 {
-                    error!("Signal: failed to send attachment error to {}: {}", sender, e);
+                    error!(
+                        "Signal: failed to send attachment error to {}: {}",
+                        sender, e
+                    );
                 }
                 return;
             }

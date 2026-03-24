@@ -49,7 +49,7 @@ const NON_GAME_GPU_PROCESSES: &[&str] = &[
     "chrome",
     "chromium",
     "electron",
-    "code",          // VSCode
+    "code", // VSCode
     "Discord",
     "plasmashell",
     "sway",
@@ -58,13 +58,7 @@ const NON_GAME_GPU_PROCESSES: &[&str] = &[
 ];
 
 /// Process names that are launchers (not games themselves)
-const LAUNCHER_PROCESSES: &[&str] = &[
-    "steam",
-    "steamwebhelper",
-    "lutris",
-    "heroic",
-    "gamemoded",
-];
+const LAUNCHER_PROCESSES: &[&str] = &["steam", "steamwebhelper", "lutris", "heroic", "gamemoded"];
 
 /// Process names that indicate an actual game is running
 const GAME_PROCESS_NAMES: &[&str] = &[
@@ -224,7 +218,10 @@ impl GameGuard {
     pub async fn set_enabled(&self, enabled: bool) {
         let mut inner = self.inner.write().await;
         inner.config.enabled = enabled;
-        info!("[game_guard] guard {}", if enabled { "enabled" } else { "disabled" });
+        info!(
+            "[game_guard] guard {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
     }
 
     /// Enable or disable the game assistant at runtime.
@@ -541,9 +538,7 @@ fn parse_nvidia_pmon_output(output: &str, threshold_mb: u64) -> Vec<GameInfo> {
 /// Read the short command name from `/proc/{pid}/comm`.
 pub fn read_proc_comm(pid: u32) -> Option<String> {
     let path = format!("/proc/{pid}/comm");
-    fs::read_to_string(&path)
-        .ok()
-        .map(|s| s.trim().to_string())
+    fs::read_to_string(&path).ok().map(|s| s.trim().to_string())
 }
 
 /// Read the full command line from `/proc/{pid}/cmdline` (NUL-separated).
@@ -568,14 +563,11 @@ pub fn get_game_name_from_pid(pid: u32) -> Option<String> {
 
     // Fallback: first token of cmdline
     read_proc_cmdline(pid).and_then(|cmdline| {
-        cmdline
-            .split_whitespace()
-            .next()
-            .and_then(|arg| {
-                std::path::Path::new(arg)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-            })
+        cmdline.split_whitespace().next().and_then(|arg| {
+            std::path::Path::new(arg)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        })
     })
 }
 
@@ -675,8 +667,9 @@ pub fn persist_gpu_layers(layers: i32, env_path: &str) -> Result<()> {
             info!("[game_guard] GPU layers set to {layers} → {env_path}");
             return Ok(());
         }
-        Err(e) if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem
-            || e.kind() == std::io::ErrorKind::PermissionDenied =>
+        Err(e)
+            if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem
+                || e.kind() == std::io::ErrorKind::PermissionDenied =>
         {
             warn!("[game_guard] {env_path} is read-only (bootc), falling back to override file");
         }
