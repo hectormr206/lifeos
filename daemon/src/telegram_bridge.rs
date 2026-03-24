@@ -236,7 +236,7 @@ mod inner {
                 for t in &recent {
                     reply.push_str(&format!(
                         "\n- [{}] {}",
-                        serde_json::to_value(&t.status)
+                        serde_json::to_value(t.status)
                             .unwrap_or_default()
                             .as_str()
                             .unwrap_or("?"),
