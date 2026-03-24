@@ -64,7 +64,12 @@ while [ "${i}" -lt 45 ]; do
     if curl -fsS "${bootstrap_url}" >/dev/null 2>&1; then
         [ "${once_per_version}" -eq 1 ] && printf '%s' "${version_key}" > "${marker_file}"
         if command -v firefox >/dev/null 2>&1; then
-            firefox -P lifeos.default "${dashboard_url}" >/dev/null 2>&1 &
+            lifeos_profile="${HOME}/.mozilla/firefox/lifeos.default"
+            if [ -d "${lifeos_profile}" ]; then
+                firefox --profile "${lifeos_profile}" --no-remote "${dashboard_url}" >/dev/null 2>&1 &
+            else
+                firefox -P LifeOS --no-remote "${dashboard_url}" >/dev/null 2>&1 &
+            fi
             exit 0
         fi
         if command -v xdg-open >/dev/null 2>&1; then
