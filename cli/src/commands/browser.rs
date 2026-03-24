@@ -283,6 +283,7 @@ fn append_audit(entry: BrowserAuditEntry) -> anyhow::Result<()> {
 
 /// Fetch a URL and return its text content (HTML stripped to plain text).
 /// Used by the supervisor for web browsing tasks.
+#[allow(dead_code)]
 pub async fn fetch_url_text(url: &str, timeout_secs: u64) -> anyhow::Result<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs.max(5)))
@@ -300,7 +301,11 @@ pub async fn fetch_url_text(url: &str, timeout_secs: u64) -> anyhow::Result<Stri
 
     // Truncate to reasonable size for LLM context
     if text.len() > 8000 {
-        Ok(format!("{}...\n[truncated, {} chars total]", &text[..8000], text.len()))
+        Ok(format!(
+            "{}...\n[truncated, {} chars total]",
+            &text[..8000],
+            text.len()
+        ))
     } else {
         Ok(text)
     }

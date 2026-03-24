@@ -131,7 +131,10 @@ impl TaskQueue {
             .unwrap_or("normal")
             .to_string();
 
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
         db.execute(
             "INSERT INTO tasks (id, objective, status, priority, source, attempts, max_attempts, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?7, ?8)",
@@ -160,7 +163,10 @@ impl TaskQueue {
 
     /// Get the next pending task (highest priority first, oldest first).
     pub fn dequeue(&self) -> Result<Option<Task>> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
 
         let mut stmt = db.prepare(
             "SELECT id, objective, status, priority, source, plan, result, error,
@@ -205,7 +211,10 @@ impl TaskQueue {
     /// Mark a task as running.
     pub fn mark_running(&self, task_id: &str) -> Result<()> {
         let now = Local::now().to_rfc3339();
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
         db.execute(
             "UPDATE tasks SET status = 'running', started_at = ?1, updated_at = ?2, attempts = attempts + 1 WHERE id = ?3",
             params![now, now, task_id],
@@ -216,7 +225,10 @@ impl TaskQueue {
     /// Mark a task as completed with a result.
     pub fn mark_completed(&self, task_id: &str, result: &str) -> Result<()> {
         let now = Local::now().to_rfc3339();
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
         db.execute(
             "UPDATE tasks SET status = 'completed', result = ?1, completed_at = ?2, updated_at = ?3 WHERE id = ?4",
             params![result, now, now, task_id],
@@ -228,7 +240,10 @@ impl TaskQueue {
     /// Mark a task as failed. If under max_attempts, set to retrying instead.
     pub fn mark_failed(&self, task_id: &str, error: &str) -> Result<bool> {
         let now = Local::now().to_rfc3339();
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
 
         let (attempts, max_attempts): (u32, u32) = db.query_row(
             "SELECT attempts, max_attempts FROM tasks WHERE id = ?1",
@@ -245,9 +260,15 @@ impl TaskQueue {
         )?;
 
         if will_retry {
-            warn!("Task {} failed (attempt {}/{}), will retry: {}", task_id, attempts, max_attempts, error);
+            warn!(
+                "Task {} failed (attempt {}/{}), will retry: {}",
+                task_id, attempts, max_attempts, error
+            );
         } else {
-            warn!("Task {} failed permanently after {} attempts: {}", task_id, attempts, error);
+            warn!(
+                "Task {} failed permanently after {} attempts: {}",
+                task_id, attempts, error
+            );
         }
 
         Ok(will_retry)
@@ -256,7 +277,10 @@ impl TaskQueue {
     /// Store the plan JSON for a task.
     pub fn set_plan(&self, task_id: &str, plan: &str) -> Result<()> {
         let now = Local::now().to_rfc3339();
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
         db.execute(
             "UPDATE tasks SET plan = ?1, updated_at = ?2 WHERE id = ?3",
             params![plan, now, task_id],
@@ -267,7 +291,10 @@ impl TaskQueue {
     /// Cancel a task.
     pub fn cancel(&self, task_id: &str) -> Result<()> {
         let now = Local::now().to_rfc3339();
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
         db.execute(
             "UPDATE tasks SET status = 'cancelled', updated_at = ?1 WHERE id = ?2",
             params![now, task_id],
@@ -277,7 +304,10 @@ impl TaskQueue {
 
     /// List tasks with optional status filter.
     pub fn list(&self, status_filter: Option<TaskStatus>, limit: u32) -> Result<Vec<Task>> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
 
         let (query, filter_val) = if let Some(status) = status_filter {
             let s = status_to_str(status);
@@ -310,7 +340,10 @@ impl TaskQueue {
 
     /// Get a summary of queue state.
     pub fn summary(&self) -> Result<serde_json::Value> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
         let mut stmt = db.prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -326,7 +359,10 @@ impl TaskQueue {
 
     /// Get a single task by ID.
     pub fn get(&self, task_id: &str) -> Result<Option<Task>> {
-        let db = self.db.lock().map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
         let task = db
             .query_row(
                 "SELECT id, objective, status, priority, source, plan, result, error,
@@ -417,8 +453,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn tmp_queue() -> TaskQueue {
-        let dir = PathBuf::from("/tmp/lifeos-test-queue")
-            .join(uuid::Uuid::new_v4().to_string());
+        let dir = PathBuf::from("/tmp/lifeos-test-queue").join(uuid::Uuid::new_v4().to_string());
         TaskQueue::new(&dir).unwrap()
     }
 

@@ -105,19 +105,33 @@ impl AgentRole {
         if lower.contains("review") || lower.contains("revisar") || lower.contains("auditar") {
             return AgentRole::Reviewer;
         }
-        if lower.contains("escrib") || lower.contains("implementa") || lower.contains("crea ")
-            || lower.contains("agrega") || lower.contains("modific") || lower.contains("fix")
-            || lower.contains("arregla") || lower.contains("codigo") || lower.contains("code")
+        if lower.contains("escrib")
+            || lower.contains("implementa")
+            || lower.contains("crea ")
+            || lower.contains("agrega")
+            || lower.contains("modific")
+            || lower.contains("fix")
+            || lower.contains("arregla")
+            || lower.contains("codigo")
+            || lower.contains("code")
         {
             return AgentRole::Coder;
         }
-        if lower.contains("deploy") || lower.contains("build") || lower.contains("servicio")
-            || lower.contains("systemctl") || lower.contains("docker") || lower.contains("imagen")
+        if lower.contains("deploy")
+            || lower.contains("build")
+            || lower.contains("servicio")
+            || lower.contains("systemctl")
+            || lower.contains("docker")
+            || lower.contains("imagen")
         {
             return AgentRole::DevOps;
         }
-        if lower.contains("investiga") || lower.contains("busca") || lower.contains("analiza")
-            || lower.contains("research") || lower.contains("encuentra") || lower.contains("lee")
+        if lower.contains("investiga")
+            || lower.contains("busca")
+            || lower.contains("analiza")
+            || lower.contains("research")
+            || lower.contains("encuentra")
+            || lower.contains("lee")
         {
             return AgentRole::Researcher;
         }
@@ -207,29 +221,43 @@ impl Runbook {
         if lower.contains("connection refused") || lower.contains("connect error") {
             return Some("Network issue. Check internet connectivity: ping 8.8.8.8");
         }
-        if lower.contains("rate limit") || lower.contains("429") || lower.contains("too many requests") {
-            return Some("Rate limited. Wait 60 seconds and retry, or switch to a different LLM provider.");
+        if lower.contains("rate limit")
+            || lower.contains("429")
+            || lower.contains("too many requests")
+        {
+            return Some(
+                "Rate limited. Wait 60 seconds and retry, or switch to a different LLM provider.",
+            );
         }
         if lower.contains("out of memory") || lower.contains("oom") {
             return Some("Out of memory. Try: reduce context size, close other apps, or use a smaller model.");
         }
         if lower.contains("permission denied") || lower.contains("eacces") {
-            return Some("Permission denied. Check file ownership. May need to run with correct user.");
+            return Some(
+                "Permission denied. Check file ownership. May need to run with correct user.",
+            );
         }
         if lower.contains("no space left") || lower.contains("disk full") {
-            return Some("Disk full. Run: df -h && du -sh /var/lib/lifeos/ && lifeos-maintenance-cleanup.sh");
+            return Some(
+                "Disk full. Run: df -h && du -sh /var/lib/lifeos/ && lifeos-maintenance-cleanup.sh",
+            );
         }
-        if lower.contains("llama-server") || lower.contains("model") && lower.contains("not found") {
+        if lower.contains("llama-server") || lower.contains("model") && lower.contains("not found")
+        {
             return Some("AI model issue. Check: systemctl status llama-server && ls /var/lib/lifeos/models/");
         }
         if lower.contains("cargo") && lower.contains("error") {
             return Some("Build error. Run: cargo clean && cargo build 2>&1 | head -30");
         }
         if lower.contains("git") && lower.contains("conflict") {
-            return Some("Git conflict. Run: git status && git diff to inspect, then resolve manually.");
+            return Some(
+                "Git conflict. Run: git status && git diff to inspect, then resolve manually.",
+            );
         }
         if lower.contains("timeout") || lower.contains("timed out") {
-            return Some("Request timed out. The LLM provider may be slow. Retry or switch provider.");
+            return Some(
+                "Request timed out. The LLM provider may be slow. Retry or switch provider.",
+            );
         }
 
         None
@@ -266,10 +294,7 @@ mod tests {
 
     #[test]
     fn suggest_gm_for_generic() {
-        assert_eq!(
-            AgentRole::suggest_for("Hola, como estas?"),
-            AgentRole::Gm
-        );
+        assert_eq!(AgentRole::suggest_for("Hola, como estas?"), AgentRole::Gm);
     }
 
     #[test]

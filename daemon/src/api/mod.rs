@@ -8880,7 +8880,9 @@ async fn get_tasks(
         .and_then(|s| serde_json::from_value(serde_json::Value::String(s.clone())).ok());
 
     match state.task_queue.list(status_filter, limit) {
-        Ok(tasks) => Ok(Json(serde_json::json!({ "tasks": tasks, "count": tasks.len() }))),
+        Ok(tasks) => Ok(Json(
+            serde_json::json!({ "tasks": tasks, "count": tasks.len() }),
+        )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {

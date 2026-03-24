@@ -143,10 +143,15 @@ impl LlmRouter {
         let complexity = request.complexity.unwrap_or(TaskComplexity::Medium);
         let sensitivity = request.sensitivity.unwrap_or(SensitivityLevel::Low);
 
-        let candidates = self.select_candidates(complexity, sensitivity, &request.preferred_provider);
+        let candidates =
+            self.select_candidates(complexity, sensitivity, &request.preferred_provider);
 
         if candidates.is_empty() {
-            bail!("No LLM providers available for complexity={:?} sensitivity={:?}", complexity, sensitivity);
+            bail!(
+                "No LLM providers available for complexity={:?} sensitivity={:?}",
+                complexity,
+                sensitivity
+            );
         }
 
         let mut last_error = None;
@@ -159,7 +164,9 @@ impl LlmRouter {
                     if let Some(tracker) = self.cost_trackers.get(&provider.name) {
                         tracker.total_requests.fetch_add(1, Ordering::Relaxed);
                         if let Some(tokens) = response.tokens_used {
-                            tracker.total_output_tokens.fetch_add(tokens as u64, Ordering::Relaxed);
+                            tracker
+                                .total_output_tokens
+                                .fetch_add(tokens as u64, Ordering::Relaxed);
                         }
                     }
                     info!(
@@ -203,7 +210,11 @@ impl LlmRouter {
             (_, SensitivityLevel::Critical) => vec![ProviderTier::Local],
             (_, SensitivityLevel::High) => vec![ProviderTier::Local, ProviderTier::Premium],
             (PrivacyLevel::Careful, SensitivityLevel::Medium) => {
-                vec![ProviderTier::Local, ProviderTier::Free, ProviderTier::Premium]
+                vec![
+                    ProviderTier::Local,
+                    ProviderTier::Free,
+                    ProviderTier::Premium,
+                ]
             }
             _ => vec![
                 ProviderTier::Local,
@@ -278,11 +289,10 @@ impl LlmRouter {
 
         match provider.api_format {
             ApiFormat::OpenAiCompatible => {
-                self.call_openai_compatible(provider, request, &api_key).await
+                self.call_openai_compatible(provider, request, &api_key)
+                    .await
             }
-            ApiFormat::Gemini => {
-                self.call_gemini(provider, request, &api_key).await
-            }
+            ApiFormat::Gemini => self.call_gemini(provider, request, &api_key).await,
         }
     }
 
@@ -294,7 +304,10 @@ impl LlmRouter {
         request: &RouterRequest,
         api_key: &str,
     ) -> Result<RouterResponse> {
-        let path = provider.chat_path.as_deref().unwrap_or("/v1/chat/completions");
+        let path = provider
+            .chat_path
+            .as_deref()
+            .unwrap_or("/v1/chat/completions");
         let url = format!("{}{}", provider.api_base, path);
 
         let payload = serde_json::json!({
@@ -310,12 +323,20 @@ impl LlmRouter {
             req = req.bearer_auth(api_key);
         }
 
-        let response = req.send().await.context(format!("request to {} failed", provider.name))?;
+        let response = req
+            .send()
+            .await
+            .context(format!("request to {} failed", provider.name))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            bail!("{} returned {}: {}", provider.name, status, &body[..body.len().min(200)]);
+            bail!(
+                "{} returned {}: {}",
+                provider.name,
+                status,
+                &body[..body.len().min(200)]
+            );
         }
 
         let body: serde_json::Value = response.json().await?;
@@ -372,7 +393,11 @@ impl LlmRouter {
                     }));
                 }
                 "user" | "assistant" => {
-                    let role = if msg.role == "assistant" { "model" } else { "user" };
+                    let role = if msg.role == "assistant" {
+                        "model"
+                    } else {
+                        "user"
+                    };
                     let text = msg.content.as_str().unwrap_or("").to_string();
                     contents.push(serde_json::json!({
                         "role": role,
@@ -399,7 +424,11 @@ impl LlmRouter {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            bail!("Gemini returned {}: {}", status, &body[..body.len().min(200)]);
+            bail!(
+                "Gemini returned {}: {}",
+                status,
+                &body[..body.len().min(200)]
+            );
         }
 
         let body: serde_json::Value = response.json().await?;

@@ -370,9 +370,8 @@ mod tests {
             SensitivityLevel::Low,
             crate::llm_router::ProviderTier::Local
         ));
-        assert!(!filter.is_safe_for_tier(
-            SensitivityLevel::Low,
-            crate::llm_router::ProviderTier::Free
-        ));
+        assert!(
+            !filter.is_safe_for_tier(SensitivityLevel::Low, crate::llm_router::ProviderTier::Free)
+        );
     }
 }

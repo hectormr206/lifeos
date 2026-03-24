@@ -65,10 +65,7 @@ mod inner {
                     Ok(notification) => {
                         let text = format_notification(&notification);
                         for &chat_id in &notify_chat_ids {
-                            if let Err(e) = notify_bot
-                                .send_message(ChatId(chat_id), &text)
-                                .await
-                            {
+                            if let Err(e) = notify_bot.send_message(ChatId(chat_id), &text).await {
                                 error!("Failed to send Telegram notification: {}", e);
                             }
                         }
@@ -90,11 +87,10 @@ mod inner {
             allowed_ids: config.allowed_chat_ids,
         };
 
-        let handler = Update::filter_message().endpoint(
-            |bot: Bot, msg: Message, ctx: BotCtx| async move {
+        let handler =
+            Update::filter_message().endpoint(|bot: Bot, msg: Message, ctx: BotCtx| async move {
                 handle_message(bot, msg, ctx).await
-            },
-        );
+            });
 
         Dispatcher::builder(bot, handler)
             .dependencies(dptree::deps![ctx])
@@ -178,7 +174,10 @@ mod inner {
 
         if !ctx.allowed_ids.is_empty() && !ctx.allowed_ids.contains(&chat_id.0) {
             bot.send_message(chat_id, "No autorizado.").await?;
-            warn!("Rejected Telegram message from unauthorized chat_id: {}", chat_id);
+            warn!(
+                "Rejected Telegram message from unauthorized chat_id: {}",
+                chat_id
+            );
             return Ok(());
         }
 

@@ -66,18 +66,35 @@ pub struct PlanStep {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StepAction {
-    ShellCommand { command: String },
+    ShellCommand {
+        command: String,
+    },
     /// Run a command inside an isolated git worktree (safe self-modification).
-    SandboxCommand { command: String },
-    AiQuery { prompt: String },
+    SandboxCommand {
+        command: String,
+    },
+    AiQuery {
+        prompt: String,
+    },
     /// Fetch a URL and return its text content (HTML stripped).
-    BrowseUrl { url: String },
+    BrowseUrl {
+        url: String,
+    },
     /// Take a screenshot, analyze it with local LLM, and return description.
-    ScreenAnalyze { prompt: Option<String> },
+    ScreenAnalyze {
+        prompt: Option<String>,
+    },
     ScreenCapture,
-    ReadFile { path: String },
-    WriteFile { path: String, content: String },
-    Respond { message: String },
+    ReadFile {
+        path: String,
+    },
+    WriteFile {
+        path: String,
+        content: String,
+    },
+    Respond {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,7 +162,9 @@ impl Supervisor {
                 candidates
                     .into_iter()
                     .find(|p| p.join("Cargo.toml").exists())
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")))
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
+                    })
             });
 
         info!("Supervisor working directory: {}", work_dir.display());
@@ -165,7 +184,10 @@ impl Supervisor {
 
     /// Get agent metrics snapshot.
     pub fn metrics(&self) -> AllAgentMetrics {
-        self.metrics.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.metrics
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Subscribe to supervisor notifications.
@@ -295,7 +317,12 @@ impl Supervisor {
                     &task.objective,
                     "completed",
                     &summary,
-                    &format!("{}/{} steps OK in {}ms", steps_ok, steps_total, start.elapsed().as_millis()),
+                    &format!(
+                        "{}/{} steps OK in {}ms",
+                        steps_ok,
+                        steps_total,
+                        start.elapsed().as_millis()
+                    ),
                 )
                 .await;
 
@@ -326,7 +353,11 @@ impl Supervisor {
                     &task.objective,
                     "failed",
                     &error_msg,
-                    if will_retry { "will retry" } else { "permanent failure" },
+                    if will_retry {
+                        "will retry"
+                    } else {
+                        "permanent failure"
+                    },
                 )
                 .await;
 
@@ -353,11 +384,7 @@ impl Supervisor {
     }
 
     /// Execute a single task: plan -> execute steps -> return result + step counts.
-    async fn execute_task(
-        &self,
-        task_id: &str,
-        objective: &str,
-    ) -> Result<(String, usize, usize)> {
+    async fn execute_task(&self, task_id: &str, objective: &str) -> Result<(String, usize, usize)> {
         // Select the best agent role for this task
         let role = AgentRole::suggest_for(objective);
         info!("Task {} assigned to role: {:?}", task_id, role);
@@ -481,13 +508,7 @@ impl Supervisor {
     }
 
     /// Save task outcome to the memory plane for future context.
-    async fn memory_writeback(
-        &self,
-        objective: &str,
-        status: &str,
-        detail: &str,
-        meta: &str,
-    ) {
+    async fn memory_writeback(&self, objective: &str, status: &str, detail: &str, meta: &str) {
         let memory = match &self.memory {
             Some(m) => m,
             None => return,
@@ -508,19 +529,27 @@ impl Supervisor {
             _ => 30,
         };
 
-        let tags = vec![
-            "supervisor".to_string(),
-            format!("status:{}", status),
-        ];
+        let tags = vec!["supervisor".to_string(), format!("status:{}", status)];
 
         let mem = memory.read().await;
         if let Err(e) = mem
-            .add_entry("decision", "system", &tags, Some("supervisor"), importance, &content)
+            .add_entry(
+                "decision",
+                "system",
+                &tags,
+                Some("supervisor"),
+                importance,
+                &content,
+            )
             .await
         {
             warn!("Memory writeback failed: {}", e);
         } else {
-            debug!("Memory writeback: {} — {}", status, &objective[..objective.len().min(60)]);
+            debug!(
+                "Memory writeback: {} — {}",
+                status,
+                &objective[..objective.len().min(60)]
+            );
         }
     }
 
@@ -528,7 +557,10 @@ impl Supervisor {
     async fn execute_screen_capture(&self) -> Result<String> {
         let screenshot_dir = self.work_dir.join("target/screenshots");
         tokio::fs::create_dir_all(&screenshot_dir).await.ok();
-        let filename = format!("supervisor-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+        let filename = format!(
+            "supervisor-{}.png",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
         let path = screenshot_dir.join(&filename);
 
         // Try grim (Wayland/COSMIC)
@@ -538,9 +570,7 @@ impl Supervisor {
             .await;
 
         match output {
-            Ok(o) if o.status.success() => {
-                Ok(format!("Screenshot saved to {}", path.display()))
-            }
+            Ok(o) if o.status.success() => Ok(format!("Screenshot saved to {}", path.display())),
             _ => {
                 // Fallback: try xdg-desktop-portal screenshot
                 let output = tokio::process::Command::new("gnome-screenshot")
@@ -551,7 +581,9 @@ impl Supervisor {
                     Ok(o) if o.status.success() => {
                         Ok(format!("Screenshot saved to {}", path.display()))
                     }
-                    _ => Ok("Screenshot capture failed — no grim or gnome-screenshot available".into()),
+                    _ => Ok(
+                        "Screenshot capture failed — no grim or gnome-screenshot available".into(),
+                    ),
                 }
             }
         }
@@ -565,7 +597,11 @@ impl Supervisor {
             .user_agent("LifeOS-Axi/0.1")
             .build()?;
 
-        let resp = client.get(url).send().await.context(format!("Failed to fetch {}", url))?;
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .context(format!("Failed to fetch {}", url))?;
         let status = resp.status();
         if !status.is_success() {
             anyhow::bail!("HTTP {} for {}", status, url);
@@ -576,7 +612,11 @@ impl Supervisor {
         let text = strip_html(&body);
 
         if text.len() > 6000 {
-            Ok(format!("{}...\n[truncated, {} chars]", &text[..6000], text.len()))
+            Ok(format!(
+                "{}...\n[truncated, {} chars]",
+                &text[..6000],
+                text.len()
+            ))
         } else {
             Ok(text)
         }
@@ -614,8 +654,14 @@ impl Supervisor {
 
         let router = self.router.read().await;
         match router.chat(&request).await {
-            Ok(response) => Ok(format!("Screenshot: {}\nAnalysis: {}", screenshot_path, response.text)),
-            Err(e) => Ok(format!("Screenshot saved: {}\nAnalysis failed: {}", screenshot_path, e)),
+            Ok(response) => Ok(format!(
+                "Screenshot: {}\nAnalysis: {}",
+                screenshot_path, response.text
+            )),
+            Err(e) => Ok(format!(
+                "Screenshot saved: {}\nAnalysis failed: {}",
+                screenshot_path, e
+            )),
         }
     }
 
@@ -719,10 +765,7 @@ impl Supervisor {
         };
 
         let mem = memory.read().await;
-        match mem
-            .search_entries(objective, 3, Some("system"))
-            .await
-        {
+        match mem.search_entries(objective, 3, Some("system")).await {
             Ok(results) if !results.is_empty() => {
                 let mut context = String::from("Relevant past experiences:\n");
                 for r in &results {
@@ -845,20 +888,38 @@ Always end with a "respond" step summarizing what was done."#,
                 let cmd = command.to_lowercase();
                 // High risk: destructive or irreversible commands
                 let high_risk = [
-                    "rm -rf", "rm -r", "rmdir", "mkfs", "dd if=",
-                    "git push", "git reset --hard", "git checkout .",
-                    "git clean", "reboot", "shutdown", "systemctl stop",
-                    "pkill", "killall", "chmod 777", "> /dev/",
-                    "curl.*| sh", "wget.*| sh", "sudo",
+                    "rm -rf",
+                    "rm -r",
+                    "rmdir",
+                    "mkfs",
+                    "dd if=",
+                    "git push",
+                    "git reset --hard",
+                    "git checkout .",
+                    "git clean",
+                    "reboot",
+                    "shutdown",
+                    "systemctl stop",
+                    "pkill",
+                    "killall",
+                    "chmod 777",
+                    "> /dev/",
+                    "curl.*| sh",
+                    "wget.*| sh",
+                    "sudo",
                 ];
                 if high_risk.iter().any(|p| cmd.contains(p)) {
                     return RiskLevel::High;
                 }
                 // Medium risk: file modification, git operations
                 let medium_risk = [
-                    "git commit", "git merge", "git rebase",
-                    "cargo publish", "npm publish",
-                    "mv ", "cp -r",
+                    "git commit",
+                    "git merge",
+                    "git rebase",
+                    "cargo publish",
+                    "npm publish",
+                    "mv ",
+                    "cp -r",
                 ];
                 if medium_risk.iter().any(|p| cmd.contains(p)) {
                     return RiskLevel::Medium;
@@ -885,17 +946,23 @@ Always end with a "respond" step summarizing what was done."#,
             let _ = self.notify_tx.send(SupervisorNotification::TaskFailed {
                 task_id: "risk-block".into(),
                 objective: format!("High-risk action blocked: {}", desc),
-                error: "This action was classified as high-risk and requires manual execution.".into(),
+                error: "This action was classified as high-risk and requires manual execution."
+                    .into(),
                 will_retry: false,
             });
-            anyhow::bail!("High-risk action blocked: {}. Execute manually if intended.", desc);
+            anyhow::bail!(
+                "High-risk action blocked: {}. Execute manually if intended.",
+                desc
+            );
         }
 
         match &step.action {
             StepAction::ShellCommand { command } => self.execute_shell(command).await,
             StepAction::SandboxCommand { command } => self.execute_in_sandbox(command).await,
             StepAction::BrowseUrl { url } => self.execute_browse(url).await,
-            StepAction::ScreenAnalyze { prompt } => self.execute_screen_analyze(prompt.as_deref()).await,
+            StepAction::ScreenAnalyze { prompt } => {
+                self.execute_screen_analyze(prompt.as_deref()).await
+            }
             StepAction::AiQuery { prompt } => self.execute_ai_query(prompt).await,
             StepAction::ScreenCapture => self.execute_screen_capture().await,
             StepAction::ReadFile { path } => {
@@ -926,7 +993,11 @@ Always end with a "respond" step summarizing what was done."#,
                 tokio::fs::write(&full_path, content)
                     .await
                     .with_context(|| format!("Failed to write {}", full_path.display()))?;
-                Ok(format!("Wrote {} bytes to {}", content.len(), full_path.display()))
+                Ok(format!(
+                    "Wrote {} bytes to {}",
+                    content.len(),
+                    full_path.display()
+                ))
             }
             StepAction::Respond { message } => Ok(message.clone()),
         }
@@ -1036,7 +1107,10 @@ fn parse_plan_from_response(text: &str) -> Result<Plan> {
                     }],
                 })
             } else {
-                log::info!("Could not parse plan JSON, wrapping as direct response ({} chars)", clean.len());
+                log::info!(
+                    "Could not parse plan JSON, wrapping as direct response ({} chars)",
+                    clean.len()
+                );
                 Ok(Plan {
                     steps: vec![PlanStep {
                         description: "Direct LLM response".into(),
@@ -1081,12 +1155,17 @@ fn strip_html(html: &str) -> String {
     }
     // Collapse multiple blank lines
     let mut prev_blank = false;
-    let lines: Vec<&str> = result.lines().filter(|l| {
-        let blank = l.trim().is_empty();
-        if blank && prev_blank { return false; }
-        prev_blank = blank;
-        true
-    }).collect();
+    let lines: Vec<&str> = result
+        .lines()
+        .filter(|l| {
+            let blank = l.trim().is_empty();
+            if blank && prev_blank {
+                return false;
+            }
+            prev_blank = blank;
+            true
+        })
+        .collect();
     lines.join("\n").trim().to_string()
 }
 

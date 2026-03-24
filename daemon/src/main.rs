@@ -17,6 +17,7 @@ use tokio::signal;
 use tokio::sync::RwLock;
 
 mod accessibility;
+mod agent_roles;
 mod agent_runtime;
 mod ai;
 mod api;
@@ -29,11 +30,9 @@ mod health;
 #[cfg(feature = "ui-overlay")]
 #[allow(dead_code)]
 mod keyboard_shortcut;
-mod agent_roles;
 mod lab;
 mod llm_router;
 mod memory_plane;
-mod privacy_filter;
 #[cfg(feature = "ui-overlay")]
 mod mini_widget;
 mod models;
@@ -43,6 +42,7 @@ mod overlay;
 mod permissions;
 #[cfg(feature = "dbus")]
 mod portal;
+mod privacy_filter;
 mod screen_capture;
 mod sensory_pipeline;
 mod supervisor;
@@ -332,13 +332,11 @@ async fn main() -> anyhow::Result<()> {
     let shared_router = Arc::new(RwLock::new(llm_router::LlmRouter::new(
         privacy_filter::PrivacyLevel::default(),
     )));
-    let shared_tq = Arc::new(
-        task_queue::TaskQueue::new(&data_dir).unwrap_or_else(|e| {
-            warn!("Failed to open task queue, using /tmp fallback: {}", e);
-            task_queue::TaskQueue::new(std::path::Path::new("/tmp/lifeos"))
-                .expect("fallback task queue must work")
-        }),
-    );
+    let shared_tq = Arc::new(task_queue::TaskQueue::new(&data_dir).unwrap_or_else(|e| {
+        warn!("Failed to open task queue, using /tmp fallback: {}", e);
+        task_queue::TaskQueue::new(std::path::Path::new("/tmp/lifeos"))
+            .expect("fallback task queue must work")
+    }));
     let shared_memory = Arc::new(RwLock::new(
         MemoryPlaneManager::new(data_dir.clone()).unwrap_or_else(|e| {
             warn!("Failed to initialize MemoryPlaneManager: {}", e);
