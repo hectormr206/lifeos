@@ -13,10 +13,14 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=lifeosd
 
+# Load LLM provider API keys and Telegram config (user-editable)
+EnvironmentFile=-/etc/lifeos/llm-providers.env
+EnvironmentFile=-/var/home/lifeos/.config/lifeos/llm-providers.env
+
 # Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ReadWritePaths=/var/lib/lifeos /var/log/lifeos
 ProtectKernelTunables=true
 ProtectKernelModules=true

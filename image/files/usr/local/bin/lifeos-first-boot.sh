@@ -112,6 +112,30 @@ system_setup() {
     # Set up Flatpak
     flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true
 
+    # Create LLM providers env template if it doesn't exist
+    if [ ! -f /etc/lifeos/llm-providers.env ]; then
+        cat > /etc/lifeos/llm-providers.env << 'ENVEOF'
+# LifeOS LLM Provider API Keys
+# Configure your keys here. The daemon loads them at startup.
+# Only fill the ones you use — the router handles fallbacks.
+#
+# HIGH PRIVACY (recommended): Cerebras, Groq
+# See /usr/share/doc/lifeos/llm-providers.env.example for all options.
+
+# Cerebras (FREE, zero data retention, 2000+ tok/s)
+CEREBRAS_API_KEY=
+# Groq (FREE, zero data retention, 500-1000 tok/s)
+GROQ_API_KEY=
+# OpenRouter (FREE models, mixed privacy)
+OPENROUTER_API_KEY=
+# Telegram Bot (optional, for remote control)
+LIFEOS_TELEGRAM_BOT_TOKEN=
+LIFEOS_TELEGRAM_CHAT_ID=
+ENVEOF
+        chmod 600 /etc/lifeos/llm-providers.env
+        log_success "LLM providers config created at /etc/lifeos/llm-providers.env"
+    fi
+
     log_success "System directories created"
 }
 

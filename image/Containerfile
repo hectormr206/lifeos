@@ -451,6 +451,9 @@ COPY image/files/etc/lifeos/cosmic-theme.toml  /etc/lifeos/cosmic-theme.toml
 COPY image/files/etc/lifeos/design-tokens.toml /etc/lifeos/design-tokens.toml
 COPY image/files/etc/lifeos/design-tokens.json /etc/lifeos/design-tokens.json
 
+# LLM providers example (reference doc — user copies to /etc/lifeos/)
+COPY files/etc/lifeos/llm-providers.env.example /usr/share/doc/lifeos/llm-providers.env.example
+
 # LifeOS Wallpapers
 COPY image/files/usr/share/backgrounds/lifeos /usr/share/backgrounds/lifeos
 
@@ -562,6 +565,8 @@ RUN printf '%s\n' \
     'Environment=LIFEOS_TTS_FALLBACK_BIN=/usr/bin/espeak-ng' \
     'Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard' \
     'Environment=LIFEOS_RUNTIME_DIR=%t/lifeos' \
+    'EnvironmentFile=-/etc/lifeos/llm-providers.env' \
+    'EnvironmentFile=-%h/.config/lifeos/llm-providers.env' \
     'RuntimeDirectory=lifeos' \
     'RuntimeDirectoryMode=0700' \
     'ExecStart=/usr/bin/lifeosd' \
