@@ -624,7 +624,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             name: "groq-qwen32b".into(),
             api_base: "https://api.groq.com/openai".into(),
             api_key_env: "GROQ_API_KEY".into(),
-            model: "qwen-qwq-32b".into(),
+            model: "qwen/qwen3-32b".into(),
             api_format: ApiFormat::OpenAiCompatible,
             cost_input_per_m: 0.0,
             cost_output_per_m: 0.0,
@@ -653,12 +653,12 @@ fn default_providers() -> Vec<ProviderConfig> {
             chat_path: None,
             privacy: String::new(),
         },
-        // DeepSeek R1 on Groq — deep reasoning
+        // GPT-OSS 120B on Groq — strong reasoning
         ProviderConfig {
-            name: "groq-deepseek-r1".into(),
+            name: "groq-gptoss120b".into(),
             api_base: "https://api.groq.com/openai".into(),
             api_key_env: "GROQ_API_KEY".into(),
-            model: "deepseek-r1-distill-llama-70b".into(),
+            model: "openai/gpt-oss-120b".into(),
             api_format: ApiFormat::OpenAiCompatible,
             cost_input_per_m: 0.0,
             cost_output_per_m: 0.0,
@@ -688,12 +688,12 @@ fn default_providers() -> Vec<ProviderConfig> {
             chat_path: Some("/v1/messages".into()),
             privacy: String::new(),
         },
-        // OpenAI GPT-4o-mini — cheapest OpenAI, no training on API data
+        // OpenAI GPT-5.4-nano — cheapest OpenAI, no training on API data
         ProviderConfig {
-            name: "openai-4o-mini".into(),
+            name: "openai-54nano".into(),
             api_base: "https://api.openai.com".into(),
             api_key_env: "OPENAI_API_KEY".into(),
-            model: "gpt-4o-mini".into(),
+            model: "gpt-5.4-nano".into(),
             api_format: ApiFormat::OpenAiCompatible,
             cost_input_per_m: 0.15,
             cost_output_per_m: 0.60,

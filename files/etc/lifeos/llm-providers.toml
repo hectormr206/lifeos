@@ -69,7 +69,7 @@ privacy = "high"
 name = "groq-qwen32b"
 api_base = "https://api.groq.com/openai"
 api_key_env = "GROQ_API_KEY"
-model = "qwen-qwq-32b"
+model = "qwen/qwen3-32b"
 api_format = "openai_compatible"
 cost_input_per_m = 0.0
 cost_output_per_m = 0.0
@@ -96,10 +96,10 @@ tier = "free"
 privacy = "high"
 
 [[providers]]
-name = "groq-deepseek-r1"
+name = "groq-gptoss120b"
 api_base = "https://api.groq.com/openai"
 api_key_env = "GROQ_API_KEY"
-model = "deepseek-r1-distill-llama-70b"
+model = "openai/gpt-oss-120b"
 api_format = "openai_compatible"
 cost_input_per_m = 0.0
 cost_output_per_m = 0.0
@@ -111,10 +111,25 @@ tier = "free"
 privacy = "high"
 
 [[providers]]
-name = "groq-gptoss120b"
+name = "groq-kimi-k2"
 api_base = "https://api.groq.com/openai"
 api_key_env = "GROQ_API_KEY"
-model = "openai/gpt-oss-120b"
+model = "moonshotai/kimi-k2-instruct-0905"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 30
+max_rpd = 14400
+supports_vision = false
+max_context = 128000
+tier = "free"
+privacy = "high"
+
+[[providers]]
+name = "groq-llama4-scout"
+api_base = "https://api.groq.com/openai"
+api_key_env = "GROQ_API_KEY"
+model = "meta-llama/llama-4-scout-17b-16e-instruct"
 api_format = "openai_compatible"
 cost_input_per_m = 0.0
 cost_output_per_m = 0.0
@@ -140,7 +155,7 @@ cost_input_per_m = 0.25
 cost_output_per_m = 1.25
 supports_vision = true
 max_context = 200000
-tier = "premium"
+tier = "cheap"
 privacy = "medium"
 
 [[providers]]
@@ -158,10 +173,24 @@ tier = "premium"
 privacy = "medium"
 
 [[providers]]
-name = "openai-5nano"
+name = "anthropic-opus"
+api_base = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-opus-4-6-20250205"
+api_format = "openai_compatible"
+chat_path = "/v1/messages"
+cost_input_per_m = 5.0
+cost_output_per_m = 25.0
+supports_vision = true
+max_context = 200000
+tier = "premium"
+privacy = "medium"
+
+[[providers]]
+name = "openai-54nano"
 api_base = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
-model = "gpt-5-nano"
+model = "gpt-5.4-nano"
 api_format = "openai_compatible"
 cost_input_per_m = 0.05
 cost_output_per_m = 0.40
@@ -171,15 +200,28 @@ tier = "cheap"
 privacy = "medium"
 
 [[providers]]
-name = "openai-5mini"
+name = "openai-54mini"
 api_base = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
-model = "gpt-5-mini"
+model = "gpt-5.4-mini"
 api_format = "openai_compatible"
 cost_input_per_m = 0.25
 cost_output_per_m = 2.0
 supports_vision = true
 max_context = 128000
+tier = "premium"
+privacy = "medium"
+
+[[providers]]
+name = "openai-41"
+api_base = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4.1"
+api_format = "openai_compatible"
+cost_input_per_m = 2.0
+cost_output_per_m = 8.0
+supports_vision = true
+max_context = 1048576
 tier = "premium"
 privacy = "medium"
 
@@ -212,6 +254,21 @@ max_rpd = 100
 supports_vision = true
 max_context = 1000000
 tier = "free"
+privacy = "low"
+
+[[providers]]
+name = "gemini-31-pro"
+api_base = "https://generativelanguage.googleapis.com"
+api_key_env = "GEMINI_API_KEY"
+model = "gemini-3.1-pro-preview"
+api_format = "gemini"
+cost_input_per_m = 1.25
+cost_output_per_m = 10.0
+max_rpm = 5
+max_rpd = 100
+supports_vision = true
+max_context = 2000000
+tier = "premium"
 privacy = "low"
 
 # =============================================================================
