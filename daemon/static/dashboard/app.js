@@ -1171,20 +1171,31 @@ async function refreshProviders() {
     if (!grid || !data.providers) return;
 
     grid.innerHTML = data.providers.map(p => {
-      const tier = p.name.startsWith('cerebras') ? 'free' :
-                   p.name.startsWith('openrouter') ? 'free' :
-                   p.name.startsWith('local') ? 'local' :
-                   p.name.startsWith('zai') ? 'cheap' : 'free';
+      const n = p.name;
+      const tier = n.startsWith('local') ? 'local' :
+                   n.startsWith('cerebras') ? 'free' :
+                   n.startsWith('groq') ? 'free' :
+                   n.startsWith('zai') ? 'cheap' : 'free';
+      const privacy = n.startsWith('local') ? 'Maxima' :
+                      n.startsWith('cerebras') ? 'Alta (ZDR)' :
+                      n.startsWith('groq') ? 'Alta (ZDR)' :
+                      n.startsWith('zai') ? 'Media' :
+                      n.startsWith('openrouter') ? 'Variable' : '?';
+      const privacyColor = privacy.startsWith('Max') ? 'var(--success)' :
+                           privacy.startsWith('Alta') ? 'var(--accent-2)' :
+                           privacy.startsWith('Media') ? 'var(--warning)' : 'var(--text-muted)';
       return `<div class="provider-card" data-tier="${tier}">
-        <div class="provider-name">${escHtml(p.name)}</div>
-        <div class="provider-stats">${p.total_requests} requests | ${p.total_output_tokens} tokens | ${p.total_failures} errores</div>
+        <div class="provider-name">${escHtml(n)}</div>
+        <div class="provider-stats">${p.total_requests} req | ${p.total_output_tokens} tok | ${p.total_failures} err</div>
+        <div class="provider-stats" style="color:${privacyColor}">Privacidad: ${privacy}</div>
       </div>`;
     }).join('');
 
     // Update key status indicators
     updateKeyStatus('cerebras', data.providers.some(p => p.name.includes('cerebras') && p.total_requests > 0));
-    updateKeyStatus('openrouter', data.providers.some(p => p.name.includes('openrouter') && p.total_requests > 0));
+    updateKeyStatus('groq', data.providers.some(p => p.name.includes('groq') && p.total_requests > 0));
     updateKeyStatus('zai', data.providers.some(p => p.name.includes('zai') && p.total_requests > 0));
+    updateKeyStatus('openrouter', data.providers.some(p => p.name.includes('openrouter') && p.total_requests > 0));
   } catch (e) { /* silent */ }
 }
 

@@ -324,26 +324,31 @@
         <div class="provider-key-form">
           <div class="key-row">
             <label>Cerebras</label>
-            <input type="password" id="key-cerebras" placeholder="csk-...">
+            <input type="password" id="key-cerebras" placeholder="csk-..." disabled>
             <span class="key-status" id="key-status-cerebras">?</span>
           </div>
           <div class="key-row">
-            <label>OpenRouter</label>
-            <input type="password" id="key-openrouter" placeholder="sk-or-...">
-            <span class="key-status" id="key-status-openrouter">?</span>
+            <label>Groq</label>
+            <input type="password" id="key-groq" placeholder="gsk_..." disabled>
+            <span class="key-status" id="key-status-groq">?</span>
           </div>
           <div class="key-row">
             <label>Z.AI / GLM</label>
-            <input type="password" id="key-zai" placeholder="API key...">
+            <input type="password" id="key-zai" placeholder="API key..." disabled>
             <span class="key-status" id="key-status-zai">?</span>
           </div>
           <div class="key-row">
-            <label>Telegram Token</label>
-            <input type="password" id="key-telegram" placeholder="Bot token...">
+            <label>OpenRouter</label>
+            <input type="password" id="key-openrouter" placeholder="sk-or-..." disabled>
+            <span class="key-status" id="key-status-openrouter">?</span>
+          </div>
+          <div class="key-row">
+            <label>Telegram</label>
+            <input type="password" id="key-telegram" placeholder="Bot token..." disabled>
             <span class="key-status" id="key-status-telegram">?</span>
           </div>
         </div>
-        <p class="setting-hint">Las keys se configuran via variables de entorno. Este panel muestra su estado.</p>
+        <p class="setting-hint">Las keys se configuran via variables de entorno en llm-providers.env. Este panel muestra su estado.</p>
       </div>
     </section>
 

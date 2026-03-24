@@ -473,8 +473,10 @@ impl LlmRouter {
 // ---------------------------------------------------------------------------
 
 fn default_providers() -> Vec<ProviderConfig> {
+    // Provider priority: Local > Cerebras (privacy+speed) > Groq (privacy+speed)
+    //                    > Z.AI paid (if balance) > OpenRouter (fallback, mixed privacy)
     vec![
-        // ===== Tier: Local — always available, zero cost, max privacy =====
+        // ===== Priority 1: Local — max privacy, zero cost =====
         ProviderConfig {
             name: "local".into(),
             api_base: "http://127.0.0.1:8082".into(),
@@ -490,8 +492,8 @@ fn default_providers() -> Vec<ProviderConfig> {
             tier: ProviderTier::Local,
             chat_path: None,
         },
-        // ===== Tier: Free — Cerebras (blazing fast, 30 RPM, 1M tok/day) =====
-        // Qwen3 235B (A22B MoE) — most powerful free model on Cerebras
+        // ===== Priority 2: Cerebras — zero data retention, 2000+ tok/s =====
+        // Qwen3 235B (A22B MoE) — most powerful free model
         ProviderConfig {
             name: "cerebras-qwen235b".into(),
             api_base: "https://api.cerebras.ai".into(),
@@ -501,13 +503,13 @@ fn default_providers() -> Vec<ProviderConfig> {
             cost_input_per_m: 0.0,
             cost_output_per_m: 0.0,
             max_rpm: Some(30),
-            max_rpd: None, // 1M tokens/day limit (not request-based)
+            max_rpd: None,
             supports_vision: false,
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
         },
-        // Llama 3.1 8B on Cerebras — fastest, lightest tasks (~2200 tok/s)
+        // Llama 3.1 8B on Cerebras — fastest for simple tasks (~2200 tok/s)
         ProviderConfig {
             name: "cerebras-llama8b".into(),
             api_base: "https://api.cerebras.ai".into(),
@@ -523,40 +525,72 @@ fn default_providers() -> Vec<ProviderConfig> {
             tier: ProviderTier::Free,
             chat_path: None,
         },
-        // ===== Tier: Free — Z.AI / GLM (OpenAI-compatible) =====
-        // GLM-4.5-Air via Z.AI direct — requires balance on account
+        // ===== Priority 3: Groq — zero data retention, ~500-1000 tok/s =====
+        // Llama 3.3 70B on Groq — strong general purpose
         ProviderConfig {
-            name: "zai-air".into(),
-            api_base: "https://api.z.ai/api/paas".into(),
-            api_key_env: "ZAI_API_KEY".into(),
-            model: "glm-4.5-air".into(),
+            name: "groq-llama70b".into(),
+            api_base: "https://api.groq.com/openai".into(),
+            api_key_env: "GROQ_API_KEY".into(),
+            model: "llama-3.3-70b-versatile".into(),
             api_format: ApiFormat::OpenAiCompatible,
-            cost_input_per_m: 0.10,
-            cost_output_per_m: 0.10,
-            max_rpm: None,
-            max_rpd: None,
+            cost_input_per_m: 0.0,
+            cost_output_per_m: 0.0,
+            max_rpm: Some(30),
+            max_rpd: Some(14400),
             supports_vision: false,
             max_context: 128_000,
-            tier: ProviderTier::Cheap,
-            chat_path: Some("/v4/chat/completions".into()),
+            tier: ProviderTier::Free,
+            chat_path: None,
         },
-        // GLM-5 — latest flagship
+        // Qwen3 32B on Groq — reasoning and coding
         ProviderConfig {
-            name: "zai-glm5".into(),
-            api_base: "https://api.z.ai/api/paas".into(),
-            api_key_env: "ZAI_API_KEY".into(),
-            model: "glm-5".into(),
+            name: "groq-qwen32b".into(),
+            api_base: "https://api.groq.com/openai".into(),
+            api_key_env: "GROQ_API_KEY".into(),
+            model: "qwen-qwq-32b".into(),
             api_format: ApiFormat::OpenAiCompatible,
-            cost_input_per_m: 0.55,
-            cost_output_per_m: 2.20,
-            max_rpm: None,
-            max_rpd: None,
+            cost_input_per_m: 0.0,
+            cost_output_per_m: 0.0,
+            max_rpm: Some(30),
+            max_rpd: Some(14400),
             supports_vision: false,
-            max_context: 200_000,
-            tier: ProviderTier::Cheap,
-            chat_path: Some("/v4/chat/completions".into()),
+            max_context: 128_000,
+            tier: ProviderTier::Free,
+            chat_path: None,
         },
-        // GLM-4.7 — strong coding/reasoning
+        // Llama 3.1 8B on Groq — fast lightweight tasks
+        ProviderConfig {
+            name: "groq-llama8b".into(),
+            api_base: "https://api.groq.com/openai".into(),
+            api_key_env: "GROQ_API_KEY".into(),
+            model: "llama-3.1-8b-instant".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.0,
+            cost_output_per_m: 0.0,
+            max_rpm: Some(30),
+            max_rpd: Some(14400),
+            supports_vision: false,
+            max_context: 128_000,
+            tier: ProviderTier::Free,
+            chat_path: None,
+        },
+        // DeepSeek R1 on Groq — deep reasoning
+        ProviderConfig {
+            name: "groq-deepseek-r1".into(),
+            api_base: "https://api.groq.com/openai".into(),
+            api_key_env: "GROQ_API_KEY".into(),
+            model: "deepseek-r1-distill-llama-70b".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.0,
+            cost_output_per_m: 0.0,
+            max_rpm: Some(30),
+            max_rpd: Some(14400),
+            supports_vision: false,
+            max_context: 128_000,
+            tier: ProviderTier::Free,
+            chat_path: None,
+        },
+        // ===== Priority 4: Z.AI paid (requires balance, privacy: medium) =====
         ProviderConfig {
             name: "zai-glm47".into(),
             api_base: "https://api.z.ai/api/paas".into(),
@@ -572,8 +606,9 @@ fn default_providers() -> Vec<ProviderConfig> {
             tier: ProviderTier::Cheap,
             chat_path: Some("/v4/chat/completions".into()),
         },
-        // ===== Tier: Free — OpenRouter (verified free models) =====
-        // Qwen3 Coder — best free coding model
+        // ===== Priority 5: OpenRouter fallback (mixed privacy) =====
+        // Note: OpenRouter routes to various providers. Privacy depends on
+        // the underlying provider. Use only as last resort for non-sensitive data.
         ProviderConfig {
             name: "openrouter-coder".into(),
             api_base: "https://openrouter.ai/api".into(),
@@ -589,60 +624,11 @@ fn default_providers() -> Vec<ProviderConfig> {
             tier: ProviderTier::Free,
             chat_path: None,
         },
-        // GPT-OSS 120B free on OpenRouter — strong general purpose
         ProviderConfig {
             name: "openrouter-gptoss120b".into(),
             api_base: "https://openrouter.ai/api".into(),
             api_key_env: "OPENROUTER_API_KEY".into(),
             model: "openai/gpt-oss-120b:free".into(),
-            api_format: ApiFormat::OpenAiCompatible,
-            cost_input_per_m: 0.0,
-            cost_output_per_m: 0.0,
-            max_rpm: Some(20),
-            max_rpd: Some(200),
-            supports_vision: false,
-            max_context: 128_000,
-            tier: ProviderTier::Free,
-            chat_path: None,
-        },
-        // MiniMax M2.5 free on OpenRouter — strong coding (80% SWE-Bench)
-        ProviderConfig {
-            name: "openrouter-minimax".into(),
-            api_base: "https://openrouter.ai/api".into(),
-            api_key_env: "OPENROUTER_API_KEY".into(),
-            model: "minimax/minimax-m2.5:free".into(),
-            api_format: ApiFormat::OpenAiCompatible,
-            cost_input_per_m: 0.0,
-            cost_output_per_m: 0.0,
-            max_rpm: Some(20),
-            max_rpd: Some(200),
-            supports_vision: false,
-            max_context: 128_000,
-            tier: ProviderTier::Free,
-            chat_path: None,
-        },
-        // Nemotron Vision 12B free — has VISION support
-        ProviderConfig {
-            name: "openrouter-nemotron-vl".into(),
-            api_base: "https://openrouter.ai/api".into(),
-            api_key_env: "OPENROUTER_API_KEY".into(),
-            model: "nvidia/nemotron-nano-12b-v2-vl:free".into(),
-            api_format: ApiFormat::OpenAiCompatible,
-            cost_input_per_m: 0.0,
-            cost_output_per_m: 0.0,
-            max_rpm: Some(20),
-            max_rpd: Some(200),
-            supports_vision: true,
-            max_context: 128_000,
-            tier: ProviderTier::Free,
-            chat_path: None,
-        },
-        // GLM 4.5 Air free on OpenRouter
-        ProviderConfig {
-            name: "openrouter-glm-free".into(),
-            api_base: "https://openrouter.ai/api".into(),
-            api_key_env: "OPENROUTER_API_KEY".into(),
-            model: "z-ai/glm-4.5-air:free".into(),
             api_format: ApiFormat::OpenAiCompatible,
             cost_input_per_m: 0.0,
             cost_output_per_m: 0.0,

@@ -1,6 +1,37 @@
 # Estrategia de Acceso a LLMs para LifeOS
 
-Fecha: 2026-03-23
+Fecha: 2026-03-23 (actualizado 2026-03-24)
+
+## 0. Principio de Privacidad (actualizado 2026-03-24)
+
+LifeOS prioriza providers que **no retienen datos y no entrenan con tu informacion**.
+
+### Ranking de privacidad por provider
+
+| Provider | Retiene datos? | Entrena con datos? | Zero Data Retention | Jurisdiccion | Confianza |
+|----------|---------------|-------------------|---------------------|-------------|-----------|
+| **Local** (Qwen3.5-2B) | No — nunca sale de tu laptop | No | N/A | Tu laptop | MAXIMA |
+| **Cerebras** | No por defecto. Nunca almacena/loguea/reusa | No | Si, por defecto | USA | ALTA |
+| **Groq** | No por defecto. Solo si activas persistencia | No | Si, activable | USA | ALTA |
+| **Z.AI/GLM** | Ambiguo ("no sin consentimiento") | Ambiguo | No documentado | China | BAJA |
+| **OpenRouter** | No (OpenRouter mismo). Pero rutea a providers que SI pueden | Depende del provider final | Si para OpenRouter, no para providers | USA/Mixto | MEDIA |
+| **OpenAI API** | 30 dias. Opt-out disponible | No en API pagada. SI en free | Opt-out | USA | MEDIA |
+| **Google Gemini** | SI en free tier | SI en free tier | Solo en paid | USA | BAJA (free) |
+
+### Orden de prioridad en el LLM router
+
+```
+1. Local (Qwen3.5-2B)      — datos sensibles, maxima privacidad
+2. Cerebras (free)          — zero retention, velocidad extrema (2000+ tok/s)
+3. Groq (free)              — zero retention, buena velocidad (500-1000 tok/s)
+4. Z.AI paid (si hay saldo) — jurisdiccion china, solo para datos no sensibles
+5. OpenRouter (fallback)    — privacidad mixta, ultima instancia
+```
+
+Fuentes:
+- Cerebras: https://cloud.cerebras.ai/privacy
+- Groq: https://console.groq.com/docs/your-data
+- OpenRouter: https://openrouter.ai/docs/guides/privacy/logging
 
 ---
 

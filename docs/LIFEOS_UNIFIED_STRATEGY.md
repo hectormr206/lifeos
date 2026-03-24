@@ -246,28 +246,45 @@ Detalle completo en `docs/LLM_ACCESS_STRATEGY.md`.
 
 **Leccion clave:** Anthropic baneo masivamente en enero 2026 a todos los que usaban tokens de suscripcion Claude en herramientas terceras (OpenClaw, Cline, etc.). OpenAI prohibe extraccion programatica. Las suscripciones NO son APIs.
 
-### 8.2 Stack real de LLMs para el router (costo adicional: $5-15/mes)
+### 8.2 Stack de LLMs priorizado por privacidad (actualizado 2026-03-24)
 
-**Tier gratis (sin gastar nada):**
+**Principio:** Solo usar providers que NO retienen datos y NO entrenan con tu informacion.
 
-| Provider | Modelo | Limite | Uso |
-|----------|--------|--------|-----|
-| Gemini API | 2.5 Flash-Lite | 1,000 req/dia | Tareas medias |
-| Gemini API | 2.5 Pro | 100 req/dia | Razonamiento complejo |
-| Zhipu/GLM | GLM-4.7-Flash | Sin limite | Tareas generales no sensibles |
-| OpenRouter | Qwen3 Coder 480B | 200 req/dia | Coding gratis |
-| OpenRouter | DeepSeek R1 | 200 req/dia | Reasoning gratis |
-| Modelo local | Qwen3.5-2B | Sin limite | Guardian de privacidad + fallback |
+**Prioridad 1 — Local (privacidad maxima):**
 
-**Tier barato (fallback cuando gratis se agota):**
+| Provider | Modelo | Privacidad | Velocidad |
+|----------|--------|-----------|-----------|
+| Modelo local | Qwen3.5-2B | Nunca sale de la laptop | 196-263 tok/s GPU |
 
-| Provider | Modelo | Costo/M tokens | Uso |
-|----------|--------|----------------|-----|
-| DeepSeek | V3.2 | $0.28 input / $0.42 output | General, excelente calidad/precio |
-| MiniMax | M2.5 | $0.30 / $1.20 | Coding (80% SWE-Bench) |
-| Kimi | K2.5 | $0.60 / $2.50 | Vision multimodal, 256K contexto |
+**Prioridad 2 — Cerebras (zero data retention, gratis):**
 
-**Capacidad gratuita total: ~2,150+ requests/dia + modelo local ilimitado. Suficiente para un agente 24/7.**
+| Provider | Modelo | Limite | Velocidad |
+|----------|--------|--------|-----------|
+| Cerebras | Qwen3 235B | 30 RPM, 1M tok/dia | 2000+ tok/s |
+| Cerebras | Llama 3.1 8B | 30 RPM | 2200+ tok/s |
+
+**Prioridad 3 — Groq (zero data retention, gratis):**
+
+| Provider | Modelo | Limite | Velocidad |
+|----------|--------|--------|-----------|
+| Groq | Llama 3.3 70B | 30 RPM, 14,400 req/dia | 500-1000 tok/s |
+| Groq | Qwen3 32B | 30 RPM | 500+ tok/s |
+| Groq | DeepSeek R1 70B | 30 RPM | 500+ tok/s |
+| Groq | Llama 3.1 8B | 30 RPM | 1000+ tok/s |
+
+**Prioridad 4 — Z.AI paid (privacidad media, requiere saldo):**
+
+| Provider | Modelo | Costo/M tokens |
+|----------|--------|----------------|
+| Z.AI | GLM-4.7 | $0.55 / $2.20 |
+
+**Prioridad 5 — OpenRouter fallback (privacidad variable):**
+
+| Provider | Modelo | Nota |
+|----------|--------|------|
+| OpenRouter | Qwen3 Coder, GPT-OSS 120B | Privacidad depende del provider subyacente. Ultima instancia |
+
+**Capacidad gratuita con privacidad alta: Cerebras (~1M tok/dia) + Groq (~14,400 req/dia) + local ilimitado.**
 
 ### 8.3 Capa de privacidad obligatoria
 
