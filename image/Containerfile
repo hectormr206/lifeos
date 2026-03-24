@@ -486,6 +486,7 @@ COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css 
 # Wayland environment for Firefox
 COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland.sh
 COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
+COPY image/files/etc/profile.d/lifeos-firefox-profile.sh /etc/profile.d/lifeos-firefox-profile.sh
 COPY image/files/etc/containers/containers.conf /etc/containers/containers.conf
 COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
 COPY image/files/usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml
