@@ -1627,8 +1627,20 @@ async function refreshGameGuard() {
     const guardStatus = $('#gg-guard-status');
     const assistStatus = $('#gg-assistant-status');
 
-    if (modeEl) modeEl.textContent = d.llm_mode === 'cpu' ? 'CPU (RAM)' : 'GPU (VRAM)';
+    if (modeEl) {
+      modeEl.textContent = d.llm_mode === 'cpu' ? 'CPU (RAM)' : 'GPU (VRAM)';
+      modeEl.style.color = d.llm_mode === 'cpu' ? 'var(--warning)' : 'var(--success)';
+    }
     if (gameEl) gameEl.textContent = d.game_name || 'Ninguno';
+    const detailEl = $('#gg-game-detail');
+    if (detailEl) {
+      if (d.game_detected && d.game_name) {
+        const title = d.game_window_title ? ` — ${d.game_window_title}` : '';
+        detailEl.textContent = `Juego activo: ${d.game_name} (PID ${d.game_pid})${title}. LLM movido a RAM.`;
+      } else {
+        detailEl.textContent = '';
+      }
+    }
     if (guardToggle) guardToggle.checked = d.guard_enabled;
     if (assistToggle) assistToggle.checked = d.assistant_enabled;
     if (guardStatus) guardStatus.textContent = d.guard_enabled ? 'Activo' : 'Desactivado';

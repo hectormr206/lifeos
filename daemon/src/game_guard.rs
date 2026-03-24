@@ -79,8 +79,12 @@ const GAME_PROCESS_NAMES: &[&str] = &[
     "godot",
     // Resident Evil series
     "RERequiem",
+    "re9.exe",
+    "re8.exe",
     "re8",
+    "re4.exe",
     "re4",
+    "re2.exe",
     "re2",
     // Common Windows game EXEs that run via Proton
     "Game.exe",
@@ -576,7 +580,10 @@ fn proc_find_process_by_name(name: &str) -> Option<(u32, String)> {
     let proc_dir = fs::read_dir("/proc").ok()?;
     for entry in proc_dir.flatten() {
         let pid_str = entry.file_name();
-        let pid: u32 = pid_str.to_string_lossy().parse().ok()?;
+        let pid: u32 = match pid_str.to_string_lossy().parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
         if let Some(comm) = read_proc_comm(pid) {
             if comm.eq_ignore_ascii_case(name) {
                 return Some((pid, comm));

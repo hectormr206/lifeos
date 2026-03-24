@@ -174,6 +174,7 @@ pub struct ApiState {
     pub calendar: Arc<crate::calendar::CalendarManager>,
     pub event_bus: tokio::sync::broadcast::Sender<crate::events::DaemonEvent>,
     pub config: ApiConfig,
+    pub game_guard: Option<Arc<RwLock<crate::game_guard::GameGuard>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1457,7 +1458,10 @@ pub fn create_router(state: ApiState) -> Router {
         // Game Guard endpoints
         .route("/game-guard/status", get(get_game_guard_status))
         .route("/game-guard/toggle", post(post_game_guard_toggle))
-        .route("/game-guard/assistant-toggle", post(post_game_assistant_toggle))
+        .route(
+            "/game-guard/assistant-toggle",
+            post(post_game_assistant_toggle),
+        )
         // Supervisor endpoints
         .route("/supervisor/status", get(get_supervisor_status))
         .route("/supervisor/metrics", get(get_supervisor_metrics))
@@ -6233,7 +6237,10 @@ fn get_gpu_model() -> Option<String> {
 
 fn get_gpu_vram() -> Option<(f32, f32)> {
     if let Ok(output) = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
     {
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -9642,39 +9649,79 @@ async fn post_api_keys(
 
 // ==================== GAME GUARD ENDPOINTS ====================
 
-async fn get_game_guard_status() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    // Read state from env — the game guard loop manages the actual state
-    let enabled = std::env::var("LIFEOS_AI_GAME_GUARD")
-        .map(|v| v != "false" && v != "0")
-        .unwrap_or(true);
-    let assistant_enabled = std::env::var("LIFEOS_AI_GAME_ASSISTANT")
-        .map(|v| v != "false" && v != "0")
-        .unwrap_or(true);
-    let gpu_layers = std::env::var("LIFEOS_AI_GPU_LAYERS")
-        .unwrap_or_else(|_| "-1".into());
-    let llm_mode = if gpu_layers == "0" { "cpu" } else { "gpu" };
+async fn get_game_guard_status(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    if let Some(ref gg) = state.game_guard {
+        let guard = gg.read().await;
+        let gs = guard.state().await;
+        let gpu_layers = std::env::var("LIFEOS_AI_GPU_LAYERS").unwrap_or_else(|_| "-1".into());
+        Ok(Json(serde_json::json!({
+            "guard_enabled": gs.guard_enabled,
+            "assistant_enabled": gs.assistant_enabled,
+            "llm_mode": format!("{:?}", gs.llm_mode).to_lowercase(),
+            "gpu_layers": gpu_layers,
+            "game_detected": gs.game_detected,
+            "game_name": gs.game_name,
+            "game_pid": gs.game_pid,
+            "game_window_title": gs.game_window_title,
+            "last_check": gs.last_check.to_rfc3339(),
+        })))
+    } else {
+        // Fallback: read from env vars
+        let enabled = std::env::var("LIFEOS_AI_GAME_GUARD")
+            .map(|v| v != "false" && v != "0")
+            .unwrap_or(true);
+        let assistant_enabled = std::env::var("LIFEOS_AI_GAME_ASSISTANT")
+            .map(|v| v != "false" && v != "0")
+            .unwrap_or(true);
+        let gpu_layers = std::env::var("LIFEOS_AI_GPU_LAYERS").unwrap_or_else(|_| "-1".into());
+        let llm_mode = if gpu_layers == "0" { "cpu" } else { "gpu" };
 
-    Ok(Json(serde_json::json!({
-        "guard_enabled": enabled,
-        "assistant_enabled": assistant_enabled,
-        "llm_mode": llm_mode,
-        "gpu_layers": gpu_layers,
-    })))
+        Ok(Json(serde_json::json!({
+            "guard_enabled": enabled,
+            "assistant_enabled": assistant_enabled,
+            "llm_mode": llm_mode,
+            "gpu_layers": gpu_layers,
+            "game_detected": false,
+            "game_name": null,
+        })))
+    }
 }
 
 async fn post_game_guard_toggle(
+    State(state): State<ApiState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let enabled = body["enabled"].as_bool().unwrap_or(true);
-    unsafe { std::env::set_var("LIFEOS_AI_GAME_GUARD", if enabled { "true" } else { "false" }) };
+    if let Some(ref gg) = state.game_guard {
+        let guard = gg.read().await;
+        guard.set_enabled(enabled).await;
+    }
+    unsafe {
+        std::env::set_var(
+            "LIFEOS_AI_GAME_GUARD",
+            if enabled { "true" } else { "false" },
+        )
+    };
     Ok(Json(serde_json::json!({ "guard_enabled": enabled })))
 }
 
 async fn post_game_assistant_toggle(
+    State(state): State<ApiState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let enabled = body["enabled"].as_bool().unwrap_or(true);
-    unsafe { std::env::set_var("LIFEOS_AI_GAME_ASSISTANT", if enabled { "true" } else { "false" }) };
+    if let Some(ref gg) = state.game_guard {
+        let guard = gg.read().await;
+        guard.set_assistant_enabled(enabled).await;
+    }
+    unsafe {
+        std::env::set_var(
+            "LIFEOS_AI_GAME_ASSISTANT",
+            if enabled { "true" } else { "false" },
+        )
+    };
     Ok(Json(serde_json::json!({ "assistant_enabled": enabled })))
 }
 

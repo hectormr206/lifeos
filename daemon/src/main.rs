@@ -32,14 +32,18 @@ mod email_bridge;
 mod events;
 mod experience_modes;
 mod follow_along;
+mod game_assistant;
+mod game_guard;
 mod health;
 #[allow(dead_code)]
 mod health_tracking;
+mod home_assistant;
 #[cfg(feature = "ui-overlay")]
 #[allow(dead_code)]
 mod keyboard_shortcut;
 mod lab;
 mod llm_router;
+mod matrix_bridge;
 mod memory_plane;
 #[cfg(feature = "ui-overlay")]
 mod mini_widget;
@@ -57,22 +61,18 @@ mod proactive;
 mod scheduled_tasks;
 mod screen_capture;
 mod sensory_pipeline;
+mod signal_bridge;
 mod supervisor;
 mod system;
 mod task_queue;
 mod telegram_bridge;
-mod whatsapp_bridge;
-mod matrix_bridge;
-mod signal_bridge;
-mod home_assistant;
-mod game_guard;
-mod game_assistant;
 mod telemetry;
 mod tuf;
 mod update_scheduler;
 mod updates;
 mod visual_comfort;
 mod wake_word;
+mod whatsapp_bridge;
 
 use accessibility::AccessibilityManager;
 use agent_runtime::AgentRuntimeManager;
@@ -403,6 +403,7 @@ pub struct DaemonState {
     pub wake_word_detector: Option<Arc<wake_word::WakeWordDetector>>,
     pub wake_word_notify: Arc<tokio::sync::Notify>,
     pub event_bus: tokio::sync::broadcast::Sender<events::DaemonEvent>,
+    pub game_guard: Option<Arc<RwLock<game_guard::GameGuard>>>,
 }
 
 #[tokio::main]
@@ -595,6 +596,9 @@ async fn main() -> anyhow::Result<()> {
         wake_word_detector,
         wake_word_notify: wake_word_notify.clone(),
         event_bus: event_tx,
+        game_guard: Some(Arc::new(RwLock::new(game_guard::GameGuard::new(
+            game_guard::GameGuardConfig::default(),
+        )))),
     });
 
     // Attach scheduled tasks manager to supervisor.
@@ -841,14 +845,15 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Start GPU Game Guard loop (auto-offload LLM to RAM when gaming)
-    let game_guard = std::sync::Arc::new(tokio::sync::RwLock::new(
-        game_guard::GameGuard::new(game_guard::GameGuardConfig::default()),
-    ));
-    let game_guard_clone = game_guard.clone();
-    let game_guard_event_tx = state.event_bus.clone();
-    let game_guard_handle = tokio::spawn(async move {
-        game_guard::run_game_guard_loop(game_guard_clone, game_guard_event_tx).await;
-    });
+    let game_guard_handle = if let Some(ref gg) = state.game_guard {
+        let game_guard_clone = gg.clone();
+        let game_guard_event_tx = state.event_bus.clone();
+        Some(tokio::spawn(async move {
+            game_guard::run_game_guard_loop(game_guard_clone, game_guard_event_tx).await;
+        }))
+    } else {
+        None
+    };
 
     // Start Telegram bridge if configured
     #[cfg(feature = "telegram")]
@@ -947,7 +952,9 @@ async fn main() -> anyhow::Result<()> {
     sensory_handle.abort();
     state.supervisor.stop();
     supervisor_handle.abort();
-    game_guard_handle.abort();
+    if let Some(h) = game_guard_handle {
+        h.abort();
+    }
     if let Some(h) = telegram_handle {
         h.abort();
     }
@@ -1004,6 +1011,7 @@ async fn start_api_server(state: Arc<DaemonState>) {
             enable_cors: true,
             max_request_size: 10 * 1024 * 1024,
         },
+        game_guard: state.game_guard.clone(),
     };
 
     if let Err(e) = api::start_api_server(api_state).await {
