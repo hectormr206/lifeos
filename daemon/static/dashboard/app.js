@@ -1045,6 +1045,302 @@ document.querySelectorAll('[data-quick-action]').forEach(btn => {
   });
 });
 
+// --- Chat with Axi ---
+const chatMessages = $('#chat-messages');
+const chatForm = $('#chat-form');
+const chatInput = $('#chat-input');
+
+if (chatForm) {
+  chatForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const text = chatInput.value.trim();
+    if (!text) return;
+    chatInput.value = '';
+
+    // Add user message
+    appendChat('user', text);
+
+    // Check for /do command
+    if (text.startsWith('/do ') || text.startsWith('/task ')) {
+      const objective = text.replace(/^\/(do|task)\s+/, '');
+      try {
+        const res = await fetch(`${API}/tasks`, {
+          method: 'POST', headers: apiHeaders(),
+          body: JSON.stringify({ objective, source: 'dashboard' })
+        });
+        if (res.ok) {
+          const task = await res.json();
+          appendChat('axi', `Tarea creada: ${objective}\nID: ${task.id}\nEl supervisor la ejecutara.`);
+        } else {
+          appendChat('axi', 'Error al crear tarea.');
+        }
+      } catch (err) {
+        appendChat('axi', `Error: ${err.message}`);
+      }
+      return;
+    }
+
+    // Regular chat via LLM router
+    try {
+      appendChat('axi', '...');
+      const res = await fetch(`${API}/llm/chat`, {
+        method: 'POST', headers: apiHeaders(),
+        body: JSON.stringify({ messages: [{ role: 'user', content: text }] })
+      });
+      // Remove typing indicator
+      const typing = chatMessages.querySelector('.chat-msg-axi:last-child');
+      if (typing && typing.textContent === '...') typing.remove();
+
+      if (res.ok) {
+        const data = await res.json();
+        appendChat('axi', `${data.text}\n[${data.provider}]`);
+      } else {
+        appendChat('axi', 'Error al contactar al LLM.');
+      }
+    } catch (err) {
+      const typing = chatMessages.querySelector('.chat-msg-axi:last-child');
+      if (typing && typing.textContent === '...') typing.remove();
+      appendChat('axi', `Error: ${err.message}`);
+    }
+  });
+}
+
+function appendChat(role, text) {
+  if (!chatMessages) return;
+  const div = document.createElement('div');
+  div.className = `chat-msg chat-msg-${role === 'user' ? 'user' : 'axi'}`;
+  div.textContent = text;
+  chatMessages.appendChild(div);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// --- System Resources ---
+async function refreshResources() {
+  try {
+    const res = await fetch(`${API}/system/resources`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const d = await res.json();
+
+    const cpuPct = d.cpu_usage_percent || 0;
+    const ramPct = d.memory_used_percent || 0;
+    const diskPct = d.disk_used_percent || 0;
+
+    setBar('res-cpu-bar', 'res-cpu', cpuPct, `${cpuPct.toFixed(0)}%`);
+    setBar('res-ram-bar', 'res-ram', ramPct,
+      `${formatBytes(d.memory_used_bytes || 0)} / ${formatBytes(d.memory_total_bytes || 0)} (${ramPct.toFixed(0)}%)`);
+    setBar('res-disk-bar', 'res-disk', diskPct,
+      `${formatBytes(d.disk_used_bytes || 0)} / ${formatBytes(d.disk_total_bytes || 0)} (${diskPct.toFixed(0)}%)`);
+
+    // GPU via nvidia-smi (if available in system info)
+    if (d.gpu_name) {
+      const gpuPct = d.gpu_memory_used_percent || 0;
+      setBar('res-gpu-bar', 'res-gpu', gpuPct,
+        `${d.gpu_name} — ${formatBytes(d.gpu_memory_used_bytes || 0)} / ${formatBytes(d.gpu_memory_total_bytes || 0)}`);
+    } else {
+      const gpuEl = $('#res-gpu');
+      if (gpuEl) gpuEl.textContent = 'Sin GPU detectada';
+    }
+  } catch (e) { /* silent */ }
+}
+
+function setBar(barId, labelId, pct, label) {
+  const bar = $(`#${barId}`);
+  const lbl = $(`#${labelId}`);
+  if (bar) bar.style.width = `${Math.min(pct, 100)}%`;
+  if (lbl) lbl.textContent = label;
+  // Color coding
+  if (bar) {
+    bar.style.background = pct > 90 ? 'var(--danger)' : pct > 70 ? 'var(--warning)' : 'var(--accent)';
+  }
+}
+
+function formatBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(0) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(1) + ' GB';
+}
+
+// --- LLM Providers ---
+async function refreshProviders() {
+  try {
+    const res = await fetch(`${API}/llm/providers`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    const grid = $('#providers-grid');
+    if (!grid || !data.providers) return;
+
+    grid.innerHTML = data.providers.map(p => {
+      const tier = p.name.startsWith('cerebras') ? 'free' :
+                   p.name.startsWith('openrouter') ? 'free' :
+                   p.name.startsWith('local') ? 'local' :
+                   p.name.startsWith('zai') ? 'cheap' : 'free';
+      return `<div class="provider-card" data-tier="${tier}">
+        <div class="provider-name">${escHtml(p.name)}</div>
+        <div class="provider-stats">${p.total_requests} requests | ${p.total_output_tokens} tokens | ${p.total_failures} errores</div>
+      </div>`;
+    }).join('');
+
+    // Update key status indicators
+    updateKeyStatus('cerebras', data.providers.some(p => p.name.includes('cerebras') && p.total_requests > 0));
+    updateKeyStatus('openrouter', data.providers.some(p => p.name.includes('openrouter') && p.total_requests > 0));
+    updateKeyStatus('zai', data.providers.some(p => p.name.includes('zai') && p.total_requests > 0));
+  } catch (e) { /* silent */ }
+}
+
+function updateKeyStatus(name, working) {
+  const el = $(`#key-status-${name}`);
+  if (el) el.textContent = working ? '\u2705' : '\u26A0\uFE0F';
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// --- Local Models ---
+async function refreshModels() {
+  try {
+    const res = await fetch(`${API}/ai/models`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    const grid = $('#models-grid');
+    if (!grid) return;
+
+    const status = await fetch(`${API}/ai/status`, { headers: apiHeaders() }).then(r => r.json()).catch(() => ({}));
+    const activeModel = status.default_model || '';
+
+    const models = data.models || [];
+    if (models.length === 0) {
+      grid.innerHTML = '<p class="task-empty">No hay modelos en /var/lib/lifeos/models/</p>';
+      return;
+    }
+
+    grid.innerHTML = models.map(m => {
+      const isActive = m.name === activeModel;
+      return `<div class="model-card ${isActive ? 'active' : ''}">
+        <div class="model-name">${escHtml(m.name)}</div>
+        <div class="model-size">${m.size_mb} MB</div>
+        ${isActive ? '<span class="model-badge">Activo</span>' : ''}
+      </div>`;
+    }).join('');
+  } catch (e) { /* silent */ }
+}
+
+// --- Agent Metrics ---
+async function refreshMetrics() {
+  try {
+    const res = await fetch(`${API}/supervisor/metrics`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+
+    const total = data.total_tasks || 0;
+    const completed = data.total_completed || 0;
+    const failed = data.total_failed || 0;
+    const rate = total > 0 ? ((completed / total) * 100).toFixed(0) + '%' : '—';
+
+    const metTotal = $('#met-total');
+    const metCompleted = $('#met-completed');
+    const metFailed = $('#met-failed');
+    const metRate = $('#met-rate');
+    if (metTotal) metTotal.textContent = total;
+    if (metCompleted) metCompleted.textContent = completed;
+    if (metFailed) metFailed.textContent = failed;
+    if (metRate) metRate.textContent = rate;
+
+    const rolesDiv = $('#metrics-roles');
+    if (rolesDiv && data.by_role) {
+      rolesDiv.innerHTML = Object.entries(data.by_role).map(([role, m]) => {
+        return `<div class="metric-role-card">
+          <div class="metric-role-name">${role}</div>
+          <div class="metric-role-stats">${m.tasks_completed} OK | ${m.tasks_failed} fail | avg ${m.avg_duration_ms}ms</div>
+        </div>`;
+      }).join('');
+    }
+  } catch (e) { /* silent */ }
+}
+
+// --- Memory Plane ---
+async function refreshMemory() {
+  try {
+    const res = await fetch(`${API}/memory/stats`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const d = await res.json();
+    const memTotal = $('#mem-total');
+    const memDecisions = $('#mem-decisions');
+    const memEvents = $('#mem-events');
+    const memNotes = $('#mem-notes');
+    if (memTotal) memTotal.textContent = d.total_entries || 0;
+    if (memDecisions) memDecisions.textContent = d.by_kind?.decision || 0;
+    if (memEvents) memEvents.textContent = d.by_kind?.event || 0;
+    if (memNotes) memNotes.textContent = d.by_kind?.note || 0;
+  } catch (e) { /* silent */ }
+}
+
+async function searchMemory(query) {
+  try {
+    const res = await fetch(`${API}/memory/search`, {
+      method: 'POST', headers: apiHeaders(),
+      body: JSON.stringify({ query, limit: 10 })
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const container = $('#memory-entries');
+    if (!container) return;
+
+    const entries = data.entries || data.results || [];
+    if (entries.length === 0) {
+      container.innerHTML = '<p class="task-empty">Sin resultados</p>';
+      return;
+    }
+
+    container.innerHTML = entries.map(e => {
+      const entry = e.entry || e;
+      return `<div class="memory-entry">
+        <div class="memory-entry-kind">${escHtml(entry.kind || '?')}</div>
+        <div class="memory-entry-content">${escHtml((entry.content || '').substring(0, 400))}</div>
+        <div class="memory-entry-meta">${entry.created_at || ''} | importancia: ${entry.importance || 0} | tags: ${(entry.tags || []).join(', ')}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    const container = $('#memory-entries');
+    if (container) container.innerHTML = '<p class="task-empty">Error al buscar</p>';
+  }
+}
+
+const memSearchBtn = $('#memory-search-btn');
+const memSearchInput = $('#memory-search-input');
+if (memSearchBtn) {
+  memSearchBtn.addEventListener('click', () => {
+    const q = memSearchInput?.value?.trim();
+    if (q) searchMemory(q);
+  });
+}
+if (memSearchInput) {
+  memSearchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const q = memSearchInput.value.trim();
+      if (q) searchMemory(q);
+    }
+  });
+}
+
+// --- Polling ---
+setInterval(() => {
+  refreshSupervisor();
+  refreshTasks();
+  refreshResources();
+  refreshMetrics();
+}, 10000);
+
+// Less frequent polls
+setInterval(() => {
+  refreshProviders();
+  refreshModels();
+  refreshMemory();
+}, 30000);
+
 // --- Boot ---
 (async () => {
   await ensureBootstrapToken();
@@ -1052,5 +1348,10 @@ document.querySelectorAll('[data-quick-action]').forEach(btn => {
   connectSSE();
   refreshSupervisor();
   refreshTasks();
+  refreshResources();
+  refreshProviders();
+  refreshModels();
+  refreshMetrics();
+  refreshMemory();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();

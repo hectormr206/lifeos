@@ -272,6 +272,123 @@
       </div>
     </section>
 
+    <!-- Chat with Axi -->
+    <section class="chat-section">
+      <h2>Chat con Axi</h2>
+      <div class="chat-container">
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-msg chat-msg-axi">Hola, soy Axi. Escribe algo o usa /do para crear tareas.</div>
+        </div>
+        <form class="chat-input-form" id="chat-form">
+          <input type="text" id="chat-input" placeholder="Escribe un mensaje o /do <tarea>..." autocomplete="off">
+          <button type="submit" class="chat-send-btn">Enviar</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- System Resources -->
+    <section class="resources-section">
+      <h2>Recursos del Sistema</h2>
+      <div class="resources-grid">
+        <div class="resource-card">
+          <div class="resource-header">CPU</div>
+          <div class="resource-bar"><div class="resource-fill" id="res-cpu-bar" style="width:0%"></div></div>
+          <span class="resource-value" id="res-cpu">—</span>
+        </div>
+        <div class="resource-card">
+          <div class="resource-header">RAM</div>
+          <div class="resource-bar"><div class="resource-fill" id="res-ram-bar" style="width:0%"></div></div>
+          <span class="resource-value" id="res-ram">—</span>
+        </div>
+        <div class="resource-card">
+          <div class="resource-header">GPU VRAM</div>
+          <div class="resource-bar"><div class="resource-fill resource-fill-gpu" id="res-gpu-bar" style="width:0%"></div></div>
+          <span class="resource-value" id="res-gpu">—</span>
+        </div>
+        <div class="resource-card">
+          <div class="resource-header">Disco</div>
+          <div class="resource-bar"><div class="resource-fill" id="res-disk-bar" style="width:0%"></div></div>
+          <span class="resource-value" id="res-disk">—</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- LLM Providers -->
+    <section class="providers-section">
+      <h2>Proveedores LLM</h2>
+      <div class="providers-grid" id="providers-grid">
+        <p class="task-empty">Cargando proveedores...</p>
+      </div>
+      <div class="providers-config">
+        <h3>Configurar API Keys</h3>
+        <div class="provider-key-form">
+          <div class="key-row">
+            <label>Cerebras</label>
+            <input type="password" id="key-cerebras" placeholder="csk-...">
+            <span class="key-status" id="key-status-cerebras">?</span>
+          </div>
+          <div class="key-row">
+            <label>OpenRouter</label>
+            <input type="password" id="key-openrouter" placeholder="sk-or-...">
+            <span class="key-status" id="key-status-openrouter">?</span>
+          </div>
+          <div class="key-row">
+            <label>Z.AI / GLM</label>
+            <input type="password" id="key-zai" placeholder="API key...">
+            <span class="key-status" id="key-status-zai">?</span>
+          </div>
+          <div class="key-row">
+            <label>Telegram Token</label>
+            <input type="password" id="key-telegram" placeholder="Bot token...">
+            <span class="key-status" id="key-status-telegram">?</span>
+          </div>
+        </div>
+        <p class="setting-hint">Las keys se configuran via variables de entorno. Este panel muestra su estado.</p>
+      </div>
+    </section>
+
+    <!-- Local Models -->
+    <section class="models-section">
+      <h2>Modelos Locales</h2>
+      <div class="models-grid" id="models-grid">
+        <p class="task-empty">Cargando modelos...</p>
+      </div>
+    </section>
+
+    <!-- Agent Metrics -->
+    <section class="metrics-section">
+      <h2>Metricas de Agentes</h2>
+      <div class="metrics-summary" id="metrics-summary">
+        <div class="hero-stats">
+          <div class="hero-stat"><span>Total tareas</span><strong id="met-total">0</strong></div>
+          <div class="hero-stat"><span>Completadas</span><strong id="met-completed">0</strong></div>
+          <div class="hero-stat"><span>Fallidas</span><strong id="met-failed">0</strong></div>
+          <div class="hero-stat"><span>Tasa exito</span><strong id="met-rate">—</strong></div>
+        </div>
+        <div class="metrics-roles" id="metrics-roles"></div>
+      </div>
+    </section>
+
+    <!-- Memory Plane -->
+    <section class="memory-section">
+      <h2>Memoria de Axi</h2>
+      <div class="memory-stats" id="memory-stats">
+        <div class="hero-stats">
+          <div class="hero-stat"><span>Entradas</span><strong id="mem-total">0</strong></div>
+          <div class="hero-stat"><span>Decisiones</span><strong id="mem-decisions">0</strong></div>
+          <div class="hero-stat"><span>Eventos</span><strong id="mem-events">0</strong></div>
+          <div class="hero-stat"><span>Notas</span><strong id="mem-notes">0</strong></div>
+        </div>
+      </div>
+      <div class="memory-search">
+        <input type="text" id="memory-search-input" placeholder="Buscar en la memoria...">
+        <button type="button" class="quick-action-btn" id="memory-search-btn">Buscar</button>
+      </div>
+      <div class="memory-entries" id="memory-entries">
+        <p class="task-empty">Busca algo o carga las entradas recientes</p>
+      </div>
+    </section>
+
     <!-- Activity Feed -->
     <section class="feed-section">
       <h2>Actividad <span id="feed-count" class="feed-count">0</span></h2>
