@@ -907,3 +907,17 @@ section { scroll-margin-top: 92px; }
 .memory-entry-kind { font-size: 0.7rem; text-transform: uppercase; color: var(--accent); font-weight: 600; }
 .memory-entry-content { font-size: 0.8rem; color: var(--text); margin-top: 0.25rem; white-space: pre-wrap; max-height: 80px; overflow-y: auto; }
 .memory-entry-meta { font-size: 0.7rem; color: var(--text-muted); margin-top: 0.25rem; }
+
+/* === Local AI Section === */
+.localai-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); margin-bottom: 1.5rem; }
+.localai-grid { display: flex; flex-direction: column; gap: 1.5rem; }
+.localai-config { display: flex; flex-direction: column; gap: 0.75rem; }
+.localai-config h3, .localai-models h3, .localai-catalog h3 { font-size: 0.95rem; margin-bottom: 0.5rem; }
+.catalog-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.5rem; }
+.catalog-item { padding: 0.75rem; background: var(--bg); border-radius: 8px; cursor: pointer; border: 1px solid var(--border); transition: var(--transition); display: flex; flex-direction: column; gap: 0.2rem; }
+.catalog-item:hover { border-color: var(--accent); background: var(--bg-card-hover); }
+.catalog-item.downloading { border-color: var(--warning); opacity: 0.7; cursor: wait; }
+.catalog-item.installed { border-color: var(--success); }
+.catalog-name { font-weight: 600; font-size: 0.85rem; }
+.catalog-size { font-size: 0.75rem; color: var(--text-muted); }
+.catalog-desc { font-size: 0.75rem; color: var(--text-muted); }

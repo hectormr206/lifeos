@@ -352,11 +352,70 @@
       </div>
     </section>
 
-    <!-- Local Models -->
-    <section class="models-section">
-      <h2>Modelos Locales</h2>
-      <div class="models-grid" id="models-grid">
-        <p class="task-empty">Cargando modelos...</p>
+    <!-- Local AI Configuration -->
+    <section class="localai-section">
+      <h2>AI Local</h2>
+      <div class="localai-grid">
+        <div class="localai-status">
+          <div class="hero-stats">
+            <div class="hero-stat"><span>Modelo activo</span><strong id="ai-active-model">—</strong></div>
+            <div class="hero-stat"><span>Estado</span><strong id="ai-server-status">—</strong></div>
+            <div class="hero-stat"><span>GPU</span><strong id="ai-gpu-name">—</strong></div>
+          </div>
+        </div>
+
+        <div class="localai-config">
+          <h3>Configuracion</h3>
+          <div class="setting-item">
+            <label for="ai-ctx-slider">Contexto (tokens)</label>
+            <input type="range" id="ai-ctx-slider" min="2048" max="32768" step="1024" value="6144">
+            <span id="ai-ctx-value">6144</span>
+          </div>
+          <div class="setting-item">
+            <label for="ai-gpu-layers">GPU Layers</label>
+            <input type="range" id="ai-gpu-layers" min="0" max="99" value="99">
+            <span id="ai-gpu-layers-value">99 (todas)</span>
+          </div>
+          <div class="setting-item">
+            <label for="ai-threads">CPU Threads</label>
+            <input type="range" id="ai-threads" min="1" max="24" value="4">
+            <span id="ai-threads-value">4</span>
+          </div>
+        </div>
+
+        <div class="localai-models">
+          <h3>Modelos disponibles</h3>
+          <div class="models-grid" id="models-grid">
+            <p class="task-empty">Cargando modelos...</p>
+          </div>
+        </div>
+
+        <div class="localai-catalog">
+          <h3>Descargar modelos</h3>
+          <p class="setting-hint">Selecciona un modelo para descargarlo al almacenamiento local.</p>
+          <div class="catalog-grid" id="catalog-grid">
+            <div class="catalog-item" data-model="Qwen3.5-0.8B-Q4_K_M" data-size="600">
+              <span class="catalog-name">Qwen3.5-0.8B</span>
+              <span class="catalog-size">~600 MB</span>
+              <span class="catalog-desc">Ultra ligero, OCR basico</span>
+            </div>
+            <div class="catalog-item" data-model="Qwen3.5-2B-Q4_K_M" data-size="1280">
+              <span class="catalog-name">Qwen3.5-2B (recomendado)</span>
+              <span class="catalog-size">~1.3 GB</span>
+              <span class="catalog-desc">Vision + texto, equilibrio ideal</span>
+            </div>
+            <div class="catalog-item" data-model="Qwen3.5-4B-Q4_K_M" data-size="2500">
+              <span class="catalog-name">Qwen3.5-4B</span>
+              <span class="catalog-size">~2.5 GB</span>
+              <span class="catalog-desc">Potente, requiere mas VRAM</span>
+            </div>
+            <div class="catalog-item" data-model="Qwen3.5-9B-Q4_K_M" data-size="5500">
+              <span class="catalog-name">Qwen3.5-9B</span>
+              <span class="catalog-size">~5.5 GB</span>
+              <span class="catalog-desc">Maximo calidad local</span>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 

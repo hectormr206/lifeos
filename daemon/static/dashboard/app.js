@@ -1243,6 +1243,66 @@ async function refreshModels() {
   } catch (e) { /* silent */ }
 }
 
+// --- Local AI Config ---
+const aiCtxSlider = $('#ai-ctx-slider');
+const aiCtxValue = $('#ai-ctx-value');
+const aiGpuLayers = $('#ai-gpu-layers');
+const aiGpuLayersValue = $('#ai-gpu-layers-value');
+const aiThreads = $('#ai-threads');
+const aiThreadsValue = $('#ai-threads-value');
+
+if (aiCtxSlider) {
+  aiCtxSlider.addEventListener('input', () => {
+    if (aiCtxValue) aiCtxValue.textContent = aiCtxSlider.value;
+  });
+}
+if (aiGpuLayers) {
+  aiGpuLayers.addEventListener('input', () => {
+    const v = aiGpuLayers.value;
+    if (aiGpuLayersValue) aiGpuLayersValue.textContent = v === '99' ? '99 (todas)' : v;
+  });
+}
+if (aiThreads) {
+  aiThreads.addEventListener('input', () => {
+    if (aiThreadsValue) aiThreadsValue.textContent = aiThreads.value;
+  });
+}
+
+async function refreshAiStatus() {
+  try {
+    const res = await fetch(`${API}/ai/status`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const d = await res.json();
+    const activeModel = $('#ai-active-model');
+    const serverStatus = $('#ai-server-status');
+    const gpuName = $('#ai-gpu-name');
+    if (activeModel) activeModel.textContent = d.default_model || '—';
+    if (serverStatus) serverStatus.textContent = d.server_running ? 'Corriendo' : 'Detenido';
+    if (gpuName) gpuName.textContent = d.gpu_acceleration ? 'Activa' : 'CPU only';
+
+    // Mark installed models in catalog
+    const models = d.models || [];
+    document.querySelectorAll('.catalog-item').forEach(item => {
+      const modelName = item.dataset.model + '.gguf';
+      if (models.some(m => m.name === modelName)) {
+        item.classList.add('installed');
+      }
+    });
+  } catch (e) { /* silent */ }
+}
+
+// Catalog click to select model
+document.querySelectorAll('.catalog-item').forEach(item => {
+  item.addEventListener('click', () => {
+    const model = item.dataset.model;
+    if (item.classList.contains('installed')) {
+      item.querySelector('.catalog-desc').textContent = 'Ya instalado. Seleccionar como activo requiere reiniciar llama-server.';
+    } else {
+      item.querySelector('.catalog-desc').textContent = 'Descarga no disponible desde el dashboard aun. Usa: life ai pull ' + model;
+    }
+  });
+});
+
 // --- Agent Metrics ---
 async function refreshMetrics() {
   try {
@@ -1354,6 +1414,7 @@ setInterval(() => {
   refreshProviders();
   refreshModels();
   refreshMemory();
+  refreshAiStatus();
 }, 30000);
 
 // --- Boot ---
@@ -1368,5 +1429,6 @@ setInterval(() => {
   refreshModels();
   refreshMetrics();
   refreshMemory();
+  refreshAiStatus();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();
