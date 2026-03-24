@@ -590,7 +590,56 @@ fn default_providers() -> Vec<ProviderConfig> {
             tier: ProviderTier::Free,
             chat_path: None,
         },
-        // ===== Priority 4: Z.AI paid (requires balance, privacy: medium) =====
+        // ===== Priority 4: Premium US providers (medium privacy, paid) =====
+        // Anthropic Claude — no training on API data
+        ProviderConfig {
+            name: "anthropic-haiku".into(),
+            api_base: "https://api.anthropic.com".into(),
+            api_key_env: "ANTHROPIC_API_KEY".into(),
+            model: "claude-haiku-4-5-20251001".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.25,
+            cost_output_per_m: 1.25,
+            max_rpm: None,
+            max_rpd: None,
+            supports_vision: true,
+            max_context: 200_000,
+            tier: ProviderTier::Premium,
+            chat_path: Some("/v1/messages".into()),
+        },
+        // OpenAI GPT-4o-mini — cheapest OpenAI, no training on API data
+        ProviderConfig {
+            name: "openai-4o-mini".into(),
+            api_base: "https://api.openai.com".into(),
+            api_key_env: "OPENAI_API_KEY".into(),
+            model: "gpt-4o-mini".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.15,
+            cost_output_per_m: 0.60,
+            max_rpm: None,
+            max_rpd: None,
+            supports_vision: true,
+            max_context: 128_000,
+            tier: ProviderTier::Premium,
+            chat_path: None,
+        },
+        // Google Gemini Flash (free tier trains on data! use with caution)
+        ProviderConfig {
+            name: "gemini-flash".into(),
+            api_base: "https://generativelanguage.googleapis.com".into(),
+            api_key_env: "GEMINI_API_KEY".into(),
+            model: "gemini-2.5-flash".into(),
+            api_format: ApiFormat::Gemini,
+            cost_input_per_m: 0.0,
+            cost_output_per_m: 0.0,
+            max_rpm: Some(10),
+            max_rpd: Some(250),
+            supports_vision: true,
+            max_context: 1_000_000,
+            tier: ProviderTier::Free,
+            chat_path: None,
+        },
+        // ===== Priority 5: Chinese providers (low privacy, paid) =====
         ProviderConfig {
             name: "zai-glm47".into(),
             api_base: "https://api.z.ai/api/paas".into(),
@@ -606,9 +655,39 @@ fn default_providers() -> Vec<ProviderConfig> {
             tier: ProviderTier::Cheap,
             chat_path: Some("/v4/chat/completions".into()),
         },
-        // ===== Priority 5: OpenRouter fallback (mixed privacy) =====
-        // Note: OpenRouter routes to various providers. Privacy depends on
-        // the underlying provider. Use only as last resort for non-sensitive data.
+        // Kimi K2.5 — multimodal vision, 256K context
+        ProviderConfig {
+            name: "kimi-k25".into(),
+            api_base: "https://api.moonshot.cn".into(),
+            api_key_env: "KIMI_API_KEY".into(),
+            model: "kimi-k2.5".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.60,
+            cost_output_per_m: 2.50,
+            max_rpm: None,
+            max_rpd: None,
+            supports_vision: true,
+            max_context: 256_000,
+            tier: ProviderTier::Cheap,
+            chat_path: None,
+        },
+        // MiniMax M2.5 — strong coding (80% SWE-Bench)
+        ProviderConfig {
+            name: "minimax-m25".into(),
+            api_base: "https://api.minimax.chat".into(),
+            api_key_env: "MINIMAX_API_KEY".into(),
+            model: "minimax-m2.5".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.30,
+            cost_output_per_m: 1.20,
+            max_rpm: None,
+            max_rpd: None,
+            supports_vision: false,
+            max_context: 128_000,
+            tier: ProviderTier::Cheap,
+            chat_path: None,
+        },
+        // ===== Priority 6: OpenRouter fallback (mixed privacy) =====
         ProviderConfig {
             name: "openrouter-coder".into(),
             api_base: "https://openrouter.ai/api".into(),

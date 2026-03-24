@@ -1179,11 +1179,15 @@ async function refreshProviders() {
       const privacy = n.startsWith('local') ? 'Maxima' :
                       n.startsWith('cerebras') ? 'Alta (ZDR)' :
                       n.startsWith('groq') ? 'Alta (ZDR)' :
-                      n.startsWith('zai') ? 'Media' :
+                      n.startsWith('anthropic') ? 'Media (no training)' :
+                      n.startsWith('openai') ? 'Media (no training)' :
+                      n.startsWith('gemini') ? 'Baja (free entrena)' :
+                      n.startsWith('zai') || n.startsWith('kimi') || n.startsWith('minimax') ? 'Baja (China)' :
                       n.startsWith('openrouter') ? 'Variable' : '?';
       const privacyColor = privacy.startsWith('Max') ? 'var(--success)' :
                            privacy.startsWith('Alta') ? 'var(--accent-2)' :
-                           privacy.startsWith('Media') ? 'var(--warning)' : 'var(--text-muted)';
+                           privacy.startsWith('Media') ? 'var(--warning)' :
+                           privacy.startsWith('Baja') ? 'var(--danger)' : 'var(--text-muted)';
       return `<div class="provider-card" data-tier="${tier}">
         <div class="provider-name">${escHtml(n)}</div>
         <div class="provider-stats">${p.total_requests} req | ${p.total_output_tokens} tok | ${p.total_failures} err</div>
