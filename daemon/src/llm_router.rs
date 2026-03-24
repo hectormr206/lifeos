@@ -78,18 +78,32 @@ pub struct ProviderCostTracker {
 pub struct ProviderConfig {
     pub name: String,
     pub api_base: String,
+    #[serde(default)]
     pub api_key_env: String,
     pub model: String,
     pub api_format: ApiFormat,
+    #[serde(default)]
     pub cost_input_per_m: f64,
+    #[serde(default)]
     pub cost_output_per_m: f64,
+    #[serde(default)]
     pub max_rpm: Option<u32>,
+    #[serde(default)]
     pub max_rpd: Option<u32>,
+    #[serde(default)]
     pub supports_vision: bool,
+    #[serde(default = "default_context")]
     pub max_context: u32,
+    #[serde(default)]
     pub tier: ProviderTier,
-    /// Override the chat completions path (default: "/v1/chat/completions")
+    #[serde(default)]
     pub chat_path: Option<String>,
+    #[serde(default)]
+    pub privacy: String,
+}
+
+fn default_context() -> u32 {
+    128_000
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,10 +113,11 @@ pub enum ApiFormat {
     Gemini,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderTier {
     Local,
+    #[default]
     Free,
     Cheap,
     Premium,
@@ -121,7 +136,10 @@ pub struct LlmRouter {
 
 impl LlmRouter {
     pub fn new(privacy_level: PrivacyLevel) -> Self {
-        let providers = default_providers();
+        let providers = load_providers_from_toml().unwrap_or_else(|e| {
+            info!("No providers.toml found ({}), using built-in defaults", e);
+            default_providers()
+        });
         let cost_trackers = providers
             .iter()
             .map(|p| (p.name.clone(), ProviderCostTracker::default()))
@@ -472,6 +490,61 @@ impl LlmRouter {
 // Default provider configurations
 // ---------------------------------------------------------------------------
 
+/// TOML file structure for providers config
+#[derive(Debug, Deserialize)]
+struct ProvidersFile {
+    providers: Vec<ProviderConfig>,
+}
+
+/// Load providers from TOML config file. Searches multiple locations.
+fn load_providers_from_toml() -> Result<Vec<ProviderConfig>> {
+    let candidates = [
+        // User config
+        dirs_home()
+            .map(|h| h.join(".config/lifeos/llm-providers.toml"))
+            .unwrap_or_default(),
+        // System config
+        std::path::PathBuf::from("/etc/lifeos/llm-providers.toml"),
+        // Repo-local (for development)
+        std::path::PathBuf::from("files/etc/lifeos/llm-providers.toml"),
+    ];
+
+    for path in &candidates {
+        if path.exists() {
+            let content = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            let file: ProvidersFile =
+                toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+
+            // Filter: only keep providers whose API key env var is set (or empty = local)
+            let active: Vec<ProviderConfig> = file
+                .providers
+                .into_iter()
+                .filter(|p| {
+                    p.api_key_env.is_empty()
+                        || std::env::var(&p.api_key_env)
+                            .map(|v| !v.is_empty())
+                            .unwrap_or(false)
+                })
+                .collect();
+
+            info!(
+                "Loaded {} providers from {} ({} with active keys)",
+                active.len() + candidates.len() - candidates.len(), // total in file
+                path.display(),
+                active.len()
+            );
+            return Ok(active);
+        }
+    }
+
+    bail!("no providers.toml found")
+}
+
+fn dirs_home() -> Option<std::path::PathBuf> {
+    std::env::var("HOME").ok().map(std::path::PathBuf::from)
+}
+
 fn default_providers() -> Vec<ProviderConfig> {
     // Provider priority: Local > Cerebras (privacy+speed) > Groq (privacy+speed)
     //                    > Z.AI paid (if balance) > OpenRouter (fallback, mixed privacy)
@@ -491,6 +564,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 6144,
             tier: ProviderTier::Local,
             chat_path: None,
+            privacy: String::new(),
         },
         // ===== Priority 2: Cerebras — zero data retention, 2000+ tok/s =====
         // Qwen3 235B (A22B MoE) — most powerful free model
@@ -508,6 +582,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
+            privacy: String::new(),
         },
         // Llama 3.1 8B on Cerebras — fastest for simple tasks (~2200 tok/s)
         ProviderConfig {
@@ -524,6 +599,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
+            privacy: String::new(),
         },
         // ===== Priority 3: Groq — zero data retention, ~500-1000 tok/s =====
         // Llama 3.3 70B on Groq — strong general purpose
@@ -541,6 +617,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
+            privacy: String::new(),
         },
         // Qwen3 32B on Groq — reasoning and coding
         ProviderConfig {
@@ -557,6 +634,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
+            privacy: String::new(),
         },
         // Llama 3.1 8B on Groq — fast lightweight tasks
         ProviderConfig {
@@ -573,6 +651,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
+            privacy: String::new(),
         },
         // DeepSeek R1 on Groq — deep reasoning
         ProviderConfig {
@@ -589,6 +668,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
+            privacy: String::new(),
         },
         // ===== Priority 4: Premium US providers (medium privacy, paid) =====
         // Anthropic Claude — no training on API data
@@ -606,6 +686,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 200_000,
             tier: ProviderTier::Premium,
             chat_path: Some("/v1/messages".into()),
+            privacy: String::new(),
         },
         // OpenAI GPT-4o-mini — cheapest OpenAI, no training on API data
         ProviderConfig {
@@ -622,6 +703,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Premium,
             chat_path: None,
+            privacy: String::new(),
         },
         // Google Gemini Flash (free tier trains on data! use with caution)
         ProviderConfig {
@@ -638,6 +720,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 1_000_000,
             tier: ProviderTier::Free,
             chat_path: None,
+            privacy: String::new(),
         },
         // ===== Priority 5: Chinese providers (low privacy, paid) =====
         ProviderConfig {
@@ -654,6 +737,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 200_000,
             tier: ProviderTier::Cheap,
             chat_path: Some("/v4/chat/completions".into()),
+            privacy: String::new(),
         },
         // Kimi K2.5 — multimodal vision, 256K context
         ProviderConfig {
@@ -670,6 +754,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 256_000,
             tier: ProviderTier::Cheap,
             chat_path: None,
+            privacy: String::new(),
         },
         // MiniMax M2.5 — strong coding (80% SWE-Bench)
         ProviderConfig {
@@ -686,6 +771,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Cheap,
             chat_path: None,
+            privacy: String::new(),
         },
         // ===== Priority 6: OpenRouter fallback (mixed privacy) =====
         ProviderConfig {
@@ -702,6 +788,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 262_144,
             tier: ProviderTier::Free,
             chat_path: None,
+            privacy: String::new(),
         },
         ProviderConfig {
             name: "openrouter-gptoss120b".into(),
@@ -717,6 +804,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
+            privacy: String::new(),
         },
     ]
 }

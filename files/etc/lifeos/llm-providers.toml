@@ -1,0 +1,293 @@
+# LifeOS LLM Providers Configuration
+# Edit this file to add/remove/update models without recompiling.
+# The daemon reads this at startup. Providers without a configured API key are skipped.
+#
+# Each provider needs a matching env var in llm-providers.env
+# Priority order: providers listed first are tried first.
+
+# =============================================================================
+# HIGH PRIVACY — zero data retention, never train on your data
+# =============================================================================
+
+[[providers]]
+name = "local"
+api_base = "http://127.0.0.1:8082"
+api_key_env = ""
+model = "local"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+supports_vision = true
+max_context = 6144
+tier = "local"
+privacy = "max"
+
+[[providers]]
+name = "cerebras-qwen235b"
+api_base = "https://api.cerebras.ai"
+api_key_env = "CEREBRAS_API_KEY"
+model = "qwen-3-235b-a22b-instruct-2507"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 30
+supports_vision = false
+max_context = 128000
+tier = "free"
+privacy = "high"
+
+[[providers]]
+name = "cerebras-llama8b"
+api_base = "https://api.cerebras.ai"
+api_key_env = "CEREBRAS_API_KEY"
+model = "llama3.1-8b"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 30
+supports_vision = false
+max_context = 128000
+tier = "free"
+privacy = "high"
+
+[[providers]]
+name = "groq-llama70b"
+api_base = "https://api.groq.com/openai"
+api_key_env = "GROQ_API_KEY"
+model = "llama-3.3-70b-versatile"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 30
+max_rpd = 14400
+supports_vision = false
+max_context = 128000
+tier = "free"
+privacy = "high"
+
+[[providers]]
+name = "groq-qwen32b"
+api_base = "https://api.groq.com/openai"
+api_key_env = "GROQ_API_KEY"
+model = "qwen-qwq-32b"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 30
+max_rpd = 14400
+supports_vision = false
+max_context = 128000
+tier = "free"
+privacy = "high"
+
+[[providers]]
+name = "groq-llama8b"
+api_base = "https://api.groq.com/openai"
+api_key_env = "GROQ_API_KEY"
+model = "llama-3.1-8b-instant"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 30
+max_rpd = 14400
+supports_vision = false
+max_context = 128000
+tier = "free"
+privacy = "high"
+
+[[providers]]
+name = "groq-deepseek-r1"
+api_base = "https://api.groq.com/openai"
+api_key_env = "GROQ_API_KEY"
+model = "deepseek-r1-distill-llama-70b"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 30
+max_rpd = 14400
+supports_vision = false
+max_context = 128000
+tier = "free"
+privacy = "high"
+
+[[providers]]
+name = "groq-gptoss120b"
+api_base = "https://api.groq.com/openai"
+api_key_env = "GROQ_API_KEY"
+model = "openai/gpt-oss-120b"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 30
+max_rpd = 14400
+supports_vision = false
+max_context = 128000
+tier = "free"
+privacy = "high"
+
+# =============================================================================
+# MEDIUM PRIVACY — no training on API data (paid)
+# =============================================================================
+
+[[providers]]
+name = "anthropic-haiku"
+api_base = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-haiku-4-5-20251001"
+api_format = "openai_compatible"
+chat_path = "/v1/messages"
+cost_input_per_m = 0.25
+cost_output_per_m = 1.25
+supports_vision = true
+max_context = 200000
+tier = "premium"
+privacy = "medium"
+
+[[providers]]
+name = "anthropic-sonnet"
+api_base = "https://api.anthropic.com"
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-sonnet-4-6-20250514"
+api_format = "openai_compatible"
+chat_path = "/v1/messages"
+cost_input_per_m = 3.0
+cost_output_per_m = 15.0
+supports_vision = true
+max_context = 200000
+tier = "premium"
+privacy = "medium"
+
+[[providers]]
+name = "openai-5nano"
+api_base = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-5-nano"
+api_format = "openai_compatible"
+cost_input_per_m = 0.05
+cost_output_per_m = 0.40
+supports_vision = false
+max_context = 128000
+tier = "cheap"
+privacy = "medium"
+
+[[providers]]
+name = "openai-5mini"
+api_base = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-5-mini"
+api_format = "openai_compatible"
+cost_input_per_m = 0.25
+cost_output_per_m = 2.0
+supports_vision = true
+max_context = 128000
+tier = "premium"
+privacy = "medium"
+
+[[providers]]
+name = "gemini-flash"
+api_base = "https://generativelanguage.googleapis.com"
+api_key_env = "GEMINI_API_KEY"
+model = "gemini-2.5-flash"
+api_format = "gemini"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 10
+max_rpd = 250
+supports_vision = true
+max_context = 1000000
+tier = "free"
+privacy = "low"
+# WARNING: free tier trains on your data
+
+[[providers]]
+name = "gemini-pro"
+api_base = "https://generativelanguage.googleapis.com"
+api_key_env = "GEMINI_API_KEY"
+model = "gemini-2.5-pro"
+api_format = "gemini"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 5
+max_rpd = 100
+supports_vision = true
+max_context = 1000000
+tier = "free"
+privacy = "low"
+
+# =============================================================================
+# LOW PRIVACY — Chinese jurisdiction
+# =============================================================================
+
+[[providers]]
+name = "zai-glm47"
+api_base = "https://api.z.ai/api/paas"
+api_key_env = "ZAI_API_KEY"
+model = "glm-4.7"
+api_format = "openai_compatible"
+chat_path = "/v4/chat/completions"
+cost_input_per_m = 0.55
+cost_output_per_m = 2.20
+supports_vision = false
+max_context = 200000
+tier = "cheap"
+privacy = "low"
+
+[[providers]]
+name = "kimi-k25"
+api_base = "https://api.moonshot.cn"
+api_key_env = "KIMI_API_KEY"
+model = "kimi-k2.5"
+api_format = "openai_compatible"
+cost_input_per_m = 0.60
+cost_output_per_m = 2.50
+supports_vision = true
+max_context = 256000
+tier = "cheap"
+privacy = "low"
+
+[[providers]]
+name = "minimax-m25"
+api_base = "https://api.minimax.chat"
+api_key_env = "MINIMAX_API_KEY"
+model = "minimax-m2.5"
+api_format = "openai_compatible"
+cost_input_per_m = 0.30
+cost_output_per_m = 1.20
+supports_vision = false
+max_context = 128000
+tier = "cheap"
+privacy = "low"
+
+# =============================================================================
+# FALLBACK — mixed privacy (OpenRouter)
+# =============================================================================
+
+[[providers]]
+name = "openrouter-coder"
+api_base = "https://openrouter.ai/api"
+api_key_env = "OPENROUTER_API_KEY"
+model = "qwen/qwen3-coder:free"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 20
+max_rpd = 200
+supports_vision = false
+max_context = 262144
+tier = "free"
+privacy = "variable"
+
+[[providers]]
+name = "openrouter-gptoss"
+api_base = "https://openrouter.ai/api"
+api_key_env = "OPENROUTER_API_KEY"
+model = "openai/gpt-oss-120b:free"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 20
+max_rpd = 200
+supports_vision = false
+max_context = 128000
+tier = "free"
+privacy = "variable"

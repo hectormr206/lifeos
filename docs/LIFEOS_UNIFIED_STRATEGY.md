@@ -434,6 +434,31 @@ Una vez que la celula perfecta funcione:
 **Meses 12-18:** Enjambre de enjambres con delegacion bidireccional
 **18+ meses:** Plataforma abierta donde otros instalan LifeOS en su hardware
 
+### 13.1 Vision a Largo Plazo: Tu Clon Digital (documentado 2026-03-24)
+
+LifeOS te conoce como nadie: tu vida, gustos, enfermedades, logros, carencias, forma de trabajar, relaciones. Con esa base:
+
+**Fase "Clon Digital" (12-18 meses):**
+- LifeOS puede interactuar por ti en Telegram, email, WhatsApp
+- Responde con tu estilo y personalidad
+- Toma decisiones menores en tu nombre (configurable)
+- Te conoce tan bien que descubre patrones que tu no veias
+
+**Fase "Red Social de LifeOS" (18-24 meses):**
+- LifeOS-to-LifeOS: tu clon interactua con el clon de otra persona
+- Grupos de LifeOS: multiples clones coordinan entre si
+- Matching: conectar personas con gustos/habilidades complementarias
+- Marketplace de servicios: tu LifeOS ofrece tus skills, otro LifeOS los contrata
+
+**Fase "Economia Autonoma" (24+ meses):**
+- Sistema de pagos entre nodos via Lightning Network (Bitcoin) o stablecoins (USDC en L2)
+- NO crear cripto propia (percepcion negativa, regulaciones, riesgo de scam)
+- Candados de gasto configurables (limite diario, aprobacion para montos altos)
+- Stripe Connect como fallback para pagos con tarjeta
+- Cada LifeOS puede monetizar las habilidades de su humano autonomamente
+
+**Principio clave:** cada una de estas fases solo se activa cuando la anterior funciona de forma confiable. No adelantar.
+
 Pero nada de esto importa si el loop basico no funciona primero.
 
 ---
