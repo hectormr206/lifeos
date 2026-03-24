@@ -21,6 +21,10 @@ mod agent_roles;
 mod agent_runtime;
 mod ai;
 mod api;
+#[allow(dead_code)]
+mod calendar;
+#[allow(dead_code)]
+mod comm_bridges;
 mod computer_use;
 mod context_policies;
 #[allow(dead_code)]

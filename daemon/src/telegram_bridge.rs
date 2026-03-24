@@ -9,7 +9,9 @@ mod inner {
     use std::sync::Arc;
     use teloxide::net::Download;
     use teloxide::prelude::*;
-    use teloxide::types::{ChatAction, InputFile, MediaKind, MessageKind};
+    use teloxide::types::{
+        ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MediaKind, MessageKind,
+    };
     use tokio::sync::RwLock;
 
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
@@ -95,10 +97,21 @@ mod inner {
             bot_username,
         };
 
-        let handler =
+        let message_handler =
             Update::filter_message().endpoint(|bot: Bot, msg: Message, ctx: BotCtx| async move {
                 handle_message(bot, msg, ctx).await
             });
+
+        let callback_handler =
+            Update::filter_callback_query().endpoint(
+                |bot: Bot, q: CallbackQuery, ctx: BotCtx| async move {
+                    handle_callback(bot, q, ctx).await
+                },
+            );
+
+        let handler = dptree::entry()
+            .branch(message_handler)
+            .branch(callback_handler);
 
         Dispatcher::builder(bot, handler)
             .dependencies(dptree::deps![ctx])
@@ -581,6 +594,70 @@ mod inner {
             bot.send_message(chat_id, String::from_utf8_lossy(chunk).to_string())
                 .await?;
         }
+        Ok(())
+    }
+
+    // ---- Callback query handler (inline button presses) ----
+
+    async fn handle_callback(
+        bot: Bot,
+        q: CallbackQuery,
+        ctx: BotCtx,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        bot.answer_callback_query(&q.id).await?;
+
+        let data = q.data.unwrap_or_default();
+        let chat_id = q.message.as_ref().map(|m| m.chat().id).unwrap_or(ChatId(0));
+
+        if let Some(task_id) = data.strip_prefix("approve:") {
+            info!("Telegram: task {} approved via button", task_id);
+            // Re-enqueue the task (it was waiting for approval)
+            match ctx.task_queue.enqueue(TaskCreate {
+                objective: format!("[APPROVED] {}", task_id),
+                priority: TaskPriority::High,
+                source: "telegram-approval".into(),
+                max_attempts: 3,
+            }) {
+                Ok(_) => {
+                    bot.send_message(chat_id, "Tarea aprobada. Ejecutando...")
+                        .await?;
+                }
+                Err(e) => {
+                    bot.send_message(chat_id, format!("Error: {}", e)).await?;
+                }
+            }
+        } else if let Some(task_id) = data.strip_prefix("reject:") {
+            info!("Telegram: task {} rejected via button", task_id);
+            bot.send_message(chat_id, "Tarea rechazada.").await?;
+        }
+
+        Ok(())
+    }
+
+    /// Send an approval request with inline buttons.
+    /// Used by the supervisor for medium-risk actions.
+    #[allow(dead_code)]
+    pub async fn send_approval_request(
+        bot: &Bot,
+        chat_id: ChatId,
+        task_description: &str,
+        task_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback("Aprobar", format!("approve:{}", task_id)),
+            InlineKeyboardButton::callback("Rechazar", format!("reject:{}", task_id)),
+        ]]);
+
+        bot.send_message(
+            chat_id,
+            format!(
+                "Accion de riesgo medio requiere aprobacion:\n\n{}\n\nQuieres ejecutarla?",
+                task_description
+            ),
+        )
+        .reply_markup(keyboard)
+        .await?;
+
         Ok(())
     }
 

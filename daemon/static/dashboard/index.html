@@ -433,6 +433,23 @@
       </div>
     </section>
 
+    <!-- Scheduled Tasks -->
+    <section class="sched-section">
+      <h2>Tareas Programadas</h2>
+      <div class="sched-list" id="sched-list">
+        <p class="task-empty">Sin tareas programadas</p>
+      </div>
+      <div class="sched-add">
+        <input type="text" id="sched-objective" placeholder="Que quieres que haga...">
+        <select id="sched-type">
+          <option value="interval">Cada N minutos</option>
+          <option value="daily">Diario a una hora</option>
+        </select>
+        <input type="text" id="sched-param" placeholder="30 (minutos) o 09:00 (hora)">
+        <button type="button" class="quick-action-btn" id="sched-add-btn">Programar</button>
+      </div>
+    </section>
+
     <!-- Memory Plane -->
     <section class="memory-section">
       <h2>Memoria de Axi</h2>
