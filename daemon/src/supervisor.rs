@@ -15,7 +15,8 @@ use crate::agent_roles::{AgentRole, AllAgentMetrics, Runbook};
 use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
 use crate::memory_plane::MemoryPlaneManager;
 use crate::privacy_filter::PrivacyFilter;
-use crate::task_queue::TaskQueue;
+use crate::scheduled_tasks::ScheduledTaskManager;
+use crate::task_queue::{TaskCreate, TaskPriority, TaskQueue};
 
 // ---------------------------------------------------------------------------
 // Notification types — consumed by Telegram bridge and other listeners
@@ -129,6 +130,7 @@ pub struct Supervisor {
     router: Arc<RwLock<LlmRouter>>,
     privacy: Arc<PrivacyFilter>,
     memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
+    scheduler: Option<Arc<ScheduledTaskManager>>,
     running: Arc<std::sync::atomic::AtomicBool>,
     work_dir: PathBuf,
     notify_tx: broadcast::Sender<SupervisorNotification>,
@@ -178,12 +180,18 @@ impl Supervisor {
             router,
             privacy,
             memory,
+            scheduler: None,
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             work_dir,
             notify_tx,
             started_at: std::time::Instant::now(),
             metrics: std::sync::Mutex::new(AllAgentMetrics::default()),
         }
+    }
+
+    /// Attach a scheduled task manager.
+    pub fn set_scheduler(&mut self, scheduler: Arc<ScheduledTaskManager>) {
+        self.scheduler = Some(scheduler);
     }
 
     /// Get agent metrics snapshot.
@@ -212,6 +220,8 @@ impl Supervisor {
 
         let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(86400)); // 24h
         heartbeat_interval.tick().await; // skip first immediate tick
+        let mut scheduler_interval = tokio::time::interval(Duration::from_secs(60)); // check every min
+        scheduler_interval.tick().await;
 
         loop {
             if !self.running.load(Ordering::Relaxed) {
@@ -222,6 +232,9 @@ impl Supervisor {
             tokio::select! {
                 _ = heartbeat_interval.tick() => {
                     self.send_heartbeat().await;
+                }
+                _ = scheduler_interval.tick() => {
+                    self.check_scheduled_tasks().await;
                 }
                 result = self.tick() => {
                     match result {
@@ -256,6 +269,34 @@ impl Supervisor {
             summary,
             uptime_hours: uptime,
         });
+    }
+
+    /// Check for due scheduled tasks and enqueue them.
+    async fn check_scheduled_tasks(&self) {
+        let scheduler = match &self.scheduler {
+            Some(s) => s,
+            None => return,
+        };
+
+        match scheduler.get_due_tasks() {
+            Ok(tasks) => {
+                for task in tasks {
+                    info!("Scheduled task due: {} — {}", task.id, task.objective);
+                    if let Err(e) = self.queue.enqueue(TaskCreate {
+                        objective: task.objective.clone(),
+                        priority: TaskPriority::Normal,
+                        source: "scheduler".into(),
+                        max_attempts: 2,
+                    }) {
+                        warn!("Failed to enqueue scheduled task: {}", e);
+                    }
+                    if let Err(e) = scheduler.mark_executed(&task.id, &task.schedule) {
+                        warn!("Failed to mark scheduled task executed: {}", e);
+                    }
+                }
+            }
+            Err(e) => warn!("Failed to check scheduled tasks: {}", e),
+        }
     }
 
     /// Manually trigger a heartbeat (callable from API).

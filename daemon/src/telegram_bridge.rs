@@ -180,6 +180,9 @@ mod inner {
         if text.starts_with("/help") || text.starts_with("/start") {
             return handle_help(bot, chat_id).await;
         }
+        if text.starts_with("/screenshot") || text.starts_with("/captura") {
+            return handle_screenshot(bot, chat_id).await;
+        }
         if text.starts_with("/search ") {
             let query = text.strip_prefix("/search ").unwrap_or("").to_string();
             return handle_search(bot, chat_id, query, ctx).await;
@@ -442,6 +445,47 @@ mod inner {
 
     // ---- Task, Status, Help, Chat handlers ----
 
+    async fn handle_screenshot(
+        bot: Bot,
+        chat_id: ChatId,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("Telegram [{}]: screenshot requested", chat_id);
+        bot.send_chat_action(chat_id, ChatAction::UploadPhoto)
+            .await
+            .ok();
+
+        let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
+        tokio::fs::create_dir_all(&tmp_dir).await.ok();
+        let path = tmp_dir.join(format!("screen-{}.png", chrono::Utc::now().timestamp()));
+
+        let output = tokio::process::Command::new("grim")
+            .arg(&path)
+            .output()
+            .await;
+
+        let captured = match output {
+            Ok(o) if o.status.success() => true,
+            _ => {
+                // Fallback
+                tokio::process::Command::new("gnome-screenshot")
+                    .args(["-f", &path.to_string_lossy()])
+                    .output()
+                    .await
+                    .map(|o| o.status.success())
+                    .unwrap_or(false)
+            }
+        };
+
+        if captured && path.exists() {
+            bot.send_photo(chat_id, InputFile::file(&path)).await?;
+            tokio::fs::remove_file(&path).await.ok();
+        } else {
+            bot.send_message(chat_id, "No pude capturar la pantalla.")
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn handle_task(
         bot: Bot,
         chat_id: ChatId,
@@ -510,6 +554,7 @@ mod inner {
              /do <tarea> — Crear tarea para el supervisor\n\
              /task <tarea> — Igual que /do\n\
              /search <query> — Buscar en internet\n\
+             /screenshot — Capturar pantalla y enviarla\n\
              /status — Ver estado de tareas\n\
              /help — Este mensaje\n\n\
              Tambien puedes:\n\

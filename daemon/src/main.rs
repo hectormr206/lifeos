@@ -23,10 +23,14 @@ mod ai;
 mod api;
 mod computer_use;
 mod context_policies;
+#[allow(dead_code)]
+mod email_bridge;
 mod events;
 mod experience_modes;
 mod follow_along;
 mod health;
+#[allow(dead_code)]
+mod health_tracking;
 #[cfg(feature = "ui-overlay")]
 #[allow(dead_code)]
 mod keyboard_shortcut;
@@ -43,6 +47,8 @@ mod permissions;
 #[cfg(feature = "dbus")]
 mod portal;
 mod privacy_filter;
+#[allow(dead_code)]
+mod proactive;
 #[allow(dead_code)]
 mod scheduled_tasks;
 mod screen_capture;

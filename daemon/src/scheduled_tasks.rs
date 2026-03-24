@@ -206,10 +206,7 @@ fn compute_next_run(schedule: &Schedule) -> Option<chrono::DateTime<Local>> {
         Schedule::Daily { time } => {
             if let Ok(t) = NaiveTime::parse_from_str(time, "%H:%M") {
                 let today = now.date_naive().and_time(t);
-                let dt = today
-                    .and_local_timezone(Local)
-                    .single()
-                    .unwrap_or(now);
+                let dt = today.and_local_timezone(Local).single().unwrap_or(now);
                 if dt > now {
                     Some(dt)
                 } else {
