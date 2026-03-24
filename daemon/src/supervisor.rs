@@ -85,6 +85,18 @@ pub enum StepAction {
     WebSearch {
         query: String,
     },
+    /// Search for files by name pattern.
+    FileSearch {
+        pattern: String,
+    },
+    /// Search file contents for a string.
+    ContentSearch {
+        query: String,
+    },
+    /// Copy text to the system clipboard.
+    ClipboardCopy {
+        text: String,
+    },
     /// Take a screenshot, analyze it with local LLM, and return description.
     ScreenAnalyze {
         prompt: Option<String>,
@@ -738,6 +750,102 @@ impl Supervisor {
         }
     }
 
+    /// Search for files by name pattern in the working directory.
+    async fn execute_file_search(&self, pattern: &str) -> Result<String> {
+        info!("File search: {}", pattern);
+        let output = tokio::process::Command::new("find")
+            .args([
+                self.work_dir.to_str().unwrap_or("."),
+                "-name",
+                pattern,
+                "-not",
+                "-path",
+                "*/target/*",
+                "-not",
+                "-path",
+                "*/.git/*",
+                "-type",
+                "f",
+            ])
+            .output()
+            .await?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.is_empty() {
+            Ok(format!("No files found matching '{}'", pattern))
+        } else if stdout.len() > 4000 {
+            Ok(format!("{}...\n[truncated]", &stdout[..4000]))
+        } else {
+            Ok(stdout.to_string())
+        }
+    }
+
+    /// Copy text to system clipboard.
+    async fn execute_clipboard_copy(&self, text: &str) -> Result<String> {
+        // Try wl-copy (Wayland) first, then xclip (X11)
+        let result = tokio::process::Command::new("wl-copy")
+            .stdin(std::process::Stdio::piped())
+            .spawn();
+
+        if let Ok(mut child) = result {
+            if let Some(mut stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt;
+                stdin.write_all(text.as_bytes()).await.ok();
+                drop(stdin);
+            }
+            let status = child.wait().await?;
+            if status.success() {
+                return Ok(format!("Copied {} chars to clipboard", text.len()));
+            }
+        }
+
+        // Fallback: xclip
+        let result = tokio::process::Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .spawn();
+
+        if let Ok(mut child) = result {
+            if let Some(mut stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt;
+                stdin.write_all(text.as_bytes()).await.ok();
+                drop(stdin);
+            }
+            child.wait().await?;
+            return Ok(format!("Copied {} chars to clipboard (xclip)", text.len()));
+        }
+
+        anyhow::bail!("No clipboard tool available (wl-copy or xclip)")
+    }
+
+    /// Search for files by name pattern in the working directory.
+    async fn execute_file_search_by_content(&self, query: &str) -> Result<String> {
+        info!("Content search: {}", query);
+        let output = tokio::process::Command::new("grep")
+            .args([
+                "-rl",
+                "--include=*.rs",
+                "--include=*.toml",
+                "--include=*.md",
+                "--include=*.json",
+                query,
+                self.work_dir.to_str().unwrap_or("."),
+            ])
+            .output()
+            .await?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.is_empty() {
+            Ok(format!("No files contain '{}'", query))
+        } else {
+            Ok(format!(
+                "Files containing '{}':\n{}",
+                query,
+                &stdout[..stdout.len().min(3000)]
+            ))
+        }
+    }
+
     /// Search the web using Serper API (free tier: 2500/mo).
     async fn execute_web_search(&self, query: &str) -> Result<String> {
         info!("Web search: {}", query);
@@ -897,6 +1005,9 @@ Available action types:
 - ai_query: Ask an AI a question. Use for analysis, summarization, reasoning.
 - browse_url: Fetch a URL and return its text content (HTML stripped). Provide "url".
 - web_search: Search the internet for information. Provide "query". Returns top results.
+- file_search: Search for files by name pattern. Provide "pattern" (e.g., "*.rs", "README*").
+- content_search: Search file contents for a string. Provide "query".
+- clipboard_copy: Copy text to the system clipboard. Provide "text".
 - screen_analyze: Take a screenshot and analyze it with AI. Optionally provide "prompt".
 - screen_capture: Take a screenshot of the current desktop (returns file path).
 - read_file: Read a file from disk. Use absolute paths or paths relative to working directory.
@@ -1021,6 +1132,9 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::SandboxCommand { .. } => RiskLevel::Low,
             StepAction::BrowseUrl { .. } => RiskLevel::Low,
             StepAction::WebSearch { .. } => RiskLevel::Low,
+            StepAction::FileSearch { .. } => RiskLevel::Low,
+            StepAction::ContentSearch { .. } => RiskLevel::Low,
+            StepAction::ClipboardCopy { .. } => RiskLevel::Low,
             StepAction::ScreenAnalyze { .. } => RiskLevel::Low,
             StepAction::WriteFile { .. } => RiskLevel::Medium,
             StepAction::ReadFile { .. } | StepAction::AiQuery { .. } => RiskLevel::Low,
@@ -1054,6 +1168,9 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::SandboxCommand { command } => self.execute_in_sandbox(command).await,
             StepAction::BrowseUrl { url } => self.execute_browse(url).await,
             StepAction::WebSearch { query } => self.execute_web_search(query).await,
+            StepAction::FileSearch { pattern } => self.execute_file_search(pattern).await,
+            StepAction::ContentSearch { query } => self.execute_file_search_by_content(query).await,
+            StepAction::ClipboardCopy { text } => self.execute_clipboard_copy(text).await,
             StepAction::ScreenAnalyze { prompt } => {
                 self.execute_screen_analyze(prompt.as_deref()).await
             }
