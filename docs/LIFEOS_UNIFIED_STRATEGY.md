@@ -720,30 +720,30 @@ lifeos/
 
 **Objetivo:** LifeOS entiende voz, imagenes y puede buscar en internet.
 
-- [ ] Telegram: recibir mensajes de voz -> descargar OGG -> Whisper local transcribe -> LLM router
-- [ ] Telegram: responder con audio -> Piper TTS genera -> convertir a OGG/OPUS -> sendVoice
-- [ ] Telegram: recibir fotos -> descargar -> enviar a LLM con vision (local Qwen3.5-2B o Groq)
-- [ ] Telegram: recibir videos -> extraer frames clave -> vision LLM analiza
-- [ ] Telegram: enviar screenshots del desktop como foto (sendPhoto)
-- [ ] Telegram: funcionar en grupos (responder solo a @bot o /do, ignorar otros mensajes)
-- [ ] Web search: integrar Groq browser_search tool (gratis, alta privacidad, built-in)
-- [ ] Web search: Serper API como fallback (2,500 busquedas/mes gratis, $1/1K despues)
-- [ ] Web search: supervisor puede usar browse_url + search como herramientas de planning
-- [ ] Supervisor: nueva accion `web_search` que busca en internet y devuelve resultados
+- [x] Telegram: recibir mensajes de voz -> descargar OGG -> Whisper local transcribe -> LLM router
+- [x] Telegram: responder con audio -> Piper TTS genera -> convertir a OGG/OPUS -> sendVoice
+- [x] Telegram: recibir fotos -> descargar -> enviar a LLM con vision (local Qwen3.5-2B o Groq)
+- [x] Telegram: recibir videos -> extraer frames clave -> vision LLM analiza
+- [x] Telegram: enviar screenshots del desktop como foto (sendPhoto)
+- [x] Telegram: funcionar en grupos (responder solo a @bot o /do, ignorar otros mensajes)
+- [x] Web search: integrar Groq browser_search tool (gratis, alta privacidad, built-in)
+- [x] Web search: Serper API como fallback (2,500 busquedas/mes gratis, $1/1K despues)
+- [x] Web search: supervisor puede usar browse_url + search como herramientas de planning
+- [x] Supervisor: nueva accion `web_search` que busca en internet y devuelve resultados
 - [ ] **HITO FASE D:** Enviar audio de voz por Telegram, recibir respuesta en audio. Enviar foto y que la describa. Pedir "busca en internet X" y que lo haga.
 
 ### Fase E — Inteligencia Proactiva + Integraciones (mes siguiente)
 
 **Objetivo:** LifeOS anticipa tus necesidades y se conecta a tus herramientas.
 
-- [ ] Notificaciones proactivas: el agente detecta patrones y avisa sin que le preguntes
+- [x] Notificaciones proactivas: el agente detecta patrones y avisa sin que le preguntes
   - Ejemplo: "Llevas 2 horas sin descanso", "Tu disco esta al 85%", "Hay un PR pendiente"
 - [ ] Calendario: conectar con CalDAV/Google Calendar via API
   - "Que tengo hoy?" "Agenda reunion a las 3" "Recuerdame a las 5 llamar a X"
-- [ ] Scheduled tasks: tareas programadas tipo cron
+- [x] Scheduled tasks: tareas programadas tipo cron
   - "Todos los lunes a las 9am revisa el estado del repo y mandame resumen"
 - [ ] Multi-step approval: botones inline en Telegram (Aprobar/Rechazar) para acciones de riesgo medio
-- [ ] Email integration: leer/responder emails via IMAP/SMTP
+- [x] Email integration: leer/responder emails via IMAP/SMTP
   - "Lee mis ultimos 5 emails y resumelos" "Responde a X diciendo que confirmo"
 - [ ] File management: organizar archivos, buscar documentos por contenido
 - [ ] Clipboard integration: copiar/pegar entre apps via supervisor
@@ -757,7 +757,7 @@ lifeos/
 - [ ] Matrix/Element bridge (comunicacion cifrada federada)
 - [ ] Signal bridge (privacidad maxima)
 - [ ] Smart home: conectar con Home Assistant para controlar dispositivos IoT
-- [ ] Health tracking: recordatorios de postura, hidratacion, descanso visual
+- [x] Health tracking: recordatorios de postura, hidratacion, descanso visual
   (ya tenemos presencia/fatiga por webcam — conectarlo a notificaciones)
 - [ ] **HITO FASE F:** Puedes hablar con LifeOS desde Telegram, WhatsApp o Matrix indistintamente.
 
