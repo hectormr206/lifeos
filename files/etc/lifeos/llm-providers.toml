@@ -213,6 +213,19 @@ tier = "premium"
 privacy = "medium"
 
 [[providers]]
+name = "openai-54"
+api_base = "https://api.openai.com"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-5.4"
+api_format = "openai_compatible"
+cost_input_per_m = 2.50
+cost_output_per_m = 10.0
+supports_vision = true
+max_context = 128000
+tier = "premium"
+privacy = "medium"
+
+[[providers]]
 name = "openai-41"
 api_base = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
