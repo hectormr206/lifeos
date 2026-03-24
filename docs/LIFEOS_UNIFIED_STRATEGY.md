@@ -781,6 +781,59 @@ SERPER_API_KEY=          # opcional, 2500 busquedas/mes gratis
 BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 ```
 
+### Fase G — GPU Game Guard + Game Assistant (proxima iteracion)
+
+**Objetivo:** LifeOS libera VRAM automaticamente al jugar y puede ayudarte dentro del juego.
+
+**Datos reales medidos (RTX 5070 Ti, 12 GB VRAM):**
+- Qwen3.5-2B Q4_K_M con 6K contexto: **~2.77 GB VRAM** en reposo
+- Gaming (RE Requiem): 11.8/11.9 GB VRAM (98%) → stuttering por falta de VRAM
+
+**GPU Game Guard (auto-offload a RAM):**
+- [ ] Detectar juego corriendo (GameMode dbus > proceso conocido > VRAM threshold)
+  - Procesos: steam, wine, proton, gamescope, lutris, heroic, mangohud, gamemoded
+  - Tambien: cualquier hijo de Steam/Proton con >500MB VRAM via nvidia-smi pmon
+- [ ] Al detectar juego: `persist_gpu_layers(0)` + restart llama-server → modelo a RAM
+- [ ] Al cerrar juego: `persist_gpu_layers(-1)` + restart llama-server → modelo a GPU
+- [ ] Loop cada 10 segundos en background
+- [ ] Notificacion via event bus: "Juego detectado, LLM en RAM" / "Juego cerrado, LLM en GPU"
+- [ ] Setting `LIFEOS_AI_GAME_GUARD=true` (default ON)
+- [ ] Dashboard toggle en seccion "Sistema & IA"
+- [ ] Instalar paquete `gamemode` en Containerfile
+
+**Game Assistant (Axi como copiloto de juego):**
+- [ ] Detectar nombre del juego automaticamente (proceso, titulo ventana, Steam appid)
+- [ ] Cuando el usuario pide ayuda (voz/texto/Telegram):
+  1. Screenshot **solo de la ventana del juego** (NO de todas las pantallas)
+     - Wayland: usar `grim` con window-id via `wlr-foreign-toplevel` o `cosmic-comp`
+     - Si esta en fullscreen: capturar solo el output/monitor donde esta el juego
+     - Si esta en ventana: capturar solo esa ventana via PID → surface
+     - **NUNCA capturar otros monitores** — pueden tener info privada
+  2. Clasificar con modelo local CPU (rapido, <500ms): "pregunta de gameplay, sensibilidad BAJA"
+  3. Web search: "RE Requiem [area/chapter] safe combination walkthrough"
+  4. Enviar screenshot + resultados web + pregunta a **Cerebras 235B** (ZDR, gratis, 2000 tok/s)
+  5. Responder en <2s via voz (Piper TTS) o texto
+- [ ] Solo usar providers ZDR (Cerebras, Groq) durante gaming — nunca chinos ni sin ZDR
+- [ ] Screenshots de juego solo bajo demanda (el usuario pide), nunca automatico
+- [ ] Privacy filter sigue activo incluso en game screenshots
+- [ ] Audit log de cada screenshot enviado a API
+- [ ] Dashboard toggle "Game Assistant" (default ON)
+
+**Seguridad:**
+- Game mode detectado por proceso real del sistema (/proc/*/comm), no por API manipulable
+- Atacante remoto no puede crear procesos locales para forzar game mode
+- Screenshots solo se envian cuando el usuario pide ayuda (consent explicito)
+- Solo providers ZDR (Cerebras/Groq) — zero data retention
+- Si el screenshot contiene datos sensibles (el privacy filter lo detecta), se bloquea
+
+**Rendimiento durante gaming:**
+| Componente | GPU mode | CPU mode (gaming) |
+|-----------|----------|-------------------|
+| Modelo local | 196-263 tok/s | 12-50 tok/s (solo clasificacion) |
+| Respuestas de gameplay | Local | Cerebras 235B a 2000 tok/s |
+| VRAM liberada | 0 | ~2.77 GB |
+| Latencia respuesta | ~100ms | <2s (Cerebras via internet) |
+
 ### Post Fase F — Lanzamiento Publico
 
 - [ ] Grabar video demo de 2 minutos (Telegram -> LifeOS trabaja -> reporta)
