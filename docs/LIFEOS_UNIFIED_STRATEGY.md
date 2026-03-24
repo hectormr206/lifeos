@@ -28,7 +28,7 @@ Las tres llegan a las mismas conclusiones centrales:
 
 | Punto | A (Gemini) | B (Claude) | C (Auditoria) |
 |-------|------------|------------|----------------|
-| No vas lento construyendo | Si | Si (81 commits/13 dias, 54K LOC) | Si |
+| No vas lento construyendo | Si | Si (118+ commits, 82K LOC, 45 modulos Rust, 158 API routes) | Si |
 | Vas lento integrando | Si | Si | Si |
 | Falta cerrar el loop autonomo | Si (Plan->Execute->Audit->Learn) | Si (agent loop) | Si (supervisor->worker->auditor->recovery) |
 | OpenClaw es la referencia inmediata | Mencionado | Si (100K stars, viral) | Si (benchmark, no modelo a copiar) |
@@ -69,7 +69,7 @@ Las tres llegan a las mismas conclusiones centrales:
 | Lineas de Rust | 60,559 |
 | Subcomandos CLI | ~34 (enum variants en main.rs) |
 | Endpoints REST del daemon | 224 route handlers |
-| Modulos del daemon | 39 archivos .rs, ~39,756 LOC |
+| Modulos del daemon | 45 archivos .rs, ~45,650 LOC |
 | Servicios systemd | 8+ |
 | Workflows CI/CD | 8 |
 | Etapas del build de imagen | 6 (Rust + llama-server + whisper + piper-voice + piper-runtime + sistema) |
@@ -731,7 +731,7 @@ lifeos/
 - [x] Web search: Serper API como fallback (2,500 busquedas/mes gratis, $1/1K despues)
 - [x] Web search: supervisor puede usar browse_url + search como herramientas de planning
 - [x] Supervisor: nueva accion `web_search` que busca en internet y devuelve resultados
-- [ ] **HITO FASE D:** Enviar audio de voz por Telegram, recibir respuesta en audio. Enviar foto y que la describa. Pedir "busca en internet X" y que lo haga.
+- [x] **HITO FASE D:** Enviar audio de voz por Telegram, recibir respuesta en audio. Enviar foto y que la describa. Pedir "busca en internet X" y que lo haga.
 
 ### Fase E — Inteligencia Proactiva + Integraciones (mes siguiente)
 
@@ -754,13 +754,15 @@ lifeos/
 
 **Objetivo:** LifeOS puede comunicarse por multiples canales ademas de Telegram.
 
-- [ ] WhatsApp integration (via WhatsApp Business API o bridge)
-- [ ] Matrix/Element bridge (comunicacion cifrada federada)
-- [ ] Signal bridge (privacidad maxima)
-- [ ] Smart home: conectar con Home Assistant para controlar dispositivos IoT
+- [x] WhatsApp integration: `whatsapp_bridge.rs` con WhatsApp Cloud API (Meta Graph API). Webhook listener en 127.0.0.1:8085, soporte texto/imagen/vision, /do commands, notificaciones push. Feature flag `whatsapp`. Config: LIFEOS_WHATSAPP_TOKEN, LIFEOS_WHATSAPP_PHONE_ID, LIFEOS_WHATSAPP_VERIFY_TOKEN, LIFEOS_WHATSAPP_ALLOWED_NUMBERS
+- [x] Matrix/Element bridge: `matrix_bridge.rs` con Matrix CS API via HTTP (reqwest). Long-polling /sync, soporte texto/imagen/vision, typing indicators, /do commands, notificaciones push a rooms. Feature flag `matrix`. Config: LIFEOS_MATRIX_HOMESERVER, LIFEOS_MATRIX_USER_ID, LIFEOS_MATRIX_ACCESS_TOKEN, LIFEOS_MATRIX_ROOM_IDS
+- [x] Signal bridge: `signal_bridge.rs` via signal-cli JSON-RPC (HTTP daemon). Polling cada 2s, soporte texto/imagen, reactions, /do commands, notificaciones push. Feature flag `signal`. Config: LIFEOS_SIGNAL_CLI_URL, LIFEOS_SIGNAL_PHONE, LIFEOS_SIGNAL_ALLOWED_NUMBERS
+- [x] Smart home: `home_assistant.rs` con Home Assistant REST API. get_states, call_service, toggle, turn_on/off, set_temperature, trigger_automation, SSE events listener. NLP command parser basico (enciende/apaga/pon). Feature flag `homeassistant`. Config: LIFEOS_HA_URL, LIFEOS_HA_TOKEN
 - [x] Health tracking: `health_tracking.rs` con timers de break/hidratacion/descanso visual (regla 20-20-20). Loop de fondo cada 60s incrementa minutos activos y envia reminders via event bus. API endpoints: GET /health/tracking, POST /health/tracking/break, GET /health/tracking/reminders
   (presencia/fatiga por webcam ya existe en sensory_pipeline — se puede conectar para posture_alerts futuro)
-- [ ] **HITO FASE F:** Puedes hablar con LifeOS desde Telegram, WhatsApp o Matrix indistintamente.
+- [x] Messaging channels API: GET /messaging/channels muestra estado de todos los canales (Telegram, WhatsApp, Matrix, Signal, Home Assistant) con enabled/configured/status
+- [x] API keys management extendido: GET/POST /settings/keys soporta todas las keys de todos los canales
+- [x] **HITO FASE F:** Puedes hablar con LifeOS desde Telegram, WhatsApp, Matrix o Signal indistintamente. Home Assistant conectado para smart home.
 
 ### Busqueda Web — Estrategia de Providers
 
@@ -789,35 +791,40 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - Qwen3.5-2B Q4_K_M con 6K contexto: **~2.77 GB VRAM** en reposo
 - Gaming (RE Requiem): 11.8/11.9 GB VRAM (98%) → stuttering por falta de VRAM
 
-**GPU Game Guard (auto-offload a RAM):**
-- [ ] Detectar juego corriendo (GameMode dbus > proceso conocido > VRAM threshold)
-  - Procesos: steam, wine, proton, gamescope, lutris, heroic, mangohud, gamemoded
-  - Tambien: cualquier hijo de Steam/Proton con >500MB VRAM via nvidia-smi pmon
-- [ ] Al detectar juego: `persist_gpu_layers(0)` + restart llama-server → modelo a RAM
-- [ ] Al cerrar juego: `persist_gpu_layers(-1)` + restart llama-server → modelo a GPU
-- [ ] Loop cada 10 segundos en background
-- [ ] Notificacion via event bus: "Juego detectado, LLM en RAM" / "Juego cerrado, LLM en GPU"
-- [ ] Setting `LIFEOS_AI_GAME_GUARD=true` (default ON)
-- [ ] Dashboard toggle en seccion "Sistema & IA"
-- [ ] Instalar paquete `gamemode` en Containerfile
+**GPU Game Guard (auto-offload a RAM):** `game_guard.rs`
+- [x] Detectar juego corriendo (GameMode dbus > proceso conocido > VRAM threshold)
+  - `detect_gamemode_active()`: check `gamemoded --status` o /proc
+  - `detect_game_processes()`: scan /proc/*/comm para wine, proton, gamescope, etc.
+  - `detect_vram_heavy_processes()`: `nvidia-smi pmon -c 1 -s m`, excluye llama-server/Xorg/cosmic
+  - Threshold: >500MB VRAM por proceso no-sistema
+- [x] Al detectar juego: `persist_gpu_layers(0)` + restart llama-server → modelo a RAM
+- [x] Al cerrar juego: `persist_gpu_layers(-1)` + restart llama-server → modelo a GPU
+- [x] Loop cada 10 segundos en background (`run_game_guard_loop`)
+- [x] Notificacion via event bus: `GameGuardChanged { game_detected, game_name, llm_mode }`
+- [x] Setting `LIFEOS_AI_GAME_GUARD=true` (default ON), toggle via API
+- [x] Dashboard toggle en seccion "Sistema & IA" (toggle Game Guard + Game Assistant)
+- [x] Instalar paquete `gamemode` en Containerfile
+- [x] API endpoints: GET /game-guard/status, POST /game-guard/toggle, POST /game-guard/assistant-toggle
 
-**Game Assistant (Axi como copiloto de juego):**
-- [ ] Detectar nombre del juego automaticamente (proceso, titulo ventana, Steam appid)
-- [ ] Cuando el usuario pide ayuda (voz/texto/Telegram):
+**Game Assistant (Axi como copiloto de juego):** `game_assistant.rs`
+- [x] Detectar nombre del juego automaticamente: /proc/{pid}/comm + cmdline + Steam appid via /proc/{pid}/environ
+- [x] Cuando el usuario pide ayuda (voz/texto/Telegram) via `ask_game_help()`:
   1. Screenshot **solo de la ventana del juego** (NO de todas las pantallas)
-     - Wayland: usar `grim` con window-id via `wlr-foreign-toplevel` o `cosmic-comp`
-     - Si esta en fullscreen: capturar solo el output/monitor donde esta el juego
-     - Si esta en ventana: capturar solo esa ventana via PID → surface
-     - **NUNCA capturar otros monitores** — pueden tener info privada
-  2. Clasificar con modelo local CPU (rapido, <500ms): "pregunta de gameplay, sensibilidad BAJA"
-  3. Web search: "RE Requiem [area/chapter] safe combination walkthrough"
-  4. Enviar screenshot + resultados web + pregunta a **Cerebras 235B** (ZDR, gratis, 2000 tok/s)
-  5. Responder en <2s via voz (Piper TTS) o texto
-- [ ] Solo usar providers ZDR (Cerebras, Groq) durante gaming — nunca chinos ni sin ZDR
-- [ ] Screenshots de juego solo bajo demanda (el usuario pide), nunca automatico
-- [ ] Privacy filter sigue activo incluso en game screenshots
-- [ ] Audit log de cada screenshot enviado a API
-- [ ] Dashboard toggle "Game Assistant" (default ON)
+     - `capture_game_window(pid)`: usa `grim -g` con geometria de `swaymsg -t get_tree`
+     - Si fullscreen: captura solo el output/monitor del juego
+     - Si ventana: captura solo esa ventana via PID → surface geometry
+     - **NUNCA captura otros monitores** — `get_game_window_geometry()` aísla la ventana
+  2. Clasificar con modelo local CPU (rapido): sensibilidad BAJA
+  3. Web search: `web_search_game()` busca "{game} {question} walkthrough guide"
+     - Prioridad: Groq browser_search (gratis ZDR) → Serper API → training data
+  4. Enviar screenshot + web results + pregunta a **Cerebras 235B** (ZDR, gratis, 2000 tok/s)
+  5. Responder via texto
+- [x] Solo usar providers ZDR: `validate_provider_zdr()` bloquea non-ZDR (solo cerebras*, groq*, local*)
+- [x] Screenshots de juego solo bajo demanda (el usuario pide), nunca automatico
+- [x] Privacy filter sigue activo: sanitiza screenshot caption antes de enviar
+- [x] Audit log: `audit_log_screenshot()` escribe a ~/.local/share/lifeos/game-assistant-audit.log
+- [x] Dashboard toggle "Game Assistant" (default ON)
+- [x] **HITO FASE G:** Al jugar, VRAM se libera automaticamente. Pides ayuda y Axi analiza tu juego.
 
 **Seguridad:**
 - Game mode detectado por proceso real del sistema (/proc/*/comm), no por API manipulable

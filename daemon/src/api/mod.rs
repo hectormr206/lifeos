@@ -1175,6 +1175,8 @@ pub struct SystemInfo {
     pub cpu_cores: u32,
     pub total_memory_gb: f32,
     pub gpu_model: Option<String>,
+    pub gpu_vram_used_mb: Option<f32>,
+    pub gpu_vram_total_mb: Option<f32>,
     pub lifeos_version: String,
     pub lifeos_build: String,
 }
@@ -1450,6 +1452,12 @@ pub fn create_router(state: ApiState) -> Router {
         // Settings: API keys management
         .route("/settings/keys", get(get_api_keys_status))
         .route("/settings/keys", post(post_api_keys))
+        // Messaging channels status
+        .route("/messaging/channels", get(get_messaging_channels))
+        // Game Guard endpoints
+        .route("/game-guard/status", get(get_game_guard_status))
+        .route("/game-guard/toggle", post(post_game_guard_toggle))
+        .route("/game-guard/assistant-toggle", post(post_game_assistant_toggle))
         // Supervisor endpoints
         .route("/supervisor/status", get(get_supervisor_status))
         .route("/supervisor/metrics", get(get_supervisor_metrics))
@@ -1699,6 +1707,8 @@ async fn get_system_info(
         cpu_cores: num_cpus::get() as u32,
         total_memory_gb: get_total_memory_gb(),
         gpu_model: get_gpu_model(),
+        gpu_vram_used_mb: get_gpu_vram().map(|(u, _)| u),
+        gpu_vram_total_mb: get_gpu_vram().map(|(_, t)| t),
         lifeos_version: env!("CARGO_PKG_VERSION").to_string(),
         lifeos_build: "2024.02.24".to_string(),
     };
@@ -6185,7 +6195,55 @@ fn get_total_memory_gb() -> f32 {
 }
 
 fn get_gpu_model() -> Option<String> {
-    // Try to get GPU info
+    // Try lspci for NVIDIA/AMD/Intel GPU
+    if let Ok(output) = std::process::Command::new("lspci").output() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut fallback: Option<String> = None;
+        for line in text.lines() {
+            if !(line.contains("VGA compatible controller") || line.contains("3D controller")) {
+                continue;
+            }
+            if let Some(idx) = line.find(": ") {
+                let name = line[idx + 2..].trim().to_string();
+                // Prefer dedicated GPU (NVIDIA/AMD) over integrated Intel
+                if name.contains("NVIDIA") || name.contains("AMD") {
+                    return Some(name);
+                }
+                if fallback.is_none() {
+                    fallback = Some(name);
+                }
+            }
+        }
+        if fallback.is_some() {
+            return fallback;
+        }
+    }
+    // Try nvidia-smi as fallback
+    if let Ok(output) = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name", "--format=csv,noheader,nounits"])
+        .output()
+    {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn get_gpu_vram() -> Option<(f32, f32)> {
+    if let Ok(output) = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"])
+        .output()
+    {
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let parts: Vec<&str> = text.split(',').map(|s| s.trim()).collect();
+        if parts.len() == 2 {
+            if let (Ok(used), Ok(total)) = (parts[0].parse::<f32>(), parts[1].parse::<f32>()) {
+                return Some((used, total));
+            }
+        }
+    }
     None
 }
 
@@ -9466,6 +9524,10 @@ async fn get_api_keys_status() -> Result<Json<serde_json::Value>, (StatusCode, J
         "LIFEOS_TELEGRAM_BOT_TOKEN",
         "LIFEOS_TELEGRAM_CHAT_ID",
         "LIFEOS_EMAIL_IMAP_HOST",
+        "LIFEOS_WHATSAPP_TOKEN",
+        "LIFEOS_MATRIX_ACCESS_TOKEN",
+        "LIFEOS_SIGNAL_PHONE",
+        "LIFEOS_HA_URL",
     ];
 
     let status: serde_json::Map<String, serde_json::Value> = keys
@@ -9493,6 +9555,19 @@ async fn post_api_keys(
         "LIFEOS_EMAIL_IMAP_USER",
         "LIFEOS_EMAIL_IMAP_PASS",
         "LIFEOS_EMAIL_SMTP_HOST",
+        "LIFEOS_WHATSAPP_TOKEN",
+        "LIFEOS_WHATSAPP_PHONE_ID",
+        "LIFEOS_WHATSAPP_VERIFY_TOKEN",
+        "LIFEOS_WHATSAPP_ALLOWED_NUMBERS",
+        "LIFEOS_MATRIX_HOMESERVER",
+        "LIFEOS_MATRIX_USER_ID",
+        "LIFEOS_MATRIX_ACCESS_TOKEN",
+        "LIFEOS_MATRIX_ROOM_IDS",
+        "LIFEOS_SIGNAL_CLI_URL",
+        "LIFEOS_SIGNAL_PHONE",
+        "LIFEOS_SIGNAL_ALLOWED_NUMBERS",
+        "LIFEOS_HA_URL",
+        "LIFEOS_HA_TOKEN",
     ];
 
     // Determine writable env file path
@@ -9563,6 +9638,88 @@ async fn post_api_keys(
         "path": env_path.display().to_string(),
         "note": "Keys saved. Restart the daemon (systemctl --user restart lifeosd) for Telegram to take effect."
     })))
+}
+
+// ==================== GAME GUARD ENDPOINTS ====================
+
+async fn get_game_guard_status() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // Read state from env — the game guard loop manages the actual state
+    let enabled = std::env::var("LIFEOS_AI_GAME_GUARD")
+        .map(|v| v != "false" && v != "0")
+        .unwrap_or(true);
+    let assistant_enabled = std::env::var("LIFEOS_AI_GAME_ASSISTANT")
+        .map(|v| v != "false" && v != "0")
+        .unwrap_or(true);
+    let gpu_layers = std::env::var("LIFEOS_AI_GPU_LAYERS")
+        .unwrap_or_else(|_| "-1".into());
+    let llm_mode = if gpu_layers == "0" { "cpu" } else { "gpu" };
+
+    Ok(Json(serde_json::json!({
+        "guard_enabled": enabled,
+        "assistant_enabled": assistant_enabled,
+        "llm_mode": llm_mode,
+        "gpu_layers": gpu_layers,
+    })))
+}
+
+async fn post_game_guard_toggle(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let enabled = body["enabled"].as_bool().unwrap_or(true);
+    unsafe { std::env::set_var("LIFEOS_AI_GAME_GUARD", if enabled { "true" } else { "false" }) };
+    Ok(Json(serde_json::json!({ "guard_enabled": enabled })))
+}
+
+async fn post_game_assistant_toggle(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let enabled = body["enabled"].as_bool().unwrap_or(true);
+    unsafe { std::env::set_var("LIFEOS_AI_GAME_ASSISTANT", if enabled { "true" } else { "false" }) };
+    Ok(Json(serde_json::json!({ "assistant_enabled": enabled })))
+}
+
+// ==================== MESSAGING CHANNELS ====================
+
+async fn get_messaging_channels() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let channels = vec![
+        serde_json::json!({
+            "id": "telegram",
+            "name": "Telegram",
+            "enabled": cfg!(feature = "telegram"),
+            "configured": std::env::var("LIFEOS_TELEGRAM_BOT_TOKEN").map(|v| !v.is_empty()).unwrap_or(false),
+            "status": if std::env::var("LIFEOS_TELEGRAM_BOT_TOKEN").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
+        }),
+        serde_json::json!({
+            "id": "whatsapp",
+            "name": "WhatsApp",
+            "enabled": cfg!(feature = "whatsapp"),
+            "configured": std::env::var("LIFEOS_WHATSAPP_TOKEN").map(|v| !v.is_empty()).unwrap_or(false),
+            "status": if std::env::var("LIFEOS_WHATSAPP_TOKEN").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
+        }),
+        serde_json::json!({
+            "id": "matrix",
+            "name": "Matrix/Element",
+            "enabled": cfg!(feature = "matrix"),
+            "configured": std::env::var("LIFEOS_MATRIX_ACCESS_TOKEN").map(|v| !v.is_empty()).unwrap_or(false),
+            "status": if std::env::var("LIFEOS_MATRIX_ACCESS_TOKEN").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
+        }),
+        serde_json::json!({
+            "id": "signal",
+            "name": "Signal",
+            "enabled": cfg!(feature = "signal"),
+            "configured": std::env::var("LIFEOS_SIGNAL_PHONE").map(|v| !v.is_empty()).unwrap_or(false),
+            "status": if std::env::var("LIFEOS_SIGNAL_PHONE").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
+        }),
+        serde_json::json!({
+            "id": "homeassistant",
+            "name": "Home Assistant",
+            "enabled": cfg!(feature = "homeassistant"),
+            "configured": std::env::var("LIFEOS_HA_URL").map(|v| !v.is_empty()).unwrap_or(false),
+            "status": if std::env::var("LIFEOS_HA_URL").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
+        }),
+    ];
+
+    Ok(Json(serde_json::json!({ "channels": channels })))
 }
 
 // ==================== CLIPBOARD ENDPOINT ====================

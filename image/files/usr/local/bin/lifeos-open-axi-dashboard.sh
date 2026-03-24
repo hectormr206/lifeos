@@ -63,12 +63,12 @@ consecutive_failures=0
 while [ "${i}" -lt 45 ]; do
     if curl -fsS "${bootstrap_url}" >/dev/null 2>&1; then
         [ "${once_per_version}" -eq 1 ] && printf '%s' "${version_key}" > "${marker_file}"
-        if command -v xdg-open >/dev/null 2>&1; then
-            xdg-open "${dashboard_url}" >/dev/null 2>&1 &
+        if command -v firefox >/dev/null 2>&1; then
+            firefox -P lifeos.default "${dashboard_url}" >/dev/null 2>&1 &
             exit 0
         fi
-        if command -v gio >/dev/null 2>&1; then
-            gio open "${dashboard_url}" >/dev/null 2>&1 &
+        if command -v xdg-open >/dev/null 2>&1; then
+            xdg-open "${dashboard_url}" >/dev/null 2>&1 &
             exit 0
         fi
         exit 1

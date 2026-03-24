@@ -57,4 +57,9 @@ pub enum DaemonEvent {
     MiniWidgetVisibilityChanged {
         visible: bool,
     },
+    GameGuardChanged {
+        game_detected: bool,
+        game_name: Option<String>,
+        llm_mode: String,
+    },
 }

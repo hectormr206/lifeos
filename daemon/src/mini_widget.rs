@@ -231,8 +231,8 @@ fn build_ui(
         if dragged {
             return;
         }
-        let _ = std::process::Command::new("xdg-open")
-            .arg(&url_clone)
+        let _ = std::process::Command::new("firefox")
+            .args(["-P", "lifeos.default", url_clone.as_str()])
             .spawn();
     });
     shell.add_controller(click);
@@ -278,8 +278,8 @@ fn build_ui(
     right_click.set_button(3);
     let url_clone2 = dashboard_url;
     right_click.connect_released(move |_, _, _, _| {
-        let _ = std::process::Command::new("xdg-open")
-            .arg(&url_clone2)
+        let _ = std::process::Command::new("firefox")
+            .args(["-P", "lifeos.default", url_clone2.as_str()])
             .spawn();
     });
     shell.add_controller(right_click);

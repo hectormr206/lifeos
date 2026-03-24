@@ -1179,26 +1179,27 @@ async function refreshResources() {
 
 async function refreshGpu() {
   try {
-    // Try system info endpoint for GPU details
     const res = await fetch(`${API}/system/info`, { headers: apiHeaders() });
     if (!res.ok) return;
     const d = await res.json();
     const gpuName = d.gpu_model || d.gpu_name || '';
     if (gpuName && gpuName !== 'N/A' && gpuName !== '') {
-      const gpuEl = $('#res-gpu');
-      if (gpuEl) gpuEl.textContent = gpuName;
-      // Try sensory status for VRAM usage from cache to save an API call
-      const sensory = diagCache.sensory;
-      if (sensory && sensory.gpu) {
-        const gpuUsed = sensory.gpu.memory_used_mb || 0;
-        const gpuTotal = sensory.gpu.memory_total_mb || 0;
-        const gpuPct = gpuTotal > 0 ? (gpuUsed / gpuTotal) * 100 : 0;
+      const gpuUsed = d.gpu_vram_used_mb || 0;
+      const gpuTotal = d.gpu_vram_total_mb || 0;
+      if (gpuTotal > 0) {
+        const gpuPct = (gpuUsed / gpuTotal) * 100;
         setBar('res-gpu-bar', 'res-gpu', gpuPct,
           `${(gpuUsed/1024).toFixed(1)} / ${(gpuTotal/1024).toFixed(1)} GB (${gpuPct.toFixed(0)}%)`);
+      } else {
+        const gpuEl = $('#res-gpu');
+        if (gpuEl) gpuEl.textContent = gpuName;
       }
+      // Also update AI Local section
+      const aiGpu = $('#ai-gpu-name');
+      if (aiGpu) aiGpu.textContent = gpuName;
     } else {
       const gpuEl = $('#res-gpu');
-      if (gpuEl) gpuEl.textContent = 'Sin GPU detectada';
+      if (gpuEl) gpuEl.textContent = 'CPU only';
     }
   } catch (e) { /* silent */ }
 }
@@ -1610,7 +1611,49 @@ setInterval(() => {
   refreshMemory();
   refreshAiStatus();
   refreshKeyStatus();
+  refreshGameGuard();
 }, 30000);
+
+// --- Game Guard ---
+async function refreshGameGuard() {
+  try {
+    const res = await fetch(`${API}/game-guard/status`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const d = await res.json();
+    const modeEl = $('#gg-llm-mode');
+    const gameEl = $('#gg-game-name');
+    const guardToggle = $('#toggle-game-guard');
+    const assistToggle = $('#toggle-game-assistant');
+    const guardStatus = $('#gg-guard-status');
+    const assistStatus = $('#gg-assistant-status');
+
+    if (modeEl) modeEl.textContent = d.llm_mode === 'cpu' ? 'CPU (RAM)' : 'GPU (VRAM)';
+    if (gameEl) gameEl.textContent = d.game_name || 'Ninguno';
+    if (guardToggle) guardToggle.checked = d.guard_enabled;
+    if (assistToggle) assistToggle.checked = d.assistant_enabled;
+    if (guardStatus) guardStatus.textContent = d.guard_enabled ? 'Activo' : 'Desactivado';
+    if (assistStatus) assistStatus.textContent = d.assistant_enabled ? 'Activo' : 'Desactivado';
+  } catch (e) { /* silent */ }
+}
+
+// Game Guard toggles
+document.getElementById('toggle-game-guard')?.addEventListener('change', async (e) => {
+  try {
+    await fetch(`${API}/game-guard/toggle`, {
+      method: 'POST', headers: apiHeaders(),
+      body: JSON.stringify({ enabled: e.target.checked })
+    });
+  } catch (err) { /* silent */ }
+});
+
+document.getElementById('toggle-game-assistant')?.addEventListener('change', async (e) => {
+  try {
+    await fetch(`${API}/game-guard/assistant-toggle`, {
+      method: 'POST', headers: apiHeaders(),
+      body: JSON.stringify({ enabled: e.target.checked })
+    });
+  } catch (err) { /* silent */ }
+});
 
 // --- Tabs Initialization ---
 function initTabs() {
@@ -1624,7 +1667,7 @@ function initTabs() {
     { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['hero-panel', 'orb-section', 'controls-section', 'status-section', 'chat-section'] },
     { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'metrics-section', 'sched-section', 'feed-section'] },
     { id: 'tab-memory', icon: '&#128450;', label: 'Memoria', keywords: ['memory-section'] },
-    { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'localai-section', 'models-section', 'providers-section', 'settings-section'] }
+    { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'settings-section'] }
   ];
 
   const tabContents = document.createElement('div');
@@ -1680,5 +1723,6 @@ function initTabs() {
   refreshScheduledTasks();
   refreshAiStatus();
   refreshKeyStatus();
+  refreshGameGuard();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();

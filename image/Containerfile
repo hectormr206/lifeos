@@ -213,7 +213,7 @@ RUN dnf -y install --skip-unavailable \
     pipewire wireplumber pipewire-alsa pipewire-pulseaudio pipewire-utils \
     alsa-utils alsa-sof-firmware alsa-ucm \
     v4l-utils libcamera \
-    grim wl-clipboard \
+    grim wl-clipboard gamemode \
     tesseract tesseract-langpack-eng tesseract-langpack-spa \
     espeak-ng \
     vulkan-loader \

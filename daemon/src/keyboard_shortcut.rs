@@ -86,7 +86,7 @@ impl ShortcutManager {
     async fn create_shortcut_entry(&self, shortcut: &Shortcut) -> Result<()> {
         let exec_cmd = match &shortcut.action {
             ShortcutAction::OpenDashboard => {
-                format!("xdg-open {}", self.dashboard_url)
+                format!("firefox -P lifeos.default {}", self.dashboard_url)
             }
             ShortcutAction::CaptureScreen => "life voice describe-screen".to_string(),
             ShortcutAction::Execute(cmd) => cmd.clone(),
@@ -150,8 +150,8 @@ impl ShortcutManager {
 
         match &shortcut.action {
             ShortcutAction::OpenDashboard => {
-                Command::new("xdg-open")
-                    .arg(&self.dashboard_url)
+                Command::new("firefox")
+                    .args(["-P", "lifeos.default", &self.dashboard_url])
                     .spawn()
                     .with_context(|| "Failed to open dashboard")?;
             }

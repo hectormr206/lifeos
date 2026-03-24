@@ -61,6 +61,12 @@ mod supervisor;
 mod system;
 mod task_queue;
 mod telegram_bridge;
+mod whatsapp_bridge;
+mod matrix_bridge;
+mod signal_bridge;
+mod home_assistant;
+mod game_guard;
+mod game_assistant;
 mod telemetry;
 mod tuf;
 mod update_scheduler;
@@ -274,6 +280,27 @@ LIFEOS_EMAIL_IMAP_HOST=
 LIFEOS_EMAIL_IMAP_USER=
 LIFEOS_EMAIL_IMAP_PASS=
 LIFEOS_EMAIL_SMTP_HOST=
+
+# WhatsApp Cloud API (opcional)
+LIFEOS_WHATSAPP_TOKEN=
+LIFEOS_WHATSAPP_PHONE_ID=
+LIFEOS_WHATSAPP_VERIFY_TOKEN=
+LIFEOS_WHATSAPP_ALLOWED_NUMBERS=
+
+# Matrix/Element (opcional)
+LIFEOS_MATRIX_HOMESERVER=
+LIFEOS_MATRIX_USER_ID=
+LIFEOS_MATRIX_ACCESS_TOKEN=
+LIFEOS_MATRIX_ROOM_IDS=
+
+# Signal (opcional, requiere signal-cli daemon)
+LIFEOS_SIGNAL_CLI_URL=http://127.0.0.1:8086
+LIFEOS_SIGNAL_PHONE=
+LIFEOS_SIGNAL_ALLOWED_NUMBERS=
+
+# Home Assistant (opcional)
+LIFEOS_HA_URL=
+LIFEOS_HA_TOKEN=
 ";
         match std::fs::write(system_env, template) {
             Ok(()) => {
@@ -813,6 +840,16 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Start GPU Game Guard loop (auto-offload LLM to RAM when gaming)
+    let game_guard = std::sync::Arc::new(tokio::sync::RwLock::new(
+        game_guard::GameGuard::new(game_guard::GameGuardConfig::default()),
+    ));
+    let game_guard_clone = game_guard.clone();
+    let game_guard_event_tx = state.event_bus.clone();
+    let game_guard_handle = tokio::spawn(async move {
+        game_guard::run_game_guard_loop(game_guard_clone, game_guard_event_tx).await;
+    });
+
     // Start Telegram bridge if configured
     #[cfg(feature = "telegram")]
     let telegram_handle = {
@@ -830,6 +867,60 @@ async fn main() -> anyhow::Result<()> {
     };
     #[cfg(not(feature = "telegram"))]
     let telegram_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Start WhatsApp bridge if configured
+    #[cfg(feature = "whatsapp")]
+    let whatsapp_handle = {
+        if let Some(wa_config) = whatsapp_bridge::WhatsAppConfig::from_env() {
+            let tq = state.task_queue.clone();
+            let router = state.llm_router.clone();
+            let notify_rx = state.supervisor.subscribe();
+            Some(tokio::spawn(async move {
+                whatsapp_bridge::run_whatsapp_bridge(wa_config, tq, router, notify_rx).await;
+            }))
+        } else {
+            info!("WhatsApp bridge: LIFEOS_WHATSAPP_TOKEN not set, skipping");
+            None
+        }
+    };
+    #[cfg(not(feature = "whatsapp"))]
+    let whatsapp_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Start Matrix bridge if configured
+    #[cfg(feature = "matrix")]
+    let matrix_handle = {
+        if let Some(mx_config) = matrix_bridge::MatrixConfig::from_env() {
+            let tq = state.task_queue.clone();
+            let router = state.llm_router.clone();
+            let notify_rx = state.supervisor.subscribe();
+            Some(tokio::spawn(async move {
+                matrix_bridge::run_matrix_bridge(mx_config, tq, router, notify_rx).await;
+            }))
+        } else {
+            info!("Matrix bridge: LIFEOS_MATRIX_ACCESS_TOKEN not set, skipping");
+            None
+        }
+    };
+    #[cfg(not(feature = "matrix"))]
+    let matrix_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Start Signal bridge if configured
+    #[cfg(feature = "signal")]
+    let signal_handle = {
+        if let Some(sig_config) = signal_bridge::SignalConfig::from_env() {
+            let tq = state.task_queue.clone();
+            let router = state.llm_router.clone();
+            let notify_rx = state.supervisor.subscribe();
+            Some(tokio::spawn(async move {
+                signal_bridge::run_signal_bridge(sig_config, tq, router, notify_rx).await;
+            }))
+        } else {
+            info!("Signal bridge: LIFEOS_SIGNAL_PHONE not set, skipping");
+            None
+        }
+    };
+    #[cfg(not(feature = "signal"))]
+    let signal_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Wait for shutdown signal
     info!("Daemon running. Press Ctrl+C to stop.");
@@ -856,7 +947,17 @@ async fn main() -> anyhow::Result<()> {
     sensory_handle.abort();
     state.supervisor.stop();
     supervisor_handle.abort();
+    game_guard_handle.abort();
     if let Some(h) = telegram_handle {
+        h.abort();
+    }
+    if let Some(h) = whatsapp_handle {
+        h.abort();
+    }
+    if let Some(h) = matrix_handle {
+        h.abort();
+    }
+    if let Some(h) = signal_handle {
         h.abort();
     }
     dbus_handle.abort();

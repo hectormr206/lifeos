@@ -919,6 +919,11 @@ section { scroll-margin-top: 92px; }
 .resource-fill-gpu { background: var(--success); }
 .resource-value { font-size: 0.8rem; color: var(--text-muted); }
 
+/* === Game Guard Section === */
+.gameguard-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
+.gameguard-grid { display: flex; flex-direction: column; gap: 1.5rem; }
+.gameguard-toggles { display: flex; flex-direction: column; gap: 1rem; }
+
 /* === Providers Section === */
 .providers-section { padding: 1.5rem; background: var(--bg-card); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12); margin-bottom: 1.5rem; }
 .providers-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }

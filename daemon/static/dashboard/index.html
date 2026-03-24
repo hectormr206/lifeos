@@ -401,6 +401,37 @@
       </div>
     </section>
 
+    <!-- Game Guard -->
+    <section class="gameguard-section">
+      <h2>GPU Game Guard</h2>
+      <div class="gameguard-grid">
+        <div class="gameguard-status">
+          <div class="hero-stats">
+            <div class="hero-stat"><span>LLM Mode</span><strong id="gg-llm-mode">—</strong></div>
+            <div class="hero-stat"><span>Juego</span><strong id="gg-game-name">Ninguno</strong></div>
+          </div>
+        </div>
+        <div class="gameguard-toggles">
+          <div class="setting-item">
+            <label for="toggle-game-guard">Game Guard (auto-offload a RAM)</label>
+            <div class="inline-setting-row">
+              <label class="toggle"><input type="checkbox" id="toggle-game-guard" checked><span class="slider"></span></label>
+              <span id="gg-guard-status" class="setting-inline-value">Activo</span>
+            </div>
+            <p class="setting-hint">Libera VRAM automaticamente cuando detecta un juego.</p>
+          </div>
+          <div class="setting-item">
+            <label for="toggle-game-assistant">Game Assistant (Axi como copiloto)</label>
+            <div class="inline-setting-row">
+              <label class="toggle"><input type="checkbox" id="toggle-game-assistant" checked><span class="slider"></span></label>
+              <span id="gg-assistant-status" class="setting-inline-value">Activo</span>
+            </div>
+            <p class="setting-hint">Pide ayuda durante el juego via voz o Telegram. Solo usa providers ZDR.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Agent Metrics -->
     <section class="metrics-section">
       <h2>Metricas de Agentes</h2>
