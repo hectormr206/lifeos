@@ -716,7 +716,71 @@ lifeos/
 - [x] Metricas por agente: per-role tracking (completed/failed/avg_duration), GET /api/v1/supervisor/metrics
 - [x] Runbooks automaticos: pattern matching de errores con sugerencias de recuperacion en Telegram
 
-### Post Fase C — Lanzamiento Publico
+### Fase D — Telegram Multimedia + Web Search (proxima iteracion)
+
+**Objetivo:** LifeOS entiende voz, imagenes y puede buscar en internet.
+
+- [ ] Telegram: recibir mensajes de voz -> descargar OGG -> Whisper local transcribe -> LLM router
+- [ ] Telegram: responder con audio -> Piper TTS genera -> convertir a OGG/OPUS -> sendVoice
+- [ ] Telegram: recibir fotos -> descargar -> enviar a LLM con vision (local Qwen3.5-2B o Groq)
+- [ ] Telegram: recibir videos -> extraer frames clave -> vision LLM analiza
+- [ ] Telegram: enviar screenshots del desktop como foto (sendPhoto)
+- [ ] Telegram: funcionar en grupos (responder solo a @bot o /do, ignorar otros mensajes)
+- [ ] Web search: integrar Groq browser_search tool (gratis, alta privacidad, built-in)
+- [ ] Web search: Serper API como fallback (2,500 busquedas/mes gratis, $1/1K despues)
+- [ ] Web search: supervisor puede usar browse_url + search como herramientas de planning
+- [ ] Supervisor: nueva accion `web_search` que busca en internet y devuelve resultados
+- [ ] **HITO FASE D:** Enviar audio de voz por Telegram, recibir respuesta en audio. Enviar foto y que la describa. Pedir "busca en internet X" y que lo haga.
+
+### Fase E — Inteligencia Proactiva + Integraciones (mes siguiente)
+
+**Objetivo:** LifeOS anticipa tus necesidades y se conecta a tus herramientas.
+
+- [ ] Notificaciones proactivas: el agente detecta patrones y avisa sin que le preguntes
+  - Ejemplo: "Llevas 2 horas sin descanso", "Tu disco esta al 85%", "Hay un PR pendiente"
+- [ ] Calendario: conectar con CalDAV/Google Calendar via API
+  - "Que tengo hoy?" "Agenda reunion a las 3" "Recuerdame a las 5 llamar a X"
+- [ ] Scheduled tasks: tareas programadas tipo cron
+  - "Todos los lunes a las 9am revisa el estado del repo y mandame resumen"
+- [ ] Multi-step approval: botones inline en Telegram (Aprobar/Rechazar) para acciones de riesgo medio
+- [ ] Email integration: leer/responder emails via IMAP/SMTP
+  - "Lee mis ultimos 5 emails y resumelos" "Responde a X diciendo que confirmo"
+- [ ] File management: organizar archivos, buscar documentos por contenido
+- [ ] Clipboard integration: copiar/pegar entre apps via supervisor
+- [ ] **HITO FASE E:** "Que tengo en mi agenda hoy?" funciona. Tareas programadas se ejecutan solas.
+
+### Fase F — Comunicacion Multi-Canal (futuro cercano)
+
+**Objetivo:** LifeOS puede comunicarse por multiples canales ademas de Telegram.
+
+- [ ] WhatsApp integration (via WhatsApp Business API o bridge)
+- [ ] Matrix/Element bridge (comunicacion cifrada federada)
+- [ ] Signal bridge (privacidad maxima)
+- [ ] Smart home: conectar con Home Assistant para controlar dispositivos IoT
+- [ ] Health tracking: recordatorios de postura, hidratacion, descanso visual
+  (ya tenemos presencia/fatiga por webcam — conectarlo a notificaciones)
+- [ ] **HITO FASE F:** Puedes hablar con LifeOS desde Telegram, WhatsApp o Matrix indistintamente.
+
+### Busqueda Web — Estrategia de Providers
+
+El modelo local NO puede buscar en internet por si solo. Necesita un tool/API.
+
+**Orden de prioridad:**
+
+| # | Provider | Privacidad | Costo | Notas |
+|---|----------|-----------|-------|-------|
+| 1 | **Groq browser_search** (built-in) | Alta (ZDR) | Gratis | Ya integrado en Groq, solo activar tool_use |
+| 2 | **Serper API** | Media | 2,500/mes gratis, $1/1K | Google Search results, rapido (1-2s) |
+| 3 | **Brave Search API** | Media | $3/1K | Indice independiente (35B paginas), no depende de Google |
+| 4 | **browse_url** (ya implementado) | Maxima | Gratis | Para leer paginas especificas, no para buscar |
+
+Configurar en `llm-providers.env`:
+```
+SERPER_API_KEY=          # opcional, 2500 busquedas/mes gratis
+BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
+```
+
+### Post Fase F — Lanzamiento Publico
 
 - [ ] Grabar video demo de 2 minutos (Telegram -> LifeOS trabaja -> reporta)
 - [ ] Actualizar README.md para publico
