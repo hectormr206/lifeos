@@ -80,6 +80,10 @@ pub enum StepAction {
     BrowseUrl {
         url: String,
     },
+    /// Search the web using Serper API and return results.
+    WebSearch {
+        query: String,
+    },
     /// Take a screenshot, analyze it with local LLM, and return description.
     ScreenAnalyze {
         prompt: Option<String>,
@@ -693,6 +697,52 @@ impl Supervisor {
         }
     }
 
+    /// Search the web using Serper API (free tier: 2500/mo).
+    async fn execute_web_search(&self, query: &str) -> Result<String> {
+        info!("Web search: {}", query);
+
+        let serper_key = std::env::var("SERPER_API_KEY").unwrap_or_default();
+
+        if !serper_key.is_empty() {
+            let client = reqwest::Client::new();
+            let res = client
+                .post("https://google.serper.dev/search")
+                .header("X-API-KEY", &serper_key)
+                .json(&serde_json::json!({"q": query, "num": 5}))
+                .send()
+                .await?;
+
+            if res.status().is_success() {
+                let body: serde_json::Value = res.json().await?;
+                let results = body["organic"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .take(5)
+                            .map(|item| {
+                                format!(
+                                    "- {} ({})\n  {}",
+                                    item["title"].as_str().unwrap_or(""),
+                                    item["link"].as_str().unwrap_or(""),
+                                    item["snippet"].as_str().unwrap_or("")
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_else(|| "No results".into());
+                return Ok(format!("Search results for '{}':\n{}", query, results));
+            }
+        }
+
+        // Fallback: ask LLM (it may use Groq's built-in search if available)
+        self.execute_ai_query(&format!(
+            "Search the internet for: {}. Provide the most relevant and current information.",
+            query
+        ))
+        .await
+    }
+
     /// Execute a command inside a temporary git worktree (isolated sandbox).
     /// The worktree is created, the command runs in it, and then it's cleaned up.
     async fn execute_in_sandbox(&self, command: &str) -> Result<String> {
@@ -805,6 +855,7 @@ Available action types:
 - sandbox_command: Run a command in an isolated git worktree. Use for code changes that might break things.
 - ai_query: Ask an AI a question. Use for analysis, summarization, reasoning.
 - browse_url: Fetch a URL and return its text content (HTML stripped). Provide "url".
+- web_search: Search the internet for information. Provide "query". Returns top results.
 - screen_analyze: Take a screenshot and analyze it with AI. Optionally provide "prompt".
 - screen_capture: Take a screenshot of the current desktop (returns file path).
 - read_file: Read a file from disk. Use absolute paths or paths relative to working directory.
@@ -928,6 +979,7 @@ Always end with a "respond" step summarizing what was done."#,
             }
             StepAction::SandboxCommand { .. } => RiskLevel::Low,
             StepAction::BrowseUrl { .. } => RiskLevel::Low,
+            StepAction::WebSearch { .. } => RiskLevel::Low,
             StepAction::ScreenAnalyze { .. } => RiskLevel::Low,
             StepAction::WriteFile { .. } => RiskLevel::Medium,
             StepAction::ReadFile { .. } | StepAction::AiQuery { .. } => RiskLevel::Low,
@@ -960,6 +1012,7 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::ShellCommand { command } => self.execute_shell(command).await,
             StepAction::SandboxCommand { command } => self.execute_in_sandbox(command).await,
             StepAction::BrowseUrl { url } => self.execute_browse(url).await,
+            StepAction::WebSearch { query } => self.execute_web_search(query).await,
             StepAction::ScreenAnalyze { prompt } => {
                 self.execute_screen_analyze(prompt.as_deref()).await
             }

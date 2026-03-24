@@ -43,6 +43,8 @@ mod permissions;
 #[cfg(feature = "dbus")]
 mod portal;
 mod privacy_filter;
+#[allow(dead_code)]
+mod scheduled_tasks;
 mod screen_capture;
 mod sensory_pipeline;
 mod supervisor;
