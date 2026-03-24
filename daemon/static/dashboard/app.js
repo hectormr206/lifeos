@@ -1147,16 +1147,18 @@ async function refreshGpu() {
     const res = await fetch(`${API}/system/info`, { headers: apiHeaders() });
     if (!res.ok) return;
     const d = await res.json();
-    if (d.gpu_name && d.gpu_name !== 'N/A' && d.gpu_name !== '') {
-      const lbl = `${d.gpu_name}`;
+    const gpuName = d.gpu_model || d.gpu_name || '';
+    if (gpuName && gpuName !== 'N/A' && gpuName !== '') {
       const gpuEl = $('#res-gpu');
-      if (gpuEl) gpuEl.textContent = lbl;
-      // Try nvidia-smi for VRAM usage
+      if (gpuEl) gpuEl.textContent = gpuName;
+      // Try sensory status for VRAM usage
       const sensory = await fetch(`${API}/sensory/status`, { headers: apiHeaders() }).then(r => r.ok ? r.json() : null).catch(() => null);
       if (sensory && sensory.gpu) {
-        const gpuPct = sensory.gpu.memory_used_percent || 0;
+        const gpuUsed = sensory.gpu.memory_used_mb || 0;
+        const gpuTotal = sensory.gpu.memory_total_mb || 0;
+        const gpuPct = gpuTotal > 0 ? (gpuUsed / gpuTotal) * 100 : 0;
         setBar('res-gpu-bar', 'res-gpu', gpuPct,
-          `${d.gpu_name} — ${gpuPct.toFixed(0)}% VRAM`);
+          `${(gpuUsed/1024).toFixed(1)} / ${(gpuTotal/1024).toFixed(1)} GB (${gpuPct.toFixed(0)}%)`);
       }
     } else {
       const gpuEl = $('#res-gpu');
