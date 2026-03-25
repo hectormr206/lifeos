@@ -172,9 +172,18 @@ impl LlmRouter {
             );
         }
 
+        info!(
+            "[llm_router] {} candidates for complexity={:?} sensitivity={:?}: {}",
+            candidates.len(),
+            complexity,
+            sensitivity,
+            candidates.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+        );
+
         let mut last_error = None;
 
         for provider in &candidates {
+            info!("[llm_router] trying provider: {}", provider.name);
             let start = Instant::now();
             match self.call_provider(provider, request).await {
                 Ok(mut response) => {
@@ -349,6 +358,58 @@ impl LlmRouter {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+
+            // Auto-discovery: if model not found, try to find the correct model name
+            if (status.as_u16() == 404 || status.as_u16() == 400)
+                && (body.contains("model_not_found")
+                    || body.contains("does not exist")
+                    || body.contains("not found"))
+            {
+                warn!(
+                    "[llm_router] Model '{}' not found on {}. Attempting auto-discovery...",
+                    provider.model, provider.name
+                );
+                if let Some(new_model) =
+                    self.discover_replacement_model(provider, api_key).await
+                {
+                    warn!(
+                        "[llm_router] Found replacement model: '{}' → '{}'. \
+                         Update your config or dashboard. Using fallback for this request.",
+                        provider.model, new_model
+                    );
+                    // Retry with discovered model
+                    let mut new_payload = payload.clone();
+                    new_payload["model"] = serde_json::Value::String(new_model.clone());
+                    let mut retry_req = self.http.post(&url).json(&new_payload);
+                    if !api_key.is_empty() {
+                        retry_req = retry_req.bearer_auth(api_key);
+                    }
+                    let retry_resp = retry_req.send().await?;
+                    if retry_resp.status().is_success() {
+                        let retry_body: serde_json::Value = retry_resp.json().await?;
+                        let msg = &retry_body["choices"][0]["message"];
+                        let raw_text = msg["content"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| msg["reasoning_content"].as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let text = strip_think_tags(&raw_text);
+                        let tokens_used = retry_body["usage"]["total_tokens"]
+                            .as_u64()
+                            .and_then(|t| u32::try_from(t).ok());
+                        return Ok(RouterResponse {
+                            text,
+                            provider: format!("{} (auto-discovered: {})", provider.name, new_model),
+                            model: new_model,
+                            tokens_used,
+                            latency_ms: 0,
+                            cached: false,
+                        });
+                    }
+                }
+            }
+
             bail!(
                 "{} returned {}: {}",
                 provider.name,
@@ -361,12 +422,15 @@ impl LlmRouter {
 
         // Some models (Qwen3.5 with --jinja) put output in reasoning_content instead of content
         let msg = &body["choices"][0]["message"];
-        let text = msg["content"]
+        let raw_text = msg["content"]
             .as_str()
             .filter(|s| !s.is_empty())
             .or_else(|| msg["reasoning_content"].as_str())
             .unwrap_or("")
             .to_string();
+
+        // Strip <think>...</think> blocks from Qwen3/DeepSeek reasoning models
+        let text = strip_think_tags(&raw_text);
 
         let tokens_used = body["usage"]["total_tokens"]
             .as_u64()
@@ -807,4 +871,71 @@ fn default_providers() -> Vec<ProviderConfig> {
             privacy: String::new(),
         },
     ]
+}
+
+impl LlmRouter {
+    /// Try to discover a replacement model when the configured one returns 404.
+    /// Calls /v1/models on the provider and finds the best match by name similarity.
+    async fn discover_replacement_model(
+        &self,
+        provider: &ProviderConfig,
+        api_key: &str,
+    ) -> Option<String> {
+        let models_url = format!("{}/v1/models", provider.api_base);
+        let mut req = self.http.get(&models_url);
+        if !api_key.is_empty() {
+            req = req.bearer_auth(api_key);
+        }
+
+        let resp = req.send().await.ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+
+        let body: serde_json::Value = resp.json().await.ok()?;
+        let models = body["data"].as_array()?;
+
+        // Extract the "family" from the old model name (e.g., "qwen" from "qwen-3-235b")
+        let old_lower = provider.model.to_lowercase();
+        let family_keywords: Vec<&str> = old_lower
+            .split(['-', '_', '.'])
+            .filter(|s| s.len() > 2 && !s.chars().all(|ch| ch.is_ascii_digit()))
+            .collect();
+
+        let mut best_match: Option<(String, usize)> = None;
+
+        for model in models {
+            let id = model["id"].as_str()?;
+            let id_lower = id.to_lowercase();
+
+            // Count how many family keywords match
+            let score = family_keywords
+                .iter()
+                .filter(|kw| id_lower.contains(*kw))
+                .count();
+
+            if score > 0
+                && (best_match.is_none() || score > best_match.as_ref()?.1)
+            {
+                best_match = Some((id.to_string(), score));
+            }
+        }
+
+        best_match.map(|(name, _)| name)
+    }
+}
+
+/// Strip `<think>...</think>` blocks from LLM responses (Qwen3, DeepSeek, etc.).
+/// These models include chain-of-thought reasoning that shouldn't be shown to users.
+fn strip_think_tags(text: &str) -> String {
+    if let Some(start) = text.find("<think>") {
+        if let Some(end) = text.find("</think>") {
+            let after = &text[end + "</think>".len()..];
+            // Recursively strip in case of multiple blocks
+            return strip_think_tags(&format!("{}{}", &text[..start], after))
+                .trim()
+                .to_string();
+        }
+    }
+    text.to_string()
 }

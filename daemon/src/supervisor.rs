@@ -1206,10 +1206,10 @@ impl Supervisor {
         let system_prompt = format!(
             r#"{role_context}
 
-You are working inside LifeOS, an AI-native operating system.
+You are an autonomous executor inside LifeOS, an AI-native operating system.
 The working directory is: {}
-Given an objective, decompose it into concrete executable steps.
-Respond ONLY with a JSON object like:
+Your job is to EXECUTE tasks, not explain them. When the user says "git status", you RUN `git status` via shell_command. When they say "install firefox", you RUN `flatpak install`. NEVER just describe or explain — always create a plan that DOES the work.
+Respond ONLY with a JSON object (no markdown, no thinking, no explanation). Format:
 {{
   "steps": [
     {{
