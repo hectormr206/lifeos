@@ -1,6 +1,6 @@
 # LifeOS Estrategia Unificada Final
 
-Fecha: 2026-03-23 (ultima revision: 2026-03-24, fases H-T, modelo biologico, sistema inmunologico)
+Fecha: 2026-03-23 (ultima revision: 2026-03-25, fases H-T implementadas, modelo biologico, sistema inmunologico)
 Sintesis de:
 
 - `docs/LIFEOS_STRATEGIC_REVIEW.md` (Estrategia A — Gemini)
@@ -1392,21 +1392,25 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 | Fase | Nombre | Dependencia | Complejidad | Impacto |
 |------|--------|-------------|-------------|---------|
 | A-G | Completadas | — | — | Base funcional |
-| **H** | Loop Iterativo | — | Media | **CRITICO** — sin esto nada funciona |
-| **I** | Auto-Aprobacion + Git | H | Media | **ALTO** — elimina friccion |
-| **J** | Browser Automation | H | Alta | **ALTO** — verificacion visual |
-| **K** | Self-Improvement + Skills | H, I | Alta | **ALTO** — viralidad (OpenClaw) |
-| **L** | Multimodalidad Avanzada | — | Media | **MEDIO** — UX polish |
-| **M** | Plataforma Completa | H, I, J | Alta | **CRITICO** — demo "wow" |
-| **N** | Operador de Desktop | J | Alta | **ALTO** — paridad OpenClaw macOS |
-| **O** | Agente Agentico Autonomo | N, J | Muy Alta | **MAXIMO** — diferenciador unico |
-| **P** | Gaming Autonomo | O | Extrema | **WOW** — nada igual existe |
-| **Q** | MCP Interoperabilidad | H | Media | **ALTO** — acceso a 10K+ tools |
-| **R** | Asistente de Reuniones | L | Media | **ALTO** — uso diario, reemplaza Plaud AI |
-| **S** | Sistema Inmunologico + Salud del Organismo | — | Media | **ALTO** — Axi cuida hardware + usuario |
-| **T** | Voice Pipeline Pro (escuchar como Alexa) | — | Media | **CRITICO** — sin esto Axi es sordo |
+| **H** | Loop Iterativo | — | Media | IMPLEMENTADO — supervisor end-to-end funcional |
+| **I** | Auto-Aprobacion + Git | H | Media | IMPLEMENTADO — auto_approve_medium + risk reclassification |
+| **J** | Browser Automation | H | Alta | IMPLEMENTADO — headless screenshots + vision LLM analysis |
+| **K** | Self-Improvement + Skills | H, I | Alta | IMPLEMENTADO — skill generation + lookup antes de planning |
+| **L** | Multimodalidad Avanzada | — | Media | 60% — VAD adaptativo hecho. Falta: wake word model (requiere TU voz), TTS con emocion |
+| **M** | Plataforma Completa | H, I, J | Alta | 80% — todo wired. Falta: testing end-to-end via Telegram + demo video |
+| **N** | Operador de Desktop | J | Alta | IMPLEMENTADO — flatpak, apps, keyboard, volume, brightness, night mode |
+| **O** | Agente Agentico Autonomo | N, J | Muy Alta | IMPLEMENTADO — logind presence detection + autonomous mode loop |
+| **P** | Gaming Autonomo | O | Extrema | IMPLEMENTADO — frame capture + ydotool input. Falta: modelo vision gaming |
+| **Q** | MCP Interoperabilidad | H | Media | IMPLEMENTADO — 7 tools + JSON-RPC 2.0 transport + real implementations |
+| **R** | Asistente de Reuniones | L | Media | IMPLEMENTADO — auto-detect via PipeWire + camera, auto-record, transcribe |
+| **S** | Sistema Inmunologico + Salud | — | Media | IMPLEMENTADO — 12 health checks: CPU/GPU/SSD/battery/disk/RAM/network/SELinux/security updates |
+| **T** | Voice Pipeline Pro | — | Media | 70% — VAD adaptativo + AGC + auto-mic. Falta: wake word model axi.rpw (requiere TU voz) |
 
-**Camino critico:** T (voz) → H → I → J → M (demo) → Q (integraciones) → N → O (diferenciador) → R (uso diario) → K (viralidad) → S (salud) → L (polish) → P (vision)
+**Lo que queda por hacer (requiere al usuario):**
+1. **Wake word model** — Grabar muestras de "axi" en diferentes tonos/volumenes para entrenar `axi.rpw`
+2. **Testing Telegram** — Enviar `/do git status` desde Telegram para verificar loop end-to-end
+3. **Demo video** — Grabar 2 minutos mostrando el flujo completo para lanzamiento publico
+4. **Modelo vision gaming** — Requiere fine-tuning con gameplay (NitroGen/SIMA approach)
 
 ---
 
