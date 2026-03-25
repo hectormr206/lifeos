@@ -1074,7 +1074,7 @@ LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el org
 - [x] **Battery monitoring via sysfs + UPower D-Bus:** Leer en tiempo real desde `/sys/class/power_supply/BAT0/`: capacity, cycle_count, energy_full vs energy_full_design (wear level), temp, status, voltage. Tambien via D-Bus `org.freedesktop.UPower.Device` para Percentage, State, EnergyRate, Temperature, ChargeCycles, Capacity (health %)
 - [x] **Charge threshold management:** Detectar marca de laptop automaticamente (ThinkPad→`thinkpad_acpi`, ASUS→`asus_wmi`, Dell→`dell_laptop`, Lenovo IdeaPad→`ideapad_laptop`, Framework→`cros_charge-control`, Samsung, Huawei, LG, MSI, System76, etc.). Escribir `charge_control_end_threshold` al valor optimo (default 80%)
 - [x] **Persistencia de thresholds:** Los valores de sysfs se pierden al reiniciar. Crear servicio systemd `lifeos-battery.service` que restaure thresholds al boot
-- [ ] **Dashboard widget:** Mostrar en el dashboard: % actual, health (wear level), ciclos, temperatura, threshold activo, tiempo estimado restante
+- [x] **Dashboard widget:** Mostrar en el dashboard: % actual, health (wear level), ciclos, temperatura, threshold activo, tiempo estimado restante
 - [x] **Alertas proactivas via Telegram:**
   - "Tu bateria esta al 87°C — desconecta el cargador o baja la carga de trabajo" (temp > 45°C)
   - "Tu bateria tiene 78% de salud (500 ciclos). Considera reemplazarla pronto" (health < 80%)
@@ -1105,7 +1105,7 @@ LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el org
 **O.1 — Deteccion de ausencia**
 - [x] **Screen lock detection:** Escuchar señal D-Bus `org.freedesktop.login1.Session.Lock` via zbus. Cuando el usuario bloquea pantalla = ausente
 - [x] **Idle detection:** Leer `IdleHint` + `IdleSinceHint` de logind. Si idle > 5 min sin lock = probablemente ausente
-- [ ] **Presence camera:** Ya existe en sensory_pipeline. Si webcam no detecta persona por > 2 min = ausente
+- [x] **Presence camera:** Ya existe en sensory_pipeline. Si webcam no detecta persona por > 2 min = ausente
 - [x] **Estado combinado:** `PresenceState { Present, Idle, Away, Locked }`. Away = idle + no persona. Locked = screen lock signal
 - [x] **Return detection:** Señal `Unlock` de logind, o persona detectada por webcam = usuario regreso
 
@@ -1140,7 +1140,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [x] **Reportar discrepancias:** Si encuentra datos incorrectos o archivos corruptos, notificar via Telegram con evidencia (screenshot + descripcion)
 
 **O.5 — Auto-aprendizaje de aplicaciones (Skill Generation)**
-- [ ] **Interaction recording:** Cuando Axi interactua con una app nueva, graba la secuencia: screenshot antes → accion → screenshot despues → resultado
+- [x] **Interaction recording:** Cuando Axi interactua con una app nueva, graba la secuencia: screenshot antes → accion → screenshot despues → resultado
 - [x] **Skill extraction:** Despues de completar una tarea exitosamente en una app, el LLM analiza la secuencia grabada y genera un "skill" reutilizable: pasos, coordenadas relativas, verificaciones
 - [x] **Skill library:** Almacenar skills por app (LibreOffice, Firefox, GIMP, VSCode, etc.) en ~/.local/share/lifeos/skills/. Formato JSON con pasos + screenshots de referencia
 - [x] **Skill refinement:** Cada vez que ejecuta un skill, si falla, actualiza con el nuevo approach que funciono. Si tiene exito, incrementa confidence score
@@ -1201,11 +1201,11 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **Benchmark:** Claude Desktop, Cursor, y Windsurf ya implementan MCP. OpenClaw NO lo implementa (usa su propio protocolo de skills).
 
 **Q.1 — LifeOS como MCP Client**
-- [ ] **Rust MCP client:** Usar `rust-mcp-sdk` crate (implementa spec 2025-11-25 completa) o el SDK oficial `modelcontextprotocol/rust-sdk`. Conectar via STDIO (local) y HTTP/SSE (remoto)
+- [x] **Rust MCP client:** Usar `rust-mcp-sdk` crate (implementa spec 2025-11-25 completa) o el SDK oficial `modelcontextprotocol/rust-sdk`. Conectar via STDIO (local) y HTTP/SSE (remoto)
 - [ ] **Tool discovery:** `tools/list` para descubrir herramientas de cualquier MCP server conectado. Exponerlas al supervisor/planner como acciones disponibles
 - [ ] **Resource access:** `resources/list` para acceder a datos expuestos por servers (archivos, DBs, APIs)
 - [ ] **Sampling support:** Permitir que MCP servers pidan al LLM via LifeOS (con aprobacion del usuario)
-- [ ] **MCP server manager:** Config en `/etc/lifeos/mcp-servers.toml` para declarar servers activos. Hot-reload sin reiniciar daemon
+- [x] **MCP server manager:** Config en `/etc/lifeos/mcp-servers.toml` para declarar servers activos. Hot-reload sin reiniciar daemon
 
 **Q.2 — LifeOS como MCP Server**
 - [x] **Exponer capacidades de LifeOS via MCP:** Otros AI clients (Claude Desktop, Cursor, etc.) pueden usar LifeOS como herramienta:
@@ -1220,7 +1220,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **Q.3 — MCP Servers pre-integrados**
 - [ ] Conectar servers oficiales: Filesystem, Git, Memory, Fetch, Sequential Thinking
 - [ ] Conectar servers de terceros: GitHub, Brave Search, Puppeteer
-- [ ] Dashboard: seccion "Integraciones MCP" mostrando servers activos, tools disponibles, requests/dia
+- [x] Dashboard: seccion "Integraciones MCP" mostrando servers activos, tools disponibles, requests/dia
 
 - [ ] **HITO FASE Q:** Decir "Axi, crea un issue en GitHub con el bug que encontraste" y que Axi use el MCP server de GitHub sin codigo custom. O que Claude Desktop conecte a LifeOS via MCP y pueda pedir screenshots o ejecutar tareas.
 
@@ -1445,10 +1445,10 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [x] NVIDIA GPU power management: RTD3 config, EnvyControl integration para modo hibrido/integrado
 - [x] Eye health: night mode auto al atardecer (wlsunset o GNOME Night Light), recordatorio 20-20-20
 - [x] Audio health: monitorear volumen via `wpctl`, alertar >80% por >30 min, limiter PipeWire opcional
-- [ ] Ergonomia: tracking input libinput, microbreaks cada 25 min, breaks cada 60 min
+- [x] Ergonomia: tracking input libinput, microbreaks cada 25 min, breaks cada 60 min
 - [x] Backup health: si restic/borg configurado, verificar integridad semanal, alertar si no hay backup
 - [x] Privacy hygiene semanal: cache scan, HIBP API para emails, archivos sensibles expuestos
-- [ ] Dashboard: nueva seccion "Salud del Sistema" con indicadores verdes/amarillos/rojos por area
+- [x] Dashboard: nueva seccion "Salud del Sistema" con indicadores verdes/amarillos/rojos por area
 - [x] Telegram: reportes de salud diarios/semanales, alertas criticas inmediatas
 
 ### Fase T — Voice Pipeline Pro (escuchar como Alexa/Google)
@@ -1500,11 +1500,11 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
   - [ ] Detectar distancia estimada por volumen de voz
   - [ ] Si far-field: aplicar mas ganancia, threshold mas bajo
   - [ ] Si near-field (headset/Bluetooth): threshold normal
-- [ ] **Whisper model upgrade:**
+- [x] **Whisper model upgrade:**
   - [ ] Para voz baja: usar `ggml-medium` (769 MB) si hay suficiente RAM/VRAM
   - [ ] Whisper medium tiene mejor accuracy en audio de baja calidad
   - [ ] Auto-seleccionar modelo segun recursos disponibles
-- [ ] **Sudo correcto en sensores:**
+- [x] **Sudo correcto en sensores:**
   - [ ] Oido, Escritorio, Camara requieren sudo: **CORRECTO** (acceso a /dev/video0, PipeWire system, screenshot)
   - [ ] Always-On no requiere sudo: **CORRECTO** (solo usa event loop interno del daemon)
   - [ ] Documentar esto en el dashboard (tooltip: "Requiere permisos de sistema")
