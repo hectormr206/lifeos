@@ -404,6 +404,70 @@
       </div>
     </section>
 
+    <!-- System Health -->
+    <section class="health-section">
+      <h2>Salud del Sistema</h2>
+      <div class="health-grid" id="health-grid">
+        <div class="health-item">
+          <span class="health-dot" id="health-dot-cpu-temp"></span>
+          <span class="health-label">CPU Temp</span>
+          <span class="health-value" id="health-cpu-temp">—</span>
+        </div>
+        <div class="health-item">
+          <span class="health-dot" id="health-dot-gpu-temp"></span>
+          <span class="health-label">GPU Temp</span>
+          <span class="health-value" id="health-gpu-temp">—</span>
+        </div>
+        <div class="health-item">
+          <span class="health-dot" id="health-dot-ssd"></span>
+          <span class="health-label">SSD Health</span>
+          <span class="health-value" id="health-ssd">—</span>
+        </div>
+        <div class="health-item">
+          <span class="health-dot" id="health-dot-battery"></span>
+          <span class="health-label">Battery Health</span>
+          <span class="health-value" id="health-battery">—</span>
+        </div>
+        <div class="health-item">
+          <span class="health-dot" id="health-dot-disk"></span>
+          <span class="health-label">Disk Usage</span>
+          <span class="health-value" id="health-disk">—</span>
+        </div>
+        <div class="health-item">
+          <span class="health-dot" id="health-dot-ram"></span>
+          <span class="health-label">RAM Usage</span>
+          <span class="health-value" id="health-ram">—</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Battery -->
+    <section class="battery-section hidden" id="battery-section">
+      <h2>Bateria</h2>
+      <div class="battery-grid">
+        <div class="battery-info">
+          <div class="hero-stats">
+            <div class="hero-stat"><span>Carga</span><strong id="bat-charge">—</strong></div>
+            <div class="hero-stat"><span>Salud</span><strong id="bat-health">—</strong></div>
+            <div class="hero-stat"><span>Ciclos</span><strong id="bat-cycles">—</strong></div>
+          </div>
+          <div class="hero-stats" style="margin-top:12px">
+            <div class="hero-stat"><span>Perfil energia</span><strong id="bat-profile">—</strong></div>
+            <div class="hero-stat"><span>Fabricante</span><strong id="bat-vendor">—</strong></div>
+          </div>
+        </div>
+        <div class="battery-threshold">
+          <div class="setting-item">
+            <label for="bat-threshold-slider">Umbral de carga (%)</label>
+            <input type="range" id="bat-threshold-slider" min="50" max="100" step="5" value="80">
+            <span id="bat-threshold-value">80%</span>
+          </div>
+          <button type="button" class="quick-action-btn" id="bat-threshold-save">Aplicar umbral</button>
+          <p class="setting-hint">Limita la carga maxima para prolongar la vida util de la bateria.</p>
+        </div>
+      </div>
+    </section>
+
     <!-- Game Guard -->
     <section class="gameguard-section">
       <h2>GPU Game Guard</h2>

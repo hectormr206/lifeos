@@ -1602,6 +1602,7 @@ setInterval(() => {
   refreshResources();
   refreshMetrics();
   refreshScheduledTasks();
+  refreshSystemHealth();
 }, 10000);
 
 // Less frequent polls
@@ -1613,6 +1614,163 @@ setInterval(() => {
   refreshKeyStatus();
   refreshGameGuard();
 }, 30000);
+
+// --- System Health ---
+function healthDot(id, value, greenBelow, yellowBelow, invert) {
+  // invert: true means lower is worse (e.g., SSD health %, battery health %)
+  // default: higher is worse (e.g., temp, disk usage)
+  const dot = $(`#${id}`);
+  if (!dot) return;
+  let color;
+  if (value == null || isNaN(value)) {
+    color = 'var(--text-muted)';
+  } else if (invert) {
+    // Higher is better: green > greenBelow, yellow > yellowBelow, red otherwise
+    color = value > greenBelow ? 'var(--success)' : value > yellowBelow ? 'var(--warning)' : 'var(--danger)';
+  } else {
+    // Higher is worse: green < greenBelow, yellow < yellowBelow, red otherwise
+    color = value < greenBelow ? 'var(--success)' : value < yellowBelow ? 'var(--warning)' : 'var(--danger)';
+  }
+  dot.style.background = color;
+  dot.style.boxShadow = `0 0 6px ${color}`;
+}
+
+let lastBatteryData = null;
+
+async function refreshSystemHealth() {
+  try {
+    // Fetch system resources for CPU/RAM/disk
+    const resRes = await fetch(`${API}/system/resources`, { headers: apiHeaders() });
+    if (resRes.ok) {
+      const d = await resRes.json();
+      const ramPct = d.memory_percent || 0;
+      const diskPct = d.disk_percent || 0;
+      const cpuTemp = d.cpu_temp_c;
+      const gpuTemp = d.gpu_temp_c;
+      const ssdHealth = d.ssd_health_percent;
+
+      // CPU temp
+      if (cpuTemp != null && !isNaN(cpuTemp)) {
+        $('#health-cpu-temp').textContent = `${cpuTemp.toFixed(0)}°C`;
+        healthDot('health-dot-cpu-temp', cpuTemp, 70, 85, false);
+      } else {
+        $('#health-cpu-temp').textContent = 'N/A';
+        healthDot('health-dot-cpu-temp', null);
+      }
+
+      // GPU temp
+      if (gpuTemp != null && !isNaN(gpuTemp)) {
+        $('#health-gpu-temp').textContent = `${gpuTemp.toFixed(0)}°C`;
+        healthDot('health-dot-gpu-temp', gpuTemp, 70, 85, false);
+      } else {
+        $('#health-gpu-temp').textContent = 'N/A';
+        healthDot('health-dot-gpu-temp', null);
+      }
+
+      // SSD health
+      if (ssdHealth != null && !isNaN(ssdHealth)) {
+        $('#health-ssd').textContent = `${ssdHealth.toFixed(0)}%`;
+        healthDot('health-dot-ssd', ssdHealth, 80, 60, true);
+      } else {
+        $('#health-ssd').textContent = 'N/A';
+        healthDot('health-dot-ssd', null);
+      }
+
+      // Disk usage
+      $('#health-disk').textContent = `${diskPct.toFixed(0)}%`;
+      healthDot('health-dot-disk', diskPct, 80, 90, false);
+
+      // RAM usage
+      $('#health-ram').textContent = `${ramPct.toFixed(0)}%`;
+      healthDot('health-dot-ram', ramPct, 80, 90, false);
+    }
+  } catch (e) { /* silent */ }
+
+  // Fetch battery status
+  try {
+    const batRes = await fetch(`${API}/battery/status`, { headers: apiHeaders() });
+    if (batRes.ok) {
+      const b = await batRes.json();
+      lastBatteryData = b;
+      const batSection = $('#battery-section');
+
+      if (b.present) {
+        // Show battery section
+        if (batSection) batSection.classList.remove('hidden');
+
+        // Battery health dot in system health
+        const batHealthPct = b.health_percent;
+        if (batHealthPct != null && !isNaN(batHealthPct)) {
+          $('#health-battery').textContent = `${batHealthPct.toFixed(0)}%`;
+          healthDot('health-dot-battery', batHealthPct, 80, 70, true);
+        } else {
+          $('#health-battery').textContent = 'N/A';
+          healthDot('health-dot-battery', null);
+        }
+
+        // Battery section details
+        const chargeEl = $('#bat-charge');
+        const healthEl = $('#bat-health');
+        const cyclesEl = $('#bat-cycles');
+        const profileEl = $('#bat-profile');
+        const vendorEl = $('#bat-vendor');
+        const thresholdSlider = $('#bat-threshold-slider');
+        const thresholdValue = $('#bat-threshold-value');
+
+        if (chargeEl) chargeEl.textContent = b.charge_percent != null ? `${b.charge_percent.toFixed(0)}%` : '—';
+        if (healthEl) healthEl.textContent = batHealthPct != null ? `${batHealthPct.toFixed(0)}%` : '—';
+        if (cyclesEl) cyclesEl.textContent = b.cycle_count != null ? `${b.cycle_count}` : '—';
+        if (profileEl) profileEl.textContent = b.power_profile || '—';
+        if (vendorEl) vendorEl.textContent = b.vendor || '—';
+        if (thresholdSlider && b.charge_threshold != null && !thresholdSlider._userTouched) {
+          thresholdSlider.value = b.charge_threshold;
+          if (thresholdValue) thresholdValue.textContent = `${b.charge_threshold}%`;
+        }
+      } else {
+        // No battery — hide section, show N/A in health
+        if (batSection) batSection.classList.add('hidden');
+        $('#health-battery').textContent = 'N/A';
+        healthDot('health-dot-battery', null);
+      }
+    }
+  } catch (e) {
+    // Battery endpoint not available — hide battery section
+    const batSection = $('#battery-section');
+    if (batSection) batSection.classList.add('hidden');
+    $('#health-battery').textContent = 'N/A';
+    healthDot('health-dot-battery', null);
+  }
+}
+
+// Battery threshold slider
+const batThresholdSlider = document.getElementById('bat-threshold-slider');
+const batThresholdValue = document.getElementById('bat-threshold-value');
+if (batThresholdSlider) {
+  batThresholdSlider.addEventListener('input', () => {
+    batThresholdSlider._userTouched = true;
+    if (batThresholdValue) batThresholdValue.textContent = `${batThresholdSlider.value}%`;
+  });
+}
+
+const batThresholdSave = document.getElementById('bat-threshold-save');
+if (batThresholdSave) {
+  batThresholdSave.addEventListener('click', async () => {
+    const val = parseInt(batThresholdSlider?.value || '80', 10);
+    try {
+      await fetch(`${API}/battery/threshold`, {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ threshold: val })
+      });
+      batThresholdSave.textContent = 'Aplicado';
+      setTimeout(() => { batThresholdSave.textContent = 'Aplicar umbral'; }, 2000);
+      if (batThresholdSlider) batThresholdSlider._userTouched = false;
+    } catch (e) {
+      batThresholdSave.textContent = 'Error';
+      setTimeout(() => { batThresholdSave.textContent = 'Aplicar umbral'; }, 2000);
+    }
+  });
+}
 
 // --- Game Guard ---
 async function refreshGameGuard() {
@@ -1679,7 +1837,7 @@ function initTabs() {
     { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['hero-panel', 'orb-section', 'controls-section', 'status-section', 'chat-section'] },
     { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'metrics-section', 'sched-section', 'feed-section'] },
     { id: 'tab-memory', icon: '&#128450;', label: 'Memoria', keywords: ['memory-section'] },
-    { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'settings-section'] }
+    { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'health-section', 'battery-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'settings-section'] }
   ];
 
   const tabContents = document.createElement('div');
@@ -1736,5 +1894,6 @@ function initTabs() {
   refreshAiStatus();
   refreshKeyStatus();
   refreshGameGuard();
+  refreshSystemHealth();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();

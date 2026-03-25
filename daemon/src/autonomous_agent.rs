@@ -208,9 +208,34 @@ async fn detect_user_presence() -> UserPresence {
     if let Ok(output) = idle {
         let text = String::from_utf8_lossy(&output.stdout);
         if text.contains("true") {
+            // Even if logind says idle, check camera presence as counter-evidence
+            if camera_presence_detected() {
+                info!("[autonomous] IdleHint=true but camera detects user — reporting Active");
+                return UserPresence::Active;
+            }
             return UserPresence::Idle;
         }
     }
 
     UserPresence::Active
+}
+
+/// Check if the sensory pipeline has recently detected a person via camera.
+/// Returns `true` if `/var/lib/lifeos/presence_detected` exists and was
+/// modified less than 2 minutes ago.
+fn camera_presence_detected() -> bool {
+    use std::path::Path;
+    use std::time::{Duration, SystemTime};
+
+    let path = Path::new("/var/lib/lifeos/presence_detected");
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    let Ok(modified) = metadata.modified() else {
+        return false;
+    };
+    let Ok(elapsed) = SystemTime::now().duration_since(modified) else {
+        return false;
+    };
+    elapsed < Duration::from_secs(120)
 }

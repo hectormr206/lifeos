@@ -3484,17 +3484,70 @@ async fn resolve_stt_model(override_model: Option<&str>) -> Option<String> {
         }
     }
 
-    [
-        "/var/lib/lifeos/models/whisper/ggml-base.bin",
-        "/usr/share/lifeos/models/whisper/ggml-base.bin",
-        "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
-        "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
-        "/var/lib/lifeos/models/whisper/ggml-small.bin",
-        "/usr/share/lifeos/models/whisper/ggml-small.bin",
-    ]
-    .iter()
-    .find(|candidate| Path::new(candidate).exists())
-    .map(|candidate| candidate.to_string())
+    // Auto-select whisper model based on available RAM
+    let available_ram_gb = read_available_ram_gb();
+
+    // Tier the candidate list: prefer larger models when RAM allows
+    let candidates: &[&str] = if available_ram_gb > 8.0 {
+        // >8 GB available — prefer medium for better accuracy on quiet speech
+        &[
+            "/var/lib/lifeos/models/whisper/ggml-medium.bin",
+            "/usr/share/lifeos/models/whisper/ggml-medium.bin",
+            "/var/lib/lifeos/models/whisper/ggml-base.bin",
+            "/usr/share/lifeos/models/whisper/ggml-base.bin",
+            "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
+            "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
+            "/var/lib/lifeos/models/whisper/ggml-small.bin",
+            "/usr/share/lifeos/models/whisper/ggml-small.bin",
+            "/var/lib/lifeos/models/whisper/ggml-tiny.bin",
+            "/usr/share/lifeos/models/whisper/ggml-tiny.bin",
+        ]
+    } else if available_ram_gb > 4.0 {
+        // >4 GB — prefer base
+        &[
+            "/var/lib/lifeos/models/whisper/ggml-base.bin",
+            "/usr/share/lifeos/models/whisper/ggml-base.bin",
+            "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
+            "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
+            "/var/lib/lifeos/models/whisper/ggml-small.bin",
+            "/usr/share/lifeos/models/whisper/ggml-small.bin",
+            "/var/lib/lifeos/models/whisper/ggml-tiny.bin",
+            "/usr/share/lifeos/models/whisper/ggml-tiny.bin",
+        ]
+    } else {
+        // <4 GB — prefer tiny/small to conserve memory
+        &[
+            "/var/lib/lifeos/models/whisper/ggml-tiny.bin",
+            "/usr/share/lifeos/models/whisper/ggml-tiny.bin",
+            "/var/lib/lifeos/models/whisper/ggml-small.bin",
+            "/usr/share/lifeos/models/whisper/ggml-small.bin",
+            "/var/lib/lifeos/models/whisper/ggml-base.bin",
+            "/usr/share/lifeos/models/whisper/ggml-base.bin",
+        ]
+    };
+
+    candidates
+        .iter()
+        .find(|candidate| Path::new(candidate).exists())
+        .map(|candidate| candidate.to_string())
+}
+
+/// Read available RAM in gigabytes from /proc/meminfo.
+/// Returns 0.0 on any error (will fall through to the smallest-model tier).
+fn read_available_ram_gb() -> f64 {
+    let Ok(contents) = std::fs::read_to_string("/proc/meminfo") else {
+        return 0.0;
+    };
+    for line in contents.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            // Value is in kB, e.g. "MemAvailable:   16384000 kB"
+            let trimmed = rest.trim().trim_end_matches("kB").trim();
+            if let Ok(kb) = trimmed.parse::<u64>() {
+                return kb as f64 / 1_048_576.0;
+            }
+        }
+    }
+    0.0
 }
 
 fn resolve_existing_stt_model(candidate: &str) -> Option<String> {

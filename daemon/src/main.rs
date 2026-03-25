@@ -41,6 +41,8 @@ mod cosmic_control;
 mod desktop_operator;
 #[allow(dead_code)]
 mod email_bridge;
+#[allow(dead_code)]
+mod ergonomics;
 mod events;
 #[allow(dead_code)]
 mod exec_whitelist;

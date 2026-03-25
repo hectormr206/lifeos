@@ -1,0 +1,17 @@
+# LifeOS MCP Server Configuration
+# Add MCP servers here. They will be connected on daemon startup.
+# Format: [[servers]] with name, transport, and command/url fields.
+
+# Example: Filesystem server (local files)
+# [[servers]]
+# name = "filesystem"
+# transport = "stdio"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/lifeos"]
+
+# Example: Git server
+# [[servers]]
+# name = "git"
+# transport = "stdio"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-git"]

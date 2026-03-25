@@ -231,6 +231,43 @@ pub struct SkillDiagnostics {
     pub unreliable_skills: Vec<SkillManifest>,
 }
 
+/// Record of an interaction step for learning/replay.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InteractionRecord {
+    pub timestamp: String,
+    pub action: String,
+    pub screenshot_before: Option<String>,
+    pub screenshot_after: Option<String>,
+    pub result: String,
+    pub success: bool,
+}
+
+/// Record an interaction for skill learning.
+/// Saves screenshot before/after + action + result to the skill directory.
+pub async fn record_interaction(
+    skills_dir: &std::path::Path,
+    skill_name: &str,
+    record: &InteractionRecord,
+) -> anyhow::Result<()> {
+    let recordings_dir = skills_dir.join(skill_name).join("recordings");
+    fs::create_dir_all(&recordings_dir).await?;
+
+    let filename = format!(
+        "interaction-{}.json",
+        chrono::Utc::now().format("%Y%m%d-%H%M%S-%3f")
+    );
+    let json = serde_json::to_string_pretty(record)?;
+    fs::write(recordings_dir.join(filename), json).await?;
+
+    info!(
+        "[skill_gen] Recorded interaction for '{}': {} ({})",
+        skill_name,
+        record.action,
+        if record.success { "OK" } else { "FAIL" }
+    );
+    Ok(())
+}
+
 /// Convert a task objective to a filesystem-safe slug.
 fn slugify(text: &str) -> String {
     text.to_lowercase()
