@@ -72,6 +72,7 @@ RUN set -eux && \
     cargo build --release --all-features --locked -p lifeosd && \
     install -D -m 0755 /build/target/release/life /out/life && \
     install -D -m 0755 /build/target/release/lifeosd /out/lifeosd && \
+    install -D -m 0755 /build/target/release/lifeos-train-wakeword /out/lifeos-train-wakeword && \
     rm -rf /build/target /root/.cargo/registry /root/.cargo/git
 
 # ============================================================================
@@ -385,12 +386,13 @@ RUN set -eux && \
 # --- CLI Life y Daemon (binarios compilados) ---
 COPY --from=builder /out/life /usr/bin/life
 COPY --from=builder /out/lifeosd /usr/bin/lifeosd
+COPY --from=builder /out/lifeos-train-wakeword /usr/local/bin/lifeos-train-wakeword
 COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
 
 # --- Dashboard web (Axi control panel) ---
 COPY daemon/static/dashboard /usr/share/lifeos/dashboard
 
-RUN chmod +x /usr/bin/life /usr/bin/lifeosd && \
+RUN chmod +x /usr/bin/life /usr/bin/lifeosd /usr/local/bin/lifeos-train-wakeword && \
     ln -sf /usr/bin/life /usr/local/bin/life && \
     ln -sf /usr/bin/lifeosd /usr/local/bin/lifeosd && \
     life --version
@@ -517,6 +519,7 @@ COPY image/files/usr/local/bin/lifeos-maintenance-cleanup.sh /usr/local/bin/life
 COPY image/files/usr/local/bin/lifeos-open-axi-dashboard.sh /usr/local/bin/lifeos-open-axi-dashboard.sh
 COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
 COPY image/files/usr/local/bin/lifeos-llama-gpu-layers.sh       /usr/local/bin/lifeos-llama-gpu-layers.sh
+COPY image/files/usr/local/bin/lifeos-generate-wakeword.sh     /usr/local/bin/lifeos-generate-wakeword.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
              /usr/local/bin/lifeos-stt-setup.sh \
@@ -528,8 +531,21 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-nvidia-secureboot.sh \
              /usr/local/bin/lifeos-open-axi-dashboard.sh \
              /usr/local/bin/lifeos-llama-gpu-layers.sh \
+             /usr/local/bin/lifeos-generate-wakeword.sh \
              /usr/local/bin/lifeos-check
 
+# --- Pre-trained wake word model (works from first boot) ---
+# Generate synthetic "Axi" samples with espeak-ng and build the rustpotter .rpw model.
+# This ensures wake word detection works immediately without user training.
+RUN set -eux && \
+    LIFEOS_TRAIN_WAKEWORD_BIN=/usr/local/bin/lifeos-train-wakeword \
+    /usr/local/bin/lifeos-generate-wakeword.sh \
+      /usr/share/lifeos/models/rustpotter/axi.rpw && \
+    test -f /usr/share/lifeos/models/rustpotter/axi.rpw && \
+    echo ">>> Pre-trained wake word model generated successfully"
+
+# Axi polkit: allow lifeosd to manage its own services without password
+COPY image/files/etc/polkit-1/rules.d/40-lifeos-axi.rules /etc/polkit-1/rules.d/40-lifeos-axi.rules
 # Game Guard: polkit + sudoers for llama-server GPU offload
 COPY image/files/etc/polkit-1/rules.d/50-lifeos-llama-server.rules /etc/polkit-1/rules.d/50-lifeos-llama-server.rules
 COPY image/files/etc/sudoers.d/lifeos-llama-server /etc/sudoers.d/lifeos-llama-server

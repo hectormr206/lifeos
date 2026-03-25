@@ -10,6 +10,11 @@ license = "Apache-2.0"
 name = "lifeosd"
 path = "src/main.rs"
 
+[[bin]]
+name = "lifeos-train-wakeword"
+path = "src/bin/train_wakeword.rs"
+required-features = ["wake-word"]
+
 [dependencies]
 tokio = { version = "1", features = ["full", "signal"] }
 serde = { version = "1", features = ["derive"] }

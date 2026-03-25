@@ -1555,6 +1555,61 @@ Implementacion concreta:
 4. Eliminar un modelo evita su reinstalacion automatica en updates posteriores.
 5. STT/TTS siguen operativos incluso cuando no hay ningun LLM pesado instalado.
 
+### Fase 4.6: Identidad de Voz — Axi te conoce
+
+**Objetivo:** que Axi reconozca a cada miembro del hogar por su voz, salude por nombre, y se adapte a variaciones vocales (enfermo, cansado, enojado) sin que el usuario configure nada. Zero-config, como Alexa/Google Assistant.
+
+**Principio rector:** el usuario NUNCA ejecuta comandos, graba muestras explicitamente, ni reinicia servicios. Todo es transparente y progresivo.
+
+**Arquitectura:**
+
+```
+Audio entrante
+  → Wake word detection (rustpotter, streaming)
+  → Speaker embedding extraction (WeSpeaker ONNX, ~15MB)
+  → Cosine similarity vs perfiles almacenados
+  → Match > 0.75 → "Hola, Hector" / No match → perfil nuevo
+  → Refinamiento continuo del centroide con cada interaccion
+```
+
+**Bloque 1 — Wake word pre-entrenado (P0, sin esto no hay voz):**
+
+- [x] **Modelo `.rpw` pre-entrenado con TTS sintetico:** Generado en el Containerfile con espeak-ng (12+ variantes de voz/velocidad/tono). Funciona desde el primer boot sin accion del usuario. _Script `lifeos-generate-wakeword.sh` + binario `lifeos-train-wakeword` en pipeline de build._
+- [x] **Resolucion automatica de modelo:** `wake_word::resolve_model_path()` busca en `/var/lib/lifeos/models/rustpotter/` (writable) y fallback a `/usr/share/lifeos/models/rustpotter/` (imagen). Auto-copia al writable en primer uso.
+- [x] **Hot-reload sin restart:** Despues de entrenar un modelo nuevo (dashboard o enrollment progresivo), el detector recarga automaticamente sin reiniciar el daemon. Flag `reload` en listener loop.
+- [x] **Dashboard training UI (fallback manual):** Endpoints API + UI para grabar muestras y generar modelo desde el dashboard. Solo como fallback — el flujo primario es automatico.
+
+**Bloque 2 — Identificacion de hablante (P0):**
+
+- [x] **Modulo `speaker_id.rs`:** Gestion de perfiles de voz con embeddings, centroide rolling, cosine similarity, persistencia JSON. Tests unitarios para matching, creacion y ask-name threshold.
+- [ ] **WeSpeaker ONNX integration:** Modelo ResNet34 (~15MB ONNX) para embeddings reales de 256 dimensiones. Cargado una vez al inicio, inferencia en < 100ms por segmento de audio.
+- [ ] **Enrollment progresivo en sensory pipeline:** Despues de cada interaccion de voz, extraer embedding en background y actualizar perfil. Sin accion del usuario.
+- [ ] **Saludo personalizado:** Axi responde "Hola, [nombre]" cuando reconoce al hablante. Tras 3+ interacciones sin nombre, Axi pregunta "¿Como te llamas?".
+- [ ] **Multi-usuario (hasta 6 perfiles):** Cada miembro del hogar tiene perfil independiente con preferencias, historial y tono de interaccion personalizados.
+
+**Bloque 3 — Adaptacion vocal continua (P1):**
+
+- [ ] **Varianza de embedding por speaker:** Axi tolera variaciones naturales (voz ronca, cansada, baja, gritando) manteniendo el match gracias al centroide rolling con hasta 50 embeddings recientes.
+- [ ] **Feedback loop con memoria:** Las decisiones de matching se guardan en el memory_plane para que Axi mejore su confianza con el tiempo.
+- [ ] **Clonacion de voz por speaker (Piper XTTS):** TTS personalizado por hablante — Axi responde con tono adaptado al contexto emocional detectado.
+
+**Bloque 4 — Permisos y autonomia de Axi (P0):**
+
+- [x] **Polkit rules para auto-gestion:** Regla `40-lifeos-axi.rules` permite al usuario `lifeos` gestionar `lifeosd.service`, `llama-server.service`, `whisper-stt.service` y `daemon-reload` sin password.
+- [ ] **Auto-restart del daemon:** Despues de actualizaciones de modelo o configuracion, Axi se reinicia transparentemente sin intervencion.
+- [ ] **Systemd sandboxing:** `ProtectHome=read-only`, `ProtectSystem=strict`, `ReadWritePaths=/var/lib/lifeos /run/lifeos /etc/lifeos`, `NoNewPrivileges=yes` para limitar blast radius manteniendo control total sobre su ecosistema.
+
+**Criterios de salida de Fase 4.6:**
+
+1. El usuario dice "Axi" y el sistema responde desde el primer boot, sin configuracion.
+2. Despues de 3+ interacciones, Axi pregunta "¿Como te llamas?" y recuerda la respuesta.
+3. Dos personas distintas del hogar son reconocidas y saludadas por nombre.
+4. Axi no pierde precision cuando el usuario habla con voz diferente (enfermo, cansado).
+5. Ningun paso requiere terminal, sudo, restart manual, ni pasos explicitos del usuario.
+6. El modelo `.rpw` pre-entrenado funciona al primer boot en hardware real.
+
+**Estado:** **EN PROGRESO.** _Bloque 1 (wake word pre-entrenado + hot-reload) cerrado. Bloque 2 (speaker_id) en baseline con placeholder embeddings, pendiente WeSpeaker ONNX._
+
 ### Fase 5 (18-30 meses): Ecosistema, sincronizacion y escala gobernada
 
 **Objetivo:** construir el ecosistema sostenible de LifeOS una vez que la experiencia sensorial core esta validada y el sistema se usa diariamente con interaccion multimodal real.

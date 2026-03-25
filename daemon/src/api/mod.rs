@@ -175,6 +175,7 @@ pub struct ApiState {
     pub event_bus: tokio::sync::broadcast::Sender<crate::events::DaemonEvent>,
     pub config: ApiConfig,
     pub game_guard: Option<Arc<RwLock<crate::game_guard::GameGuard>>>,
+    pub wake_word_detector: Option<Arc<crate::wake_word::WakeWordDetector>>,
 }
 
 #[derive(Clone, Debug)]
@@ -8157,7 +8158,7 @@ async fn delete_wake_word_samples(
 /// Build a rustpotter .rpw wake word model from recorded samples.
 #[cfg(feature = "wake-word")]
 async fn train_wake_word_model(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     use rustpotter::{WakewordRef, WakewordRefBuildFromFiles, WakewordSave};
 
@@ -8242,11 +8243,17 @@ async fn train_wake_word_model(
     })?;
 
     match result {
-        Ok(path) => Ok(Json(serde_json::json!({
-            "status": "ok",
-            "model_path": path,
-            "message": "Wake word model created. Restart daemon to activate.",
-        }))),
+        Ok(path) => {
+            // Hot-reload: signal the wake word detector to pick up the new model
+            if let Some(ref detector) = state.wake_word_detector {
+                detector.reload_model();
+            }
+            Ok(Json(serde_json::json!({
+                "status": "ok",
+                "model_path": path,
+                "message": "Wake word model created and activated.",
+            })))
+        }
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {

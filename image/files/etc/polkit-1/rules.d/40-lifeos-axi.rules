@@ -1,0 +1,29 @@
+// Allow the lifeos user to manage LifeOS system services without a password.
+// This enables Axi (lifeosd) to transparently manage its own services:
+//   - Restart lifeosd after model updates (hot-reload fallback)
+//   - Manage llama-server for GPU offload (Game Guard)
+//   - Manage whisper-stt for voice pipeline
+//   - Reload systemd daemon after drop-in changes
+//
+// Principle: Axi can manage its own ecosystem, but NOT arbitrary system services.
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        subject.user === "lifeos") {
+        var unit = action.lookup("unit");
+        var allowedUnits = [
+            "lifeosd.service",
+            "llama-server.service",
+            "whisper-stt.service"
+        ];
+        for (var i = 0; i < allowedUnits.length; i++) {
+            if (unit === allowedUnits[i]) {
+                return polkit.Result.YES;
+            }
+        }
+    }
+    // Allow daemon-reload for drop-in config changes
+    if (action.id === "org.freedesktop.systemd1.reload-daemon" &&
+        subject.user === "lifeos") {
+        return polkit.Result.YES;
+    }
+});

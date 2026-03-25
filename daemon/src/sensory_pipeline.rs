@@ -2279,7 +2279,7 @@ async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
         .await,
         llama_server_running: ai_manager.is_running().await,
         always_on_source: resolve_always_on_source().await,
-        rustpotter_model_available: Path::new(crate::wake_word::RUSTPOTTER_MODEL_PATH).exists(),
+        rustpotter_model_available: crate::wake_word::resolve_model_path().is_some(),
     }
 }
 

@@ -110,6 +110,8 @@ mod sensory_pipeline;
 mod signal_bridge;
 #[allow(dead_code)]
 mod skill_generator;
+#[allow(dead_code)]
+mod speaker_id;
 mod supervisor;
 mod system;
 mod task_queue;
@@ -493,11 +495,16 @@ async fn main() -> anyhow::Result<()> {
     // Initialize wake word detector (rustpotter) if available.
     let wake_word_notify = Arc::new(tokio::sync::Notify::new());
     let wake_word_detector = {
-        let model_path = std::path::PathBuf::from(wake_word::RUSTPOTTER_MODEL_PATH);
-        if wake_word::WakeWordDetector::available() && model_path.exists() {
-            match wake_word::WakeWordDetector::new(model_path, None) {
+        if !wake_word::WakeWordDetector::available() {
+            info!("Wake word feature not compiled — using Whisper-based detection");
+            None
+        } else if let Some(model_path) = wake_word::resolve_model_path() {
+            match wake_word::WakeWordDetector::new(model_path.clone(), None) {
                 Ok(detector) => {
-                    info!("Rustpotter wake word detector initialized");
+                    info!(
+                        "Rustpotter wake word detector initialized (model: {})",
+                        model_path.display()
+                    );
                     Some(Arc::new(detector))
                 }
                 Err(e) => {
@@ -506,14 +513,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         } else {
-            if !wake_word::WakeWordDetector::available() {
-                info!("Wake word feature not compiled — using Whisper-based detection");
-            } else {
-                info!(
-                    "Rustpotter model not found at {} — using Whisper-based detection",
-                    wake_word::RUSTPOTTER_MODEL_PATH
-                );
-            }
+            info!("No wake word model found — using Whisper-based detection");
             None
         }
     };
@@ -1112,6 +1112,7 @@ async fn start_api_server(state: Arc<DaemonState>) {
             max_request_size: 10 * 1024 * 1024,
         },
         game_guard: state.game_guard.clone(),
+        wake_word_detector: state.wake_word_detector.clone(),
     };
 
     if let Err(e) = api::start_api_server(api_state).await {

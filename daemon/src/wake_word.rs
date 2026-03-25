@@ -9,8 +9,39 @@
 //! implementation returns `available() == false` and the daemon falls back
 //! to the legacy Whisper-based detection in `sensory_pipeline.rs`.
 
-/// Default model search path inside the OS image.
+/// Default model path (writable, user-specific or refined by enrollment).
 pub const RUSTPOTTER_MODEL_PATH: &str = "/var/lib/lifeos/models/rustpotter/axi.rpw";
+/// Pre-built model shipped in the immutable image (read-only).
+pub const RUSTPOTTER_IMAGE_MODEL_PATH: &str = "/usr/share/lifeos/models/rustpotter/axi.rpw";
+
+/// Resolve the best available wake word model path.
+/// Prefers the writable path (may be user-refined), falls back to the
+/// pre-built image model, and auto-copies it to the writable location
+/// on first use so future refinements can update it in place.
+pub fn resolve_model_path() -> Option<std::path::PathBuf> {
+    let writable = std::path::PathBuf::from(RUSTPOTTER_MODEL_PATH);
+    if writable.exists() {
+        return Some(writable);
+    }
+    let image = std::path::PathBuf::from(RUSTPOTTER_IMAGE_MODEL_PATH);
+    if image.exists() {
+        // Copy to writable location so it can be refined later
+        if let Some(parent) = writable.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        if std::fs::copy(&image, &writable).is_ok() {
+            log::info!(
+                "Copied pre-built wake word model from {} to {}",
+                image.display(),
+                writable.display()
+            );
+            return Some(writable);
+        }
+        // If copy fails (e.g. read-only fs), use image path directly
+        return Some(image);
+    }
+    None
+}
 
 // ── Feature-gated implementation ─────────────────────────────────────────
 
@@ -44,6 +75,8 @@ mod inner {
         source_rx: tokio::sync::watch::Receiver<Option<String>>,
         /// Signals the listener thread to terminate.
         shutdown: Arc<AtomicBool>,
+        /// Signals the listener thread to reload the model (hot-reload after training).
+        reload: Arc<AtomicBool>,
     }
 
     impl WakeWordDetector {
@@ -63,6 +96,7 @@ mod inner {
                 source_tx,
                 source_rx,
                 shutdown: Arc::new(AtomicBool::new(false)),
+                reload: Arc::new(AtomicBool::new(false)),
             })
         }
 
@@ -101,6 +135,13 @@ mod inner {
             self.active.load(Ordering::Relaxed)
         }
 
+        /// Signal the detector to reload its model file (hot-reload after training).
+        /// The listener loop will restart with the updated model on the next cycle.
+        pub fn reload_model(&self) {
+            info!("Wake word model reload requested");
+            self.reload.store(true, Ordering::Relaxed);
+        }
+
         /// Returns `true` when the feature is compiled.
         pub fn available() -> bool {
             true
@@ -113,6 +154,10 @@ mod inner {
                 if self.shutdown.load(Ordering::Relaxed) {
                     info!("Wake word detector shutting down");
                     return;
+                }
+                // Clear reload flag before starting a new session
+                if self.reload.swap(false, Ordering::Relaxed) {
+                    info!("Reloading wake word model...");
                 }
                 if let Err(e) = self.listen_session() {
                     warn!("Wake word listener session ended: {e}");
@@ -166,6 +211,13 @@ mod inner {
             loop {
                 // Check shutdown
                 if self.shutdown.load(Ordering::Relaxed) {
+                    let _ = child.kill();
+                    return Ok(());
+                }
+
+                // Check model reload
+                if self.reload.load(Ordering::Relaxed) {
+                    info!("Model reload requested, restarting listener");
                     let _ = child.kill();
                     return Ok(());
                 }
@@ -275,6 +327,7 @@ mod inner {
         pub fn pause(&self) {}
         pub fn resume(&self) {}
         pub fn stop(&self) {}
+        pub fn reload_model(&self) {}
         pub fn is_active(&self) -> bool {
             false
         }
