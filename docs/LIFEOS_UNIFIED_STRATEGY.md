@@ -969,7 +969,7 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - [x] **Test generation:** Escribir tests automaticamente para codigo existente. Ejecutarlos y reportar cobertura
 - [x] **Deploy pipeline:** Configurar y ejecutar deploy (Docker build + push, o rsync, o Vercel CLI, segun el proyecto)
 - [x] **Monitoring post-deploy:** Despues de deployer, hacer health checks periodicos. Si el servicio cae, notificar y proponer fix
-- [ ] **Parallel task execution:** Multiples tareas de desarrollo en paralelo (branch A: frontend, branch B: backend) con merge al final
+- [x] **Parallel task execution:** Multiples tareas de desarrollo en paralelo (branch A: frontend, branch B: backend) con merge al final
 - [x] **Code review agent:** Antes de merge, un agente Reviewer analiza el diff, busca bugs, sugiere mejoras
 - [x] **Documentation generation:** Generar/actualizar README, API docs, y changelogs automaticamente basados en los cambios
 - [ ] **HITO FASE M:** Decir "clona este repo de GitHub, arregla los 3 issues abiertos, corre tests, y abre PRs para cada uno" y que Axi lo haga todo solo, reportando progreso por Telegram
@@ -1079,7 +1079,7 @@ LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el org
   - "Tu bateria esta al 87°C — desconecta el cargador o baja la carga de trabajo" (temp > 45°C)
   - "Tu bateria tiene 78% de salud (500 ciclos). Considera reemplazarla pronto" (health < 80%)
   - "Llevas 3 horas enchufado al 100%. Activo limite de carga al 80% para proteger la bateria"
-- [ ] **Smart charging schedule:** Script + systemd timer que baja el threshold durante el dia (60%) y sube en la noche (80%) para cargar mientras duermes. Configurable por el usuario
+- [x] **Smart charging schedule:** Script + systemd timer que baja el threshold durante el dia (60%) y sube en la noche (80%) para cargar mientras duermes. Configurable por el usuario
 - [x] **NVIDIA GPU power management:**
   - Configurar RTD3 (`NVreg_DynamicPowerManagement=0x02`) para que la GPU se apague completamente cuando no se usa (ahorra 5-15W en idle)
   - Integrar con Game Guard: cuando no hay juego, GPU en modo power-save. Cuando hay juego, GPU full power
@@ -1089,7 +1089,7 @@ LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el org
   - En bateria con compilacion/build → `balanced`
   - Enchufado → `balanced` o `performance`
   - "Axi, pon modo ahorro de energia" → switch a power-saver
-- [ ] **CLI:** `life battery` subcommand para ver status, cambiar threshold, forzar carga completa
+- [x] **CLI:** `life battery` subcommand para ver status, cambiar threshold, forzar carga completa
 - [x] **API endpoints:** GET /api/v1/battery/status, POST /api/v1/battery/threshold, GET /api/v1/battery/history
 
 - [ ] **HITO FASE N:** Decir "instala GIMP, abrelo, y dime que version es" y que Axi: instale via flatpak, abra la app, lea la version de la ventana (screenshot + OCR), y reporte. Ademas: "cuida mi bateria" y que Axi configure threshold al 80%, active RTD3 en la GPU, y reporte health de la bateria semanalmente.
@@ -1137,7 +1137,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
   - Firefox/Chromium: DevTools Protocol (CDP) para navegar, extraer DOM, ejecutar JS
   - Terminal: Leer buffer de texto directamente (pty), no necesita vision
 - [ ] **Verificacion de archivos:** "Abre el Excel descargado, verifica columna B son numeros, celdas desbloqueadas, total = suma" → UNO bridge si es LibreOffice, vision si es otra app
-- [ ] **Reportar discrepancias:** Si encuentra datos incorrectos o archivos corruptos, notificar via Telegram con evidencia (screenshot + descripcion)
+- [x] **Reportar discrepancias:** Si encuentra datos incorrectos o archivos corruptos, notificar via Telegram con evidencia (screenshot + descripcion)
 
 **O.5 — Auto-aprendizaje de aplicaciones (Skill Generation)**
 - [ ] **Interaction recording:** Cuando Axi interactua con una app nueva, graba la secuencia: screenshot antes → accion → screenshot despues → resultado
@@ -1249,7 +1249,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **R.3 — Transcripcion local (Whisper)**
 - [x] **Post-meeting transcription:** Cuando la reunion termina, pasar el audio por Whisper STT local. Ya esta integrado en LifeOS
 - [ ] **Speaker diarization:** Identificar diferentes hablantes (usando `pyannote-audio` o modelo local). Etiquetar "Hablante 1", "Hablante 2", etc.
-- [ ] **Multi-idioma:** Whisper soporta 99 idiomas. Auto-detectar idioma o usar el configurado
+- [x] **Multi-idioma:** Whisper soporta 99 idiomas. Auto-detectar idioma o usar el configurado
 - [x] **Formato de salida:** Transcripcion con timestamps + etiquetas de hablante en formato SRT y TXT
 
 **R.4 — Resumen inteligente + Action Items**
@@ -1266,7 +1266,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **R.5 — Privacidad**
 - [x] **Todo local:** Audio, transcripcion, y resumen procesados localmente. NUNCA enviar audio crudo a la nube
 - [x] **Consentimiento explicito:** El usuario debe aprobar la grabacion (notificacion al inicio). Opcion "Siempre grabar reuniones de X app"
-- [ ] **Borrado seguro:** Opcion de borrar grabacion despues de generar transcripcion (solo conservar texto)
+- [x] **Borrado seguro:** Opcion de borrar grabacion despues de generar transcripcion (solo conservar texto)
 - [ ] **Indicador visible:** Mientras graba, mostrar icono rojo en el mini_widget overlay
 
 - [ ] **HITO FASE R:** Entrar a una reunion de Zoom. LifeOS detecta automaticamente, empieza a grabar. Al terminar, Whisper transcribe localmente, LLM genera resumen con action items, y aparece en Telegram: "Tu reunion termino. 3 action items: [1] Enviar propuesta a Juan antes del viernes [2] Revisar presupuesto Q2 [3] Programar siguiente reunion para el 15 de abril."
@@ -1436,18 +1436,18 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
   - **BUG ACTUAL:** proactive.rs reporta "Disco al 100%" por leer composefs root, NO el disco real
 - [x] Auto-limpieza: journalctl vacuum, flatpak unused, dnf cache, thumbnails
 - [x] Monitor red: `ss -tnp` cada 30s, whitelist de procesos/puertos, alertar conexiones sospechosas
-- [ ] USBGuard integration: bloquear dispositivos USB desconocidos, notificar al usuario
+- [x] USBGuard integration: bloquear dispositivos USB desconocidos, notificar al usuario
 - [x] Security patches: `dnf-automatic` security-only, firmware via `fwupdmgr`, HSI score semanal
 - [x] Bateria inteligente: UPower D-Bus, charge thresholds (TLP o sysfs directo segun vendor)
   - [ ] Auto-detectar vendor laptop (ThinkPad, ASUS, Dell, Framework, etc.) y configurar thresholds
   - [ ] Smart charging: threshold bajo en horas pico, normal en horas valle
   - [ ] Alertar desgaste: health <80%, cycles >500, temperatura >45°C
 - [x] NVIDIA GPU power management: RTD3 config, EnvyControl integration para modo hibrido/integrado
-- [ ] Eye health: night mode auto al atardecer (wlsunset o GNOME Night Light), recordatorio 20-20-20
+- [x] Eye health: night mode auto al atardecer (wlsunset o GNOME Night Light), recordatorio 20-20-20
 - [x] Audio health: monitorear volumen via `wpctl`, alertar >80% por >30 min, limiter PipeWire opcional
 - [ ] Ergonomia: tracking input libinput, microbreaks cada 25 min, breaks cada 60 min
-- [ ] Backup health: si restic/borg configurado, verificar integridad semanal, alertar si no hay backup
-- [ ] Privacy hygiene semanal: cache scan, HIBP API para emails, archivos sensibles expuestos
+- [x] Backup health: si restic/borg configurado, verificar integridad semanal, alertar si no hay backup
+- [x] Privacy hygiene semanal: cache scan, HIBP API para emails, archivos sensibles expuestos
 - [ ] Dashboard: nueva seccion "Salud del Sistema" con indicadores verdes/amarillos/rojos por area
 - [x] Telegram: reportes de salud diarios/semanales, alertas criticas inmediatas
 
