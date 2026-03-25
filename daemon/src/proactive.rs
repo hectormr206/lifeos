@@ -67,8 +67,10 @@ pub async fn check_all(
 }
 
 async fn check_disk_space() -> Option<ProactiveAlert> {
+    // Check /var (which holds /home on bootc) instead of / (composefs overlay, always 100%).
+    // On immutable systems, / is a tiny composefs mount that is always full by design.
     let output = tokio::process::Command::new("df")
-        .args(["--output=pcent", "/"])
+        .args(["--output=pcent", "/var"])
         .output()
         .await
         .ok()?;

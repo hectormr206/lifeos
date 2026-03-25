@@ -31,9 +31,21 @@ const DEFAULT_WAKE_WORD: &str = "axi";
 const MAX_RELEVANT_LINES: usize = 8;
 const MAX_MEMORY_BYTES: usize = 6 * 1024;
 const MIN_AUDIO_SIGNAL_BYTES: usize = 4096;
-const PCM_RMS_THRESHOLD: f64 = 450.0;
+/// Default RMS threshold for speech detection. Can be overridden via
+/// `LIFEOS_VAD_RMS_THRESHOLD` env var. Lowered from 450 to 250 to detect
+/// quiet/soft speech (whispers are ~100-300 RMS in 16-bit PCM).
+const PCM_RMS_THRESHOLD_DEFAULT: f64 = 250.0;
+/// Multiplier applied to the measured noise floor to compute the adaptive
+/// speech threshold: `threshold = max(noise_floor * ADAPTIVE_MULTIPLIER, absolute_min)`.
+const ADAPTIVE_NOISE_MULTIPLIER: f64 = 3.0;
+/// Absolute minimum RMS threshold even with very low noise floor,
+/// to avoid triggering on electrical noise.
+const ADAPTIVE_RMS_FLOOR: f64 = 80.0;
+/// Number of initial 250ms windows used to measure ambient noise floor.
+const NOISE_FLOOR_WINDOWS: usize = 4; // 1 second of ambient measurement
 /// How long to wait for the user to start speaking after wake word (seconds).
-const UTTERANCE_PRE_SPEECH_TIMEOUT_SECS: f64 = 4.0;
+/// Increased from 4.0 to 6.0 to give quiet speakers more time.
+const UTTERANCE_PRE_SPEECH_TIMEOUT_SECS: f64 = 6.0;
 /// How long of silence after speech to consider the utterance complete (seconds).
 /// Set to 2.5 s to tolerate natural thinking pauses (~1-2 s) without cutting off.
 const UTTERANCE_SILENCE_AFTER_SPEECH_SECS: f64 = 2.5;
@@ -43,6 +55,14 @@ const UTTERANCE_MAX_DURATION_SECS: f64 = 30.0;
 const UTTERANCE_WINDOW_SECS: f64 = 0.25;
 /// Sample rate for all audio capture.
 const AUDIO_SAMPLE_RATE: u32 = 16000;
+
+/// Read the VAD RMS threshold from environment or return the default.
+fn vad_rms_threshold() -> f64 {
+    std::env::var("LIFEOS_VAD_RMS_THRESHOLD")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(PCM_RMS_THRESHOLD_DEFAULT)
+}
 const SCREENSHOT_RETENTION_COUNT: usize = 50;
 const SCREENSHOT_RETENTION_DAYS: u64 = 2;
 const IDLE_SCREEN_INTERVAL_SECONDS: u64 = 45;
@@ -3163,7 +3183,8 @@ async fn audio_has_voice_activity(path: &Path) -> Result<bool> {
     }
 
     let rms = (squared / samples as f64).sqrt();
-    Ok(rms >= PCM_RMS_THRESHOLD)
+    let threshold = vad_rms_threshold();
+    Ok(rms >= threshold)
 }
 
 /// Capture audio from the microphone until the user stops speaking.
@@ -3243,6 +3264,13 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
     let mut speech_detected = false;
     let mut last_speech_at = Instant::now();
 
+    // --- Adaptive VAD: measure ambient noise floor from the first N windows ---
+    let base_threshold = vad_rms_threshold();
+    let mut noise_floor_sum = 0f64;
+    let mut noise_floor_count = 0usize;
+    let mut adaptive_threshold = base_threshold;
+    let mut noise_floor_measured = false;
+
     loop {
         let elapsed = start.elapsed().as_secs_f64();
 
@@ -3263,23 +3291,53 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
             Ok(Err(_)) | Err(_) => break, // EOF or timeout
         }
 
-        all_pcm.extend_from_slice(&buf);
+        // Apply software gain before storing/analyzing. Default 12 dB for quiet speech.
+        let gain_db: f64 = std::env::var("LIFEOS_MIC_GAIN_DB")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(12.0);
+        let gain_linear = 10f64.powf(gain_db / 20.0);
 
-        // Compute RMS for this window.
+        // Amplify samples in-place and store the boosted PCM.
+        let mut amplified = Vec::with_capacity(buf.len());
         let mut sum_sq = 0f64;
         let mut count = 0usize;
         for chunk in buf.chunks_exact(2) {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f64;
-            sum_sq += sample * sample;
+            let raw = i16::from_le_bytes([chunk[0], chunk[1]]) as f64;
+            let boosted = (raw * gain_linear).clamp(-32768.0, 32767.0);
+            let sample_i16 = boosted as i16;
+            amplified.extend_from_slice(&sample_i16.to_le_bytes());
+            sum_sq += boosted * boosted;
             count += 1;
         }
+        all_pcm.extend_from_slice(&amplified);
+
+        // Compute RMS for this window (on the amplified signal).
         let rms = if count > 0 {
             (sum_sq / count as f64).sqrt()
         } else {
             0.0
         };
 
-        let is_speech = rms >= PCM_RMS_THRESHOLD;
+        // Adaptive noise floor: use the first N windows to measure ambient noise,
+        // then set the threshold to noise_floor * multiplier (min ADAPTIVE_RMS_FLOOR).
+        if !noise_floor_measured {
+            noise_floor_sum += rms;
+            noise_floor_count += 1;
+            if noise_floor_count >= NOISE_FLOOR_WINDOWS {
+                let avg_noise = noise_floor_sum / noise_floor_count as f64;
+                adaptive_threshold = (avg_noise * ADAPTIVE_NOISE_MULTIPLIER)
+                    .max(ADAPTIVE_RMS_FLOOR)
+                    .min(base_threshold); // never worse than the configured max
+                noise_floor_measured = true;
+                log::debug!(
+                    "[vad] noise floor: {avg_noise:.0}, adaptive threshold: {adaptive_threshold:.0} (base: {base_threshold:.0})"
+                );
+            }
+            continue; // don't count noise floor windows as pre-speech timeout
+        }
+
+        let is_speech = rms >= adaptive_threshold;
 
         if is_speech {
             speech_detected = true;
@@ -4175,14 +4233,22 @@ fn resolve_camera_device() -> Option<String> {
 /// When the default PulseAudio source is a Bluetooth device, this returns a
 /// non-Bluetooth alternative (internal mic) to avoid A2DP→HSP/HFP profile
 /// switching that degrades audio quality system-wide.
+/// Auto-detect the best audio input source for voice capture.
+///
+/// Priority: env override → PipeWire default source → best available mic.
+/// Unlike the previous version, this always returns a source if any mic exists,
+/// not just when Bluetooth is the default.
 async fn resolve_always_on_source() -> Option<String> {
+    // 1. Explicit override from environment
     if let Ok(val) = std::env::var("LIFEOS_ALWAYS_ON_SOURCE") {
         let val = val.trim().to_string();
         if !val.is_empty() && val != "auto" {
+            log::info!("[audio] using explicit source from env: {val}");
             return Some(val);
         }
     }
 
+    // 2. Get the system default source (usually the built-in mic)
     let info_output = Command::new("pactl").arg("info").output().await.ok()?;
     if !info_output.status.success() {
         return None;
@@ -4191,12 +4257,9 @@ async fn resolve_always_on_source() -> Option<String> {
     let default_source = info
         .lines()
         .find(|l| l.starts_with("Default Source:") || l.starts_with("Fuente por defecto:"))
-        .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))?;
+        .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()));
 
-    if !default_source.starts_with("bluez_input.") {
-        return None;
-    }
-
+    // 3. List all non-monitor sources
     let list_output = Command::new("pactl")
         .args(["list", "short", "sources"])
         .output()
@@ -4219,18 +4282,35 @@ async fn resolve_always_on_source() -> Option<String> {
         .filter(|name| !name.contains(".monitor"))
         .collect();
 
+    // 4. If the default source is a real input (not a monitor), use it directly
+    if let Some(ref ds) = default_source {
+        if !ds.contains(".monitor") && sources.iter().any(|s| s == ds) {
+            log::info!("[audio] using system default source: {ds}");
+            return Some(ds.clone());
+        }
+    }
+
+    // 5. Fallback priority: analog stereo > USB > Bluetooth > any ALSA input
     if let Some(s) = sources
         .iter()
         .find(|s| s.starts_with("alsa_input.") && s.contains("analog-stereo"))
     {
+        log::info!("[audio] using analog stereo source: {s}");
         return Some(s.clone());
     }
     if let Some(s) = sources.iter().find(|s| s.starts_with("alsa_input.usb-")) {
+        log::info!("[audio] using USB source: {s}");
+        return Some(s.clone());
+    }
+    if let Some(s) = sources.iter().find(|s| s.starts_with("bluez_input.")) {
+        log::info!("[audio] using Bluetooth source: {s}");
         return Some(s.clone());
     }
     if let Some(s) = sources.iter().find(|s| s.starts_with("alsa_input.")) {
+        log::info!("[audio] using ALSA source: {s}");
         return Some(s.clone());
     }
+    log::warn!("[audio] no input source found");
     None
 }
 
