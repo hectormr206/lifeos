@@ -16,17 +16,21 @@ OVERRIDE_FILE="${OVERRIDE_DIR}/99-game-guard-gpu-layers.conf"
 
 mkdir -p "$OVERRIDE_DIR"
 
+OVERRIDE_ENV="/etc/lifeos/llama-server-game-guard.env"
+
 if [ "$LAYERS" = "-1" ]; then
     # Restore: remove override so the default env file value is used
-    rm -f "$OVERRIDE_FILE"
+    rm -f "$OVERRIDE_FILE" "$OVERRIDE_ENV"
     echo "[game_guard] Removed GPU layers override — restoring default"
 else
-    # Override: set specific GPU layers value
+    # Write override env file (EnvironmentFile processed AFTER the main one, so it wins)
+    echo "LIFEOS_AI_GPU_LAYERS=${LAYERS}" > "$OVERRIDE_ENV"
+    # Drop-in adds the override env file AFTER the main EnvironmentFile
     cat > "$OVERRIDE_FILE" <<EOF
 [Service]
-Environment=LIFEOS_AI_GPU_LAYERS=${LAYERS}
+EnvironmentFile=-${OVERRIDE_ENV}
 EOF
-    echo "[game_guard] Set GPU layers to ${LAYERS} via systemd drop-in"
+    echo "[game_guard] Set GPU layers to ${LAYERS} via env override"
 fi
 
 systemctl daemon-reload
