@@ -75,6 +75,27 @@ pub struct KgStats {
 }
 
 // ---------------------------------------------------------------------------
+// Privacy
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivacyLevel {
+    /// Store everything the system observes.
+    Everything,
+    /// Only store entities/relations extracted from explicit conversations.
+    ConversationsOnly,
+    /// Only store when the user explicitly requests it.
+    ExplicitOnly,
+}
+
+impl Default for PrivacyLevel {
+    fn default() -> Self {
+        Self::Everything
+    }
+}
+
+// ---------------------------------------------------------------------------
 // KnowledgeGraph
 // ---------------------------------------------------------------------------
 
@@ -82,6 +103,7 @@ pub struct KnowledgeGraph {
     data_dir: PathBuf,
     entities: Vec<Entity>,
     relations: Vec<Relation>,
+    privacy_level: PrivacyLevel,
 }
 
 impl KnowledgeGraph {
@@ -106,6 +128,7 @@ impl KnowledgeGraph {
             data_dir,
             entities,
             relations,
+            privacy_level: PrivacyLevel::default(),
         }
     }
 
@@ -202,6 +225,124 @@ impl KnowledgeGraph {
             }
         }
         results
+    }
+
+    // -- privacy ------------------------------------------------------------
+
+    /// Set the privacy level for the knowledge graph.
+    pub fn set_privacy_level(&mut self, level: PrivacyLevel) {
+        self.privacy_level = level;
+    }
+
+    /// Get the current privacy level.
+    pub fn privacy_level(&self) -> PrivacyLevel {
+        self.privacy_level
+    }
+
+    // -- temporal queries ---------------------------------------------------
+
+    /// Query relations for an entity sorted by timestamp (newest first).
+    /// Optionally filters by `relation_type`.
+    pub fn query_temporal(
+        &self,
+        entity_name: &str,
+        relation_type: Option<&str>,
+    ) -> Vec<(Relation, Entity)> {
+        let needle = entity_name.to_lowercase();
+        // Find all entity IDs matching the name
+        let ids: Vec<&str> = self
+            .entities
+            .iter()
+            .filter(|e| e.name.to_lowercase().contains(&needle))
+            .map(|e| e.id.as_str())
+            .collect();
+
+        let mut results: Vec<(Relation, Entity)> = Vec::new();
+        for rel in &self.relations {
+            let matches_entity =
+                ids.iter().any(|id| *id == rel.from_id || *id == rel.to_id);
+            if !matches_entity {
+                continue;
+            }
+            if let Some(rt) = relation_type {
+                if rel.relation_type != rt {
+                    continue;
+                }
+            }
+            // Find the "other" entity
+            let other_id = if ids.contains(&rel.from_id.as_str()) {
+                &rel.to_id
+            } else {
+                &rel.from_id
+            };
+            if let Some(other) = self.entities.iter().find(|e| e.id == *other_id) {
+                results.push((rel.clone(), other.clone()));
+            }
+        }
+
+        // Sort newest first
+        results.sort_by(|a, b| b.0.timestamp.cmp(&a.0.timestamp));
+        results
+    }
+
+    /// Return all entities with relations whose timestamp falls within
+    /// `[from, to]`, grouped by entity.
+    pub fn query_by_time_range(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> Vec<(Entity, Vec<Relation>)> {
+        let mut map: HashMap<String, Vec<Relation>> = HashMap::new();
+
+        for rel in &self.relations {
+            if rel.timestamp >= from && rel.timestamp <= to {
+                map.entry(rel.from_id.clone())
+                    .or_default()
+                    .push(rel.clone());
+                map.entry(rel.to_id.clone())
+                    .or_default()
+                    .push(rel.clone());
+            }
+        }
+
+        let mut results = Vec::new();
+        for entity in &self.entities {
+            if let Some(rels) = map.remove(&entity.id) {
+                results.push((entity.clone(), rels));
+            }
+        }
+        results
+    }
+
+    // -- deletion -----------------------------------------------------------
+
+    /// Remove an entity and ALL relations that reference it.
+    pub fn delete_entity_cascade(&mut self, entity_id: &str) {
+        self.entities.retain(|e| e.id != entity_id);
+        self.relations
+            .retain(|r| r.from_id != entity_id && r.to_id != entity_id);
+        self.save();
+    }
+
+    /// Remove entities whose `created_at` falls within `[from, to]` and
+    /// all relations referencing them.
+    pub fn delete_by_date_range(&mut self, from: DateTime<Utc>, to: DateTime<Utc>) {
+        let removed_ids: std::collections::HashSet<String> = self
+            .entities
+            .iter()
+            .filter(|e| e.created_at >= from && e.created_at <= to)
+            .map(|e| e.id.clone())
+            .collect();
+
+        self.entities
+            .retain(|e| !(e.created_at >= from && e.created_at <= to));
+
+        if !removed_ids.is_empty() {
+            self.relations
+                .retain(|r| !removed_ids.contains(&r.from_id) && !removed_ids.contains(&r.to_id));
+        }
+
+        self.save();
     }
 
     // -- text extraction (regex, no LLM) ------------------------------------

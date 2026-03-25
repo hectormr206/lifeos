@@ -357,6 +357,556 @@ impl SecurityDaemon {
     }
 
     // -----------------------------------------------------------------------
+    // Self-healing: service restart
+    // -----------------------------------------------------------------------
+
+    /// Restart a user-level systemd service after capturing recent logs.
+    ///
+    /// Only `--user` services are allowed (never system services).
+    pub fn self_heal_service(service_name: &str) -> Result<String> {
+        // Validate service name: reject empty, path-traversal, or suspicious chars.
+        if service_name.is_empty()
+            || service_name.contains('/')
+            || service_name.contains("..")
+            || service_name.contains(';')
+            || service_name.contains('&')
+        {
+            anyhow::bail!("Invalid service name: {}", service_name);
+        }
+
+        // Capture recent logs (last 5 minutes, up to 20 lines).
+        let log_output = Command::new("journalctl")
+            .args([
+                "--user",
+                "-u",
+                service_name,
+                "--since",
+                "5 min ago",
+                "-n",
+                "20",
+                "--no-pager",
+            ])
+            .output();
+
+        let last_lines = match log_output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                if stdout.trim().is_empty() {
+                    format!("(no recent logs; stderr: {})", stderr.trim())
+                } else {
+                    stdout.trim().to_string()
+                }
+            }
+            Err(e) => format!("(failed to read logs: {})", e),
+        };
+
+        // Attempt restart via systemctl --user.
+        let restart = Command::new("systemctl")
+            .args(["--user", "restart", service_name])
+            .output();
+
+        match restart {
+            Ok(out) if out.status.success() => Ok(format!(
+                "Service '{}' was down. Logs:\n{}\nRestarted successfully.",
+                service_name, last_lines
+            )),
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                anyhow::bail!(
+                    "Failed to restart '{}': {}. Logs:\n{}",
+                    service_name,
+                    stderr.trim(),
+                    last_lines
+                )
+            }
+            Err(e) => anyhow::bail!(
+                "Cannot execute systemctl for '{}': {}. Logs:\n{}",
+                service_name,
+                e,
+                last_lines
+            ),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Self-healing: disk cleanup
+    // -----------------------------------------------------------------------
+
+    /// Check disk usage on `/var` and the home directory.
+    /// If usage exceeds 90%, automatically vacuum journal logs and remove
+    /// unused Flatpak runtimes to reclaim space.
+    pub fn self_heal_disk() -> Result<String> {
+        let mut report = String::new();
+
+        // Parse disk usage from `df` for the given mount point.
+        fn disk_usage_pct(path: &str) -> Option<u8> {
+            let output = Command::new("df")
+                .args(["--output=pcent", path])
+                .output()
+                .ok()?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Output looks like: "Use%\n  42%\n"
+            for line in stdout.lines().skip(1) {
+                let trimmed = line.trim().trim_end_matches('%');
+                if let Ok(pct) = trimmed.parse::<u8>() {
+                    return Some(pct);
+                }
+            }
+            None
+        }
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/var/home/lifeos".to_string());
+        let var_pct = disk_usage_pct("/var");
+        let home_pct = disk_usage_pct(&home);
+
+        report.push_str(&format!(
+            "Disk usage: /var={}%, home={}%\n",
+            var_pct.map_or("??".to_string(), |p| p.to_string()),
+            home_pct.map_or("??".to_string(), |p| p.to_string()),
+        ));
+
+        let needs_cleanup = var_pct.is_some_and(|p| p > 90)
+            || home_pct.is_some_and(|p| p > 90);
+
+        if !needs_cleanup {
+            report.push_str("No cleanup needed (usage <= 90%).");
+            return Ok(report);
+        }
+
+        report.push_str("Usage > 90% detected. Running auto-cleanup...\n");
+
+        // 1) Vacuum journal logs.
+        let journal_result = Command::new("journalctl")
+            .args(["--vacuum-time=3d", "--vacuum-size=200M"])
+            .output();
+        match journal_result {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                report.push_str(&format!(
+                    "Journal vacuum: {}{}\n",
+                    stdout.trim(),
+                    if stderr.trim().is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", stderr.trim())
+                    }
+                ));
+            }
+            Err(e) => report.push_str(&format!("Journal vacuum failed: {}\n", e)),
+        }
+
+        // 2) Check for unused Flatpak runtimes.
+        let flatpak_list = Command::new("flatpak")
+            .args(["list", "--unused", "--columns=application"])
+            .output();
+        match flatpak_list {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let unused: Vec<&str> = stdout
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .collect();
+                if unused.is_empty() {
+                    report.push_str("No unused Flatpak runtimes found.\n");
+                } else {
+                    report.push_str(&format!(
+                        "Found {} unused Flatpak runtimes. Removing...\n",
+                        unused.len()
+                    ));
+                    let remove = Command::new("flatpak")
+                        .args(["uninstall", "--unused", "-y"])
+                        .output();
+                    match remove {
+                        Ok(r) if r.status.success() => {
+                            report.push_str("Unused Flatpak runtimes removed.\n");
+                        }
+                        Ok(r) => {
+                            let stderr = String::from_utf8_lossy(&r.stderr);
+                            report.push_str(&format!(
+                                "Flatpak removal partial: {}\n",
+                                stderr.trim()
+                            ));
+                        }
+                        Err(e) => {
+                            report.push_str(&format!("Flatpak removal failed: {}\n", e));
+                        }
+                    }
+                }
+            }
+            Ok(_) => report.push_str("Flatpak list --unused returned an error.\n"),
+            Err(_) => report.push_str("Flatpak not available.\n"),
+        }
+
+        // 3) Report post-cleanup usage.
+        let var_after = disk_usage_pct("/var");
+        let home_after = disk_usage_pct(&home);
+        report.push_str(&format!(
+            "Post-cleanup: /var={}%, home={}%\n",
+            var_after.map_or("??".to_string(), |p| p.to_string()),
+            home_after.map_or("??".to_string(), |p| p.to_string()),
+        ));
+
+        // Calculate freed space.
+        if let (Some(before), Some(after)) = (var_pct, var_after) {
+            if before > after {
+                report.push_str(&format!(
+                    "Freed ~{}% on /var.\n",
+                    before.saturating_sub(after)
+                ));
+            }
+        }
+
+        Ok(report)
+    }
+
+    // -----------------------------------------------------------------------
+    // Self-healing: network diagnostics
+    // -----------------------------------------------------------------------
+
+    /// Run network diagnostics: check DNS resolution, default gateway, and
+    /// attempt fallback DNS if resolution fails.
+    pub fn self_heal_network() -> Result<String> {
+        let mut report = String::new();
+
+        // 1) Check DNS resolution via getent.
+        let dns_check = Command::new("getent")
+            .args(["hosts", "dns.google"])
+            .output();
+
+        let dns_ok = match &dns_check {
+            Ok(out) if out.status.success() => {
+                let resolved = String::from_utf8_lossy(&out.stdout);
+                report.push_str(&format!("DNS resolution OK: {}\n", resolved.trim()));
+                true
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                report.push_str(&format!(
+                    "DNS resolution FAILED for dns.google: {}\n",
+                    stderr.trim()
+                ));
+                false
+            }
+            Err(e) => {
+                report.push_str(&format!("Cannot execute getent: {}\n", e));
+                false
+            }
+        };
+
+        // 2) If DNS failed, attempt to set fallback nameservers.
+        if !dns_ok {
+            report.push_str("Attempting fallback DNS (8.8.8.8, 1.1.1.1)...\n");
+            let fallback_content = "# LifeOS fallback DNS\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n";
+            match fs::write("/etc/resolv.conf", fallback_content) {
+                Ok(_) => {
+                    report.push_str("Wrote fallback DNS to /etc/resolv.conf.\n");
+                    // Verify fix.
+                    let recheck = Command::new("getent")
+                        .args(["hosts", "dns.google"])
+                        .output();
+                    match recheck {
+                        Ok(out) if out.status.success() => {
+                            report.push_str("DNS resolution restored after fallback.\n");
+                        }
+                        _ => {
+                            report.push_str(
+                                "DNS still failing after fallback. Network may be down.\n",
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    report.push_str(&format!(
+                        "Cannot write /etc/resolv.conf (read-only on bootc?): {}\n",
+                        e
+                    ));
+                }
+            }
+        }
+
+        // 3) Check default gateway.
+        let gw_output = Command::new("ip")
+            .args(["route", "show", "default"])
+            .output();
+        match gw_output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if stdout.trim().is_empty() {
+                    report.push_str("WARNING: No default gateway found.\n");
+                } else {
+                    report.push_str(&format!("Default gateway: {}\n", stdout.trim()));
+                }
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                report.push_str(&format!("ip route error: {}\n", stderr.trim()));
+            }
+            Err(e) => {
+                report.push_str(&format!("Cannot execute 'ip': {}\n", e));
+            }
+        }
+
+        Ok(report)
+    }
+
+    // -----------------------------------------------------------------------
+    // Predictive maintenance
+    // -----------------------------------------------------------------------
+
+    /// Inspect hardware health (SSD SMART data, battery) and generate
+    /// predictive warnings before failures occur.
+    pub fn predictive_maintenance(&self) -> Vec<SecurityAlert> {
+        let mut alerts = Vec::new();
+
+        // --- SSD SMART via smartctl ---
+        // Try to find the first NVMe device.
+        let nvme_device = Self::find_first_nvme().unwrap_or_else(|| "/dev/nvme0n1".to_string());
+
+        let smart_output = Command::new("smartctl")
+            .args(["-j", "-a", &nvme_device])
+            .output();
+
+        match smart_output {
+            Ok(out) if out.status.success() || !out.stdout.is_empty() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    // percentage_used from NVMe health
+                    let pct_used = json
+                        .pointer("/nvme_smart_health_information_log/percentage_used")
+                        .and_then(|v| v.as_u64());
+
+                    if let Some(pct) = pct_used {
+                        if pct > 80 {
+                            // Rough estimate: if 80% used over N years, remaining ~ (100-pct)/(pct/assumed_age)
+                            let remaining_months = if pct >= 100 {
+                                0u64
+                            } else {
+                                // Assume ~3 years average age; estimate linearly
+                                ((100 - pct) as f64 / pct as f64 * 36.0) as u64
+                            };
+                            alerts.push(SecurityAlert {
+                                severity: AlertSeverity::Warning,
+                                category: "hardware.ssd_wear".into(),
+                                message: format!(
+                                    "SSD has {}% life used. Plan replacement in ~{} months.",
+                                    pct, remaining_months
+                                ),
+                                timestamp: Utc::now(),
+                                process: None,
+                            });
+                        }
+                    }
+
+                    // media_errors
+                    let media_errors = json
+                        .pointer("/nvme_smart_health_information_log/media_errors")
+                        .and_then(|v| v.as_u64());
+
+                    if let Some(errors) = media_errors {
+                        if errors > 0 {
+                            alerts.push(SecurityAlert {
+                                severity: AlertSeverity::Critical,
+                                category: "hardware.ssd_errors".into(),
+                                message: format!(
+                                    "SSD has {} uncorrectable media error(s). Backup immediately.",
+                                    errors
+                                ),
+                                timestamp: Utc::now(),
+                                process: None,
+                            });
+                        }
+                    }
+                } else {
+                    debug!("predictive_maintenance: failed to parse smartctl JSON");
+                }
+            }
+            Ok(_) => {
+                debug!("predictive_maintenance: smartctl returned no data for {}", nvme_device);
+            }
+            Err(e) => {
+                debug!("predictive_maintenance: smartctl not available: {}", e);
+            }
+        }
+
+        // --- Battery health ---
+        let bat_full = fs::read_to_string("/sys/class/power_supply/BAT0/energy_full");
+        let bat_design = fs::read_to_string("/sys/class/power_supply/BAT0/energy_full_design");
+
+        if let (Ok(full_str), Ok(design_str)) = (bat_full, bat_design) {
+            let full: f64 = full_str.trim().parse().unwrap_or(0.0);
+            let design: f64 = design_str.trim().parse().unwrap_or(1.0);
+            if design > 0.0 {
+                let health_pct = (full / design * 100.0) as u8;
+                if health_pct < 80 {
+                    alerts.push(SecurityAlert {
+                        severity: AlertSeverity::Warning,
+                        category: "hardware.battery".into(),
+                        message: format!("Battery degraded to {}% of design capacity.", health_pct),
+                        timestamp: Utc::now(),
+                        process: None,
+                    });
+                }
+            }
+        }
+
+        alerts
+    }
+
+    /// Find the first NVMe block device by scanning /dev/nvme*.
+    fn find_first_nvme() -> Option<String> {
+        let output = Command::new("ls")
+            .args(["/dev/"])
+            .output()
+            .ok()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for entry in stdout.lines() {
+            let entry = entry.trim();
+            // Match nvme0n1, nvme1n1, etc. (block device, not partition)
+            if entry.starts_with("nvme")
+                && entry.contains('n')
+                && !entry.contains('p')
+                && entry.len() > 5
+            {
+                return Some(format!("/dev/{}", entry));
+            }
+        }
+        None
+    }
+
+    // -----------------------------------------------------------------------
+    // Zero-day protection
+    // -----------------------------------------------------------------------
+
+    /// Compare running processes against known baselines.
+    ///
+    /// - New processes running for less than 5 minutes trigger an info alert.
+    /// - Unknown processes with network connections trigger a warning.
+    pub fn zero_day_protection(&self) -> Vec<SecurityAlert> {
+        let mut alerts = Vec::new();
+
+        let entries = match fs::read_dir("/proc") {
+            Ok(e) => e,
+            Err(_) => return alerts,
+        };
+
+        // Gather the set of processes with network connections (from ss).
+        let net_procs = Self::processes_with_network();
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            if !name_str.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+
+            let pid: u32 = match name_str.parse() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+
+            let proc_name = match self.read_proc_name(pid) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            // Skip if already in baseline.
+            if self.baselines.contains_key(&proc_name) {
+                continue;
+            }
+
+            // Check process age (uptime since boot vs process start time).
+            let young = Self::is_process_young(pid, 300); // 5 minutes = 300 seconds
+
+            if young {
+                alerts.push(SecurityAlert {
+                    severity: AlertSeverity::Info,
+                    category: "zeroday.new_process".into(),
+                    message: format!(
+                        "New unknown process: {} (pid {}). Monitoring.",
+                        proc_name, pid
+                    ),
+                    timestamp: Utc::now(),
+                    process: Some(proc_name.clone()),
+                });
+            }
+
+            // Check if this unknown process has network connections.
+            if net_procs.contains(&pid) || net_procs.contains(&0) && net_procs.contains(&pid) {
+                alerts.push(SecurityAlert {
+                    severity: AlertSeverity::Warning,
+                    category: "zeroday.network_unknown".into(),
+                    message: format!(
+                        "Unknown process '{}' (pid {}) has network connections. Isolating recommended.",
+                        proc_name, pid
+                    ),
+                    timestamp: Utc::now(),
+                    process: Some(proc_name),
+                });
+            }
+        }
+
+        alerts
+    }
+
+    /// Check if a process started less than `max_age_secs` seconds ago.
+    fn is_process_young(pid: u32, max_age_secs: u64) -> bool {
+        // Read system uptime.
+        let uptime: f64 = match fs::read_to_string("/proc/uptime") {
+            Ok(s) => s.split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0.0),
+            Err(_) => return false,
+        };
+
+        // Read process start time (field 21, 0-indexed) in clock ticks.
+        let stat = match fs::read_to_string(format!("/proc/{}/stat", pid)) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let fields: Vec<&str> = stat.split_whitespace().collect();
+        if fields.len() <= 21 {
+            return false;
+        }
+        let start_ticks: f64 = match fields[21].parse() {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+
+        // Clock ticks per second (usually 100 on Linux).
+        let ticks_per_sec: f64 = 100.0; // sysconf(_SC_CLK_TCK) default
+        let process_start_secs = start_ticks / ticks_per_sec;
+        let process_age = uptime - process_start_secs;
+
+        process_age >= 0.0 && process_age < max_age_secs as f64
+    }
+
+    /// Gather set of PIDs that have active network connections (via `ss -tnp`).
+    fn processes_with_network() -> std::collections::HashSet<u32> {
+        let mut pids = std::collections::HashSet::new();
+
+        let output = match Command::new("ss").args(["-tnp"]).output() {
+            Ok(o) => o,
+            Err(_) => return pids,
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines().skip(1) {
+            // Look for pid=NNNN in the users: column
+            // Format example: users:(("firefox",pid=1234,fd=56))
+            if let Some(pid_start) = line.find("pid=") {
+                let after_pid = &line[pid_start + 4..];
+                let pid_str: String = after_pid.chars().take_while(|c| c.is_ascii_digit()).collect();
+                if let Ok(pid) = pid_str.parse::<u32>() {
+                    pids.insert(pid);
+                }
+            }
+        }
+
+        pids
+    }
+
+    // -----------------------------------------------------------------------
     // Status summary
     // -----------------------------------------------------------------------
 
@@ -432,5 +982,67 @@ mod tests {
         // After update, we should have some baselines (on any Linux system)
         // In CI, /proc exists so this should populate
         assert!(daemon.baselines.len() > 0 || cfg!(not(target_os = "linux")));
+    }
+
+    #[test]
+    fn test_self_heal_service_rejects_invalid_names() {
+        assert!(SecurityDaemon::self_heal_service("").is_err());
+        assert!(SecurityDaemon::self_heal_service("../etc/passwd").is_err());
+        assert!(SecurityDaemon::self_heal_service("foo;bar").is_err());
+        assert!(SecurityDaemon::self_heal_service("foo&bar").is_err());
+    }
+
+    #[test]
+    fn test_self_heal_disk_runs() {
+        // Should not panic; may report unknown percentages in CI.
+        let result = SecurityDaemon::self_heal_disk();
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert!(report.contains("Disk usage"));
+    }
+
+    #[test]
+    fn test_self_heal_network_runs() {
+        // Should not panic even without network.
+        let result = SecurityDaemon::self_heal_network();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_predictive_maintenance_runs() {
+        let daemon = SecurityDaemon::new();
+        // Should not panic; may return empty if no hardware sensors.
+        let _alerts = daemon.predictive_maintenance();
+    }
+
+    #[test]
+    fn test_zero_day_protection_runs() {
+        let daemon = SecurityDaemon::new();
+        // With empty baselines, most processes will be flagged.
+        let alerts = daemon.zero_day_protection();
+        // On a Linux system with /proc, we should get some alerts.
+        assert!(!alerts.is_empty() || cfg!(not(target_os = "linux")));
+    }
+
+    #[test]
+    fn test_is_process_young() {
+        // PID 1 (init) should NOT be young on any running system.
+        assert!(!SecurityDaemon::is_process_young(1, 300));
+        // Non-existent PID should return false.
+        assert!(!SecurityDaemon::is_process_young(999_999_999, 300));
+    }
+
+    #[test]
+    fn test_processes_with_network() {
+        // Should not panic; returns a set (possibly empty in sandboxed CI).
+        let pids = SecurityDaemon::processes_with_network();
+        // Just verify it's a valid set.
+        let _ = pids.len();
+    }
+
+    #[test]
+    fn test_find_first_nvme() {
+        // May return None in CI without NVMe devices; should not panic.
+        let _device = SecurityDaemon::find_first_nvme();
     }
 }

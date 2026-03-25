@@ -54,6 +54,17 @@ pub struct AppContract {
     pub autonomy_level: AutonomyLevel,
 }
 
+/// Result of a permission check against an app's autonomy level.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PermissionResult {
+    /// Action is allowed without user interaction.
+    Allowed,
+    /// Action requires user approval (includes description).
+    NeedsApproval(String),
+    /// Action is denied (includes reason).
+    Denied(String),
+}
+
 /// Registry that manages all known app contracts.
 #[derive(Debug)]
 pub struct AppContractRegistry {
@@ -148,6 +159,70 @@ impl AppContractRegistry {
     /// List all registered contracts.
     pub fn list_all(&self) -> Vec<&AppContract> {
         self.contracts.iter().collect()
+    }
+
+    /// Update the autonomy level for a registered app and persist to disk.
+    pub fn set_autonomy(&mut self, app_name: &str, level: AutonomyLevel) -> Result<()> {
+        let contract = self
+            .contracts
+            .iter_mut()
+            .find(|c| c.name == app_name)
+            .ok_or_else(|| anyhow::anyhow!("app '{}' not found in registry", app_name))?;
+        info!(
+            "app_contracts: setting autonomy for '{}' to {:?}",
+            app_name, level
+        );
+        contract.autonomy_level = level;
+        self.save()
+    }
+
+    /// Check whether an app is allowed to perform a given action based on its autonomy level.
+    pub fn check_permission(&self, app_name: &str, action: &str) -> PermissionResult {
+        let contract = match self.contracts.iter().find(|c| c.name == app_name) {
+            Some(c) => c,
+            None => {
+                return PermissionResult::Denied(format!("app '{}' not registered", app_name))
+            }
+        };
+
+        match contract.autonomy_level {
+            AutonomyLevel::Autonomous => PermissionResult::Allowed,
+            AutonomyLevel::AskFirst => PermissionResult::NeedsApproval(format!(
+                "app '{}' wants to perform '{}' — approval required",
+                app_name, action
+            )),
+            AutonomyLevel::Manual => PermissionResult::Denied(format!(
+                "app '{}' is in manual mode — action '{}' blocked",
+                app_name, action
+            )),
+        }
+    }
+
+    /// Persist the current registry to a JSON file in the config directory.
+    pub fn save(&self) -> Result<()> {
+        fs::create_dir_all(&self.config_dir)?;
+        let path = self.config_dir.join("_registry.json");
+        let json = serde_json::to_string_pretty(&self.contracts)?;
+        fs::write(&path, json)?;
+        debug!("app_contracts: saved registry to {:?}", path);
+        Ok(())
+    }
+
+    /// Reload the registry from the persisted JSON file on disk.
+    pub fn load(&mut self) -> Result<()> {
+        let path = self.config_dir.join("_registry.json");
+        if path.exists() {
+            let contents = fs::read_to_string(&path)?;
+            self.contracts = serde_json::from_str(&contents)?;
+            info!(
+                "app_contracts: loaded {} contracts from {:?}",
+                self.contracts.len(),
+                path
+            );
+        } else {
+            debug!("app_contracts: no registry file at {:?}, keeping current state", path);
+        }
+        Ok(())
     }
 }
 

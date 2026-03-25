@@ -36,6 +36,8 @@ mod calendar;
 #[allow(dead_code)]
 mod comm_bridges;
 mod computer_use;
+#[allow(dead_code)]
+mod connector_registry;
 mod context_policies;
 #[allow(dead_code)]
 mod cosmic_control;

@@ -307,6 +307,93 @@ pub async fn call_tool(
 }
 
 // ---------------------------------------------------------------------------
+// External MCP server discovery
+// ---------------------------------------------------------------------------
+
+/// Discover tools from an external MCP server by sending a `tools/list` JSON-RPC request.
+pub async fn discover_tools_from_server(server_url: &str) -> Result<Vec<McpTool>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let request_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+        "params": {}
+    });
+
+    let resp = client
+        .post(server_url)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to contact MCP server at {}: {}", server_url, e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("MCP server returned HTTP {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid JSON response: {}", e))?;
+
+    // The result should be an array of tool definitions
+    let tools_value = body
+        .get("result")
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(vec![]));
+
+    let tools: Vec<McpTool> = serde_json::from_value(tools_value)
+        .map_err(|e| format!("Failed to parse tools from response: {}", e))?;
+
+    Ok(tools)
+}
+
+/// Discover resources from an external MCP server by sending a `resources/list` JSON-RPC request.
+pub async fn discover_resources_from_server(
+    server_url: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("HTTP client error: {}", e))?;
+
+    let request_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "resources/list",
+        "params": {}
+    });
+
+    let resp = client
+        .post(server_url)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to contact MCP server at {}: {}", server_url, e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("MCP server returned HTTP {}", resp.status()));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid JSON response: {}", e))?;
+
+    let resources = body
+        .get("result")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    Ok(resources)
+}
+
+// ---------------------------------------------------------------------------
 // JSON-RPC 2.0 Transport (stdio)
 // ---------------------------------------------------------------------------
 

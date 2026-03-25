@@ -8,6 +8,7 @@ use log::info;
 use log::warn;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProactiveAlert {
@@ -671,6 +672,65 @@ async fn check_audio_volume() -> Option<ProactiveAlert> {
         })
     } else {
         None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Air-gapped mode detection
+// ---------------------------------------------------------------------------
+
+use std::sync::Mutex;
+use std::time::Instant;
+
+/// Cached result of the air-gapped check (value, timestamp).
+static AIR_GAPPED_CACHE: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+
+/// Check if the system is air-gapped (no internet connectivity).
+///
+/// Tries to resolve `dns.google` via `getent hosts`. Caches the result for 5 minutes.
+pub async fn is_air_gapped() -> bool {
+    {
+        if let Ok(guard) = AIR_GAPPED_CACHE.lock() {
+            if let Some((cached, ts)) = *guard {
+                if ts.elapsed() < Duration::from_secs(300) {
+                    return cached;
+                }
+            }
+        }
+    }
+
+    let result = tokio::process::Command::new("getent")
+        .args(["hosts", "dns.google"])
+        .output()
+        .await
+        .map(|o| !o.status.success())
+        .unwrap_or(true);
+
+    if let Ok(mut guard) = AIR_GAPPED_CACHE.lock() {
+        *guard = Some((result, Instant::now()));
+    }
+
+    if result {
+        info!("Air-gapped mode detected — only local providers available");
+    }
+
+    result
+}
+
+/// Return the list of available LLM providers based on connectivity.
+///
+/// When air-gapped, only the local provider is available.
+/// Otherwise, returns all configured providers.
+pub fn get_available_providers_for_mode(air_gapped: bool) -> Vec<String> {
+    if air_gapped {
+        vec!["local".into()]
+    } else {
+        vec![
+            "local".into(),
+            "openai".into(),
+            "anthropic".into(),
+            "groq".into(),
+        ]
     }
 }
 

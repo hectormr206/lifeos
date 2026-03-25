@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,6 +18,77 @@ use crate::memory_plane::MemoryPlaneManager;
 use crate::privacy_filter::PrivacyFilter;
 use crate::scheduled_tasks::ScheduledTaskManager;
 use crate::task_queue::{TaskCreate, TaskPriority, TaskQueue};
+
+// ---------------------------------------------------------------------------
+// SLA configuration
+// ---------------------------------------------------------------------------
+
+/// Service-Level Agreement constraints for a task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlaConfig {
+    /// Maximum allowed duration in seconds.
+    pub max_duration_secs: u64,
+    /// Minimum acceptable confidence (0.0–1.0).
+    pub min_confidence: f64,
+}
+
+impl SlaConfig {
+    /// Parse an SLA prefix from an objective string.
+    /// Format: `[SLA:30m,95%] actual objective text`
+    /// Returns `(Some(SlaConfig), stripped_objective)` or `(None, original)`.
+    pub fn parse_from_objective(objective: &str) -> (Option<Self>, String) {
+        let trimmed = objective.trim();
+        if !trimmed.starts_with("[SLA:") {
+            return (None, objective.to_string());
+        }
+        if let Some(end) = trimmed.find(']') {
+            let inner = &trimmed[5..end]; // e.g. "30m,95%"
+            let parts: Vec<&str> = inner.split(',').collect();
+            if parts.len() == 2 {
+                let duration_str = parts[0].trim();
+                let confidence_str = parts[1].trim().trim_end_matches('%');
+
+                let secs = if let Some(m) = duration_str.strip_suffix('m') {
+                    m.parse::<u64>().ok().map(|v| v * 60)
+                } else if let Some(s) = duration_str.strip_suffix('s') {
+                    s.parse::<u64>().ok()
+                } else if let Some(h) = duration_str.strip_suffix('h') {
+                    h.parse::<u64>().ok().map(|v| v * 3600)
+                } else {
+                    duration_str.parse::<u64>().ok()
+                };
+
+                let conf = confidence_str.parse::<f64>().ok().map(|v| v / 100.0);
+
+                if let (Some(s), Some(c)) = (secs, conf) {
+                    let stripped = trimmed[end + 1..].trim().to_string();
+                    return (
+                        Some(SlaConfig {
+                            max_duration_secs: s,
+                            min_confidence: c,
+                        }),
+                        stripped,
+                    );
+                }
+            }
+        }
+        (None, objective.to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reliability statistics
+// ---------------------------------------------------------------------------
+
+/// Aggregated reliability metrics computed from the audit log.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReliabilityStats {
+    pub total_tasks: usize,
+    pub success_rate: f64,
+    pub avg_duration_ms: f64,
+    pub most_failed_action_type: Option<String>,
+    pub avg_confidence: f64,
+}
 
 // ---------------------------------------------------------------------------
 // Notification types — consumed by Telegram bridge and other listeners
@@ -699,6 +771,30 @@ impl Supervisor {
             }
         }
 
+        // Parse SLA metadata from the objective if present
+        let (sla, clean_objective) = SlaConfig::parse_from_objective(objective);
+        let objective = if sla.is_some() {
+            clean_objective.as_str()
+        } else {
+            objective
+        };
+
+        // SLA pre-check: in shadow mode, estimate duration from plan step count.
+        // Each step is estimated at ~30 seconds.
+        if let Some(ref sla_cfg) = sla {
+            if self.shadow_mode {
+                // Rough estimate: 30s per step, assume 4 steps average
+                let estimated_secs = 4 * 30;
+                if estimated_secs > sla_cfg.max_duration_secs {
+                    anyhow::bail!(
+                        "SLA violation: estimated time ({}s) exceeds limit ({}s)",
+                        estimated_secs,
+                        sla_cfg.max_duration_secs
+                    );
+                }
+            }
+        }
+
         // Select the best agent role for this task
         let role = AgentRole::suggest_for(objective);
         info!("Task {} assigned to role: {:?}", task_id, role);
@@ -713,6 +809,19 @@ impl Supervisor {
             plan.steps.len(),
             role
         );
+
+        // SLA post-plan check: estimate ~30s per step and bail if over limit
+        if let Some(ref sla_cfg) = sla {
+            let estimated_secs = (plan.steps.len() as u64) * 30;
+            if estimated_secs > sla_cfg.max_duration_secs {
+                anyhow::bail!(
+                    "SLA violation: estimated time ({}s for {} steps) exceeds limit ({}s)",
+                    estimated_secs,
+                    plan.steps.len(),
+                    sla_cfg.max_duration_secs
+                );
+            }
+        }
 
         // ---------------------------------------------------------------
         // Shadow mode: dry-run preview without executing anything
@@ -1431,8 +1540,15 @@ Always end with a "respond" step summarizing what was done."#,
         let memory_context = self.recall_context(objective).await;
 
         let mut user_content = objective.to_string();
+
+        // Prepend live context (active window, queue state, etc.)
+        let context_prompt = self.build_context_prompt();
+        if !context_prompt.is_empty() {
+            user_content = format!("{}\n\n{}", context_prompt, user_content);
+        }
+
         if !memory_context.is_empty() {
-            user_content = format!("{}\n\n{}", objective, memory_context);
+            user_content = format!("{}\n\n{}", user_content, memory_context);
         }
 
         let request = RouterRequest {
@@ -1837,6 +1953,126 @@ Respond ONLY with a JSON object (no markdown):
         let router = self.router.read().await;
         let response = router.chat(&request).await?;
         Ok(response.text)
+    }
+
+    /// Compute reliability statistics by reading the supervisor audit log.
+    pub fn reliability_stats(&self) -> ReliabilityStats {
+        let log_paths = [
+            PathBuf::from("/var/log/lifeos/supervisor-audit.log"),
+            PathBuf::from("/var/lib/lifeos/supervisor-audit.log"),
+        ];
+
+        let content = log_paths
+            .iter()
+            .find_map(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default();
+
+        if content.is_empty() {
+            return ReliabilityStats::default();
+        }
+
+        let mut total = 0usize;
+        let mut successes = 0usize;
+        let mut confidence_sum = 0.0f64;
+        let mut failed_types: HashMap<String, usize> = HashMap::new();
+
+        for line in content.lines() {
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields.len() < 6 {
+                continue;
+            }
+            let status = fields[2];
+            // Only count terminal states
+            if status != "completed" && status != "failed" && status != "step_fail" {
+                continue;
+            }
+            total += 1;
+            if status == "completed" || status == "step_ok" || status == "step_ok_retry" {
+                successes += 1;
+            }
+            if status == "step_fail" || status == "failed" {
+                let action_hint = fields.get(3).unwrap_or(&"unknown");
+                *failed_types
+                    .entry(action_hint.to_string())
+                    .or_insert(0) += 1;
+            }
+            // Parse confidence from last field: "confidence=0.85"
+            if let Some(conf_field) = fields.last() {
+                if let Some(val_str) = conf_field.strip_prefix("confidence=") {
+                    if let Ok(c) = val_str.parse::<f64>() {
+                        confidence_sum += c;
+                    }
+                }
+            }
+        }
+
+        let most_failed = failed_types
+            .into_iter()
+            .max_by_key(|(_k, v)| *v)
+            .map(|(k, _)| k);
+
+        ReliabilityStats {
+            total_tasks: total,
+            success_rate: if total > 0 {
+                successes as f64 / total as f64
+            } else {
+                0.0
+            },
+            avg_duration_ms: 0.0, // Duration not tracked per-line in audit log
+            most_failed_action_type: most_failed,
+            avg_confidence: if total > 0 {
+                confidence_sum / total as f64
+            } else {
+                0.0
+            },
+        }
+    }
+
+    /// Build a context prompt from current system state to prepend to LLM requests.
+    ///
+    /// Gathers:
+    /// - Last screenshot filename (as proxy for active window)
+    /// - Last task objective processed
+    /// - Current working directory
+    pub fn build_context_prompt(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+
+        parts.push(format!("Working directory: {}", self.work_dir.display()));
+
+        // Try to find the latest screenshot to infer active window context
+        let screenshot_dir = std::env::temp_dir().join("lifeos-screenshots");
+        if let Ok(entries) = std::fs::read_dir(&screenshot_dir) {
+            let latest = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path()
+                        .extension()
+                        .map(|ext| ext == "png")
+                        .unwrap_or(false)
+                })
+                .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()));
+            if let Some(entry) = latest {
+                parts.push(format!(
+                    "Last screen capture: {}",
+                    entry.file_name().to_string_lossy()
+                ));
+            }
+        }
+
+        // Include queue summary if available
+        if let Ok(summary) = self.queue.summary() {
+            if let Some(obj) = summary.as_object() {
+                if let Some(pending) = obj.get("pending") {
+                    parts.push(format!("Pending tasks in queue: {}", pending));
+                }
+            }
+        }
+
+        if parts.is_empty() {
+            return String::new();
+        }
+
+        format!("[Current context]\n{}\n", parts.join("\n"))
     }
 
     async fn audit_log(
