@@ -153,6 +153,9 @@ pub struct Supervisor {
     notify_tx: broadcast::Sender<SupervisorNotification>,
     started_at: std::time::Instant,
     metrics: std::sync::Mutex<AllAgentMetrics>,
+    /// When true, medium-risk actions (git commit, mv, cp) execute without
+    /// waiting for approval. Controlled by LIFEOS_AUTO_APPROVE_MEDIUM env var.
+    auto_approve_medium: bool,
 }
 
 impl Supervisor {
@@ -192,6 +195,10 @@ impl Supervisor {
 
         info!("Supervisor working directory: {}", work_dir.display());
 
+        let auto_approve_medium = std::env::var("LIFEOS_AUTO_APPROVE_MEDIUM")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(true); // default ON — medium-risk auto-executes with notification
+
         Self {
             queue,
             router,
@@ -203,6 +210,7 @@ impl Supervisor {
             notify_tx,
             started_at: std::time::Instant::now(),
             metrics: std::sync::Mutex::new(AllAgentMetrics::default()),
+            auto_approve_medium,
         }
     }
 
@@ -1102,37 +1110,41 @@ Always end with a "respond" step summarizing what was done."#,
                 // High risk: destructive or irreversible commands
                 let high_risk = [
                     "rm -rf",
-                    "rm -r",
-                    "rmdir",
+                    "rm -r /",
                     "mkfs",
                     "dd if=",
-                    "git push",
+                    "git push --force",
+                    "git push -f ",
                     "git reset --hard",
                     "git checkout .",
-                    "git clean",
+                    "git clean -fd",
                     "reboot",
                     "shutdown",
                     "systemctl stop",
-                    "pkill",
+                    "pkill -9",
                     "killall",
                     "chmod 777",
                     "> /dev/",
                     "curl.*| sh",
                     "wget.*| sh",
-                    "sudo",
                 ];
                 if high_risk.iter().any(|p| cmd.contains(p)) {
                     return RiskLevel::High;
                 }
-                // Medium risk: file modification, git operations
+                // Medium risk: git operations, file modification, publishing
+                // These auto-execute when auto_approve_medium is true (default),
+                // but always send a notification so user can track what happened.
                 let medium_risk = [
                     "git commit",
+                    "git push",
                     "git merge",
                     "git rebase",
+                    "git stash",
                     "cargo publish",
                     "npm publish",
                     "mv ",
                     "cp -r",
+                    "sudo",
                 ];
                 if medium_risk.iter().any(|p| cmd.contains(p)) {
                     return RiskLevel::Medium;
@@ -1176,21 +1188,39 @@ Always end with a "respond" step summarizing what was done."#,
         }
 
         if risk == RiskLevel::Medium {
-            info!(
-                "Medium-risk action detected, notifying for approval: {}",
-                desc
-            );
+            if self.auto_approve_medium {
+                info!("Medium-risk action auto-approved (notifying): {}", desc);
+            } else {
+                warn!(
+                    "Medium-risk action detected, blocking for approval: {}",
+                    desc
+                );
+                let _ = self
+                    .notify_tx
+                    .send(SupervisorNotification::ApprovalRequired {
+                        task_id: "medium-risk".into(),
+                        objective: desc.clone(),
+                        action_description: format!(
+                            "Accion de riesgo medio requiere aprobacion: {}\n{}",
+                            step.description, desc
+                        ),
+                    });
+                anyhow::bail!(
+                    "Medium-risk action requires approval: {}. Send /approve to continue.",
+                    desc
+                );
+            }
+            // Always notify even when auto-approved, for audit trail
             let _ = self
                 .notify_tx
                 .send(SupervisorNotification::ApprovalRequired {
-                    task_id: "medium-risk".into(),
+                    task_id: "medium-risk-auto".into(),
                     objective: desc.clone(),
                     action_description: format!(
-                        "Accion de riesgo medio: {}\n{}",
+                        "Accion de riesgo medio (auto-aprobada): {}\n{}",
                         step.description, desc
                     ),
                 });
-            // Execute but notify — the notification allows user to track what happened
         }
 
         match &step.action {

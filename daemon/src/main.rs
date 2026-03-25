@@ -22,11 +22,15 @@ mod agent_runtime;
 mod ai;
 mod api;
 #[allow(dead_code)]
+mod autonomous_agent;
+#[allow(dead_code)]
 mod calendar;
 #[allow(dead_code)]
 mod comm_bridges;
 mod computer_use;
 mod context_policies;
+#[allow(dead_code)]
+mod desktop_operator;
 #[allow(dead_code)]
 mod email_bridge;
 mod events;
@@ -47,6 +51,10 @@ mod lab;
 mod llm_router;
 #[allow(dead_code)]
 mod matrix_bridge;
+#[allow(dead_code)]
+mod mcp_server;
+#[allow(dead_code)]
+mod meeting_assistant;
 mod memory_plane;
 #[cfg(feature = "ui-overlay")]
 mod mini_widget;
