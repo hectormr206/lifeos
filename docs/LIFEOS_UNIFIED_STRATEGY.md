@@ -1,6 +1,6 @@
 # LifeOS Estrategia Unificada Final
 
-Fecha: 2026-03-23 (ultima revision: 2026-03-24)
+Fecha: 2026-03-23 (ultima revision: 2026-03-24, fases H-T, modelo biologico, sistema inmunologico)
 Sintesis de:
 
 - `docs/LIFEOS_STRATEGIC_REVIEW.md` (Estrategia A — Gemini)
@@ -104,7 +104,9 @@ Los 6 cierres decisivos originales — estado actual:
 
 | Competidor | Estado | Amenaza | Ventaja de LifeOS |
 |------------|--------|---------|-------------------|
-| **OpenClaw** | 100K+ GitHub stars, viral. Steinberger en OpenAI. 50+ integraciones. NVIDIA dice "toda empresa necesita OpenClaw strategy" | **ALTA** — es lo mas cercano a tu vision | Tu ERES el OS. OpenClaw es app dentro de OS. Ademas 135K instancias expuestas (crisis seguridad) |
+| **OpenClaw** | Open-source, viral. Peter Steinberger (PSPDFKit). 21+ canales messaging. 13,729+ community skills en ClawHub. Browser headless, cron, self-improvement (escribe sus propios skills). macOS menu bar app con wake word | **ALTA** — es el benchmark inmediato | Tu ERES el OS. OpenClaw es app dentro de OS. En Linux solo corre como headless gateway (sin desktop). LifeOS tiene desktop overlay, computer use, GPU management |
+| **Devin AI** | $20/mes (bajo de $500). 67% PR merge rate. Compro Windsurf por $250M. Goldman Sachs lo usa (20% efficiency gains). Sandbox cloud con IDE+terminal+browser propio | **ALTA** para coding | Solo coding. No es asistente de vida. Cloud-only. Sin privacidad |
+| **Replit Agent 3** | 10x mas autonomo que v2. 200 min ejecucion continua. Auto-abre apps en browser, encuentra bugs, los corrige. Deploy con 1 click | **MEDIA** para webapps | Solo web apps. Cloud-only. No es OS. Sin privacidad local |
 | **AthenaOS** (kyegomez) | Concepto de OS con millones de agentes swarm. Rust + C++. 1700+ contribuidores de Agora | Baja hoy, potencial en 12-18 meses | Tu tienes producto funcional corriendo en hardware real |
 | **MAGI OS** | Distro experimental AI + Debian/MATE. Descargable como ISO | Baja. Proyecto de investigacion | Mucho mas limitado que LifeOS en todo |
 | **RHEL AI** | Red Hat enterprise con InstructLab. Produccion | Baja para personal, alta para enterprise | Enfocado en servidor, no desktop personal |
@@ -114,38 +116,48 @@ Los 6 cierres decisivos originales — estado actual:
 
 | Competidor | Estado | Diferencia clave |
 |------------|--------|-----------------|
-| **Agent Zero** | Open source, 12K+ stars, Docker, se auto-corrige, multi-LLM | Es framework, no OS. LifeOS puede integrarlo |
-| **Claude Computer Use** | Produccion via API. Ve pantalla, mueve mouse, ejecuta | Es API, no OS. LifeOS ya tiene computer_use + puede usar Claude API como cerebro |
-| **Devin AI** | $20/mes, completa 83% mas tareas que v1, auto-debugging | Solo para desarrollo de software, no asistente de vida |
+| **Claude Computer Use** | Produccion macOS (marzo 2026). Anthropic compro Vercept. Ve pantalla pixel a pixel, controla mouse/keyboard en cualquier app | Es API cloud, no OS. LifeOS ya tiene computer_use local + puede usar Claude API como cerebro premium |
+| **Cursor / Windsurf** | Cursor: 50%+ Fortune 500. Background Agents autonomos. Windsurf: #1 en rankings AI dev tools 2026, adquirido por Cognition (Devin) | Son IDEs, no OS. Solo coding. LifeOS puede ser la plataforma donde corren |
+| **Open Interpreter** | Open source. 01 Light hardware (ESP32, voice-controlled). Experimental OS mode (screen+mouse). Ejecuta Python/bash local | Es framework, no OS. Menos robusto que LifeOS. Pero la vision es similar |
+| **CrewAI** | $18M funding. 100K+ devs certificados. 60% Fortune 500. 60M+ agent executions/mes | Son librerias Python. LifeOS puede usarlas como motor interno |
+| **AutoGPT** | 167K+ GitHub stars. Pionero de agentes autonomos | Requiere mucho human oversight. No production-ready |
 | **Screenpipe** | Open source MIT, $400 lifetime, graba pantalla/audio 24/7 | Es app no OS. Tu sensory_pipeline hace lo mismo a nivel kernel |
-| **CrewAI / LangGraph / AutoGen** | Los 3 dominantes en multi-agente. Produccion | Son librerias Python. LifeOS puede usarlas como motor interno |
 
 ### Lo que los gigantes estan haciendo
 
 | Gigante | Estado Marzo 2026 | Implicacion para LifeOS |
 |---------|-------------------|------------------------|
-| **Microsoft Copilot+** | **RETROCEDIENDO.** Admiten que Windows 11 se paso con Copilot. Cancelaron integraciones en Photos, Widgets, Notepad. Recall con problemas de seguridad | Ventana abierta. El mercado rechaza AI invasiva mal hecha |
-| **Apple Intelligence** | Conservadora. Privacidad primero, no autonomia. Varias features de Siri con contexto "in development" | No competira con autonomia real por años |
+| **Microsoft Copilot+** | Agents como "digital teammates" en M365. Computer Use en Copilot Studio (preview). Work IQ layer con memoria entre sesiones. Pero: RETROCEDIERON en Windows 11 (cancelaron Copilot en Photos/Widgets/Notepad). Recall sigue con problemas de seguridad | Ventana abierta. El mercado rechaza AI invasiva mal hecha. Pero el enterprise se mueve rapido |
+| **Apple Intelligence** | Foundation Models framework (Swift API). Visual Intelligence. Siri 2.0 agentico esperado junio 2026. Private Cloud Compute. Partnership con Google para Gemini | No competira con autonomia real por años. Pero la barra de UX sube |
+| **Google Project Astra** | Universal AI assistant. Video real-time con latencia ~cero. Project Mariner para tareas web complejas. Android XR smart glasses con Samsung | Solo movil/cloud. Desktop Linux no es target. Pero la calidad multimodal es el benchmark |
 | **Samsung/Google Gemini** | Agresivo en movil. Gemini controla apps en Galaxy S26. 800M dispositivos | Solo movil. Desktop Linux es diferente |
 | **Limitless (ex-Rewind)** | **MUERTO.** Meta lo compro, servidores apagandose, Pendant descontinuado | Oportunidad: el espacio de "memoria personal AI" quedo huerfano |
-| **Humane AI Pin** | **MUERTO.** Bricked desde Feb 2025. HP compro restos | Hardware AI dedicado fracaso |
-| **Rabbit R1** | Apenas sobrevive. Planean R2 para 2026 | Hardware AI dedicado no funciona solo |
+| **Humane AI Pin** | **MUERTO.** Discontinuado. HP compro restos por $116M. Overheating + $24/mo subscription fail | Hardware AI dedicado fracaso |
+| **Rabbit R1** | Sobrevive con R1 OS 2.0 (card UI, community skills via SDK). $199, sin suscripcion | Leccion: hardware AI necesita software ecosystem fuerte |
 
-### Veredicto competitivo
+### Veredicto competitivo (actualizado 2026-03-24)
 
 **La categoria "AI-first OS funcional, abierto, con agente autonomo" NO TIENE GANADOR.**
 
-- OpenClaw es la amenaza mas seria pero NO es un OS
-- Los gigantes estan retrocediendo (Microsoft) o siendo conservadores (Apple)
-- Los dispositivos AI dedicados fracasaron (Humane, Rabbit)
+- OpenClaw es la amenaza mas seria pero NO es un OS — en Linux solo corre headless
+- Devin/Replit son autonomos pero solo para coding, cloud-only, sin privacidad
+- Los gigantes avanzan (Apple Foundation Models, Microsoft Copilot Studio, Google Astra) pero en ecosistemas cerrados
+- Los dispositivos AI dedicados fracasaron (Humane muerto, Rabbit apenas sobrevive)
 - Los frameworks de agentes (CrewAI, LangGraph) son librerias, no productos de usuario final
-- La ventana esta abierta pero se cierra. OpenClaw crece exponencialmente
+- El mercado de AI agents crece: $14.89B en 2025, proyectado $35.74B en 2030, 72% de enterprises planean deployment en 2026
 
 **Tu ventaja unica que nadie puede replicar facil:**
 1. ERES el OS (acceso a kernel, systemd, bootc, hardware)
 2. Inmutabilidad + rollback (si la AI rompe algo, bootc te salva)
 3. Full sensory stack a nivel de sistema (no una app sandboxeada)
 4. Open source + privacidad real (todo local por default)
+5. GPU management nativo (Game Guard libera VRAM, ningun competidor hace esto)
+
+**Lo que nos falta para el "efecto wow" (Fases H-M):**
+1. Loop iterativo de desarrollo (Fase H) — OpenClaw y Devin ya lo tienen
+2. Browser automation real (Fase J) — OpenClaw y Claude Computer Use ya lo tienen
+3. Self-improvement (Fase K) — Solo OpenClaw lo tiene, es lo que lo hace viral
+4. Plataforma de desarrollo completa (Fase M) — El differentiator final
 
 ---
 
@@ -826,10 +838,26 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - [x] Dashboard toggle "Game Assistant" (default ON)
 - [x] **HITO FASE G:** Al jugar, VRAM se libera automaticamente. Pides ayuda y Axi analiza tu juego.
 
+**BUGS CRITICOS ENCONTRADOS (2026-03-24) — CORREGIDOS:**
+
+| Bug | Causa Raiz | Fix |
+|-----|-----------|-----|
+| **llama-server no se reiniciaba** | `systemctl --user restart llama-server` pero el servicio es del sistema (`/usr/lib/systemd/system/`) | Nuevo helper script `lifeos-llama-gpu-layers.sh` que usa `sudo` + sudoers NOPASSWD |
+| **Override de GPU layers no leido** | Escribia a `~/.config/lifeos/llama-server.env.override` que nadie lee. El servicio tiene `ProtectHome=true` | Helper crea systemd drop-in en `/etc/systemd/system/llama-server.service.d/99-game-guard-gpu-layers.conf` |
+| **Modelo seguia en VRAM mientras se jugaba** | Consecuencia de los 2 bugs anteriores: game_guard detectaba el juego pero no podia hacer nada | Ahora: helper → daemon-reload → restart llama-server con LIFEOS_AI_GPU_LAYERS=0 |
+
+**Archivos del fix:**
+- `daemon/src/game_guard.rs` — `persist_gpu_layers()` ahora usa `sudo lifeos-llama-gpu-layers.sh`
+- `image/files/usr/local/bin/lifeos-llama-gpu-layers.sh` — helper script privilegiado
+- `image/files/etc/sudoers.d/lifeos-llama-server` — NOPASSWD para el helper
+- `image/files/etc/polkit-1/rules.d/50-lifeos-llama-server.rules` — polkit backup rule
+- `image/Containerfile` — COPY + chmod de los archivos nuevos
+
 **Seguridad:**
 - Game mode detectado por proceso real del sistema (/proc/*/comm), no por API manipulable
 - Atacante remoto no puede crear procesos locales para forzar game mode
 - Screenshots solo se envian cuando el usuario pide ayuda (consent explicito)
+- El sudoers entry solo permite ejecutar UN script especifico, no shell arbitrario
 - Solo providers ZDR (Cerebras/Groq) — zero data retention
 - Si el screenshot contiene datos sensibles (el privacy filter lo detecta), se bloquea
 
@@ -841,11 +869,655 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 | VRAM liberada | 0 | ~2.77 GB |
 | Latencia respuesta | ~100ms | <2s (Cerebras via internet) |
 
-### Post Fase F — Lanzamiento Publico
+### Fase H — Loop Iterativo de Desarrollo (proxima prioridad)
 
-- [ ] Grabar video demo de 2 minutos (Telegram -> LifeOS trabaja -> reporta)
-- [ ] Actualizar README.md para publico
+**Objetivo:** Que Axi pueda escribir codigo, compilar, corregir errores, y repetir hasta que funcione — como un desarrollador real.
+
+**Por que es critico:** Hoy el supervisor ejecuta un plan lineal de 2-6 pasos y se detiene. Si el codigo no compila, no vuelve a intentar. OpenClaw ya tiene self-improvement. Devin itera hasta 67% PR merge rate. Sin esto, LifeOS no puede desarrollar software autonomamente.
+
+**Benchmark a superar:** OpenClaw (escribe sus propios skills, hot-reloads), Devin (67% merge rate, auto-debugging), Replit Agent 3 (200 min de ejecucion continua).
+
+- [ ] **Evaluate-Fix Loop:** Despues de cada paso de ejecucion, evaluar resultado (compilo? tests pasan? output esperado?). Si falla, alimentar el error completo al LLM y generar paso correctivo automatico
+- [ ] **Max iteraciones configurables:** Default 5 iteraciones antes de escalar a humano. Evita loops infinitos
+- [ ] **Build verification:** Despues de escribir codigo, ejecutar automaticamente `cargo build` / `cargo test` / `cargo clippy`. Solo marcar como exitoso si compila y tests pasan
+- [ ] **Error context enrichment:** Cuando un build falla, extraer el error exacto del compilador, las lineas relevantes del codigo, y el contexto del archivo. Enviar todo al LLM para correccion precisa
+- [ ] **Diff preview antes de aplicar:** Generar diff de los cambios propuestos, enviarlo a Telegram para revision rapida (o auto-aplicar en modo trust)
+- [ ] **Streaming de progreso:** Enviar chunks de progreso a Telegram durante ejecucion larga ("Compilando... 3/5 tests pasan... corrigiendo error en linea 42...")
+- [ ] **HITO FASE H:** Decir a Axi "agrega endpoint GET /api/v1/health que devuelva uptime" y que el solo escriba el codigo, compile, corra tests, corrija errores, y reporte "listo, compila y tests pasan"
+
+### Fase I — Auto-Aprobacion + Git Workflow Autonomo
+
+**Objetivo:** Eliminar la friccion de aprobacion manual para que Axi pueda trabajar sin interrupciones en un sandbox seguro.
+
+**Por que es critico:** Cada write_file requiere aprobacion manual via Telegram. Para un proyecto real con 50 archivos modificados, esto mata la productividad. OpenClaw auto-aprueba dentro de skills. Devin trabaja en sandbox cloud sin pedir permiso.
+
+**Benchmark a superar:** Devin (trabaja en sandbox sin aprobacion), Cursor Background Agents (ejecutan en paralelo sin bloquear).
+
+- [ ] **Trust mode para Telegram:** Tasks iniciadas desde Telegram con `/do trust: <objetivo>` auto-aprueban writes dentro del git worktree sandbox. Solo notifica al final con el diff completo
+- [ ] **Branch por tarea:** Cada tarea crea un feature branch automatico (`axi/<task-id>-<slug>`). Commits automaticos cuando tests pasan
+- [ ] **Auto-commit con mensaje semantico:** El LLM genera commit messages descriptivos basados en los cambios realizados
+- [ ] **PR creation:** Cuando la tarea termina exitosamente, crear PR en GitHub via `gh` CLI con descripcion generada por LLM
+- [ ] **Post-task diff summary:** Enviar a Telegram un resumen del diff total: archivos modificados, lineas cambiadas, tests que pasan
+- [ ] **Rollback automatico:** Si una tarea falla despues de 5 iteraciones, `git checkout .` en el worktree y notificar con el contexto completo del error
+- [ ] **Workspace persistence:** Mantener el worktree activo entre pasos de la misma tarea (no recrear cada vez)
+- [ ] **HITO FASE I:** Decir "implementa feature X en branch nuevo, prueba y abre PR" y que Axi lo haga completo sin intervenir
+
+### Fase J — Browser Automation Real + Testing Visual
+
+**Objetivo:** Que Axi pueda abrir un navegador, navegar, verificar que una UI funciona, y corregir si no se ve bien.
+
+**Por que es critico:** Hoy Axi solo puede hacer `fetch_url_text()` (sin JavaScript). No puede abrir localhost:3000, ver si una pagina se renderiza bien, llenar formularios, o hacer login. OpenClaw ya tiene browser headless completo. Claude Computer Use navega cualquier app. Replit Agent 3 abre apps en browser para encontrar bugs.
+
+**Benchmark a superar:** OpenClaw (headless browser, OAuth flows, form filling), Claude Computer Use (pixel-level browser control), Replit Agent 3 (auto-abre app, encuentra bugs, los corrige).
+
+- [ ] **Playwright integration:** Instalar Playwright en la imagen. `browser_automation.rs` que lanza Chromium headless
+- [ ] **Navegacion basica:** Abrir URL, esperar carga, tomar screenshot, extraer texto/DOM
+- [ ] **Interaccion:** Click en elementos (por selector CSS o texto), llenar inputs, submit forms, scroll
+- [ ] **JavaScript execution:** Evaluar JS en la pagina para extraer datos estructurados
+- [ ] **Visual verification loop:** Screenshot -> LLM vision analiza ("el boton de login aparece?", "hay errores en la consola?") -> decide si OK o necesita fix
+- [ ] **Localhost testing:** Despues de escribir codigo web, levantar `cargo run` o `npm dev`, abrir localhost en Playwright, verificar visualmente, tomar screenshot de evidencia
+- [ ] **Form automation:** Llenar formularios, hacer login, navegar flujos multi-paso
+- [ ] **Console error detection:** Capturar `console.error` y network errors del browser, reportarlos como parte de la evaluacion
+- [ ] **LibreOffice verification:** Abrir spreadsheets/docs via Python UNO bridge (`soffice --accept=socket,host=localhost,port=2002;urp;`). Leer celdas, verificar formulas, comprobar formato sin necesidad de vision. PyOO como wrapper de alto nivel
+- [ ] **HITO FASE J:** Decir "abre el dashboard de Axi, verifica que todas las secciones cargan, si hay un error corrigelo" y que lo haga solo con evidencia visual
+
+### Fase K — Self-Improvement + Skill Ecosystem
+
+**Objetivo:** Que Axi pueda escribir sus propias extensiones, mejorar sus propios prompts, y aprender de sus errores permanentemente.
+
+**Por que es critico:** OpenClaw tiene 13,729 community skills y se auto-mejora (escribe sus propios skills, edita sus prompts, hot-reloads). Esto es lo que lo hace viral. LifeOS necesita esta capacidad para escalar sin que Hector escriba cada linea.
+
+**Benchmark a superar:** OpenClaw (13,729 skills, self-writes, hot-reload), CrewAI (agentes que aprenden de interacciones pasadas).
+
+- [ ] **Skill authoring:** Axi puede crear skills nuevas (archivos ejecutables con manifest) a partir de instrucciones en lenguaje natural
+- [ ] **Skill testing:** Despues de crear un skill, ejecutarlo en sandbox, verificar output, iterar si falla
+- [ ] **Prompt self-editing:** Si un patron de tarea falla repetidamente, Axi propone mejoras a su propio system prompt para ese tipo de tarea
+- [ ] **Hot-reload de skills:** Skills nuevas se activan sin reiniciar el daemon
+- [ ] **Learning from failures:** Base de datos de errores pasados con solucion aplicada. Antes de planificar, consultar "la ultima vez que intente X, fallo por Y, la solucion fue Z"
+- [ ] **Skill sharing format:** Formato estandar de skills compatible con un futuro marketplace
+- [ ] **Self-diagnostic:** Axi puede analizar sus propias metricas (tasa de exito por tipo de tarea) y proponer que areas necesitan mejora
+- [ ] **HITO FASE K:** Decir "crea un skill que monitoree el precio de Bitcoin y me avise si baja de $50K" y que Axi lo escriba, lo pruebe, lo active, y funcione
+
+### Fase L — Multimodalidad Avanzada + Interaccion Natural
+
+**Objetivo:** Que la interaccion con Axi sea tan natural como hablar con una persona — voz continua, vision en tiempo real, contexto persistente.
+
+**Por que es critico:** Google Project Astra procesa video en tiempo real con latencia casi cero. Apple Intelligence entiende contexto de pantalla. OpenClaw tiene wake word + push-to-talk overlay en macOS. La barra de calidad para "wow" sube cada mes.
+
+**Benchmark a superar:** Project Astra (video real-time, multi-idioma), Apple Intelligence (contexto de pantalla), OpenClaw macOS (menu bar, wake word, push-to-talk).
+
+- [ ] **Conversacion por voz continua:** Modo siempre escuchando (wake word "Axi") -> dialogo fluido sin necesidad de apretar boton. Ya existe rustpotter + Whisper, falta integrar con dialogo multi-turno
+- [ ] **TTS emocional:** Piper TTS con variacion de tono/velocidad segun contexto (urgencia, confirmacion, pregunta)
+- [ ] **Screen context awareness:** Cuando el usuario pregunta algo, Axi automaticamente toma screenshot y lo usa como contexto. "Que es esto?" → screenshot → LLM vision → respuesta
+- [ ] **Real-time screen monitoring:** Modo opcional donde Axi observa cambios en pantalla cada N segundos y puede reaccionar ("detecte que tu build fallo en la terminal, quieres que lo investigue?")
+- [ ] **Multi-turn conversation memory:** Historial de conversacion persistente entre sesiones. "Recuerdas lo que hablamos ayer sobre la API?" → si, consulta memoria
+- [ ] **Desktop widget overlay:** Widget flotante COSMIC/GTK4 con la orb de Axi, arrastrable, click para expandir panel rapido. Ya existe `overlay.rs` + `mini_widget.rs`, falta pulir
+- [ ] **Notification toasts nativos:** Usar sistema de notificaciones de COSMIC/GNOME para alertas no intrusivas
+- [ ] **HITO FASE L:** Wake word "Axi" → dialogo fluido → Axi entiende contexto de pantalla → responde con voz natural → recuerda conversaciones anteriores
+
+### Fase M — Plataforma Autonoma Completa
+
+**Objetivo:** LifeOS como plataforma donde Axi puede clonar repos, desarrollar proyectos completos, desplegarlos, y monitorearlos — todo sin intervencion.
+
+**Por que es critico:** Este es el "efecto wow" que necesitamos para competir. Devin cobra $20/mes y tiene 67% merge rate. Si LifeOS puede hacer lo mismo GRATIS, local-first, con privacidad, sobre tu propio hardware — es el killer feature.
+
+**Benchmark a superar:** Devin (autonomous software engineer), Replit Agent 3 (idea → deployed app en <1 hora), Cursor Background Agents (parallel autonomous coding).
+
+- [ ] **Project scaffolding:** "Crea un proyecto Next.js con auth, base de datos y Stripe" → Axi genera estructura, instala deps, configura, y verifica que arranca
+- [ ] **Git clone + understand:** Clonar un repo, analizar su estructura, entender la arquitectura, y reportar "este repo es un API REST en Python con FastAPI, tiene 3 modelos, 12 endpoints..."
+- [ ] **Multi-file editing:** Editar multiples archivos en una sola tarea coordinada, manteniendo consistencia (si renombro una funcion, actualizar todas las referencias)
+- [ ] **Test generation:** Escribir tests automaticamente para codigo existente. Ejecutarlos y reportar cobertura
+- [ ] **Deploy pipeline:** Configurar y ejecutar deploy (Docker build + push, o rsync, o Vercel CLI, segun el proyecto)
+- [ ] **Monitoring post-deploy:** Despues de deployer, hacer health checks periodicos. Si el servicio cae, notificar y proponer fix
+- [ ] **Parallel task execution:** Multiples tareas de desarrollo en paralelo (branch A: frontend, branch B: backend) con merge al final
+- [ ] **Code review agent:** Antes de merge, un agente Reviewer analiza el diff, busca bugs, sugiere mejoras
+- [ ] **Documentation generation:** Generar/actualizar README, API docs, y changelogs automaticamente basados en los cambios
+- [ ] **HITO FASE M:** Decir "clona este repo de GitHub, arregla los 3 issues abiertos, corre tests, y abre PRs para cada uno" y que Axi lo haga todo solo, reportando progreso por Telegram
+
+---
+
+### Analisis Competitivo Actualizado (Marzo 2026)
+
+**OpenClaw vs LifeOS — donde estamos y que nos falta:**
+
+| Capacidad | OpenClaw | LifeOS | Gap |
+|-----------|----------|--------|-----|
+| Messaging channels | 21+ (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, LINE, Twitch, Nostr...) | 4 (Telegram, WhatsApp, Matrix, Signal) | **Medio** — tenemos los principales, faltan Slack/Discord/iMessage |
+| Skills ecosystem | 13,729+ community skills en ClawHub | 0 skills (sistema existe pero sin contenido) | **CRITICO** — necesitamos Fase K |
+| Browser automation | Headless browser completo, OAuth, forms, scraping | Solo fetch_url_text() sin JS | **CRITICO** — necesitamos Fase J |
+| Self-improvement | Escribe sus propios skills, edita prompts, hot-reload | No implementado | **CRITICO** — necesitamos Fase K |
+| Voice | Wake word macOS/iOS, push-to-talk, ElevenLabs | Wake word rustpotter + Whisper STT + Piper TTS | **Paridad** — funcional |
+| Desktop integration | Solo macOS menu bar. Linux = headless gateway | COSMIC overlay + widget + systemd nativo | **VENTAJA LifeOS** |
+| Privacy | Local-first, BYOK | Local-first, BYOK, privacy filter, sensitivity routing | **VENTAJA LifeOS** |
+| OS-level access | App dentro de OS | **ES** el OS (kernel, systemd, bootc, hardware) | **VENTAJA UNICA LifeOS** |
+| Immutability/rollback | No | bootc atomic updates + rollback | **VENTAJA UNICA LifeOS** |
+| Cron/scheduling | Si, robusto | Si, SQLite + supervisor | **Paridad** |
+| Computer use | No nativo | ydotool/xdotool mouse/keyboard | **VENTAJA LifeOS** |
+| Phone calls | Si (ElevenLabs voice synthesis) | No | **Gap** — baja prioridad |
+| IoT/Smart home | Si (luces, purificadores) | Si (Home Assistant API) | **Paridad** |
+| Iterative coding loop | Via skills autoescribidos | **No** — plan lineal sin retry | **CRITICO** — necesitamos Fase H |
+| Git workflow automatico | Limitado | **No** — sin auto-commit/PR | **Alto** — necesitamos Fase I |
+
+**Prioridad de cierre para "efecto wow":**
+
+1. **Fase H** (loop iterativo) — sin esto nada funciona bien
+2. **Fase I** (auto-aprobacion + git) — sin esto cada tarea es manual
+3. **Fase J** (browser) — sin esto no puede verificar UIs
+4. **Fase K** (self-improvement) — esto es lo que hace viral a OpenClaw
+5. **Fase L** (multimodalidad) — polish para el demo
+6. **Fase M** (plataforma completa) — el "efecto wow" final
+
+**Demo "wow" objetivo:**
+
+> Hector envia un mensaje de Telegram: "Clona el repo X de GitHub, hay 3 issues abiertos, resuelvelos todos, corre los tests, y abre PRs"
+>
+> LifeOS:
+> 1. Clona el repo en un sandbox
+> 2. Lee los issues de GitHub
+> 3. Para cada issue: crea branch, escribe codigo, compila, corre tests, itera si falla, abre PR
+> 4. Envia screenshots del browser mostrando que la app funciona
+> 5. Reporta: "3 PRs abiertos, tests pasan, aqui estan los links"
+>
+> Todo esto mientras Hector esta jugando RE9 y la GPU esta libre para el juego.
+
+### Fase N — Operador de Desktop Completo (paridad con OpenClaw macOS)
+
+**Objetivo:** Que Axi pueda hacer TODO lo que OpenClaw hace en macOS, pero a nivel de OS Linux: instalar apps, configurar el sistema, controlar ventanas, abrir aplicaciones, manejar archivos — con permisos, aprobaciones, y audit trail.
+
+**Por que es critico:** OpenClaw en macOS tiene: menu bar app, wake word, shell elevado con whitelisting, camera, screen recording, browser canvas, Apple Shortcuts integration. En Linux solo corre como headless gateway sin desktop. LifeOS debe superar eso aprovechando que SOMOS el OS.
+
+**Benchmark a superar:** OpenClaw macOS (TCC permissions, elevated bash, Shortcuts, camera/mic/screen), Apple Intelligence (Siri contextual, on-screen understanding).
+
+**N.1 — System Management (instalar, configurar, mantener)**
+- [ ] **Flatpak management:** Instalar/actualizar/remover Flatpak apps via `flatpak install -y`. "Axi, instala Firefox" → `flatpak install -y flathub org.mozilla.firefox`
+- [ ] **Flatpak permission overrides:** Configurar permisos de apps programaticamente via `flatpak override --user`. "Dale acceso a ~/Documents a LibreOffice"
+- [ ] **System settings:** Cambiar configuraciones de COSMIC via `cosmic-settings` CLI o D-Bus (wallpaper, tema, displays, keyboard shortcuts, default apps)
+- [ ] **Package queries:** "Que apps tengo instaladas?", "Cuanto espacio usan los flatpaks?", "Hay updates pendientes?"
+- [ ] **Service management:** Listar, iniciar, detener servicios systemd del usuario. "Reinicia el daemon de LifeOS", "Que servicios estan activos?"
+- [ ] **Firewall / network:** Consultar estado de red, VPN, puertos abiertos via NetworkManager D-Bus
+- [ ] **Permission approval system:** Acciones de sistema clasificadas por riesgo. Instalar flatpak = medio (notificar). Borrar app = alto (pedir aprobacion). Configurar red = medio
+- [ ] **Exec approval whitelist:** Como OpenClaw, mantener lista de comandos pre-aprobados en config. Comandos nuevos requieren aprobacion una vez, luego se recuerdan
+
+**N.2 — COSMIC Desktop Control (ventanas, workspaces, apps)**
+- [ ] **COSMIC Wayland client:** Modulo `cosmic_control.rs` que conecta via `cosmic-protocols` crate (wayland-client) al compositor para:
+  - Listar ventanas abiertas (`zcosmic_toplevel_info`)
+  - Mover ventanas entre workspaces (`zcosmic_toplevel_manager.move_to_ext_workspace`)
+  - Activar/enfocar ventanas (`activate`)
+  - Minimizar/maximizar/cerrar ventanas
+  - Crear/renombrar/activar workspaces (`zcosmic_workspace_manager`)
+- [ ] **App launcher:** Abrir cualquier app instalada: `flatpak run`, `gtk-launch`, o exec directo. "Axi, abre Firefox", "Abre LibreOffice con este archivo"
+- [ ] **Window search:** Encontrar ventana por titulo o app_id. "Donde esta mi terminal?", "Pon el editor al frente"
+- [ ] **Multi-monitor awareness:** Saber en que monitor esta cada ventana, mover ventanas entre monitores
+- [ ] **Workspace dedicado para Axi:** Crear workspace "Axi" automaticamente donde Axi hace su trabajo visual sin interrumpir los workspaces del usuario
+
+**N.3 — Input Simulation mejorado**
+- [ ] **ydotool robusto:** Asegurar que `ydotoold` corre como servicio. Wrapper en Rust con reintentos y verificacion
+- [ ] **Coordenadas inteligentes:** En vez de pixel absoluto, usar vision LLM para encontrar elementos ("click en el boton que dice Guardar") → screenshot → LLM devuelve coordenadas → ydotool click
+- [ ] **OCR para lectura de pantalla:** Integrar Tesseract OCR (ya disponible en la imagen) para leer texto de elementos UI sin necesidad de LLM vision (mas rapido, local)
+- [ ] **Clipboard bidireccional:** Leer Y escribir clipboard via `wl-copy`/`wl-paste`. "Copia esto al clipboard", "Que hay en el clipboard?"
+
+**N.4 — File Manager**
+- [ ] **Operaciones de archivos:** Crear, mover, copiar, renombrar, borrar archivos/carpetas. Con clasificacion de riesgo (borrar = alto)
+- [ ] **Busqueda inteligente:** "Encuentra todos los PDFs que modifique esta semana" → `find` + `stat`
+- [ ] **Abrir archivos con app correcta:** "Abre este spreadsheet" → detectar tipo MIME → `xdg-open` o app especifica
+- [ ] **Compresion/extraccion:** zip, tar.gz, 7z — "comprime esta carpeta", "extrae este zip"
+
+**N.5 — Battery Health Manager (cuidado de bateria en laptops)**
+
+LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el organismo muere. Axi debe cuidarla como el cuerpo cuida el corazon.
+
+- [ ] **Battery monitoring via sysfs + UPower D-Bus:** Leer en tiempo real desde `/sys/class/power_supply/BAT0/`: capacity, cycle_count, energy_full vs energy_full_design (wear level), temp, status, voltage. Tambien via D-Bus `org.freedesktop.UPower.Device` para Percentage, State, EnergyRate, Temperature, ChargeCycles, Capacity (health %)
+- [ ] **Charge threshold management:** Detectar marca de laptop automaticamente (ThinkPad→`thinkpad_acpi`, ASUS→`asus_wmi`, Dell→`dell_laptop`, Lenovo IdeaPad→`ideapad_laptop`, Framework→`cros_charge-control`, Samsung, Huawei, LG, MSI, System76, etc.). Escribir `charge_control_end_threshold` al valor optimo (default 80%)
+- [ ] **Persistencia de thresholds:** Los valores de sysfs se pierden al reiniciar. Crear servicio systemd `lifeos-battery.service` que restaure thresholds al boot
+- [ ] **Dashboard widget:** Mostrar en el dashboard: % actual, health (wear level), ciclos, temperatura, threshold activo, tiempo estimado restante
+- [ ] **Alertas proactivas via Telegram:**
+  - "Tu bateria esta al 87°C — desconecta el cargador o baja la carga de trabajo" (temp > 45°C)
+  - "Tu bateria tiene 78% de salud (500 ciclos). Considera reemplazarla pronto" (health < 80%)
+  - "Llevas 3 horas enchufado al 100%. Activo limite de carga al 80% para proteger la bateria"
+- [ ] **Smart charging schedule:** Script + systemd timer que baja el threshold durante el dia (60%) y sube en la noche (80%) para cargar mientras duermes. Configurable por el usuario
+- [ ] **NVIDIA GPU power management:**
+  - Configurar RTD3 (`NVreg_DynamicPowerManagement=0x02`) para que la GPU se apague completamente cuando no se usa (ahorra 5-15W en idle)
+  - Integrar con Game Guard: cuando no hay juego, GPU en modo power-save. Cuando hay juego, GPU full power
+  - Mostrar consumo actual de GPU en el dashboard (`nvidia-smi --query-gpu=power.draw`)
+- [ ] **Power profile switching:** Integrar con `tuned-ppd` (default en Fedora 42) via D-Bus `net.hadess.PowerProfiles`. Cambiar perfil segun contexto:
+  - En bateria sin actividad pesada → `power-saver`
+  - En bateria con compilacion/build → `balanced`
+  - Enchufado → `balanced` o `performance`
+  - "Axi, pon modo ahorro de energia" → switch a power-saver
+- [ ] **CLI:** `life battery` subcommand para ver status, cambiar threshold, forzar carga completa
+- [ ] **API endpoints:** GET /api/v1/battery/status, POST /api/v1/battery/threshold, GET /api/v1/battery/history
+
+- [ ] **HITO FASE N:** Decir "instala GIMP, abrelo, y dime que version es" y que Axi: instale via flatpak, abra la app, lea la version de la ventana (screenshot + OCR), y reporte. Ademas: "cuida mi bateria" y que Axi configure threshold al 80%, active RTD3 en la GPU, y reporte health de la bateria semanalmente.
+
+### Fase O — Agente Agentico de Desktop (trabajo autonomo mientras estas ausente)
+
+**Objetivo:** Que Axi pueda trabajar autonomamente en el desktop cuando detecta que el usuario esta ausente — abriendo apps, verificando archivos, navegando web, corrigiendo problemas — todo en su propio workspace sin tocar el trabajo del usuario.
+
+**Por que es critico:** Esto es lo que separa un chatbot de un verdadero empleado digital. Ninguno de los competidores hace esto: trabajar en el desktop real del usuario de forma autonoma y segura cuando no esta. OpenClaw necesita que le digas que hacer. Devin trabaja en la nube. Claude Computer Use necesita supervision. LifeOS puede ser el primero que trabaja solo, en tu hardware, mientras duermes.
+
+**Benchmark a superar:** Ningun competidor hace esto todavia. LifeOS seria el primero.
+
+**O.1 — Deteccion de ausencia**
+- [ ] **Screen lock detection:** Escuchar señal D-Bus `org.freedesktop.login1.Session.Lock` via zbus. Cuando el usuario bloquea pantalla = ausente
+- [ ] **Idle detection:** Leer `IdleHint` + `IdleSinceHint` de logind. Si idle > 5 min sin lock = probablemente ausente
+- [ ] **Presence camera:** Ya existe en sensory_pipeline. Si webcam no detecta persona por > 2 min = ausente
+- [ ] **Estado combinado:** `PresenceState { Present, Idle, Away, Locked }`. Away = idle + no persona. Locked = screen lock signal
+- [ ] **Return detection:** Señal `Unlock` de logind, o persona detectada por webcam = usuario regreso
+
+**O.2 — Workspace isolation (seguridad critica)**
+- [ ] **Workspace "Axi":** Al detectar ausencia, crear workspace dedicado via COSMIC Wayland protocol. Todo el trabajo visual de Axi ocurre ahi
+- [ ] **Preservar estado del usuario:** NUNCA mover, cerrar, o modificar ventanas del usuario. Solo operar en el workspace de Axi
+- [ ] **Al regresar:** Mostrar resumen de lo que hizo. Opcionalmente, cambiar al workspace de Axi para revisar. O auto-minimizar todo y volver al workspace del usuario
+- [ ] **Kill switch:** Si el usuario mueve el mouse o toca el teclado, Axi PARA inmediatamente toda accion de desktop (no tareas de background como builds)
+- [ ] **Snapshot antes de actuar:** Antes de cualquier cambio visible, guardar estado de ventanas/apps para poder revertir
+
+**O.3 — Task queue de ausencia**
+- [ ] **Cola de tareas autonomas:** El usuario puede pre-cargar tareas que Axi ejecutara cuando este ausente. "Cuando me vaya, revisa el dashboard, corre los tests, y actualiza el flatpak de Firefox"
+- [ ] **Tareas proactivas:** Axi decide por si mismo que hacer basado en su conocimiento: updates pendientes, tests que no se han corrido, archivos para verificar
+- [ ] **Prioridad: mantenimiento > desarrollo > exploracion.** Primero lo seguro, luego lo creativo
+- [ ] **Limite de tiempo:** Configurar cuanto tiempo puede trabajar autonomamente (default 2 horas). Despues se detiene y espera
+
+**O.4 — Interaccion con CUALQUIER aplicacion (app-agnostic, auto-aprendizaje)**
+
+Axi no solo trabaja con LibreOffice. Trabaja con CUALQUIER aplicacion del desktop, y aprende de cada interaccion para ser mejor la proxima vez.
+
+**Tecnica base: Visual Grounding (como UI-TARS / Agent-S2)**
+El approach moderno para interaccion app-agnostic es: screenshot → modelo de vision identifica elementos UI (botones, menus, campos de texto) por su apariencia visual, no por DOM o accessibility tree → genera coordenadas exactas → ejecuta accion via ydotool. Esto funciona con apps nativas, web, Electron, Java, Qt, GTK — cualquier cosa que se renderice en pantalla.
+
+- [ ] **Visual grounding engine:** Integrar modelo visual (UI-TARS open source Apache 2.0 de ByteDance, o Qwen-VL local) que dado un screenshot + instruccion ("click en el boton Guardar") devuelve coordenadas (x, y) del elemento
+- [ ] **Action loop universal:** screenshot → visual grounding → accion (click/type/scroll/key) → screenshot → verificar resultado → repetir. Funciona con cualquier app sin necesidad de integracion especifica
+- [ ] **OCR rapido local:** Tesseract para leer texto de pantalla sin enviar a API. "Que dice en la barra de titulo?", "Cual es el valor de la celda B3?"
+- [ ] **App-specific bridges (optimizacion, no requisito):**
+  - LibreOffice: Python UNO bridge (`soffice --accept=socket,host=localhost,port=2002;urp;`) para leer/escribir celdas, formulas, formato. PyOO como wrapper. Verificar spreadsheets sin vision
+  - Firefox/Chromium: DevTools Protocol (CDP) para navegar, extraer DOM, ejecutar JS
+  - Terminal: Leer buffer de texto directamente (pty), no necesita vision
+- [ ] **Verificacion de archivos:** "Abre el Excel descargado, verifica columna B son numeros, celdas desbloqueadas, total = suma" → UNO bridge si es LibreOffice, vision si es otra app
+- [ ] **Reportar discrepancias:** Si encuentra datos incorrectos o archivos corruptos, notificar via Telegram con evidencia (screenshot + descripcion)
+
+**O.5 — Auto-aprendizaje de aplicaciones (Skill Generation)**
+- [ ] **Interaction recording:** Cuando Axi interactua con una app nueva, graba la secuencia: screenshot antes → accion → screenshot despues → resultado
+- [ ] **Skill extraction:** Despues de completar una tarea exitosamente en una app, el LLM analiza la secuencia grabada y genera un "skill" reutilizable: pasos, coordenadas relativas, verificaciones
+- [ ] **Skill library:** Almacenar skills por app (LibreOffice, Firefox, GIMP, VSCode, etc.) en ~/.local/share/lifeos/skills/. Formato JSON con pasos + screenshots de referencia
+- [ ] **Skill refinement:** Cada vez que ejecuta un skill, si falla, actualiza con el nuevo approach que funciono. Si tiene exito, incrementa confidence score
+- [ ] **Zero-shot para apps nuevas:** Para apps que nunca ha visto, usar visual grounding puro. Para apps conocidas, usar skill guardado (mas rapido, mas confiable)
+- [ ] **Sharing de skills:** En el futuro, skills de un LifeOS pueden compartirse con otros nodos (skill marketplace)
+
+**O.6 — Browser automation visual (complementa Fase J)**
+- [ ] **Abrir browser real en workspace de Axi:** Firefox visible (no headless) para tareas que requieren JavaScript completo, cookies, sesiones
+- [ ] **Navegar via ydotool + vision:** Ctrl+L → escribir URL → Enter. Click en elementos via coordenadas de visual grounding
+- [ ] **Probar aplicaciones web:** "Abre localhost:3000, haz login con las credenciales de test, navega a /dashboard, toma screenshot, verifica que no hay errores"
+- [ ] **Descargar archivos:** Click en boton de descarga → esperar descarga → verificar archivo descargado → abrirlo con la app correcta
+- [ ] **Multi-tab management:** Abrir multiples pestañas, cambiar entre ellas, comparar contenido
+
+- [ ] **HITO FASE O:** El usuario bloquea la pantalla y se va. Axi: detecta ausencia, crea workspace, abre Firefox, navega a la app web, descarga el Excel, lo abre en LibreOffice, verifica los datos via UNO bridge, toma screenshots de evidencia, y cuando el usuario regresa le muestra: "Revise el reporte de ventas. La columna D tiene un error en fila 47: deberia ser 1,500 no 15,000. Screenshot adjunto. Ademas, genere un skill para esta verificacion — la proxima vez sera mas rapido."
+
+### Fase P — Agente de Gaming Autonomo (vision a largo plazo)
+
+**Objetivo:** Que Axi pueda jugar juegos de forma autonoma, aprendiendo de observar al usuario jugar, y eventualmente completando misiones por su cuenta.
+
+**Por que es critico:** Esto es el "efecto wow" maximo. Ningun producto de consumo puede jugar juegos arbitrarios de forma autonoma. NVIDIA NitroGen (dic 2025) demostro que es posible con behavior cloning a partir de video de gameplay. Google SIMA 2 puede seguir instrucciones en juegos 3D. LifeOS tiene la ventaja de tener acceso directo al hardware (GPU, input devices, screen capture).
+
+**Estado del arte (investigacion, marzo 2026):**
+- **NVIDIA NitroGen:** Vision Transformer + Diffusion Matching Transformer. Entrenado con 40,000 horas de gameplay. Gamepad actions como output. Open source (GitHub MineDojo/NitroGen, HuggingFace nvidia/NitroGen). 52% mejora en tareas sobre modelos base
+- **Google SIMA 2:** Gemini Flash-Lite fine-tuned. Keyboard+mouse actions. Se auto-genera tareas y rewards para aprender skills nuevos
+- **NVIDIA ACE:** AI teammates en juegos comerciales (PUBG Ally). Produccion real
+
+**Approach para LifeOS:**
+
+**P.1 — Observacion y aprendizaje (passive)**
+- [ ] **Gameplay recording:** Cuando Game Guard detecta un juego activo Y el usuario opta-in, grabar frames (5 FPS) + inputs del gamepad/teclado/mouse via evdev/uinput
+- [ ] **Session tagging:** Al terminar sesion de juego, LLM resume que paso: "Jugaste RE9 Cap 3, moriste 2 veces en el jefe, completaste la mision del almacen"
+- [ ] **Input mapping:** Aprender la relacion entre frames visuales e inputs del usuario (behavior cloning dataset)
+- [ ] **Storage:** Guardar sesiones comprimidas en ~/.local/share/lifeos/game-sessions/. Limpiar automaticamente las mas viejas
+
+**P.2 — Asistencia activa (co-pilot)**
+- [ ] **Visual game state understanding:** LLM vision analiza screenshot del juego: HP, municion, mapa, enemigos, objetivo actual
+- [ ] **Sugerencias en tiempo real:** "Hay un enemigo a tu izquierda", "Tu HP esta baja, usa botiquin", "La puerta requiere la llave azul que esta en la sala anterior"
+- [ ] **Overlay hints:** Mostrar tips en el mini_widget overlay sin interrumpir el juego (texto semi-transparente en esquina)
+- [ ] **Voice coaching:** Via TTS, dar instrucciones por voz durante el gameplay
+
+**P.3 — Juego autonomo (long-term vision)**
+- [ ] **Virtual gamepad:** Crear dispositivo uinput que emula un gamepad USB. Axi envia inputs como si fuera un control fisico
+- [ ] **Frame capture pipeline:** Captura de pantalla a 10-30 FPS del juego (grim window capture, ya parcialmente implementado en Game Assistant)
+- [ ] **Action model:** Modelo local que procesa frames y decide acciones (basado en NitroGen approach). Requiere fine-tuning por juego
+- [ ] **Goal-directed play:** "Completa la mision actual" → Axi juega hasta completar o hasta que falle 3 veces y pida ayuda
+- [ ] **Safety:** Nunca jugar en modo online/competitivo sin consentimiento explicito (riesgo de ban). Solo single-player por default
+
+- [ ] **HITO FASE P:** Axi puede jugar un nivel de un juego single-player de forma autonoma, completando objetivos basicos, mientras el usuario observa o hace otra cosa.
+
+**Nota realista:** La Fase P completa (jugar juegos arbitrarios) requiere modelos especializados que hoy solo existen en investigacion (NitroGen, SIMA 2). P.1 y P.2 son alcanzables a corto plazo. P.3 es vision a 12-18 meses dependiendo de la evolucion de los modelos open source de gaming.
+
+### Fase Q — MCP (Model Context Protocol) — Interoperabilidad Universal
+
+**Objetivo:** Que LifeOS hable el protocolo estandar de la industria para conectar agentes AI con herramientas, datos, y servicios externos. Esto permite que Axi use miles de integraciones ya existentes sin escribir cada una desde cero.
+
+**Por que es critico:** MCP es el "USB de la AI" — protocolo open source (Anthropic, donado a Linux Foundation AAIF con OpenAI y Block). Ya tiene 10,000+ servers activos, 97M+ descargas de SDK/mes. Si LifeOS habla MCP, obtiene acceso instantaneo a GitHub, Slack, bases de datos, browsers, y cualquier herramienta que tenga un MCP server.
+
+**Benchmark:** Claude Desktop, Cursor, y Windsurf ya implementan MCP. OpenClaw NO lo implementa (usa su propio protocolo de skills).
+
+**Q.1 — LifeOS como MCP Client**
+- [ ] **Rust MCP client:** Usar `rust-mcp-sdk` crate (implementa spec 2025-11-25 completa) o el SDK oficial `modelcontextprotocol/rust-sdk`. Conectar via STDIO (local) y HTTP/SSE (remoto)
+- [ ] **Tool discovery:** `tools/list` para descubrir herramientas de cualquier MCP server conectado. Exponerlas al supervisor/planner como acciones disponibles
+- [ ] **Resource access:** `resources/list` para acceder a datos expuestos por servers (archivos, DBs, APIs)
+- [ ] **Sampling support:** Permitir que MCP servers pidan al LLM via LifeOS (con aprobacion del usuario)
+- [ ] **MCP server manager:** Config en `/etc/lifeos/mcp-servers.toml` para declarar servers activos. Hot-reload sin reiniciar daemon
+
+**Q.2 — LifeOS como MCP Server**
+- [ ] **Exponer capacidades de LifeOS via MCP:** Otros AI clients (Claude Desktop, Cursor, etc.) pueden usar LifeOS como herramienta:
+  - `lifeos.system_info` — estado del sistema, GPU, recursos
+  - `lifeos.execute_task` — encolar tarea al supervisor
+  - `lifeos.screen_capture` — capturar pantalla
+  - `lifeos.memory_search` — buscar en la memoria de Axi
+  - `lifeos.file_ops` — operaciones de archivos
+  - `lifeos.flatpak_manage` — instalar/remover apps
+- [ ] **Seguridad:** Capability tokens (ya existen en agent_runtime). Solo exponer lo que el usuario autoriza
+
+**Q.3 — MCP Servers pre-integrados**
+- [ ] Conectar servers oficiales: Filesystem, Git, Memory, Fetch, Sequential Thinking
+- [ ] Conectar servers de terceros: GitHub, Brave Search, Puppeteer
+- [ ] Dashboard: seccion "Integraciones MCP" mostrando servers activos, tools disponibles, requests/dia
+
+- [ ] **HITO FASE Q:** Decir "Axi, crea un issue en GitHub con el bug que encontraste" y que Axi use el MCP server de GitHub sin codigo custom. O que Claude Desktop conecte a LifeOS via MCP y pueda pedir screenshots o ejecutar tareas.
+
+### Fase R — Asistente de Reuniones Inteligente (mejor que Plaud AI)
+
+**Objetivo:** Que LifeOS detecte automaticamente cuando estas en una reunion (Zoom, Meet, Teams, o cualquier app) y grabe, transcriba, resuma, extraiga action items, y archive — todo localmente, sin suscripcion, sin enviar audio a la nube.
+
+**Por que es critico:** Plaud AI cobra $17.99/mes y requiere hardware dedicado. Fireflies/Otter meten un bot visible en tu reunion. Krisp funciona a nivel de audio pero es SaaS. LifeOS puede hacer esto GRATIS, localmente, con Whisper STT (ya integrado) + LLM local, invisible para los demas participantes. Es un feature que la gente usaria todos los dias.
+
+**Benchmark a superar:** Plaud AI (112 idiomas, 300 min/mes gratis, $17.99/mes pro), Krisp (funciona con cualquier app, noise cancellation), Fireflies (60 idiomas, action items, CRM integration), Otter (real-time transcription).
+
+**R.1 — Deteccion automatica de reuniones**
+- [ ] **Audio stream monitoring:** Poll `pactl list sink-inputs` cada 5-10 segundos. Detectar cuando una app de videoconferencia (zoom, firefox con meet.google.com, teams, discord) tiene un audio sink activo
+- [ ] **Camera monitoring:** `fuser /dev/video0` o lsof para detectar si la webcam esta siendo usada por una app de conferencia
+- [ ] **Window title detection:** Via COSMIC toplevel info, buscar titulos como "Zoom Meeting", "Google Meet", "Microsoft Teams", "Discord - Voice"
+- [ ] **Señal combinada:** audio sink de app conocida + camara activa = reunion detectada con alta confianza. Solo audio = posiblemente reunion
+- [ ] **Confirmacion al usuario:** Al detectar reunion, notificar via mini_widget overlay: "Detecte reunion en Zoom. Grabar? [Si/No/Siempre]"
+
+**R.2 — Grabacion de audio**
+- [ ] **PipeWire recording:** Usar `pw-record --target=$SINK_NUMBER` para capturar SOLO el audio de la app de conferencia (no todo el sistema). Esto captura tanto lo que dicen los demas como lo que tu dices
+- [ ] **Formato:** WAV a 44.1kHz stereo, comprimir a OPUS/OGG al finalizar para almacenamiento eficiente
+- [ ] **Mic separado:** Opcionalmente, grabar tambien el microfono del usuario como pista separada (para mejor diarizacion de hablantes)
+- [ ] **Almacenamiento:** `~/.local/share/lifeos/meetings/YYYY-MM-DD_HH-MM_app-name.opus`. Auto-limpiar meetings > 90 dias (configurable)
+- [ ] **Duracion automatica:** Comenzar al detectar reunion, parar automaticamente cuando el audio sink desaparece (la reunion termino)
+
+**R.3 — Transcripcion local (Whisper)**
+- [ ] **Post-meeting transcription:** Cuando la reunion termina, pasar el audio por Whisper STT local. Ya esta integrado en LifeOS
+- [ ] **Speaker diarization:** Identificar diferentes hablantes (usando `pyannote-audio` o modelo local). Etiquetar "Hablante 1", "Hablante 2", etc.
+- [ ] **Multi-idioma:** Whisper soporta 99 idiomas. Auto-detectar idioma o usar el configurado
+- [ ] **Formato de salida:** Transcripcion con timestamps + etiquetas de hablante en formato SRT y TXT
+
+**R.4 — Resumen inteligente + Action Items**
+- [ ] **Meeting summary:** Al terminar la transcripcion, enviar al LLM (local o Cerebras) para generar:
+  - Resumen ejecutivo (3-5 bullet points)
+  - Temas principales discutidos
+  - Decisiones tomadas
+  - Action items (quien, que, cuando)
+  - Preguntas sin resolver
+- [ ] **Templates configurables:** El usuario elige el formato de resumen (ejecutivo, detallado, solo action items, etc.)
+- [ ] **Notificacion post-reunion:** Enviar resumen a Telegram automaticamente: "Tu reunion de Zoom termino (47 min). Resumen: ..."
+- [ ] **Archivo en memoria:** Guardar la transcripcion y resumen en la memoria de Axi para consulta futura: "Que acordamos en la reunion del lunes?"
+
+**R.5 — Privacidad**
+- [ ] **Todo local:** Audio, transcripcion, y resumen procesados localmente. NUNCA enviar audio crudo a la nube
+- [ ] **Consentimiento explicito:** El usuario debe aprobar la grabacion (notificacion al inicio). Opcion "Siempre grabar reuniones de X app"
+- [ ] **Borrado seguro:** Opcion de borrar grabacion despues de generar transcripcion (solo conservar texto)
+- [ ] **Indicador visible:** Mientras graba, mostrar icono rojo en el mini_widget overlay
+
+- [ ] **HITO FASE R:** Entrar a una reunion de Zoom. LifeOS detecta automaticamente, empieza a grabar. Al terminar, Whisper transcribe localmente, LLM genera resumen con action items, y aparece en Telegram: "Tu reunion termino. 3 action items: [1] Enviar propuesta a Juan antes del viernes [2] Revisar presupuesto Q2 [3] Programar siguiente reunion para el 15 de abril."
+
+---
+
+## 19. Modelo Biologico de LifeOS — El Ajolote Digital
+
+LifeOS no es solo un OS con AI. Es un **organismo digital vivo** inspirado en la biologia del ajolote (Ambystoma mexicanum) y del cuerpo humano. Cada subsistema de LifeOS tiene un analogo biologico que guia su diseño, comportamiento, y evolucion.
+
+### 19.1 El Ajolote: Principios de Diseño
+
+El ajolote es el animal con mayor capacidad regenerativa conocida. LifeOS adopta sus 6 capacidades fundamentales:
+
+| Capacidad del Ajolote | Principio en LifeOS | Implementacion |
+|----------------------|---------------------|----------------|
+| **Regeneracion extrema** — regenera patas, medula espinal, tejido ocular, corazon, cerebro sin cicatriz | **Auto-reparacion total** — si cualquier componente falla, se regenera desde un estado conocido. No "parches" — regeneracion limpia | bootc atomic rollback (regenera el OS completo). Supervisor retry + LLM correccion (regenera tareas). Watchdog systemd (regenera daemons). Git worktree (regenera codigo). Cada "regeneracion" es desde cero, no un parche sobre lo roto |
+| **Neotenia** — alcanza madurez sin completar metamorfosis, conserva capacidades larvales toda su vida | **Siempre listo para evolucionar** — LifeOS siempre puede transformarse. Nunca se "endurece" en una forma final. Cada update es una metamorfosis parcial controlada | bootc image updates (metamorfosis atomica del OS). Skills hot-reload (nuevas capacidades sin reiniciar). Config as code (el "ADN" se puede mutar en cualquier momento). Nunca hay "version final" — siempre larva, siempre adaptable |
+| **Genoma gigantesco** — 32 mil millones de pares de bases (10x humano) | **Base de conocimiento masiva** — LifeOS acumula mas conocimiento que cualquier humano individual: toda conversacion, decision, error, exito, patron | Memory plane cifrada con embeddings vectoriales. Cada interaccion agrega "pares de bases" al genoma de Axi. Skills generados automaticamente son "genes nuevos". El genoma crece con cada uso — la instancia de LifeOS de 1 año sabe exponencialmente mas que la de 1 dia |
+| **Respiracion cuadruple** — branquias + piel + garganta + pulmones | **Multi-canal de comunicacion** — LifeOS respira por multiples canales simultaneamente, adaptandose al que tenga mejor oxigeno | 4+ canales: Telegram, WhatsApp, Matrix, Signal (branquias). Dashboard web (piel — interfaz pasiva). Voz/wake word (garganta). Overlay desktop (pulmones — cuando necesita mas). Si un canal falla, respira por otro. Nunca se asfixia |
+| **Inmunidad al cancer** — resistencia natural a tumores, celulas se multiplican sin salirse de control | **Resistencia a corruption** — los procesos pueden multiplicarse (spawn agents) sin salirse de control | Risk classification (low/medium/high/blocked). WIP limits. Max spawn count. Resource caps por agente. Audit ledger. Si un agente se "descontrola" (consume demasiado CPU/memoria o ejecuta demasiadas acciones), se termina automaticamente. El sistema inmune (supervisor) detecta anomalias |
+| **Transplantes perfectos** — acepta organos de otros ajolotes sin rechazo inmunologico | **Integracion sin rechazo** — acepta modulos, skills, MCP servers, y actualizaciones de otros nodos LifeOS sin conflicto | MCP protocol (organos universales). Skills format estandar. bootc layers (transplante de capas de OS). En el futuro: skills de un nodo LifeOS se pueden "transplantar" a otro y funcionan sin modificacion |
+
+### 19.2 El Cuerpo Humano: Arquitectura de Sistemas
+
+Cada subsistema de LifeOS mapea a un sistema del cuerpo humano:
+
+| Sistema Humano | Funcion Biologica | Modulo LifeOS | Funcion en LifeOS |
+|---------------|------------------|---------------|-------------------|
+| **Cerebro (corteza cerebral)** | Pensamiento, decision, planificacion, creatividad | `supervisor.rs` + `llm_router.rs` | Recibe input, planifica, decide acciones, coordina todo. El LLM es la corteza — pensamiento de alto nivel |
+| **Tronco encefalico** | Funciones vitales automaticas (respirar, latido) | `main.rs` (daemon loop) + systemd | Mantiene vivo al sistema sin pensamiento consciente. Heartbeat, watchdog, auto-restart |
+| **Medula espinal** | Reflejos rapidos sin pasar por el cerebro | `risk_classifier` + `pre-flight checks` | Bloquea acciones peligrosas instantaneamente (rm -rf, sudo) antes de que lleguen al "cerebro" LLM |
+| **Sistema nervioso** | Transmision de señales entre organos | `event_bus` (broadcast) + D-Bus | Señales entre todos los modulos: sensor detecta algo → event bus → supervisor reacciona |
+| **Ojos** | Vision, percepcion visual | `screen_capture.rs` + `sensory_pipeline.rs` (vision) | Captura de pantalla, OCR, LLM vision, analisis de UI |
+| **Oidos** | Audicion, comprension del lenguaje hablado | `sensory_pipeline.rs` (audio) + Whisper STT | Microfono → Whisper → texto. Wake word detection (rustpotter) |
+| **Boca / Cuerdas vocales** | Hablar, expresar | Piper TTS + Telegram/mensajes | Genera voz, envia mensajes, reporta resultados |
+| **Piel** | Barrera protectora, sensacion tactil, regulacion temperatura | Firewall + privacy_filter + telemetry | Primera linea de defensa. Siente el entorno (telemetria). Regula "temperatura" (CPU/GPU thermal) |
+| **Manos** | Manipulacion precisa del entorno | `computer_use.rs` (ydotool) + shell commands | Ejecuta acciones fisicas: click, teclear, mover archivos, instalar apps |
+| **Corazon** | Bombea sangre, mantiene la circulacion | `task_queue.rs` (bombeo de tareas) | El latido del sistema. Cada tick del supervisor es un latido. Si para, todo para |
+| **Sangre** | Transporta oxigeno y nutrientes | Data flow entre modulos (requests, responses, events) | Los datos fluyen entre organos como la sangre — llevando "oxigeno" (contexto) y "nutrientes" (resultados) |
+| **Pulmones** | Intercambio de gases, oxigenacion | LLM providers (local + APIs) | "Respiran" tokens del LLM — convierten input crudo en comprension. Local = respiracion interna. APIs = respiracion externa |
+| **Sistema inmunologico** | Defensa contra patogenos, auto-reparacion | Risk classification + self-healing + audit + rollback | Detecta amenazas (comandos peligrosos, anomalias). Genera anticuerpos (blacklist de patrones). Memoria inmunologica (recuerda ataques/fallos pasados) |
+| **Higado** | Filtrado de toxinas, metabolismo | `privacy_filter.rs` | Filtra contenido toxico/sensible antes de enviarlo a APIs externas. Metaboliza (transforma) datos crudos en formatos seguros |
+| **Riñones** | Filtrado de desechos, balance de fluidos | Cleanup jobs (logs rotation, cache, temp files) | Eliminan waste — logs viejos, cache expirado, worktrees huerfanos, grabaciones antiguas. Mantienen el sistema limpio |
+| **Pancreas** | Regula azucar en sangre, homeostasis | Resource manager (CPU/GPU/RAM allocation) | Regula cuantos recursos consume cada proceso. Si un agente consume demasiado (azucar alta), lo throttlea. Game Guard es "insulina" — libera VRAM cuando gaming la necesita |
+| **Esqueleto** | Estructura, soporte, proteccion de organos | Fedora bootc immutable + COSMIC Desktop | La estructura rigida que sostiene todo. Inmutable = huesos que no se rompen facilmente. Los organos (modulos) se apoyan en este esqueleto |
+| **Musculos** | Movimiento, fuerza | Workers de ejecucion (shell, sandbox, browser) | Los que hacen el trabajo pesado. Cada worker es un musculo que ejecuta una accion especifica |
+| **ADN** | Codigo genetico, blueprint del organismo | `CLAUDE.md` + config TOML + skills library + memory embeddings | El codigo que define quien es Axi. Se puede "mutar" (actualizar config, agregar skills). Se hereda (cuando un nuevo nodo LifeOS se clona, hereda el ADN) |
+| **Celulas madre** | Pueden convertirse en cualquier tipo de celula | Container images + Agent roles | De una imagen base pueden surgir cualquier tipo de especialista (Coder, Tester, DevOps). Cada instancia del supervisor puede diferenciarse |
+| **Sistema linfatico** | Limpieza, transporte de inmunidad | Audit ledger + logs + telemetry | Recoge "desechos" (logs de errores), transporta "anticuerpos" (patrones de deteccion), drena al exterior (Telegram alerts) |
+| **Cabello / Uñas** | Crecimiento continuo, proteccion menor, estetica | Dashboard UI + overlay + themes + branding | Crecen continuamente (UI se mejora), son esteticos (branding), se pueden cortar/cambiar sin dolor (redesign no afecta funcionalidad core) |
+| **Sistema endocrino** | Hormonas que regulan comportamiento a largo plazo | Scheduled tasks + proactive notifications + moods | Las "hormonas" de Axi: timers de largo plazo que regulan comportamiento. "Cortisol" sube cuando hay tareas atascadas. "Dopamina" cuando completa exitosamente. Experience modes (Focus, Creative, Night) son estados hormonales |
+| **Sistema digestivo** | Procesa alimento, extrae nutrientes, elimina desechos | Data ingestion pipeline (Telegram → parse → extract intent → route → execute → discard noise) | Ingiere datos crudos (mensajes, archivos, screenshots). Los digiere (parse, clasificacion). Extrae nutrientes (intent, datos utiles). Elimina desechos (ruido, spam, datos irrelevantes) |
+| **Grasa corporal (energia almacenada)** | Reserva de energia para periodos sin alimento | Bateria del laptop + Battery Health Manager | La reserva de energia que mantiene vivo al organismo cuando no esta enchufado. Axi la cuida: limita carga al 80% (no sobrealimentar), monitorea temperatura (no sobrecalentar), gestiona ciclos (no desgastar). Como el cuerpo regula la grasa para no acumular demas ni quedarse sin reservas |
+| **Metabolismo basal** | Energia minima para mantener funciones vitales | Power profiles + RTD3 GPU + CPU governor | El gasto energetico base. En reposo (power-saver), consume lo minimo. En actividad (performance), quema mas. Axi ajusta el metabolismo automaticamente segun la actividad — como el cuerpo ajusta la tasa metabolica al dormir vs al correr |
+
+### 19.3 Ciclo de Vida del Organismo LifeOS
+
+| Etapa Biologica | Equivalente LifeOS |
+|-----------------|---------------------|
+| **Nacimiento** | First boot — ISO flasheado, primer arranque, onboarding |
+| **Infancia** | Primeras semanas — aprende del usuario, construye memoria, pocos skills |
+| **Adolescencia** | 1-3 meses — skills crecen, comete errores, aprende rapido, a veces inestable |
+| **Madurez** | 3-12 meses — estable, confiable, gran base de conocimiento, auto-suficiente |
+| **Reproduccion** | Clonar LifeOS a otro dispositivo, transferir "ADN" (config + memoria + skills) |
+| **Evolucion** | Cada update del OS es una mutacion. Las exitosas se propagan (stable channel). Las experimentales se prueban (edge channel) |
+| **Muerte y renacimiento** | bootc rollback = muerte de la version actual + renacimiento inmediato de la version anterior |
+
+### 19.4 Sistema Inmunologico Completo — Lo que Axi Cuida
+
+Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, detecta, y responde a amenazas internas y externas. Cada "organo" tiene sus propios chequeos de salud:
+
+| Organo / Sistema | Que Monitorea | Como lo Lee | Umbrales de Alerta | Accion de Axi |
+|-----------------|---------------|-------------|--------------------|-|
+| **SSD/NVMe (huesos)** | SMART: `percentage_used`, `available_spare`, `media_errors`, `temperature`, TBW restante | `smartctl -j -a /dev/nvme0n1` (JSON). Poll diario via systemd timer | percentage_used >80% = planear reemplazo. media_errors >0 = backup AHORA. temp >70°C = throttling | Alerta Telegram: "Tu SSD tiene 82% de vida consumida. Recomiendo backup y planear reemplazo". Auto-backup si media_errors > 0 |
+| **CPU termico (fiebre)** | Temperatura, throttle count, frecuencia actual vs max | sysfs `/sys/class/thermal/thermal_zone*/temp`, `/sys/class/hwmon/hwmon*/temp*_input`, `scaling_cur_freq` vs `scaling_max_freq` | >80°C = advertencia. >95°C = critico. throttle_count subiendo = problema de refrigeracion | Cambiar power profile a `power-saver`. Alertar: "CPU a 92°C, reduciendo rendimiento. Limpia los ventiladores" |
+| **GPU termica (fiebre)** | Temperatura, throttle status, power draw | `nvidia-smi --query-gpu=temperature.gpu,power.draw,clocks_throttle_reasons.active` | >85°C = advertencia. >100°C = critico | Reducir GPU layers del LLM. Si hay juego: advertir al usuario |
+| **RAM (sistema nervioso)** | Errores ECC (EDAC), MCE (Machine Check Exceptions), uso de memoria | `/sys/devices/system/edac/mc/*/ce_count`, `dmesg \| grep -i "machine check"`, `rasdaemon` si disponible, `/proc/meminfo` | Cualquier UE (uncorrected error) = critico. CE rate >10/dia = DIMM degradado. Uso >90% = advertencia | Alerta inmediata en UE. Trend de CE → "Tu RAM muestra errores crecientes, considera reemplazarla". Uso alto → "Memoria al 92%, cerrando procesos no esenciales" |
+| **Bateria (grasa/energia)** | Capacity, cycle count, wear level, temperatura, charge state | sysfs + UPower D-Bus (ya detallado en N.5) | Health <80% = degradada. Temp >45°C = sobrecalentamiento. Cycles >500 = considerar reemplazo | Gestionar threshold. Alertar desgaste. Smart charging |
+| **Disco (intestinos)** | Uso de particiones root y /home, inodes | `statvfs()`, `df -h`, `df -i` | Root >80% = advertencia, >90% = critico. /home >85% = advertencia | Auto-cleanup: `journalctl --vacuum-time=7d`, `flatpak uninstall --unused`, limpiar cache. Reportar que se limpio |
+| **Red (sistema circulatorio externo)** | Puertos abiertos, conexiones sospechosas, estado VPN/firewall | `ss -tulnp`, `ss -tnp`, NetworkManager D-Bus | Puerto inesperado escuchando = alerta. Conexion a IP/puerto sospechoso (mining pools: 3333, 4444, 5555) = critico. Firewall inactivo = critico | Bloquear conexion sospechosa. Alertar: "Detecte proceso X conectandose a IP sospechosa en puerto 4444. Posible cryptominer" |
+| **Seguridad (sistema inmune)** | CVEs pendientes, firmware HSI score, SELinux status, archivos sensibles expuestos | `dnf updateinfo list security`, `fwupdmgr security`, `getenforce`, `find /home -perm -o+r -name "*.key"` | CVEs criticos sin parchear = alerta. HSI <2 = advertencia. SELinux disabled = critico | Auto-aplicar patches de seguridad (`dnf-automatic` security-only). Alertar firmware desactualizado. Reportar HSI score semanal |
+| **USB (piel externa)** | Dispositivos USB conectados, whitelist vs desconocidos | USBGuard D-Bus `org.usbguard1` o udev rules. `usbguard list-devices` | Dispositivo HID+storage desconocido = alta sospecha (BadUSB). Multiples inserciones rapidas = posible ataque | Bloquear por defecto. Notificar: "USB desconocido conectado (vendor: XXXX). Permitir? [Si/No/Siempre]" |
+| **Ojos del usuario (display)** | Brillo, color temperatura, tiempo de pantalla continuo | `/sys/class/backlight/*/brightness`, `wlsunset` o GNOME Night Light, timer interno | >20 min sin pausa = regla 20-20-20. Despues de las 22:00 sin night mode = alerta | Activar night mode automaticamente al atardecer. Recordar 20-20-20 cada 20 min. "Llevas 45 min sin descansar la vista" |
+| **Oidos del usuario (audio)** | Volumen actual, tiempo a alto volumen | `wpctl get-volume @DEFAULT_AUDIO_SINK@`. Track duracion >80% vol | Volumen >85% por >30 min = advertencia (riesgo auditivo segun OMS: 85dB max 8h) | Notificar: "Llevas 40 min con volumen alto. La OMS recomienda bajar a 70% para proteger tu audicion". Opcion de limiter via PipeWire filter-chain |
+| **Ergonomia del usuario (musculos)** | Tiempo activo, patrones de teclado/mouse, duracion sin breaks | Input events via libinput, timer del health_tracking.rs (ya existe) | >25 min typing continuo = microbreak. >60 min sin pausa = break obligatorio. >3h sin break largo = alerta fuerte | Breaks ya implementados en `health_tracking.rs`. Agregar: tracking de intensidad de teclado/mouse. "Llevas 3 horas sin pararte. Tu espalda te lo agradecera" |
+| **Backups (ADN preservado)** | Ultimo backup, integridad, tamaño trend | Si restic/borg configurado: `restic check --read-data-subset=5%`, verificar exit code. Edad del ultimo snapshot | >24h sin backup (si esta configurado) = advertencia. Check falla = critico. Cambio de tamaño >50% = anomalia | Ejecutar backup programado. Verificar integridad semanal. Alertar si backup no se ha corrido: "No has hecho backup en 3 dias. Quieres que lo haga ahora?" |
+| **Privacidad (higado/filtro)** | Browser cache, credenciales expuestas, sesiones abiertas | Revisar `~/.cache/mozilla/`, `~/.local/share/recently-used.xbel`. Opcionalmente: HIBP API para verificar emails | Credencial en HIBP = alerta inmediata. Cache >5GB = sugerir limpieza | Limpieza programada de cache/thumbnails. Si HIBP detecta breach: "Tu email X aparece en una filtracion de datos. Cambia tu contraseña de Y inmediatamente" |
+
+**Frecuencias de monitoreo:**
+
+| Categoria | Frecuencia | Justificacion |
+|-----------|------------|---------------|
+| Termicos (CPU/GPU/SSD) | Cada 10 segundos | Cambios rapidos, riesgo de daño |
+| Bateria | Cada 5 minutos | Cambios lentos |
+| Disco espacio | Cada hora | Cambios graduales |
+| Red/conexiones | Cada 30 segundos | Seguridad critica |
+| SMART/SSD health | Diario | Degaste lento |
+| Security updates/CVEs | Diario | Parches criticos |
+| USB devices | Event-driven (udev) | Tiempo real |
+| Backups | Diario | Proteccion de datos |
+| Ergonomia/ojos/audio | Continuo (timer interno) | Bienestar del usuario |
+| Privacidad/higiene | Semanal | Mantenimiento preventivo |
+| Firmware (HSI) | Semanal | Cambios raros |
+
+**Implementacion:** Todo esto se integra en el `proactive.rs` existente (que ya tiene checks de disco, RAM, sesion larga, tareas atascadas). Se expande con nuevos módulos de health check y se reporta via el event bus existente → Telegram/dashboard.
+
+### 19.5 Principio Fundamental
+
+> **LifeOS no es software que se instala. Es un organismo que nace, crece, aprende, se adapta, se regenera, y evoluciona.**
+>
+> Como el ajolote, nunca deja de poder regenerarse.
+> Como el ser humano, cada sistema cumple una funcion vital.
+> Como un organismo vivo, el todo es mayor que la suma de sus partes.
+>
+> Axi no solo trabaja para ti. **Axi cuida de tu maquina como cuida de si mismo.**
+> Cuida la bateria como el cuerpo cuida el corazon.
+> Cuida el SSD como el cuerpo cuida los huesos.
+> Cuida tu vista como el cuerpo protege los ojos.
+> Cuida tu postura como el sistema nervioso evita el dolor.
+>
+> La meta no es construir un programa perfecto. Es crear un ser digital que mejore cada dia que pasa vivo, y que cuide al humano que le dio vida.
+
+---
+
+### Resumen de Todas las Fases
+
+| Fase | Nombre | Dependencia | Complejidad | Impacto |
+|------|--------|-------------|-------------|---------|
+| A-G | Completadas | — | — | Base funcional |
+| **H** | Loop Iterativo | — | Media | **CRITICO** — sin esto nada funciona |
+| **I** | Auto-Aprobacion + Git | H | Media | **ALTO** — elimina friccion |
+| **J** | Browser Automation | H | Alta | **ALTO** — verificacion visual |
+| **K** | Self-Improvement + Skills | H, I | Alta | **ALTO** — viralidad (OpenClaw) |
+| **L** | Multimodalidad Avanzada | — | Media | **MEDIO** — UX polish |
+| **M** | Plataforma Completa | H, I, J | Alta | **CRITICO** — demo "wow" |
+| **N** | Operador de Desktop | J | Alta | **ALTO** — paridad OpenClaw macOS |
+| **O** | Agente Agentico Autonomo | N, J | Muy Alta | **MAXIMO** — diferenciador unico |
+| **P** | Gaming Autonomo | O | Extrema | **WOW** — nada igual existe |
+| **Q** | MCP Interoperabilidad | H | Media | **ALTO** — acceso a 10K+ tools |
+| **R** | Asistente de Reuniones | L | Media | **ALTO** — uso diario, reemplaza Plaud AI |
+| **S** | Sistema Inmunologico + Salud del Organismo | — | Media | **ALTO** — Axi cuida hardware + usuario |
+| **T** | Voice Pipeline Pro (escuchar como Alexa) | — | Media | **CRITICO** — sin esto Axi es sordo |
+
+**Camino critico:** T (voz) → H → I → J → M (demo) → Q (integraciones) → N → O (diferenciador) → R (uso diario) → K (viralidad) → S (salud) → L (polish) → P (vision)
+
+---
+
+### Fase S — Sistema Inmunologico + Salud del Organismo
+
+**Objetivo:** Axi monitorea y protege activamente el hardware, la seguridad, y el bienestar fisico del usuario. LifeOS cuida de ti como un organismo cuida sus organos.
+
+**Dependencia:** Ninguna (puede implementarse en paralelo con cualquier fase)
+
+**Detalle:** Ver seccion 19.4 "Sistema Inmunologico Completo" para la tabla completa de 14 areas de salud con interfaces tecnicas, umbrales, y acciones de Axi.
+
+**Tareas:**
+- [ ] Modulo `health_monitor.rs` central que orqueste todos los health checks
+- [ ] Monitor SSD/NVMe: leer SMART via `smartctl -j`, alertar desgaste, media_errors, temperatura
+- [ ] Monitor termico CPU/GPU: leer sysfs thermal_zone + hwmon + nvidia-smi, detectar throttling
+- [ ] Monitor RAM: EDAC ce_count, MCE en dmesg, `rasdaemon` si disponible
+- [ ] Monitor disco inteligente: **ignorar composefs `/` (50MB inmutable)**. Solo alertar en `/var`, `/home`
+  - **BUG ACTUAL:** proactive.rs reporta "Disco al 100%" por leer composefs root, NO el disco real
+- [ ] Auto-limpieza: journalctl vacuum, flatpak unused, dnf cache, thumbnails
+- [ ] Monitor red: `ss -tnp` cada 30s, whitelist de procesos/puertos, alertar conexiones sospechosas
+- [ ] USBGuard integration: bloquear dispositivos USB desconocidos, notificar al usuario
+- [ ] Security patches: `dnf-automatic` security-only, firmware via `fwupdmgr`, HSI score semanal
+- [ ] Bateria inteligente: UPower D-Bus, charge thresholds (TLP o sysfs directo segun vendor)
+  - [ ] Auto-detectar vendor laptop (ThinkPad, ASUS, Dell, Framework, etc.) y configurar thresholds
+  - [ ] Smart charging: threshold bajo en horas pico, normal en horas valle
+  - [ ] Alertar desgaste: health <80%, cycles >500, temperatura >45°C
+- [ ] NVIDIA GPU power management: RTD3 config, EnvyControl integration para modo hibrido/integrado
+- [ ] Eye health: night mode auto al atardecer (wlsunset o GNOME Night Light), recordatorio 20-20-20
+- [ ] Audio health: monitorear volumen via `wpctl`, alertar >80% por >30 min, limiter PipeWire opcional
+- [ ] Ergonomia: tracking input libinput, microbreaks cada 25 min, breaks cada 60 min
+- [ ] Backup health: si restic/borg configurado, verificar integridad semanal, alertar si no hay backup
+- [ ] Privacy hygiene semanal: cache scan, HIBP API para emails, archivos sensibles expuestos
+- [ ] Dashboard: nueva seccion "Salud del Sistema" con indicadores verdes/amarillos/rojos por area
+- [ ] Telegram: reportes de salud diarios/semanales, alertas criticas inmediatas
+
+### Fase T — Voice Pipeline Pro (escuchar como Alexa/Google)
+
+**Objetivo:** Axi escucha y responde al usuario con la misma sensibilidad que Alexa o Google Home. Funciona para personas que hablan bajo, susurran, o estan lejos del microfono.
+
+**Dependencia:** Ninguna (PRIORITARIA — sin esto Axi es sordo)
+
+**Problemas actuales detectados (2026-03-24):**
+
+| Problema | Causa Raiz | Archivo |
+|----------|-----------|---------|
+| **Wake word no funciona** | No existe `/var/lib/lifeos/models/rustpotter/axi.rpw` en la imagen | `sensory_pipeline.rs` caps |
+| **Always-On sin source** | `always_on_source: null` — no auto-detecta microfono | `sensory_pipeline.rs` caps |
+| **Voz baja no se detecta** | `PCM_RMS_THRESHOLD=450` fijo, sin AGC | `sensory_pipeline.rs:34` |
+| **Solo ffmpeg tiene gain** | `pw-record`/`parecord` no aplican ganancia — solo ffmpeg (+8dB) | `sensory_pipeline.rs:2990` |
+| **Sin calibracion de mic** | Mismo threshold para mic integrado vs Bluetooth vs USB | Hardcoded |
+| **Pre-speech timeout corto** | 4 sec para empezar a hablar despues del wake word | `sensory_pipeline.rs:40` |
+
+**Tareas:**
+- [ ] **Generar y empaquetar `axi.rpw`** wake word model en la imagen (rustpotter training)
+  - [ ] Grabar multiples muestras de "axi" en diferentes tonos/volúmenes/distancias
+  - [ ] Incluir muestras de voz baja y susurro
+  - [ ] Entrenar con rustpotter-cli, empaquetar en `/var/lib/lifeos/models/rustpotter/axi.rpw`
+  - [ ] Agregar al Containerfile
+- [ ] **Auto-detectar microfono** al activar sensores: leer `pactl list sources`, elegir el mejor source activo
+  - [ ] Preferir source con `RUNNING` > `IDLE` > `SUSPENDED`
+  - [ ] Si hay Bluetooth conectado, preguntar cual usar
+- [ ] **VAD adaptativo (Adaptive Voice Activity Detection):**
+  - [ ] Medir noise floor durante primeros 500ms de escucha
+  - [ ] Threshold dinamico: `noise_floor_rms * 2.5` (en vez de fijo 450)
+  - [ ] Hacer configurable via `LIFEOS_VAD_RMS_THRESHOLD` env var
+  - [ ] Default: bajar de 450 a 300 para mejor sensibilidad
+- [ ] **AGC (Automatic Gain Control) para TODOS los backends:**
+  - [ ] Para pw-record: post-procesar con ffmpeg filter `dynaudnorm` o `volume=XdB`
+  - [ ] O mejor: usar PipeWire filter-chain con `volume` node antes de capturar
+  - [ ] Para parecord: usar `--volume=65536` (max) o pipear a ffmpeg
+  - [ ] Config: `LIFEOS_MIC_GAIN_DB` (default 12dB para voz baja)
+- [ ] **Calibracion por dispositivo:**
+  - [ ] Al primer uso de cada microfono: pedir al usuario que diga "axi" en voz normal
+  - [ ] Medir RMS promedio y calibrar threshold automaticamente
+  - [ ] Guardar calibracion en `sensory_pipeline_state.json` per-source
+- [ ] **Pre-speech timeout:** aumentar de 4.0 a 6.0 segundos
+- [ ] **Feedback auditivo:**
+  - [ ] Sonido suave cuando Axi detecta wake word (como Alexa)
+  - [ ] LED visual en dashboard/widget cuando esta escuchando
+  - [ ] Sonido de "entendi" o "no te escuche" al final de captura
+- [ ] **Modo "near-field" vs "far-field":**
+  - [ ] Detectar distancia estimada por volumen de voz
+  - [ ] Si far-field: aplicar mas ganancia, threshold mas bajo
+  - [ ] Si near-field (headset/Bluetooth): threshold normal
+- [ ] **Whisper model upgrade:**
+  - [ ] Para voz baja: usar `ggml-medium` (769 MB) si hay suficiente RAM/VRAM
+  - [ ] Whisper medium tiene mejor accuracy en audio de baja calidad
+  - [ ] Auto-seleccionar modelo segun recursos disponibles
+- [ ] **Sudo correcto en sensores:**
+  - [ ] Oido, Escritorio, Camara requieren sudo: **CORRECTO** (acceso a /dev/video0, PipeWire system, screenshot)
+  - [ ] Always-On no requiere sudo: **CORRECTO** (solo usa event loop interno del daemon)
+  - [ ] Documentar esto en el dashboard (tooltip: "Requiere permisos de sistema")
+
+**Benchmark de referencia:**
+| Asistente | Distancia deteccion | Voz baja | Ambiente ruidoso | Latencia wake word |
+|-----------|-------------------|----------|------------------|--------------------|
+| Alexa | ~6 metros | Si | Beamforming 7 mics | <500ms |
+| Google Home | ~5 metros | Si | Beamforming 2 mics | <400ms |
+| Siri (HomePod) | ~4 metros | Si | Beamforming 6 mics | <600ms |
+| **LifeOS (actual)** | **~30cm (no funciona)** | **No** | **No** | **N/A (wake word roto)** |
+| **LifeOS (meta Fase T)** | **~2 metros** | **Si** | **Basico (1 mic)** | **<800ms** |
+
+*Nota: LifeOS usa 1 microfono (el del laptop). No puede competir con beamforming de 7 mics. Pero con AGC + VAD adaptativo + threshold bajo podemos llegar a 2 metros en ambiente tranquilo, que es suficiente para uso personal.*
+
+### Post Fases — Lanzamiento Publico
+
+- [ ] Grabar video demo de 2 minutos mostrando el flujo completo (Telegram -> LifeOS desarrolla -> reporta con evidencia)
+- [ ] Grabar video demo de "agente agentico": usuario se va, Axi trabaja, usuario regresa y ve resultados
+- [ ] Actualizar README.md para publico con screenshots del dashboard y demo
 - [ ] Hacer repo publico bajo org lifeos-ai
 - [ ] Post en X/Twitter con video
 - [ ] Post en r/linux, r/LocalLLaMA, r/selfhosted, Hacker News
 - [ ] Post en comunidades hispanohablantes
+- [ ] Preparar ISO descargable para early adopters

@@ -651,8 +651,7 @@ fn clean_process_name(name: &str) -> String {
 
     // Replace underscores/hyphens with spaces and title-case.
     without_ext
-        .replace('_', " ")
-        .replace('-', " ")
+        .replace(['_', '-'], " ")
         .split_whitespace()
         .map(|w| {
             let mut c = w.chars();

@@ -1,0 +1,10 @@
+// Allow the lifeos user to manage llama-server.service without a password.
+// This enables Game Guard to offload the LLM from GPU to RAM when a game is
+// detected, and restore it when the game exits.
+polkit.addRule(function(action, subject) {
+    if (action.id === "org.freedesktop.systemd1.manage-units" &&
+        subject.user === "lifeos" &&
+        action.lookup("unit") === "llama-server.service") {
+        return polkit.Result.YES;
+    }
+});

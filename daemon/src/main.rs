@@ -32,17 +32,20 @@ mod email_bridge;
 mod events;
 mod experience_modes;
 mod follow_along;
+#[allow(dead_code)]
 mod game_assistant;
 mod game_guard;
 mod health;
 #[allow(dead_code)]
 mod health_tracking;
+#[allow(dead_code)]
 mod home_assistant;
 #[cfg(feature = "ui-overlay")]
 #[allow(dead_code)]
 mod keyboard_shortcut;
 mod lab;
 mod llm_router;
+#[allow(dead_code)]
 mod matrix_bridge;
 mod memory_plane;
 #[cfg(feature = "ui-overlay")]
@@ -61,6 +64,7 @@ mod proactive;
 mod scheduled_tasks;
 mod screen_capture;
 mod sensory_pipeline;
+#[allow(dead_code)]
 mod signal_bridge;
 mod supervisor;
 mod system;
@@ -72,6 +76,7 @@ mod update_scheduler;
 mod updates;
 mod visual_comfort;
 mod wake_word;
+#[allow(dead_code)]
 mod whatsapp_bridge;
 
 use accessibility::AccessibilityManager;

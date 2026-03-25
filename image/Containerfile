@@ -510,6 +510,7 @@ COPY image/files/usr/local/bin/lifeos-nvidia-secureboot.sh /usr/local/bin/lifeos
 COPY image/files/usr/local/bin/lifeos-maintenance-cleanup.sh /usr/local/bin/lifeos-maintenance-cleanup.sh
 COPY image/files/usr/local/bin/lifeos-open-axi-dashboard.sh /usr/local/bin/lifeos-open-axi-dashboard.sh
 COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
+COPY image/files/usr/local/bin/lifeos-llama-gpu-layers.sh       /usr/local/bin/lifeos-llama-gpu-layers.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
              /usr/local/bin/lifeos-stt-setup.sh \
@@ -520,7 +521,13 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-maintenance-cleanup.sh \
              /usr/local/bin/lifeos-nvidia-secureboot.sh \
              /usr/local/bin/lifeos-open-axi-dashboard.sh \
+             /usr/local/bin/lifeos-llama-gpu-layers.sh \
              /usr/local/bin/lifeos-check
+
+# Game Guard: polkit + sudoers for llama-server GPU offload
+COPY image/files/etc/polkit-1/rules.d/50-lifeos-llama-server.rules /etc/polkit-1/rules.d/50-lifeos-llama-server.rules
+COPY image/files/etc/sudoers.d/lifeos-llama-server /etc/sudoers.d/lifeos-llama-server
+RUN chmod 0440 /etc/sudoers.d/lifeos-llama-server
 
 # xdg-desktop-portal LifeOS integration
 COPY files/usr/share/xdg-desktop-portal/portals/lifeos.portal /usr/share/xdg-desktop-portal/portals/lifeos.portal

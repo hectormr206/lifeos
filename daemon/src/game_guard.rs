@@ -15,7 +15,6 @@ use chrono::{DateTime, Utc};
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -277,7 +276,7 @@ impl GameGuard {
                     Ok(_) => {}
                     Err(e) => warn!("[game_guard] persist_gpu_layers(0) failed: {e}"),
                 }
-                restart_llama_server();
+                // persist_gpu_layers already restarts llama-server via the helper script
                 inner.current_mode = LlmMode::Cpu;
                 inner.last_game = game_info;
             }
@@ -289,7 +288,7 @@ impl GameGuard {
                     Ok(_) => {}
                     Err(e) => warn!("[game_guard] persist_gpu_layers(-1) failed: {e}"),
                 }
-                restart_llama_server();
+                // persist_gpu_layers already restarts llama-server via the helper script
                 inner.current_mode = LlmMode::Gpu;
                 inner.last_game = None;
             }
@@ -639,82 +638,63 @@ pub fn get_game_window_title(pid: u32) -> Option<String> {
 /// - `layers = -1` → all layers on GPU (normal)
 /// - `layers = 0`  → all layers on CPU (game running)
 ///
-/// If `/etc` is read-only (bootc immutable rootfs), writes to
-/// `~/.config/lifeos/llama-server.env.override` instead.
-pub fn persist_gpu_layers(layers: i32, env_path: &str) -> Result<()> {
-    let primary = std::path::Path::new(env_path);
-
-    // Try to read the existing file
-    let original_content = fs::read_to_string(primary).unwrap_or_default();
-
-    let new_line = format!("LIFEOS_AI_GPU_LAYERS={layers}");
-
-    let updated = if original_content.contains("LIFEOS_AI_GPU_LAYERS=") {
-        // Replace the existing line
-        original_content
-            .lines()
-            .map(|line| {
-                if line.starts_with("LIFEOS_AI_GPU_LAYERS=") {
-                    new_line.clone()
-                } else {
-                    line.to_string()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-            + "\n"
-    } else {
-        // Append the line
-        format!("{original_content}\n{new_line}\n")
-    };
-
-    // Attempt to write to the primary path
-    match fs::write(primary, &updated) {
-        Ok(_) => {
-            info!("[game_guard] GPU layers set to {layers} → {env_path}");
-            return Ok(());
-        }
-        Err(e)
-            if e.kind() == std::io::ErrorKind::ReadOnlyFilesystem
-                || e.kind() == std::io::ErrorKind::PermissionDenied =>
-        {
-            warn!("[game_guard] {env_path} is read-only (bootc), falling back to override file");
-        }
-        Err(e) => {
-            warn!("[game_guard] could not write {env_path}: {e} — falling back to override file");
-        }
-    }
-
-    // Fallback: write to ~/.config/lifeos/llama-server.env.override
-    let override_path = override_env_path()?;
-    if let Some(parent) = override_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("create override dir {}", parent.display()))?;
-    }
-    fs::write(&override_path, &updated)
-        .with_context(|| format!("write override file {}", override_path.display()))?;
-
-    info!(
-        "[game_guard] GPU layers set to {layers} → {}",
-        override_path.display()
-    );
+/// Uses the privileged helper script `lifeos-llama-gpu-layers.sh` which:
+/// 1. Creates/removes a systemd drop-in override for LIFEOS_AI_GPU_LAYERS
+/// 2. Runs `systemctl daemon-reload && systemctl restart llama-server`
+///
+/// The helper runs via `sudo` with a NOPASSWD sudoers rule installed in the image.
+/// This is required because llama-server.service is a system-level unit (runs as root)
+/// and the daemon runs as the `lifeos` user.
+pub fn persist_gpu_layers(layers: i32, _env_path: &str) -> Result<()> {
+    set_gpu_layers_and_restart(layers);
     Ok(())
 }
 
-/// Returns the path to the user-level override env file.
-fn override_env_path() -> Result<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    Ok(PathBuf::from(home)
-        .join(".config")
-        .join("lifeos")
-        .join("llama-server.env.override"))
+/// Set GPU layers and restart llama-server via the privileged helper script.
+///
+/// The helper `lifeos-llama-gpu-layers.sh` handles:
+/// - Creating/removing a systemd drop-in in `/etc/systemd/system/llama-server.service.d/`
+/// - `systemctl daemon-reload`
+/// - `systemctl restart llama-server.service`
+///
+/// Requires: `/etc/sudoers.d/lifeos-llama-server` granting NOPASSWD access.
+fn set_gpu_layers_and_restart(layers: i32) {
+    let layers_str = layers.to_string();
+    info!("[game_guard] setting GPU layers to {layers} via helper script");
+
+    match Command::new("sudo")
+        .args(["/usr/local/bin/lifeos-llama-gpu-layers.sh", &layers_str])
+        .output()
+    {
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                info!("[game_guard] helper script succeeded: {}", stdout.trim());
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                error!(
+                    "[game_guard] helper script failed (exit {}): {}",
+                    output.status,
+                    stderr.trim()
+                );
+                // Fallback: try direct systemctl (may work if polkit rule is installed)
+                warn!("[game_guard] falling back to direct systemctl restart");
+                restart_llama_server_direct();
+            }
+        }
+        Err(e) => {
+            error!("[game_guard] failed to run helper script: {e}");
+            warn!("[game_guard] falling back to direct systemctl restart");
+            restart_llama_server_direct();
+        }
+    }
 }
 
-/// Restart llama-server via systemctl --user (non-blocking fire-and-forget).
-fn restart_llama_server() {
-    info!("[game_guard] restarting llama-server (systemctl --user restart llama-server)");
+/// Direct systemctl restart fallback (no env override, just restart).
+fn restart_llama_server_direct() {
+    info!("[game_guard] restarting llama-server (systemctl restart llama-server)");
     match Command::new("systemctl")
-        .args(["--user", "restart", "llama-server"])
+        .args(["restart", "llama-server"])
         .spawn()
     {
         Ok(_) => {}
