@@ -47,14 +47,17 @@ install_pkgs() {
 
 case "$profile" in
     daemon)
-        # Check core prerequisites (GTK4, dbus, pkg-config)
+        # Always ensure wayland/xkbcommon are present (cosmic-protocols build.rs needs them)
+        if ! pkg-config --exists xkbcommon 2>/dev/null || ! pkg-config --exists wayland-client 2>/dev/null; then
+            echo "Installing wayland/xkbcommon dev libraries..."
+            install_pkgs \
+                "libwayland-dev libxkbcommon-dev" \
+                "wayland-devel libxkbcommon-devel"
+        fi
+
+        # Check remaining core prerequisites (GTK4, dbus, pkg-config)
         if bash scripts/check-daemon-prereqs.sh >/dev/null 2>&1; then
-            echo "daemon core prerequisites already installed"
-            # Check optional deps (wayland/xkbcommon for cosmic feature)
-            if ! pkg-config --exists xkbcommon 2>/dev/null || ! pkg-config --exists wayland-client 2>/dev/null; then
-                echo "WARNING: wayland-devel/libxkbcommon-devel not installed (cosmic feature disabled)"
-                echo "These will be available after the next LifeOS image update"
-            fi
+            echo "daemon prerequisites already installed"
             exit 0
         fi
 
