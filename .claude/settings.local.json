@@ -30,7 +30,17 @@
       "WebFetch(domain:unsloth.ai)",
       "Bash(source ~/.cargo/env)",
       "Bash(cargo search:*)",
-      "Bash(cargo info:*)"
+      "Bash(cargo info:*)",
+      "Bash(flatpak-spawn --host df -Pk /var)",
+      "Bash(flatpak-spawn --host grep -r SSH_AUTH_SOCK /etc/xdg/autostart/ /usr/share/gnome-session/)",
+      "Bash(flatpak-spawn --host grep -r SSH_AUTH_SOCK /etc/profile.d/ /etc/environment /etc/bash.bashrc)",
+      "Bash(flatpak-spawn --host bash -c 'journalctl -b -p warning --no-pager | grep -i ssh_auth 2>/dev/null | head -3')",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "Bash(git add:*)",
+      "Bash(git reset:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

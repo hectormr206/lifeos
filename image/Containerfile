@@ -149,6 +149,21 @@ RUN set -eux && \
     test -s /out/models/piper/es_MX-claude-high.onnx.json
 
 # ============================================================================
+# Stage 4b: Download WeSpeaker ONNX model for speaker identification
+# ============================================================================
+FROM fedora:${FEDORA_MAJOR} AS wespeaker-builder
+
+RUN dnf install -y curl && dnf clean all
+
+RUN set -eux && \
+    mkdir -p /out/models/wespeaker && \
+    curl -fSL --retry 3 --connect-timeout 120 \
+      -o /out/models/wespeaker/voxceleb_resnet34_LM.onnx \
+      "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx?download=true" && \
+    test -s /out/models/wespeaker/voxceleb_resnet34_LM.onnx && \
+    echo ">>> WeSpeaker ONNX model downloaded ($(du -sh /out/models/wespeaker/voxceleb_resnet34_LM.onnx | cut -f1))"
+
+# ============================================================================
 # Stage 5: Bundle Piper TTS runtime binary (Rhasspy Piper CLI)
 # ============================================================================
 FROM fedora:${FEDORA_MAJOR} AS piper-runtime-builder
@@ -362,6 +377,10 @@ RUN dnf -y install \
     langpacks-es langpacks-en \
     && dnf clean all
 
+# --- Speaker identification runtime (WeSpeaker ONNX) ---
+RUN pip3 install --no-cache-dir onnxruntime numpy && \
+    python3 -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
+
 # --- Aplicaciones Nativas Esenciales ---
 RUN dnf -y install \
     mpv evince keepassxc \
@@ -417,6 +436,7 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /va
 
 COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
 COPY --from=piper-voice-builder /out/models/piper /usr/share/lifeos/models/piper
+COPY --from=wespeaker-builder /out/models/wespeaker /usr/share/lifeos/models/wespeaker
 COPY --from=piper-runtime-builder /out/opt/lifeos/piper-tts /opt/lifeos/piper-tts
 
 RUN ln -sf /opt/lifeos/piper-tts/piper /usr/local/bin/lifeos-piper
@@ -520,6 +540,7 @@ COPY image/files/usr/local/bin/lifeos-open-axi-dashboard.sh /usr/local/bin/lifeo
 COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/lifeos-check
 COPY image/files/usr/local/bin/lifeos-llama-gpu-layers.sh       /usr/local/bin/lifeos-llama-gpu-layers.sh
 COPY image/files/usr/local/bin/lifeos-generate-wakeword.sh     /usr/local/bin/lifeos-generate-wakeword.sh
+COPY image/files/usr/local/bin/lifeos-speaker-embedding.py     /usr/local/bin/lifeos-speaker-embedding.py
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
              /usr/local/bin/lifeos-stt-setup.sh \
@@ -532,6 +553,7 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-open-axi-dashboard.sh \
              /usr/local/bin/lifeos-llama-gpu-layers.sh \
              /usr/local/bin/lifeos-generate-wakeword.sh \
+             /usr/local/bin/lifeos-speaker-embedding.py \
              /usr/local/bin/lifeos-check
 
 # --- Pre-trained wake word model (works from first boot) ---
@@ -592,6 +614,7 @@ RUN printf '%s\n' \
     'Environment=LIFEOS_TTS_FALLBACK_BIN=/usr/bin/espeak-ng' \
     'Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard' \
     'Environment=LIFEOS_RUNTIME_DIR=%t/lifeos' \
+    'Environment=LIFEOS_WESPEAKER_MODEL=/usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx' \
     'EnvironmentFile=-/etc/lifeos/llm-providers.env' \
     'EnvironmentFile=-%h/.config/lifeos/llm-providers.env' \
     'RuntimeDirectory=lifeos' \
@@ -599,6 +622,9 @@ RUN printf '%s\n' \
     'ExecStart=/usr/bin/lifeosd' \
     'Restart=on-failure' \
     'RestartSec=5' \
+    'WatchdogSec=300' \
+    'NoNewPrivileges=yes' \
+    'PrivateTmp=yes' \
     '' \
     '[Install]' \
     'WantedBy=default.target' \
@@ -804,6 +830,8 @@ RUN test -x /usr/bin/mpv && \
     test -f /usr/share/lifeos/models/whisper/ggml-base.bin && \
     test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx && \
     test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx.json && \
+    test -f /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx && \
+    test -f /usr/share/lifeos/models/rustpotter/axi.rpw && \
     test -d /usr/share/backgrounds/lifeos && \
     test -d /usr/share/icons/LifeOS && \
     test -f /usr/share/themes/LifeOS-Dark/index.theme && \

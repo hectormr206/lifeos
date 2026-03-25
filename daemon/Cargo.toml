@@ -55,6 +55,8 @@ teloxide = { version = "0.13", features = ["macros"], optional = true }
 # Wake word detection (half pinned to avoid rand 0.8/0.9 conflict with candle-core 0.2)
 half = "=2.4.1"
 rustpotter = { version = "3", optional = true, default-features = false }
+# Speaker identification — uses external lifeos-speaker-embedding script (Python + onnxruntime)
+# No Rust ONNX dependency needed; matching/profile logic is pure Rust.
 # MCP (Model Context Protocol) client — disabled until rustc 1.88+ in CI
 # rust-mcp-sdk requires cookie_store 0.22 which needs rustc 1.88
 # Our MCP server (mcp_server.rs) uses hand-written JSON-RPC, no SDK needed
@@ -71,6 +73,7 @@ http-api = ["axum", "tower-http"]
 ui-overlay = ["gtk4", "glib", "adw"]
 cosmic = ["cosmic-protocols", "cosmic-client-toolkit", "wayland-client"]
 wake-word = ["rustpotter"]
+speaker-id = []
 # mcp-client = ["rust-mcp-sdk"]  # disabled until rustc 1.88+ in CI
 telegram = ["teloxide"]
 whatsapp = []

@@ -466,15 +466,20 @@ pub struct SensoryPipelineManager {
     data_dir: PathBuf,
     state: Arc<RwLock<SensoryPipelineState>>,
     playback: Arc<Mutex<Option<ActivePlayback>>>,
+    speaker_id: Arc<tokio::sync::Mutex<crate::speaker_id::SpeakerIdManager>>,
 }
 
 impl SensoryPipelineManager {
     pub fn new(data_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&data_dir).context("Failed to create sensory pipeline data dir")?;
+        let speaker_dir = data_dir.join("speaker_profiles");
         Ok(Self {
             data_dir,
             state: Arc::new(RwLock::new(SensoryPipelineState::default())),
             playback: Arc::new(Mutex::new(None)),
+            speaker_id: Arc::new(tokio::sync::Mutex::new(
+                crate::speaker_id::SpeakerIdManager::new(speaker_dir),
+            )),
         })
     }
 
@@ -1014,7 +1019,7 @@ impl SensoryPipelineManager {
                 cycle.memory_plane,
                 cycle.telemetry,
                 VoiceLoopRequest {
-                    audio_file: None,
+                    audio_file: Some(audio_path),
                     prompt: Some(prompt),
                     include_screen,
                     screen_source: None,
@@ -1097,6 +1102,59 @@ impl SensoryPipelineManager {
             .set_axi_state(AxiState::Thinking, Some("llm"))
             .await?;
 
+        // --- Speaker identification (passive enrollment) ---
+        // Extract embedding from captured audio and identify/enroll speaker.
+        // This runs concurrently with the LLM call preparation.
+        let speaker_match = if let Some(audio_file) =
+            request.audio_file.as_deref().filter(|p| !p.is_empty())
+        {
+            let audio_path = std::path::PathBuf::from(audio_file);
+            match crate::speaker_id::extract_embedding(&audio_path).await {
+                Ok(embedding) => {
+                    let mut sid = self.speaker_id.lock().await;
+                    let result = sid.identify(&embedding);
+
+                    // Check if user is responding to "¿Como te llamas?" from previous interaction.
+                    // Detect name responses like "Héctor", "Me llamo Cely", "Soy Héctor", etc.
+                    if result.name.is_none() {
+                        if let Some(name) = extract_name_from_transcript(&transcript) {
+                            log::info!("Speaker {} identified as '{}'", result.profile_id, name);
+                            sid.set_name(&result.profile_id, &name);
+                        }
+                    }
+
+                    Some(result)
+                }
+                Err(e) => {
+                    log::debug!("Speaker embedding extraction skipped: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let speaker_name = speaker_match.as_ref().and_then(|m| m.name.as_deref());
+        let should_ask_name = speaker_match
+            .as_ref()
+            .map(|m| m.should_ask_name)
+            .unwrap_or(false);
+
+        // Build system prompt with speaker context
+        let greeting_context = if let Some(name) = speaker_name {
+            format!(
+                " The user's name is {}. Greet them naturally by name when appropriate.",
+                name
+            )
+        } else {
+            String::new()
+        };
+
+        let base_system_prompt = format!(
+            "You are Axi, the local LifeOS assistant. Answer in ONE or TWO short sentences in natural spoken Spanish. Be direct and concise — this will be read aloud via TTS. No markdown, no code, no lists, no internal reasoning.{}",
+            greeting_context
+        );
+
         let system_context = screen_context.as_ref().map(|ctx| {
             format!(
                 "Screen OCR context:\n{}\n\nRelevant lines:\n{}",
@@ -1118,10 +1176,7 @@ impl SensoryPipelineManager {
                 .chat(
                     None,
                     vec![
-                        (
-                            "system".to_string(),
-                            "You are Axi, the local LifeOS assistant. Answer in ONE or TWO short sentences in natural spoken Spanish. Be direct and concise — this will be read aloud via TTS. No markdown, no code, no lists, no internal reasoning.".to_string(),
-                        ),
+                        ("system".to_string(), base_system_prompt),
                         ("user".to_string(), transcript.clone()),
                     ],
                 )
@@ -1129,7 +1184,12 @@ impl SensoryPipelineManager {
         };
         let llm_duration_ms = llm_started.elapsed().as_millis() as u64;
         let tokens_per_second = tokens_per_second(chat.tokens_used, llm_duration_ms);
-        let response_text = sanitize_assistant_response(&chat.response);
+        let mut response_text = sanitize_assistant_response(&chat.response);
+
+        // If the speaker hasn't been named yet and threshold reached, ask their name
+        if should_ask_name {
+            response_text.push_str(" Por cierto, no conozco tu nombre aun. ¿Como te llamas?");
+        }
         overlay
             .set_processing_feedback(
                 Some("thinking"),
@@ -4055,6 +4115,53 @@ fn strip_think_sections(input: &str) -> String {
         }
     }
     output
+}
+
+/// Try to extract a person's name from a transcript that is a response to
+/// "¿Como te llamas?". Matches patterns like "Héctor", "Me llamo Cely",
+/// "Soy Héctor", "Mi nombre es Cely", or a single capitalized word.
+fn extract_name_from_transcript(transcript: &str) -> Option<String> {
+    let text = transcript.trim();
+    if text.is_empty() || text.len() > 100 {
+        return None;
+    }
+    let lower = text.to_lowercase();
+
+    // Pattern: "me llamo X", "soy X", "mi nombre es X"
+    for prefix in &["me llamo ", "soy ", "mi nombre es "] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            let name = rest.trim().trim_end_matches(['.', ',', '!']);
+            if !name.is_empty() && name.len() < 30 {
+                // Capitalize first letter
+                let mut chars = name.chars();
+                let capitalized: String = chars
+                    .next()
+                    .map(|c| c.to_uppercase().to_string())
+                    .unwrap_or_default()
+                    + chars.as_str();
+                return Some(capitalized);
+            }
+        }
+    }
+
+    // Pattern: single word that looks like a name (1-3 words, short)
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() <= 2 && text.len() < 25 {
+        // Check that the first character is alphabetic (likely a name)
+        if text
+            .chars()
+            .next()
+            .map(|c| c.is_alphabetic())
+            .unwrap_or(false)
+        {
+            let name = text.trim_end_matches(['.', ',', '!']);
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    None
 }
 
 fn looks_like_internal_reasoning_line(line: &str) -> bool {

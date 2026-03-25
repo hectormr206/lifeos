@@ -227,25 +227,72 @@ impl SpeakerIdManager {
 
 // ── Embedding extraction ─────────────────────────────────────────────────
 
+const SPEAKER_EMBEDDING_SCRIPT: &str = "/usr/local/bin/lifeos-speaker-embedding.py";
+const WESPEAKER_MODEL_PATH: &str = "/usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx";
+
 /// Extract a speaker embedding from a WAV audio file.
 ///
-/// Current implementation: placeholder that generates a deterministic
-/// embedding from audio characteristics (RMS energy, zero-crossing rate).
-/// This allows the profile management and matching logic to work while
-/// we integrate WeSpeaker ONNX for real embeddings.
+/// Uses the WeSpeaker ONNX model (ResNet34, 26.5MB) via a Python subprocess.
+/// The script computes mel filterbank features and runs ONNX inference,
+/// outputting a JSON array of 256 floats (the L2-normalized embedding).
 ///
-/// TODO: Replace with WeSpeaker ONNX model inference for production-quality
-/// speaker embeddings. The model (ResNet34, ~15MB ONNX) would be loaded
-/// once at daemon startup and used for all extractions.
+/// Falls back to a lightweight audio-statistics embedding if the model
+/// or Python dependencies are not available.
 pub async fn extract_embedding(audio_path: &Path) -> anyhow::Result<Vec<f32>> {
-    // Read WAV file and compute basic audio features as a placeholder embedding
+    // Try WeSpeaker ONNX first
+    if Path::new(SPEAKER_EMBEDDING_SCRIPT).exists() && Path::new(WESPEAKER_MODEL_PATH).exists() {
+        match extract_embedding_wespeaker(audio_path).await {
+            Ok(emb) => return Ok(emb),
+            Err(e) => {
+                warn!("WeSpeaker extraction failed, using fallback: {e}");
+            }
+        }
+    }
+
+    // Fallback: audio-statistics embedding
+    extract_embedding_fallback(audio_path).await
+}
+
+/// Extract embedding using WeSpeaker ONNX via Python subprocess.
+async fn extract_embedding_wespeaker(audio_path: &Path) -> anyhow::Result<Vec<f32>> {
+    let output = tokio::process::Command::new("python3")
+        .args([
+            SPEAKER_EMBEDDING_SCRIPT,
+            audio_path.to_string_lossy().as_ref(),
+            "--model",
+            WESPEAKER_MODEL_PATH,
+        ])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Speaker embedding script failed: {stderr}");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let embedding: Vec<f32> = serde_json::from_str(stdout.trim())?;
+
+    if embedding.len() != EMBEDDING_DIM {
+        anyhow::bail!(
+            "Expected {} dimensions, got {}",
+            EMBEDDING_DIM,
+            embedding.len()
+        );
+    }
+
+    Ok(embedding)
+}
+
+/// Fallback embedding extraction using audio statistics.
+/// Not production quality but allows the system to function without ONNX.
+async fn extract_embedding_fallback(audio_path: &Path) -> anyhow::Result<Vec<f32>> {
     let data = tokio::fs::read(audio_path).await?;
 
     if data.len() < 44 {
         anyhow::bail!("Audio file too small for WAV header");
     }
 
-    // Skip WAV header (44 bytes) and interpret as 16-bit PCM
     let pcm: Vec<i16> = data[44..]
         .chunks_exact(2)
         .map(|c| i16::from_le_bytes([c[0], c[1]]))
@@ -255,31 +302,22 @@ pub async fn extract_embedding(audio_path: &Path) -> anyhow::Result<Vec<f32>> {
         anyhow::bail!("No audio samples in file");
     }
 
-    // Generate a placeholder embedding from audio statistics.
-    // This is NOT a real speaker embedding — it's a deterministic feature
-    // vector that allows the matching/profile infrastructure to work.
     let mut embedding = vec![0.0f32; EMBEDDING_DIM];
-
-    // Use chunks of audio to fill the embedding with spectral-like features
     let chunk_size = pcm.len().max(EMBEDDING_DIM) / EMBEDDING_DIM;
     for (i, chunk) in pcm.chunks(chunk_size).enumerate() {
         if i >= EMBEDDING_DIM {
             break;
         }
-        // RMS energy of this chunk
         let rms: f32 =
             (chunk.iter().map(|&s| (s as f32).powi(2)).sum::<f32>() / chunk.len() as f32).sqrt();
-        // Zero-crossing rate
         let zcr: f32 = chunk
             .windows(2)
             .filter(|w| (w[0] > 0) != (w[1] > 0))
             .count() as f32
             / chunk.len() as f32;
-
         embedding[i] = rms * 0.001 + zcr;
     }
 
-    // L2 normalize
     let norm: f32 = embedding.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 1e-8 {
         for x in &mut embedding {
