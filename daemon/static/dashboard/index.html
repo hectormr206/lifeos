@@ -566,6 +566,19 @@
           <input type="text" id="wake-word-input" value="axi" placeholder="axi">
           <button id="wake-word-save" class="btn-small">Guardar</button>
         </div>
+        <!-- Wake word training -->
+        <div class="setting-item" style="grid-column: 1 / -1;">
+          <label>Entrenar Wake Word</label>
+          <p class="setting-hint" id="ww-hint">Graba al menos 3 muestras diciendo "Axi" para crear el modelo de deteccion por voz.</p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+            <button id="ww-record" class="btn-small" style="background:#e74c3c;">Grabar muestra (2.5s)</button>
+            <button id="ww-train" class="btn-small" style="background:#27ae60;" disabled>Entrenar modelo</button>
+            <button id="ww-delete" class="btn-small" style="background:#555;">Borrar muestras</button>
+            <span id="ww-status" style="font-size:0.85em; color:#aaa;">Cargando...</span>
+          </div>
+          <div id="ww-samples" style="margin-top:8px; font-size:0.8em; color:#999;"></div>
+        </div>
+
         <div class="setting-item">
           <label for="interval-slider">Intervalo captura (s)</label>
           <input type="range" id="interval-slider" min="5" max="30" value="10">

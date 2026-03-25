@@ -1230,6 +1230,13 @@ pub fn create_router(state: ApiState) -> Router {
         )
         .route("/sensory/benchmark", post(run_sensory_benchmark))
         .route("/sensory/kill-switch", post(trigger_sensory_kill_switch))
+        // Wake word training
+        .route("/sensory/wake-word/record", post(record_wake_word_sample))
+        .route("/sensory/wake-word/train", post(train_wake_word_model))
+        .route(
+            "/sensory/wake-word/samples",
+            get(list_wake_word_samples).delete(delete_wake_word_samples),
+        )
         // Overlay endpoints
         .route("/overlay/show", post(show_overlay))
         .route("/overlay/hide", post(hide_overlay))
@@ -8016,6 +8023,254 @@ async fn trigger_sensory_kill_switch(
         "sensory_runtime": runtime,
         "sensory": sensory,
     })))
+}
+
+// ---------------------------------------------------------------------------
+// Wake word training endpoints
+// ---------------------------------------------------------------------------
+
+const WAKE_WORD_SAMPLES_DIR: &str = "/var/lib/lifeos/models/rustpotter/samples";
+const WAKE_WORD_MODEL_PATH: &str = "/var/lib/lifeos/models/rustpotter/axi.rpw";
+
+/// Record a 2-second WAV sample of the user saying the wake word.
+async fn record_wake_word_sample(
+    State(_state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let samples_dir = std::path::Path::new(WAKE_WORD_SAMPLES_DIR);
+    tokio::fs::create_dir_all(samples_dir).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "IO Error".into(),
+                message: format!("Cannot create samples dir: {e}"),
+                code: 500,
+            }),
+        )
+    })?;
+
+    let sample_id = uuid::Uuid::new_v4();
+    let wav_path = samples_dir.join(format!("axi-{sample_id}.wav"));
+
+    // Record 2.5 seconds of audio via pw-record
+    let output = Command::new("pw-record")
+        .args([
+            "--rate",
+            "16000",
+            "--channels",
+            "1",
+            "--format",
+            "s16",
+            wav_path.to_string_lossy().as_ref(),
+        ])
+        .spawn();
+
+    match output {
+        Ok(mut child) => {
+            // Let it record for 2.5 seconds, then kill
+            tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+
+            if wav_path.exists() {
+                Ok(Json(serde_json::json!({
+                    "status": "ok",
+                    "sample_path": wav_path.to_string_lossy(),
+                    "sample_id": sample_id.to_string(),
+                })))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Recording failed".into(),
+                        message: "pw-record did not produce a WAV file".into(),
+                        code: 500,
+                    }),
+                ))
+            }
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Recording failed".into(),
+                message: format!("Cannot start pw-record: {e}"),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// List existing wake word samples.
+async fn list_wake_word_samples(
+    State(_state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let samples_dir = std::path::Path::new(WAKE_WORD_SAMPLES_DIR);
+    let mut samples = Vec::new();
+
+    if samples_dir.exists() {
+        let mut entries = tokio::fs::read_dir(samples_dir).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "IO Error".into(),
+                    message: e.to_string(),
+                    code: 500,
+                }),
+            )
+        })?;
+
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("wav") {
+                let meta = tokio::fs::metadata(&path).await.ok();
+                samples.push(serde_json::json!({
+                    "name": path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                    "path": path.to_string_lossy(),
+                    "size_bytes": meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                }));
+            }
+        }
+    }
+
+    let model_exists = std::path::Path::new(WAKE_WORD_MODEL_PATH).exists();
+
+    Ok(Json(serde_json::json!({
+        "samples": samples,
+        "count": samples.len(),
+        "model_exists": model_exists,
+        "model_path": WAKE_WORD_MODEL_PATH,
+    })))
+}
+
+/// Delete all wake word samples.
+async fn delete_wake_word_samples(
+    State(_state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let samples_dir = std::path::Path::new(WAKE_WORD_SAMPLES_DIR);
+    if samples_dir.exists() {
+        let _ = tokio::fs::remove_dir_all(samples_dir).await;
+    }
+    Ok(Json(
+        serde_json::json!({ "status": "ok", "message": "Samples deleted" }),
+    ))
+}
+
+/// Build a rustpotter .rpw wake word model from recorded samples.
+#[cfg(feature = "wake-word")]
+async fn train_wake_word_model(
+    State(_state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    use rustpotter::{WakewordRef, WakewordRefBuildFromFiles, WakewordSave};
+
+    let samples_dir = std::path::Path::new(WAKE_WORD_SAMPLES_DIR);
+    if !samples_dir.exists() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "No samples".into(),
+                message: "Record at least 3 samples first".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    // Collect WAV files
+    let mut wav_files: Vec<String> = Vec::new();
+    let mut entries = tokio::fs::read_dir(samples_dir).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "IO Error".into(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )
+    })?;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("wav") {
+            wav_files.push(path.to_string_lossy().to_string());
+        }
+    }
+
+    if wav_files.len() < 3 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Not enough samples".into(),
+                message: format!(
+                    "Need at least 3 samples, got {}. Record more.",
+                    wav_files.len()
+                ),
+                code: 400,
+            }),
+        ));
+    }
+
+    // Build the model in a blocking task (MFCC computation is CPU-heavy)
+    let model_path = WAKE_WORD_MODEL_PATH.to_string();
+    let result = tokio::task::spawn_blocking(move || {
+        // Ensure parent dir exists
+        if let Some(parent) = std::path::Path::new(&model_path).parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+
+        let wakeword_ref = WakewordRef::new_from_sample_files(
+            "axi".to_string(),
+            None, // use default threshold
+            None, // use default avg_threshold
+            wav_files,
+            16, // mfcc_size — standard value
+        )
+        .map_err(|e| format!("Failed to build wake word model: {e}"))?;
+
+        wakeword_ref
+            .save_to_file(&model_path)
+            .map_err(|e| format!("Failed to save model: {e}"))?;
+
+        Ok::<_, String>(model_path)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Training failed".into(),
+                message: format!("Task panicked: {e}"),
+                code: 500,
+            }),
+        )
+    })?;
+
+    match result {
+        Ok(path) => Ok(Json(serde_json::json!({
+            "status": "ok",
+            "model_path": path,
+            "message": "Wake word model created. Restart daemon to activate.",
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Training failed".into(),
+                message: e,
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Stub when wake-word feature is not compiled.
+#[cfg(not(feature = "wake-word"))]
+async fn train_wake_word_model(
+    State(_state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(ApiError {
+            error: "Not available".into(),
+            message: "wake-word feature not compiled".into(),
+            code: 501,
+        }),
+    ))
 }
 
 async fn scan_prompt_shield(

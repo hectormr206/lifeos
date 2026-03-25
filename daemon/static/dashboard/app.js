@@ -874,6 +874,64 @@ $('#wake-word-save').addEventListener('click', async (e) => {
   }
 });
 
+// --- Wake word training ---
+async function wwRefresh() {
+  try {
+    const data = await api('GET', '/sensory/wake-word/samples');
+    const count = data.count || 0;
+    const modelExists = data.model_exists || false;
+    $('#ww-status').textContent = `${count} muestra(s)` + (modelExists ? ' | Modelo listo' : ' | Sin modelo');
+    $('#ww-status').style.color = modelExists ? 'var(--success)' : '#aaa';
+    $('#ww-train').disabled = count < 3;
+    const list = (data.samples || []).map(s => s.name).join(', ');
+    $('#ww-samples').textContent = list || '';
+  } catch { $('#ww-status').textContent = 'Error cargando'; }
+}
+
+$('#ww-record').addEventListener('click', async () => {
+  const btn = $('#ww-record');
+  btn.disabled = true;
+  btn.textContent = 'Grabando...';
+  btn.style.background = '#c0392b';
+  try {
+    await api('POST', '/sensory/wake-word/record');
+    btn.textContent = 'Grabado!';
+    btn.style.background = '#27ae60';
+    await wwRefresh();
+  } catch (err) {
+    btn.textContent = 'Error';
+  } finally {
+    setTimeout(() => { btn.textContent = 'Grabar muestra (2.5s)'; btn.style.background = '#e74c3c'; btn.disabled = false; }, 1500);
+  }
+});
+
+$('#ww-train').addEventListener('click', async () => {
+  const btn = $('#ww-train');
+  btn.disabled = true;
+  btn.textContent = 'Entrenando...';
+  try {
+    const result = await api('POST', '/sensory/wake-word/train');
+    btn.textContent = 'Modelo creado!';
+    btn.style.background = '#27ae60';
+    $('#ww-status').textContent = 'Modelo listo. Reinicia el daemon para activar.';
+    $('#ww-status').style.color = 'var(--success)';
+  } catch (err) {
+    btn.textContent = 'Error';
+    btn.style.background = '#e74c3c';
+    $('#ww-status').textContent = err.message || 'Error entrenando';
+  } finally {
+    setTimeout(() => { btn.textContent = 'Entrenar modelo'; btn.style.background = '#27ae60'; btn.disabled = false; }, 3000);
+  }
+});
+
+$('#ww-delete').addEventListener('click', async () => {
+  if (!confirm('Borrar todas las muestras de wake word?')) return;
+  await api('DELETE', '/sensory/wake-word/samples');
+  await wwRefresh();
+});
+
+wwRefresh();
+
 $('#interval-slider').addEventListener('input', (e) => {
   $('#interval-value').textContent = e.target.value + 's';
 });
