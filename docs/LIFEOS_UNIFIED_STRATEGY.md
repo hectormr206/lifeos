@@ -1,6 +1,6 @@
 # LifeOS Estrategia Unificada Final
 
-Fecha: 2026-03-23 (ultima revision: 2026-03-25, fases H-T implementadas, modelo biologico, sistema inmunologico)
+Fecha: 2026-03-23 (ultima revision: 2026-03-25, fases H-T implementadas + fases U-Z vision mundial)
 Sintesis de:
 
 - `docs/LIFEOS_STRATEGIC_REVIEW.md` (Estrategia A — Gemini)
@@ -1519,6 +1519,197 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 | **LifeOS (meta Fase T)** | **~2 metros** | **Si** | **Basico (1 mic)** | **<800ms** |
 
 *Nota: LifeOS usa 1 microfono (el del laptop). No puede competir con beamforming de 7 mics. Pero con AGC + VAD adaptativo + threshold bajo podemos llegar a 2 metros en ambiente tranquilo, que es suficiente para uso personal.*
+
+---
+
+## VISION MUNDIAL: Fases U-Z — Lo que LifeOS necesita para ser EL AI OS del mundo
+
+**Contexto de mercado (marzo 2026):**
+- AI OS market: $12.85B (2025) → $107.6B (2033), CAGR 30.5%
+- 80% de inferencia AI sera local en 2026 (no cloud)
+- Linux desktop: 4.7% global, +70% en 2 años, mejor racha de la historia
+- Confianza en agentes autonomos: cayo de 43% a 27% — la gente quiere control
+- Windows 10 EOL + Copilot forzado empuja usuarios a Linux
+- Palantir + NVIDIA lanzaron "Sovereign AI OS" para gobiernos ($$$)
+- 50+ empresas AI-native llegaran a $250M ARR en 2026
+
+**El insight clave:**
+> "El agente no es el producto. El workflow es el producto."
+> La gente no quiere un AI impresionante que a veces falla. Quiere un boton que funcione.
+> Si un agente tiene 85% accuracy por paso, un workflow de 10 pasos tiene solo 20% exito.
+> **LifeOS debe ser boring-reliable, not impressive-unreliable.**
+
+**Diferenciacion unica vs competidores:**
+| Competidor | Modelo | Debilidad |
+|-----------|--------|-----------|
+| Apple Intelligence | Cloud + cerrado + $$$ | No puedes ver/controlar que hace con tus datos |
+| Microsoft Copilot | Telemetria + suscripcion | Forza AI en el OS sin consentimiento |
+| Google Astra | Cloud + data harvesting | Todo pasa por servidores de Google |
+| OpenClaw | App dentro de OS | No ES el OS — no tiene acceso kernel/hardware |
+| Devin | Cloud sandbox | No corre en tu hardware, pagas suscripcion |
+| **LifeOS** | **ES el OS + local + privado + immutable + gratis** | **Necesita reliability y polish** |
+
+---
+
+### Fase U — Self-Improving OS (El Loop de Karpathy)
+
+**Objetivo:** LifeOS se optimiza a si mismo continuamente — configs del sistema, workflows del usuario, modelos locales, prompts del supervisor. Como el autoresearch de Karpathy que corrio 700 experimentos en 2 dias y encontro 20 optimizaciones.
+
+**Referencia:** [Karpathy autoresearch](https://github.com/karpathy/autoresearch) — 630 lineas de Python, corre ML experiments autonomamente. Shopify CEO: 37 experimentos overnight, 19% performance gain.
+
+**Por que es headline:** "Este Linux se optimiza solo mientras duermes"
+
+- [ ] **System config optimizer:** Loop que prueba configs de kernel (sysctl), scheduler, I/O, swap y mide impacto. Guarda los ganadores, revierte los perdedores. Benchmark automatico con `sysbench`, `fio`, `stress-ng`
+- [ ] **Prompt evolution:** El supervisor graba resultados de cada tarea. Periodicamente, un meta-agente analiza patrones de exito/fracaso y propone mejoras a los system prompts. A/B testing automatico de prompts
+- [ ] **Model fine-tuning local:** Cuando hay GPU idle (noche/ausencia), fine-tune el modelo local con datos de interacciones exitosas del usuario. LoRA adapters guardados localmente
+- [ ] **Workflow learning:** Detectar patrones repetitivos del usuario (abre terminal → git pull → cargo build → cargo test) y generar skills automaticamente sin que el usuario pida
+- [ ] **Resource prediction:** Predecir carga de trabajo por hora del dia/dia de semana. Pre-cargar modelos, pre-calentar caches, ajustar power profile proactivamente
+- [ ] **Nightly optimization daemon:** Proceso que corre entre 2-5 AM (configurable) cuando el usuario duerme. Ejecuta: cleanup, config tuning, model optimization, skill generation, security audit
+- [ ] **Metrics dashboard:** Mostrar en el dashboard: "Axi optimizo X configs esta semana, ahorrando Y% de bateria y Z segundos de boot"
+- [ ] **HITO FASE U:** LifeOS corre 1 semana sin intervencion. Al final: boot 15% mas rapido, 10% menos uso de RAM, 3 skills auto-generados, 2 prompts mejorados
+
+### Fase V — Knowledge Graph Personal Local (Memoria Total)
+
+**Objetivo:** Axi tiene un grafo de conocimiento que conecta TODO lo que sabe del usuario — archivos, conversaciones, calendario, contactos, habitos, preferencias. No solo busca texto similar (RAG) sino que entiende relaciones: "La reunion del lunes fue con Juan, sobre el proyecto X, donde decidimos Y, y Juan prometio Z para el viernes."
+
+**Referencia:** [Mem0](https://mem0.ai/blog/graph-memory-solutions-ai-agents) — dual-store (vector + graph). 26% mas accuracy, 91% menos latencia, 90% menos tokens vs RAG naive.
+
+**Por que es headline:** "Tu OS recuerda todo — y nunca sale de tu maquina"
+
+- [ ] **Entity extraction daemon:** Procesar todo texto que pasa por Axi (conversaciones, archivos abiertos, emails) y extraer entidades (personas, proyectos, fechas, decisiones, compromisos)
+- [ ] **Relation graph:** Grafo dirigido con nodos (entidades) y edges (relaciones). Stored en SQLite + sqlite-vec para hybrid search. Ejemplo: `Juan --[prometio]--> "entregar propuesta" --[para]--> "viernes 28"`
+- [ ] **Conflict detection:** Cuando nueva info contradice info existente, el LLM decide: actualizar, fusionar, invalidar, o mantener ambas con timestamp
+- [ ] **Temporal reasoning:** "Cuando fue la ultima vez que hable con Juan?" → consulta al grafo por edges con timestamp. "Que decidimos sobre X?" → busca nodos de decision relacionados con X
+- [ ] **Privacy layers:** El usuario controla que se graba. Niveles: todo, solo conversaciones con Axi, solo lo que el usuario marca explicitamente. Borrado selectivo por entidad/fecha
+- [ ] **Cross-app context:** El grafo conecta info de Telegram + archivos + calendario + browser history (local). "Preparame para la reunion de mañana" → Axi busca emails, docs, y conversaciones previas sobre los temas de la agenda
+- [ ] **Knowledge decay:** Hechos viejos sin uso pierden relevancia gradualmente. Hechos confirmados repetidamente ganan peso. Como la memoria humana
+- [ ] **Export/import:** Exportar grafo completo (JSON-LD) para migrar a otro dispositivo LifeOS. El "ADN" del organismo incluye su memoria
+- [ ] **HITO FASE V:** Preguntarle a Axi "que le prometi a Juan sobre el proyecto X?" y que responda correctamente citando la conversacion del martes, el email del miercoles, y el commit del jueves
+
+### Fase W — Reliability Engine (Boring-Reliable > Impressive-Unreliable)
+
+**Objetivo:** Que cada workflow de Axi funcione. Siempre. Sin importar complejidad. La reliability es mas importante que la capability. Si 85% accuracy por paso = 20% exito en 10 pasos, necesitamos 99% por paso.
+
+**Referencia:** Princeton encontro que reliability mejora a la MITAD de la velocidad que accuracy. Fortune: "AI agents are getting more capable, but reliability is lagging."
+
+**Por que es headline:** "Este OS tiene 99.9% de uptime en sus agentes"
+
+- [ ] **Atomic transactions:** Cada workflow es una transaccion. Si un paso falla, TODOS los cambios se revierten. Git worktree para codigo, snapshots para archivos, journal para configs
+- [ ] **Checkpoint + resume:** Guardar estado del agente cada N pasos. Si crashea, resume desde el ultimo checkpoint sin re-ejecutar todo
+- [ ] **Shadow mode:** Antes de ejecutar un workflow nuevo, correrlo en simulacion (dry-run) y mostrar al usuario que HARIA sin hacerlo realmente. "Axi planea: 1) crear branch, 2) editar 3 archivos, 3) correr tests. Proceder? [Si/No]"
+- [ ] **Confidence scoring:** Cada paso tiene un score de confianza (0-1). Si confianza < 0.7, escalar a humano. Si > 0.9, auto-ejecutar. El umbral es configurable
+- [ ] **Retry with variation:** Si un paso falla, no reintentar lo mismo. Generar un approach alternativo via LLM. "El build fallo por X, intentando approach B..."
+- [ ] **Cascade failure prevention:** Si paso 3 de 8 falla, no seguir ejecutando. Evaluar si los pasos restantes dependen del fallido. Si no, continuar los independientes
+- [ ] **Execution audit trail:** Log inmutable de cada accion, su resultado, y el razonamiento del LLM. Queryable via "Axi, por que hiciste X?" → muestra el chain of thought
+- [ ] **Reliability dashboard:** Tasa de exito por tipo de tarea, tiempo promedio de ejecucion, pasos que mas fallan, prompts que mas se auto-corrigieron
+- [ ] **SLA mode:** Para tareas criticas, el usuario define un SLA: "esta tarea debe completarse en <30 min con >95% accuracy". Si Axi no puede garantizarlo, notifica antes de empezar
+- [ ] **HITO FASE W:** 100 tareas via Telegram en una semana. 95%+ completadas exitosamente sin intervencion humana. Las fallidas revierten limpiamente y reportan error claro
+
+### Fase X — Intent-Based Interaction + OS-Level Translation
+
+**Objetivo:** El usuario habla con LifeOS como habla con una persona. No "abre Firefox, navega a gmail.com, busca email de Juan". Sino "respondele a Juan que acepto la reunion". Y que funcione. Ademas, todo se traduce en tiempo real — llamadas, documentos, subtitulos.
+
+**Referencia:** OpenAI diseña hardware sin pantalla con Jony Ive (Fall 2026). Microsoft dice que Windows 12 sera "agentic, ambient". Apple rumora voice-first navigation en iOS 26.
+
+**Por que es headline:** "Le dices a tu laptop que hacer y lo hace. En cualquier idioma."
+
+- [ ] **Intent parser:** Modulo que convierte lenguaje natural en intent + entities + constraints. "Agenda reunion con Juan para el viernes a las 3" → `{intent: "schedule_meeting", with: "Juan", date: "viernes", time: "15:00"}`
+- [ ] **Intent router:** Dado un intent, determinar que skills/apps/acciones son necesarias. "Respondele a Juan" → buscar ultimo mensaje de Juan (Telegram/email) → componer respuesta → enviar
+- [ ] **Multi-step intent resolution:** "Preparame para la reunion de mañana" → 1) buscar agenda, 2) buscar docs relacionados, 3) resumir conversaciones previas, 4) generar briefing, 5) enviarlo a Telegram
+- [ ] **OS-level translation daemon:** Servicio systemd que intercepta audio streams (PipeWire) y genera subtitulos traducidos en tiempo real. Funciona con Zoom, Meet, YouTube, podcasts, cualquier app
+- [ ] **Document translation:** Click derecho en cualquier archivo → "Traducir a español". Usa modelos locales (NLLB-200, Madlad-400). Sin cloud
+- [ ] **Live voice translation:** Durante llamadas, Axi traduce lo que dice la otra persona en tiempo real via TTS. Modo "interprete simultaneo"
+- [ ] **Context-aware responses:** Cuando el usuario pregunta algo, Axi usa el contexto actual (ventana activa, archivo abierto, ultima conversacion) para dar respuesta relevante sin que el usuario explique el contexto
+- [ ] **HITO FASE X:** Decir "respondele a Juan que acepto, agenda la reunion para el viernes, y traduce el documento que me envio al español". Axi lo hace todo — busca el mensaje, responde, agenda, traduce. Sin abrir una sola app manualmente
+
+### Fase Y — AI Security Daemon + Self-Healing Avanzado
+
+**Objetivo:** LifeOS es el OS mas seguro del mundo. No porque bloquee todo, sino porque un daemon AI monitorea CADA proceso, CADA conexion, CADA cambio de archivo en tiempo real y reacciona antes de que el usuario se entere. El OS se repara solo — nunca muestra errores.
+
+**Referencia:** SentinelOne lanzo AI security autonomo para air-gapped environments (marzo 2026). 60% de enterprises adoptan self-healing. Gartner: 30% reduccion en bugs de produccion con self-evolving software.
+
+**Por que es headline:** "Este OS nunca ha mostrado un mensaje de error"
+
+- [ ] **Process anomaly detection:** Baseline de comportamiento normal por proceso (CPU, RAM, network, disk I/O). Si un proceso se desvia >3 sigma, alertar. Si se desvia >5 sigma, aislar automaticamente
+- [ ] **Network threat detection:** Analizar DNS queries, conexiones salientes, patrones de trafico. Detectar C2 callbacks, data exfiltration, lateral movement. Bloquear y notificar
+- [ ] **File integrity monitoring:** Hash de archivos criticos del sistema. Si cambian sin explicacion (update/user edit), alertar inmediatamente. Detectar rootkits, backdoors, tampering
+- [ ] **Self-healing services:** Si un servicio crashea, Axi lee los logs, diagnostica root cause, aplica fix, reinicia. El usuario nunca ve "Service failed to start"
+- [ ] **Disk self-healing:** Si un particion se llena, Axi auto-limpia (journals, cache, flatpak unused). Si un archivo se corrompe, restaurar desde snapshot. Si hay bad sectors, migrar datos proactivamente
+- [ ] **Network self-healing:** Si DNS falla, switch a fallback. Si VPN se desconecta, reconectar automaticamente. Si WiFi es inestable, diagnosticar y reportar solucion
+- [ ] **Predictive maintenance:** Analizar tendencias de SMART data, temperaturas, ciclos de bateria. Predecir fallos ANTES de que ocurran: "Tu SSD tiene 85% de vida usada. Al ritmo actual, necesitaras reemplazo en ~6 meses"
+- [ ] **Zero-day protection:** Si se detecta un comportamiento nuevo nunca visto (nuevo proceso, nueva conexion, nuevo patron), aislarlo por defecto y preguntar al usuario. Principio de minimo privilegio AI-enforced
+- [ ] **HITO FASE Y:** Simular un ataque: proceso malicioso que intenta exfiltrar datos. El AI security daemon lo detecta en <10 segundos, lo aisla, bloquea la conexion, notifica al usuario via Telegram con evidencia forense completa
+
+### Fase Z — Ecosystem + Distribution + World Domination
+
+**Objetivo:** LifeOS pasa de ser un proyecto personal a una plataforma global. Hardware partnerships, app ecosystem, developer community, enterprise customers.
+
+**Referencia:** Linux desktop cruzo 4.7% global. Windows 10 EOL es el mayor push factor. Framework, System76, Tuxedo ya venden laptops Linux. El TAM de sovereign AI personal es enorme e inexplorado.
+
+**Por que es headline:** "El primer OS que es tuyo de verdad — tu hardware, tu AI, tus datos"
+
+**Z.1 — AI-Native App Ecosystem**
+- [ ] **App contract standard:** Formato JSON para declarar capabilities de una app (intents que maneja, datos que necesita, acciones que puede hacer). El OS orquesta apps via intents, no via GUI
+- [ ] **Skill marketplace:** Repositorio publico de skills creados por la comunidad. Como npm/crates.io pero para skills de Axi. Rating, reviews, verificacion de seguridad
+- [ ] **Autonomy slider per-app:** Cada app/skill tiene un nivel de autonomia configurable. "Axi puede usar esta app libremente" vs "solo con mi aprobacion"
+- [ ] **Revenue sharing:** Creadores de skills ganan cuando sus skills son usados. Modelo freemium: skills basicos gratis, premium de pago
+
+**Z.2 — Developer Platform**
+- [ ] **LifeOS SDK:** Rust + Python SDK para crear skills, agentes, y apps AI-native. Event-driven, con hooks para el ciclo de vida del OS
+- [ ] **Agent evaluation framework:** Herramientas para testear agentes antes de publicar: accuracy benchmarks, safety checks, resource limits
+- [ ] **Connector registry:** Catalogo de conectores a servicios externos (GitHub, Slack, Google Calendar, etc.) que skills pueden usar
+- [ ] **Developer documentation:** Portal con guias, tutorials, API reference, ejemplos. "De cero a tu primer skill en 10 minutos"
+- [ ] **Local development environment:** `life dev init` crea un sandbox para desarrollar y testear skills sin afectar el sistema
+
+**Z.3 — Hardware Partnerships**
+- [ ] **Framework laptop partnership:** LifeOS pre-instalado como opcion en Framework laptops. Hardware abierto + OS abierto = combinacion perfecta
+- [ ] **System76/Tuxedo OEM:** Negociar pre-instalacion en laptops Linux de gama alta
+- [ ] **NPU optimization:** Ser el primer Linux con auto-deteccion de NPU (Intel, AMD, Qualcomm) y aceleracion transparente. Los fabricantes quieren mostrar que su NPU sirve para algo
+- [ ] **"LifeOS Ready" certification:** Programa de certificacion para hardware que cumple requisitos minimos (NPU opcional, 16GB RAM, NVMe)
+
+**Z.4 — Enterprise**
+- [ ] **SOC 2 Type I:** Preparar documentacion y controles para auditoria SOC 2 (6 meses)
+- [ ] **Fleet management:** Dashboard web para IT admins: desplegar imagenes LifeOS, configurar politicas, monitorear flota de dispositivos via bootc
+- [ ] **AI governance dashboard:** Para compliance officers: que hace el AI, que datos accede, audit trail completo, explicabilidad de decisiones
+- [ ] **Air-gapped mode:** LifeOS funciona 100% sin internet. Todo local. Para gobierno, militar, salud, finanzas
+
+**Z.5 — Distribution**
+- [ ] **Zero-config ISO:** Descargar, flashear, bootear. En 5 minutos estas hablando con Axi. Sin terminal, sin configuracion, sin conocimiento previo de Linux
+- [ ] **Migration wizard:** Tool que importa datos de Windows/macOS: documentos, bookmarks, passwords (KeePass), calendario, contactos
+- [ ] **"Try without installing":** Live USB que corre LifeOS completo desde USB sin tocar el disco. Prueba antes de comprometerte
+- [ ] **OTA updates channel:** Stable (mensual, probado), Edge (semanal, bleeding edge), LTS (cada 6 meses, solo security fixes)
+
+**Z.6 — AI Creativity Tools Nativos**
+- [ ] **Image generation/editing:** Click derecho en cualquier imagen → extender, editar, generar variaciones. Modelos locales (SDXL, Flux) en GPU
+- [ ] **Text-to-speech artistica:** No solo TTS funcional, sino voces con emocion, ritmo, entonacion natural. Para podcasts, narraciones, presentaciones
+- [ ] **Code generation IDE:** Un mini-IDE integrado donde Axi escribe codigo, lo testea, y lo itera. Sin salir del OS
+- [ ] **Document generation:** "Crea una presentacion sobre X" → genera slides con contenido, imagenes, y formato profesional
+
+**Z.7 — Accessibility Universal**
+- [ ] **AI screen reader:** No solo lee texto — DESCRIBE interfaces visualmente. "Hay un formulario con 3 campos: nombre, email, y un boton azul que dice Enviar"
+- [ ] **Voice control total:** Controlar TODO el OS por voz. No solo comandos predefinidos, sino lenguaje natural. "Mueve esta ventana a la derecha", "Haz mas grande el texto"
+- [ ] **Adaptive interface:** El OS detecta limitaciones motoras/visuales/cognitivas y adapta la interface: botones mas grandes, contraste alto, simplificacion automatica
+- [ ] **Cognitive assistance:** Para personas con ADHD, dyslexia, o dificultades de aprendizaje: resaltado de texto, lectura guiada, resumen automatico de documentos largos
+
+---
+
+### Resumen de Todas las Fases (A-Z)
+
+| Fase | Nombre | Estado | Impacto |
+|------|--------|--------|---------|
+| A-G | Base funcional | COMPLETADA | Fundacion |
+| H-T | Fases de desarrollo core | IMPLEMENTADA (67%) | Sistema funcional |
+| **U** | Self-Improving OS (Karpathy Loop) | NUEVA | **HEADLINE** — "se optimiza solo" |
+| **V** | Knowledge Graph Personal | NUEVA | **HEADLINE** — "recuerda todo, local" |
+| **W** | Reliability Engine | NUEVA | **CRITICO** — sin esto nada funciona a escala |
+| **X** | Intent-Based Interaction + Translation | NUEVA | **HEADLINE** — "le dices que hacer y lo hace" |
+| **Y** | AI Security + Self-Healing Avanzado | NUEVA | **HEADLINE** — "nunca muestra errores" |
+| **Z** | Ecosystem + Distribution + World | NUEVA | **ESCALA** — de proyecto a plataforma global |
+
+**Camino critico para "iPhone Moment":**
+W (reliability) → U (self-improving) → V (knowledge graph) → X (intent-based) → Y (security) → Z (ecosystem)
+
+**La reliability (W) va primero porque sin ella, todo lo demas es humo.**
 
 ### Post Fases — Lanzamiento Publico
 
