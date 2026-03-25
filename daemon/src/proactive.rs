@@ -73,6 +73,10 @@ pub async fn check_all(
         alerts.push(alert);
     }
 
+    if let Some(alert) = check_network_security().await {
+        alerts.push(alert);
+    }
+
     if let Some(tq) = task_queue {
         if let Some(alert) = check_stuck_tasks(tq).await {
             alerts.push(alert);
@@ -488,6 +492,69 @@ async fn check_battery_health() -> Option<ProactiveAlert> {
             ),
             severity: AlertSeverity::Warning,
         });
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Network security monitoring
+// ---------------------------------------------------------------------------
+
+async fn check_network_security() -> Option<ProactiveAlert> {
+    // Check for suspicious listening ports
+    let output = tokio::process::Command::new("ss")
+        .args(["-tulnp"])
+        .output()
+        .await
+        .ok()?;
+
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    // Known suspicious ports (cryptomining, C2 servers)
+    let suspicious_ports = [
+        "3333", "4444", "5555", "8333", "14444", // Mining pools
+        "4443", "8443", "9090", // Common C2
+    ];
+
+    let mut suspicious_lines = Vec::new();
+    for line in text.lines().skip(1) {
+        let lower = line.to_lowercase();
+        for port in &suspicious_ports {
+            if lower.contains(&format!(":{}", port)) && lower.contains("listen") {
+                suspicious_lines.push(line.trim().to_string());
+            }
+        }
+    }
+
+    if !suspicious_lines.is_empty() {
+        return Some(ProactiveAlert {
+            category: AlertCategory::SystemHealth,
+            message: format!(
+                "Puertos sospechosos detectados ({} servicios). Verifica: {}",
+                suspicious_lines.len(),
+                suspicious_lines.first().unwrap_or(&String::new())
+            ),
+            severity: AlertSeverity::Warning,
+        });
+    }
+
+    // Check if firewall is active
+    let fw_output = tokio::process::Command::new("nft")
+        .args(["list", "ruleset"])
+        .output()
+        .await
+        .ok();
+
+    if let Some(fw) = fw_output {
+        let rules = String::from_utf8_lossy(&fw.stdout);
+        if rules.trim().is_empty() || !fw.status.success() {
+            return Some(ProactiveAlert {
+                category: AlertCategory::SecurityUpdate,
+                message: "Firewall (nftables) no tiene reglas activas. Sistema expuesto.".into(),
+                severity: AlertSeverity::Warning,
+            });
+        }
     }
 
     None

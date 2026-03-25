@@ -24,6 +24,8 @@ mod api;
 #[allow(dead_code)]
 mod autonomous_agent;
 #[allow(dead_code)]
+mod browser_automation;
+#[allow(dead_code)]
 mod calendar;
 #[allow(dead_code)]
 mod comm_bridges;
@@ -74,6 +76,8 @@ mod screen_capture;
 mod sensory_pipeline;
 #[allow(dead_code)]
 mod signal_bridge;
+#[allow(dead_code)]
+mod skill_generator;
 mod supervisor;
 mod system;
 mod task_queue;
