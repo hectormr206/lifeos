@@ -24,6 +24,8 @@ mod api;
 #[allow(dead_code)]
 mod autonomous_agent;
 #[allow(dead_code)]
+mod backup_monitor;
+#[allow(dead_code)]
 mod battery_manager;
 #[allow(dead_code)]
 mod browser_automation;
@@ -43,6 +45,8 @@ mod events;
 #[allow(dead_code)]
 mod exec_whitelist;
 mod experience_modes;
+#[allow(dead_code)]
+mod eye_health;
 mod follow_along;
 #[allow(dead_code)]
 mod game_assistant;
@@ -79,6 +83,8 @@ mod permissions;
 mod portal;
 mod privacy_filter;
 #[allow(dead_code)]
+mod privacy_hygiene;
+#[allow(dead_code)]
 mod proactive;
 #[allow(dead_code)]
 mod prompt_tuner;
@@ -98,6 +104,8 @@ mod telemetry;
 mod tuf;
 mod update_scheduler;
 mod updates;
+#[allow(dead_code)]
+mod usb_guard;
 mod visual_comfort;
 mod wake_word;
 #[allow(dead_code)]

@@ -1,0 +1,11 @@
+[Unit]
+Description=LifeOS Smart Charging Schedule
+Documentation=https://github.com/hectormr206/lifeos
+
+[Timer]
+# Run every hour to adjust charge threshold based on time of day
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

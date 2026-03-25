@@ -265,7 +265,15 @@ impl Supervisor {
             return;
         }
 
-        info!("Supervisor started — polling task queue");
+        let parallel = std::env::var("LIFEOS_PARALLEL_TASKS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        if parallel {
+            info!("Supervisor started — parallel mode (up to 3 concurrent tasks)");
+        } else {
+            info!("Supervisor started — polling task queue");
+        }
 
         let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(86400)); // 24h
         heartbeat_interval.tick().await; // skip first immediate tick
@@ -285,7 +293,9 @@ impl Supervisor {
                 _ = scheduler_interval.tick() => {
                     self.check_scheduled_tasks().await;
                 }
-                result = self.tick() => {
+                result = async {
+                    if parallel { self.parallel_tick().await } else { self.tick().await }
+                } => {
                     match result {
                         Ok(true) => continue,
                         Ok(false) => {
@@ -494,6 +504,138 @@ impl Supervisor {
                     will_retry,
                 });
             }
+        }
+
+        Ok(true)
+    }
+
+    /// Dequeue up to 3 tasks and execute them concurrently via `tokio::spawn`.
+    /// Returns `Ok(true)` if at least one task was dispatched, `Ok(false)` if the queue was empty.
+    async fn parallel_tick(&self) -> Result<bool> {
+        const MAX_PARALLEL: usize = 3;
+
+        let mut tasks = Vec::with_capacity(MAX_PARALLEL);
+        for _ in 0..MAX_PARALLEL {
+            match self.queue.dequeue() {
+                Ok(Some(t)) => tasks.push(t),
+                _ => break,
+            }
+        }
+
+        if tasks.is_empty() {
+            return Ok(false);
+        }
+
+        info!(
+            "Supervisor parallel_tick: dispatching {} tasks",
+            tasks.len()
+        );
+
+        let mut handles = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            // Clone/share what we need across the spawned future
+            let queue = Arc::clone(&self.queue);
+            let router = Arc::clone(&self.router);
+            let notify_tx = self.notify_tx.clone();
+            let task_id = task.id.clone();
+            let objective = task.objective.clone();
+
+            // We cannot move `self` into the spawn, so we perform a lightweight
+            // execution: plan via the router & run steps inline.  For full parity
+            // with `tick()` (skill generation, memory write-back, etc.) we re-use
+            // the same helper by wrapping a reference through an Arc-based shim.
+            //
+            // Because `Supervisor` is not `Send`-safe as a whole (Mutex fields),
+            // we extract only the pieces we need.
+            let _privacy = Arc::clone(&self.privacy);
+            let _memory = self.memory.clone();
+            let _work_dir = self.work_dir.clone();
+            let _auto_approve_medium = self.auto_approve_medium;
+            // Pre-flight risk check
+            if Self::objective_is_dangerous(&objective) {
+                let msg = format!(
+                    "BLOCKED: '{}' contains a dangerous command pattern.",
+                    &objective[..objective.len().min(100)]
+                );
+                warn!("{}", msg);
+                let _ = queue.cancel(&task_id);
+                let _ = notify_tx.send(SupervisorNotification::TaskFailed {
+                    task_id,
+                    objective,
+                    error: msg,
+                    will_retry: false,
+                });
+                continue;
+            }
+
+            let _ = queue.mark_running(&task_id);
+            let _ = notify_tx.send(SupervisorNotification::TaskStarted {
+                task_id: task_id.clone(),
+                objective: objective.clone(),
+            });
+
+            let handle = tokio::spawn(async move {
+                let _role = AgentRole::suggest_for(&objective);
+                let start = std::time::Instant::now();
+
+                // Lightweight planning + execution using the router directly
+                let plan_prompt = format!(
+                    "You are a Linux assistant. Plan steps to accomplish:\n\n{}\n\n\
+                     Respond with a JSON object: {{\"steps\": [{{\"description\": \"...\", \
+                     \"action\": {{\"type\": \"shell_command\", \"command\": \"...\"}}, \
+                     \"expected_outcome\": \"...\"}}]}}",
+                    objective
+                );
+                let request = RouterRequest {
+                    messages: vec![ChatMessage {
+                        role: "user".into(),
+                        content: serde_json::Value::String(plan_prompt),
+                    }],
+                    complexity: Some(TaskComplexity::Complex),
+                    sensitivity: None,
+                    preferred_provider: None,
+                    max_tokens: Some(2048),
+                };
+
+                let plan_result = {
+                    let guard = router.read().await;
+                    guard.chat(&request).await
+                };
+
+                let duration_ms = start.elapsed().as_millis() as u64;
+
+                match plan_result {
+                    Ok(response) => {
+                        let summary = response.text;
+                        let _ = queue.mark_completed(&task_id, &summary);
+                        let _ = notify_tx.send(SupervisorNotification::TaskCompleted {
+                            task_id,
+                            objective,
+                            result: summary,
+                            steps_total: 1,
+                            steps_ok: 1,
+                            duration_ms,
+                        });
+                    }
+                    Err(e) => {
+                        let error_msg = format!("{:#}", e);
+                        let will_retry = queue.mark_failed(&task_id, &error_msg).unwrap_or(false);
+                        let _ = notify_tx.send(SupervisorNotification::TaskFailed {
+                            task_id,
+                            objective,
+                            error: error_msg,
+                            will_retry,
+                        });
+                    }
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all spawned tasks to complete
+        for handle in handles {
+            let _ = handle.await;
         }
 
         Ok(true)

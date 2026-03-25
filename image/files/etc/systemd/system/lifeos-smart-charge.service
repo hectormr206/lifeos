@@ -1,0 +1,20 @@
+[Unit]
+Description=LifeOS Smart Charging — Adjust threshold by time of day
+After=lifeos-battery.service
+ConditionPathExists=/sys/class/power_supply/BAT0
+
+[Service]
+Type=oneshot
+# During day (8-23): lower threshold to reduce wear
+# During night (23-7): raise threshold to charge while sleeping
+ExecStart=/bin/bash -c '\
+  HOUR=$(date +%%H); \
+  if [ "$HOUR" -ge 23 ] || [ "$HOUR" -lt 7 ]; then \
+    THRESH=80; \
+  elif [ "$HOUR" -ge 8 ] && [ "$HOUR" -lt 18 ]; then \
+    THRESH=60; \
+  else \
+    THRESH=70; \
+  fi; \
+  echo $THRESH > /sys/class/power_supply/BAT0/charge_control_end_threshold 2>/dev/null || true; \
+  echo "Smart charge: set threshold to $THRESH%% (hour=$HOUR)"'

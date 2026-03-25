@@ -43,6 +43,7 @@ pub struct MeetingAssistant {
     enabled: bool,
     state: MeetingState,
     recording_process: Option<tokio::process::Child>,
+    language: String,
 }
 
 impl MeetingAssistant {
@@ -54,6 +55,7 @@ impl MeetingAssistant {
                 .unwrap_or(true),
             state: MeetingState::default(),
             recording_process: None,
+            language: "auto".to_string(),
         }
     }
 
@@ -165,7 +167,7 @@ impl MeetingAssistant {
                 "-f",
                 audio_path,
                 "--language",
-                "auto",
+                &self.language,
                 "--output-txt",
             ])
             .output()
@@ -229,6 +231,49 @@ impl MeetingAssistant {
             .context("LLM summary generation failed")?;
 
         Ok(response.text)
+    }
+
+    /// Set the whisper language for transcription (e.g., "es", "en", "auto").
+    pub fn set_language(&mut self, lang: &str) {
+        self.language = lang.to_string();
+        info!("[meeting] Whisper language set to: {}", self.language);
+    }
+
+    /// Delete meeting files (wav, opus, txt) older than `days` from the meetings directory.
+    pub async fn cleanup_old_meetings(&self, days: u64) -> Result<u64> {
+        let meetings_dir = self.data_dir.join("meetings");
+        if !meetings_dir.exists() {
+            return Ok(0);
+        }
+
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86400);
+
+        let mut removed = 0u64;
+        let mut entries = tokio::fs::read_dir(&meetings_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let metadata = entry.metadata().await?;
+            if metadata.is_file() {
+                if let Ok(modified) = metadata.modified() {
+                    if modified < cutoff {
+                        if let Err(e) = tokio::fs::remove_file(entry.path()).await {
+                            info!(
+                                "[meeting] Failed to remove {}: {}",
+                                entry.path().display(),
+                                e
+                            );
+                        } else {
+                            removed += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        info!(
+            "[meeting] Cleaned up {} old meeting files (>{} days)",
+            removed, days
+        );
+        Ok(removed)
     }
 
     /// Compress a WAV recording to OPUS for storage efficiency.
