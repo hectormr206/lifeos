@@ -9908,7 +9908,7 @@ async fn post_api_keys(
     Ok(Json(serde_json::json!({
         "updated": updated_count,
         "path": env_path.display().to_string(),
-        "note": "Keys saved. Restart the daemon (systemctl --user restart lifeosd) for Telegram to take effect."
+        "note": "Keys guardadas y activas. Los proveedores LLM funcionan inmediatamente."
     })))
 }
 

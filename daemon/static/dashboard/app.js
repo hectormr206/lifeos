@@ -1798,6 +1798,52 @@ async function refreshSystemHealth() {
     $('#health-battery').textContent = 'N/A';
     healthDot('health-dot-battery', null);
   }
+
+  // Service status
+  try {
+    // Daemon is always running if we got here
+    setServiceStatus('svc-daemon', 'svc-dot-daemon', 'Activo', 'ok');
+
+    // LLM server
+    const aiRes = await fetch(`${API}/ai/status`, { headers: apiHeaders() }).catch(() => null);
+    if (aiRes && aiRes.ok) {
+      const ai = await aiRes.json();
+      setServiceStatus('svc-llm', 'svc-dot-llm',
+        ai.server_running ? 'Activo' : 'Detenido',
+        ai.server_running ? 'ok' : 'warn');
+    } else {
+      setServiceStatus('svc-llm', 'svc-dot-llm', 'Sin respuesta', 'error');
+    }
+
+    // STT (whisper)
+    const sensoryRes = await fetch(`${API}/sensory/status`, { headers: apiHeaders() }).catch(() => null);
+    if (sensoryRes && sensoryRes.ok) {
+      const s = await sensoryRes.json();
+      const sttOk = s.capabilities && s.capabilities.whisper_binary;
+      setServiceStatus('svc-stt', 'svc-dot-stt',
+        sttOk ? 'Disponible' : 'No encontrado',
+        sttOk ? 'ok' : 'warn');
+    } else {
+      setServiceStatus('svc-stt', 'svc-dot-stt', '—', 'neutral');
+    }
+
+    // Telegram
+    const tgToken = !!document.querySelector('#key-status-telegram.ok');
+    setServiceStatus('svc-telegram', 'svc-dot-telegram',
+      tgToken ? 'Configurado' : 'Sin configurar',
+      tgToken ? 'ok' : 'neutral');
+  } catch (e) { /* silent */ }
+}
+
+function setServiceStatus(valId, dotId, text, level) {
+  const val = $(`#${valId}`);
+  const dot = $(`#${dotId}`);
+  if (val) val.textContent = text;
+  if (dot) {
+    dot.style.background = level === 'ok' ? 'var(--success)' :
+                           level === 'warn' ? '#f39c12' :
+                           level === 'error' ? 'var(--danger)' : '#555';
+  }
 }
 
 // Battery threshold slider

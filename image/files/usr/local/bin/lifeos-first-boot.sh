@@ -136,6 +136,20 @@ ENVEOF
         log_success "LLM providers config created at /etc/lifeos/llm-providers.env"
     fi
 
+    # Initialize battery charge threshold (default 80% for battery health)
+    if [ ! -f /etc/lifeos/battery-threshold ]; then
+        echo "80" > /etc/lifeos/battery-threshold
+        log_success "Battery charge threshold initialized (80%)"
+    fi
+
+    # Ensure wake word model is available in writable location
+    if [ ! -f /var/lib/lifeos/models/rustpotter/axi.rpw ] && \
+       [ -f /usr/share/lifeos/models/rustpotter/axi.rpw ]; then
+        mkdir -p /var/lib/lifeos/models/rustpotter
+        cp /usr/share/lifeos/models/rustpotter/axi.rpw /var/lib/lifeos/models/rustpotter/axi.rpw
+        log_success "Wake word model copied to writable location"
+    fi
+
     log_success "System directories created"
 }
 

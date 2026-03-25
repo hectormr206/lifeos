@@ -330,7 +330,17 @@
           </div>
         </div>
         <button type="button" class="quick-action-btn" id="save-keys-btn">Guardar Keys</button>
-        <p class="setting-hint" id="keys-hint">Configura tus keys aqui. Se guardan en llm-providers.env. Reinicia el daemon despues de guardar.</p>
+        <p class="setting-hint" id="keys-hint">Configura tus keys aqui. Se activan inmediatamente sin reiniciar.</p>
+        <details style="margin-top:8px;">
+          <summary style="cursor:pointer; color:var(--accent); font-size:0.85em;">Como configurar Telegram?</summary>
+          <ol style="font-size:0.8em; color:#aaa; margin-top:6px; padding-left:20px;">
+            <li>Abre Telegram y busca <strong>@BotFather</strong></li>
+            <li>Envia <code>/newbot</code> y sigue las instrucciones</li>
+            <li>Copia el token (ej: <code>123456:ABC-DEF...</code>) y pegalo arriba</li>
+            <li>Para tu Chat ID: envia cualquier mensaje a <strong>@userinfobot</strong> y copia el numero</li>
+            <li>Guarda y listo — Axi respondera por Telegram</li>
+          </ol>
+        </details>
       </div>
     </section>
 
@@ -437,6 +447,33 @@
           <span class="health-dot" id="health-dot-ram"></span>
           <span class="health-label">RAM Usage</span>
           <span class="health-value" id="health-ram">—</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Service Status -->
+    <section class="services-section">
+      <h2>Servicios</h2>
+      <div class="health-grid" id="services-grid">
+        <div class="health-item">
+          <span class="health-dot" id="svc-dot-daemon"></span>
+          <span class="health-label">Axi (daemon)</span>
+          <span class="health-value" id="svc-daemon">—</span>
+        </div>
+        <div class="health-item">
+          <span class="health-dot" id="svc-dot-llm"></span>
+          <span class="health-label">LLM Server</span>
+          <span class="health-value" id="svc-llm">—</span>
+        </div>
+        <div class="health-item">
+          <span class="health-dot" id="svc-dot-stt"></span>
+          <span class="health-label">Voz (STT)</span>
+          <span class="health-value" id="svc-stt">—</span>
+        </div>
+        <div class="health-item">
+          <span class="health-dot" id="svc-dot-telegram"></span>
+          <span class="health-label">Telegram</span>
+          <span class="health-value" id="svc-telegram">—</span>
         </div>
       </div>
     </section>

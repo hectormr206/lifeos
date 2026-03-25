@@ -116,7 +116,7 @@ impl Default for ScheduleConfig {
             update_time: "02:00".to_string(),
             update_day: 1, // Monday
             check_frequency_hours: 24,
-            auto_install: false,
+            auto_install: true, // Zero-config: auto-install at 2am by default
             verify_checksum: true,
             create_backup: true,
         }
@@ -504,7 +504,7 @@ mod tests {
         let config = ScheduleConfig::default();
         assert_eq!(config.schedule_type, ScheduleType::Automatic);
         assert_eq!(config.update_time, "02:00");
-        assert!(!config.auto_install);
+        assert!(config.auto_install);
     }
 
     #[test]
