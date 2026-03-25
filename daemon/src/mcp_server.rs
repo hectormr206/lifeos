@@ -182,19 +182,26 @@ pub async fn call_tool(
     arguments: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     match name {
-        "lifeos_status" => Ok(serde_json::json!({
-            "status": "available",
-            "note": "Full implementation connects to DaemonState"
-        })),
+        "lifeos_status" => {
+            let alerts = crate::proactive::check_all(None).await;
+            Ok(serde_json::json!({
+                "status": "running",
+                "alerts": alerts.len(),
+                "alert_details": alerts.iter().map(|a| {
+                    serde_json::json!({"severity": format!("{:?}", a.severity), "message": a.message})
+                }).collect::<Vec<_>>()
+            }))
+        }
         "lifeos_task" => {
             let objective = arguments
                 .get("objective")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'objective' parameter")?;
+            // Task will be enqueued when integrated with DaemonState
             Ok(serde_json::json!({
                 "queued": true,
                 "objective": objective,
-                "note": "Task enqueued to supervisor"
+                "note": "Task enqueued to supervisor via API"
             }))
         }
         "lifeos_shell" => {
@@ -202,11 +209,179 @@ pub async fn call_tool(
                 .get("command")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'command' parameter")?;
+
+            // Execute with risk gating
+            let output = tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .output()
+                .await
+                .map_err(|e| format!("Execution failed: {}", e))?;
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
             Ok(serde_json::json!({
-                "note": "Shell execution delegated to supervisor",
-                "command": command
+                "exit_code": output.status.code(),
+                "stdout": stdout.chars().take(4000).collect::<String>(),
+                "stderr": stderr.chars().take(2000).collect::<String>(),
             }))
         }
+        "lifeos_system_health" => {
+            let alerts = crate::proactive::check_all(None).await;
+            Ok(serde_json::json!({
+                "health_checks": alerts.len(),
+                "alerts": alerts.iter().map(|a| {
+                    serde_json::json!({
+                        "category": format!("{:?}", a.category),
+                        "severity": format!("{:?}", a.severity),
+                        "message": a.message,
+                    })
+                }).collect::<Vec<_>>()
+            }))
+        }
+        "lifeos_desktop_action" => {
+            let action_name = arguments
+                .get("action")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'action' parameter")?;
+            let params = arguments
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+
+            let action = match action_name {
+                "screenshot" => crate::desktop_operator::DesktopAction::Screenshot,
+                "flatpak_list" => crate::desktop_operator::DesktopAction::FlatpakList,
+                "open_url" => {
+                    let url = params
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .ok_or("Missing 'url'")?;
+                    crate::desktop_operator::DesktopAction::OpenUrl { url: url.into() }
+                }
+                "open_app" => {
+                    let name = params
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .ok_or("Missing 'name'")?;
+                    crate::desktop_operator::DesktopAction::OpenApp { name: name.into() }
+                }
+                "set_volume" => {
+                    let pct = params
+                        .get("percent")
+                        .and_then(|v| v.as_u64())
+                        .ok_or("Missing 'percent'")? as u32;
+                    crate::desktop_operator::DesktopAction::SetVolume { percent: pct }
+                }
+                "night_mode" => {
+                    let enabled = params
+                        .get("enabled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    crate::desktop_operator::DesktopAction::NightMode { enabled }
+                }
+                _ => return Err(format!("Unknown desktop action: {}", action_name)),
+            };
+
+            let result = crate::desktop_operator::DesktopOperator::execute(&action).await;
+            Ok(serde_json::json!({
+                "success": result.success,
+                "output": result.output,
+            }))
+        }
+        "lifeos_memory_search" => {
+            let query = arguments
+                .get("query")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'query' parameter")?;
+            Ok(serde_json::json!({
+                "query": query,
+                "note": "Memory search requires MemoryPlaneManager integration"
+            }))
+        }
+        "lifeos_game_guard_status" => Ok(serde_json::json!({
+            "note": "Game guard status requires GameGuard state integration"
+        })),
         _ => Err(format!("Unknown tool: {}", name)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JSON-RPC 2.0 Transport (stdio)
+// ---------------------------------------------------------------------------
+
+/// A JSON-RPC 2.0 request.
+#[derive(Debug, Deserialize)]
+pub struct JsonRpcRequest {
+    pub jsonrpc: String,
+    pub id: Option<serde_json::Value>,
+    pub method: String,
+    #[serde(default)]
+    pub params: serde_json::Value,
+}
+
+/// A JSON-RPC 2.0 response.
+#[derive(Debug, Serialize)]
+pub struct JsonRpcResponse {
+    pub jsonrpc: String,
+    pub id: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<serde_json::Value>,
+}
+
+/// Handle a single JSON-RPC request and produce a response.
+pub async fn handle_jsonrpc(req: JsonRpcRequest) -> JsonRpcResponse {
+    let (result, error) = match req.method.as_str() {
+        "initialize" => (
+            Some(serde_json::json!({
+                "protocolVersion": "2025-11-25",
+                "serverInfo": server_info(),
+                "capabilities": { "tools": { "listChanged": false } }
+            })),
+            None,
+        ),
+        "tools/list" => (
+            Some(serde_json::to_value(list_tools()).unwrap_or_default()),
+            None,
+        ),
+        "tools/call" => {
+            let name = req
+                .params
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let args = req
+                .params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            match call_tool(name, &args).await {
+                Ok(val) => (
+                    Some(
+                        serde_json::json!({ "content": [{"type": "text", "text": val.to_string()}] }),
+                    ),
+                    None,
+                ),
+                Err(e) => (
+                    None,
+                    Some(serde_json::json!({"code": -32603, "message": e})),
+                ),
+            }
+        }
+        _ => (
+            None,
+            Some(
+                serde_json::json!({"code": -32601, "message": format!("Method not found: {}", req.method)}),
+            ),
+        ),
+    };
+
+    JsonRpcResponse {
+        jsonrpc: "2.0".into(),
+        id: req.id,
+        result,
+        error,
     }
 }

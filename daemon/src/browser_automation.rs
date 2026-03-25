@@ -150,4 +150,42 @@ impl BrowserAutomation {
             )),
         }
     }
+
+    /// Navigate to a URL, capture screenshot, and analyze with vision LLM.
+    /// Returns the LLM's description/analysis of what the page shows.
+    pub async fn navigate_and_analyze(
+        &self,
+        url: &str,
+        analysis_prompt: &str,
+        router: &std::sync::Arc<tokio::sync::RwLock<crate::llm_router::LlmRouter>>,
+    ) -> Result<String> {
+        let screenshot_path = self.navigate_and_capture(url).await?;
+
+        // Build a vision request to the LLM router
+        let request = crate::llm_router::RouterRequest {
+            messages: vec![crate::llm_router::ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(format!(
+                    "{}\n\n[Screenshot of {} attached at: {}]",
+                    analysis_prompt, url, screenshot_path
+                )),
+            }],
+            complexity: Some(crate::llm_router::TaskComplexity::Vision),
+            sensitivity: None,
+            preferred_provider: None,
+            max_tokens: Some(1024),
+        };
+
+        let router_guard = router.read().await;
+        match router_guard.chat(&request).await {
+            Ok(response) => Ok(response.text),
+            Err(e) => {
+                // Fallback: return the screenshot path if vision fails
+                Ok(format!(
+                    "Screenshot saved at {} but vision analysis failed: {}",
+                    screenshot_path, e
+                ))
+            }
+        }
+    }
 }

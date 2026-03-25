@@ -77,6 +77,14 @@ pub async fn check_all(
         alerts.push(alert);
     }
 
+    if let Some(alert) = check_selinux_status().await {
+        alerts.push(alert);
+    }
+
+    if let Some(alert) = check_pending_security_updates().await {
+        alerts.push(alert);
+    }
+
     if let Some(tq) = task_queue {
         if let Some(alert) = check_stuck_tasks(tq).await {
             alerts.push(alert);
@@ -558,4 +566,71 @@ async fn check_network_security() -> Option<ProactiveAlert> {
     }
 
     None
+}
+
+// ---------------------------------------------------------------------------
+// SELinux status check
+// ---------------------------------------------------------------------------
+
+async fn check_selinux_status() -> Option<ProactiveAlert> {
+    let output = tokio::process::Command::new("getenforce")
+        .output()
+        .await
+        .ok()?;
+
+    let status = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_lowercase();
+
+    if status == "disabled" {
+        return Some(ProactiveAlert {
+            category: AlertCategory::SecurityUpdate,
+            message:
+                "SELinux esta deshabilitado. El sistema tiene menos proteccion contra exploits."
+                    .into(),
+            severity: AlertSeverity::Warning,
+        });
+    }
+
+    if status == "permissive" {
+        return Some(ProactiveAlert {
+            category: AlertCategory::SecurityUpdate,
+            message: "SELinux en modo permisivo. Solo registra violaciones, no las bloquea.".into(),
+            severity: AlertSeverity::Info,
+        });
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Pending security updates
+// ---------------------------------------------------------------------------
+
+async fn check_pending_security_updates() -> Option<ProactiveAlert> {
+    let output = tokio::process::Command::new("dnf")
+        .args(["updateinfo", "list", "security", "--available", "-q"])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let count = text.lines().filter(|l| !l.trim().is_empty()).count();
+
+    if count >= 5 {
+        Some(ProactiveAlert {
+            category: AlertCategory::SecurityUpdate,
+            message: format!(
+                "{} actualizaciones de seguridad pendientes. Ejecuta: sudo dnf update --security",
+                count
+            ),
+            severity: AlertSeverity::Warning,
+        })
+    } else {
+        None
+    }
 }
