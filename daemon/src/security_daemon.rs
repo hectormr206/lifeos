@@ -986,7 +986,7 @@ mod tests {
         daemon.update_baselines();
         // After update, we should have some baselines (on any Linux system)
         // In CI, /proc exists so this should populate
-        assert!(daemon.baselines.len() > 0 || cfg!(not(target_os = "linux")));
+        assert!(!daemon.baselines.is_empty() || cfg!(not(target_os = "linux")));
     }
 
     #[test]
