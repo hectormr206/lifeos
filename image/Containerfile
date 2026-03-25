@@ -378,8 +378,10 @@ RUN dnf -y install \
     && dnf clean all
 
 # --- Speaker identification runtime (WeSpeaker ONNX) ---
-RUN pip3 install --no-cache-dir onnxruntime numpy && \
-    python3 -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)"
+RUN dnf -y install python3-pip python3-numpy && \
+    pip3 install --no-cache-dir onnxruntime && \
+    python3 -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)" && \
+    dnf clean all
 
 # --- Aplicaciones Nativas Esenciales ---
 RUN dnf -y install \
