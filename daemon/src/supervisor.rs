@@ -148,6 +148,9 @@ pub struct StepResult {
     pub success: bool,
     pub output: String,
     pub step_index: usize,
+    /// Confidence score: 1.0 = clear success, 0.8 = output but no signal,
+    /// 0.5 = empty output, 0.3 = warnings detected, 0.0 = failure.
+    pub confidence: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +183,9 @@ pub struct Supervisor {
     /// When true, medium-risk actions (git commit, mv, cp) execute without
     /// waiting for approval. Controlled by LIFEOS_AUTO_APPROVE_MEDIUM env var.
     auto_approve_medium: bool,
+    /// When true, execute_task() returns a dry-run preview instead of executing.
+    /// Controlled by LIFEOS_SHADOW_MODE env var.
+    shadow_mode: bool,
 }
 
 impl Supervisor {
@@ -223,6 +229,14 @@ impl Supervisor {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(true); // default ON — medium-risk auto-executes with notification
 
+        let shadow_mode = std::env::var("LIFEOS_SHADOW_MODE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
+        if shadow_mode {
+            info!("Supervisor shadow mode ENABLED — tasks will be dry-run only");
+        }
+
         Self {
             queue,
             router,
@@ -235,6 +249,7 @@ impl Supervisor {
             started_at: std::time::Instant::now(),
             metrics: std::sync::Mutex::new(AllAgentMetrics::default()),
             auto_approve_medium,
+            shadow_mode,
         }
     }
 
@@ -433,7 +448,13 @@ impl Supervisor {
 
                 self.queue.mark_completed(&task.id, &summary)?;
 
-                self.audit_log(&task.id, &task.objective, "completed", &summary)
+                let task_confidence = if steps_total > 0 {
+                    steps_ok as f64 / steps_total as f64
+                } else {
+                    0.0
+                };
+
+                self.audit_log(&task.id, &task.objective, "completed", &summary, task_confidence)
                     .await;
 
                 // Generate a reusable skill from this successful task
@@ -486,7 +507,7 @@ impl Supervisor {
                 let error_msg = format!("{:#}", e);
                 let will_retry = self.queue.mark_failed(&task.id, &error_msg)?;
 
-                self.audit_log(&task.id, &task.objective, "failed", &error_msg)
+                self.audit_log(&task.id, &task.objective, "failed", &error_msg, 0.0)
                     .await;
 
                 // Save to memory: what failed and why
@@ -693,10 +714,87 @@ impl Supervisor {
             role
         );
 
+        // ---------------------------------------------------------------
+        // Shadow mode: dry-run preview without executing anything
+        // ---------------------------------------------------------------
+        if self.shadow_mode {
+            let mut preview = String::from("SHADOW MODE — Plan preview:\n");
+            for (i, step) in plan.steps.iter().enumerate() {
+                let action_type = match &step.action {
+                    StepAction::ShellCommand { .. } => "shell_command",
+                    StepAction::SandboxCommand { .. } => "sandbox_command",
+                    StepAction::AiQuery { .. } => "ai_query",
+                    StepAction::BrowseUrl { .. } => "browse_url",
+                    StepAction::WebSearch { .. } => "web_search",
+                    StepAction::FileSearch { .. } => "file_search",
+                    StepAction::ContentSearch { .. } => "content_search",
+                    StepAction::ClipboardCopy { .. } => "clipboard_copy",
+                    StepAction::ScreenAnalyze { .. } => "screen_analyze",
+                    StepAction::ScreenCapture => "screen_capture",
+                    StepAction::ReadFile { .. } => "read_file",
+                    StepAction::WriteFile { .. } => "write_file",
+                    StepAction::Respond { .. } => "respond",
+                    StepAction::BrowserScreenshot { .. } => "browser_screenshot",
+                    StepAction::FlatpakInstall { .. } => "flatpak_install",
+                    StepAction::OpenApp { .. } => "open_app",
+                    StepAction::OpenFile { .. } => "open_file",
+                    StepAction::TypeText { .. } => "type_text",
+                    StepAction::SendKeys { .. } => "send_keys",
+                };
+                preview.push_str(&format!(
+                    "{}) [{}] {}\n",
+                    i + 1,
+                    action_type,
+                    step.description
+                ));
+            }
+            self.audit_log(task_id, objective, "shadow_preview", &preview, 0.0)
+                .await;
+            return Ok((preview, plan.steps.len(), 0));
+        }
+
+        // ---------------------------------------------------------------
+        // Real execution with retry-with-variation + cascade prevention
+        // ---------------------------------------------------------------
         let mut results = Vec::new();
         let mut last_output = String::new();
+        // Track indices of failed shell_command steps for cascade prevention
+        let mut failed_shell_indices: Vec<usize> = Vec::new();
 
         for (i, step) in plan.steps.iter().enumerate() {
+            // Cascade failure prevention: if a prior shell_command failed and
+            // this step's description references a previous step's output,
+            // skip it to avoid cascading errors.
+            if !failed_shell_indices.is_empty() {
+                let desc_lower = step.description.to_lowercase();
+                let depends_on_failed = failed_shell_indices.iter().any(|&fi| {
+                    // Heuristic: step mentions "output", "result", or "previous"
+                    // and the failed step was a shell_command
+                    desc_lower.contains("output")
+                        || desc_lower.contains("result")
+                        || desc_lower.contains("previous")
+                        || desc_lower.contains(&format!("step {}", fi + 1))
+                });
+                if depends_on_failed {
+                    let skip_msg = format!(
+                        "Step {} skipped: depends on failed step output",
+                        i + 1
+                    );
+                    warn!("Task {} — {}", task_id, skip_msg);
+                    let r = StepResult {
+                        success: false,
+                        output: skip_msg.clone(),
+                        step_index: i,
+                        confidence: 0.0,
+                    };
+                    self.audit_log(task_id, &step.description, "skipped_cascade", &skip_msg, 0.0)
+                        .await;
+                    results.push(r);
+                    last_output = skip_msg;
+                    continue;
+                }
+            }
+
             // Stream progress to Telegram
             let progress_msg = format!("Paso {}/{}: {}", i + 1, plan.steps.len(), step.description);
             info!("Task {} {}", task_id, progress_msg);
@@ -707,20 +805,86 @@ impl Supervisor {
 
             match self.execute_step(step).await {
                 Ok(output) => {
+                    let confidence = Self::compute_confidence(&output);
                     last_output = output.clone();
+                    self.audit_log(task_id, &step.description, "step_ok", &output, confidence)
+                        .await;
                     results.push(StepResult {
                         success: true,
                         output,
                         step_index: i,
+                        confidence,
                     });
                 }
                 Err(e) => {
-                    let error = format!("Step {} failed: {}", i + 1, e);
-                    warn!("Task {} — {}", task_id, error);
+                    let error_msg = format!("{}", e);
+                    warn!("Task {} — Step {} failed: {}", task_id, i + 1, error_msg);
+
+                    // Retry with variation: ask LLM for an alternative approach
+                    info!("Task {} — Attempting retry with variation for step {}", task_id, i + 1);
+                    match self.generate_alternative_step(step, &error_msg).await {
+                        Ok(alt_step) => {
+                            info!(
+                                "Task {} — Retrying step {} with alternative: {}",
+                                task_id,
+                                i + 1,
+                                alt_step.description
+                            );
+                            match self.execute_step(&alt_step).await {
+                                Ok(output) => {
+                                    let confidence = Self::compute_confidence(&output);
+                                    last_output = output.clone();
+                                    self.audit_log(
+                                        task_id,
+                                        &alt_step.description,
+                                        "step_ok_retry",
+                                        &output,
+                                        confidence,
+                                    )
+                                    .await;
+                                    results.push(StepResult {
+                                        success: true,
+                                        output,
+                                        step_index: i,
+                                        confidence,
+                                    });
+                                    continue;
+                                }
+                                Err(retry_err) => {
+                                    warn!(
+                                        "Task {} — Retry also failed for step {}: {}",
+                                        task_id,
+                                        i + 1,
+                                        retry_err
+                                    );
+                                }
+                            }
+                        }
+                        Err(alt_err) => {
+                            debug!(
+                                "Task {} — Could not generate alternative for step {}: {}",
+                                task_id,
+                                i + 1,
+                                alt_err
+                            );
+                        }
+                    }
+
+                    // Both original and retry failed
+                    let error = format!("Step {} failed: {}", i + 1, error_msg);
+                    self.audit_log(task_id, &step.description, "step_fail", &error, 0.0)
+                        .await;
+
+                    // Track for cascade prevention if this was a shell_command
+                    if matches!(step.action, StepAction::ShellCommand { .. }) {
+                        failed_shell_indices.push(i);
+                    }
+
                     results.push(StepResult {
                         success: false,
                         output: error.clone(),
                         step_index: i,
+                        confidence: 0.0,
                     });
                     last_output = error;
                 }
@@ -1559,6 +1723,71 @@ Always end with a "respond" step summarizing what was done."#,
         }
     }
 
+    /// Compute a confidence score for a step's output.
+    fn compute_confidence(output: &str) -> f64 {
+        if output.is_empty() || output == "(no output)" {
+            return 0.5;
+        }
+        let lower = output.to_lowercase();
+        // Check for warning signals
+        if lower.contains("warning") || lower.contains("warn") || lower.contains("deprecated") {
+            return 0.3;
+        }
+        // Check for clear success signals
+        let success_keywords = ["success", "ok", "passed", "completed", "done", "created", "written"];
+        if success_keywords.iter().any(|kw| lower.contains(kw)) {
+            return 1.0;
+        }
+        // Non-empty output with no clear signal
+        0.8
+    }
+
+    /// Ask the LLM for an alternative approach when a step fails.
+    async fn generate_alternative_step(
+        &self,
+        original_step: &PlanStep,
+        error: &str,
+    ) -> Result<PlanStep> {
+        let step_json = serde_json::to_string(original_step)
+            .unwrap_or_else(|_| original_step.description.clone());
+        let prompt = format!(
+            r#"A step in an automated plan failed. Suggest ONE alternative step that achieves the same goal using a different approach.
+
+Original step:
+{}
+
+Error:
+{}
+
+Respond ONLY with a JSON object (no markdown):
+{{"description": "...", "action": {{"type": "...", ...}}, "expected_outcome": "..."}}"#,
+            step_json,
+            &error[..error.len().min(500)]
+        );
+
+        let request = RouterRequest {
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(prompt),
+            }],
+            complexity: Some(TaskComplexity::Medium),
+            sensitivity: None,
+            preferred_provider: None,
+            max_tokens: Some(512),
+        };
+
+        let router = self.router.read().await;
+        let response = router
+            .chat(&request)
+            .await
+            .context("Failed to get alternative step from LLM")?;
+
+        let json_str = extract_json(&response.text);
+        let alt_step: PlanStep = serde_json::from_str(&json_str)
+            .context("Failed to parse alternative step JSON")?;
+        Ok(alt_step)
+    }
+
     async fn execute_shell(&self, command: &str) -> Result<String> {
         info!("Executing shell: {}", command);
 
@@ -1610,20 +1839,34 @@ Always end with a "respond" step summarizing what was done."#,
         Ok(response.text)
     }
 
-    async fn audit_log(&self, task_id: &str, objective: &str, status: &str, detail: &str) {
+    async fn audit_log(
+        &self,
+        task_id: &str,
+        objective: &str,
+        status: &str,
+        detail: &str,
+        confidence: f64,
+    ) {
         let log_dir = PathBuf::from("/var/log/lifeos");
-        if std::fs::create_dir_all(&log_dir).is_err() {
-            // Fallback to data dir
-            return;
-        }
+        // Try primary dir, fallback to /var/lib/lifeos
+        let log_dir = if std::fs::create_dir_all(&log_dir).is_ok() {
+            log_dir
+        } else {
+            let fallback = PathBuf::from("/var/lib/lifeos");
+            if std::fs::create_dir_all(&fallback).is_err() {
+                return;
+            }
+            fallback
+        };
         let path = log_dir.join("supervisor-audit.log");
         let entry = format!(
-            "{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\tconfidence={:.2}\n",
             chrono::Local::now().to_rfc3339(),
             task_id,
             status,
             objective.chars().take(100).collect::<String>(),
             detail.chars().take(200).collect::<String>(),
+            confidence,
         );
         use tokio::io::AsyncWriteExt;
         if let Ok(mut f) = tokio::fs::OpenOptions::new()

@@ -22,6 +22,8 @@ mod agent_runtime;
 mod ai;
 mod api;
 #[allow(dead_code)]
+mod app_contracts;
+#[allow(dead_code)]
 mod autonomous_agent;
 #[allow(dead_code)]
 mod backup_monitor;
@@ -62,6 +64,10 @@ mod health;
 mod health_tracking;
 #[allow(dead_code)]
 mod home_assistant;
+#[allow(dead_code)]
+mod intent_parser;
+#[allow(dead_code)]
+mod knowledge_graph;
 #[cfg(feature = "ui-overlay")]
 #[allow(dead_code)]
 mod keyboard_shortcut;
@@ -94,6 +100,10 @@ mod prompt_tuner;
 mod scheduled_tasks;
 mod screen_capture;
 mod sensory_pipeline;
+#[allow(dead_code)]
+mod security_daemon;
+#[allow(dead_code)]
+mod self_improving;
 #[allow(dead_code)]
 mod signal_bridge;
 #[allow(dead_code)]
