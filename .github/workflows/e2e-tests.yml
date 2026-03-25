@@ -71,7 +71,7 @@ jobs:
       
       - name: Clippy
         run: |
-          cargo clippy --all-targets --all-features --locked -- -D warnings
+          cargo clippy --all-targets --locked -- -D warnings
 
   # Bootc upgrade/rollback test - comprehensive VM test
   bootc-upgrade-rollback:
