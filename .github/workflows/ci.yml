@@ -53,7 +53,7 @@ jobs:
 
       - name: Run clippy
         working-directory: ./cli
-        run: cargo clippy --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked -- -D warnings
+        run: cargo clippy --all-features --locked -- -D warnings
 
       - name: Build CLI (debug)
         working-directory: ./cli
@@ -65,7 +65,7 @@ jobs:
 
       - name: Run CLI tests
         working-directory: ./cli
-        run: cargo test --features "dbus,http-api,wake-word,telegram" --locked
+        run: cargo test --all-features --locked
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
