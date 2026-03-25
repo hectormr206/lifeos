@@ -457,6 +457,9 @@ COPY image/files/etc/lifeos/design-tokens.json /etc/lifeos/design-tokens.json
 # LLM providers example (reference doc — user copies to /etc/lifeos/)
 COPY files/etc/lifeos/llm-providers.env.example /usr/share/doc/lifeos/llm-providers.env.example
 
+# MCP server configuration template
+COPY image/files/etc/lifeos/mcp-servers.toml.default /etc/lifeos/mcp-servers.toml.default
+
 # LifeOS Wallpapers
 COPY image/files/usr/share/backgrounds/lifeos /usr/share/backgrounds/lifeos
 

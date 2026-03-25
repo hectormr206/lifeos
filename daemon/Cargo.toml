@@ -63,7 +63,7 @@ wayland-client = { version = "0.31", optional = true }
 default = ["dbus", "http-api"]
 dbus = ["zbus"]
 http-api = ["axum", "tower-http"]
-ui-overlay = ["gtk4", "glib"]
+ui-overlay = ["gtk4", "glib", "adw"]
 cosmic = ["cosmic-protocols", "cosmic-client-toolkit", "wayland-client"]
 wake-word = ["rustpotter"]
 # mcp-client = ["rust-mcp-sdk"]  # disabled until rustc 1.88+ in CI
