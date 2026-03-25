@@ -882,7 +882,7 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - [x] **Build verification:** Despues de escribir codigo, ejecutar automaticamente `cargo build` / `cargo test` / `cargo clippy`. Solo marcar como exitoso si compila y tests pasan
 - [x] **Error context enrichment:** Cuando un build falla, extraer el error exacto del compilador, las lineas relevantes del codigo, y el contexto del archivo. Enviar todo al LLM para correccion precisa
 - [ ] **Diff preview antes de aplicar:** Generar diff de los cambios propuestos, enviarlo a Telegram para revision rapida (o auto-aplicar en modo trust)
-- [ ] **Streaming de progreso:** Enviar chunks de progreso a Telegram durante ejecucion larga ("Compilando... 3/5 tests pasan... corrigiendo error en linea 42...")
+- [x] **Streaming de progreso:** Enviar chunks de progreso a Telegram durante ejecucion larga ("Compilando... 3/5 tests pasan... corrigiendo error en linea 42...")
 - [ ] **HITO FASE H:** Decir a Axi "agrega endpoint GET /api/v1/health que devuelva uptime" y que el solo escriba el codigo, compile, corra tests, corrija errores, y reporte "listo, compila y tests pasan"
 
 ### Fase I — Auto-Aprobacion + Git Workflow Autonomo
@@ -894,10 +894,10 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 **Benchmark a superar:** Devin (trabaja en sandbox sin aprobacion), Cursor Background Agents (ejecutan en paralelo sin bloquear).
 
 - [x] **Trust mode para Telegram:** Tasks iniciadas desde Telegram con `/do trust: <objetivo>` auto-aprueban writes dentro del git worktree sandbox. Solo notifica al final con el diff completo
-- [ ] **Branch por tarea:** Cada tarea crea un feature branch automatico (`axi/<task-id>-<slug>`). Commits automaticos cuando tests pasan
-- [ ] **Auto-commit con mensaje semantico:** El LLM genera commit messages descriptivos basados en los cambios realizados
-- [ ] **PR creation:** Cuando la tarea termina exitosamente, crear PR en GitHub via `gh` CLI con descripcion generada por LLM
-- [ ] **Post-task diff summary:** Enviar a Telegram un resumen del diff total: archivos modificados, lineas cambiadas, tests que pasan
+- [x] **Branch por tarea:** Cada tarea crea un feature branch automatico (`axi/<task-id>-<slug>`). Commits automaticos cuando tests pasan
+- [x] **Auto-commit con mensaje semantico:** El LLM genera commit messages descriptivos basados en los cambios realizados
+- [x] **PR creation:** Cuando la tarea termina exitosamente, crear PR en GitHub via `gh` CLI con descripcion generada por LLM
+- [x] **Post-task diff summary:** Enviar a Telegram un resumen del diff total: archivos modificados, lineas cambiadas, tests que pasan
 - [x] **Rollback automatico:** Si una tarea falla despues de 5 iteraciones, `git checkout .` en el worktree y notificar con el contexto completo del error
 - [x] **Workspace persistence:** Mantener el worktree activo entre pasos de la misma tarea (no recrear cada vez)
 - [ ] **HITO FASE I:** Decir "implementa feature X en branch nuevo, prueba y abre PR" y que Axi lo haga completo sin intervenir
@@ -935,7 +935,7 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - [x] **Hot-reload de skills:** Skills nuevas se activan sin reiniciar el daemon
 - [x] **Learning from failures:** Base de datos de errores pasados con solucion aplicada. Antes de planificar, consultar "la ultima vez que intente X, fallo por Y, la solucion fue Z"
 - [x] **Skill sharing format:** Formato estandar de skills compatible con un futuro marketplace
-- [ ] **Self-diagnostic:** Axi puede analizar sus propias metricas (tasa de exito por tipo de tarea) y proponer que areas necesitan mejora
+- [x] **Self-diagnostic:** Axi puede analizar sus propias metricas (tasa de exito por tipo de tarea) y proponer que areas necesitan mejora
 - [ ] **HITO FASE K:** Decir "crea un skill que monitoree el precio de Bitcoin y me avise si baja de $50K" y que Axi lo escriba, lo pruebe, lo active, y funcione
 
 ### Fase L — Multimodalidad Avanzada + Interaccion Natural
@@ -1035,10 +1035,10 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 **N.1 — System Management (instalar, configurar, mantener)**
 - [x] **Flatpak management:** Instalar/actualizar/remover Flatpak apps via `flatpak install -y`. "Axi, instala Firefox" → `flatpak install -y flathub org.mozilla.firefox`
-- [ ] **Flatpak permission overrides:** Configurar permisos de apps programaticamente via `flatpak override --user`. "Dale acceso a ~/Documents a LibreOffice"
+- [x] **Flatpak permission overrides:** Configurar permisos de apps programaticamente via `flatpak override --user`. "Dale acceso a ~/Documents a LibreOffice"
 - [ ] **System settings:** Cambiar configuraciones de COSMIC via `cosmic-settings` CLI o D-Bus (wallpaper, tema, displays, keyboard shortcuts, default apps)
 - [x] **Package queries:** "Que apps tengo instaladas?", "Cuanto espacio usan los flatpaks?", "Hay updates pendientes?"
-- [ ] **Service management:** Listar, iniciar, detener servicios systemd del usuario. "Reinicia el daemon de LifeOS", "Que servicios estan activos?"
+- [x] **Service management:** Listar, iniciar, detener servicios systemd del usuario. "Reinicia el daemon de LifeOS", "Que servicios estan activos?"
 - [x] **Firewall / network:** Consultar estado de red, VPN, puertos abiertos via NetworkManager D-Bus
 - [x] **Permission approval system:** Acciones de sistema clasificadas por riesgo. Instalar flatpak = medio (notificar). Borrar app = alto (pedir aprobacion). Configurar red = medio
 - [ ] **Exec approval whitelist:** Como OpenClaw, mantener lista de comandos pre-aprobados en config. Comandos nuevos requieren aprobacion una vez, luego se recuerdan
@@ -1058,21 +1058,21 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 **N.3 — Input Simulation mejorado**
 - [x] **ydotool robusto:** Asegurar que `ydotoold` corre como servicio. Wrapper en Rust con reintentos y verificacion
 - [ ] **Coordenadas inteligentes:** En vez de pixel absoluto, usar vision LLM para encontrar elementos ("click en el boton que dice Guardar") → screenshot → LLM devuelve coordenadas → ydotool click
-- [ ] **OCR para lectura de pantalla:** Integrar Tesseract OCR (ya disponible en la imagen) para leer texto de elementos UI sin necesidad de LLM vision (mas rapido, local)
+- [x] **OCR para lectura de pantalla:** Integrar Tesseract OCR (ya disponible en la imagen) para leer texto de elementos UI sin necesidad de LLM vision (mas rapido, local)
 - [x] **Clipboard bidireccional:** Leer Y escribir clipboard via `wl-copy`/`wl-paste`. "Copia esto al clipboard", "Que hay en el clipboard?"
 
 **N.4 — File Manager**
 - [x] **Operaciones de archivos:** Crear, mover, copiar, renombrar, borrar archivos/carpetas. Con clasificacion de riesgo (borrar = alto)
 - [x] **Busqueda inteligente:** "Encuentra todos los PDFs que modifique esta semana" → `find` + `stat`
 - [x] **Abrir archivos con app correcta:** "Abre este spreadsheet" → detectar tipo MIME → `xdg-open` o app especifica
-- [ ] **Compresion/extraccion:** zip, tar.gz, 7z — "comprime esta carpeta", "extrae este zip"
+- [x] **Compresion/extraccion:** zip, tar.gz, 7z — "comprime esta carpeta", "extrae este zip"
 
 **N.5 — Battery Health Manager (cuidado de bateria en laptops)**
 
 LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el organismo muere. Axi debe cuidarla como el cuerpo cuida el corazon.
 
 - [x] **Battery monitoring via sysfs + UPower D-Bus:** Leer en tiempo real desde `/sys/class/power_supply/BAT0/`: capacity, cycle_count, energy_full vs energy_full_design (wear level), temp, status, voltage. Tambien via D-Bus `org.freedesktop.UPower.Device` para Percentage, State, EnergyRate, Temperature, ChargeCycles, Capacity (health %)
-- [ ] **Charge threshold management:** Detectar marca de laptop automaticamente (ThinkPad→`thinkpad_acpi`, ASUS→`asus_wmi`, Dell→`dell_laptop`, Lenovo IdeaPad→`ideapad_laptop`, Framework→`cros_charge-control`, Samsung, Huawei, LG, MSI, System76, etc.). Escribir `charge_control_end_threshold` al valor optimo (default 80%)
+- [x] **Charge threshold management:** Detectar marca de laptop automaticamente (ThinkPad→`thinkpad_acpi`, ASUS→`asus_wmi`, Dell→`dell_laptop`, Lenovo IdeaPad→`ideapad_laptop`, Framework→`cros_charge-control`, Samsung, Huawei, LG, MSI, System76, etc.). Escribir `charge_control_end_threshold` al valor optimo (default 80%)
 - [ ] **Persistencia de thresholds:** Los valores de sysfs se pierden al reiniciar. Crear servicio systemd `lifeos-battery.service` que restaure thresholds al boot
 - [ ] **Dashboard widget:** Mostrar en el dashboard: % actual, health (wear level), ciclos, temperatura, threshold activo, tiempo estimado restante
 - [x] **Alertas proactivas via Telegram:**
@@ -1080,11 +1080,11 @@ LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el org
   - "Tu bateria tiene 78% de salud (500 ciclos). Considera reemplazarla pronto" (health < 80%)
   - "Llevas 3 horas enchufado al 100%. Activo limite de carga al 80% para proteger la bateria"
 - [ ] **Smart charging schedule:** Script + systemd timer que baja el threshold durante el dia (60%) y sube en la noche (80%) para cargar mientras duermes. Configurable por el usuario
-- [ ] **NVIDIA GPU power management:**
+- [x] **NVIDIA GPU power management:**
   - Configurar RTD3 (`NVreg_DynamicPowerManagement=0x02`) para que la GPU se apague completamente cuando no se usa (ahorra 5-15W en idle)
   - Integrar con Game Guard: cuando no hay juego, GPU en modo power-save. Cuando hay juego, GPU full power
   - Mostrar consumo actual de GPU en el dashboard (`nvidia-smi --query-gpu=power.draw`)
-- [ ] **Power profile switching:** Integrar con `tuned-ppd` (default en Fedora 42) via D-Bus `net.hadess.PowerProfiles`. Cambiar perfil segun contexto:
+- [x] **Power profile switching:** Integrar con `tuned-ppd` (default en Fedora 42) via D-Bus `net.hadess.PowerProfiles`. Cambiar perfil segun contexto:
   - En bateria sin actividad pesada → `power-saver`
   - En bateria con compilacion/build → `balanced`
   - Enchufado → `balanced` o `performance`
@@ -1113,14 +1113,14 @@ LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el org
 - [ ] **Workspace "Axi":** Al detectar ausencia, crear workspace dedicado via COSMIC Wayland protocol. Todo el trabajo visual de Axi ocurre ahi
 - [x] **Preservar estado del usuario:** NUNCA mover, cerrar, o modificar ventanas del usuario. Solo operar en el workspace de Axi
 - [x] **Al regresar:** Mostrar resumen de lo que hizo. Opcionalmente, cambiar al workspace de Axi para revisar. O auto-minimizar todo y volver al workspace del usuario
-- [ ] **Kill switch:** Si el usuario mueve el mouse o toca el teclado, Axi PARA inmediatamente toda accion de desktop (no tareas de background como builds)
+- [x] **Kill switch:** Si el usuario mueve el mouse o toca el teclado, Axi PARA inmediatamente toda accion de desktop (no tareas de background como builds)
 - [ ] **Snapshot antes de actuar:** Antes de cualquier cambio visible, guardar estado de ventanas/apps para poder revertir
 
 **O.3 — Task queue de ausencia**
 - [x] **Cola de tareas autonomas:** El usuario puede pre-cargar tareas que Axi ejecutara cuando este ausente. "Cuando me vaya, revisa el dashboard, corre los tests, y actualiza el flatpak de Firefox"
 - [x] **Tareas proactivas:** Axi decide por si mismo que hacer basado en su conocimiento: updates pendientes, tests que no se han corrido, archivos para verificar
 - [ ] **Prioridad: mantenimiento > desarrollo > exploracion.** Primero lo seguro, luego lo creativo
-- [ ] **Limite de tiempo:** Configurar cuanto tiempo puede trabajar autonomamente (default 2 horas). Despues se detiene y espera
+- [x] **Limite de tiempo:** Configurar cuanto tiempo puede trabajar autonomamente (default 2 horas). Despues se detiene y espera
 
 **O.4 — Interaccion con CUALQUIER aplicacion (app-agnostic, auto-aprendizaje)**
 
@@ -1131,7 +1131,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 
 - [ ] **Visual grounding engine:** Integrar modelo visual (UI-TARS open source Apache 2.0 de ByteDance, o Qwen-VL local) que dado un screenshot + instruccion ("click en el boton Guardar") devuelve coordenadas (x, y) del elemento
 - [ ] **Action loop universal:** screenshot → visual grounding → accion (click/type/scroll/key) → screenshot → verificar resultado → repetir. Funciona con cualquier app sin necesidad de integracion especifica
-- [ ] **OCR rapido local:** Tesseract para leer texto de pantalla sin enviar a API. "Que dice en la barra de titulo?", "Cual es el valor de la celda B3?"
+- [x] **OCR rapido local:** Tesseract para leer texto de pantalla sin enviar a API. "Que dice en la barra de titulo?", "Cual es el valor de la celda B3?"
 - [ ] **App-specific bridges (optimizacion, no requisito):**
   - LibreOffice: Python UNO bridge (`soffice --accept=socket,host=localhost,port=2002;urp;`) para leer/escribir celdas, formulas, formato. PyOO como wrapper. Verificar spreadsheets sin vision
   - Firefox/Chromium: DevTools Protocol (CDP) para navegar, extraer DOM, ejecutar JS
@@ -1241,7 +1241,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 
 **R.2 — Grabacion de audio**
 - [x] **PipeWire recording:** Usar `pw-record --target=$SINK_NUMBER` para capturar SOLO el audio de la app de conferencia (no todo el sistema). Esto captura tanto lo que dicen los demas como lo que tu dices
-- [ ] **Formato:** WAV a 44.1kHz stereo, comprimir a OPUS/OGG al finalizar para almacenamiento eficiente
+- [x] **Formato:** WAV a 44.1kHz stereo, comprimir a OPUS/OGG al finalizar para almacenamiento eficiente
 - [ ] **Mic separado:** Opcionalmente, grabar tambien el microfono del usuario como pista separada (para mejor diarizacion de hablantes)
 - [ ] **Almacenamiento:** `~/.local/share/lifeos/meetings/YYYY-MM-DD_HH-MM_app-name.opus`. Auto-limpiar meetings > 90 dias (configurable)
 - [x] **Duracion automatica:** Comenzar al detectar reunion, parar automaticamente cuando el audio sink desaparece (la reunion termino)
@@ -1253,14 +1253,14 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [ ] **Formato de salida:** Transcripcion con timestamps + etiquetas de hablante en formato SRT y TXT
 
 **R.4 — Resumen inteligente + Action Items**
-- [ ] **Meeting summary:** Al terminar la transcripcion, enviar al LLM (local o Cerebras) para generar:
+- [x] **Meeting summary:** Al terminar la transcripcion, enviar al LLM (local o Cerebras) para generar:
   - Resumen ejecutivo (3-5 bullet points)
   - Temas principales discutidos
   - Decisiones tomadas
   - Action items (quien, que, cuando)
   - Preguntas sin resolver
 - [ ] **Templates configurables:** El usuario elige el formato de resumen (ejecutivo, detallado, solo action items, etc.)
-- [ ] **Notificacion post-reunion:** Enviar resumen a Telegram automaticamente: "Tu reunion de Zoom termino (47 min). Resumen: ..."
+- [x] **Notificacion post-reunion:** Enviar resumen a Telegram automaticamente: "Tu reunion de Zoom termino (47 min). Resumen: ..."
 - [ ] **Archivo en memoria:** Guardar la transcripcion y resumen en la memoria de Axi para consulta futura: "Que acordamos en la reunion del lunes?"
 
 **R.5 — Privacidad**
@@ -1429,27 +1429,27 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 
 **Tareas:**
 - [ ] Modulo `health_monitor.rs` central que orqueste todos los health checks
-- [ ] Monitor SSD/NVMe: leer SMART via `smartctl -j`, alertar desgaste, media_errors, temperatura
-- [ ] Monitor termico CPU/GPU: leer sysfs thermal_zone + hwmon + nvidia-smi, detectar throttling
-- [ ] Monitor RAM: EDAC ce_count, MCE en dmesg, `rasdaemon` si disponible
-- [ ] Monitor disco inteligente: **ignorar composefs `/` (50MB inmutable)**. Solo alertar en `/var`, `/home`
+- [x] Monitor SSD/NVMe: leer SMART via `smartctl -j`, alertar desgaste, media_errors, temperatura
+- [x] Monitor termico CPU/GPU: leer sysfs thermal_zone + hwmon + nvidia-smi, detectar throttling
+- [x] Monitor RAM: EDAC ce_count, MCE en dmesg, `rasdaemon` si disponible
+- [x] Monitor disco inteligente: **ignorar composefs `/` (50MB inmutable)**. Solo alertar en `/var`, `/home`
   - **BUG ACTUAL:** proactive.rs reporta "Disco al 100%" por leer composefs root, NO el disco real
-- [ ] Auto-limpieza: journalctl vacuum, flatpak unused, dnf cache, thumbnails
-- [ ] Monitor red: `ss -tnp` cada 30s, whitelist de procesos/puertos, alertar conexiones sospechosas
+- [x] Auto-limpieza: journalctl vacuum, flatpak unused, dnf cache, thumbnails
+- [x] Monitor red: `ss -tnp` cada 30s, whitelist de procesos/puertos, alertar conexiones sospechosas
 - [ ] USBGuard integration: bloquear dispositivos USB desconocidos, notificar al usuario
-- [ ] Security patches: `dnf-automatic` security-only, firmware via `fwupdmgr`, HSI score semanal
+- [x] Security patches: `dnf-automatic` security-only, firmware via `fwupdmgr`, HSI score semanal
 - [ ] Bateria inteligente: UPower D-Bus, charge thresholds (TLP o sysfs directo segun vendor)
   - [ ] Auto-detectar vendor laptop (ThinkPad, ASUS, Dell, Framework, etc.) y configurar thresholds
   - [ ] Smart charging: threshold bajo en horas pico, normal en horas valle
   - [ ] Alertar desgaste: health <80%, cycles >500, temperatura >45°C
-- [ ] NVIDIA GPU power management: RTD3 config, EnvyControl integration para modo hibrido/integrado
+- [x] NVIDIA GPU power management: RTD3 config, EnvyControl integration para modo hibrido/integrado
 - [ ] Eye health: night mode auto al atardecer (wlsunset o GNOME Night Light), recordatorio 20-20-20
-- [ ] Audio health: monitorear volumen via `wpctl`, alertar >80% por >30 min, limiter PipeWire opcional
+- [x] Audio health: monitorear volumen via `wpctl`, alertar >80% por >30 min, limiter PipeWire opcional
 - [ ] Ergonomia: tracking input libinput, microbreaks cada 25 min, breaks cada 60 min
 - [ ] Backup health: si restic/borg configurado, verificar integridad semanal, alertar si no hay backup
 - [ ] Privacy hygiene semanal: cache scan, HIBP API para emails, archivos sensibles expuestos
 - [ ] Dashboard: nueva seccion "Salud del Sistema" con indicadores verdes/amarillos/rojos por area
-- [ ] Telegram: reportes de salud diarios/semanales, alertas criticas inmediatas
+- [x] Telegram: reportes de salud diarios/semanales, alertas criticas inmediatas
 
 ### Fase T — Voice Pipeline Pro (escuchar como Alexa/Google)
 
@@ -1474,15 +1474,15 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
   - [ ] Incluir muestras de voz baja y susurro
   - [ ] Entrenar con rustpotter-cli, empaquetar en `/var/lib/lifeos/models/rustpotter/axi.rpw`
   - [ ] Agregar al Containerfile
-- [ ] **Auto-detectar microfono** al activar sensores: leer `pactl list sources`, elegir el mejor source activo
+- [x] **Auto-detectar microfono** al activar sensores: leer `pactl list sources`, elegir el mejor source activo
   - [ ] Preferir source con `RUNNING` > `IDLE` > `SUSPENDED`
   - [ ] Si hay Bluetooth conectado, preguntar cual usar
-- [ ] **VAD adaptativo (Adaptive Voice Activity Detection):**
+- [x] **VAD adaptativo (Adaptive Voice Activity Detection):**
   - [ ] Medir noise floor durante primeros 500ms de escucha
   - [ ] Threshold dinamico: `noise_floor_rms * 2.5` (en vez de fijo 450)
   - [ ] Hacer configurable via `LIFEOS_VAD_RMS_THRESHOLD` env var
   - [ ] Default: bajar de 450 a 300 para mejor sensibilidad
-- [ ] **AGC (Automatic Gain Control) para TODOS los backends:**
+- [x] **AGC (Automatic Gain Control) para TODOS los backends:**
   - [ ] Para pw-record: post-procesar con ffmpeg filter `dynaudnorm` o `volume=XdB`
   - [ ] O mejor: usar PipeWire filter-chain con `volume` node antes de capturar
   - [ ] Para parecord: usar `--volume=65536` (max) o pipear a ffmpeg
@@ -1491,7 +1491,7 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
   - [ ] Al primer uso de cada microfono: pedir al usuario que diga "axi" en voz normal
   - [ ] Medir RMS promedio y calibrar threshold automaticamente
   - [ ] Guardar calibracion en `sensory_pipeline_state.json` per-source
-- [ ] **Pre-speech timeout:** aumentar de 4.0 a 6.0 segundos
+- [x] **Pre-speech timeout:** aumentar de 4.0 a 6.0 segundos
 - [ ] **Feedback auditivo:**
   - [ ] Sonido suave cuando Axi detecta wake word (como Alexa)
   - [ ] LED visual en dashboard/widget cuando esta escuchando
