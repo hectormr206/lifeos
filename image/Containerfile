@@ -347,6 +347,7 @@ RUN dnf -y install \
     gcc gcc-c++ make cmake \
     openssl-devel \
     dbus-devel glib2-devel gtk4-devel libadwaita-devel \
+    wayland-devel libxkbcommon-devel \
     rust cargo rustfmt clippy rust-analyzer \
     wlsunset \
     linux-firmware \

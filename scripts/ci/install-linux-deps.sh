@@ -47,11 +47,21 @@ install_pkgs() {
 
 case "$profile" in
     daemon)
-        # Always install — the prereqs check doesn't cover wayland/xkbcommon yet
+        # Check if ALL prerequisites are present (including wayland/xkbcommon for cosmic feature)
+        all_present=true
+        if ! pkg-config --exists xkbcommon 2>/dev/null; then all_present=false; fi
+        if ! pkg-config --exists wayland-client 2>/dev/null; then all_present=false; fi
+        if ! bash scripts/check-daemon-prereqs.sh >/dev/null 2>&1; then all_present=false; fi
+
+        if $all_present; then
+            echo "daemon prerequisites already installed (including wayland/xkbcommon)"
+            exit 0
+        fi
+
         install_pkgs \
             "pkg-config libdbus-1-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev libwayland-dev libxkbcommon-dev" \
             "pkgconf-pkg-config dbus-devel glib2-devel gtk4-devel libadwaita-devel wayland-devel libxkbcommon-devel"
-        bash scripts/check-daemon-prereqs.sh || true
+        bash scripts/check-daemon-prereqs.sh
         ;;
     runtime)
         missing=0

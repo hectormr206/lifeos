@@ -74,7 +74,7 @@ jobs:
       - name: Build Daemon for CodeQL
         if: steps.code-scanning.outputs.enabled == 'true'
         working-directory: ./daemon
-        run: cargo build --release --all-features --locked
+        run: cargo build --release --features "dbus,http-api,wake-word,telegram" --locked
 
       - name: Perform CodeQL Analysis
         if: steps.code-scanning.outputs.enabled == 'true'

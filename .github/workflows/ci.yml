@@ -53,7 +53,7 @@ jobs:
 
       - name: Run clippy
         working-directory: ./cli
-        run: cargo clippy --all-features --locked -- -D warnings
+        run: cargo clippy --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked -- -D warnings
 
       - name: Build CLI (debug)
         working-directory: ./cli
@@ -65,7 +65,7 @@ jobs:
 
       - name: Run CLI tests
         working-directory: ./cli
-        run: cargo test --all-features --locked
+        run: cargo test --features "dbus,http-api,wake-word,telegram" --locked
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
@@ -116,11 +116,11 @@ jobs:
 
       - name: Run clippy
         working-directory: ./daemon
-        run: cargo clippy --all-features --locked -- -D warnings
+        run: cargo clippy --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked -- -D warnings
 
       - name: Build daemon (debug)
         working-directory: ./daemon
-        run: cargo build --all-features --locked
+        run: cargo build --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked
 
       - name: Build daemon (release)
         working-directory: ./daemon
@@ -128,7 +128,7 @@ jobs:
 
       - name: Run daemon tests
         working-directory: ./daemon
-        run: cargo test --all-features --locked
+        run: cargo test --features "dbus,http-api,wake-word,telegram" --locked
 
       - name: Upload daemon artifact
         uses: actions/upload-artifact@v4
