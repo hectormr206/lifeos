@@ -540,13 +540,13 @@ impl Supervisor {
         let mut last_output = String::new();
 
         for (i, step) in plan.steps.iter().enumerate() {
-            info!(
-                "Task {} step {}/{}: {}",
-                task_id,
-                i + 1,
-                plan.steps.len(),
-                step.description
-            );
+            // Stream progress to Telegram
+            let progress_msg = format!("Paso {}/{}: {}", i + 1, plan.steps.len(), step.description);
+            info!("Task {} {}", task_id, progress_msg);
+            let _ = self.notify_tx.send(SupervisorNotification::TaskStarted {
+                task_id: format!("{}-step-{}", task_id, i + 1),
+                objective: progress_msg,
+            });
 
             match self.execute_step(step).await {
                 Ok(output) => {

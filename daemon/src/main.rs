@@ -24,6 +24,8 @@ mod api;
 #[allow(dead_code)]
 mod autonomous_agent;
 #[allow(dead_code)]
+mod battery_manager;
+#[allow(dead_code)]
 mod browser_automation;
 #[allow(dead_code)]
 mod calendar;
@@ -45,6 +47,8 @@ mod game_assistant;
 mod game_guard;
 #[allow(dead_code)]
 mod gaming_agent;
+#[allow(dead_code)]
+mod git_workflow;
 mod health;
 #[allow(dead_code)]
 mod health_tracking;

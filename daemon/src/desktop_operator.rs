@@ -42,6 +42,25 @@ pub enum DesktopAction {
     Screenshot,
     /// List installed Flatpak applications
     FlatpakList,
+    /// Override Flatpak app permissions
+    FlatpakOverride { app_id: String, permission: String },
+    /// List/start/stop/restart a systemd user service
+    SystemdService {
+        operation: String, // "list", "start", "stop", "restart", "status"
+        unit: Option<String>,
+    },
+    /// Compress a file or directory
+    Compress {
+        path: String,
+        format: String, // "zip", "tar.gz", "7z"
+    },
+    /// Extract an archive
+    Extract {
+        path: String,
+        destination: Option<String>,
+    },
+    /// OCR: read text from a screenshot or image file
+    OcrRead { image_path: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,6 +246,107 @@ impl DesktopOperator {
                             .context("Screenshot failed (grim and gnome-screenshot)")?;
                         Ok(path)
                     }
+                }
+            }
+
+            DesktopAction::FlatpakOverride { app_id, permission } => {
+                info!(
+                    "[desktop] Overriding flatpak permission: {} for {}",
+                    permission, app_id
+                );
+                let output = Command::new("flatpak")
+                    .args(["override", "--user", permission, app_id])
+                    .output()
+                    .await
+                    .context("flatpak override failed")?;
+                Ok(format_output(&output))
+            }
+
+            DesktopAction::SystemdService { operation, unit } => {
+                let args: Vec<&str> = match operation.as_str() {
+                    "list" => vec!["--user", "list-units", "--type=service", "--state=running"],
+                    "start" | "stop" | "restart" | "status" => {
+                        let u = unit.as_deref().ok_or_else(|| {
+                            anyhow::anyhow!("unit name required for {}", operation)
+                        })?;
+                        vec!["--user", operation.as_str(), u]
+                    }
+                    _ => anyhow::bail!("Unknown systemd operation: {}", operation),
+                };
+                let output = Command::new("systemctl")
+                    .args(&args)
+                    .output()
+                    .await
+                    .context("systemctl failed")?;
+                Ok(format_output(&output))
+            }
+
+            DesktopAction::Compress { path, format } => {
+                info!("[desktop] Compressing: {} as {}", path, format);
+                let output_file = format!("{}.{}", path, format);
+                let output = match format.as_str() {
+                    "zip" => Command::new("zip")
+                        .args(["-r", &output_file, path])
+                        .output()
+                        .await
+                        .context("zip failed")?,
+                    "tar.gz" => Command::new("tar")
+                        .args(["czf", &output_file, path])
+                        .output()
+                        .await
+                        .context("tar failed")?,
+                    "7z" => Command::new("7z")
+                        .args(["a", &output_file, path])
+                        .output()
+                        .await
+                        .context("7z failed")?,
+                    _ => anyhow::bail!("Unknown format: {}", format),
+                };
+                if output.status.success() {
+                    Ok(format!("Compressed to: {}", output_file))
+                } else {
+                    Ok(format!("Compression failed: {}", format_output(&output)))
+                }
+            }
+
+            DesktopAction::Extract { path, destination } => {
+                info!("[desktop] Extracting: {}", path);
+                let dest = destination.as_deref().unwrap_or(".");
+                let output = if path.ends_with(".zip") {
+                    Command::new("unzip")
+                        .args(["-o", path, "-d", dest])
+                        .output()
+                        .await
+                        .context("unzip failed")?
+                } else if path.ends_with(".tar.gz") || path.ends_with(".tgz") {
+                    Command::new("tar")
+                        .args(["xzf", path, "-C", dest])
+                        .output()
+                        .await
+                        .context("tar failed")?
+                } else if path.ends_with(".7z") {
+                    Command::new("7z")
+                        .args(["x", path, &format!("-o{}", dest)])
+                        .output()
+                        .await
+                        .context("7z failed")?
+                } else {
+                    anyhow::bail!("Unknown archive format: {}", path)
+                };
+                Ok(format_output(&output))
+            }
+
+            DesktopAction::OcrRead { image_path } => {
+                info!("[desktop] OCR reading: {}", image_path);
+                let output = Command::new("tesseract")
+                    .args([image_path.as_str(), "stdout", "-l", "eng+spa"])
+                    .output()
+                    .await
+                    .context("tesseract OCR failed")?;
+                if output.status.success() {
+                    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+                } else {
+                    anyhow::bail!("OCR failed: {}", String::from_utf8_lossy(&output.stderr))
                 }
             }
         }

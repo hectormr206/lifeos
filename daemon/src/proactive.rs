@@ -85,6 +85,10 @@ pub async fn check_all(
         alerts.push(alert);
     }
 
+    if let Some(alert) = check_audio_volume().await {
+        alerts.push(alert);
+    }
+
     if let Some(tq) = task_queue {
         if let Some(alert) = check_stuck_tasks(tq).await {
             alerts.push(alert);
@@ -633,4 +637,94 @@ async fn check_pending_security_updates() -> Option<ProactiveAlert> {
     } else {
         None
     }
+}
+
+// ---------------------------------------------------------------------------
+// Audio volume health (hearing protection per WHO guidelines)
+// ---------------------------------------------------------------------------
+
+async fn check_audio_volume() -> Option<ProactiveAlert> {
+    let output = tokio::process::Command::new("wpctl")
+        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
+        .output()
+        .await
+        .ok()?;
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let volume: f64 = text
+        .split_whitespace()
+        .last()?
+        .trim_end_matches(']')
+        .parse()
+        .ok()?;
+
+    let volume_pct = (volume * 100.0) as u32;
+
+    if volume_pct > 85 {
+        Some(ProactiveAlert {
+            category: AlertCategory::SystemHealth,
+            message: format!(
+                "Volumen al {}%. La OMS recomienda no superar 85% para proteger tu audicion.",
+                volume_pct
+            ),
+            severity: AlertSeverity::Warning,
+        })
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-cleanup (disk space recovery)
+// ---------------------------------------------------------------------------
+
+/// Run automatic cleanup of caches, logs, and unused packages.
+pub async fn run_auto_cleanup() -> Vec<String> {
+    let mut actions = Vec::new();
+
+    if let Ok(output) = tokio::process::Command::new("journalctl")
+        .args(["--vacuum-time=7d"])
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stderr);
+            if text.contains("freed") {
+                actions.push(format!("Journal: {}", text.trim()));
+            }
+        }
+    }
+
+    if let Ok(output) = tokio::process::Command::new("flatpak")
+        .args(["uninstall", "--unused", "-y"])
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if !text.trim().is_empty() {
+                actions.push(format!("Flatpak unused: {}", text.trim()));
+            }
+        }
+    }
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+    let thumb_dir = format!("{}/.cache/thumbnails", home);
+    let _ = tokio::process::Command::new("rm")
+        .args(["-rf", &thumb_dir])
+        .output()
+        .await;
+    actions.push("Thumbnails cache cleared".into());
+
+    for dir in &["audio", "camera", "browser_screenshots", "game_frames"] {
+        let path = format!("/var/lib/lifeos/{}", dir);
+        let _ = tokio::process::Command::new("find")
+            .args([&path, "-type", "f", "-mtime", "+7", "-delete"])
+            .output()
+            .await;
+    }
+    actions.push("Old captures cleaned (>7 days)".into());
+
+    info!("[cleanup] Auto-cleanup: {} actions", actions.len());
+    actions
 }

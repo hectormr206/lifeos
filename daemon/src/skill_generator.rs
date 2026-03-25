@@ -169,11 +169,66 @@ impl SkillGenerator {
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         if output.status.success() {
+            // Update use count and success rate
+            self.update_skill_stats(&skill_dir.join("manifest.json"), true)
+                .await;
             Ok(stdout.to_string())
         } else {
+            self.update_skill_stats(&skill_dir.join("manifest.json"), false)
+                .await;
             anyhow::bail!("Skill failed: {}{}", stdout, stderr)
         }
     }
+
+    /// Update skill usage statistics after execution.
+    async fn update_skill_stats(&self, manifest_path: &std::path::Path, success: bool) {
+        if let Ok(content) = fs::read_to_string(manifest_path).await {
+            if let Ok(mut manifest) = serde_json::from_str::<SkillManifest>(&content) {
+                manifest.use_count += 1;
+                manifest.last_used = Some(chrono::Utc::now().to_rfc3339());
+                // Running average of success rate
+                let total = manifest.use_count as f64;
+                let prev_successes = manifest.success_rate * (total - 1.0);
+                manifest.success_rate = (prev_successes + if success { 1.0 } else { 0.0 }) / total;
+
+                if let Ok(json) = serde_json::to_string_pretty(&manifest) {
+                    let _ = fs::write(manifest_path, json).await;
+                }
+            }
+        }
+    }
+
+    /// Get diagnostic metrics: total skills, avg success rate, most/least used.
+    pub async fn diagnostics(&self) -> Result<SkillDiagnostics> {
+        let skills = self.list_skills().await?;
+        let total = skills.len();
+        let avg_success = if total > 0 {
+            skills.iter().map(|s| s.success_rate).sum::<f64>() / total as f64
+        } else {
+            0.0
+        };
+        let most_used = skills.iter().max_by_key(|s| s.use_count).cloned();
+        let least_reliable = skills
+            .iter()
+            .filter(|s| s.use_count >= 3 && s.success_rate < 0.5)
+            .cloned()
+            .collect();
+
+        Ok(SkillDiagnostics {
+            total_skills: total,
+            avg_success_rate: avg_success,
+            most_used,
+            unreliable_skills: least_reliable,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillDiagnostics {
+    pub total_skills: usize,
+    pub avg_success_rate: f64,
+    pub most_used: Option<SkillManifest>,
+    pub unreliable_skills: Vec<SkillManifest>,
 }
 
 /// Convert a task objective to a filesystem-safe slug.

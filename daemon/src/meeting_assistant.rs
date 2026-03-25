@@ -187,6 +187,68 @@ impl MeetingAssistant {
 
         Ok(transcript)
     }
+
+    /// Generate a meeting summary from a transcript using the LLM router.
+    pub async fn summarize_meeting(
+        &self,
+        transcript: &str,
+        router: &std::sync::Arc<tokio::sync::RwLock<crate::llm_router::LlmRouter>>,
+    ) -> Result<String> {
+        let prompt = format!(
+            "Eres un asistente que resume reuniones. Genera un resumen estructurado de esta transcripcion:\n\n\
+            {}\n\n\
+            Formato del resumen:\n\
+            ## Resumen Ejecutivo\n\
+            (3-5 bullet points)\n\n\
+            ## Temas Discutidos\n\
+            (lista)\n\n\
+            ## Decisiones Tomadas\n\
+            (lista)\n\n\
+            ## Action Items\n\
+            (quien, que, cuando)\n\n\
+            ## Preguntas Sin Resolver\n\
+            (lista, si las hay)",
+            &transcript[..transcript.len().min(6000)]
+        );
+
+        let request = crate::llm_router::RouterRequest {
+            messages: vec![crate::llm_router::ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(prompt),
+            }],
+            complexity: Some(crate::llm_router::TaskComplexity::Complex),
+            sensitivity: None,
+            preferred_provider: None,
+            max_tokens: Some(2048),
+        };
+
+        let router_guard = router.read().await;
+        let response = router_guard
+            .chat(&request)
+            .await
+            .context("LLM summary generation failed")?;
+
+        Ok(response.text)
+    }
+
+    /// Compress a WAV recording to OPUS for storage efficiency.
+    pub async fn compress_to_opus(wav_path: &str) -> Result<String> {
+        let opus_path = wav_path.replace(".wav", ".opus");
+        let output = Command::new("ffmpeg")
+            .args(["-i", wav_path, "-c:a", "libopus", "-b:a", "48k", &opus_path])
+            .output()
+            .await
+            .context("ffmpeg opus compression failed")?;
+
+        if output.status.success() {
+            // Remove original WAV to save space
+            let _ = tokio::fs::remove_file(wav_path).await;
+            Ok(opus_path)
+        } else {
+            // Keep WAV if compression fails
+            Ok(wav_path.to_string())
+        }
+    }
 }
 
 /// Detect if a conferencing app has an active audio stream via PipeWire/PulseAudio.
