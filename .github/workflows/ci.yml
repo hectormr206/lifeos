@@ -124,7 +124,7 @@ jobs:
 
       - name: Build daemon (release)
         working-directory: ./daemon
-        run: cargo build --release --all-features --locked
+        run: cargo build --release --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked
 
       - name: Run daemon tests
         working-directory: ./daemon
