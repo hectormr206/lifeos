@@ -48,13 +48,7 @@ pub struct IntentEntity {
 // Verb → Action mappings (lowercase)
 // ---------------------------------------------------------------------------
 
-const SCHEDULE_VERBS: &[&str] = &[
-    "agenda",
-    "programa",
-    "schedule",
-    "calendariza",
-    "planifica",
-];
+const SCHEDULE_VERBS: &[&str] = &["agenda", "programa", "schedule", "calendariza", "planifica"];
 const SEND_VERBS: &[&str] = &["envia", "envía", "manda", "send", "mail"];
 const OPEN_VERBS: &[&str] = &["abre", "open", "lanza", "launch", "ejecuta", "run"];
 const CLOSE_VERBS: &[&str] = &["cierra", "close", "termina", "kill", "stop", "para"];
@@ -82,7 +76,9 @@ fn match_email(text: &str) -> Vec<IntentEntity> {
     let mut entities = Vec::new();
     // Simple email regex
     for word in text.split_whitespace() {
-        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '_' && c != '-');
+        let clean = word.trim_matches(|c: char| {
+            !c.is_alphanumeric() && c != '@' && c != '.' && c != '_' && c != '-'
+        });
         if clean.contains('@') && clean.contains('.') && clean.len() > 5 {
             entities.push(IntentEntity {
                 name: clean.to_string(),
@@ -98,7 +94,10 @@ fn match_urls(text: &str) -> Vec<IntentEntity> {
     let mut entities = Vec::new();
     for word in text.split_whitespace() {
         let lower = word.to_lowercase();
-        if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("www.") {
+        if lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("www.")
+        {
             entities.push(IntentEntity {
                 name: word.to_string(),
                 entity_type: "url".into(),
@@ -227,9 +226,11 @@ fn match_dates(text: &str) -> Vec<IntentEntity> {
             vec![]
         };
         if parts.len() == 3 {
-            if let (Ok(a), Ok(b), Ok(c)) =
-                (parts[0].parse::<u32>(), parts[1].parse::<u32>(), parts[2].parse::<u32>())
-            {
+            if let (Ok(a), Ok(b), Ok(c)) = (
+                parts[0].parse::<u32>(),
+                parts[1].parse::<u32>(),
+                parts[2].parse::<u32>(),
+            ) {
                 // Accept dd/mm/yyyy or yyyy-mm-dd
                 if (a <= 31 && b <= 12 && c >= 2000) || (a >= 2000 && b <= 12 && c <= 31) {
                     entities.push(IntentEntity {
@@ -409,7 +410,15 @@ pub fn parse(text: &str) -> Intent {
 /// Recognizes Spanish conjunctions ("y", "luego", "despues", "después")
 /// and English ones ("and", "then", "after that") as sentence boundaries.
 pub fn resolve_multi_step(intents_text: &str) -> Vec<Intent> {
-    let separators = [" y ", " luego ", " despues ", " después ", " and ", " then ", " after that "];
+    let separators = [
+        " y ",
+        " luego ",
+        " despues ",
+        " después ",
+        " and ",
+        " then ",
+        " after that ",
+    ];
 
     let mut parts: Vec<String> = vec![intents_text.to_string()];
 
@@ -463,14 +472,20 @@ mod tests {
     fn test_parse_open_app() {
         let intent = parse("abre firefox");
         assert_eq!(intent.action, IntentAction::Open);
-        assert!(intent.entities.iter().any(|e| e.entity_type == "app" && e.value == "firefox"));
+        assert!(intent
+            .entities
+            .iter()
+            .any(|e| e.entity_type == "app" && e.value == "firefox"));
     }
 
     #[test]
     fn test_parse_install() {
         let intent = parse("install discord");
         assert_eq!(intent.action, IntentAction::Install);
-        assert!(intent.entities.iter().any(|e| e.entity_type == "app" && e.value == "discord"));
+        assert!(intent
+            .entities
+            .iter()
+            .any(|e| e.entity_type == "app" && e.value == "discord"));
     }
 
     #[test]

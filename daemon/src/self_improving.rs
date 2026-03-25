@@ -231,7 +231,10 @@ impl PromptEvolution {
             .collect();
 
         if suggestions.is_empty() {
-            info!("PromptEvolution: all action types above {:.0}% success threshold", SUCCESS_THRESHOLD * 100.0);
+            info!(
+                "PromptEvolution: all action types above {:.0}% success threshold",
+                SUCCESS_THRESHOLD * 100.0
+            );
         } else {
             info!(
                 "PromptEvolution: {} action type(s) below threshold, suggestions generated",
@@ -335,7 +338,10 @@ impl WorkflowLearner {
                 .then_with(|| b.sequence.len().cmp(&a.sequence.len()))
         });
 
-        debug!("WorkflowLearner: found {} repeating patterns", patterns.len());
+        debug!(
+            "WorkflowLearner: found {} repeating patterns",
+            patterns.len()
+        );
         patterns
     }
 
@@ -504,7 +510,10 @@ impl NightlyOptimizer {
                     .unwrap_or_default();
                 if age > cutoff {
                     if let Err(e) = fs::remove_file(entry.path()) {
-                        warn!("NightlyOptimizer: failed to remove {}: {e}", entry.path().display());
+                        warn!(
+                            "NightlyOptimizer: failed to remove {}: {e}",
+                            entry.path().display()
+                        );
                     } else {
                         removed += 1;
                     }
@@ -607,10 +616,7 @@ impl SelfImprovingDaemon {
 
     /// Returns a JSON-serializable status snapshot for the dashboard.
     pub fn get_status(&self) -> SelfImprovingStatus {
-        let prompt_metrics = self
-            .prompt_evolution
-            .get_metrics()
-            .unwrap_or_default();
+        let prompt_metrics = self.prompt_evolution.get_metrics().unwrap_or_default();
 
         let detected_patterns = self.workflow_learner.detect_patterns();
 
@@ -659,7 +665,8 @@ mod tests {
 
     impl TmpDir {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("lifeos-test-{}-{}", name, std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("lifeos-test-{}-{}", name, std::process::id()));
             fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }
@@ -755,7 +762,10 @@ mod tests {
         let found = patterns.iter().any(|p| {
             p.sequence == vec!["open-editor", "save-file", "run-tests"] && p.occurrences >= 3
         });
-        assert!(found, "Expected repeating pattern not detected: {patterns:?}");
+        assert!(
+            found,
+            "Expected repeating pattern not detected: {patterns:?}"
+        );
     }
 
     #[test]

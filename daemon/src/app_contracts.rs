@@ -180,9 +180,7 @@ impl AppContractRegistry {
     pub fn check_permission(&self, app_name: &str, action: &str) -> PermissionResult {
         let contract = match self.contracts.iter().find(|c| c.name == app_name) {
             Some(c) => c,
-            None => {
-                return PermissionResult::Denied(format!("app '{}' not registered", app_name))
-            }
+            None => return PermissionResult::Denied(format!("app '{}' not registered", app_name)),
         };
 
         match contract.autonomy_level {
@@ -220,7 +218,10 @@ impl AppContractRegistry {
                 path
             );
         } else {
-            debug!("app_contracts: no registry file at {:?}, keeping current state", path);
+            debug!(
+                "app_contracts: no registry file at {:?}, keeping current state",
+                path
+            );
         }
         Ok(())
     }

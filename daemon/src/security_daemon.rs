@@ -115,7 +115,10 @@ impl SecurityDaemon {
 
             // Check if this is an unknown process
             if !self.baselines.contains_key(&proc_name) {
-                debug!("security_daemon: unknown process '{}' (pid {})", proc_name, pid);
+                debug!(
+                    "security_daemon: unknown process '{}' (pid {})",
+                    proc_name, pid
+                );
                 // Only alert for non-kernel threads (those with comm length > 0)
                 if !proc_name.is_empty() {
                     alerts.push(SecurityAlert {
@@ -336,17 +339,17 @@ impl SecurityDaemon {
 
             let cpu = self.read_proc_cpu(pid).unwrap_or(0.0);
 
-            let baseline = self
-                .baselines
-                .entry(proc_name.clone())
-                .or_insert_with(|| ProcessBaseline {
-                    pid,
-                    name: proc_name,
-                    avg_cpu: 0.0,
-                    avg_mem: 0.0,
-                    avg_net_bytes: 0,
-                    sample_count: 0,
-                });
+            let baseline =
+                self.baselines
+                    .entry(proc_name.clone())
+                    .or_insert_with(|| ProcessBaseline {
+                        pid,
+                        name: proc_name,
+                        avg_cpu: 0.0,
+                        avg_mem: 0.0,
+                        avg_net_bytes: 0,
+                        sample_count: 0,
+                    });
 
             baseline.sample_count += 1;
             let n = baseline.sample_count as f64;
@@ -466,8 +469,7 @@ impl SecurityDaemon {
             home_pct.map_or("??".to_string(), |p| p.to_string()),
         ));
 
-        let needs_cleanup = var_pct.is_some_and(|p| p > 90)
-            || home_pct.is_some_and(|p| p > 90);
+        let needs_cleanup = var_pct.is_some_and(|p| p > 90) || home_pct.is_some_and(|p| p > 90);
 
         if !needs_cleanup {
             report.push_str("No cleanup needed (usage <= 90%).");
@@ -504,10 +506,7 @@ impl SecurityDaemon {
         match flatpak_list {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                let unused: Vec<&str> = stdout
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .collect();
+                let unused: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
                 if unused.is_empty() {
                     report.push_str("No unused Flatpak runtimes found.\n");
                 } else {
@@ -524,10 +523,8 @@ impl SecurityDaemon {
                         }
                         Ok(r) => {
                             let stderr = String::from_utf8_lossy(&r.stderr);
-                            report.push_str(&format!(
-                                "Flatpak removal partial: {}\n",
-                                stderr.trim()
-                            ));
+                            report
+                                .push_str(&format!("Flatpak removal partial: {}\n", stderr.trim()));
                         }
                         Err(e) => {
                             report.push_str(&format!("Flatpak removal failed: {}\n", e));
@@ -598,7 +595,8 @@ impl SecurityDaemon {
         // 2) If DNS failed, attempt to set fallback nameservers.
         if !dns_ok {
             report.push_str("Attempting fallback DNS (8.8.8.8, 1.1.1.1)...\n");
-            let fallback_content = "# LifeOS fallback DNS\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n";
+            let fallback_content =
+                "# LifeOS fallback DNS\nnameserver 8.8.8.8\nnameserver 1.1.1.1\n";
             match fs::write("/etc/resolv.conf", fallback_content) {
                 Ok(_) => {
                     report.push_str("Wrote fallback DNS to /etc/resolv.conf.\n");
@@ -723,7 +721,10 @@ impl SecurityDaemon {
                 }
             }
             Ok(_) => {
-                debug!("predictive_maintenance: smartctl returned no data for {}", nvme_device);
+                debug!(
+                    "predictive_maintenance: smartctl returned no data for {}",
+                    nvme_device
+                );
             }
             Err(e) => {
                 debug!("predictive_maintenance: smartctl not available: {}", e);
@@ -756,10 +757,7 @@ impl SecurityDaemon {
 
     /// Find the first NVMe block device by scanning /dev/nvme*.
     fn find_first_nvme() -> Option<String> {
-        let output = Command::new("ls")
-            .args(["/dev/"])
-            .output()
-            .ok()?;
+        let output = Command::new("ls").args(["/dev/"]).output().ok()?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         for entry in stdout.lines() {
             let entry = entry.trim();
@@ -855,7 +853,11 @@ impl SecurityDaemon {
     fn is_process_young(pid: u32, max_age_secs: u64) -> bool {
         // Read system uptime.
         let uptime: f64 = match fs::read_to_string("/proc/uptime") {
-            Ok(s) => s.split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0.0),
+            Ok(s) => s
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0),
             Err(_) => return false,
         };
 
@@ -896,7 +898,10 @@ impl SecurityDaemon {
             // Format example: users:(("firefox",pid=1234,fd=56))
             if let Some(pid_start) = line.find("pid=") {
                 let after_pid = &line[pid_start + 4..];
-                let pid_str: String = after_pid.chars().take_while(|c| c.is_ascii_digit()).collect();
+                let pid_str: String = after_pid
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
                 if let Ok(pid) = pid_str.parse::<u32>() {
                     pids.insert(pid);
                 }

@@ -177,7 +177,11 @@ impl LlmRouter {
             candidates.len(),
             complexity,
             sensitivity,
-            candidates.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+            candidates
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
 
         let mut last_error = None;
@@ -369,9 +373,7 @@ impl LlmRouter {
                     "[llm_router] Model '{}' not found on {}. Attempting auto-discovery...",
                     provider.model, provider.name
                 );
-                if let Some(new_model) =
-                    self.discover_replacement_model(provider, api_key).await
-                {
+                if let Some(new_model) = self.discover_replacement_model(provider, api_key).await {
                     warn!(
                         "[llm_router] Found replacement model: '{}' → '{}'. \
                          Update your config or dashboard. Using fallback for this request.",
@@ -914,9 +916,7 @@ impl LlmRouter {
                 .filter(|kw| id_lower.contains(*kw))
                 .count();
 
-            if score > 0
-                && (best_match.is_none() || score > best_match.as_ref()?.1)
-            {
+            if score > 0 && (best_match.is_none() || score > best_match.as_ref()?.1) {
                 best_match = Some((id.to_string(), score));
             }
         }

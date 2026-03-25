@@ -68,11 +68,11 @@ mod health_tracking;
 mod home_assistant;
 #[allow(dead_code)]
 mod intent_parser;
-#[allow(dead_code)]
-mod knowledge_graph;
 #[cfg(feature = "ui-overlay")]
 #[allow(dead_code)]
 mod keyboard_shortcut;
+#[allow(dead_code)]
+mod knowledge_graph;
 mod lab;
 mod llm_router;
 #[allow(dead_code)]
@@ -101,11 +101,11 @@ mod prompt_tuner;
 #[allow(dead_code)]
 mod scheduled_tasks;
 mod screen_capture;
-mod sensory_pipeline;
 #[allow(dead_code)]
 mod security_daemon;
 #[allow(dead_code)]
 mod self_improving;
+mod sensory_pipeline;
 #[allow(dead_code)]
 mod signal_bridge;
 #[allow(dead_code)]

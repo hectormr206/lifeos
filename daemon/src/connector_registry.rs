@@ -63,7 +63,10 @@ impl ConnectorRegistry {
                     );
                 }
                 Err(e) => {
-                    warn!("connector_registry: failed to load {:?}: {}", config_path, e);
+                    warn!(
+                        "connector_registry: failed to load {:?}: {}",
+                        config_path, e
+                    );
                     registry.register_defaults();
                 }
             }
@@ -88,7 +91,10 @@ impl ConnectorRegistry {
         self.connectors.retain(|c| c.name != connector.name);
         self.connectors.push(connector);
         if let Err(e) = self.save() {
-            warn!("connector_registry: failed to persist after register: {}", e);
+            warn!(
+                "connector_registry: failed to persist after register: {}",
+                e
+            );
         }
     }
 
@@ -117,10 +123,7 @@ impl ConnectorRegistry {
             .iter_mut()
             .find(|c| c.name == name)
             .ok_or_else(|| anyhow::anyhow!("connector '{}' not found", name))?;
-        info!(
-            "connector_registry: setting '{}' enabled={}",
-            name, enabled
-        );
+        info!("connector_registry: setting '{}' enabled={}", name, enabled);
         connector.enabled = enabled;
         self.save()
     }
@@ -159,7 +162,10 @@ impl ConnectorRegistry {
         ];
 
         self.connectors = defaults;
-        debug!("connector_registry: registered {} default connectors", self.connectors.len());
+        debug!(
+            "connector_registry: registered {} default connectors",
+            self.connectors.len()
+        );
     }
 
     fn save(&self) -> Result<()> {

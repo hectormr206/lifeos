@@ -154,9 +154,11 @@ impl KnowledgeGraph {
         let name_lower = name.to_lowercase();
 
         // Deduplicate: if an entity with same name+type exists, bump last_seen
-        if let Some(existing) = self.entities.iter_mut().find(|e| {
-            e.name.to_lowercase() == name_lower && e.entity_type == entity_type
-        }) {
+        if let Some(existing) = self
+            .entities
+            .iter_mut()
+            .find(|e| e.name.to_lowercase() == name_lower && e.entity_type == entity_type)
+        {
             existing.last_seen = Utc::now();
             existing.relevance_score = (existing.relevance_score + 0.05).min(1.0);
             let id = existing.id.clone();
@@ -179,13 +181,7 @@ impl KnowledgeGraph {
     }
 
     /// Add a relation between two entities.
-    pub fn add_relation(
-        &mut self,
-        from_id: &str,
-        to_id: &str,
-        relation_type: &str,
-        context: &str,
-    ) {
+    pub fn add_relation(&mut self, from_id: &str, to_id: &str, relation_type: &str, context: &str) {
         let relation = Relation {
             from_id: from_id.to_string(),
             to_id: to_id.to_string(),
@@ -259,8 +255,7 @@ impl KnowledgeGraph {
 
         let mut results: Vec<(Relation, Entity)> = Vec::new();
         for rel in &self.relations {
-            let matches_entity =
-                ids.iter().any(|id| *id == rel.from_id || *id == rel.to_id);
+            let matches_entity = ids.iter().any(|id| *id == rel.from_id || *id == rel.to_id);
             if !matches_entity {
                 continue;
             }
@@ -299,9 +294,7 @@ impl KnowledgeGraph {
                 map.entry(rel.from_id.clone())
                     .or_default()
                     .push(rel.clone());
-                map.entry(rel.to_id.clone())
-                    .or_default()
-                    .push(rel.clone());
+                map.entry(rel.to_id.clone()).or_default().push(rel.clone());
             }
         }
 
@@ -667,8 +660,7 @@ mod tests {
         let deadline1 = g.add_entity("2026-04-01", EntityType::Date);
         g.add_relation(&commit, &deadline1, "deadline_for", "original deadline");
 
-        let conflict =
-            ConflictDetector::check_conflict(&g, "deadline_for:2026-05-15", &commit);
+        let conflict = ConflictDetector::check_conflict(&g, "deadline_for:2026-05-15", &commit);
         assert!(conflict.is_some());
         assert!(conflict.unwrap().contains("Conflict"));
     }

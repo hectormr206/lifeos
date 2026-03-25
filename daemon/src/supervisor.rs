@@ -497,11 +497,8 @@ impl Supervisor {
 
         // Timeout: 5 minutes max per task (prevents stuck tasks)
         let task_timeout = std::time::Duration::from_secs(300);
-        let task_result = tokio::time::timeout(
-            task_timeout,
-            self.execute_task(&task.id, &task.objective),
-        )
-        .await;
+        let task_result =
+            tokio::time::timeout(task_timeout, self.execute_task(&task.id, &task.objective)).await;
 
         let task_result = match task_result {
             Ok(inner) => inner,
@@ -526,8 +523,14 @@ impl Supervisor {
                     0.0
                 };
 
-                self.audit_log(&task.id, &task.objective, "completed", &summary, task_confidence)
-                    .await;
+                self.audit_log(
+                    &task.id,
+                    &task.objective,
+                    "completed",
+                    &summary,
+                    task_confidence,
+                )
+                .await;
 
                 // Generate a reusable skill from this successful task
                 if steps_ok >= 2 {
@@ -885,10 +888,7 @@ impl Supervisor {
                         || desc_lower.contains(&format!("step {}", fi + 1))
                 });
                 if depends_on_failed {
-                    let skip_msg = format!(
-                        "Step {} skipped: depends on failed step output",
-                        i + 1
-                    );
+                    let skip_msg = format!("Step {} skipped: depends on failed step output", i + 1);
                     warn!("Task {} — {}", task_id, skip_msg);
                     let r = StepResult {
                         success: false,
@@ -896,8 +896,14 @@ impl Supervisor {
                         step_index: i,
                         confidence: 0.0,
                     };
-                    self.audit_log(task_id, &step.description, "skipped_cascade", &skip_msg, 0.0)
-                        .await;
+                    self.audit_log(
+                        task_id,
+                        &step.description,
+                        "skipped_cascade",
+                        &skip_msg,
+                        0.0,
+                    )
+                    .await;
                     results.push(r);
                     last_output = skip_msg;
                     continue;
@@ -930,7 +936,11 @@ impl Supervisor {
                     warn!("Task {} — Step {} failed: {}", task_id, i + 1, error_msg);
 
                     // Retry with variation: ask LLM for an alternative approach
-                    info!("Task {} — Attempting retry with variation for step {}", task_id, i + 1);
+                    info!(
+                        "Task {} — Attempting retry with variation for step {}",
+                        task_id,
+                        i + 1
+                    );
                     match self.generate_alternative_step(step, &error_msg).await {
                         Ok(alt_step) => {
                             info!(
@@ -1850,7 +1860,15 @@ Always end with a "respond" step summarizing what was done."#,
             return 0.3;
         }
         // Check for clear success signals
-        let success_keywords = ["success", "ok", "passed", "completed", "done", "created", "written"];
+        let success_keywords = [
+            "success",
+            "ok",
+            "passed",
+            "completed",
+            "done",
+            "created",
+            "written",
+        ];
         if success_keywords.iter().any(|kw| lower.contains(kw)) {
             return 1.0;
         }
@@ -1899,8 +1917,8 @@ Respond ONLY with a JSON object (no markdown):
             .context("Failed to get alternative step from LLM")?;
 
         let json_str = extract_json(&response.text);
-        let alt_step: PlanStep = serde_json::from_str(&json_str)
-            .context("Failed to parse alternative step JSON")?;
+        let alt_step: PlanStep =
+            serde_json::from_str(&json_str).context("Failed to parse alternative step JSON")?;
         Ok(alt_step)
     }
 
@@ -1992,9 +2010,7 @@ Respond ONLY with a JSON object (no markdown):
             }
             if status == "step_fail" || status == "failed" {
                 let action_hint = fields.get(3).unwrap_or(&"unknown");
-                *failed_types
-                    .entry(action_hint.to_string())
-                    .or_insert(0) += 1;
+                *failed_types.entry(action_hint.to_string()).or_insert(0) += 1;
             }
             // Parse confidence from last field: "confidence=0.85"
             if let Some(conf_field) = fields.last() {
