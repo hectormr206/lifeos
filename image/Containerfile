@@ -41,6 +41,7 @@ RUN dnf -y install \
     graphene-devel \
     cairo-devel \
     wayland-devel \
+    libxkbcommon-devel \
     && dnf clean all
 
 # Prebuild QA tooling once so the shipped ISO can run `make ci`
