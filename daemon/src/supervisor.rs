@@ -117,6 +117,30 @@ pub enum StepAction {
     Respond {
         message: String,
     },
+    /// Open a URL in the browser and take a screenshot for visual verification.
+    BrowserScreenshot {
+        url: String,
+    },
+    /// Install a Flatpak application.
+    FlatpakInstall {
+        app_id: String,
+    },
+    /// Open an application by name.
+    OpenApp {
+        name: String,
+    },
+    /// Open a file with its default application.
+    OpenFile {
+        path: String,
+    },
+    /// Type text into the focused window via ydotool.
+    TypeText {
+        text: String,
+    },
+    /// Send a keyboard shortcut (e.g., "ctrl+s").
+    SendKeys {
+        combo: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -387,6 +411,23 @@ impl Supervisor {
                 self.audit_log(&task.id, &task.objective, "completed", &summary)
                     .await;
 
+                // Generate a reusable skill from this successful task
+                if steps_ok >= 2 {
+                    let skill_gen = crate::skill_generator::SkillGenerator::new(&self.work_dir);
+                    // Extract step descriptions and commands for skill generation
+                    let step_data: Vec<(String, String)> = summary
+                        .lines()
+                        .filter(|l| l.starts_with("[OK]"))
+                        .map(|l| (l.to_string(), l.to_string()))
+                        .collect();
+                    if let Err(e) = skill_gen
+                        .generate_from_task(&task.objective, &step_data, true)
+                        .await
+                    {
+                        debug!("Skill generation skipped: {}", e);
+                    }
+                }
+
                 // Save to memory: what was done, what worked
                 self.memory_writeback(
                     &task.objective,
@@ -460,6 +501,26 @@ impl Supervisor {
 
     /// Execute a single task: plan -> execute steps -> return result + step counts.
     async fn execute_task(&self, task_id: &str, objective: &str) -> Result<(String, usize, usize)> {
+        // Check if we have a reusable skill for this objective
+        let skill_gen = crate::skill_generator::SkillGenerator::new(&self.work_dir);
+        if let Ok(Some((skill, skill_dir))) = skill_gen.find_skill(objective).await {
+            info!(
+                "Task {} matched skill '{}' — executing directly",
+                task_id, skill.name
+            );
+            match skill_gen.execute_skill(&skill_dir).await {
+                Ok(output) => {
+                    return Ok((format!("[Skill '{}'] {}", skill.name, output), 1, 1));
+                }
+                Err(e) => {
+                    warn!(
+                        "Skill '{}' failed ({}), falling back to LLM planning",
+                        skill.name, e
+                    );
+                }
+            }
+        }
+
         // Select the best agent role for this task
         let role = AgentRole::suggest_for(objective);
         info!("Task {} assigned to role: {:?}", task_id, role);
@@ -1031,6 +1092,12 @@ Available action types:
 - read_file: Read a file from disk. Use absolute paths or paths relative to working directory.
 - write_file: Write content to a file. Provide "path" and "content".
 - respond: Send a text response back to the user. Use as the last step.
+- browser_screenshot: Open a URL in a headless browser and take a screenshot. Provide "url". Use to verify web apps.
+- flatpak_install: Install a Flatpak app. Provide "app_id" (e.g., "org.mozilla.firefox").
+- open_app: Open an application by name. Provide "name" (e.g., "firefox", "libreoffice-calc").
+- open_file: Open a file with its default application. Provide "path".
+- type_text: Type text into the currently focused window. Provide "text".
+- send_keys: Send a keyboard shortcut. Provide "combo" (e.g., "ctrl+s", "alt+F4").
 
 Keep plans short (2-6 steps). Prefer simple, safe commands.
 Never use sudo. Never delete files without confirmation.
@@ -1161,6 +1228,12 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::WriteFile { .. } => RiskLevel::Medium,
             StepAction::ReadFile { .. } | StepAction::AiQuery { .. } => RiskLevel::Low,
             StepAction::ScreenCapture | StepAction::Respond { .. } => RiskLevel::Low,
+            StepAction::BrowserScreenshot { .. } => RiskLevel::Low,
+            StepAction::FlatpakInstall { .. } => RiskLevel::Medium,
+            StepAction::OpenApp { .. } => RiskLevel::Low,
+            StepAction::OpenFile { .. } => RiskLevel::Low,
+            StepAction::TypeText { .. } => RiskLevel::Medium,
+            StepAction::SendKeys { .. } => RiskLevel::Medium,
         }
     }
 
@@ -1169,6 +1242,11 @@ Always end with a "respond" step summarizing what was done."#,
         let desc = match &step.action {
             StepAction::ShellCommand { command } => command.clone(),
             StepAction::WriteFile { path, .. } => format!("write_file: {}", path),
+            StepAction::FlatpakInstall { app_id } => format!("flatpak_install: {}", app_id),
+            StepAction::TypeText { text } => {
+                format!("type_text: {}...", &text[..text.len().min(40)])
+            }
+            StepAction::SendKeys { combo } => format!("send_keys: {}", combo),
             _ => step.description.clone(),
         };
 
@@ -1271,6 +1349,56 @@ Always end with a "respond" step summarizing what was done."#,
                 ))
             }
             StepAction::Respond { message } => Ok(message.clone()),
+
+            // Desktop operator actions
+            StepAction::BrowserScreenshot { url } => {
+                let browser =
+                    crate::browser_automation::BrowserAutomation::new(self.work_dir.join("target"));
+                browser.navigate_and_capture(url).await
+            }
+            StepAction::FlatpakInstall { app_id } => {
+                let result = crate::desktop_operator::DesktopOperator::execute(
+                    &crate::desktop_operator::DesktopAction::FlatpakInstall {
+                        app_id: app_id.clone(),
+                    },
+                )
+                .await;
+                if result.success {
+                    Ok(result.output)
+                } else {
+                    anyhow::bail!("{}", result.output)
+                }
+            }
+            StepAction::OpenApp { name } => {
+                let result = crate::desktop_operator::DesktopOperator::execute(
+                    &crate::desktop_operator::DesktopAction::OpenApp { name: name.clone() },
+                )
+                .await;
+                Ok(result.output)
+            }
+            StepAction::OpenFile { path } => {
+                let result = crate::desktop_operator::DesktopOperator::execute(
+                    &crate::desktop_operator::DesktopAction::OpenFile { path: path.clone() },
+                )
+                .await;
+                Ok(result.output)
+            }
+            StepAction::TypeText { text } => {
+                let result = crate::desktop_operator::DesktopOperator::execute(
+                    &crate::desktop_operator::DesktopAction::TypeText { text: text.clone() },
+                )
+                .await;
+                Ok(result.output)
+            }
+            StepAction::SendKeys { combo } => {
+                let result = crate::desktop_operator::DesktopOperator::execute(
+                    &crate::desktop_operator::DesktopAction::SendKeys {
+                        combo: combo.clone(),
+                    },
+                )
+                .await;
+                Ok(result.output)
+            }
         }
     }
 

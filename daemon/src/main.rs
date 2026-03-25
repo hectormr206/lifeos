@@ -837,6 +837,55 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Autonomous agent — check user presence every 30s, activate when screen locked
+    let autonomous_event_bus = state.event_bus.clone();
+    let _autonomous_handle = tokio::spawn(async move {
+        let mut agent = autonomous_agent::AutonomousAgent::new();
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if agent.check_presence().await.is_ok() && agent.should_work() {
+                let _ = autonomous_event_bus.send(events::DaemonEvent::Notification {
+                    priority: "info".into(),
+                    message: "Axi en modo autonomo — trabajando mientras estas ausente.".into(),
+                });
+            }
+        }
+    });
+
+    // Meeting assistant — check for active meetings every 15s
+    let meeting_data_dir = data_dir.clone();
+    let meeting_event_bus = state.event_bus.clone();
+    let _meeting_handle = tokio::spawn(async move {
+        let mut assistant = meeting_assistant::MeetingAssistant::new(meeting_data_dir);
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+            if !assistant.is_enabled() {
+                continue;
+            }
+            match assistant.detect_meeting().await {
+                Ok(true) => {
+                    let state = assistant.state();
+                    if state.recording && state.duration_secs < 2 {
+                        let app = state.app_name.clone().unwrap_or_default();
+                        let _ = meeting_event_bus.send(events::DaemonEvent::Notification {
+                            priority: "info".into(),
+                            message: format!(
+                                "Reunion detectada ({}) — grabando automaticamente.",
+                                app
+                            ),
+                        });
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    log::debug!("Meeting detection error: {}", e);
+                }
+            }
+        }
+    });
+
     // Start supervisor loop with self-healing (restarts on panic)
     let supervisor_state = state.clone();
     let supervisor_handle = tokio::spawn(async move {
