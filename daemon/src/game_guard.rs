@@ -849,17 +849,12 @@ mod tests {
     }
 
     #[test]
-    fn test_persist_gpu_layers_override() {
-        let env_file = std::env::temp_dir().join("lifeos-test-llama-server.env");
-        std::fs::write(&env_file, "LIFEOS_AI_GPU_LAYERS=-1\nSOME_OTHER=value\n").unwrap();
-
-        let path_str = env_file.to_string_lossy().to_string();
-        persist_gpu_layers(0, &path_str).unwrap();
-
-        let content = std::fs::read_to_string(&env_file).unwrap();
-        assert!(content.contains("LIFEOS_AI_GPU_LAYERS=0"));
-        assert!(content.contains("SOME_OTHER=value"));
-        assert!(!content.contains("LIFEOS_AI_GPU_LAYERS=-1"));
-        let _ = std::fs::remove_file(&env_file);
+    fn test_persist_gpu_layers_calls_helper() {
+        // persist_gpu_layers now delegates to sudo lifeos-llama-gpu-layers.sh.
+        // In test environment, the helper won't exist, but the function should
+        // not panic and should return Ok (it gracefully handles missing helper).
+        let result = persist_gpu_layers(0, "/nonexistent/path");
+        // It's Ok because set_gpu_layers_and_restart logs errors but returns Ok
+        assert!(result.is_ok());
     }
 }

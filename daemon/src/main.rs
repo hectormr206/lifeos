@@ -41,6 +41,8 @@ mod follow_along;
 #[allow(dead_code)]
 mod game_assistant;
 mod game_guard;
+#[allow(dead_code)]
+mod gaming_agent;
 mod health;
 #[allow(dead_code)]
 mod health_tracking;
