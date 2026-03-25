@@ -52,8 +52,8 @@ case "$profile" in
             exit 0
         fi
         install_pkgs \
-            "pkg-config libdbus-1-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev" \
-            "pkgconf-pkg-config dbus-devel glib2-devel gtk4-devel libadwaita-devel"
+            "pkg-config libdbus-1-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev libwayland-dev libxkbcommon-dev" \
+            "pkgconf-pkg-config dbus-devel glib2-devel gtk4-devel libadwaita-devel wayland-devel libxkbcommon-devel"
         bash scripts/check-daemon-prereqs.sh
         ;;
     runtime)
