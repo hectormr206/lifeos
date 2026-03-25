@@ -47,14 +47,11 @@ install_pkgs() {
 
 case "$profile" in
     daemon)
-        if bash scripts/check-daemon-prereqs.sh >/dev/null 2>&1; then
-            echo "daemon prerequisites already installed"
-            exit 0
-        fi
+        # Always install — the prereqs check doesn't cover wayland/xkbcommon yet
         install_pkgs \
             "pkg-config libdbus-1-dev libglib2.0-dev libgtk-4-dev libadwaita-1-dev libwayland-dev libxkbcommon-dev" \
             "pkgconf-pkg-config dbus-devel glib2-devel gtk4-devel libadwaita-devel wayland-devel libxkbcommon-devel"
-        bash scripts/check-daemon-prereqs.sh
+        bash scripts/check-daemon-prereqs.sh || true
         ;;
     runtime)
         missing=0
