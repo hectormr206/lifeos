@@ -32,6 +32,8 @@ mod comm_bridges;
 mod computer_use;
 mod context_policies;
 #[allow(dead_code)]
+mod cosmic_control;
+#[allow(dead_code)]
 mod desktop_operator;
 #[allow(dead_code)]
 mod email_bridge;

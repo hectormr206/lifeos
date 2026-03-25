@@ -40,6 +40,7 @@ RUN dnf -y install \
     gdk-pixbuf2-devel \
     graphene-devel \
     cairo-devel \
+    wayland-devel \
     && dnf clean all
 
 # Prebuild QA tooling once so the shipped ISO can run `make ci`

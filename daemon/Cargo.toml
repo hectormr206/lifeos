@@ -50,11 +50,16 @@ teloxide = { version = "0.13", features = ["macros"], optional = true }
 # Wake word detection (half pinned to avoid rand 0.8/0.9 conflict with candle-core 0.2)
 half = "=2.4.1"
 rustpotter = { version = "3", optional = true, default-features = false }
+# COSMIC desktop control (GPL-3.0 — only compiled with "cosmic" feature)
+cosmic-protocols = { version = "0.2", optional = true, default-features = false, features = ["client"] }
+cosmic-client-toolkit = { version = "0.2", optional = true }
+wayland-client = { version = "0.31", optional = true }
 [features]
 default = ["dbus", "http-api"]
 dbus = ["zbus"]
 http-api = ["axum", "tower-http"]
 ui-overlay = ["gtk4", "glib"]
+cosmic = ["cosmic-protocols", "cosmic-client-toolkit", "wayland-client"]
 wake-word = ["rustpotter"]
 telegram = ["teloxide"]
 whatsapp = []
