@@ -1462,6 +1462,9 @@ pub fn create_router(state: ApiState) -> Router {
             "/game-guard/assistant-toggle",
             post(post_game_assistant_toggle),
         )
+        // Battery management endpoints
+        .route("/battery/status", get(get_battery_status))
+        .route("/battery/threshold", post(post_battery_threshold))
         // Supervisor endpoints
         .route("/supervisor/status", get(get_supervisor_status))
         .route("/supervisor/metrics", get(get_supervisor_metrics))
@@ -10102,5 +10105,47 @@ mod tests {
         let summary = build_storage_summary(&installed, &pinned, Some("c.gguf"));
         assert_eq!(summary.installed_model_bytes, 600);
         assert_eq!(summary.reclaimable_model_bytes, 100);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Battery management handlers
+// ---------------------------------------------------------------------------
+
+async fn get_battery_status(
+    State(_state): State<ApiState>,
+) -> Result<axum::Json<serde_json::Value>, (StatusCode, String)> {
+    match crate::battery_manager::read_battery_status().await {
+        Ok(status) => Ok(axum::Json(serde_json::to_value(status).unwrap_or_default())),
+        Err(e) => Ok(axum::Json(serde_json::json!({
+            "error": format!("{}", e),
+            "present": false
+        }))),
+    }
+}
+
+async fn post_battery_threshold(
+    State(_state): State<ApiState>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Result<axum::Json<serde_json::Value>, (StatusCode, String)> {
+    let threshold = body
+        .get("threshold")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Missing 'threshold' (40-100)".into(),
+            )
+        })? as u32;
+
+    match crate::battery_manager::set_charge_threshold(threshold).await {
+        Ok(()) => Ok(axum::Json(serde_json::json!({
+            "success": true,
+            "threshold": threshold
+        }))),
+        Err(e) => Ok(axum::Json(serde_json::json!({
+            "success": false,
+            "error": format!("{}", e)
+        }))),
     }
 }

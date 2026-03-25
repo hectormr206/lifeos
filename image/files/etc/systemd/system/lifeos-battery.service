@@ -1,0 +1,14 @@
+[Unit]
+Description=LifeOS Battery Charge Threshold Persistence
+Documentation=https://github.com/hectormr206/lifeos
+After=multi-user.target
+ConditionPathExists=/sys/class/power_supply/BAT0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Read saved threshold from config, apply to sysfs
+ExecStart=/bin/bash -c 'THRESHOLD=$(cat /etc/lifeos/battery-threshold 2>/dev/null || echo 80); echo $THRESHOLD > /sys/class/power_supply/BAT0/charge_control_end_threshold 2>/dev/null || true'
+
+[Install]
+WantedBy=multi-user.target

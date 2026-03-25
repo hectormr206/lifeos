@@ -40,6 +40,8 @@ mod desktop_operator;
 #[allow(dead_code)]
 mod email_bridge;
 mod events;
+#[allow(dead_code)]
+mod exec_whitelist;
 mod experience_modes;
 mod follow_along;
 #[allow(dead_code)]
@@ -78,6 +80,8 @@ mod portal;
 mod privacy_filter;
 #[allow(dead_code)]
 mod proactive;
+#[allow(dead_code)]
+mod prompt_tuner;
 #[allow(dead_code)]
 mod scheduled_tasks;
 mod screen_capture;
