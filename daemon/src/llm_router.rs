@@ -927,7 +927,7 @@ impl LlmRouter {
 
 /// Strip `<think>...</think>` blocks from LLM responses (Qwen3, DeepSeek, etc.).
 /// These models include chain-of-thought reasoning that shouldn't be shown to users.
-fn strip_think_tags(text: &str) -> String {
+pub fn strip_think_tags(text: &str) -> String {
     if let Some(start) = text.find("<think>") {
         if let Some(end) = text.find("</think>") {
             let after = &text[end + "</think>".len()..];

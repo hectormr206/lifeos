@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::agent_roles::{AgentRole, AllAgentMetrics, Runbook};
-use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
+use crate::llm_router::{strip_think_tags, ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
 use crate::memory_plane::MemoryPlaneManager;
 use crate::privacy_filter::PrivacyFilter;
 use crate::scheduled_tasks::ScheduledTaskManager;
@@ -2137,7 +2137,10 @@ Respond ONLY with a JSON object (no markdown):
 // ---------------------------------------------------------------------------
 
 fn parse_plan_from_response(text: &str) -> Result<Plan> {
-    let json_str = extract_json(text);
+    // Strip <think>...</think> blocks before extracting JSON — reasoning models
+    // (Qwen3, DeepSeek) wrap their output in think tags which breaks JSON parsing.
+    let stripped = strip_think_tags(text);
+    let json_str = extract_json(&stripped);
 
     match serde_json::from_str::<Plan>(&json_str) {
         Ok(plan) if !plan.steps.is_empty() => {
@@ -2146,7 +2149,7 @@ fn parse_plan_from_response(text: &str) -> Result<Plan> {
         }
         Ok(_) | Err(_) => {
             // If text looks like it contains a useful response, wrap it
-            let clean = text.trim();
+            let clean = sanitize_fallback_text(&stripped);
             if clean.is_empty() {
                 Ok(Plan {
                     steps: vec![PlanStep {
@@ -2165,15 +2168,73 @@ fn parse_plan_from_response(text: &str) -> Result<Plan> {
                 Ok(Plan {
                     steps: vec![PlanStep {
                         description: "Direct LLM response".into(),
-                        action: StepAction::Respond {
-                            message: clean.to_string(),
-                        },
+                        action: StepAction::Respond { message: clean },
                         expected_outcome: "User receives response".into(),
                     }],
                 })
             }
         }
     }
+}
+
+/// Clean up raw LLM text for use as a fallback response when JSON parsing fails.
+/// Removes thinking/reasoning scaffolding, markdown formatting, and special tokens.
+fn sanitize_fallback_text(text: &str) -> String {
+    let text = text.replace("<|im_start|>", " ").replace("<|im_end|>", " ");
+
+    let reasoning_prefixes = [
+        "thinking process",
+        "the user wants",
+        "i need to",
+        "let me ",
+        "analyze the request",
+        "determine the output",
+        "drafting the",
+        "selection:",
+        "check constraints",
+        "final polish",
+        "constraints:",
+        "goal:",
+        "reasoning:",
+        "analysis:",
+        "internal reasoning",
+        "**analyze",
+        "**task:",
+        "**input:",
+        "**output:",
+        "**constraint",
+        "**requirement",
+        "**context:",
+        "**goal:",
+        "**formulate",
+    ];
+
+    let mut cleaned_lines = Vec::new();
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let normalized = line
+            .trim_start_matches([
+                '*', '-', '#', '`', '>', ' ', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.',
+            ])
+            .trim()
+            .to_lowercase();
+        if reasoning_prefixes.iter().any(|p| normalized.starts_with(p)) {
+            continue;
+        }
+        // Strip markdown bold/italic asterisks
+        let line = line.replace("**", "").replace("*", "");
+        let line = line.trim();
+        if !line.is_empty() {
+            cleaned_lines.push(line.to_string());
+        }
+    }
+
+    let result = cleaned_lines.join(" ");
+    // Collapse whitespace
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Strip HTML tags to get plain text (simple approach).

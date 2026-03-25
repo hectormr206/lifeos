@@ -3997,6 +3997,9 @@ fn sanitize_assistant_response(raw: &str) -> String {
         .replace("<|im_start|>", " ")
         .replace("<|im_end|>", " ");
 
+    // Strip markdown bold/italic asterisks — these get read aloud by TTS as "asterisk"
+    text = text.replace("**", "").replace('*', "");
+
     let mut cleaned_lines = Vec::new();
     let mut in_code_fence = false;
     for raw_line in text.lines() {
