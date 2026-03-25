@@ -1202,8 +1202,8 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 
 **Q.1 — LifeOS como MCP Client**
 - [x] **Rust MCP client:** Usar `rust-mcp-sdk` crate (implementa spec 2025-11-25 completa) o el SDK oficial `modelcontextprotocol/rust-sdk`. Conectar via STDIO (local) y HTTP/SSE (remoto)
-- [ ] **Tool discovery:** `tools/list` para descubrir herramientas de cualquier MCP server conectado. Exponerlas al supervisor/planner como acciones disponibles
-- [ ] **Resource access:** `resources/list` para acceder a datos expuestos por servers (archivos, DBs, APIs)
+- [x] **Tool discovery:** `tools/list` para descubrir herramientas de cualquier MCP server conectado. Exponerlas al supervisor/planner como acciones disponibles
+- [x] **Resource access:** `resources/list` para acceder a datos expuestos por servers (archivos, DBs, APIs)
 - [ ] **Sampling support:** Permitir que MCP servers pidan al LLM via LifeOS (con aprobacion del usuario)
 - [x] **MCP server manager:** Config en `/etc/lifeos/mcp-servers.toml` para declarar servers activos. Hot-reload sin reiniciar daemon
 
@@ -1215,7 +1215,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
   - `lifeos.memory_search` — buscar en la memoria de Axi
   - `lifeos.file_ops` — operaciones de archivos
   - `lifeos.flatpak_manage` — instalar/remover apps
-- [ ] **Seguridad:** Capability tokens (ya existen en agent_runtime). Solo exponer lo que el usuario autoriza
+- [x] **Seguridad:** Capability tokens (ya existen en agent_runtime). Solo exponer lo que el usuario autoriza
 
 **Q.3 — MCP Servers pre-integrados**
 - [ ] Conectar servers oficiales: Filesystem, Git, Memory, Fetch, Sequential Thinking
@@ -1242,7 +1242,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **R.2 — Grabacion de audio**
 - [x] **PipeWire recording:** Usar `pw-record --target=$SINK_NUMBER` para capturar SOLO el audio de la app de conferencia (no todo el sistema). Esto captura tanto lo que dicen los demas como lo que tu dices
 - [x] **Formato:** WAV a 44.1kHz stereo, comprimir a OPUS/OGG al finalizar para almacenamiento eficiente
-- [ ] **Mic separado:** Opcionalmente, grabar tambien el microfono del usuario como pista separada (para mejor diarizacion de hablantes)
+- [x] **Mic separado:** Opcionalmente, grabar tambien el microfono del usuario como pista separada (para mejor diarizacion de hablantes)
 - [x] **Almacenamiento:** `~/.local/share/lifeos/meetings/YYYY-MM-DD_HH-MM_app-name.opus`. Auto-limpiar meetings > 90 dias (configurable)
 - [x] **Duracion automatica:** Comenzar al detectar reunion, parar automaticamente cuando el audio sink desaparece (la reunion termino)
 
@@ -1579,8 +1579,8 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [x] **Entity extraction daemon:** Procesar todo texto que pasa por Axi (conversaciones, archivos abiertos, emails) y extraer entidades (personas, proyectos, fechas, decisiones, compromisos)
 - [x] **Relation graph:** Grafo dirigido con nodos (entidades) y edges (relaciones). Stored en SQLite + sqlite-vec para hybrid search. Ejemplo: `Juan --[prometio]--> "entregar propuesta" --[para]--> "viernes 28"`
 - [x] **Conflict detection:** Cuando nueva info contradice info existente, el LLM decide: actualizar, fusionar, invalidar, o mantener ambas con timestamp
-- [ ] **Temporal reasoning:** "Cuando fue la ultima vez que hable con Juan?" → consulta al grafo por edges con timestamp. "Que decidimos sobre X?" → busca nodos de decision relacionados con X
-- [ ] **Privacy layers:** El usuario controla que se graba. Niveles: todo, solo conversaciones con Axi, solo lo que el usuario marca explicitamente. Borrado selectivo por entidad/fecha
+- [x] **Temporal reasoning:** "Cuando fue la ultima vez que hable con Juan?" → consulta al grafo por edges con timestamp. "Que decidimos sobre X?" → busca nodos de decision relacionados con X
+- [x] **Privacy layers:** El usuario controla que se graba. Niveles: todo, solo conversaciones con Axi, solo lo que el usuario marca explicitamente. Borrado selectivo por entidad/fecha
 - [ ] **Cross-app context:** El grafo conecta info de Telegram + archivos + calendario + browser history (local). "Preparame para la reunion de mañana" → Axi busca emails, docs, y conversaciones previas sobre los temas de la agenda
 - [x] **Knowledge decay:** Hechos viejos sin uso pierden relevancia gradualmente. Hechos confirmados repetidamente ganan peso. Como la memoria humana
 - [x] **Export/import:** Exportar grafo completo (JSON-LD) para migrar a otro dispositivo LifeOS. El "ADN" del organismo incluye su memoria
@@ -1601,8 +1601,8 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [x] **Retry with variation:** Si un paso falla, no reintentar lo mismo. Generar un approach alternativo via LLM. "El build fallo por X, intentando approach B..."
 - [x] **Cascade failure prevention:** Si paso 3 de 8 falla, no seguir ejecutando. Evaluar si los pasos restantes dependen del fallido. Si no, continuar los independientes
 - [x] **Execution audit trail:** Log inmutable de cada accion, su resultado, y el razonamiento del LLM. Queryable via "Axi, por que hiciste X?" → muestra el chain of thought
-- [ ] **Reliability dashboard:** Tasa de exito por tipo de tarea, tiempo promedio de ejecucion, pasos que mas fallan, prompts que mas se auto-corrigieron
-- [ ] **SLA mode:** Para tareas criticas, el usuario define un SLA: "esta tarea debe completarse en <30 min con >95% accuracy". Si Axi no puede garantizarlo, notifica antes de empezar
+- [x] **Reliability dashboard:** Tasa de exito por tipo de tarea, tiempo promedio de ejecucion, pasos que mas fallan, prompts que mas se auto-corrigieron
+- [x] **SLA mode:** Para tareas criticas, el usuario define un SLA: "esta tarea debe completarse en <30 min con >95% accuracy". Si Axi no puede garantizarlo, notifica antes de empezar
 - [ ] **HITO FASE W:** 100 tareas via Telegram en una semana. 95%+ completadas exitosamente sin intervencion humana. Las fallidas revierten limpiamente y reportan error claro
 
 ### Fase X — Intent-Based Interaction + OS-Level Translation
@@ -1619,7 +1619,7 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [ ] **OS-level translation daemon:** Servicio systemd que intercepta audio streams (PipeWire) y genera subtitulos traducidos en tiempo real. Funciona con Zoom, Meet, YouTube, podcasts, cualquier app
 - [ ] **Document translation:** Click derecho en cualquier archivo → "Traducir a español". Usa modelos locales (NLLB-200, Madlad-400). Sin cloud
 - [ ] **Live voice translation:** Durante llamadas, Axi traduce lo que dice la otra persona en tiempo real via TTS. Modo "interprete simultaneo"
-- [ ] **Context-aware responses:** Cuando el usuario pregunta algo, Axi usa el contexto actual (ventana activa, archivo abierto, ultima conversacion) para dar respuesta relevante sin que el usuario explique el contexto
+- [x] **Context-aware responses:** Cuando el usuario pregunta algo, Axi usa el contexto actual (ventana activa, archivo abierto, ultima conversacion) para dar respuesta relevante sin que el usuario explique el contexto
 - [ ] **HITO FASE X:** Decir "respondele a Juan que acepto, agenda la reunion para el viernes, y traduce el documento que me envio al español". Axi lo hace todo — busca el mensaje, responde, agenda, traduce. Sin abrir una sola app manualmente
 
 ### Fase Y — AI Security Daemon + Self-Healing Avanzado
@@ -1633,11 +1633,11 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [x] **Process anomaly detection:** Baseline de comportamiento normal por proceso (CPU, RAM, network, disk I/O). Si un proceso se desvia >3 sigma, alertar. Si se desvia >5 sigma, aislar automaticamente
 - [x] **Network threat detection:** Analizar DNS queries, conexiones salientes, patrones de trafico. Detectar C2 callbacks, data exfiltration, lateral movement. Bloquear y notificar
 - [x] **File integrity monitoring:** Hash de archivos criticos del sistema. Si cambian sin explicacion (update/user edit), alertar inmediatamente. Detectar rootkits, backdoors, tampering
-- [ ] **Self-healing services:** Si un servicio crashea, Axi lee los logs, diagnostica root cause, aplica fix, reinicia. El usuario nunca ve "Service failed to start"
-- [ ] **Disk self-healing:** Si un particion se llena, Axi auto-limpia (journals, cache, flatpak unused). Si un archivo se corrompe, restaurar desde snapshot. Si hay bad sectors, migrar datos proactivamente
-- [ ] **Network self-healing:** Si DNS falla, switch a fallback. Si VPN se desconecta, reconectar automaticamente. Si WiFi es inestable, diagnosticar y reportar solucion
-- [ ] **Predictive maintenance:** Analizar tendencias de SMART data, temperaturas, ciclos de bateria. Predecir fallos ANTES de que ocurran: "Tu SSD tiene 85% de vida usada. Al ritmo actual, necesitaras reemplazo en ~6 meses"
-- [ ] **Zero-day protection:** Si se detecta un comportamiento nuevo nunca visto (nuevo proceso, nueva conexion, nuevo patron), aislarlo por defecto y preguntar al usuario. Principio de minimo privilegio AI-enforced
+- [x] **Self-healing services:** Si un servicio crashea, Axi lee los logs, diagnostica root cause, aplica fix, reinicia. El usuario nunca ve "Service failed to start"
+- [x] **Disk self-healing:** Si un particion se llena, Axi auto-limpia (journals, cache, flatpak unused). Si un archivo se corrompe, restaurar desde snapshot. Si hay bad sectors, migrar datos proactivamente
+- [x] **Network self-healing:** Si DNS falla, switch a fallback. Si VPN se desconecta, reconectar automaticamente. Si WiFi es inestable, diagnosticar y reportar solucion
+- [x] **Predictive maintenance:** Analizar tendencias de SMART data, temperaturas, ciclos de bateria. Predecir fallos ANTES de que ocurran: "Tu SSD tiene 85% de vida usada. Al ritmo actual, necesitaras reemplazo en ~6 meses"
+- [x] **Zero-day protection:** Si se detecta un comportamiento nuevo nunca visto (nuevo proceso, nueva conexion, nuevo patron), aislarlo por defecto y preguntar al usuario. Principio de minimo privilegio AI-enforced
 - [ ] **HITO FASE Y:** Simular un ataque: proceso malicioso que intenta exfiltrar datos. El AI security daemon lo detecta en <10 segundos, lo aisla, bloquea la conexion, notifica al usuario via Telegram con evidencia forense completa
 
 ### Fase Z — Ecosystem + Distribution + World Domination
@@ -1651,13 +1651,13 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 **Z.1 — AI-Native App Ecosystem**
 - [x] **App contract standard:** Formato JSON para declarar capabilities de una app (intents que maneja, datos que necesita, acciones que puede hacer). El OS orquesta apps via intents, no via GUI
 - [ ] **Skill marketplace:** Repositorio publico de skills creados por la comunidad. Como npm/crates.io pero para skills de Axi. Rating, reviews, verificacion de seguridad
-- [ ] **Autonomy slider per-app:** Cada app/skill tiene un nivel de autonomia configurable. "Axi puede usar esta app libremente" vs "solo con mi aprobacion"
+- [x] **Autonomy slider per-app:** Cada app/skill tiene un nivel de autonomia configurable. "Axi puede usar esta app libremente" vs "solo con mi aprobacion"
 - [ ] **Revenue sharing:** Creadores de skills ganan cuando sus skills son usados. Modelo freemium: skills basicos gratis, premium de pago
 
 **Z.2 — Developer Platform**
 - [ ] **LifeOS SDK:** Rust + Python SDK para crear skills, agentes, y apps AI-native. Event-driven, con hooks para el ciclo de vida del OS
 - [ ] **Agent evaluation framework:** Herramientas para testear agentes antes de publicar: accuracy benchmarks, safety checks, resource limits
-- [ ] **Connector registry:** Catalogo de conectores a servicios externos (GitHub, Slack, Google Calendar, etc.) que skills pueden usar
+- [x] **Connector registry:** Catalogo de conectores a servicios externos (GitHub, Slack, Google Calendar, etc.) que skills pueden usar
 - [ ] **Developer documentation:** Portal con guias, tutorials, API reference, ejemplos. "De cero a tu primer skill en 10 minutos"
 - [ ] **Local development environment:** `life dev init` crea un sandbox para desarrollar y testear skills sin afectar el sistema
 
@@ -1671,7 +1671,7 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [ ] **SOC 2 Type I:** Preparar documentacion y controles para auditoria SOC 2 (6 meses)
 - [ ] **Fleet management:** Dashboard web para IT admins: desplegar imagenes LifeOS, configurar politicas, monitorear flota de dispositivos via bootc
 - [ ] **AI governance dashboard:** Para compliance officers: que hace el AI, que datos accede, audit trail completo, explicabilidad de decisiones
-- [ ] **Air-gapped mode:** LifeOS funciona 100% sin internet. Todo local. Para gobierno, militar, salud, finanzas
+- [x] **Air-gapped mode:** LifeOS funciona 100% sin internet. Todo local. Para gobierno, militar, salud, finanzas
 
 **Z.5 — Distribution**
 - [ ] **Zero-config ISO:** Descargar, flashear, bootear. En 5 minutos estas hablando con Axi. Sin terminal, sin configuracion, sin conocimiento previo de Linux
