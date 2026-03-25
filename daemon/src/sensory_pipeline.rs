@@ -4338,7 +4338,7 @@ async fn resolve_always_on_source() -> Option<String> {
     // 4. If the default source is a real input (not a monitor), use it directly
     if let Some(ref ds) = default_source {
         if !ds.contains(".monitor") && sources.iter().any(|s| s == ds) {
-            log::info!("[audio] using system default source: {ds}");
+            log::debug!("[audio] using system default source: {ds}");
             return Some(ds.clone());
         }
     }

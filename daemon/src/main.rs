@@ -1332,7 +1332,7 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
         let telemetry_manager = state.telemetry_manager.read().await.clone();
 
         if let Err(e) = sensory_manager.refresh_capabilities(&ai_manager).await {
-            warn!("Failed to refresh sensory capabilities: {}", e);
+            debug!("Failed to refresh sensory capabilities: {}", e);
             continue;
         }
 
@@ -1422,7 +1422,7 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     match sensory_manager.run_always_on_cycle(cycle).await {
                         Ok(Some(_)) => continue,
                         Ok(None) => {}
-                        Err(e) => warn!("Failed to run always-on voice cycle: {}", e),
+                        Err(e) => debug!("Failed to run always-on voice cycle: {}", e),
                     }
                 }
                 // If rustpotter is active but no detection, do nothing (it's listening).

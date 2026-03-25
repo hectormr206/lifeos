@@ -408,7 +408,22 @@ impl Supervisor {
         let role = AgentRole::suggest_for(&task.objective);
         let start = std::time::Instant::now();
 
-        match self.execute_task(&task.id, &task.objective).await {
+        // Timeout: 5 minutes max per task (prevents stuck tasks)
+        let task_timeout = std::time::Duration::from_secs(300);
+        let task_result = tokio::time::timeout(
+            task_timeout,
+            self.execute_task(&task.id, &task.objective),
+        )
+        .await;
+
+        let task_result = match task_result {
+            Ok(inner) => inner,
+            Err(_) => Err(anyhow::anyhow!(
+                "Tarea cancelada: excedio el limite de 5 minutos. Intenta dividirla en pasos mas pequeños."
+            )),
+        };
+
+        match task_result {
             Ok((result, steps_total, steps_ok)) => {
                 // Summarize the raw result with AI for cleaner Telegram output
                 let summary = self
