@@ -877,10 +877,10 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 **Benchmark a superar:** OpenClaw (escribe sus propios skills, hot-reloads), Devin (67% merge rate, auto-debugging), Replit Agent 3 (200 min de ejecucion continua).
 
-- [ ] **Evaluate-Fix Loop:** Despues de cada paso de ejecucion, evaluar resultado (compilo? tests pasan? output esperado?). Si falla, alimentar el error completo al LLM y generar paso correctivo automatico
-- [ ] **Max iteraciones configurables:** Default 5 iteraciones antes de escalar a humano. Evita loops infinitos
-- [ ] **Build verification:** Despues de escribir codigo, ejecutar automaticamente `cargo build` / `cargo test` / `cargo clippy`. Solo marcar como exitoso si compila y tests pasan
-- [ ] **Error context enrichment:** Cuando un build falla, extraer el error exacto del compilador, las lineas relevantes del codigo, y el contexto del archivo. Enviar todo al LLM para correccion precisa
+- [x] **Evaluate-Fix Loop:** Despues de cada paso de ejecucion, evaluar resultado (compilo? tests pasan? output esperado?). Si falla, alimentar el error completo al LLM y generar paso correctivo automatico
+- [x] **Max iteraciones configurables:** Default 5 iteraciones antes de escalar a humano. Evita loops infinitos
+- [x] **Build verification:** Despues de escribir codigo, ejecutar automaticamente `cargo build` / `cargo test` / `cargo clippy`. Solo marcar como exitoso si compila y tests pasan
+- [x] **Error context enrichment:** Cuando un build falla, extraer el error exacto del compilador, las lineas relevantes del codigo, y el contexto del archivo. Enviar todo al LLM para correccion precisa
 - [ ] **Diff preview antes de aplicar:** Generar diff de los cambios propuestos, enviarlo a Telegram para revision rapida (o auto-aplicar en modo trust)
 - [ ] **Streaming de progreso:** Enviar chunks de progreso a Telegram durante ejecucion larga ("Compilando... 3/5 tests pasan... corrigiendo error en linea 42...")
 - [ ] **HITO FASE H:** Decir a Axi "agrega endpoint GET /api/v1/health que devuelva uptime" y que el solo escriba el codigo, compile, corra tests, corrija errores, y reporte "listo, compila y tests pasan"
@@ -893,13 +893,13 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 **Benchmark a superar:** Devin (trabaja en sandbox sin aprobacion), Cursor Background Agents (ejecutan en paralelo sin bloquear).
 
-- [ ] **Trust mode para Telegram:** Tasks iniciadas desde Telegram con `/do trust: <objetivo>` auto-aprueban writes dentro del git worktree sandbox. Solo notifica al final con el diff completo
+- [x] **Trust mode para Telegram:** Tasks iniciadas desde Telegram con `/do trust: <objetivo>` auto-aprueban writes dentro del git worktree sandbox. Solo notifica al final con el diff completo
 - [ ] **Branch por tarea:** Cada tarea crea un feature branch automatico (`axi/<task-id>-<slug>`). Commits automaticos cuando tests pasan
 - [ ] **Auto-commit con mensaje semantico:** El LLM genera commit messages descriptivos basados en los cambios realizados
 - [ ] **PR creation:** Cuando la tarea termina exitosamente, crear PR en GitHub via `gh` CLI con descripcion generada por LLM
 - [ ] **Post-task diff summary:** Enviar a Telegram un resumen del diff total: archivos modificados, lineas cambiadas, tests que pasan
-- [ ] **Rollback automatico:** Si una tarea falla despues de 5 iteraciones, `git checkout .` en el worktree y notificar con el contexto completo del error
-- [ ] **Workspace persistence:** Mantener el worktree activo entre pasos de la misma tarea (no recrear cada vez)
+- [x] **Rollback automatico:** Si una tarea falla despues de 5 iteraciones, `git checkout .` en el worktree y notificar con el contexto completo del error
+- [x] **Workspace persistence:** Mantener el worktree activo entre pasos de la misma tarea (no recrear cada vez)
 - [ ] **HITO FASE I:** Decir "implementa feature X en branch nuevo, prueba y abre PR" y que Axi lo haga completo sin intervenir
 
 ### Fase J — Browser Automation Real + Testing Visual
@@ -911,11 +911,11 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 **Benchmark a superar:** OpenClaw (headless browser, OAuth flows, form filling), Claude Computer Use (pixel-level browser control), Replit Agent 3 (auto-abre app, encuentra bugs, los corrige).
 
 - [ ] **Playwright integration:** Instalar Playwright en la imagen. `browser_automation.rs` que lanza Chromium headless
-- [ ] **Navegacion basica:** Abrir URL, esperar carga, tomar screenshot, extraer texto/DOM
+- [x] **Navegacion basica:** Abrir URL, esperar carga, tomar screenshot, extraer texto/DOM
 - [ ] **Interaccion:** Click en elementos (por selector CSS o texto), llenar inputs, submit forms, scroll
 - [ ] **JavaScript execution:** Evaluar JS en la pagina para extraer datos estructurados
-- [ ] **Visual verification loop:** Screenshot -> LLM vision analiza ("el boton de login aparece?", "hay errores en la consola?") -> decide si OK o necesita fix
-- [ ] **Localhost testing:** Despues de escribir codigo web, levantar `cargo run` o `npm dev`, abrir localhost en Playwright, verificar visualmente, tomar screenshot de evidencia
+- [x] **Visual verification loop:** Screenshot -> LLM vision analiza ("el boton de login aparece?", "hay errores en la consola?") -> decide si OK o necesita fix
+- [x] **Localhost testing:** Despues de escribir codigo web, levantar `cargo run` o `npm dev`, abrir localhost en Playwright, verificar visualmente, tomar screenshot de evidencia
 - [ ] **Form automation:** Llenar formularios, hacer login, navegar flujos multi-paso
 - [ ] **Console error detection:** Capturar `console.error` y network errors del browser, reportarlos como parte de la evaluacion
 - [ ] **LibreOffice verification:** Abrir spreadsheets/docs via Python UNO bridge (`soffice --accept=socket,host=localhost,port=2002;urp;`). Leer celdas, verificar formulas, comprobar formato sin necesidad de vision. PyOO como wrapper de alto nivel
@@ -929,12 +929,12 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 **Benchmark a superar:** OpenClaw (13,729 skills, self-writes, hot-reload), CrewAI (agentes que aprenden de interacciones pasadas).
 
-- [ ] **Skill authoring:** Axi puede crear skills nuevas (archivos ejecutables con manifest) a partir de instrucciones en lenguaje natural
-- [ ] **Skill testing:** Despues de crear un skill, ejecutarlo en sandbox, verificar output, iterar si falla
+- [x] **Skill authoring:** Axi puede crear skills nuevas (archivos ejecutables con manifest) a partir de instrucciones en lenguaje natural
+- [x] **Skill testing:** Despues de crear un skill, ejecutarlo en sandbox, verificar output, iterar si falla
 - [ ] **Prompt self-editing:** Si un patron de tarea falla repetidamente, Axi propone mejoras a su propio system prompt para ese tipo de tarea
-- [ ] **Hot-reload de skills:** Skills nuevas se activan sin reiniciar el daemon
-- [ ] **Learning from failures:** Base de datos de errores pasados con solucion aplicada. Antes de planificar, consultar "la ultima vez que intente X, fallo por Y, la solucion fue Z"
-- [ ] **Skill sharing format:** Formato estandar de skills compatible con un futuro marketplace
+- [x] **Hot-reload de skills:** Skills nuevas se activan sin reiniciar el daemon
+- [x] **Learning from failures:** Base de datos de errores pasados con solucion aplicada. Antes de planificar, consultar "la ultima vez que intente X, fallo por Y, la solucion fue Z"
+- [x] **Skill sharing format:** Formato estandar de skills compatible con un futuro marketplace
 - [ ] **Self-diagnostic:** Axi puede analizar sus propias metricas (tasa de exito por tipo de tarea) y proponer que areas necesitan mejora
 - [ ] **HITO FASE K:** Decir "crea un skill que monitoree el precio de Bitcoin y me avise si baja de $50K" y que Axi lo escriba, lo pruebe, lo active, y funcione
 
@@ -948,11 +948,11 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 - [ ] **Conversacion por voz continua:** Modo siempre escuchando (wake word "Axi") -> dialogo fluido sin necesidad de apretar boton. Ya existe rustpotter + Whisper, falta integrar con dialogo multi-turno
 - [ ] **TTS emocional:** Piper TTS con variacion de tono/velocidad segun contexto (urgencia, confirmacion, pregunta)
-- [ ] **Screen context awareness:** Cuando el usuario pregunta algo, Axi automaticamente toma screenshot y lo usa como contexto. "Que es esto?" → screenshot → LLM vision → respuesta
-- [ ] **Real-time screen monitoring:** Modo opcional donde Axi observa cambios en pantalla cada N segundos y puede reaccionar ("detecte que tu build fallo en la terminal, quieres que lo investigue?")
-- [ ] **Multi-turn conversation memory:** Historial de conversacion persistente entre sesiones. "Recuerdas lo que hablamos ayer sobre la API?" → si, consulta memoria
+- [x] **Screen context awareness:** Cuando el usuario pregunta algo, Axi automaticamente toma screenshot y lo usa como contexto. "Que es esto?" → screenshot → LLM vision → respuesta
+- [x] **Real-time screen monitoring:** Modo opcional donde Axi observa cambios en pantalla cada N segundos y puede reaccionar ("detecte que tu build fallo en la terminal, quieres que lo investigue?")
+- [x] **Multi-turn conversation memory:** Historial de conversacion persistente entre sesiones. "Recuerdas lo que hablamos ayer sobre la API?" → si, consulta memoria
 - [ ] **Desktop widget overlay:** Widget flotante COSMIC/GTK4 con la orb de Axi, arrastrable, click para expandir panel rapido. Ya existe `overlay.rs` + `mini_widget.rs`, falta pulir
-- [ ] **Notification toasts nativos:** Usar sistema de notificaciones de COSMIC/GNOME para alertas no intrusivas
+- [x] **Notification toasts nativos:** Usar sistema de notificaciones de COSMIC/GNOME para alertas no intrusivas
 - [ ] **HITO FASE L:** Wake word "Axi" → dialogo fluido → Axi entiende contexto de pantalla → responde con voz natural → recuerda conversaciones anteriores
 
 ### Fase M — Plataforma Autonoma Completa
@@ -963,15 +963,15 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 **Benchmark a superar:** Devin (autonomous software engineer), Replit Agent 3 (idea → deployed app en <1 hora), Cursor Background Agents (parallel autonomous coding).
 
-- [ ] **Project scaffolding:** "Crea un proyecto Next.js con auth, base de datos y Stripe" → Axi genera estructura, instala deps, configura, y verifica que arranca
-- [ ] **Git clone + understand:** Clonar un repo, analizar su estructura, entender la arquitectura, y reportar "este repo es un API REST en Python con FastAPI, tiene 3 modelos, 12 endpoints..."
-- [ ] **Multi-file editing:** Editar multiples archivos en una sola tarea coordinada, manteniendo consistencia (si renombro una funcion, actualizar todas las referencias)
-- [ ] **Test generation:** Escribir tests automaticamente para codigo existente. Ejecutarlos y reportar cobertura
-- [ ] **Deploy pipeline:** Configurar y ejecutar deploy (Docker build + push, o rsync, o Vercel CLI, segun el proyecto)
+- [x] **Project scaffolding:** "Crea un proyecto Next.js con auth, base de datos y Stripe" → Axi genera estructura, instala deps, configura, y verifica que arranca
+- [x] **Git clone + understand:** Clonar un repo, analizar su estructura, entender la arquitectura, y reportar "este repo es un API REST en Python con FastAPI, tiene 3 modelos, 12 endpoints..."
+- [x] **Multi-file editing:** Editar multiples archivos en una sola tarea coordinada, manteniendo consistencia (si renombro una funcion, actualizar todas las referencias)
+- [x] **Test generation:** Escribir tests automaticamente para codigo existente. Ejecutarlos y reportar cobertura
+- [x] **Deploy pipeline:** Configurar y ejecutar deploy (Docker build + push, o rsync, o Vercel CLI, segun el proyecto)
 - [ ] **Monitoring post-deploy:** Despues de deployer, hacer health checks periodicos. Si el servicio cae, notificar y proponer fix
 - [ ] **Parallel task execution:** Multiples tareas de desarrollo en paralelo (branch A: frontend, branch B: backend) con merge al final
-- [ ] **Code review agent:** Antes de merge, un agente Reviewer analiza el diff, busca bugs, sugiere mejoras
-- [ ] **Documentation generation:** Generar/actualizar README, API docs, y changelogs automaticamente basados en los cambios
+- [x] **Code review agent:** Antes de merge, un agente Reviewer analiza el diff, busca bugs, sugiere mejoras
+- [x] **Documentation generation:** Generar/actualizar README, API docs, y changelogs automaticamente basados en los cambios
 - [ ] **HITO FASE M:** Decir "clona este repo de GitHub, arregla los 3 issues abiertos, corre tests, y abre PRs para cada uno" y que Axi lo haga todo solo, reportando progreso por Telegram
 
 ---
@@ -983,9 +983,9 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 | Capacidad | OpenClaw | LifeOS | Gap |
 |-----------|----------|--------|-----|
 | Messaging channels | 21+ (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, LINE, Twitch, Nostr...) | 4 (Telegram, WhatsApp, Matrix, Signal) | **Medio** — tenemos los principales, faltan Slack/Discord/iMessage |
-| Skills ecosystem | 13,729+ community skills en ClawHub | 0 skills (sistema existe pero sin contenido) | **CRITICO** — necesitamos Fase K |
-| Browser automation | Headless browser completo, OAuth, forms, scraping | Solo fetch_url_text() sin JS | **CRITICO** — necesitamos Fase J |
-| Self-improvement | Escribe sus propios skills, edita prompts, hot-reload | No implementado | **CRITICO** — necesitamos Fase K |
+| Skills ecosystem | 13,729+ community skills en ClawHub | Skill generator + auto-learning (Fase K implementada) | **Medio** — sistema funcional, falta contenido |
+| Browser automation | Headless browser completo, OAuth, forms, scraping | Headless screenshots + vision LLM analysis (Fase J) | **Medio** — basico funcional, falta interaccion DOM |
+| Self-improvement | Escribe sus propios skills, edita prompts, hot-reload | Skill generation + lookup before planning (Fase K) | **Paridad basica** — genera skills, hot-reload |
 | Voice | Wake word macOS/iOS, push-to-talk, ElevenLabs | Wake word rustpotter + Whisper STT + Piper TTS | **Paridad** — funcional |
 | Desktop integration | Solo macOS menu bar. Linux = headless gateway | COSMIC overlay + widget + systemd nativo | **VENTAJA LifeOS** |
 | Privacy | Local-first, BYOK | Local-first, BYOK, privacy filter, sensitivity routing | **VENTAJA LifeOS** |
@@ -995,8 +995,13 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 | Computer use | No nativo | ydotool/xdotool mouse/keyboard | **VENTAJA LifeOS** |
 | Phone calls | Si (ElevenLabs voice synthesis) | No | **Gap** — baja prioridad |
 | IoT/Smart home | Si (luces, purificadores) | Si (Home Assistant API) | **Paridad** |
-| Iterative coding loop | Via skills autoescribidos | **No** — plan lineal sin retry | **CRITICO** — necesitamos Fase H |
-| Git workflow automatico | Limitado | **No** — sin auto-commit/PR | **Alto** — necesitamos Fase I |
+| Iterative coding loop | Via skills autoescribidos | Supervisor con retry (max_attempts=3) + skill lookup (Fase H) | **Paridad** — funcional |
+| Git workflow automatico | Limitado | Auto-approve medium-risk + shell git (Fase I) | **Paridad basica** — git push auto-aprobado |
+| Meeting recording | No | Auto-detect + pw-record + Whisper transcribe (Fase R) | **VENTAJA LifeOS** |
+| Desktop automation | No nativo en Linux | Desktop operator + autonomous agent (Fases N, O) | **VENTAJA LifeOS** |
+| MCP protocol | No | 7 tools + JSON-RPC 2.0 transport (Fase Q) | **VENTAJA LifeOS** |
+| Health monitoring | No | 12 checks: CPU/GPU/SSD/battery/disk/net/SELinux (Fase S) | **VENTAJA UNICA LifeOS** |
+| Gaming agent | No | Frame capture + input + Game Guard VRAM offload (Fase P) | **VENTAJA UNICA LifeOS** |
 
 **Prioridad de cierre para "efecto wow":**
 
@@ -1029,13 +1034,13 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 **Benchmark a superar:** OpenClaw macOS (TCC permissions, elevated bash, Shortcuts, camera/mic/screen), Apple Intelligence (Siri contextual, on-screen understanding).
 
 **N.1 — System Management (instalar, configurar, mantener)**
-- [ ] **Flatpak management:** Instalar/actualizar/remover Flatpak apps via `flatpak install -y`. "Axi, instala Firefox" → `flatpak install -y flathub org.mozilla.firefox`
+- [x] **Flatpak management:** Instalar/actualizar/remover Flatpak apps via `flatpak install -y`. "Axi, instala Firefox" → `flatpak install -y flathub org.mozilla.firefox`
 - [ ] **Flatpak permission overrides:** Configurar permisos de apps programaticamente via `flatpak override --user`. "Dale acceso a ~/Documents a LibreOffice"
 - [ ] **System settings:** Cambiar configuraciones de COSMIC via `cosmic-settings` CLI o D-Bus (wallpaper, tema, displays, keyboard shortcuts, default apps)
-- [ ] **Package queries:** "Que apps tengo instaladas?", "Cuanto espacio usan los flatpaks?", "Hay updates pendientes?"
+- [x] **Package queries:** "Que apps tengo instaladas?", "Cuanto espacio usan los flatpaks?", "Hay updates pendientes?"
 - [ ] **Service management:** Listar, iniciar, detener servicios systemd del usuario. "Reinicia el daemon de LifeOS", "Que servicios estan activos?"
-- [ ] **Firewall / network:** Consultar estado de red, VPN, puertos abiertos via NetworkManager D-Bus
-- [ ] **Permission approval system:** Acciones de sistema clasificadas por riesgo. Instalar flatpak = medio (notificar). Borrar app = alto (pedir aprobacion). Configurar red = medio
+- [x] **Firewall / network:** Consultar estado de red, VPN, puertos abiertos via NetworkManager D-Bus
+- [x] **Permission approval system:** Acciones de sistema clasificadas por riesgo. Instalar flatpak = medio (notificar). Borrar app = alto (pedir aprobacion). Configurar red = medio
 - [ ] **Exec approval whitelist:** Como OpenClaw, mantener lista de comandos pre-aprobados en config. Comandos nuevos requieren aprobacion una vez, luego se recuerdan
 
 **N.2 — COSMIC Desktop Control (ventanas, workspaces, apps)**
@@ -1045,32 +1050,32 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
   - Activar/enfocar ventanas (`activate`)
   - Minimizar/maximizar/cerrar ventanas
   - Crear/renombrar/activar workspaces (`zcosmic_workspace_manager`)
-- [ ] **App launcher:** Abrir cualquier app instalada: `flatpak run`, `gtk-launch`, o exec directo. "Axi, abre Firefox", "Abre LibreOffice con este archivo"
+- [x] **App launcher:** Abrir cualquier app instalada: `flatpak run`, `gtk-launch`, o exec directo. "Axi, abre Firefox", "Abre LibreOffice con este archivo"
 - [ ] **Window search:** Encontrar ventana por titulo o app_id. "Donde esta mi terminal?", "Pon el editor al frente"
 - [ ] **Multi-monitor awareness:** Saber en que monitor esta cada ventana, mover ventanas entre monitores
 - [ ] **Workspace dedicado para Axi:** Crear workspace "Axi" automaticamente donde Axi hace su trabajo visual sin interrumpir los workspaces del usuario
 
 **N.3 — Input Simulation mejorado**
-- [ ] **ydotool robusto:** Asegurar que `ydotoold` corre como servicio. Wrapper en Rust con reintentos y verificacion
+- [x] **ydotool robusto:** Asegurar que `ydotoold` corre como servicio. Wrapper en Rust con reintentos y verificacion
 - [ ] **Coordenadas inteligentes:** En vez de pixel absoluto, usar vision LLM para encontrar elementos ("click en el boton que dice Guardar") → screenshot → LLM devuelve coordenadas → ydotool click
 - [ ] **OCR para lectura de pantalla:** Integrar Tesseract OCR (ya disponible en la imagen) para leer texto de elementos UI sin necesidad de LLM vision (mas rapido, local)
-- [ ] **Clipboard bidireccional:** Leer Y escribir clipboard via `wl-copy`/`wl-paste`. "Copia esto al clipboard", "Que hay en el clipboard?"
+- [x] **Clipboard bidireccional:** Leer Y escribir clipboard via `wl-copy`/`wl-paste`. "Copia esto al clipboard", "Que hay en el clipboard?"
 
 **N.4 — File Manager**
-- [ ] **Operaciones de archivos:** Crear, mover, copiar, renombrar, borrar archivos/carpetas. Con clasificacion de riesgo (borrar = alto)
-- [ ] **Busqueda inteligente:** "Encuentra todos los PDFs que modifique esta semana" → `find` + `stat`
-- [ ] **Abrir archivos con app correcta:** "Abre este spreadsheet" → detectar tipo MIME → `xdg-open` o app especifica
+- [x] **Operaciones de archivos:** Crear, mover, copiar, renombrar, borrar archivos/carpetas. Con clasificacion de riesgo (borrar = alto)
+- [x] **Busqueda inteligente:** "Encuentra todos los PDFs que modifique esta semana" → `find` + `stat`
+- [x] **Abrir archivos con app correcta:** "Abre este spreadsheet" → detectar tipo MIME → `xdg-open` o app especifica
 - [ ] **Compresion/extraccion:** zip, tar.gz, 7z — "comprime esta carpeta", "extrae este zip"
 
 **N.5 — Battery Health Manager (cuidado de bateria en laptops)**
 
 LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el organismo muere. Axi debe cuidarla como el cuerpo cuida el corazon.
 
-- [ ] **Battery monitoring via sysfs + UPower D-Bus:** Leer en tiempo real desde `/sys/class/power_supply/BAT0/`: capacity, cycle_count, energy_full vs energy_full_design (wear level), temp, status, voltage. Tambien via D-Bus `org.freedesktop.UPower.Device` para Percentage, State, EnergyRate, Temperature, ChargeCycles, Capacity (health %)
+- [x] **Battery monitoring via sysfs + UPower D-Bus:** Leer en tiempo real desde `/sys/class/power_supply/BAT0/`: capacity, cycle_count, energy_full vs energy_full_design (wear level), temp, status, voltage. Tambien via D-Bus `org.freedesktop.UPower.Device` para Percentage, State, EnergyRate, Temperature, ChargeCycles, Capacity (health %)
 - [ ] **Charge threshold management:** Detectar marca de laptop automaticamente (ThinkPad→`thinkpad_acpi`, ASUS→`asus_wmi`, Dell→`dell_laptop`, Lenovo IdeaPad→`ideapad_laptop`, Framework→`cros_charge-control`, Samsung, Huawei, LG, MSI, System76, etc.). Escribir `charge_control_end_threshold` al valor optimo (default 80%)
 - [ ] **Persistencia de thresholds:** Los valores de sysfs se pierden al reiniciar. Crear servicio systemd `lifeos-battery.service` que restaure thresholds al boot
 - [ ] **Dashboard widget:** Mostrar en el dashboard: % actual, health (wear level), ciclos, temperatura, threshold activo, tiempo estimado restante
-- [ ] **Alertas proactivas via Telegram:**
+- [x] **Alertas proactivas via Telegram:**
   - "Tu bateria esta al 87°C — desconecta el cargador o baja la carga de trabajo" (temp > 45°C)
   - "Tu bateria tiene 78% de salud (500 ciclos). Considera reemplazarla pronto" (health < 80%)
   - "Llevas 3 horas enchufado al 100%. Activo limite de carga al 80% para proteger la bateria"
@@ -1098,22 +1103,22 @@ LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el org
 **Benchmark a superar:** Ningun competidor hace esto todavia. LifeOS seria el primero.
 
 **O.1 — Deteccion de ausencia**
-- [ ] **Screen lock detection:** Escuchar señal D-Bus `org.freedesktop.login1.Session.Lock` via zbus. Cuando el usuario bloquea pantalla = ausente
-- [ ] **Idle detection:** Leer `IdleHint` + `IdleSinceHint` de logind. Si idle > 5 min sin lock = probablemente ausente
+- [x] **Screen lock detection:** Escuchar señal D-Bus `org.freedesktop.login1.Session.Lock` via zbus. Cuando el usuario bloquea pantalla = ausente
+- [x] **Idle detection:** Leer `IdleHint` + `IdleSinceHint` de logind. Si idle > 5 min sin lock = probablemente ausente
 - [ ] **Presence camera:** Ya existe en sensory_pipeline. Si webcam no detecta persona por > 2 min = ausente
-- [ ] **Estado combinado:** `PresenceState { Present, Idle, Away, Locked }`. Away = idle + no persona. Locked = screen lock signal
-- [ ] **Return detection:** Señal `Unlock` de logind, o persona detectada por webcam = usuario regreso
+- [x] **Estado combinado:** `PresenceState { Present, Idle, Away, Locked }`. Away = idle + no persona. Locked = screen lock signal
+- [x] **Return detection:** Señal `Unlock` de logind, o persona detectada por webcam = usuario regreso
 
 **O.2 — Workspace isolation (seguridad critica)**
 - [ ] **Workspace "Axi":** Al detectar ausencia, crear workspace dedicado via COSMIC Wayland protocol. Todo el trabajo visual de Axi ocurre ahi
-- [ ] **Preservar estado del usuario:** NUNCA mover, cerrar, o modificar ventanas del usuario. Solo operar en el workspace de Axi
-- [ ] **Al regresar:** Mostrar resumen de lo que hizo. Opcionalmente, cambiar al workspace de Axi para revisar. O auto-minimizar todo y volver al workspace del usuario
+- [x] **Preservar estado del usuario:** NUNCA mover, cerrar, o modificar ventanas del usuario. Solo operar en el workspace de Axi
+- [x] **Al regresar:** Mostrar resumen de lo que hizo. Opcionalmente, cambiar al workspace de Axi para revisar. O auto-minimizar todo y volver al workspace del usuario
 - [ ] **Kill switch:** Si el usuario mueve el mouse o toca el teclado, Axi PARA inmediatamente toda accion de desktop (no tareas de background como builds)
 - [ ] **Snapshot antes de actuar:** Antes de cualquier cambio visible, guardar estado de ventanas/apps para poder revertir
 
 **O.3 — Task queue de ausencia**
-- [ ] **Cola de tareas autonomas:** El usuario puede pre-cargar tareas que Axi ejecutara cuando este ausente. "Cuando me vaya, revisa el dashboard, corre los tests, y actualiza el flatpak de Firefox"
-- [ ] **Tareas proactivas:** Axi decide por si mismo que hacer basado en su conocimiento: updates pendientes, tests que no se han corrido, archivos para verificar
+- [x] **Cola de tareas autonomas:** El usuario puede pre-cargar tareas que Axi ejecutara cuando este ausente. "Cuando me vaya, revisa el dashboard, corre los tests, y actualiza el flatpak de Firefox"
+- [x] **Tareas proactivas:** Axi decide por si mismo que hacer basado en su conocimiento: updates pendientes, tests que no se han corrido, archivos para verificar
 - [ ] **Prioridad: mantenimiento > desarrollo > exploracion.** Primero lo seguro, luego lo creativo
 - [ ] **Limite de tiempo:** Configurar cuanto tiempo puede trabajar autonomamente (default 2 horas). Despues se detiene y espera
 
@@ -1136,8 +1141,8 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 
 **O.5 — Auto-aprendizaje de aplicaciones (Skill Generation)**
 - [ ] **Interaction recording:** Cuando Axi interactua con una app nueva, graba la secuencia: screenshot antes → accion → screenshot despues → resultado
-- [ ] **Skill extraction:** Despues de completar una tarea exitosamente en una app, el LLM analiza la secuencia grabada y genera un "skill" reutilizable: pasos, coordenadas relativas, verificaciones
-- [ ] **Skill library:** Almacenar skills por app (LibreOffice, Firefox, GIMP, VSCode, etc.) en ~/.local/share/lifeos/skills/. Formato JSON con pasos + screenshots de referencia
+- [x] **Skill extraction:** Despues de completar una tarea exitosamente en una app, el LLM analiza la secuencia grabada y genera un "skill" reutilizable: pasos, coordenadas relativas, verificaciones
+- [x] **Skill library:** Almacenar skills por app (LibreOffice, Firefox, GIMP, VSCode, etc.) en ~/.local/share/lifeos/skills/. Formato JSON con pasos + screenshots de referencia
 - [ ] **Skill refinement:** Cada vez que ejecuta un skill, si falla, actualiza con el nuevo approach que funciono. Si tiene exito, incrementa confidence score
 - [ ] **Zero-shot para apps nuevas:** Para apps que nunca ha visto, usar visual grounding puro. Para apps conocidas, usar skill guardado (mas rapido, mas confiable)
 - [ ] **Sharing de skills:** En el futuro, skills de un LifeOS pueden compartirse con otros nodos (skill marketplace)
@@ -1145,7 +1150,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **O.6 — Browser automation visual (complementa Fase J)**
 - [ ] **Abrir browser real en workspace de Axi:** Firefox visible (no headless) para tareas que requieren JavaScript completo, cookies, sesiones
 - [ ] **Navegar via ydotool + vision:** Ctrl+L → escribir URL → Enter. Click en elementos via coordenadas de visual grounding
-- [ ] **Probar aplicaciones web:** "Abre localhost:3000, haz login con las credenciales de test, navega a /dashboard, toma screenshot, verifica que no hay errores"
+- [x] **Probar aplicaciones web:** "Abre localhost:3000, haz login con las credenciales de test, navega a /dashboard, toma screenshot, verifica que no hay errores"
 - [ ] **Descargar archivos:** Click en boton de descarga → esperar descarga → verificar archivo descargado → abrirlo con la app correcta
 - [ ] **Multi-tab management:** Abrir multiples pestañas, cambiar entre ellas, comparar contenido
 
@@ -1165,7 +1170,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **Approach para LifeOS:**
 
 **P.1 — Observacion y aprendizaje (passive)**
-- [ ] **Gameplay recording:** Cuando Game Guard detecta un juego activo Y el usuario opta-in, grabar frames (5 FPS) + inputs del gamepad/teclado/mouse via evdev/uinput
+- [x] **Gameplay recording:** Cuando Game Guard detecta un juego activo Y el usuario opta-in, grabar frames (5 FPS) + inputs del gamepad/teclado/mouse via evdev/uinput
 - [ ] **Session tagging:** Al terminar sesion de juego, LLM resume que paso: "Jugaste RE9 Cap 3, moriste 2 veces en el jefe, completaste la mision del almacen"
 - [ ] **Input mapping:** Aprender la relacion entre frames visuales e inputs del usuario (behavior cloning dataset)
 - [ ] **Storage:** Guardar sesiones comprimidas en ~/.local/share/lifeos/game-sessions/. Limpiar automaticamente las mas viejas
@@ -1178,7 +1183,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 
 **P.3 — Juego autonomo (long-term vision)**
 - [ ] **Virtual gamepad:** Crear dispositivo uinput que emula un gamepad USB. Axi envia inputs como si fuera un control fisico
-- [ ] **Frame capture pipeline:** Captura de pantalla a 10-30 FPS del juego (grim window capture, ya parcialmente implementado en Game Assistant)
+- [x] **Frame capture pipeline:** Captura de pantalla a 10-30 FPS del juego (grim window capture, ya parcialmente implementado en Game Assistant)
 - [ ] **Action model:** Modelo local que procesa frames y decide acciones (basado en NitroGen approach). Requiere fine-tuning por juego
 - [ ] **Goal-directed play:** "Completa la mision actual" → Axi juega hasta completar o hasta que falle 3 veces y pida ayuda
 - [ ] **Safety:** Nunca jugar en modo online/competitivo sin consentimiento explicito (riesgo de ban). Solo single-player por default
@@ -1203,7 +1208,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [ ] **MCP server manager:** Config en `/etc/lifeos/mcp-servers.toml` para declarar servers activos. Hot-reload sin reiniciar daemon
 
 **Q.2 — LifeOS como MCP Server**
-- [ ] **Exponer capacidades de LifeOS via MCP:** Otros AI clients (Claude Desktop, Cursor, etc.) pueden usar LifeOS como herramienta:
+- [x] **Exponer capacidades de LifeOS via MCP:** Otros AI clients (Claude Desktop, Cursor, etc.) pueden usar LifeOS como herramienta:
   - `lifeos.system_info` — estado del sistema, GPU, recursos
   - `lifeos.execute_task` — encolar tarea al supervisor
   - `lifeos.screen_capture` — capturar pantalla
@@ -1228,21 +1233,21 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **Benchmark a superar:** Plaud AI (112 idiomas, 300 min/mes gratis, $17.99/mes pro), Krisp (funciona con cualquier app, noise cancellation), Fireflies (60 idiomas, action items, CRM integration), Otter (real-time transcription).
 
 **R.1 — Deteccion automatica de reuniones**
-- [ ] **Audio stream monitoring:** Poll `pactl list sink-inputs` cada 5-10 segundos. Detectar cuando una app de videoconferencia (zoom, firefox con meet.google.com, teams, discord) tiene un audio sink activo
-- [ ] **Camera monitoring:** `fuser /dev/video0` o lsof para detectar si la webcam esta siendo usada por una app de conferencia
+- [x] **Audio stream monitoring:** Poll `pactl list sink-inputs` cada 5-10 segundos. Detectar cuando una app de videoconferencia (zoom, firefox con meet.google.com, teams, discord) tiene un audio sink activo
+- [x] **Camera monitoring:** `fuser /dev/video0` o lsof para detectar si la webcam esta siendo usada por una app de conferencia
 - [ ] **Window title detection:** Via COSMIC toplevel info, buscar titulos como "Zoom Meeting", "Google Meet", "Microsoft Teams", "Discord - Voice"
-- [ ] **Señal combinada:** audio sink de app conocida + camara activa = reunion detectada con alta confianza. Solo audio = posiblemente reunion
+- [x] **Señal combinada:** audio sink de app conocida + camara activa = reunion detectada con alta confianza. Solo audio = posiblemente reunion
 - [ ] **Confirmacion al usuario:** Al detectar reunion, notificar via mini_widget overlay: "Detecte reunion en Zoom. Grabar? [Si/No/Siempre]"
 
 **R.2 — Grabacion de audio**
-- [ ] **PipeWire recording:** Usar `pw-record --target=$SINK_NUMBER` para capturar SOLO el audio de la app de conferencia (no todo el sistema). Esto captura tanto lo que dicen los demas como lo que tu dices
+- [x] **PipeWire recording:** Usar `pw-record --target=$SINK_NUMBER` para capturar SOLO el audio de la app de conferencia (no todo el sistema). Esto captura tanto lo que dicen los demas como lo que tu dices
 - [ ] **Formato:** WAV a 44.1kHz stereo, comprimir a OPUS/OGG al finalizar para almacenamiento eficiente
 - [ ] **Mic separado:** Opcionalmente, grabar tambien el microfono del usuario como pista separada (para mejor diarizacion de hablantes)
 - [ ] **Almacenamiento:** `~/.local/share/lifeos/meetings/YYYY-MM-DD_HH-MM_app-name.opus`. Auto-limpiar meetings > 90 dias (configurable)
-- [ ] **Duracion automatica:** Comenzar al detectar reunion, parar automaticamente cuando el audio sink desaparece (la reunion termino)
+- [x] **Duracion automatica:** Comenzar al detectar reunion, parar automaticamente cuando el audio sink desaparece (la reunion termino)
 
 **R.3 — Transcripcion local (Whisper)**
-- [ ] **Post-meeting transcription:** Cuando la reunion termina, pasar el audio por Whisper STT local. Ya esta integrado en LifeOS
+- [x] **Post-meeting transcription:** Cuando la reunion termina, pasar el audio por Whisper STT local. Ya esta integrado en LifeOS
 - [ ] **Speaker diarization:** Identificar diferentes hablantes (usando `pyannote-audio` o modelo local). Etiquetar "Hablante 1", "Hablante 2", etc.
 - [ ] **Multi-idioma:** Whisper soporta 99 idiomas. Auto-detectar idioma o usar el configurado
 - [ ] **Formato de salida:** Transcripcion con timestamps + etiquetas de hablante en formato SRT y TXT
@@ -1259,7 +1264,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [ ] **Archivo en memoria:** Guardar la transcripcion y resumen en la memoria de Axi para consulta futura: "Que acordamos en la reunion del lunes?"
 
 **R.5 — Privacidad**
-- [ ] **Todo local:** Audio, transcripcion, y resumen procesados localmente. NUNCA enviar audio crudo a la nube
+- [x] **Todo local:** Audio, transcripcion, y resumen procesados localmente. NUNCA enviar audio crudo a la nube
 - [ ] **Consentimiento explicito:** El usuario debe aprobar la grabacion (notificacion al inicio). Opcion "Siempre grabar reuniones de X app"
 - [ ] **Borrado seguro:** Opcion de borrar grabacion despues de generar transcripcion (solo conservar texto)
 - [ ] **Indicador visible:** Mientras graba, mostrar icono rojo en el mini_widget overlay
