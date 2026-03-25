@@ -1026,6 +1026,75 @@ section { scroll-margin-top: 92px; }
 .resource-value { font-size: 0.8rem; color: var(--text-muted); }
 
 /* === Game Guard Section === */
+/* === System Health Section === */
+.health-section {
+  padding: 1.5rem;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  margin-bottom: 1.5rem;
+}
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.health-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius);
+}
+[data-theme="light"] .health-item {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+.health-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+.health-label {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  flex: 1;
+}
+.health-value {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* === Battery Section === */
+.battery-section {
+  padding: 1.5rem;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  margin-bottom: 1.5rem;
+}
+.battery-section.hidden { display: none; }
+.battery-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.battery-threshold {
+  padding: 16px 20px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius);
+}
+[data-theme="light"] .battery-threshold {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
 .gameguard-section {
   padding: 1.5rem;
   background: var(--bg-card);
