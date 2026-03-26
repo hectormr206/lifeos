@@ -136,10 +136,24 @@ pub struct LlmRouter {
 
 impl LlmRouter {
     pub fn new(privacy_level: PrivacyLevel) -> Self {
-        let providers = load_providers_from_toml().unwrap_or_else(|e| {
+        let all_providers = load_providers_from_toml().unwrap_or_else(|e| {
             info!("No providers.toml found ({}), using built-in defaults", e);
             default_providers()
         });
+        // Filter: only keep providers whose API key env var is set (or empty = local)
+        let providers: Vec<ProviderConfig> = all_providers
+            .into_iter()
+            .filter(|p| {
+                p.api_key_env.is_empty()
+                    || std::env::var(&p.api_key_env)
+                        .map(|v| !v.is_empty())
+                        .unwrap_or(false)
+            })
+            .collect();
+        info!(
+            "[llm_router] {} active providers (with API keys configured)",
+            providers.len()
+        );
         let cost_trackers = providers
             .iter()
             .map(|p| (p.name.clone(), ProviderCostTracker::default()))

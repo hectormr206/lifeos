@@ -2,8 +2,9 @@
 
 ## Especificacion de Producto y Arquitectura
 
-**Version:** 0.1.0 - "Aegis"
-**Fecha:** 2026-02-26
+**Version:** 0.2.0 - "Aegis"
+**Fecha:** 2026-03-26
+**Autor:** Héctor Martínez — [hectormr.com](https://hectormr.com)
 **Estado:** Blueprint ejecutable (MVP + Roadmap 24 meses)
 **Audiencia:** usuarios principiantes, power users, developers, empresas
 

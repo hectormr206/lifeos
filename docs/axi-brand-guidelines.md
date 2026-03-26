@@ -3,8 +3,9 @@
 Este documento defines the visual identity system for **Axi, el Ajolote tecnológico**.
 
 **Version:** 1.1.0
-**Last Updated:** 2026-03-05
+**Last Updated:** 2026-03-26
 **Status:** Official
+**Author:** Héctor Martínez — [hectormr.com](https://hectormr.com)
 
 ## Color Palette
 
