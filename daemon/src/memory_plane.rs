@@ -42,7 +42,10 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     nonce_b64 TEXT NOT NULL,
     ciphertext_b64 TEXT NOT NULL,
     plaintext_sha256 TEXT NOT NULL,
-    embedding_source TEXT NOT NULL DEFAULT 'fallback'
+    embedding_source TEXT NOT NULL DEFAULT 'fallback',
+    last_accessed TEXT,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    mood TEXT
 );
 
 -- Vector search table (sqlite-vec)
@@ -51,11 +54,54 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_embeddings USING vec0(
     embedding FLOAT[768]
 );
 
+-- Knowledge graph: directed triples (subject -[predicate]-> object)
+CREATE TABLE IF NOT EXISTS knowledge_graph (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject TEXT NOT NULL,
+    predicate TEXT NOT NULL,
+    object TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(subject, predicate, object)
+);
+
+-- Procedural memory: reusable workflows/sequences
+CREATE TABLE IF NOT EXISTS procedural_memory (
+    proc_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL,
+    steps TEXT NOT NULL,
+    trigger_pattern TEXT,
+    times_used INTEGER NOT NULL DEFAULT 0,
+    last_used TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_memory_kind ON memory_entries(kind);
 CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory_entries(scope);
 CREATE INDEX IF NOT EXISTS idx_memory_created ON memory_entries(created_at);
 CREATE INDEX IF NOT EXISTS idx_memory_kind_created ON memory_entries(kind, created_at);
+CREATE INDEX IF NOT EXISTS idx_memory_importance ON memory_entries(importance);
+CREATE INDEX IF NOT EXISTS idx_memory_last_accessed ON memory_entries(last_accessed);
+CREATE INDEX IF NOT EXISTS idx_kg_subject ON knowledge_graph(subject);
+CREATE INDEX IF NOT EXISTS idx_kg_object ON knowledge_graph(object);
+CREATE INDEX IF NOT EXISTS idx_kg_predicate ON knowledge_graph(predicate);
+CREATE INDEX IF NOT EXISTS idx_proc_name ON procedural_memory(name);
+
+-- Cross-memory links (relates entries to each other)
+CREATE TABLE IF NOT EXISTS memory_links (
+    from_entry TEXT NOT NULL,
+    to_entry TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(from_entry, to_entry, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_links_from ON memory_links(from_entry);
+CREATE INDEX IF NOT EXISTS idx_links_to ON memory_links(to_entry);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -946,6 +992,445 @@ impl MemoryPlaneManager {
 
         log::info!("Migrated {} entries from JSON to SQLite", count);
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Knowledge Graph (relational memory)
+    // -----------------------------------------------------------------------
+
+    /// Add a triple to the knowledge graph: subject -[predicate]-> object.
+    pub async fn add_triple(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        confidence: f64,
+        source_entry_id: Option<&str>,
+    ) -> Result<()> {
+        let db_path = self.db_path.clone();
+        let subject = subject.to_lowercase();
+        let predicate = predicate.to_lowercase();
+        let object = object.to_lowercase();
+        let source = source_entry_id.map(|s| s.to_string());
+        let now = Utc::now().to_rfc3339();
+
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO knowledge_graph (subject, predicate, object, confidence, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                 ON CONFLICT(subject, predicate, object) DO UPDATE SET
+                    confidence = MAX(confidence, ?4),
+                    updated_at = ?6",
+                params![subject, predicate, object, confidence, source, now],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Query the knowledge graph for triples involving an entity.
+    pub async fn query_graph(&self, entity: &str, limit: usize) -> Result<Vec<serde_json::Value>> {
+        let db_path = self.db_path.clone();
+        let entity = entity.to_lowercase();
+        let limit = limit.clamp(1, 100) as i32;
+
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT subject, predicate, object, confidence, created_at
+                 FROM knowledge_graph
+                 WHERE subject = ?1 OR object = ?1
+                 ORDER BY confidence DESC, updated_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![entity, limit], |row| {
+                    Ok(serde_json::json!({
+                        "subject": row.get::<_, String>(0)?,
+                        "predicate": row.get::<_, String>(1)?,
+                        "object": row.get::<_, String>(2)?,
+                        "confidence": row.get::<_, f64>(3)?,
+                        "created_at": row.get::<_, String>(4)?,
+                    }))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await?
+    }
+
+    // -----------------------------------------------------------------------
+    // Procedural Memory (workflow memory)
+    // -----------------------------------------------------------------------
+
+    /// Save a procedure (reusable workflow).
+    pub async fn save_procedure(
+        &self,
+        name: &str,
+        description: &str,
+        steps: &[String],
+        trigger_pattern: Option<&str>,
+    ) -> Result<String> {
+        let db_path = self.db_path.clone();
+        let proc_id = Uuid::new_v4().to_string();
+        let name = name.to_string();
+        let description = description.to_string();
+        let steps_json = serde_json::to_string(steps)?;
+        let trigger = trigger_pattern.map(|s| s.to_string());
+        let now = Utc::now().to_rfc3339();
+        let pid = proc_id.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO procedural_memory (proc_id, name, description, steps, trigger_pattern, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                 ON CONFLICT(name) DO UPDATE SET
+                    description = ?3, steps = ?4, trigger_pattern = ?5, updated_at = ?6",
+                params![pid, name, description, steps_json, trigger, now],
+            )?;
+            Ok(pid)
+        })
+        .await?
+    }
+
+    /// Find procedures matching a query (by name or trigger pattern).
+    pub async fn find_procedures(&self, query: &str) -> Result<Vec<serde_json::Value>> {
+        let db_path = self.db_path.clone();
+        let query = format!("%{}%", query.to_lowercase());
+
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT proc_id, name, description, steps, trigger_pattern, times_used
+                 FROM procedural_memory
+                 WHERE LOWER(name) LIKE ?1 OR LOWER(description) LIKE ?1
+                    OR (trigger_pattern IS NOT NULL AND LOWER(trigger_pattern) LIKE ?1)
+                 ORDER BY times_used DESC
+                 LIMIT 10",
+            )?;
+            let rows = stmt
+                .query_map(params![query], |row| {
+                    let steps_str: String = row.get(3)?;
+                    let steps: Vec<String> = serde_json::from_str(&steps_str).unwrap_or_default();
+                    Ok(serde_json::json!({
+                        "proc_id": row.get::<_, String>(0)?,
+                        "name": row.get::<_, String>(1)?,
+                        "description": row.get::<_, String>(2)?,
+                        "steps": steps,
+                        "trigger_pattern": row.get::<_, Option<String>>(4)?,
+                        "times_used": row.get::<_, i32>(5)?,
+                    }))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await?
+    }
+
+    /// Mark a procedure as used (increments counter).
+    pub async fn use_procedure(&self, name: &str) -> Result<()> {
+        let db_path = self.db_path.clone();
+        let name = name.to_string();
+        let now = Utc::now().to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "UPDATE procedural_memory SET times_used = times_used + 1, last_used = ?2 WHERE name = ?1",
+                params![name, now],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    // -----------------------------------------------------------------------
+    // Emotional Memory (mood tracking on entries)
+    // -----------------------------------------------------------------------
+
+    /// Update the mood metadata for a memory entry.
+    pub async fn set_mood(&self, entry_id: &str, mood: &str) -> Result<()> {
+        let db_path = self.db_path.clone();
+        let entry_id = entry_id.to_string();
+        let mood = mood.to_string();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "UPDATE memory_entries SET mood = ?2 WHERE entry_id = ?1",
+                params![entry_id, mood],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Get recent mood entries to understand user emotional patterns.
+    pub async fn mood_history(&self, limit: usize) -> Result<Vec<(String, String, String)>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 50) as i32;
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT entry_id, mood, created_at FROM memory_entries
+                 WHERE mood IS NOT NULL AND mood != ''
+                 ORDER BY created_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![limit], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await?
+    }
+
+    // -----------------------------------------------------------------------
+    // Memory Consolidation & Forgetting
+    // -----------------------------------------------------------------------
+
+    /// Track access: update last_accessed and increment access_count.
+    pub async fn track_access(&self, entry_id: &str) -> Result<()> {
+        let db_path = self.db_path.clone();
+        let entry_id = entry_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "UPDATE memory_entries SET last_accessed = ?2, access_count = access_count + 1 WHERE entry_id = ?1",
+                params![entry_id, now],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Nocturnal consolidation: boost frequently accessed, degrade never-accessed.
+    /// Returns (boosted_count, degraded_count, deleted_count).
+    pub async fn consolidate(&self) -> Result<(usize, usize, usize)> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let now = Utc::now();
+            let ninety_days_ago = (now - chrono::Duration::days(90)).to_rfc3339();
+            let thirty_days_ago = (now - chrono::Duration::days(30)).to_rfc3339();
+
+            // Boost: entries accessed 5+ times get importance +5 (cap at 100)
+            let boosted = db.execute(
+                "UPDATE memory_entries SET importance = MIN(importance + 5, 100)
+                 WHERE access_count >= 5 AND importance < 100",
+                [],
+            )?;
+
+            // Degrade: entries not accessed in 30 days with importance > 30 get -5
+            let degraded = db.execute(
+                "UPDATE memory_entries SET importance = MAX(importance - 5, 0)
+                 WHERE (last_accessed IS NULL OR last_accessed < ?1)
+                   AND importance > 30
+                   AND access_count < 2",
+                params![thirty_days_ago],
+            )?;
+
+            // Intelligent forgetting: soft delete (importance < 10, not accessed in 90 days)
+            let deleted = db.execute(
+                "DELETE FROM memory_entries
+                 WHERE importance < 10
+                   AND (last_accessed IS NULL OR last_accessed < ?1)
+                   AND access_count < 1",
+                params![ninety_days_ago],
+            )?;
+
+            // Also clean up orphaned embeddings
+            db.execute(
+                "DELETE FROM memory_embeddings WHERE entry_id NOT IN (SELECT entry_id FROM memory_entries)",
+                [],
+            )?;
+
+            Ok((boosted, degraded, deleted))
+        })
+        .await?
+    }
+
+    // -----------------------------------------------------------------------
+    // Cross-Memory Linking
+    // -----------------------------------------------------------------------
+
+    /// Link two memory entries with a relationship.
+    pub async fn link_entries(&self, from_id: &str, to_id: &str, relation: &str) -> Result<()> {
+        let db_path = self.db_path.clone();
+        let from = from_id.to_string();
+        let to = to_id.to_string();
+        let rel = relation.to_string();
+        let now = Utc::now().to_rfc3339();
+
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT OR IGNORE INTO memory_links (from_entry, to_entry, relation, created_at)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![from, to, rel, now],
+            )?;
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Get all entries linked to a given entry.
+    pub async fn get_linked(&self, entry_id: &str) -> Result<Vec<serde_json::Value>> {
+        let db_path = self.db_path.clone();
+        let eid = entry_id.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT from_entry, to_entry, relation, created_at
+                 FROM memory_links
+                 WHERE from_entry = ?1 OR to_entry = ?1
+                 ORDER BY created_at DESC
+                 LIMIT 20",
+            )?;
+            let rows = stmt
+                .query_map(params![eid], |row| {
+                    Ok(serde_json::json!({
+                        "from": row.get::<_, String>(0)?,
+                        "to": row.get::<_, String>(1)?,
+                        "relation": row.get::<_, String>(2)?,
+                        "created_at": row.get::<_, String>(3)?,
+                    }))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(rows)
+        })
+        .await?
+    }
+
+    /// Cross-memory consolidation: find recent memories and auto-generate
+    /// knowledge graph triples and causal links between them.
+    /// Called during periodic consolidation.
+    pub async fn cross_link_recent(
+        &self,
+        ai_manager: &Option<Arc<crate::ai::AiManager>>,
+    ) -> Result<usize> {
+        // Get recent memories (last 24h)
+        let recent = self.list_entries(20, None, None).await?;
+        if recent.len() < 2 {
+            return Ok(0);
+        }
+
+        // Build a compact representation for LLM analysis
+        let mut memory_list = String::new();
+        for (i, entry) in recent.iter().enumerate() {
+            memory_list.push_str(&format!(
+                "{}. [{}] {} (id: {})\n",
+                i + 1,
+                entry.kind,
+                &entry.content[..entry.content.len().min(100)],
+                entry.entry_id
+            ));
+        }
+
+        // Ask LLM to extract relationships
+        let ai = match ai_manager {
+            Some(a) => a,
+            None => return Ok(0),
+        };
+
+        let prompt = format!(
+            "Analiza estas memorias recientes y extrae SOLO relaciones claras.\n\
+             Para cada relacion responde en formato: SUBJECT|PREDICATE|OBJECT\n\
+             Ejemplo: hector|trabaja_en|lifeos\n\
+             Solo responde con las lineas de relaciones, nada mas. Si no hay relaciones claras, responde NONE.\n\n\
+             Memorias:\n{}",
+            memory_list
+        );
+
+        let messages = vec![("user".to_string(), prompt)];
+        let response_obj = match ai.chat(None, messages).await {
+            Ok(r) => r,
+            Err(_) => return Ok(0),
+        };
+        let response = response_obj.response;
+
+        let mut count = 0;
+        for line in response.lines() {
+            let line = line.trim();
+            if line == "NONE" || line.is_empty() {
+                continue;
+            }
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() == 3 {
+                let subject = parts[0].trim();
+                let predicate = parts[1].trim();
+                let object = parts[2].trim();
+                if !subject.is_empty() && !predicate.is_empty() && !object.is_empty() {
+                    self.add_triple(subject, predicate, object, 0.8, None)
+                        .await
+                        .ok();
+                    count += 1;
+                }
+            }
+        }
+
+        Ok(count)
+    }
+
+    /// Get memory health stats including consolidation metrics.
+    pub async fn consolidation_stats(&self) -> Result<serde_json::Value> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+
+            let total: i32 =
+                db.query_row("SELECT COUNT(*) FROM memory_entries", [], |r| r.get(0))?;
+            let high_importance: i32 = db.query_row(
+                "SELECT COUNT(*) FROM memory_entries WHERE importance >= 70",
+                [],
+                |r| r.get(0),
+            )?;
+            let low_importance: i32 = db.query_row(
+                "SELECT COUNT(*) FROM memory_entries WHERE importance < 30",
+                [],
+                |r| r.get(0),
+            )?;
+            let never_accessed: i32 = db.query_row(
+                "SELECT COUNT(*) FROM memory_entries WHERE access_count = 0",
+                [],
+                |r| r.get(0),
+            )?;
+            let graph_triples: i32 = db
+                .query_row("SELECT COUNT(*) FROM knowledge_graph", [], |r| r.get(0))
+                .unwrap_or(0);
+            let procedures: i32 = db
+                .query_row("SELECT COUNT(*) FROM procedural_memory", [], |r| r.get(0))
+                .unwrap_or(0);
+            let moods: i32 = db
+                .query_row(
+                    "SELECT COUNT(*) FROM memory_entries WHERE mood IS NOT NULL AND mood != ''",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+
+            Ok(serde_json::json!({
+                "total_memories": total,
+                "high_importance": high_importance,
+                "low_importance": low_importance,
+                "never_accessed": never_accessed,
+                "knowledge_graph_triples": graph_triples,
+                "procedures": procedures,
+                "entries_with_mood": moods,
+            }))
+        })
+        .await?
     }
 }
 

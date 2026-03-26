@@ -1,6 +1,6 @@
 [package]
 name = "lifeosd"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "LifeOS System Daemon"
 authors = ["LifeOS Team"]
@@ -62,6 +62,8 @@ rustpotter = { version = "3", optional = true, default-features = false }
 # Our MCP server (mcp_server.rs) uses hand-written JSON-RPC, no SDK needed
 # Uncomment when CI runner has rustc >= 1.88:
 # rust-mcp-sdk = { version = "0.9", optional = true }
+# System tray icon (StatusNotifierItem — works with COSMIC, KDE, GNOME+extension)
+ksni = { version = "0.2", optional = true }
 # COSMIC desktop control (GPL-3.0 — only compiled with "cosmic" feature)
 cosmic-protocols = { version = "0.2", optional = true, default-features = false, features = ["client"] }
 cosmic-client-toolkit = { version = "0.2", optional = true }
@@ -80,3 +82,4 @@ whatsapp = []
 matrix = []
 signal = []
 homeassistant = []
+tray = ["ksni"]

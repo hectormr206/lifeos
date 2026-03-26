@@ -1,6 +1,8 @@
-//! Telegram bridge — Bidirectional multimedia communication with LifeOS.
+//! Telegram bridge — Natural language AI assistant with tool execution.
 //!
-//! Supports: text, voice (STT+TTS), photos (vision), groups, push notifications.
+//! Axi understands natural language and can perform real actions on the system
+//! without requiring /commands. Supports: text, voice (STT+TTS), photos (vision),
+//! groups, push notifications, heartbeat proactive monitoring.
 
 #[cfg(feature = "telegram")]
 mod inner {
@@ -14,9 +16,16 @@ mod inner {
     };
     use tokio::sync::RwLock;
 
-    use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
+    use crate::llm_router::LlmRouter;
+    use crate::memory_plane::MemoryPlaneManager;
     use crate::supervisor::SupervisorNotification;
-    use crate::task_queue::{TaskCreate, TaskPriority, TaskQueue};
+    use crate::task_queue::TaskQueue;
+    use crate::telegram_tools::{self, ConversationHistory, CronStore, SddStore, ToolContext};
+
+    /// Heartbeat interval — how often Axi proactively checks system health.
+    const HEARTBEAT_INTERVAL_SECS: u64 = 30 * 60; // 30 minutes
+    /// Cron check interval — how often we check for due cron jobs.
+    const CRON_CHECK_INTERVAL_SECS: u64 = 60; // every minute
 
     #[derive(Debug, Clone)]
     pub struct TelegramConfig {
@@ -44,8 +53,7 @@ mod inner {
 
     #[derive(Clone)]
     struct BotCtx {
-        task_queue: Arc<TaskQueue>,
-        router: Arc<RwLock<LlmRouter>>,
+        tool_ctx: ToolContext,
         allowed_ids: Vec<i64>,
         bot_username: String,
     }
@@ -54,13 +62,16 @@ mod inner {
         config: TelegramConfig,
         task_queue: Arc<TaskQueue>,
         router: Arc<RwLock<LlmRouter>>,
+        memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
         mut notify_rx: tokio::sync::broadcast::Receiver<SupervisorNotification>,
     ) {
-        info!("Starting Telegram bridge...");
+        info!("Starting Telegram bridge (natural language mode)...");
 
         let bot = Bot::new(&config.bot_token);
         let notify_bot = bot.clone();
+        let heartbeat_bot = bot.clone();
         let notify_chat_ids = config.allowed_chat_ids.clone();
+        let heartbeat_chat_ids = config.allowed_chat_ids.clone();
 
         // Get bot username for group mention detection
         let bot_username = bot
@@ -70,12 +81,11 @@ mod inner {
             .unwrap_or_default();
         info!("Telegram bot username: @{}", bot_username);
 
-        // Notification listener
+        // Supervisor notification listener
         tokio::spawn(async move {
             loop {
                 match notify_rx.recv().await {
                     Ok(notification) => {
-                        // Approval requests get inline keyboard buttons
                         if let SupervisorNotification::ApprovalRequired {
                             ref task_id,
                             ref action_description,
@@ -113,9 +123,117 @@ mod inner {
             }
         });
 
-        let ctx = BotCtx {
-            task_queue,
+        // Shared state for conversation history, cron, and SDD sessions
+        let history = Arc::new(ConversationHistory::new());
+        let cron_store = Arc::new(CronStore::new());
+        let sdd_store = Arc::new(SddStore::new());
+
+        let heartbeat_tool_ctx = ToolContext {
+            router: router.clone(),
+            task_queue: task_queue.clone(),
+            memory: memory.clone(),
+            history: history.clone(),
+            cron_store: cron_store.clone(),
+            sdd_store: sdd_store.clone(),
+        };
+
+        // Heartbeat — configurable HEARTBEAT.md evaluation loop
+        let heartbeat_ctx = heartbeat_tool_ctx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS)).await;
+
+                match telegram_tools::run_heartbeat(&heartbeat_ctx).await {
+                    Some(report) => {
+                        for &chat_id in &heartbeat_chat_ids {
+                            if let Err(e) =
+                                heartbeat_bot.send_message(ChatId(chat_id), &report).await
+                            {
+                                error!("Heartbeat notification failed: {}", e);
+                            }
+                        }
+                    }
+                    None => {
+                        info!("[heartbeat] All clear, no notification needed");
+                    }
+                }
+            }
+        });
+
+        // Cron runner — checks every minute for due cron jobs
+        let cron_bot = bot.clone();
+        let cron_ctx = heartbeat_tool_ctx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(CRON_CHECK_INTERVAL_SECS)).await;
+
+                let due = cron_ctx.cron_store.due_jobs().await;
+                for job in due {
+                    info!("[cron] Running job: {} -> {}", job.name, job.action);
+                    cron_ctx.cron_store.mark_run(&job.name).await;
+
+                    // Execute the cron action through the agentic loop
+                    let (response, _screenshot) =
+                        telegram_tools::agentic_chat(&cron_ctx, job.chat_id, &job.action, None)
+                            .await;
+
+                    // Send result to the chat that created the cron job
+                    if job.chat_id != 0 {
+                        let msg = format!("[Cron: {}]\n\n{}", job.name, response);
+                        if let Err(e) = cron_bot.send_message(ChatId(job.chat_id), &msg).await {
+                            error!("Cron notification failed: {}", e);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Memory consolidation — runs every 6 hours (nocturnal consolidation)
+        let consolidation_memory = memory.clone();
+        tokio::spawn(async move {
+            // Wait 5 minutes before first consolidation
+            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+
+                if let Some(ref mem) = consolidation_memory {
+                    let m = mem.read().await;
+                    // Standard consolidation: boost/degrade/forget
+                    match m.consolidate().await {
+                        Ok((boosted, degraded, deleted)) => {
+                            info!(
+                                "[consolidation] Memory maintenance: boosted={}, degraded={}, deleted={}",
+                                boosted, degraded, deleted
+                            );
+                        }
+                        Err(e) => {
+                            warn!("[consolidation] Failed: {}", e);
+                        }
+                    }
+                    // Cross-memory consolidation: auto-generate graph links from recent memories
+                    match m.cross_link_recent(&None).await {
+                        Ok(links) if links > 0 => {
+                            info!("[consolidation] Cross-linked {} new relationships", links);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+
+        let tool_ctx = ToolContext {
             router,
+            task_queue,
+            memory,
+            history,
+            cron_store,
+            sdd_store,
+        };
+
+        let ctx = BotCtx {
+            tool_ctx,
             allowed_ids: config.allowed_chat_ids,
             bot_username,
         };
@@ -144,6 +262,10 @@ mod inner {
             .await;
     }
 
+    // -----------------------------------------------------------------------
+    // Message handler — ALL messages go through the agentic loop
+    // -----------------------------------------------------------------------
+
     async fn handle_message(
         bot: Bot,
         msg: Message,
@@ -152,34 +274,34 @@ mod inner {
         let chat_id = msg.chat.id;
         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
 
-        // Auth check — in groups, only respond if mentioned or command
+        // Auth check
         if is_group {
-            let dominated = is_addressed_to_bot(&msg, &ctx.bot_username);
-            if !dominated {
-                return Ok(()); // silently ignore non-addressed group messages
+            if !is_addressed_to_bot(&msg, &ctx.bot_username) {
+                return Ok(());
             }
         } else if !ctx.allowed_ids.is_empty() && !ctx.allowed_ids.contains(&chat_id.0) {
             bot.send_message(chat_id, "No autorizado.").await?;
             return Ok(());
         }
 
-        // Dispatch by message content type
+        // Voice messages: transcribe, then process as natural language
         if let Some(voice) = msg.voice() {
             return handle_voice(bot, msg.clone(), chat_id, voice.file.id.clone(), ctx).await;
         }
 
-        if let Some(photo_sizes) = largest_photo(&msg) {
+        // Photos: vision analysis through agentic loop
+        if let Some(photo_id) = largest_photo(&msg) {
             let caption = msg
                 .caption()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "Describe esta imagen en español.".into());
-            return handle_photo(bot, chat_id, photo_sizes, &caption, ctx).await;
+            return handle_photo(bot, chat_id, photo_id, &caption, ctx).await;
         }
 
+        // Text messages
         let text = match msg.text() {
             Some(t) => {
                 let mut t = t.to_string();
-                // Strip bot mention from group messages
                 if is_group {
                     t = t
                         .replace(&format!("@{}", ctx.bot_username), "")
@@ -201,34 +323,116 @@ mod inner {
 
         info!("Telegram [{}]: {}", chat_id, &text[..text.len().min(100)]);
 
-        // Commands
-        if text.starts_with("/task ") || text.starts_with("/do ") {
-            let objective = text
-                .strip_prefix("/task ")
-                .or_else(|| text.strip_prefix("/do "))
-                .unwrap_or(&text)
-                .to_string();
-            return handle_task(bot, chat_id, objective, ctx).await;
-        }
-        if text.starts_with("/status") {
-            return handle_status(bot, chat_id, ctx).await;
-        }
-        if text.starts_with("/help") || text.starts_with("/start") {
+        // Legacy commands still work for backwards compatibility
+        if text == "/help" || text == "/start" {
             return handle_help(bot, chat_id).await;
         }
-        if text.starts_with("/screenshot") || text.starts_with("/captura") {
-            return handle_screenshot(bot, chat_id).await;
-        }
-        if text.starts_with("/search ") {
-            let query = text.strip_prefix("/search ").unwrap_or("").to_string();
-            return handle_search(bot, chat_id, query, ctx).await;
+        if text == "/new" || text == "/reset" {
+            // Save session summary before clearing
+            let old_messages = ctx.tool_ctx.history.clear(chat_id.0).await;
+            if !old_messages.is_empty() {
+                telegram_tools::save_session_summary(&ctx.tool_ctx, chat_id.0, &old_messages).await;
+            }
+            bot.send_message(chat_id, "Conversacion guardada en memoria y reiniciada.")
+                .await?;
+            return Ok(());
         }
 
-        // Default: chat
-        handle_chat(bot, chat_id, text, ctx).await
+        // /btw — side conversation that doesn't pollute main history
+        if text.starts_with("/btw ") {
+            let side_text = text.strip_prefix("/btw ").unwrap_or(&text);
+            bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
+            // Use a separate "side" chat_id so it doesn't mix with main history
+            let side_id = chat_id.0 ^ 0x7F7F_7F7F; // XOR to create distinct ID
+            let (response, screenshot_path) =
+                telegram_tools::agentic_chat(&ctx.tool_ctx, side_id, side_text, None).await;
+            // Clear the side conversation immediately after (no summary for /btw)
+            let _ = ctx.tool_ctx.history.clear(side_id).await;
+
+            if let Some(ref path) = screenshot_path {
+                let screenshot_file = std::path::Path::new(path);
+                if screenshot_file.exists() {
+                    bot.send_photo(chat_id, InputFile::file(screenshot_file))
+                        .await
+                        .ok();
+                    tokio::fs::remove_file(screenshot_file).await.ok();
+                }
+            }
+            send_chunked(&bot, chat_id, &response).await?;
+            return Ok(());
+        }
+
+        // Everything else goes through the agentic loop (with conversation history)
+        bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
+
+        let (response, screenshot_path) =
+            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, &text, None).await;
+
+        // If SDD checkpoint, send inline buttons for approval
+        if response.contains("--- CHECKPOINT ---") {
+            // Extract SDD ID from response
+            if let Some(sdd_id) = response
+                .lines()
+                .find(|l| l.starts_with("SDD ID: "))
+                .map(|l| l.strip_prefix("SDD ID: ").unwrap_or("").trim().to_string())
+            {
+                // Send result up to checkpoint (without the CHECKPOINT marker)
+                let clean_response = response
+                    .split("--- CHECKPOINT ---")
+                    .next()
+                    .unwrap_or(&response);
+                send_chunked(&bot, chat_id, clean_response).await?;
+
+                // Send approval buttons
+                let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                    InlineKeyboardButton::callback(
+                        "Continuar SDD",
+                        format!("sdd_approve:{}", sdd_id),
+                    ),
+                    InlineKeyboardButton::callback("Abortar SDD", format!("sdd_reject:{}", sdd_id)),
+                ]]);
+
+                let phase_name =
+                    if response.contains("Proponer") && !response.contains("Especificar") {
+                        "Proponer"
+                    } else {
+                        "Disenar"
+                    };
+
+                bot.send_message(
+                    chat_id,
+                    format!(
+                        "Fase {} completada. Quieres que continue con las siguientes fases?",
+                        phase_name
+                    ),
+                )
+                .reply_markup(keyboard)
+                .await?;
+
+                return Ok(());
+            }
+        }
+
+        // If a screenshot was taken, send it as a photo
+        if let Some(ref path) = screenshot_path {
+            let screenshot_file = std::path::Path::new(path);
+            if screenshot_file.exists() {
+                bot.send_photo(chat_id, InputFile::file(screenshot_file))
+                    .await
+                    .ok();
+                tokio::fs::remove_file(screenshot_file).await.ok();
+            }
+        }
+
+        // Send the text response (chunked for Telegram's 4096 limit)
+        send_chunked(&bot, chat_id, &response).await?;
+
+        Ok(())
     }
 
-    // ---- Voice handling ----
+    // -----------------------------------------------------------------------
+    // Voice handling — transcribe then run through agentic loop
+    // -----------------------------------------------------------------------
 
     async fn handle_voice(
         bot: Bot,
@@ -240,7 +444,6 @@ mod inner {
         info!("Telegram [{}]: voice message received", chat_id);
         bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
 
-        // Download voice file
         let file = bot.get_file(&file_id).await?;
         let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
         tokio::fs::create_dir_all(&tmp_dir).await.ok();
@@ -248,7 +451,6 @@ mod inner {
         let mut ogg_file = tokio::fs::File::create(&ogg_path).await?;
         bot.download_file(&file.path, &mut ogg_file).await?;
 
-        // Convert OGG to WAV for Whisper
         let wav_path = ogg_path.with_extension("wav");
         let ffmpeg = tokio::process::Command::new("ffmpeg")
             .args([
@@ -265,7 +467,6 @@ mod inner {
             .await;
 
         let transcription = if ffmpeg.map(|o| o.status.success()).unwrap_or(false) {
-            // Run Whisper STT
             let output = tokio::process::Command::new("whisper-cli")
                 .args([
                     "-m",
@@ -290,15 +491,11 @@ mod inner {
                 }
             }
         } else {
-            bot.send_message(
-                chat_id,
-                "No pude convertir el audio (ffmpeg no disponible).",
-            )
-            .await?;
+            bot.send_message(chat_id, "No pude convertir el audio.")
+                .await?;
             return Ok(());
         };
 
-        // Cleanup temp files
         tokio::fs::remove_file(&ogg_path).await.ok();
         tokio::fs::remove_file(&wav_path).await.ok();
 
@@ -313,33 +510,43 @@ mod inner {
             &transcription[..transcription.len().min(80)]
         );
 
-        // Process transcription through LLM
-        let response_text = chat_with_llm(&ctx, &transcription).await;
+        // Process transcription through agentic loop (natural language!)
+        let (response, screenshot_path) =
+            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, &transcription, None).await;
 
-        // Try to respond with audio via Piper TTS
-        if let Some(audio_path) = text_to_voice(&response_text).await {
+        // Send screenshot if one was taken
+        if let Some(ref path) = screenshot_path {
+            let screenshot_file = std::path::Path::new(path);
+            if screenshot_file.exists() {
+                bot.send_photo(chat_id, InputFile::file(screenshot_file))
+                    .await
+                    .ok();
+                tokio::fs::remove_file(screenshot_file).await.ok();
+            }
+        }
+
+        // Try TTS response
+        if let Some(audio_path) = text_to_voice(&response).await {
             bot.send_voice(chat_id, InputFile::file(&audio_path))
                 .await
                 .ok();
-            // Also send as text for readability
             bot.send_message(
                 chat_id,
                 format!(
-                    "{}\n\n(transcripcion de tu voz: {})",
-                    &response_text[..response_text.len().min(3500)],
+                    "{}\n\n(tu dijiste: {})",
+                    &response[..response.len().min(3500)],
                     &transcription[..transcription.len().min(200)]
                 ),
             )
             .await?;
             tokio::fs::remove_file(&audio_path).await.ok();
         } else {
-            // Fallback: text only
             bot.send_message(
                 chat_id,
                 format!(
                     "(Tu dijiste: {})\n\n{}",
                     &transcription[..transcription.len().min(200)],
-                    &response_text[..response_text.len().min(3500)]
+                    &response[..response.len().min(3500)]
                 ),
             )
             .await?;
@@ -348,7 +555,9 @@ mod inner {
         Ok(())
     }
 
-    // ---- Photo handling ----
+    // -----------------------------------------------------------------------
+    // Photo handling — through agentic loop with vision
+    // -----------------------------------------------------------------------
 
     async fn handle_photo(
         bot: Bot,
@@ -360,7 +569,6 @@ mod inner {
         info!("Telegram [{}]: photo received", chat_id);
         bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
 
-        // Download photo
         let file = bot.get_file(&file_id).await?;
         let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
         tokio::fs::create_dir_all(&tmp_dir).await.ok();
@@ -368,259 +576,35 @@ mod inner {
         let mut img_file = tokio::fs::File::create(&img_path).await?;
         bot.download_file(&file.path, &mut img_file).await?;
 
-        // Encode to base64 for LLM vision
         let img_bytes = tokio::fs::read(&img_path).await?;
         use base64::Engine;
         let b64 = base64::engine::general_purpose::STANDARD.encode(&img_bytes);
         let data_url = format!("data:image/jpeg;base64,{}", b64);
 
-        let request = RouterRequest {
-            messages: vec![
-                ChatMessage {
-                    role: "system".into(),
-                    content: serde_json::Value::String(
-                        "Eres Axi, asistente visual de LifeOS. Describe y analiza imagenes en español de forma concisa.".into(),
-                    ),
-                },
-                ChatMessage {
-                    role: "user".into(),
-                    content: serde_json::json!([
-                        { "type": "text", "text": caption },
-                        { "type": "image_url", "image_url": { "url": data_url } }
-                    ]),
-                },
-            ],
-            complexity: Some(TaskComplexity::Vision),
-            sensitivity: None,
-            preferred_provider: None,
-            max_tokens: Some(1024),
-        };
-
-        let router = ctx.router.read().await;
-        let reply = match router.chat(&request).await {
-            Ok(r) => format!("{}\n\n[{}]", r.text, r.provider),
-            Err(e) => format!("No pude analizar la imagen: {}", e),
-        };
-
         tokio::fs::remove_file(&img_path).await.ok();
 
-        for chunk in reply.as_bytes().chunks(4000) {
-            bot.send_message(chat_id, String::from_utf8_lossy(chunk).to_string())
-                .await?;
-        }
+        // Process through agentic loop with image
+        let (response, screenshot_path) =
+            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, caption, Some(&data_url)).await;
 
-        Ok(())
-    }
-
-    // ---- Search ----
-
-    async fn handle_search(
-        bot: Bot,
-        chat_id: ChatId,
-        query: String,
-        ctx: BotCtx,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Telegram [{}]: /search {}", chat_id, query);
-        bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
-
-        // Use Serper if available, otherwise use LLM with search instruction
-        let serper_key = std::env::var("SERPER_API_KEY").unwrap_or_default();
-
-        let search_results = if !serper_key.is_empty() {
-            // Direct Serper search
-            let client = reqwest::Client::new();
-            let res = client
-                .post("https://google.serper.dev/search")
-                .header("X-API-KEY", &serper_key)
-                .json(&serde_json::json!({"q": query, "num": 5}))
-                .send()
-                .await;
-
-            match res {
-                Ok(r) if r.status().is_success() => {
-                    let body: serde_json::Value = r.json().await.unwrap_or_default();
-                    let organic = body["organic"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .take(5)
-                                .map(|item| {
-                                    format!(
-                                        "- {} ({})\n  {}",
-                                        item["title"].as_str().unwrap_or(""),
-                                        item["link"].as_str().unwrap_or(""),
-                                        item["snippet"].as_str().unwrap_or("")
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        })
-                        .unwrap_or_else(|| "Sin resultados".into());
-                    format!("Resultados para '{}':\n\n{}", query, organic)
-                }
-                _ => "Error en busqueda Serper".into(),
-            }
-        } else {
-            // Fallback: ask LLM to search (works if Groq compound is available)
-            chat_with_llm(
-                &ctx,
-                &format!(
-                    "Busca en internet informacion actualizada sobre: {}. Dame los resultados mas relevantes.",
-                    query
-                ),
-            )
-            .await
-        };
-
-        for chunk in search_results.as_bytes().chunks(4000) {
-            bot.send_message(chat_id, String::from_utf8_lossy(chunk).to_string())
-                .await?;
-        }
-        Ok(())
-    }
-
-    // ---- Task, Status, Help, Chat handlers ----
-
-    async fn handle_screenshot(
-        bot: Bot,
-        chat_id: ChatId,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Telegram [{}]: screenshot requested", chat_id);
-        bot.send_chat_action(chat_id, ChatAction::UploadPhoto)
-            .await
-            .ok();
-
-        let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
-        tokio::fs::create_dir_all(&tmp_dir).await.ok();
-        let path = tmp_dir.join(format!("screen-{}.png", chrono::Utc::now().timestamp()));
-
-        let output = tokio::process::Command::new("grim")
-            .arg(&path)
-            .output()
-            .await;
-
-        let captured = match output {
-            Ok(o) if o.status.success() => true,
-            _ => {
-                // Fallback
-                tokio::process::Command::new("gnome-screenshot")
-                    .args(["-f", &path.to_string_lossy()])
-                    .output()
+        if let Some(ref path) = screenshot_path {
+            let screenshot_file = std::path::Path::new(path);
+            if screenshot_file.exists() {
+                bot.send_photo(chat_id, InputFile::file(screenshot_file))
                     .await
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-            }
-        };
-
-        if captured && path.exists() {
-            bot.send_photo(chat_id, InputFile::file(&path)).await?;
-            tokio::fs::remove_file(&path).await.ok();
-        } else {
-            bot.send_message(chat_id, "No pude capturar la pantalla.")
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn handle_task(
-        bot: Bot,
-        chat_id: ChatId,
-        objective: String,
-        ctx: BotCtx,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        match ctx.task_queue.enqueue(TaskCreate {
-            objective: objective.clone(),
-            priority: TaskPriority::Normal,
-            source: "telegram".into(),
-            max_attempts: 3,
-        }) {
-            Ok(task) => {
-                bot.send_message(
-                    chat_id,
-                    format!(
-                        "Tarea creada:\n{}\n\nID: {}\nTe avisare cuando termine.",
-                        objective, task.id
-                    ),
-                )
-                .await?;
-            }
-            Err(e) => {
-                bot.send_message(chat_id, format!("Error: {}", e)).await?;
+                    .ok();
+                tokio::fs::remove_file(screenshot_file).await.ok();
             }
         }
+
+        send_chunked(&bot, chat_id, &response).await?;
+
         Ok(())
     }
 
-    async fn handle_status(
-        bot: Bot,
-        chat_id: ChatId,
-        ctx: BotCtx,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let summary = ctx.task_queue.summary().unwrap_or_default();
-        let recent = ctx.task_queue.list(None, 5).unwrap_or_default();
-        let mut reply = format!(
-            "Estado de LifeOS:\n{}",
-            serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "{}".into())
-        );
-        if !recent.is_empty() {
-            reply.push_str("\n\nUltimas tareas:");
-            for t in &recent {
-                reply.push_str(&format!(
-                    "\n- [{}] {}",
-                    serde_json::to_value(t.status)
-                        .unwrap_or_default()
-                        .as_str()
-                        .unwrap_or("?"),
-                    &t.objective[..t.objective.len().min(60)],
-                ));
-            }
-        }
-        bot.send_message(chat_id, reply).await?;
-        Ok(())
-    }
-
-    async fn handle_help(
-        bot: Bot,
-        chat_id: ChatId,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        bot.send_message(
-            chat_id,
-            "Soy Axi, tu asistente de LifeOS.\n\n\
-             Comandos:\n\
-             /do <tarea> — Crear tarea para el supervisor\n\
-             /task <tarea> — Igual que /do\n\
-             /search <query> — Buscar en internet\n\
-             /screenshot — Capturar pantalla y enviarla\n\
-             /status — Ver estado de tareas\n\
-             /help — Este mensaje\n\n\
-             Tambien puedes:\n\
-             - Enviar texto y te respondo\n\
-             - Enviar nota de voz y te respondo con voz\n\
-             - Enviar foto y la analizo\n\
-             - En grupos, mencioname con @\n\n\
-             Cuando una tarea termine, te aviso automaticamente.",
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn handle_chat(
-        bot: Bot,
-        chat_id: ChatId,
-        text: String,
-        ctx: BotCtx,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
-
-        let reply = chat_with_llm(&ctx, &text).await;
-        for chunk in reply.as_bytes().chunks(4000) {
-            bot.send_message(chat_id, String::from_utf8_lossy(chunk).to_string())
-                .await?;
-        }
-        Ok(())
-    }
-
-    // ---- Callback query handler (inline button presses) ----
+    // -----------------------------------------------------------------------
+    // Callback query handler (inline button presses for approvals)
+    // -----------------------------------------------------------------------
 
     async fn handle_callback(
         bot: Bot,
@@ -632,10 +616,58 @@ mod inner {
         let data = q.data.unwrap_or_default();
         let chat_id = q.message.as_ref().map(|m| m.chat().id).unwrap_or(ChatId(0));
 
-        if let Some(task_id) = data.strip_prefix("approve:") {
+        if let Some(sdd_id) = data.strip_prefix("sdd_approve:") {
+            info!("Telegram: SDD {} approved, continuing...", sdd_id);
+            bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
+            bot.send_message(chat_id, "Continuando con las siguientes fases SDD...")
+                .await?;
+
+            match telegram_tools::sdd_continue(&ctx.tool_ctx, sdd_id).await {
+                Some((result, paused, new_id, _chat)) => {
+                    if paused {
+                        // Another checkpoint — send buttons again
+                        let clean = result.split("--- CHECKPOINT ---").next().unwrap_or(&result);
+                        send_chunked(&bot, chat_id, clean).await?;
+
+                        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+                            InlineKeyboardButton::callback(
+                                "Continuar SDD",
+                                format!("sdd_approve:{}", new_id),
+                            ),
+                            InlineKeyboardButton::callback(
+                                "Abortar SDD",
+                                format!("sdd_reject:{}", new_id),
+                            ),
+                        ]]);
+                        bot.send_message(chat_id, "Fase completada. Continuar?")
+                            .reply_markup(keyboard)
+                            .await?;
+                    } else {
+                        // SDD complete
+                        send_chunked(&bot, chat_id, &result).await?;
+                        bot.send_message(chat_id, "SDD completado y guardado en memoria.")
+                            .await?;
+                    }
+                }
+                None => {
+                    bot.send_message(chat_id, "Sesion SDD no encontrada (puede haber expirado).")
+                        .await?;
+                }
+            }
+        } else if let Some(sdd_id) = data.strip_prefix("sdd_reject:") {
+            info!("Telegram: SDD {} rejected", sdd_id);
+            match telegram_tools::sdd_abort(&ctx.tool_ctx, sdd_id).await {
+                Some(msg) => {
+                    send_chunked(&bot, chat_id, &msg).await?;
+                }
+                None => {
+                    bot.send_message(chat_id, "SDD abortado.").await?;
+                }
+            }
+        } else if let Some(task_id) = data.strip_prefix("approve:") {
             info!("Telegram: task {} approved via button", task_id);
-            // Re-enqueue the task (it was waiting for approval)
-            match ctx.task_queue.enqueue(TaskCreate {
+            use crate::task_queue::{TaskCreate, TaskPriority};
+            match ctx.tool_ctx.task_queue.enqueue(TaskCreate {
                 objective: format!("[APPROVED] {}", task_id),
                 priority: TaskPriority::High,
                 source: "telegram-approval".into(),
@@ -657,61 +689,71 @@ mod inner {
         Ok(())
     }
 
-    /// Send an approval request with inline buttons.
-    /// Used by the supervisor for medium-risk actions.
-    #[allow(dead_code)]
-    pub async fn send_approval_request(
-        bot: &Bot,
-        chat_id: ChatId,
-        task_description: &str,
-        task_id: &str,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let keyboard = InlineKeyboardMarkup::new(vec![vec![
-            InlineKeyboardButton::callback("Aprobar", format!("approve:{}", task_id)),
-            InlineKeyboardButton::callback("Rechazar", format!("reject:{}", task_id)),
-        ]]);
+    // -----------------------------------------------------------------------
+    // Help (the only remaining /command — everything else is natural language)
+    // -----------------------------------------------------------------------
 
+    async fn handle_help(
+        bot: Bot,
+        chat_id: ChatId,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         bot.send_message(
             chat_id,
-            format!(
-                "Accion de riesgo medio requiere aprobacion:\n\n{}\n\nQuieres ejecutarla?",
-                task_description
-            ),
+            "Soy Axi, tu asistente de LifeOS.\n\n\
+             Hablame de forma natural, como a un amigo. Puedo:\n\n\
+             - Ver cuantos archivos tienes en una carpeta\n\
+             - Buscar informacion en internet\n\
+             - Tomar y enviarte capturas de pantalla\n\
+             - Navegar paginas web y analizarlas\n\
+             - Instalar aplicaciones\n\
+             - Ejecutar comandos en tu sistema\n\
+             - Escribir y leer archivos\n\
+             - Controlar tu computadora (teclado, mouse)\n\
+             - Recordar cosas que me digas\n\
+             - Programar tareas recurrentes (cron)\n\
+             - Monitorear tu sistema y avisarte si algo anda mal\n\
+             - Analizar fotos que me envies\n\
+             - Responder notas de voz con voz\n\n\
+             Recuerdo la conversacion — puedes hacer follow-ups.\n\n\
+             Ejemplos:\n\
+             \"Cuantos archivos tengo en Descargas?\"\n\
+             \"Busca el clima de hoy en mi ciudad\"\n\
+             \"Abre google.com y dime que ves\"\n\
+             \"Cada dia a las 7am dame un resumen del sistema\"\n\n\
+             /new — Reiniciar conversacion\n\
+             /help — Este mensaje\n\n\
+             En grupos, mencioname con @. Te monitoreo cada 30 min.",
         )
-        .reply_markup(keyboard)
         .await?;
-
         Ok(())
     }
 
-    // ---- Shared helpers ----
+    // -----------------------------------------------------------------------
+    // Shared helpers
+    // -----------------------------------------------------------------------
 
-    async fn chat_with_llm(ctx: &BotCtx, text: &str) -> String {
-        let request = RouterRequest {
-            messages: vec![
-                ChatMessage {
-                    role: "system".into(),
-                    content: serde_json::Value::String(
-                        "Eres Axi, el asistente AI de LifeOS. Responde conciso y util en español."
-                            .into(),
-                    ),
-                },
-                ChatMessage {
-                    role: "user".into(),
-                    content: serde_json::Value::String(text.into()),
-                },
-            ],
-            complexity: Some(TaskComplexity::Medium),
-            sensitivity: None,
-            preferred_provider: None,
-            max_tokens: Some(1024),
-        };
-
-        let router = ctx.router.read().await;
-        match router.chat(&request).await {
-            Ok(r) => format!("{}\n\n[{}]", r.text, r.provider),
-            Err(e) => format!("Error: {}", e),
+    /// Send a long message in chunks (Telegram has 4096 char limit).
+    async fn send_chunked(
+        bot: &Bot,
+        chat_id: ChatId,
+        text: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Split on char boundaries respecting Telegram's limit
+        let max = 4000;
+        let mut start = 0;
+        while start < text.len() {
+            let mut end = (start + max).min(text.len());
+            // Find char boundary
+            while end > start && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == start {
+                break;
+            }
+            bot.send_message(chat_id, &text[start..end]).await?;
+            start = end;
         }
+        Ok(())
     }
 
     /// Convert text to voice using Piper TTS. Returns path to OGG file or None.
@@ -721,7 +763,13 @@ mod inner {
         let wav_path = tmp_dir.join(format!("tts-{}.wav", chrono::Utc::now().timestamp()));
         let ogg_path = wav_path.with_extension("ogg");
 
-        // Piper TTS: text -> WAV
+        // Strip provider tag for TTS
+        let clean_text = if let Some(pos) = text.rfind("\n\n[") {
+            &text[..pos]
+        } else {
+            text
+        };
+
         let piper = tokio::process::Command::new("/opt/lifeos/piper-tts/piper")
             .args([
                 "--model",
@@ -736,7 +784,7 @@ mod inner {
             if let Some(mut stdin) = child.stdin.take() {
                 use tokio::io::AsyncWriteExt;
                 stdin
-                    .write_all(text[..text.len().min(500)].as_bytes())
+                    .write_all(clean_text[..clean_text.len().min(500)].as_bytes())
                     .await
                     .ok();
                 drop(stdin);
@@ -749,7 +797,6 @@ mod inner {
             return None;
         }
 
-        // Convert WAV -> OGG (Telegram requires OGG/OPUS for voice)
         let ffmpeg = tokio::process::Command::new("ffmpeg")
             .args([
                 "-i",
@@ -775,16 +822,14 @@ mod inner {
         if bot_username.is_empty() {
             return false;
         }
-        // Check text for @mention or /command
         if let Some(text) = msg.text() {
             if text.contains(&format!("@{}", bot_username)) {
                 return true;
             }
             if text.starts_with('/') {
-                return true; // all /commands in groups are addressed
+                return true;
             }
         }
-        // Check caption for mention
         if let Some(caption) = msg.caption() {
             if caption.contains(&format!("@{}", bot_username)) {
                 return true;
@@ -800,6 +845,32 @@ mod inner {
             }
         }
         None
+    }
+
+    /// Send an approval request with inline buttons.
+    #[allow(dead_code)]
+    pub async fn send_approval_request(
+        bot: &Bot,
+        chat_id: ChatId,
+        task_description: &str,
+        task_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let keyboard = InlineKeyboardMarkup::new(vec![vec![
+            InlineKeyboardButton::callback("Aprobar", format!("approve:{}", task_id)),
+            InlineKeyboardButton::callback("Rechazar", format!("reject:{}", task_id)),
+        ]]);
+
+        bot.send_message(
+            chat_id,
+            format!(
+                "Accion requiere aprobacion:\n\n{}\n\nQuieres ejecutarla?",
+                task_description
+            ),
+        )
+        .reply_markup(keyboard)
+        .await?;
+
+        Ok(())
     }
 
     fn format_notification(n: &SupervisorNotification) -> String {

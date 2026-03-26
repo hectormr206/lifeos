@@ -359,11 +359,11 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parses_intents_jarvis_start() {
+    fn test_cli_parses_intents_autonomy_start() {
         let cli = Cli::parse_from([
             "life",
             "intents",
-            "jarvis",
+            "autonomy",
             "start",
             "--pin",
             "1234",
@@ -373,14 +373,14 @@ mod tests {
             "user://local/admin",
         ]);
         match cli.command.expect("Expected command") {
-            Commands::Intents(commands::intents::IntentsCommands::Jarvis(
-                commands::intents::IntentJarvisCommands::Start { pin, ttl, actor },
+            Commands::Intents(commands::intents::IntentsCommands::Autonomy(
+                commands::intents::IntentAutonomyCommands::Start { pin, ttl, actor },
             )) => {
                 assert_eq!(pin, "1234");
                 assert_eq!(ttl, 25);
                 assert_eq!(actor, "user://local/admin");
             }
-            _ => panic!("Expected intents jarvis start command"),
+            _ => panic!("Expected intents autonomy start command"),
         }
     }
 

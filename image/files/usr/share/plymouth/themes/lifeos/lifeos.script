@@ -1,0 +1,157 @@
+// LifeOS Plymouth Theme
+// Boot: Animated Axi orb with pulsing teal glow + progress dots
+// Shutdown: Axi orb fading with "Hasta pronto" message
+// Update: Axi orb with "Actualizando LifeOS..." message
+
+// ── Background ──────────────────────────────────────────────
+Window.SetBackgroundTopColor(0.10, 0.10, 0.18);    // #1a1a2e
+Window.SetBackgroundBottomColor(0.06, 0.13, 0.24);  // #0f2140
+
+// ── Screen dimensions ───────────────────────────────────────
+screen_width = Window.GetWidth();
+screen_height = Window.GetHeight();
+center_x = screen_width / 2;
+center_y = screen_height / 2;
+
+// ── Detect mode ─────────────────────────────────────────────
+mode = Plymouth.GetMode();
+// mode: "boot", "shutdown", "suspend", "resume", "updates"
+
+// ── Logo image ──────────────────────────────────────────────
+logo = Image("logo.png");
+logo_width = logo.GetWidth();
+logo_height = logo.GetHeight();
+logo_sprite = Sprite(logo);
+logo_sprite.SetX(center_x - logo_width / 2);
+logo_sprite.SetY(center_y - logo_height / 2 - 40);
+logo_sprite.SetOpacity(1.0);
+
+// ── Brand text ──────────────────────────────────────────────
+brand = Image("brand.png");
+brand_sprite = Sprite(brand);
+brand_width = brand.GetWidth();
+brand_height = brand.GetHeight();
+brand_sprite.SetX(center_x - brand_width / 2);
+brand_sprite.SetY(center_y + logo_height / 2);
+brand_sprite.SetOpacity(0.8);
+
+// ── Status message (shown below brand for shutdown/update) ──
+status_sprite = Sprite();
+status_y = center_y + logo_height / 2 + 50;
+
+if (mode == "shutdown" || mode == "suspend") {
+    status_text = Image.Text("Hasta pronto", 0.0, 0.83, 0.67, "Sans 16");
+    status_sprite.SetImage(status_text);
+    status_sprite.SetX(center_x - status_text.GetWidth() / 2);
+    status_sprite.SetY(status_y);
+    status_sprite.SetOpacity(0.9);
+} else if (mode == "updates") {
+    status_text = Image.Text("Actualizando LifeOS...", 0.0, 0.83, 0.67, "Sans 16");
+    status_sprite.SetImage(status_text);
+    status_sprite.SetX(center_x - status_text.GetWidth() / 2);
+    status_sprite.SetY(status_y);
+    status_sprite.SetOpacity(0.9);
+}
+
+// ── Progress dots (only for boot and updates) ───────────────
+dot_count = 5;
+dot_spacing = 20;
+dot_y = status_y + 40;
+dot_start_x = center_x - ((dot_count - 1) * dot_spacing) / 2;
+
+dot_on = Image("dot-on.png");
+dot_off = Image("dot-off.png");
+
+dots = [];
+show_dots = (mode == "boot" || mode == "resume" || mode == "updates");
+
+if (show_dots) {
+    for (i = 0; i < dot_count; i++) {
+        dots[i] = Sprite(dot_off);
+        dots[i].SetX(dot_start_x + i * dot_spacing - dot_on.GetWidth() / 2);
+        dots[i].SetY(dot_y);
+        dots[i].SetOpacity(0.6);
+    }
+}
+
+// ── Animation state ─────────────────────────────────────────
+progress = 0;
+frame = 0;
+pulse_direction = 1;
+pulse_opacity = 0.7;
+// For shutdown: fade direction
+shutdown_opacity = 1.0;
+
+// ── Boot/update progress callback ───────────────────────────
+fun boot_progress_cb(duration, prog) {
+    progress = prog;
+
+    if (show_dots) {
+        active_dots = Math.Int(prog * dot_count);
+        for (i = 0; i < dot_count; i++) {
+            if (i < active_dots)
+                dots[i].SetImage(dot_on);
+            else
+                dots[i].SetImage(dot_off);
+        }
+    }
+}
+Plymouth.SetBootProgressFunction(boot_progress_cb);
+
+// ── Refresh callback (animation loop) ───────────────────────
+fun refresh_cb() {
+    frame++;
+
+    if (mode == "shutdown" || mode == "suspend") {
+        // Slow fade out for shutdown
+        if (shutdown_opacity > 0.2) {
+            shutdown_opacity -= 0.002;
+            logo_sprite.SetOpacity(shutdown_opacity);
+            brand_sprite.SetOpacity(shutdown_opacity * 0.8);
+            status_sprite.SetOpacity(shutdown_opacity * 0.9);
+        }
+    } else {
+        // Pulse for boot/resume/updates
+        pulse_opacity += 0.008 * pulse_direction;
+        if (pulse_opacity >= 1.0) {
+            pulse_opacity = 1.0;
+            pulse_direction = -1;
+        }
+        if (pulse_opacity <= 0.6) {
+            pulse_opacity = 0.6;
+            pulse_direction = 1;
+        }
+        logo_sprite.SetOpacity(pulse_opacity);
+    }
+}
+Plymouth.SetRefreshFunction(refresh_cb);
+
+// ── Quit callback ───────────────────────────────────────────
+fun quit_cb() {
+    logo_sprite.SetOpacity(0);
+    brand_sprite.SetOpacity(0);
+    status_sprite.SetOpacity(0);
+    if (show_dots) {
+        for (i = 0; i < dot_count; i++)
+            dots[i].SetOpacity(0);
+    }
+}
+Plymouth.SetQuitFunction(quit_cb);
+
+// ── Password prompt (for LUKS encryption) ───────────────────
+fun display_password_cb(prompt, bullets) {
+    // Plymouth renders its built-in password dialog on top
+    // Our theme background and logo remain visible behind it
+}
+Plymouth.SetDisplayPasswordFunction(display_password_cb);
+
+// ── System messages ─────────────────────────────────────────
+message_sprite = Sprite();
+fun message_cb(text) {
+    msg_image = Image.Text(text, 0.9, 0.9, 0.9, "Sans 12");
+    message_sprite.SetImage(msg_image);
+    message_sprite.SetX(center_x - msg_image.GetWidth() / 2);
+    message_sprite.SetY(screen_height - 60);
+    message_sprite.SetOpacity(0.7);
+}
+Plymouth.SetMessageFunction(message_cb);

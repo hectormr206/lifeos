@@ -169,7 +169,7 @@ pub struct TrustModeState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct JarvisSessionState {
+pub struct AutonomySessionState {
     pub active: bool,
     pub activated_by: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
@@ -337,7 +337,7 @@ struct AgentRuntimeState {
     #[serde(default)]
     trust_mode: TrustModeState,
     #[serde(default)]
-    jarvis: JarvisSessionState,
+    autonomy: AutonomySessionState,
     #[serde(default)]
     resource_runtime: ResourceRuntimeState,
     #[serde(default)]
@@ -483,14 +483,14 @@ impl AgentRuntimeManager {
         let risk = state.intents[intent_idx].risk.clone();
         let exec_mode = state.execution_mode.clone();
         let trust_enabled = state.trust_mode.enabled;
-        let jarvis_active = state.jarvis.active
+        let autonomy_active = state.autonomy.active
             && state
-                .jarvis
+                .autonomy
                 .expires_at
                 .map(|expiry| expiry > Utc::now())
                 .unwrap_or(false);
         if matches!(risk.as_str(), "high" | "critical") && !approved {
-            if jarvis_active
+            if autonomy_active
                 || (trust_enabled
                     && matches!(
                         exec_mode,
@@ -506,7 +506,7 @@ impl AgentRuntimeManager {
                     serde_json::json!({
                         "risk": risk,
                         "execution_mode": format_execution_mode(&exec_mode),
-                        "reason": if jarvis_active { "jarvis_session_active" } else { "trust_mode_enabled" },
+                        "reason": if autonomy_active { "autonomy_session_active" } else { "trust_mode_enabled" },
                     }),
                 );
             } else {
@@ -771,7 +771,7 @@ impl AgentRuntimeManager {
             default_command,
             exec_mode,
             trust_enabled,
-            jarvis_active,
+            autonomy_active,
         ) = {
             let state = self.state.read().await;
             let intent = state
@@ -785,9 +785,9 @@ impl AgentRuntimeManager {
                 intent_default_command(&intent.action),
                 state.execution_mode.clone(),
                 state.trust_mode.enabled,
-                state.jarvis.active
+                state.autonomy.active
                     && state
-                        .jarvis
+                        .autonomy
                         .expires_at
                         .map(|expiry| expiry > Utc::now())
                         .unwrap_or(false),
@@ -795,7 +795,7 @@ impl AgentRuntimeManager {
         };
 
         if matches!(intent_risk.as_str(), "high" | "critical") && !approved {
-            if jarvis_active
+            if autonomy_active
                 || (trust_enabled
                     && matches!(
                         exec_mode,
@@ -810,7 +810,7 @@ impl AgentRuntimeManager {
                     "auto_approved",
                     intent_id,
                     serde_json::json!({
-                        "reason": if jarvis_active { "jarvis_session_active" } else { "trust_mode_enabled" },
+                        "reason": if autonomy_active { "autonomy_session_active" } else { "trust_mode_enabled" },
                         "execution_mode": format_execution_mode(&exec_mode),
                         "risk": intent_risk
                     }),
@@ -1653,25 +1653,25 @@ impl AgentRuntimeManager {
         state.trust_mode.clone()
     }
 
-    pub async fn jarvis_session(&self) -> JarvisSessionState {
+    pub async fn autonomy_session(&self) -> AutonomySessionState {
         let mut state = self.state.write().await;
-        refresh_jarvis_session(&mut state);
-        state.jarvis.clone()
+        refresh_autonomy_session(&mut state);
+        state.autonomy.clone()
     }
 
-    pub async fn start_jarvis_session(
+    pub async fn start_autonomy_session(
         &self,
         actor: Option<&str>,
         pin: &str,
         ttl_minutes: u32,
-    ) -> Result<JarvisSessionState> {
+    ) -> Result<AutonomySessionState> {
         let actor = actor.unwrap_or("user://local/default").trim();
         let pin = pin.trim();
         if pin.len() < 4 {
-            anyhow::bail!("jarvis pin must be at least 4 characters");
+            anyhow::bail!("autonomy pin must be at least 4 characters");
         }
         if !(15..=60).contains(&ttl_minutes) {
-            anyhow::bail!("jarvis ttl must be between 15 and 60 minutes");
+            anyhow::bail!("autonomy ttl must be between 15 and 60 minutes");
         }
 
         let now = Utc::now();
@@ -1679,9 +1679,9 @@ impl AgentRuntimeManager {
         let pin_sha256 = format!("{:x}", Sha256::digest(pin.as_bytes()));
 
         let mut state = self.state.write().await;
-        refresh_jarvis_session(&mut state);
-        if state.jarvis.active {
-            anyhow::bail!("jarvis session already active");
+        refresh_autonomy_session(&mut state);
+        if state.autonomy.active {
+            anyhow::bail!("autonomy session already active");
         }
 
         let capabilities = [
@@ -1697,12 +1697,12 @@ impl AgentRuntimeManager {
             token_ids.push(token_id.clone());
             state.tokens.push(CapabilityTokenRecord {
                 token_id: token_id.clone(),
-                token: format!("lifeid.jarvis.{}.{}", token_id, Uuid::new_v4().simple()),
+                token: format!("lifeid.autonomy.{}.{}", token_id, Uuid::new_v4().simple()),
                 issuer: "life-id.local".to_string(),
-                subject: "agent://jarvis-session/primary".to_string(),
-                acting_as: format!("agent://jarvis-session/{}", actor.replace('/', "_")),
+                subject: "agent://autonomy-session/primary".to_string(),
+                acting_as: format!("agent://autonomy-session/{}", actor.replace('/', "_")),
                 capabilities: vec![capability.to_string()],
-                scope: "scope://jarvis/session".to_string(),
+                scope: "scope://autonomy/session".to_string(),
                 risk: "high".to_string(),
                 issued_at: now,
                 expires_at,
@@ -1711,7 +1711,7 @@ impl AgentRuntimeManager {
             });
         }
 
-        state.jarvis = JarvisSessionState {
+        state.autonomy = AutonomySessionState {
             active: true,
             activated_by: Some(actor.to_string()),
             started_at: Some(now),
@@ -1723,9 +1723,9 @@ impl AgentRuntimeManager {
         state.execution_mode = ExecutionMode::RunUntilDone;
         append_ledger(
             &mut state,
-            "jarvis",
+            "autonomy",
             "start",
-            "jarvis-session",
+            "autonomy-session",
             serde_json::json!({
                 "actor": actor,
                 "ttl_minutes": ttl_minutes,
@@ -1735,22 +1735,22 @@ impl AgentRuntimeManager {
             }),
         );
 
-        let snapshot = state.jarvis.clone();
+        let snapshot = state.autonomy.clone();
         drop(state);
         self.save_state().await?;
         Ok(snapshot)
     }
 
-    pub async fn stop_jarvis_session(&self, actor: Option<&str>) -> Result<JarvisSessionState> {
+    pub async fn stop_autonomy_session(&self, actor: Option<&str>) -> Result<AutonomySessionState> {
         let actor = actor.unwrap_or("user://local/default");
         let now = Utc::now();
         let mut state = self.state.write().await;
-        refresh_jarvis_session(&mut state);
-        if !state.jarvis.active {
-            return Ok(state.jarvis.clone());
+        refresh_autonomy_session(&mut state);
+        if !state.autonomy.active {
+            return Ok(state.autonomy.clone());
         }
 
-        let token_ids = state.jarvis.token_ids.clone();
+        let token_ids = state.autonomy.token_ids.clone();
         for token in state.tokens.iter_mut() {
             if token_ids.iter().any(|id| id == &token.token_id) {
                 token.revoked = true;
@@ -1758,42 +1758,42 @@ impl AgentRuntimeManager {
             }
         }
 
-        state.jarvis.active = false;
-        state.jarvis.expires_at = Some(now);
+        state.autonomy.active = false;
+        state.autonomy.expires_at = Some(now);
         state.execution_mode = ExecutionMode::Interactive;
         append_ledger(
             &mut state,
-            "jarvis",
+            "autonomy",
             "stop",
-            "jarvis-session",
+            "autonomy-session",
             serde_json::json!({
                 "actor": actor,
                 "revoked_tokens": token_ids,
                 "execution_mode": "interactive",
             }),
         );
-        let snapshot = state.jarvis.clone();
+        let snapshot = state.autonomy.clone();
         drop(state);
         self.save_state().await?;
         Ok(snapshot)
     }
 
-    pub async fn trigger_kill_switch(&self, actor: Option<&str>) -> Result<JarvisSessionState> {
+    pub async fn trigger_kill_switch(&self, actor: Option<&str>) -> Result<AutonomySessionState> {
         let actor = actor.unwrap_or("user://local/default");
         let now = Utc::now();
         let mut state = self.state.write().await;
-        refresh_jarvis_session(&mut state);
+        refresh_autonomy_session(&mut state);
 
-        let token_ids = state.jarvis.token_ids.clone();
+        let token_ids = state.autonomy.token_ids.clone();
         for token in state.tokens.iter_mut() {
             if token_ids.iter().any(|id| id == &token.token_id) {
                 token.revoked = true;
                 token.revoked_at = Some(now);
             }
         }
-        state.jarvis.active = false;
-        state.jarvis.kill_switch_armed = true;
-        state.jarvis.expires_at = Some(now);
+        state.autonomy.active = false;
+        state.autonomy.kill_switch_armed = true;
+        state.autonomy.expires_at = Some(now);
         state.execution_mode = ExecutionMode::Interactive;
         state.trust_mode.enabled = false;
         state.trust_mode.updated_at = Some(now);
@@ -1801,7 +1801,7 @@ impl AgentRuntimeManager {
 
         append_ledger(
             &mut state,
-            "jarvis",
+            "autonomy",
             "kill_switch",
             "super-escape",
             serde_json::json!({
@@ -1811,7 +1811,7 @@ impl AgentRuntimeManager {
                 "execution_mode": "interactive"
             }),
         );
-        let snapshot = state.jarvis.clone();
+        let snapshot = state.autonomy.clone();
         drop(state);
         self.save_state().await?;
         Ok(snapshot)
@@ -2236,12 +2236,12 @@ fn append_ledger(
     });
 }
 
-fn refresh_jarvis_session(state: &mut AgentRuntimeState) {
-    if !state.jarvis.active {
+fn refresh_autonomy_session(state: &mut AgentRuntimeState) {
+    if !state.autonomy.active {
         return;
     }
     let expired = state
-        .jarvis
+        .autonomy
         .expires_at
         .map(|expiry| expiry <= Utc::now())
         .unwrap_or(true);
@@ -2250,20 +2250,20 @@ fn refresh_jarvis_session(state: &mut AgentRuntimeState) {
     }
 
     let now = Utc::now();
-    let token_ids = state.jarvis.token_ids.clone();
+    let token_ids = state.autonomy.token_ids.clone();
     for token in state.tokens.iter_mut() {
         if token_ids.iter().any(|id| id == &token.token_id) {
             token.revoked = true;
             token.revoked_at = Some(now);
         }
     }
-    state.jarvis.active = false;
+    state.autonomy.active = false;
     state.execution_mode = ExecutionMode::Interactive;
     append_ledger(
         state,
-        "jarvis",
+        "autonomy",
         "expire",
-        "jarvis-session",
+        "autonomy-session",
         serde_json::json!({
             "expired_at": now,
             "revoked_tokens": token_ids,
@@ -2817,12 +2817,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn jarvis_session_start_and_stop_revokes_tokens() {
-        let dir = temp_dir("agent-runtime-test-jarvis");
+    async fn autonomy_session_start_and_stop_revokes_tokens() {
+        let dir = temp_dir("agent-runtime-test-autonomy");
         let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
 
         let started = mgr
-            .start_jarvis_session(Some("user://local/admin"), "1234", 20)
+            .start_autonomy_session(Some("user://local/admin"), "1234", 20)
             .await
             .unwrap();
         assert!(started.active);
@@ -2830,7 +2830,7 @@ mod tests {
         assert_eq!(mgr.execution_mode().await, ExecutionMode::RunUntilDone);
 
         let stopped = mgr
-            .stop_jarvis_session(Some("user://local/admin"))
+            .stop_autonomy_session(Some("user://local/admin"))
             .await
             .unwrap();
         assert!(!stopped.active);
@@ -2840,11 +2840,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn jarvis_session_auto_approves_high_risk_intents() {
-        let dir = temp_dir("agent-runtime-test-jarvis-auto");
+    async fn autonomy_session_auto_approves_high_risk_intents() {
+        let dir = temp_dir("agent-runtime-test-autonomy-auto");
         let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
 
-        mgr.start_jarvis_session(Some("user://local/admin"), "5678", 20)
+        mgr.start_autonomy_session(Some("user://local/admin"), "5678", 20)
             .await
             .unwrap();
         let planned = mgr.plan_intent("install updates now").await.unwrap();

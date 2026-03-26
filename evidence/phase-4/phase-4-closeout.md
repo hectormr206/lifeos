@@ -33,7 +33,7 @@ Observed sensory performance:
 
 Behavior checks:
 
-- Kill switch validated end-to-end via `life intents jarvis kill-switch` and runtime recovery.
+- Kill switch validated end-to-end via `life intents autonomy kill-switch` and runtime recovery.
 - Screenshot retention trimmed and verified at `120` files under `/var/lib/lifeos/screenshots`.
 - Non-blocking warnings observed in journal: `systemd-remount-fs.service` and D-Bus Portal/Broker broken pipe notifications.
 

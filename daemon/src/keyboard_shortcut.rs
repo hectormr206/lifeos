@@ -1,7 +1,7 @@
 //! Global Keyboard Shortcut Handler
 //!
 //! Handles global keyboard shortcuts for LifeOS.
-//! Super+Space opens the web dashboard in the default browser.
+//! Super+Shift+S captures the screen for AI context.
 
 use anyhow::{Context, Result};
 use log::{error, info, warn};
@@ -41,17 +41,27 @@ impl ShortcutManager {
     pub fn new(dashboard_url: String) -> Self {
         Self {
             shortcuts: vec![
-                Shortcut {
-                    name: "open-dashboard".to_string(),
-                    keys: "Super+space".to_string(),
-                    action: ShortcutAction::OpenDashboard,
-                    description: "Open LifeOS dashboard".to_string(),
-                },
+                // Super+Space removed — conflicts with keyboard layout switcher.
+                // Dashboard is accessible via Axi tray icon → "Abrir Dashboard".
                 Shortcut {
                     name: "capture-screen".to_string(),
                     keys: "Super+Shift+S".to_string(),
-                    action: ShortcutAction::CaptureScreen,
-                    description: "Capture screen for AI".to_string(),
+                    action: ShortcutAction::Execute("cosmic-screenshot".to_string()),
+                    description: "Captura de pantalla (COSMIC Screenshot)".to_string(),
+                },
+                Shortcut {
+                    name: "clipboard-history".to_string(),
+                    keys: "Super+V".to_string(),
+                    action: ShortcutAction::Execute(
+                        "cosmic-ext-applet-clipboard-manager".to_string(),
+                    ),
+                    description: "Historial del portapapeles".to_string(),
+                },
+                Shortcut {
+                    name: "emoji-picker".to_string(),
+                    keys: "Super+period".to_string(),
+                    action: ShortcutAction::Execute("cosmic-emoji-picker".to_string()),
+                    description: "Selector de emojis".to_string(),
                 },
             ],
             active: AtomicBool::new(false),
@@ -189,13 +199,13 @@ mod tests {
     fn test_shortcut_manager_creation() {
         let mgr = ShortcutManager::new("http://127.0.0.1:8081/dashboard?token=test".to_string());
         assert!(!mgr.shortcuts.is_empty());
-        assert_eq!(mgr.shortcuts[0].name, "open-dashboard");
+        assert_eq!(mgr.shortcuts[0].name, "capture-screen");
     }
 
     #[test]
     fn test_shortcut_list() {
         let mgr = ShortcutManager::new("http://127.0.0.1:8081/dashboard?token=test".to_string());
         let shortcuts = mgr.list_shortcuts();
-        assert_eq!(shortcuts.len(), 2);
+        assert_eq!(shortcuts.len(), 3);
     }
 }

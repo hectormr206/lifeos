@@ -49,9 +49,9 @@ pub enum IntentsCommands {
     /// Runtime execution mode for autonomous intent pipeline
     #[command(subcommand)]
     Mode(IntentModeCommands),
-    /// Temporal Jarvis session controls (TTL + PIN + kill switch)
+    /// Temporal Autonomy session controls (TTL + PIN + kill switch)
     #[command(subcommand)]
-    Jarvis(IntentJarvisCommands),
+    Autonomy(IntentAutonomyCommands),
     /// Scan text with Prompt Shield v1 policy
     Shield { input: String },
     /// Show COSMIC workspace awareness routing hints
@@ -96,10 +96,10 @@ pub enum IntentModeCommands {
 }
 
 #[derive(Subcommand)]
-pub enum IntentJarvisCommands {
-    /// Show current Jarvis session status
+pub enum IntentAutonomyCommands {
+    /// Show current Autonomy session status
     Status,
-    /// Start a temporary Jarvis session
+    /// Start a temporary Autonomy session
     Start {
         /// PIN required for activation
         #[arg(long)]
@@ -111,7 +111,7 @@ pub enum IntentJarvisCommands {
         #[arg(long, default_value = "user://local/default")]
         actor: String,
     },
-    /// Stop active Jarvis session
+    /// Stop active Autonomy session
     Stop {
         /// Actor principal
         #[arg(long, default_value = "user://local/default")]
@@ -245,7 +245,7 @@ pub async fn execute(args: IntentsCommands) -> anyhow::Result<()> {
         } => cmd_orchestrate(&objective, &specialist, approve).await?,
         IntentsCommands::TeamRuns { limit } => cmd_team_runs(limit).await?,
         IntentsCommands::Mode(mode_cmd) => cmd_mode(mode_cmd).await?,
-        IntentsCommands::Jarvis(jarvis_cmd) => cmd_jarvis(jarvis_cmd).await?,
+        IntentsCommands::Autonomy(autonomy_cmd) => cmd_autonomy(autonomy_cmd).await?,
         IntentsCommands::Shield { input } => cmd_shield_scan(&input).await?,
         IntentsCommands::WorkspaceAwareness => cmd_workspace_awareness().await?,
         IntentsCommands::Resources(resources_cmd) => cmd_resources(resources_cmd).await?,
@@ -556,28 +556,28 @@ async fn cmd_mode(cmd: IntentModeCommands) -> anyhow::Result<()> {
     }
 }
 
-async fn cmd_jarvis(cmd: IntentJarvisCommands) -> anyhow::Result<()> {
+async fn cmd_autonomy(cmd: IntentAutonomyCommands) -> anyhow::Result<()> {
     match cmd {
-        IntentJarvisCommands::Status => cmd_jarvis_status().await,
-        IntentJarvisCommands::Start { pin, ttl, actor } => {
-            cmd_jarvis_start(&pin, ttl, &actor).await
+        IntentAutonomyCommands::Status => cmd_autonomy_status().await,
+        IntentAutonomyCommands::Start { pin, ttl, actor } => {
+            cmd_autonomy_start(&pin, ttl, &actor).await
         }
-        IntentJarvisCommands::Stop { actor } => cmd_jarvis_stop(&actor).await,
-        IntentJarvisCommands::KillSwitch { actor } => cmd_jarvis_kill_switch(&actor).await,
+        IntentAutonomyCommands::Stop { actor } => cmd_autonomy_stop(&actor).await,
+        IntentAutonomyCommands::KillSwitch { actor } => cmd_autonomy_kill_switch(&actor).await,
     }
 }
 
-async fn cmd_jarvis_status() -> anyhow::Result<()> {
+async fn cmd_autonomy_status() -> anyhow::Result<()> {
     let client = daemon_client::authenticated_client();
     let resp = client
-        .get(format!("{}/api/v1/runtime/jarvis", daemon_url()))
+        .get(format!("{}/api/v1/runtime/autonomy", daemon_url()))
         .send()
         .await;
 
     match resp {
         Ok(r) if r.status().is_success() => {
             let body: serde_json::Value = r.json().await?;
-            println!("{}", "Jarvis session status".bold().blue());
+            println!("{}", "Autonomy session status".bold().blue());
             println!("  active: {}", body["active"].as_bool().unwrap_or(false));
             println!(
                 "  activated_by: {}",
@@ -595,7 +595,7 @@ async fn cmd_jarvis_status() -> anyhow::Result<()> {
         }
         Ok(r) => {
             let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to get Jarvis status: {}", body);
+            anyhow::bail!("Failed to get Autonomy status: {}", body);
         }
         Err(_) => {
             println!(
@@ -607,10 +607,10 @@ async fn cmd_jarvis_status() -> anyhow::Result<()> {
     }
 }
 
-async fn cmd_jarvis_start(pin: &str, ttl: u32, actor: &str) -> anyhow::Result<()> {
+async fn cmd_autonomy_start(pin: &str, ttl: u32, actor: &str) -> anyhow::Result<()> {
     let client = daemon_client::authenticated_client();
     let resp = client
-        .post(format!("{}/api/v1/runtime/jarvis", daemon_url()))
+        .post(format!("{}/api/v1/runtime/autonomy", daemon_url()))
         .json(&serde_json::json!({
             "pin": pin,
             "ttl_minutes": ttl,
@@ -622,22 +622,25 @@ async fn cmd_jarvis_start(pin: &str, ttl: u32, actor: &str) -> anyhow::Result<()
     match resp {
         Ok(r) if r.status().is_success() => {
             let body: serde_json::Value = r.json().await?;
-            println!("{}", "Jarvis session started".green().bold());
+            println!("{}", "Autonomy session started".green().bold());
             println!(
                 "  expires_at: {}",
-                body["jarvis"]["expires_at"].as_str().unwrap_or("-").cyan()
+                body["autonomy"]["expires_at"]
+                    .as_str()
+                    .unwrap_or("-")
+                    .cyan()
             );
             println!("  ttl_minutes: {}", ttl);
             println!("  actor: {}", actor.cyan());
             println!(
                 "  hint: {}",
-                "Use `life intents jarvis kill-switch` for emergency stop.".dimmed()
+                "Use `life intents autonomy kill-switch` for emergency stop.".dimmed()
             );
             Ok(())
         }
         Ok(r) => {
             let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to start Jarvis session: {}", body);
+            anyhow::bail!("Failed to start Autonomy session: {}", body);
         }
         Err(_) => {
             println!(
@@ -649,10 +652,10 @@ async fn cmd_jarvis_start(pin: &str, ttl: u32, actor: &str) -> anyhow::Result<()
     }
 }
 
-async fn cmd_jarvis_stop(actor: &str) -> anyhow::Result<()> {
+async fn cmd_autonomy_stop(actor: &str) -> anyhow::Result<()> {
     let client = daemon_client::authenticated_client();
     let resp = client
-        .post(format!("{}/api/v1/runtime/jarvis/stop", daemon_url()))
+        .post(format!("{}/api/v1/runtime/autonomy/stop", daemon_url()))
         .json(&serde_json::json!({
             "actor": actor
         }))
@@ -661,13 +664,13 @@ async fn cmd_jarvis_stop(actor: &str) -> anyhow::Result<()> {
 
     match resp {
         Ok(r) if r.status().is_success() => {
-            println!("{}", "Jarvis session stopped".green().bold());
+            println!("{}", "Autonomy session stopped".green().bold());
             println!("  actor: {}", actor.cyan());
             Ok(())
         }
         Ok(r) => {
             let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to stop Jarvis session: {}", body);
+            anyhow::bail!("Failed to stop Autonomy session: {}", body);
         }
         Err(_) => {
             println!(
@@ -679,11 +682,11 @@ async fn cmd_jarvis_stop(actor: &str) -> anyhow::Result<()> {
     }
 }
 
-async fn cmd_jarvis_kill_switch(actor: &str) -> anyhow::Result<()> {
+async fn cmd_autonomy_kill_switch(actor: &str) -> anyhow::Result<()> {
     let client = daemon_client::authenticated_client();
     let resp = client
         .post(format!(
-            "{}/api/v1/runtime/jarvis/kill-switch",
+            "{}/api/v1/runtime/autonomy/kill-switch",
             daemon_url()
         ))
         .json(&serde_json::json!({
@@ -694,7 +697,7 @@ async fn cmd_jarvis_kill_switch(actor: &str) -> anyhow::Result<()> {
 
     match resp {
         Ok(r) if r.status().is_success() => {
-            println!("{}", "Jarvis kill-switch triggered".yellow().bold());
+            println!("{}", "Autonomy kill-switch triggered".yellow().bold());
             println!("  actor: {}", actor.cyan());
             println!(
                 "  status: {}",
@@ -704,7 +707,7 @@ async fn cmd_jarvis_kill_switch(actor: &str) -> anyhow::Result<()> {
         }
         Ok(r) => {
             let body = r.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to trigger Jarvis kill-switch: {}", body);
+            anyhow::bail!("Failed to trigger Autonomy kill-switch: {}", body);
         }
         Err(_) => {
             println!(

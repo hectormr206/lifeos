@@ -160,7 +160,7 @@ SVG base assets are located at:
 ├── axi-healthy.svg    # Base state - smiling
 ├── axi-updating.svg   # Updates in progress
 ├── axi-rollback.svg   # Regenerating with green glow
-├── axi-jarvis.svg     # Intelligence mode
+├── axi-autonomy.svg     # Intelligence mode
 ├── axi-focus.svg      # Focus/Flow mode
 ├── axi-meeting.svg    # Meeting mode
 ├── axi-night.svg      # Night mode/sleepy

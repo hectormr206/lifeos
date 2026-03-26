@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3840 2160" width="3840" height="2160">
+  <title>LifeOS Axi Night - Premium Wallpaper</title>
+  <defs>
+    <!-- Deep dark gradient -->
+    <linearGradient id="sky" x1="0%" y1="0%" x2="30%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a14;stop-opacity:1"/>
+      <stop offset="40%" style="stop-color:#1a1a2e;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#0f2140;stop-opacity:1"/>
+    </linearGradient>
+    <!-- Teal nebula glow -->
+    <radialGradient id="nebula1" cx="70%" cy="30%" r="35%">
+      <stop offset="0%" style="stop-color:#00D4AA;stop-opacity:0.12"/>
+      <stop offset="100%" style="stop-color:#00D4AA;stop-opacity:0"/>
+    </radialGradient>
+    <!-- Pink accent glow -->
+    <radialGradient id="nebula2" cx="20%" cy="70%" r="30%">
+      <stop offset="0%" style="stop-color:#FF6B9D;stop-opacity:0.08"/>
+      <stop offset="100%" style="stop-color:#FF6B9D;stop-opacity:0"/>
+    </radialGradient>
+    <!-- Blue accent -->
+    <radialGradient id="nebula3" cx="85%" cy="80%" r="25%">
+      <stop offset="0%" style="stop-color:#3282B8;stop-opacity:0.10"/>
+      <stop offset="100%" style="stop-color:#3282B8;stop-opacity:0"/>
+    </radialGradient>
+    <!-- Subtle grid -->
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M 80 0 L 0 0 0 80" fill="none" stroke="#00D4AA" stroke-width="0.3" opacity="0.04"/>
+    </pattern>
+  </defs>
+  <!-- Sky background -->
+  <rect width="3840" height="2160" fill="url(#sky)"/>
+  <!-- Nebula glows -->
+  <ellipse cx="2688" cy="648" rx="1400" ry="800" fill="url(#nebula1)"/>
+  <ellipse cx="768" cy="1512" rx="1200" ry="700" fill="url(#nebula2)"/>
+  <ellipse cx="3264" cy="1728" rx="1000" ry="600" fill="url(#nebula3)"/>
+  <!-- Grid overlay -->
+  <rect width="3840" height="2160" fill="url(#grid)"/>
+  <!-- Stars (decorative dots) -->
+  <circle cx="300" cy="200" r="1.5" fill="#ffffff" opacity="0.6"/>
+  <circle cx="800" cy="150" r="1" fill="#ffffff" opacity="0.4"/>
+  <circle cx="1400" cy="300" r="2" fill="#00D4AA" opacity="0.5"/>
+  <circle cx="2000" cy="100" r="1" fill="#ffffff" opacity="0.5"/>
+  <circle cx="2500" cy="250" r="1.5" fill="#ffffff" opacity="0.3"/>
+  <circle cx="3000" cy="180" r="1" fill="#ffffff" opacity="0.6"/>
+  <circle cx="3500" cy="350" r="2" fill="#3282B8" opacity="0.4"/>
+  <circle cx="500" cy="600" r="1" fill="#ffffff" opacity="0.3"/>
+  <circle cx="1200" cy="500" r="1.5" fill="#ffffff" opacity="0.5"/>
+  <circle cx="1800" cy="700" r="1" fill="#00D4AA" opacity="0.3"/>
+  <circle cx="2800" cy="550" r="1.5" fill="#ffffff" opacity="0.4"/>
+  <circle cx="3300" cy="700" r="1" fill="#ffffff" opacity="0.5"/>
+  <circle cx="400" cy="1000" r="1" fill="#ffffff" opacity="0.4"/>
+  <circle cx="1600" cy="1100" r="2" fill="#FF6B9D" opacity="0.3"/>
+  <circle cx="2200" cy="900" r="1" fill="#ffffff" opacity="0.5"/>
+  <circle cx="3100" cy="1050" r="1.5" fill="#ffffff" opacity="0.3"/>
+  <circle cx="600" cy="1500" r="1" fill="#ffffff" opacity="0.5"/>
+  <circle cx="1900" cy="1600" r="1.5" fill="#00D4AA" opacity="0.3"/>
+  <circle cx="2600" cy="1400" r="1" fill="#ffffff" opacity="0.4"/>
+  <circle cx="3400" cy="1500" r="2" fill="#3282B8" opacity="0.3"/>
+  <circle cx="350" cy="1900" r="1" fill="#ffffff" opacity="0.3"/>
+  <circle cx="1100" cy="1800" r="1.5" fill="#ffffff" opacity="0.5"/>
+  <circle cx="2400" cy="1900" r="1" fill="#ffffff" opacity="0.4"/>
+  <circle cx="3200" cy="2000" r="1.5" fill="#00D4AA" opacity="0.3"/>
+  <!-- Axi orb (subtle, bottom-right) -->
+  <g transform="translate(3200, 1800)" opacity="0.06">
+    <circle cx="0" cy="0" r="200" fill="none" stroke="#00D4AA" stroke-width="2"/>
+    <circle cx="0" cy="0" r="140" fill="none" stroke="#00D4AA" stroke-width="1.5"/>
+    <circle cx="0" cy="0" r="80" fill="none" stroke="#3282B8" stroke-width="1"/>
+    <circle cx="0" cy="0" r="30" fill="#00D4AA"/>
+  </g>
+</svg>

@@ -63,9 +63,9 @@ pub const AXI_WORRIED: &str = r#"
         ╰────╯
 "#;
 
-/// Jarvis Axi (with glasses)
+/// Autonomy Axi (with glasses)
 #[allow(dead_code)]
-pub const AXI_JARVIS: &str = r#"
+pub const AXI_AUTONOMY: &str = r#"
     ╭━━━━━━━━━━━━━━╮
    ╭┃ ▣    ▣    ┃╮
    ╰┃     ⌣      ┃╯
@@ -144,7 +144,7 @@ pub fn get_ascii_for_state(state: AxiState) -> &'static str {
         AxiState::Updating => AXI_UPDATING,
         AxiState::Offline => AXI_SLEEPING,
         AxiState::Error => AXI_WORRIED,
-        AxiState::Jarvis => AXI_JARVIS,
+        AxiState::Autonomy => AXI_AUTONOMY,
         AxiState::Focus => AXI_FOCUS,
         AxiState::Mini => AXI_MINI,
     }
@@ -162,8 +162,8 @@ pub enum AxiState {
     Offline,
     /// Error state
     Error,
-    /// Jarvis/Intelligence mode
-    Jarvis,
+    /// Autonomy/Intelligence mode
+    Autonomy,
     /// Focus/Flow mode
     Focus,
     /// Compact mini version
@@ -194,7 +194,7 @@ mod tests {
         assert!(!get_ascii_for_state(AxiState::Updating).is_empty());
         assert!(!get_ascii_for_state(AxiState::Offline).is_empty());
         assert!(!get_ascii_for_state(AxiState::Error).is_empty());
-        assert!(!get_ascii_for_state(AxiState::Jarvis).is_empty());
+        assert!(!get_ascii_for_state(AxiState::Autonomy).is_empty());
         assert!(!get_ascii_for_state(AxiState::Focus).is_empty());
         assert!(!get_ascii_for_state(AxiState::Mini).is_empty());
     }

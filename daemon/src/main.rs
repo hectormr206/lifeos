@@ -25,6 +25,7 @@ mod api;
 mod app_contracts;
 #[allow(dead_code)]
 mod autonomous_agent;
+mod axi_tray;
 #[allow(dead_code)]
 mod backup_monitor;
 #[allow(dead_code)]
@@ -105,6 +106,7 @@ mod screen_capture;
 mod security_daemon;
 #[allow(dead_code)]
 mod self_improving;
+mod sensory_memory;
 mod sensory_pipeline;
 #[allow(dead_code)]
 mod signal_bridge;
@@ -116,6 +118,7 @@ mod supervisor;
 mod system;
 mod task_queue;
 mod telegram_bridge;
+mod telegram_tools;
 mod telemetry;
 mod tuf;
 mod update_scheduler;
@@ -797,7 +800,44 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Launch Axi system tray icon (StatusNotifierItem — top panel)
+    #[cfg(feature = "tray")]
+    {
+        let has_display =
+            std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok();
+        if has_display {
+            let tray_token = state.bootstrap_token.clone().unwrap_or_default();
+            let tray_api_base =
+                format!("http://127.0.0.1:{}", state.config.api_bind_address.port(),);
+            let tray_dashboard = format!("{}/dashboard?token={}", tray_api_base, tray_token,);
+            let tray_state = {
+                let overlay = state.overlay_manager.read().await;
+                let s = overlay.get_state().await;
+                format!("{:?}", s.axi_state)
+            };
+            let tray_rx = state.event_bus.subscribe();
+            axi_tray::spawn_tray(
+                tray_rx,
+                tray_dashboard,
+                tray_api_base,
+                tray_token,
+                tray_state,
+            );
+            info!("Axi system tray icon launched");
+        }
+    }
+
     // Start background tasks
+    // Sensory memory listener — persists significant sensory events to MemoryPlane
+    {
+        let sensory_mem = state.memory_plane_manager.clone();
+        let sensory_rx = state.event_bus.subscribe();
+        tokio::spawn(async move {
+            sensory_memory::run_sensory_memory_listener(sensory_rx, sensory_mem).await;
+        });
+        info!("Sensory memory listener started");
+    }
+
     let health_handle = tokio::spawn(run_health_checks(state.clone()));
     let update_handle = tokio::spawn(run_update_checks(state.clone()));
     let metrics_handle = tokio::spawn(run_metrics_collection(state.clone()));
@@ -961,9 +1001,10 @@ async fn main() -> anyhow::Result<()> {
         if let Some(tg_config) = telegram_bridge::TelegramConfig::from_env() {
             let tq = state.task_queue.clone();
             let router = state.llm_router.clone();
+            let memory = Some(state.memory_plane_manager.clone());
             let notify_rx = state.supervisor.subscribe();
             Some(tokio::spawn(async move {
-                telegram_bridge::run_telegram_bot(tg_config, tq, router, notify_rx).await;
+                telegram_bridge::run_telegram_bot(tg_config, tq, router, memory, notify_rx).await;
             }))
         } else {
             info!("Telegram bridge: LIFEOS_TELEGRAM_BOT_TOKEN not set, skipping");

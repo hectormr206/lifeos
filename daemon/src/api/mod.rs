@@ -1352,8 +1352,8 @@ pub fn create_router(state: ApiState) -> Router {
             get(get_resource_runtime).post(set_resource_runtime),
         )
         .route(
-            "/runtime/jarvis",
-            get(get_jarvis_session).post(start_jarvis_session),
+            "/runtime/autonomy",
+            get(get_autonomy_session).post(start_autonomy_session),
         )
         .route(
             "/runtime/always-on",
@@ -1381,10 +1381,10 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/runtime/heartbeat/tick", post(run_heartbeat_tick))
         .route("/runtime/workspace-awareness", get(get_workspace_awareness))
         .route("/runtime/prompt-shield/scan", post(scan_prompt_shield))
-        .route("/runtime/jarvis/stop", post(stop_jarvis_session))
+        .route("/runtime/autonomy/stop", post(stop_autonomy_session))
         .route(
-            "/runtime/jarvis/kill-switch",
-            post(trigger_jarvis_kill_switch),
+            "/runtime/autonomy/kill-switch",
+            post(trigger_autonomy_kill_switch),
         )
         .route(
             "/memory/entries",
@@ -6841,14 +6841,14 @@ struct TrustModePayload {
 }
 
 #[derive(Debug, Deserialize)]
-struct JarvisStartPayload {
+struct AutonomyStartPayload {
     actor: Option<String>,
     pin: String,
     ttl_minutes: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
-struct JarvisControlPayload {
+struct AutonomyControlPayload {
     actor: Option<String>,
 }
 
@@ -7864,21 +7864,21 @@ async fn set_trust_mode(
     })))
 }
 
-async fn get_jarvis_session(
+async fn get_autonomy_session(
     State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let mgr = state.agent_runtime_manager.read().await;
-    let jarvis = mgr.jarvis_session().await;
-    Ok(Json(serde_json::json!(jarvis)))
+    let autonomy_state = mgr.autonomy_session().await;
+    Ok(Json(serde_json::json!(autonomy_state)))
 }
 
-async fn start_jarvis_session(
+async fn start_autonomy_session(
     State(state): State<ApiState>,
-    Json(payload): Json<JarvisStartPayload>,
+    Json(payload): Json<AutonomyStartPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let mgr = state.agent_runtime_manager.read().await;
-    let jarvis = mgr
-        .start_jarvis_session(
+    let autonomy_state = mgr
+        .start_autonomy_session(
             payload.actor.as_deref(),
             &payload.pin,
             payload.ttl_minutes.unwrap_or(30),
@@ -7896,17 +7896,17 @@ async fn start_jarvis_session(
         })?;
     Ok(Json(serde_json::json!({
         "status": "ok",
-        "jarvis": jarvis,
+        "autonomy": autonomy_state,
     })))
 }
 
-async fn stop_jarvis_session(
+async fn stop_autonomy_session(
     State(state): State<ApiState>,
-    Json(payload): Json<JarvisControlPayload>,
+    Json(payload): Json<AutonomyControlPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let mgr = state.agent_runtime_manager.read().await;
-    let jarvis = mgr
-        .stop_jarvis_session(payload.actor.as_deref())
+    let autonomy_state = mgr
+        .stop_autonomy_session(payload.actor.as_deref())
         .await
         .map_err(|e| {
             (
@@ -7920,17 +7920,17 @@ async fn stop_jarvis_session(
         })?;
     Ok(Json(serde_json::json!({
         "status": "ok",
-        "jarvis": jarvis,
+        "autonomy": autonomy_state,
     })))
 }
 
-async fn trigger_jarvis_kill_switch(
+async fn trigger_autonomy_kill_switch(
     State(state): State<ApiState>,
-    Json(payload): Json<JarvisControlPayload>,
+    Json(payload): Json<AutonomyControlPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let actor = payload.actor.as_deref();
     let runtime_mgr = state.agent_runtime_manager.read().await;
-    let jarvis = runtime_mgr.trigger_kill_switch(actor).await.map_err(|e| {
+    let autonomy_state = runtime_mgr.trigger_kill_switch(actor).await.map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -7974,7 +7974,7 @@ async fn trigger_jarvis_kill_switch(
 
     Ok(Json(serde_json::json!({
         "status": "ok",
-        "jarvis": jarvis,
+        "autonomy": autonomy_state,
         "sensory_runtime": sensory_runtime,
         "sensory": sensory,
         "execution_mode": "interactive",

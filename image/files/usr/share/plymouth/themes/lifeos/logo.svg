@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <title>LifeOS Boot Logo</title>
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" style="stop-color:#00D4AA;stop-opacity:0.8"/>
+      <stop offset="60%" style="stop-color:#00D4AA;stop-opacity:0.3"/>
+      <stop offset="100%" style="stop-color:#00D4AA;stop-opacity:0"/>
+    </radialGradient>
+  </defs>
+  <!-- Outer glow -->
+  <circle cx="100" cy="100" r="95" fill="url(#glow)"/>
+  <!-- Outer ring -->
+  <circle cx="100" cy="100" r="70" fill="none" stroke="#00D4AA" stroke-width="2" opacity="0.6"/>
+  <!-- Middle ring -->
+  <circle cx="100" cy="100" r="50" fill="none" stroke="#3282B8" stroke-width="2" opacity="0.8"/>
+  <!-- Inner orb -->
+  <circle cx="100" cy="100" r="28" fill="#00D4AA" opacity="0.9"/>
+  <!-- Center dot -->
+  <circle cx="100" cy="100" r="8" fill="#ffffff" opacity="0.9"/>
+</svg>

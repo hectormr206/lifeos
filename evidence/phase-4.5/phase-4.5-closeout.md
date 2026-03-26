@@ -38,7 +38,7 @@ Observed performance after lifecycle tuning:
 
 Operational checks:
 
-- `life intents jarvis kill-switch` validated with offline transition and clean reactivation.
+- `life intents autonomy kill-switch` validated with offline transition and clean reactivation.
 - `life overlay clear` and follow-up describe-screen calls returned stable low-latency responses.
 - Known non-blocking warnings persisted in journal around D-Bus portal/broker startup and
   `systemd-remount-fs.service`; they did not block Phase 4.5 acceptance criteria.

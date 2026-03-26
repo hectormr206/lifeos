@@ -159,7 +159,7 @@ El ajolote es **mexicano** (endémico de Xochimilco). Esto da a LifeOS una ident
 | **Healthy**           | Axi sonriendo, branquias relajadas     | Sistema funcionando perfectamente |
 | **Updating**          | Axi con casco de obra                  | Aplicando actualizaciones         |
 | **Rollback/Recovery** | Axi regenerándose (brillo verde)       | Recuperando de un fallo           |
-| **Jarvis Mode**       | Axi con anteojos de inteligencia       | Modo Jarvis activo                |
+| **Autonomy Mode**       | Axi con anteojos de inteligencia       | Modo Autonomy activo                |
 | **Focus Mode**        | Axi con auriculares, ojos concentrados | Modo Flow activo                  |
 | **Meeting Mode**      | Axi con corbata, expresión profesional | Modo reunión activo               |
 | **Night Mode**        | Axi con pijama, bostezando             | Modo nocturno activo              |
@@ -679,19 +679,19 @@ Hardware (TPM) → Firmware → Secure Boot → Kernel firmado
 - Escaneo de vulnerabilidades continuo de la imagen base.
 - Respuesta automatizada: aislamiento → rollback → hotfix.
 
-### 9.4 Modo Jarvis: permisos maximos, ejecucion controlada
+### 9.4 Modo Autonomy: permisos maximos, ejecucion controlada
 
-Para lograr una experiencia tipo Jarvis (IA con control amplio del sistema), LifeOS implementa un modelo de **privilegios temporales auditables**:
+Para lograr una experiencia tipo Autonomy (IA con control amplio del sistema), LifeOS implementa un modelo de **privilegios temporales auditables**:
 
 - **Permiso potencial total:** el usuario puede autorizar control amplio de sistema.
-- **Sesiones temporales:** 15-60 minutos con expiracion automatica. No hay modo "Jarvis permanente".
+- **Sesiones temporales:** 15-60 minutos con expiracion automatica. No hay modo "Autonomy permanente".
 - **Separacion de funciones:** el modelo AI propone planes; un daemon privilegiado (`lifeosd`) ejecuta acciones tipadas y auditables.
 - **Tokens de capacidad:** cada accion se firma con alcance, contexto y TTL (camara, mic, pantalla, red, system-write).
 - **Politica por riesgo:**
   - Lectura / acciones reversibles: auto-aprobadas.
   - Acciones destructivas, red externa, cambios criticos: confirmacion biometrica o PIN.
 - **Kill switch global:** desactiva en un paso todos los sensores y la autonomia (atajo: `Super+Escape`).
-- **Log completo:** cada sesion Jarvis genera un reporte auditable exportable.
+- **Log completo:** cada sesion Autonomy genera un reporte auditable exportable.
 
 ### 9.5 Capacidades de auto-defensa (inspiradas en sistemas autonomos)
 
@@ -1225,7 +1225,7 @@ Implementacion concreta:
 - [x] Adaptadores AI por app (email, visor de imagenes, busqueda global) para paridad funcional con flujos UOS AI. _Implementado en baseline: `life adapters email|image|search`._
 - [x] Awareness de COSMIC Workspaces en el enrutador de agente para sugerencias/acciones segun habitat activo. _Implementado en baseline: API `/runtime/workspace-awareness` + CLI `life intents workspace-awareness`._
 
-- [x] Modo Jarvis temporal: implementacion completa segun seccion 9.4 (tokens de capacidad con TTL, aprobacion biometrica/PIN, kill switch `Super+Escape`). _Implementado en baseline: TTL+PIN, tokens de capacidad, `jarvis start/stop`, y kill-switch (`life intents jarvis kill-switch`)._
+- [x] Modo Autonomy temporal: implementacion completa segun seccion 9.4 (tokens de capacidad con TTL, aprobacion biometrica/PIN, kill switch `Super+Escape`). _Implementado en baseline: TTL+PIN, tokens de capacidad, `autonomy start/stop`, y kill-switch (`life intents autonomy kill-switch`)._
 
 - [x] Ledger cifrado y exportable de todas las acciones autonomas. _Baseline: intents/workspace/orchestrator/trust/computer-use quedan auditados y exportables._
 - [x] Modos de ejecucion: interactive, run-until-done, silent-until-done (ver seccion 13.2). _Implementado en `agent_runtime` + API `/runtime/mode` + CLI `life intents mode`._
@@ -1378,7 +1378,7 @@ Implementacion concreta:
 - Booted image validada: `containers-storage:localhost/lifeos:edge-20260314-db06313` (digest `sha256:f7469804c18d3d811393bb06b778ffbc7438541ba2438b1316ea17f5ff0b5e9f`).
 - `life ai status -v`: `Offload: full gpu / full gpu`, modelo activo `Qwen3.5-0.8B-Q4_K_M.gguf`, `mmproj-F16.gguf`, `LIFEOS_AI_CTX_SIZE=6144`.
 - Bench sensorial estable: voice loop `986-1094 ms`, vision query `~3392 ms`, throughput `~341-346 tok/s`.
-- Privacidad validada end-to-end: `life intents jarvis kill-switch` apaga sensores y reinicio de runtime recupera `axi_state: idle`.
+- Privacidad validada end-to-end: `life intents autonomy kill-switch` apaga sensores y reinicio de runtime recupera `axi_state: idle`.
 - Retencion de screenshots verificada y acotada a `120` archivos en `/var/lib/lifeos/screenshots`.
 - Warning no bloqueante observado en campo: errores D-Bus Portal/Broker (`Broken pipe`) al notificar.
 - Mitigacion integrada para audio UI: `lifeos-audio-route-heal.service` (user systemd) corrige sink/source por defecto cuando PipeWire/WirePlumber reinician o cambian nodos (incluyendo casos con Bluetooth inestable), evitando estados de "Ningun dispositivo seleccionado".
@@ -1610,6 +1610,192 @@ Audio entrante
 
 **Estado:** **CUMPLIDO EN REPO (2026-03-25).** _Bloques 1-4 cerrados. Wake word pre-entrenado funcional desde primer boot, speaker identification con WeSpeaker ONNX, enrollment progresivo, saludo personalizado, multi-usuario. Validacion en campo pendiente: requiere rebuild de imagen e interaccion con multiples hablantes reales._
 
+### Fase 4.7: Agentic Telegram — Paridad con OpenClaw
+
+**Objetivo:** Que Axi entienda lenguaje natural via Telegram y ejecute acciones reales sin requerir comandos. Paridad funcional con OpenClaw (68K+ stars, marzo 2026).
+
+**Estado:** **EN PROGRESO (2026-03-25).**
+
+**Bloque 1: Bot agentico con lenguaje natural (CUMPLIDO EN REPO 2026-03-25):**
+
+- [x] **Motor de herramientas agentico (`telegram_tools.rs`):** 16 tools ejecutables por el LLM via tags `<tool>` en system prompt. Funciona con cualquier proveedor (no requiere tool-calling nativo). _Implementado._
+- [x] **Herramientas implementadas:**
+  - [x] `screenshot` — captura de pantalla y envio como foto
+  - [x] `run_command` — ejecucion de comandos en terminal con safety checks
+  - [x] `search_web` — busqueda en internet (Serper API o fallback LLM)
+  - [x] `read_file` / `write_file` — lectura y escritura de archivos
+  - [x] `list_files` — listado de directorios con patrones
+  - [x] `system_status` — estado completo del sistema (disco, RAM, CPU, bateria, alertas proactivas)
+  - [x] `open_url` — fetch de contenido HTML de URLs
+  - [x] `remember` / `recall` — memoria persistente encriptada (AES-256-GCM via MemoryPlane)
+  - [x] `computer_type` / `computer_key` / `computer_click` — control de teclado y mouse (ydotool/xdotool)
+  - [x] `install_app` — instalacion de aplicaciones via Flatpak
+  - [x] `notify` — notificaciones de escritorio
+  - [x] `task_status` — estado de tareas en cola
+- [x] **Loop agentico multi-ronda:** hasta 5 rondas de tool calls por mensaje. El LLM decide si usar herramientas o solo conversar. _Implementado._
+- [x] **Reescritura de `telegram_bridge.rs`:** eliminados /commands obligatorios. Todo mensaje pasa por `agentic_chat()`. `/help` y `/start` se mantienen por compatibilidad. _Implementado._
+- [x] **Heartbeat proactivo cada 30 minutos:** revisa disco, RAM, CPU, bateria, SSD, seguridad de red. Envia alertas Warning/Critical automaticamente. _Implementado._
+- [x] **Fotos y voz a traves del loop agentico:** las notas de voz se transcriben (Whisper) y se procesan como lenguaje natural con tools disponibles. Las fotos pasan por vision multimodal. _Implementado._
+- [x] **Memoria integrada:** el bot usa MemoryPlaneManager (SQLite + AES-256-GCM + embeddings) para remember/recall. _Implementado._
+- [x] **Build limpio:** cargo build + clippy sin errores ni warnings. 219 tests pasando. _Verificado._
+
+**Bloque 2: Paridad OpenClaw critica (CUMPLIDO EN REPO 2026-03-25):**
+
+- [x] **Historial de conversacion persistente:** HashMap por chat_id con TTL de 2 horas y max 20 mensajes. Permite follow-ups naturales ("y eso?" refiere al contexto previo). Comando `/new` para reiniciar. _Implementado en `ConversationHistory`._
+- [x] **Heartbeat con HEARTBEAT.md configurable:** el agente evalua el checklist de `~/.config/lifeos/HEARTBEAT.md` (o default) cada 30 min con datos reales del sistema. Si todo esta bien, responde HEARTBEAT_OK y no molesta. Si hay algo, reporta. _Implementado en `run_heartbeat()`._
+- [x] **Cron jobs programables:** expresiones cron de 5 campos (min hora dia mes dia_semana) con soporte de `*/N`, rangos, listas. Persistencia en JSON (`~/.config/lifeos/telegram_cron.json`). Runner cada 60s que ejecuta jobs via agentic loop y envia resultados al chat. Tools: `cron_add`, `cron_list`, `cron_remove`. _Implementado en `CronStore`._
+- [x] **Browser automation con vision:** `browser_navigate` tool que navega a URL con Firefox/Chromium headless, captura screenshot, y lo analiza con vision LLM. Incluye fallback a HTML fetch. _Implementado._
+
+**Bloque 3: Paridad OpenClaw avanzada (CUMPLIDO EN REPO 2026-03-25):**
+
+- [x] **Busqueda avanzada (Tavily + Serper + fallback LLM):** Tavily como prioridad 1 (gratis 1000 queries/mes, respuestas LLM-optimized con `include_answer`), Serper como prioridad 2, fallback a LLM. Env var: `TAVILY_API_KEY`. _Implementado._
+- [x] **Sesiones de 48 horas:** TTL de historial de conversacion extendido a 48h con max 40 mensajes. Sesiones largas con continuidad de contexto. _Implementado._
+- [x] **Comando /btw (side conversations):** conversaciones laterales que no contaminan el contexto principal. Usa chat_id XOR para aislar y se limpia inmediatamente. _Implementado._
+- [x] **Sub-agentes con modelos diferentes:** Tool `sub_agent` permite lanzar sub-agente con `preferred_provider` especifico y nivel de thinking (low/medium/high). Usa la infraestructura existente del router. _Implementado._
+- [x] **Smart home real (Home Assistant REST API):** Tool `smart_home` con acciones: turn_on, turn_off, toggle, status, list_entities. Conecta directo al REST API de HA con `LIFEOS_HA_URL` + `LIFEOS_HA_TOKEN`. _Implementado._
+- [x] **Acceso remoto (Tailscale serve/funnel):** Tools `tailscale_status` (muestra peers, IPs, estado) y `tailscale_share` (comparte puerto via serve o funnel). _Implementado._
+- [x] **Plugin SDK (SKILL.md):** Sistema de skills basado en directorio `~/.config/lifeos/skills/<name>/SKILL.md` con formato estandarizado (name, description, command). Tools: `skill_list`, `skill_run`. Ejecucion sandboxed en directorio del skill. _Implementado._
+
+**Bloque 4: No implementado (ventajas de comunidad OpenClaw — 68K stars, 600+ contributors):**
+
+- [ ] **Multi-canal simultaneo (12+ canales):** requiere bridges dedicados por plataforma. No viable para un solo desarrollador. _Depende de crecimiento de comunidad._
+- [ ] **Companion apps (iOS/Android):** requiere desarrollo nativo iOS/Android. _Fuera de scope actual._
+- [ ] **Canvas/A2UI (agente genera UIs interactivas):** requiere cliente UI dedicado en cada plataforma. _Fuera de scope actual._
+- [ ] **ClawHub marketplace (13,700+ skills):** requiere comunidad activa contribuyendo skills. _El SDK de skills (SKILL.md) esta listo para cuando la comunidad crezca._
+
+**Criterios de salida de Fase 4.7:**
+
+1. [x] El usuario habla naturalmente en Telegram y Axi ejecuta acciones sin /commands.
+2. [x] Axi toma screenshots, ejecuta comandos, busca en internet, instala apps, lee/escribe archivos — todo via lenguaje natural.
+3. [x] El heartbeat avisa proactivamente de problemas del sistema con HEARTBEAT.md configurable.
+4. [x] Voice notes y fotos se procesan con capacidad de ejecutar acciones (no solo responder texto).
+5. [x] Historial de conversacion con TTL 48h — follow-ups y side conversations (/btw) funcionan.
+6. [x] Cron jobs programables con expresiones cron estandar y ejecucion automatica.
+7. [x] Sub-agentes con modelos distintos, Smart Home (HA), acceso remoto (Tailscale), y skills (SKILL.md).
+
+**Bloque 5: System Tray Icon (CUMPLIDO EN REPO 2026-03-26):**
+
+- [x] **Icono de Axi en el system tray del panel superior:** Reemplaza el mini-widget flotante GTK4 con un icono StatusNotifierItem (SNI) nativo que aparece en el panel superior como los iconos de Steam, Bluetooth, etc. Usa crate `ksni` 0.2. _Implementado en `axi_tray.rs`._
+- [x] **Colores dinamicos por estado:** El icono cambia de color segun el estado de Axi: verde (idle), cyan (listening), amarillo (thinking), azul (speaking), teal (watching), rojo (error), gris (offline), indigo (night). _Implementado con `icon_pixmap()` generando circulos ARGB32._
+- [x] **Menu contextual con controles de 5 sentidos + kill switch:** Click muestra menu completo:
+  - Always-On (escucha activa / wake word) — toggle con API call a `/runtime/always-on`
+  - Microfono — toggle on/off
+  - Habla (voz por bocinas / TTS) — toggle on/off
+  - Camara — toggle on/off
+  - Captura de pantalla — toggle on/off
+  - DESACTIVAR/Reactivar todos los sentidos (kill switch) — desactiva los 5 sentidos de golpe via `/sensory/kill-switch`
+  - Abrir Dashboard — lanza xdg-open al dashboard web
+  _Implementado con `ksni::menu::CheckmarkItem` + `StandardItem` + curl API calls._
+- [x] **Tooltip informativo:** Al pasar el mouse muestra "Axi — [estado]". _Implementado con `tool_tip()`._
+- [x] **Actualizacion reactiva:** El icono escucha `DaemonEvent::AxiStateChanged` y `DaemonEvent::SensorChanged` via broadcast channel. Estado de Axi y sensores se actualizan en tiempo real sin polling. _Implementado con `handle.update()`._
+- [x] **Sincronizacion bidireccional con Dashboard:** Todos los toggles del tray llaman a las mismas APIs REST que usa el dashboard (`/runtime/sensory`, `/runtime/always-on`, `/sensory/kill-switch`). El daemon procesa el cambio, emite `DaemonEvent::SensorChanged`, que llega al dashboard via SSE y al tray via broadcast. Cambios desde el dashboard tambien actualizan el tray. _Flujo: Tray toggle → API call → daemon update → event emit → SSE (dashboard) + broadcast (tray)._
+- [x] **Feature flag `tray`:** Compilacion condicional con `--features tray`. Usa `ksni` 0.2 (compatible con rustc 1.85). No afecta builds sin la feature. _Implementado._
+
+**Estado:** **CUMPLIDO EN REPO (2026-03-26).** _Bloques 1-3 + Bloque 5 cerrados. 27 tools implementados + system tray icon. Build + clippy + 219 tests OK. Los 4 items del Bloque 4 quedan fuera de scope por requerir comunidad/apps nativas._
+
+### Fase 4.8: Engram Protocol + SDD — Memoria Eterna y Desarrollo Estructurado
+
+**Objetivo:** Que Axi nunca pierda contexto entre sesiones (protocolo Engram) y que pueda ejecutar desarrollo complejo con metodologia SDD cuando el usuario lo pida.
+
+**Estado:** **CUMPLIDO EN REPO (2026-03-26).** _Bloques 1-2 cerrados (13/13 items). Build + clippy + 219 tests OK._
+
+**Inspiracion:** [Engram](https://github.com/Gentleman-Programming/engram) (memoria persistente para agentes AI) y [gentle-ai](https://github.com/Gentleman-Programming/gentle-ai) SDD (Spec-Driven Development de 9 fases).
+
+**Bloque 1 — Engram Protocol (Memoria Eterna):**
+
+Problema: actualmente Axi solo recuerda 40 mensajes con TTL de 48h. Cuando el TTL expira, pierde TODO el contexto. Engram resuelve esto con un protocolo de memoria automatica donde el agente guarda proactivamente sin que el usuario lo pida.
+
+- [x] **Protocolo de memoria automatica en system prompt:** Axi guarda automaticamente (via tool `remember`) despues de: decisiones, bugs resueltos, descubrimientos, convenciones, preferencias del usuario. Self-check obligatorio despues de cada tarea inyectado en SYSTEM_PROMPT. _Implementado._
+- [x] **Formato estructurado de memoria:** Formato What/Why/Where/Learned con campos: type, topic, title, content, tags. Tool `remember` acepta tipo, topic_key y titulo estructurado. _Implementado._
+- [x] **Topic keys:** Identificadores estables para temas que evolucionan (ej: "usuario:gustos", "project:lifeos:ci", "sdd:auth-module"). Se agregan automaticamente como tags para busqueda. _Implementado._
+- [x] **Session summary obligatorio:** Al ejecutar /new o /reset, se genera automaticamente un resumen LLM de la conversacion (objetivo, logros, decisiones, proximos pasos) y se guarda en MemoryPlane con tipo "decision" y tag "session_summary". _Implementado en `save_session_summary()`._
+- [x] **Context recall proactivo al inicio:** Al recibir el primer mensaje de una sesion nueva (history vacio), se busca automaticamente en MemoryPlane contexto relevante (query del usuario + session_summaries) y se inyecta como bloque de sistema. _Implementado en `agentic_chat()`._
+- [x] **Recuperacion post-TTL:** Los session summaries guardados en MemoryPlane son permanentes (SQLite encriptado). Cuando una sesion expira y el usuario vuelve, el context recall carga el summary anterior automaticamente. _Implementado via recall proactivo._
+- [x] **7 tipos de memoria tipados:** bugfix (importancia 70), decision (80), architecture (80), discovery (70), pattern (60), config (50), preference (50). El tipo determina la importancia para ranking de busqueda. _Implementado en `execute_remember()`._
+
+**Bloque 2 — SDD (Spec-Driven Development):**
+
+Inspirado en el orquestador SDD de gentle-ai: 9 fases para desarrollo complejo donde el agente planifica antes de implementar.
+
+- [x] **Orquestador SDD como tool `sdd_start`:** Tool que ejecuta las 8 fases secuencialmente con sub-agentes. El usuario dice "usa sdd" o Axi lo recomienda para tareas de desarrollo complejas. Instruccion inyectada en SYSTEM_PROMPT. _Implementado._
+- [x] **8 fases con sub-agentes y modelos por fase:**
+  1. **Explorar** — investiga idea, lee codebase, compara enfoques (groq-llama70b)
+  2. **Proponer** — decision arquitectonica (cerebras-qwen235b — modelo potente)
+  3. **Especificar** — requisitos estructurados (groq-llama70b)
+  4. **Disenar** — arquitectura e implementacion (cerebras-qwen235b — modelo potente)
+  5. **Tareas** — desglose mecanico en items (groq-llama70b)
+  6. **Implementar** — ejecuta tareas (groq-llama70b)
+  7. **Verificar** — valida vs spec, reporta OK/WARNING/ERROR (groq-llama70b)
+  8. **Archivar** — persiste resultado en memoria (groq-llama8b — modelo ligero)
+  _Implementado en `execute_sdd_start()`. Cada fase recibe output de la anterior._
+- [x] **Asignacion de modelos por fase:** Fases de diseno/propuesta usan cerebras-qwen235b (modelo potente), implementacion/verificacion usan groq-llama70b (rapido), archivo usa groq-llama8b (ligero). _Implementado con `preferred_provider` por fase._
+- [x] **Persistencia de artefactos SDD:** Al finalizar las 8 fases, el resultado completo se guarda en MemoryPlane con tipo "architecture", topic_key `sdd:<tarea>`, importancia 80. Recuperable en sesiones futuras via recall. _Implementado._
+- [x] **Auto-deteccion de complejidad:** Instruccion en SYSTEM_PROMPT: "Si la tarea toca 3+ archivos o requiere arquitectura, sugiere SDD. Si el usuario dice 'usa sdd', activalo siempre." _Implementado como heuristica en prompt._
+- [x] **Review checkpoints:** SDD pausa despues de Proponer (fase 2) y despues de Disenar (fase 4) enviando inline buttons [Continuar SDD] / [Abortar SDD]. Al aprobar, continua con las fases siguientes. Al abortar, guarda resultado parcial en memoria. Estado de sesion SDD almacenado en `SddStore` (HashMap en memoria). _Implementado con callback handlers `sdd_approve:`/`sdd_reject:` en telegram_bridge.rs._
+
+**Bloque 3 — Memoria a corto plazo mejorada (CUMPLIDO EN REPO 2026-03-26):**
+
+- [x] **Auto-compactacion:** Cuando el historial supera 20 mensajes, los mensajes viejos se comprimen automaticamente en un resumen textual. Cuando el resumen supera 500 chars, se compacta via LLM en background (maximo 3 oraciones conservando decisiones, preferencias y contexto clave). _Implementado con `compact_with_llm()` + threshold `COMPACTION_THRESHOLD=20`._
+- [x] **Persistencia en disco:** El historial de conversacion se guarda en `~/.local/share/lifeos/conversation_history.json` y se recarga automaticamente al iniciar el daemon. Sobrevive reinicios del servicio. _Implementado con `persist_locked()` + carga en `ConversationHistory::new()`._
+- [x] **Sliding window inteligente:** En lugar de cortar en N mensajes fijos, se mantiene siempre: (1) el primer mensaje del usuario (intent original), (2) un resumen compactado de mensajes intermedios, (3) los ultimos 15 mensajes verbatim. El LLM recibe los 3 bloques en orden. _Implementado con `first_message` + `compacted_summary` + `messages[RECENT_WINDOW]`._
+
+**Criterios de salida de Fase 4.8:**
+
+1. [x] Axi recuerda automaticamente decisiones, bugs y descubrimientos sin que el usuario lo pida.
+2. [x] Al cerrar sesion (/new), se guarda un resumen automatico que se recupera en la siguiente sesion.
+3. [x] Al iniciar conversacion, Axi busca contexto relevante en memoria y lo inyecta como contexto de sistema.
+4. [x] El usuario puede decir "usa sdd" y Axi ejecuta el workflow de 8 fases con sub-agentes y modelos diferentes.
+5. [x] Los artefactos SDD persisten entre sesiones via MemoryPlane (tipo "architecture", importancia 80).
+6. [x] Axi sugiere SDD para tareas complejas (3+ archivos o arquitectura) pero no lo impone para tareas simples.
+7. [x] La memoria a corto plazo se auto-compacta, persiste en disco, y usa sliding window inteligente.
+
+### Fase 4.9: Memorias Avanzadas — Grafo de Conocimiento y Memoria Procedural
+
+**Objetivo:** Agregar los tipos de memoria que aun faltan para que Axi sea un asistente verdaderamente inteligente a largo plazo.
+
+**Estado:** **PENDIENTE.**
+
+**Investigacion (2026-03-26):** Basado en [Mem0](https://mem0.ai/blog/graph-memory-solutions-ai-agents), [Letta/MemGPT](https://vectorize.io/articles/mem0-vs-letta), [benchmarks 2026](https://dev.to/varun_pratapbhardwaj_b13/5-ai-agent-memory-systems-compared-mem0-zep-letta-supermemory-superlocalmemory-2026-benchmark-59p3), y [Redis](https://redis.io/blog/ai-agent-memory-stateful-systems/).
+
+**Memorias que ya tenemos:**
+
+| Tipo | Implementacion | Storage |
+|------|---------------|---------|
+| Corto plazo (working memory) | ConversationHistory con compactacion + persistencia disco | JSON file + RAM |
+| Episodica (experiencias pasadas) | MemoryPlane con timestamps + tipos + busqueda hibrida | SQLite + AES-256-GCM + sqlite-vec |
+| Semantica (hechos/conocimiento) | MemoryPlane con remember/recall + 7 tipos + topic keys | SQLite + AES-256-GCM + sqlite-vec |
+
+**Memorias implementadas (CUMPLIDO EN REPO 2026-03-26):**
+
+- [x] **Memoria de grafo (relacional):** Tabla SQLite `knowledge_graph` con tripletas (subject, predicate, object) + confidence + source_entry_id. Tools: `graph_add` y `graph_query`. System prompt instruye a Axi a guardar relaciones automaticamente. _Ejemplo: "hector --[trabaja_en]--> lifeos --[usa]--> rust"._
+- [x] **Memoria procedural (como hacer cosas):** Tabla SQLite `procedural_memory` con: name, description, steps (JSON array), trigger_pattern, times_used. Tools: `procedure_save` y `procedure_find`. _Ejemplo: "deploy lifeos: [cargo build, podman push, bootc update]"._
+- [x] **Memoria emocional/relacional:** Campo `mood` en memory_entries + metodos `set_mood()` y `mood_history()`. System prompt instruye inferir mood y guardarlo. _Permite adaptar tono: si frustrado → directo, si contento → casual._
+- [x] **Consolidacion periodica (cada 6 horas):** Loop background que ejecuta `consolidate()`: boost (+5 importancia) a memorias accedidas 5+ veces, degradacion (-5) a memorias no accedidas en 30 dias, limpieza de memorias con importancia < 10 no accedidas en 90 dias. _Como el cerebro cuando duerme._
+- [x] **Olvido inteligente:** Integrado en consolidation: memorias importancia < 10 + sin acceso en 90 dias = eliminadas. Embeddings huerfanos limpiados. Campos `last_accessed` y `access_count` en memory_entries para tracking. _Metodo `track_access()` + `consolidation_stats()`._
+- [x] **4 tools nuevos en Telegram:** graph_add, graph_query, procedure_save, procedure_find (total: 31 tools).
+
+**Investigacion: Memorias sensoriales y arquitectura de enlace (2026-03-26):**
+
+Basado en [M3-Agent](https://arxiv.org/abs/2508.09736) (multimodal memory), [MAGMA](https://arxiv.org/pdf/2601.03236) (multi-graph), [TELEMEM](https://arxiv.org/pdf/2601.06037) (long-term multimodal), y [MemAgents ICLR 2026](https://openreview.net/pdf?id=U51WxL382H):
+
+**Memoria sensorial — que necesitamos:**
+
+LifeOS ya tiene captura sensorial (vision, audio, presencia) pero NO persiste los datos sensoriales como memorias enlazadas. El pipeline sensorial (`sensory_pipeline.rs`) captura screen OCR, transcripciones de voz, deteccion de presencia y estado de reunion — pero todo queda en RAM y se pierde.
+
+**Memorias sensoriales (CUMPLIDO EN REPO 2026-03-26):**
+
+- [x] **Memoria visual persistente:** Modulo `sensory_memory.rs` escucha `DaemonEvent::ScreenCapture` y persiste capturas significativas (con cooldown de 5 min) en MemoryPlane tipo "visual" con app + summary OCR. Importancia 30. _Implementado._
+- [x] **Memoria auditiva persistente:** Escucha `DaemonEvent::VoiceSessionEnd` y persiste transcripciones de voz (min 20 chars) con transcript + response + latencia. Tipo "auditory", importancia 40. Tambien persiste detecciones de wake word. _Implementado._
+- [x] **Memoria de presencia/contexto:** Escucha `WindowChanged` (persiste cambios de app, no repetidos), `MeetingStateChanged` (inicio/fin de reunion), y `PresenceUpdate` (presente/ausente). Tipo "context", importancia variable (meetings=50, apps=15, presencia=10). _Implementado._
+- [x] **Listener centralizado:** `sensory_memory::run_sensory_memory_listener()` suscrito al event bus del daemon. Se lanza en main.rs como tarea background. _Implementado._
+
+**Arquitectura de enlace (cross-memory linking) (CUMPLIDO EN REPO 2026-03-26):**
+
+- [x] **Tabla `memory_links`:** Tabla SQLite para relaciones entre memorias (from_entry, to_entry, relation). Metodos: `link_entries()`, `get_linked()`. _Implementado._
+- [x] **Grafo causal via knowledge_graph:** Las relaciones causales se modelan como tripletas con predicados "caused_by", "led_to", "resolved_by" en la tabla knowledge_graph existente. _Implementado (misma tabla, predicados semanticos)._
+- [x] **Consolidacion cross-memory automatica:** `cross_link_recent()` lee las 20 memorias mas recientes, las envia al LLM local, y genera automaticamente tripletas de relaciones en formato SUBJECT|PREDICATE|OBJECT. Se ejecuta cada 6 horas junto con la consolidacion normal. _Implementado._
+- [x] **4 grafos ortogonales (MAGMA):** (1) Semantico = knowledge_graph tripletas, (2) Temporal = timestamps + last_accessed en todas las memorias, (3) Causal = knowledge_graph con predicados causales + memory_links, (4) Entidades = knowledge_graph subjects/objects + tags. _Arquitectura completa._
+
 ### Fase 5 (18-30 meses): Ecosistema, sincronizacion y escala gobernada
 
 **Objetivo:** construir el ecosistema sostenible de LifeOS una vez que la experiencia sensorial core esta validada y el sistema se usa diariamente con interaccion multimodal real.
@@ -1653,8 +1839,149 @@ Audio entrante
 1. **Fases 0-2.5:** fundacion, UX, IA multimodal baseline, identidad visual (cerradas).
 2. **Fase 3:** hardening, dogfooding y cierre de producto (cerrada).
 3. **Fases 4 y 4.5:** interaccion sensorial real + ciclo de vida local de modelos pesados (cerradas en repo, validadas en campo).
-4. **Fase 5:** ecosistema, sincronizacion y escala gobernada (pendiente).
-5. **RFC B2B:** arquitectura multi-agente corporativa (experimental, fuera de compromiso).
+4. **Fase 4.7:** Agentic Telegram — paridad OpenClaw (Bloques 1-3 cumplidos, Bloque 4 fuera de scope).
+5. **Fase 4.8:** Engram Protocol + SDD + memoria corto plazo mejorada (cumplido).
+6. **Fase 4.9:** Memorias avanzadas — grafo, procedural, emocional, consolidacion, sensoriales, cross-linking (cumplido).
+7. **Fase 4.10:** Auditoria legal — renombre Autonomy, LICENSE, NOTICE, GPL fix (cumplido).
+8. **Fase 4.11:** Identidad visual completa — Plymouth, tema COSMIC, wallpapers, greeter, sonidos, About (cumplido, 14/15).
+9. **Fase 5:** ecosistema, sincronizacion y escala gobernada (pendiente).
+10. **RFC B2B:** arquitectura multi-agente corporativa (experimental, fuera de compromiso).
+
+### Fase 4.11: Identidad Visual Completa — LifeOS se ve como LifeOS
+
+**Objetivo:** Que cada pixel de LifeOS refleje la identidad de marca. Desde el boot hasta el shutdown, el usuario debe saber que esta usando LifeOS, no un COSMIC generico.
+
+**Estado:** **CUMPLIDO EN REPO (2026-03-26).** _14/15 items cerrados. Unico pendiente: first boot wizard visual (depende de cosmic-initial-setup upstream). Build + clippy + 219 tests OK._
+
+**Bloque 1 — Boot y Login (primera impresion):**
+
+- [x] **Plymouth boot splash:** Theme custom con logo Axi animado (pulso teal, 5 dots de progreso, fade out). Incluye: logo.svg, brand.svg, dot-on/off.svg, script con animacion. SVGs se convierten a PNG en build. Se instala como default theme. _Implementado en `/usr/share/plymouth/themes/lifeos/`._
+- [x] **COSMIC Greeter branding:** Fondo de pantalla "Axi Night" + accent teal + dark mode configurados en `/var/lib/cosmic-greeter/.config/cosmic/`. _Implementado._
+- [x] **Shutdown/reboot splash:** Plymouth detecta modo via `GetMode()`. En shutdown/suspend muestra "Hasta pronto" en teal con fade-out lento del logo. _Implementado en lifeos.script._
+- [x] **Update splash:** En modo "updates", Plymouth muestra "Actualizando LifeOS..." con dots de progreso y pulso del logo. _Implementado en lifeos.script._
+
+**Bloque 2 — Desktop (uso diario):**
+
+- [x] **COSMIC accent color por defecto:** Teal Axi (#00D4AA) = `(0.0, 0.831, 0.667, 1.0)` configurado en `/etc/skel/.config/cosmic/CosmicTheme.Dark.Builder/v1/accent` y Light.Builder. Se aplica a botones, selecciones, focus rings, toggles. _Implementado._
+- [x] **Wallpapers premium (4K):** 6 variantes SVG:
+  - lifeos-default.svg: gradiente clasico con grid y orbe central
+  - lifeos-dark.svg: gradiente oscuro con acentos teal
+  - lifeos-light.svg: gradiente claro
+  - lifeos-axi-night.svg (NUEVO): nebulosas teal/rosa, estrellas, grid sutil, orbe Axi
+  - lifeos-minimal.svg (NUEVO): ultra-limpio, gradiente oscuro con accent teal
+  - lifeos-lock.svg: para lockscreen
+  _Implementado. Default wallpaper configurado a axi-night._
+- [x] **COSMIC panel layout default:** Panel superior + dock inferior con auto-hide (wait 1s, transition 200ms). Configurado en `/etc/skel/.config/cosmic/CosmicPanel*/`. _Implementado._
+- [x] **Dark mode por defecto:** `is_dark = true` en CosmicTheme.Mode. _Implementado._
+- [x] **Cursor theme:** COSMIC cursor nativo (cosmic-icons) — ya es moderno y consistente. No requiere cursor de terceros.
+
+**Bloque 3 — Detalles de pulido:**
+
+- [x] **Sonidos de sistema:** 5 sonidos generados via sox en build: desktop-login (ascendente C5→E5), desktop-logout (descendente E5→C5), message-new-instant (ping A5), dialog-error (tono bajo E3), dialog-warning (doble A4). Sound theme XDG "lifeos" con herencia de freedesktop. _Implementado con `lifeos-generate-sounds.sh` + `index.theme`._
+- [x] **Fuente por defecto:** `rsms-inter-fonts` agregado al Containerfile. Inter (SIL OFL) como font del sistema con Noto Sans como fallback. _Implementado._
+- [x] **Icon theme:** cosmic-icons es suficiente — el accent teal se aplica automaticamente via el theme builder. No requiere iconos custom.
+- [ ] **First boot wizard visual:** _Pendiente: depende de cosmic-initial-setup que aun no esta maduro._
+- [x] **Axi en el About:** `LOGO="lifeos"` en os-release apunta al icon LifeOS (symlink en hicolor). `PRETTY_NAME` ahora incluye "Powered by Axi". COSMIC Settings > About muestra logo LifeOS + nombre completo. _Implementado._
+
+**Bloque 4 — Bugs conocidos y fixes:**
+
+- [x] **Bluetooth volume reset en meetings:** WirePlumber auto-switch de A2DP a HSP/HFP resetea volumen a 100%. Fix: WirePlumber config en `/etc/wireplumber/wireplumber.conf.d/` que persiste volumen entre profile switches. _Implementado con `50-lifeos-bluetooth.conf` + `51-lifeos-bt-volume-persist.conf`._
+- [ ] **Multi-monitor workspace alignment:** Ventanas en monitor secundario no se alinean correctamente en el workspace overview. Es un bug conocido de COSMIC compositor ([cosmic-comp#697](https://github.com/pop-os/cosmic-comp/issues/697), [cosmic-epoch#2609](https://github.com/pop-os/cosmic-epoch/issues/2609)). _No es un bug de LifeOS — es upstream COSMIC. Se resolvera con actualizaciones de cosmic-comp. Monitorear._
+
+---
+
+### Registro de Marca y Propiedad Intelectual
+
+**Estado:** PENDIENTE. _Realizar antes de cualquier lanzamiento publico o comercial._
+
+**Paso 1: Busqueda formal de trademarks**
+
+- [ ] Buscar "LifeOS" en [USPTO TESS](https://tmsearch.uspto.gov/) — Clases 9 (software) y 42 (servicios SaaS).
+  - Resultado preliminar (2026-03-26): El unico registro en Clase 9 (LifeWallet, 86940965) esta **ABANDONADO** desde 2017. Via libre aparente.
+- [ ] Buscar "Axi" en USPTO — Clases 9 y 42.
+  - Resultado preliminar: No se encontro registro para "Axi" en software/AI. AxisCare usa "Axi" como feature name sin registro formal.
+- [ ] Buscar ambos en [EUIPO](https://euipo.europa.eu/eSearch/) (Europa) y [IMPI](https://marcia.impi.gob.mx/) (Mexico).
+
+**Paso 2: Registro de trademark (USA — USPTO)**
+
+- [ ] Crear cuenta en [USPTO Trademark Center](https://trademarkcenter.uspto.gov/)
+- [ ] Seleccionar "TEAS Plus" (formulario mas barato, ~$250 USD por clase)
+- [ ] Registrar "LifeOS" en:
+  - Clase 9: "Computer operating system software; downloadable computer software for AI-assisted personal computing"
+  - Clase 42: "Software as a service (SaaS) featuring an AI-native operating system"
+- [ ] Registrar "Axi" en:
+  - Clase 9: "Computer software featuring an AI virtual assistant"
+- [ ] Preparar "Specimen of Use" — screenshot de LifeOS corriendo con la marca visible
+- [ ] Esperar examen (3-6 meses) → responder Office Actions si hay → publicacion → registro
+
+**Paso 3: Registro internacional (opcional, futuro)**
+
+- [ ] Madrid Protocol para registro en multiples paises con una sola solicitud
+- [ ] Prioridad: USA → Mexico → EU → resto del mundo
+
+**Costo estimado:**
+- USA: ~$250/clase × 2 marcas × 2 clases = ~$1,000 USD
+- Mexico (IMPI): ~$2,500 MXN por marca (~$150 USD × 2 = ~$300 USD)
+- Total estimado: ~$1,300 USD
+
+---
+
+### Plan de Lanzamiento y Marketing
+
+**Estado:** PENDIENTE. _Ejecutar cuando Fase 4.11 este cerrada y la marca este en proceso de registro._
+
+**Fase M1: Presencia web (semana 1-2)**
+
+- [ ] **Dominio:** Registrar `lifeos.dev` o `lifeos.ai` (verificar disponibilidad)
+- [ ] **Landing page:** Pagina simple con:
+  - Hero: screenshot de LifeOS + "El primer OS con AI que te conoce"
+  - Features: 5-6 diferenciadores (privacidad, voz, memoria, Axi)
+  - Demo video: 60 segundos mostrando interaccion con Axi
+  - CTA: "Descargar ISO" + "Star en GitHub"
+  - Tech stack para la web: Astro o Hugo (estatico, rapido, gratuito en Cloudflare Pages)
+- [ ] **GitHub repo publico:** README profesional con badges, screenshots, GIF animado del demo
+
+**Fase M2: Contenido (semana 2-4)**
+
+- [ ] **Video de presentacion (YouTube):** 5-10 min mostrando:
+  - Boot → login → desktop → hablar con Axi → Telegram → screenshot → instalar app
+  - Enfasis en: "sin configuracion, funciona desde el primer boot"
+  - Titulo sugerido: "LifeOS: Linux con AI que te conoce por voz"
+- [ ] **Video tecnico:** 15-20 min deep dive en la arquitectura
+  - Rust + COSMIC + llama.cpp + memoria encriptada + 31 tools
+  - Para developers que quieran contribuir
+- [ ] **Articulo en Dev.to / Medium:** "Como construi un OS con AI desde cero"
+  - Historia personal, decisiones tecnicas, lecciones aprendidas
+  - Incluir metricas: 219 tests, 31 tools, 5 tipos de memoria
+
+**Fase M3: Comunidad (semana 4-8)**
+
+- [ ] **Discord server:** Canales: general, dev, feedback, showcase, español, english
+- [ ] **Reddit:** Posts en r/linux, r/LocalLLaMA, r/rust, r/selfhosted, r/COSMIC
+- [ ] **Hacker News:** "Show HN: LifeOS — AI-native Linux distribution built in Rust"
+- [ ] **Twitter/X:** Cuenta @LifeOS_dev — posts diarios con tips, progress, screenshots
+- [ ] **YouTube canal:** Videos semanales: tutoriales, updates, behind-the-scenes
+- [ ] **Telegram grupo:** Para usuarios de LifeOS en español
+
+**Fase M4: Crecimiento (mes 2-6)**
+
+- [ ] **Livestreams:** Desarrollo en vivo en YouTube/Twitch — "Building LifeOS live"
+- [ ] **Colaboraciones:** Contactar YouTubers de Linux (The Linux Experiment, Chris Titus, DistroTube)
+- [ ] **ProductHunt launch:** Preparar assets, descripcion, y lanzar un martes
+- [ ] **Blog con RSS:** Updates semanales del proyecto
+- [ ] **Newsletter:** Para early adopters — updates mensuales
+- [ ] **Talks:** Proponer charla en FOSDEM, Linux Plumbers, RustConf
+
+**Fase M5: Distribucion (mes 3-12)**
+
+- [ ] **ISO publica:** Descargas en el sitio web + torrent + mirrors
+- [ ] **Flathub presence:** Publicar `life` CLI como Flatpak para que otros distros lo prueben
+- [ ] **AUR package:** Para usuarios de Arch que quieran el CLI/daemon
+- [ ] **COPR repo:** Para Fedora users
+- [ ] **Docker image:** Para probar Axi sin instalar el OS completo
+- [ ] **GitHub Sponsors / Open Collective:** Aceptar donaciones para infraestructura
+
+---
 
 ### A Futuro (Experimental B2B): Arquitectura Multi-Agente Corporativa (LifeOS Swarm) [RFC EXPERIMENTAL]
 
@@ -1768,7 +2095,7 @@ Audio entrante
 7. **Life Capsule** como feature por defecto desde el MVP.
 8. **Sync** instalado por defecto, pero desactivado hasta consentimiento explicito.
 9. **Contrato de permisos multimodales** definido desde dia 1.
-10. **Autonomia tipo Jarvis** solo como sesion temporal auditable, nunca permanente.
+10. **Autonomia tipo Autonomy** solo como sesion temporal auditable, nunca permanente.
 11. **Sin dependencias criticas en proyectos sin respaldo operativo suficiente** para componentes base.
 12. **Intent Bus nativo (`life-intents`)** como contrato estable de acciones para UI/CLI/agentes/apps.
 13. **Identity Plane de agentes (`life-id`)** con tokens de capacidad firmados y revocables.
@@ -2297,7 +2624,7 @@ Campos obligatorios:
 
 1. Formato: PASETO v4.public (o JWT firmado equivalente si el entorno lo exige).
 2. Claims minimos: `iss`, `sub`, `act`, `cap[]`, `scope`, `risk`, `iat`, `exp`, `jti`.
-3. Binding opcional a dispositivo (`device_id`, `tpm_quote_hash`) para sesiones Jarvis.
+3. Binding opcional a dispositivo (`device_id`, `tpm_quote_hash`) para sesiones Autonomy.
 4. Revocacion online/offline por `jti` contra CRL local sincronizable.
 
 **Reglas de validacion de token:**
@@ -2671,7 +2998,7 @@ qemu-system-x86_64 -m 4096 -enable-kvm -cdrom output/bootiso/*.iso -boot d
 7. **Sync** instalado por defecto, pero activado solo con consentimiento explicito.
 8. **Contrato de permisos multimodales** definido desde dia 1.
 9. **Hardware Compatibility Matrix** publicada antes de la beta.
-10. **Autonomia tipo Jarvis** solo como sesion temporal, nunca permanente.
+10. **Autonomia tipo Autonomy** solo como sesion temporal, nunca permanente.
 11. **Gobernanza abierta** desde dia 0: repo publico, issues abiertos, CONTRIBUTING.md.
 12. **Principio de independencia:** nunca depender de proyectos sin backing corporativo para componentes criticos.
 13. **Intent Bus primero:** acciones solo via `life-intents` con `plan -> policy -> execute`.
@@ -2811,7 +3138,7 @@ No declares finalizado hasta cumplir todos los puntos de la seccion 0.3 con evid
 
 ---
 
-## 29. Autonomia general Jarvis-class (si o si)
+## 29. Autonomia general Autonomy-class (si o si)
 
 ### 29.1 Objetivo
 

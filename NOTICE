@@ -1,0 +1,81 @@
+LifeOS — AI-Native Linux Distribution
+Copyright 2026 LifeOS Contributors
+
+This product includes software developed by third parties:
+
+=== Core Runtime ===
+
+llama.cpp (MIT License)
+  https://github.com/ggerganov/llama.cpp
+  Copyright (c) 2023-2026 Georgi Gerganov
+  Local LLM inference engine (llama-server binary).
+
+Whisper.cpp (MIT License)
+  https://github.com/ggerganov/whisper.cpp
+  Copyright (c) 2022-2026 Georgi Gerganov
+  Speech-to-text engine (whisper-cli binary).
+
+Piper TTS (MIT License)
+  https://github.com/rhasspy/piper
+  Copyright (c) 2023-2026 Michael Hansen
+  Text-to-speech engine with Spanish MX voice.
+
+=== AI Models ===
+
+Qwen3 (Apache-2.0 License)
+  https://huggingface.co/Qwen
+  Copyright (c) Alibaba Cloud
+  Default local LLM model (Qwen3.5-4B GGUF).
+
+WeSpeaker (Apache-2.0 License)
+  https://github.com/wenet-e2e/wespeaker
+  Copyright (c) WeNet Community
+  Speaker identification ONNX model.
+
+Rustpotter (MIT License)
+  https://github.com/GiviMAD/rustpotter
+  Wake word detection engine.
+
+=== Desktop Environment ===
+
+COSMIC Desktop (GPL-3.0 License)
+  https://github.com/pop-os/cosmic-epoch
+  Copyright (c) System76, Inc.
+  Desktop environment compositor, panel, applets, and applications.
+  NOTE: COSMIC components are GPL-3.0 licensed. When the lifeosd binary
+  is compiled with --features cosmic, the resulting binary is subject to
+  GPL-3.0 terms. The default build (without cosmic feature) remains Apache-2.0.
+
+=== Rust Dependencies ===
+
+All Rust crate dependencies are licensed under MIT, Apache-2.0, or
+dual MIT/Apache-2.0 unless noted otherwise. See Cargo.lock for the
+complete dependency tree. Notable dependencies:
+
+- tokio (MIT) — async runtime
+- axum (MIT) — HTTP framework
+- teloxide (MIT) — Telegram bot framework
+- rusqlite (MIT) — SQLite bindings
+- sqlite-vec (MIT) — vector search extension
+- ksni (MIT) — StatusNotifierItem system tray
+- aes-gcm-siv (MIT/Apache-2.0) — memory encryption
+
+=== Browser ===
+
+Firefox (MPL-2.0 License)
+  https://www.mozilla.org/firefox/
+  Bundled with LifeOS hardened privacy profile.
+
+uBlock Origin (GPL-3.0 License)
+  https://github.com/gorhill/uBlock
+  Pre-installed ad blocker in Firefox profile.
+
+=== Inspiration & References ===
+
+The memory protocol design was inspired by:
+- Engram (MIT License) — https://github.com/Gentleman-Programming/engram
+- gentle-ai (MIT License) — https://github.com/Gentleman-Programming/gentle-ai
+
+The agentic Telegram bot was benchmarked against:
+- OpenClaw (AGPL-3.0 License) — https://github.com/openclaw/openclaw
+  Referenced for feature comparison only. No code was copied.

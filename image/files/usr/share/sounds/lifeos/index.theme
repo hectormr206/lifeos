@@ -1,0 +1,8 @@
+[Sound Theme]
+Name=LifeOS
+Comment=Subtle system sounds for LifeOS
+Inherits=freedesktop
+Directories=stereo
+
+[stereo]
+OutputProfile=stereo

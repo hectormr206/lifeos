@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=LifeOS
+Description=AI-native Linux distribution boot splash with Axi
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/lifeos
+ScriptFile=/usr/share/plymouth/themes/lifeos/lifeos.script

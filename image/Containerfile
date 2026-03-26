@@ -69,7 +69,8 @@ COPY contracts/ contracts/
 # Build binaries with deterministic dependency resolution, then keep only artifacts.
 RUN set -eux && \
     cargo build --release --locked -p life && \
-    cargo build --release --all-features --locked -p lifeosd && \
+    cargo build --release --locked -p lifeosd \
+        --features "dbus,http-api,ui-overlay,wake-word,speaker-id,telegram,tray" && \
     install -D -m 0755 /build/target/release/life /out/life && \
     install -D -m 0755 /build/target/release/lifeosd /out/lifeosd && \
     install -D -m 0755 /build/target/release/lifeos-train-wakeword /out/lifeos-train-wakeword && \
@@ -224,6 +225,7 @@ RUN dnf -y install dnf5-plugins && \
 # --- Escritorio COSMIC y Base ---
 RUN dnf -y install --skip-unavailable \
     cosmic-desktop cosmic-files cosmic-term cosmic-edit cosmic-store \
+    cosmic-screenshot cosmic-player cosmic-idle \
     xdg-desktop-portal-cosmic xdg-desktop-portal-gtk xdg-desktop-portal-wlr \
     xdg-user-dirs \
     NetworkManager NetworkManager-wifi wpa_supplicant wireless-regdb iwd \
@@ -331,6 +333,13 @@ RUN set -eux && \
     fi && \
     dnf clean all
 
+# --- Flatpak: configure Flathub so COSMIC Store shows apps ---
+# Use /etc/flatpak/remotes.d/ (immutable, survives bootc updates) + runtime init
+RUN mkdir -p /etc/flatpak/remotes.d && \
+    printf '[Flatpak Remote]\nName=flathub\nUrl=https://dl.flathub.org/repo/\nGPGKey=https://dl.flathub.org/repo/flathub.gpg\nEnabled=true\n' \
+        > /etc/flatpak/remotes.d/flathub.flatpakrepo && \
+    flatpak remote-add --if-not-exists --system flathub https://flathub.org/repo/flathub.flatpakrepo || true
+
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \
     firefox \
@@ -350,6 +359,19 @@ RUN set -eux && \
     rm -f "${TMP_XPI}" && \
     echo ">>> uBlock Origin extension downloaded to /usr/lib and /usr/lib64 Firefox distribution paths"
 
+# --- Plymouth Boot Splash (LifeOS branded) ---
+RUN dnf -y install plymouth plymouth-scripts plymouth-plugin-script librsvg2-tools && \
+    dnf clean all
+COPY image/files/usr/share/plymouth/themes/lifeos/ /usr/share/plymouth/themes/lifeos/
+# Convert SVGs to PNGs for Plymouth (Plymouth doesn't support SVG natively)
+RUN cd /usr/share/plymouth/themes/lifeos && \
+    rsvg-convert -w 200 -h 200 logo.svg -o logo.png && \
+    rsvg-convert -w 300 -h 40 brand.svg -o brand.png && \
+    rsvg-convert -w 12 -h 12 dot-on.svg -o dot-on.png && \
+    rsvg-convert -w 12 -h 12 dot-off.svg -o dot-off.png && \
+    rm -f *.svg && \
+    plymouth-set-default-theme lifeos
+
 # --- Herramientas del Sistema ---
 # Incluye toolchain de desarrollo para que LifeOS pueda auto-hospedar
 # build/test de `life` y `lifeosd --all-features` sin toolbox adicional.
@@ -360,6 +382,7 @@ RUN dnf -y install \
     virt-install virt-viewer virt-manager edk2-ovmf swtpm spice-vdagent \
     fuse-overlayfs slirp4netns \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git gh wget \
+    rsms-inter-fonts \
     pkgconf-pkg-config \
     gcc gcc-c++ make cmake \
     openssl-devel \
@@ -509,6 +532,10 @@ COPY image/files/etc/firefox/policies/policies.json /etc/firefox/policies/polici
 
 # Firefox profile template (skeleton for new users)
 # This creates /etc/skel/.mozilla/firefox/ with default profile
+# --- COSMIC defaults: LifeOS accent color (teal), dark mode, wallpaper ---
+COPY image/files/etc/skel/.config/cosmic/ /etc/skel/.config/cosmic/
+
+# --- Firefox profile ---
 COPY image/files/etc/skel/.mozilla/firefox/profiles.ini /etc/skel/.mozilla/firefox/profiles.ini
 COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/user.js /etc/skel/.mozilla/firefox/lifeos.default/user.js
 COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css
@@ -572,14 +599,32 @@ RUN set -eux && \
 COPY image/files/etc/polkit-1/rules.d/40-lifeos-axi.rules /etc/polkit-1/rules.d/40-lifeos-axi.rules
 # Game Guard: polkit + sudoers for llama-server GPU offload
 COPY image/files/etc/polkit-1/rules.d/50-lifeos-llama-server.rules /etc/polkit-1/rules.d/50-lifeos-llama-server.rules
-COPY image/files/etc/sudoers.d/lifeos-llama-server /etc/sudoers.d/lifeos-llama-server
-RUN chmod 0440 /etc/sudoers.d/lifeos-llama-server
+COPY image/files/etc/sudoers.d/lifeos-axi /etc/sudoers.d/lifeos-axi
+RUN chmod 0440 /etc/sudoers.d/lifeos-axi
 
 # xdg-desktop-portal LifeOS integration
 COPY files/usr/share/xdg-desktop-portal/portals/lifeos.portal /usr/share/xdg-desktop-portal/portals/lifeos.portal
 
 # Copiar configuración inicial si no existe
 RUN cp -n /etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml || true
+
+# --- LifeOS system sounds (subtle tones generated via sox) ---
+COPY image/files/usr/share/sounds/lifeos/index.theme /usr/share/sounds/lifeos/index.theme
+COPY image/files/usr/local/bin/lifeos-generate-sounds.sh /usr/local/bin/lifeos-generate-sounds.sh
+RUN chmod +x /usr/local/bin/lifeos-generate-sounds.sh && \
+    dnf -y install sox && \
+    /usr/local/bin/lifeos-generate-sounds.sh && \
+    dnf clean all
+
+# --- WirePlumber: fix BT volume reset on profile switch (A2DP <-> HSP/HFP) ---
+COPY image/files/etc/wireplumber/wireplumber.conf.d/ /etc/wireplumber/wireplumber.conf.d/
+
+# --- COSMIC environment: enable clipboard data control protocol ---
+RUN mkdir -p /etc/environment.d && \
+    printf 'COSMIC_DATA_CONTROL_ENABLED=1\n' > /etc/environment.d/50-lifeos-cosmic.conf
+
+# --- COSMIC Greeter branding: LifeOS wallpaper + teal accent on login screen ---
+COPY image/files/var/lib/cosmic-greeter/.config/cosmic/ /var/lib/cosmic-greeter/.config/cosmic/
 
 # --- Display Manager: COSMIC Greeter ---
 RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/display-manager.service && \
@@ -598,8 +643,9 @@ COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
 COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf /etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf
-COPY image/files/etc/xdg/autostart/lifeos-axi-experience.desktop /etc/xdg/autostart/lifeos-axi-experience.desktop
-COPY image/files/usr/share/applications/lifeos-axi-dashboard.desktop /usr/share/applications/lifeos-axi-dashboard.desktop
+# Dashboard access: only via Axi tray icon → "Abrir Dashboard"
+# COPY image/files/etc/xdg/autostart/lifeos-axi-experience.desktop /etc/xdg/autostart/lifeos-axi-experience.desktop
+# COPY image/files/usr/share/applications/lifeos-axi-dashboard.desktop /usr/share/applications/lifeos-axi-dashboard.desktop
 # lifeosd.service — user service so it inherits Wayland, PipeWire, D-Bus
 # This lets the GTK4 mini-widget (Eye of Axi) render on the desktop and
 # gives native access to audio, camera, and screen capture.
@@ -675,15 +721,15 @@ RUN mkdir -p /etc/systemd/system && \
 RUN rm -f /usr/lib/os-release && \
     printf '%s\n' \
     'NAME="LifeOS"' \
-    'VERSION="0.1 Aegis"' \
+    'VERSION="0.2 Aegis"' \
     'ID=fedora' \
     'VARIANT_ID=lifeos' \
     'VARIANT="LifeOS"' \
     "VERSION_ID=\"${FEDORA_MAJOR}\"" \
     "PLATFORM_ID=\"platform:f${FEDORA_MAJOR}\"" \
-    "PRETTY_NAME=\"LifeOS 0.1 Aegis (Fedora ${FEDORA_MAJOR})\"" \
+    "PRETTY_NAME=\"LifeOS 0.2 Aegis — Powered by Axi (Fedora ${FEDORA_MAJOR})\"" \
     'ANSI_COLOR="0;36"' \
-    'LOGO="fedora-logo-icon"' \
+    'LOGO="lifeos"' \
     "CPE_NAME=\"cpe:/o:fedoraproject:fedora:${FEDORA_MAJOR}\"" \
     'HOME_URL="https://lifeos.hectormr.com"' \
     'DOCUMENTATION_URL="https://lifeos.hectormr.com/docs"' \
@@ -694,6 +740,10 @@ RUN rm -f /usr/lib/os-release && \
     'REDHAT_SUPPORT_PRODUCT="Fedora"' \
     "REDHAT_SUPPORT_PRODUCT_VERSION=\"${FEDORA_MAJOR}\"" \
     > /usr/lib/os-release
+
+# LifeOS icon in hicolor theme (for COSMIC Settings > About and other apps)
+RUN mkdir -p /usr/share/icons/hicolor/scalable/apps && \
+    ln -sf /usr/share/icons/LifeOS/scalable/apps/lifeos.svg /usr/share/icons/hicolor/scalable/apps/lifeos.svg
 
 # Placeholders de imagen oscuros para el instalador Anaconda
 RUN mkdir -p /usr/share/anaconda/pixmaps/ && \
@@ -802,8 +852,7 @@ RUN test -x /usr/bin/mpv && \
     test -f /usr/share/lifeos/dashboard/index.html && \
     test -f /usr/share/lifeos/dashboard/app.js && \
     test -f /usr/share/lifeos/dashboard/style.css && \
-    test -f /etc/xdg/autostart/lifeos-axi-experience.desktop && \
-    test -f /usr/share/applications/lifeos-axi-dashboard.desktop && \
+    # Dashboard .desktop removed — access only via tray icon
     test -f /usr/lib/systemd/user/lifeosd.service && \
     test -f /usr/lib/systemd/system/llama-server.service && \
     test -f /usr/lib/systemd/system/whisper-stt.service && \
