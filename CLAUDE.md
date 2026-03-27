@@ -71,11 +71,24 @@ sudo bash scripts/build-iso.sh
 
 - **bootc immutability:** `/usr` is read-only at runtime. Never create symlinks or modify files in `/usr/bin` or `/usr/sbin` at runtime. All changes to `/usr` happen at image build time in the Containerfile.
 - **llama-server:** Must be built with `-DBUILD_SHARED_LIBS=OFF -DGGML_STATIC=ON` (static). Binary ends up at `/usr/sbin/llama-server`.
-- **os-release:** Must keep `ID=fedora` for bootc-image-builder compatibility. Use `VARIANT_ID=lifeos` for branding.
+- **os-release:** Must keep `ID=fedora` for bootc-image-builder compatibility. Use `VARIANT_ID=lifeos` for branding. **NEVER use non-ASCII characters** (em dash `—`, accents, emoji) in any field — the GitHub Actions runner sends `PRETTY_NAME` in HTTP headers, and .NET rejects non-ASCII.
 - **systemd:** Does NOT support `${VAR:-default}` bash syntax in ExecStart. Use EnvironmentFile for variable defaults.
 - **Daemon auth:** All `/api/v1/*` routes require `x-bootstrap-token` or `x-api-key` header. CLI reads token from `/run/lifeos/bootstrap.token`. The `daemon_client::authenticated_client()` handles this.
 - **Daemon features:** Default features exclude `ui-overlay`. Building `--all-features` requires GTK4 dev headers (`gtk4-devel`, `glib2-devel`, etc.).
 - **User cannot run sudo:** Never run sudo commands directly. Provide commands for the user to run manually.
+
+## Self-hosted Runner (`/var/lib/lifeos/actions-runner/`)
+
+- Service: `actions.runner.hectormr206-lifeos.hectormr.service` (system-level, user `lifeos`)
+- **SELinux:** After installing or updating the runner, binaries need `bin_t` context or systemd fails with `status=203/EXEC`:
+  ```bash
+  sudo chcon -t bin_t /var/lib/lifeos/actions-runner/runsvc.sh
+  sudo chcon -t bin_t /var/lib/lifeos/actions-runner/bin/Runner.Listener
+  sudo chcon -t bin_t /var/lib/lifeos/actions-runner/bin/Runner.Worker
+  sudo chcon -t bin_t /var/lib/lifeos/actions-runner/externals/node20/bin/node
+  ```
+- `.env` sets `DOCKER_HOST=unix:///run/user/1000/podman/podman.sock`
+- Labels: `self-hosted, Linux, X64, lifeos, bootc`
 
 ## Pre-commit Hooks
 

@@ -739,7 +739,7 @@ RUN rm -f /usr/lib/os-release && \
     'VARIANT="LifeOS"' \
     "VERSION_ID=\"${FEDORA_MAJOR}\"" \
     "PLATFORM_ID=\"platform:f${FEDORA_MAJOR}\"" \
-    "PRETTY_NAME=\"LifeOS 0.2 Aegis — hectormr.com (Fedora ${FEDORA_MAJOR})\"" \
+    "PRETTY_NAME=\"LifeOS 0.2 Aegis - hectormr.com (Fedora ${FEDORA_MAJOR})\"" \
     'ANSI_COLOR="0;36"' \
     'LOGO="lifeos"' \
     "CPE_NAME=\"cpe:/o:fedoraproject:fedora:${FEDORA_MAJOR}\"" \
