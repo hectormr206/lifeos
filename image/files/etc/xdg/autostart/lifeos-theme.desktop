@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=LifeOS Theme
+Comment=Apply LifeOS visual identity on first login
+Exec=/usr/local/bin/lifeos-apply-theme.sh
+Type=Application
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

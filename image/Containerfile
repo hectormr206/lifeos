@@ -535,6 +535,12 @@ COPY image/files/etc/firefox/policies/policies.json /etc/firefox/policies/polici
 # --- COSMIC defaults: LifeOS accent color (teal), dark mode, wallpaper ---
 COPY image/files/etc/skel/.config/cosmic/ /etc/skel/.config/cosmic/
 
+# --- LifeOS visual identity: theme + auto-apply on first login ---
+COPY image/files/usr/share/lifeos/themes/ /usr/share/lifeos/themes/
+COPY image/files/usr/local/bin/lifeos-apply-theme.sh /usr/local/bin/lifeos-apply-theme.sh
+COPY image/files/etc/xdg/autostart/lifeos-theme.desktop /etc/xdg/autostart/lifeos-theme.desktop
+RUN chmod +x /usr/local/bin/lifeos-apply-theme.sh
+
 # --- Firefox profile ---
 COPY image/files/etc/skel/.mozilla/firefox/profiles.ini /etc/skel/.mozilla/firefox/profiles.ini
 COPY image/files/etc/skel/.mozilla/firefox/lifeos.default/user.js /etc/skel/.mozilla/firefox/lifeos.default/user.js
