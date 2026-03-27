@@ -61,8 +61,9 @@ COMP="$HOME/.config/cosmic/com.system76.CosmicComp/v1"
 mkdir -p "$COMP"
 echo "true" > "$COMP/active_hint"
 
-# ── 5. Wallpaper ──
-WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-axi-night.svg"
+# ── 5. Wallpaper (prefer PNG over SVG) ──
+WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-axi-night.png"
+[ ! -f "$WALLPAPER" ] && WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-axi-night.svg"
 if [ -f "$WALLPAPER" ]; then
     BG_DIR="$HOME/.config/cosmic/com.system76.CosmicBackground/v1"
     mkdir -p "$BG_DIR"
@@ -73,6 +74,11 @@ fi
 MODE_DIR="$HOME/.config/cosmic/com.system76.CosmicTheme.Mode/v1"
 mkdir -p "$MODE_DIR"
 echo "true" > "$MODE_DIR/is_dark"
+
+# ── 7. Icon theme: LifeOS ──
+TK_DIR="$HOME/.config/cosmic/com.system76.CosmicTk/v1"
+mkdir -p "$TK_DIR"
+echo '"LifeOS"' > "$TK_DIR/icon_theme"
 
 echo "[lifeos-theme] LifeOS identity applied successfully"
 

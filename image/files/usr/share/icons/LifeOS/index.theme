@@ -1,8 +1,8 @@
 [Icon Theme]
 Name=LifeOS
-Comment=LifeOS Icon Theme - Inherits Adwaita with LifeOS brand overrides
-Inherits=Adwaita
-Directories=scalable/apps,scalable/categories,scalable/status,scalable/actions,scalable/places,scalable/mimetypes
+Comment=LifeOS Icon Theme — Teal Axi accent, dark background icons by hectormr.com
+Inherits=Cosmic,Adwaita,hicolor
+Directories=scalable/apps,scalable/categories,scalable/status,scalable/actions,scalable/places,scalable/mimetypes,512x512/apps,512x512/places,512x512/categories
 
 [scalable/apps]
 Size=128
@@ -45,3 +45,18 @@ MinSize=16
 MaxSize=512
 Type=Scalable
 Context=MimeTypes
+
+[512x512/apps]
+Size=512
+Type=Fixed
+Context=Applications
+
+[512x512/places]
+Size=512
+Type=Fixed
+Context=Places
+
+[512x512/categories]
+Size=512
+Type=Fixed
+Context=Categories
