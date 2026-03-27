@@ -2,17 +2,26 @@
 # LifeOS Theme Applier — applies the complete LifeOS visual identity.
 # Called via XDG autostart on login. Only runs once per version (marker file).
 # Also runs on update to refresh the theme.
+# Usage: lifeos-apply-theme.sh [--force]
+#   --force   Re-apply theme even if already applied for this version
 set -eu
 
 THEME_DIR="/usr/share/lifeos/themes"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"
 MARKER="$STATE_DIR/theme-applied-version"
 CURRENT_VERSION="0.2.0"
+FORCE=false
+
+for arg in "$@"; do
+    case "$arg" in
+        --force) FORCE=true ;;
+    esac
+done
 
 mkdir -p "$STATE_DIR"
 
-# Skip if already applied for this version
-if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$CURRENT_VERSION" ]; then
+# Skip if already applied for this version (unless --force)
+if [ "$FORCE" = "false" ] && [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$CURRENT_VERSION" ]; then
     exit 0
 fi
 

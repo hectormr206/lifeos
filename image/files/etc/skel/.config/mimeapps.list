@@ -1,0 +1,28 @@
+[Default Applications]
+# Images — Loupe (GNOME image viewer, GTK4/Wayland native)
+image/png=org.gnome.Loupe.desktop
+image/jpeg=org.gnome.Loupe.desktop
+image/gif=org.gnome.Loupe.desktop
+image/webp=org.gnome.Loupe.desktop
+image/svg+xml=org.gnome.Loupe.desktop
+image/bmp=org.gnome.Loupe.desktop
+image/tiff=org.gnome.Loupe.desktop
+image/x-icon=org.gnome.Loupe.desktop
+image/avif=org.gnome.Loupe.desktop
+image/heif=org.gnome.Loupe.desktop
+
+# PDF — Evince
+application/pdf=org.gnome.Evince.desktop
+
+# Video — mpv
+video/mp4=mpv.desktop
+video/x-matroska=mpv.desktop
+video/webm=mpv.desktop
+video/x-msvideo=mpv.desktop
+video/quicktime=mpv.desktop
+
+# Audio — mpv
+audio/mpeg=mpv.desktop
+audio/ogg=mpv.desktop
+audio/flac=mpv.desktop
+audio/x-wav=mpv.desktop

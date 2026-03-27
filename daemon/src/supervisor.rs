@@ -977,6 +977,36 @@ impl Supervisor {
         // ---------------------------------------------------------------
         // Real execution with retry-with-variation + cascade prevention
         // ---------------------------------------------------------------
+
+        // Workspace persistence: if any step uses SandboxCommand, create one
+        // worktree for the entire task instead of one per step.
+        let has_sandbox_steps = plan
+            .steps
+            .iter()
+            .any(|s| matches!(s.action, StepAction::SandboxCommand { .. }));
+        let task_worktree = if has_sandbox_steps {
+            match self.create_sandbox_worktree().await {
+                Ok((path, branch)) => {
+                    info!(
+                        "Task {} — persistent sandbox worktree created: {}",
+                        task_id,
+                        path.display()
+                    );
+                    Some((path, branch))
+                }
+                Err(e) => {
+                    warn!(
+                        "Task {} — failed to create persistent worktree, will use per-step: {}",
+                        task_id, e
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let task_worktree_path = task_worktree.as_ref().map(|(p, _)| p.as_path());
+
         let mut results = Vec::new();
         let mut last_output = String::new();
         // Track indices of failed shell_command steps for cascade prevention
@@ -1027,7 +1057,7 @@ impl Supervisor {
                 objective: progress_msg,
             });
 
-            match self.execute_step(step).await {
+            match self.execute_step(step, task_worktree_path).await {
                 Ok(output) => {
                     let confidence = Self::compute_confidence(&output);
                     last_output = output.clone();
@@ -1058,7 +1088,7 @@ impl Supervisor {
                                 i + 1,
                                 alt_step.description
                             );
-                            match self.execute_step(&alt_step).await {
+                            match self.execute_step(&alt_step, task_worktree_path).await {
                                 Ok(output) => {
                                     let confidence = Self::compute_confidence(&output);
                                     last_output = output.clone();
@@ -1117,6 +1147,11 @@ impl Supervisor {
                     last_output = error;
                 }
             }
+        }
+
+        // Clean up the persistent sandbox worktree if we created one
+        if let Some((ref wt_path, ref wt_branch)) = task_worktree {
+            self.cleanup_sandbox_worktree(wt_path, wt_branch).await;
         }
 
         let steps_total = plan.steps.len();
@@ -1564,16 +1599,15 @@ impl Supervisor {
         .await
     }
 
-    /// Execute a command inside a temporary git worktree (isolated sandbox).
-    /// The worktree is created, the command runs in it, and then it's cleaned up.
-    async fn execute_in_sandbox(&self, command: &str) -> Result<String> {
+    /// Create a persistent sandbox worktree for multi-step task execution.
+    /// Returns `(worktree_path, branch_name)` so the caller can clean up later.
+    async fn create_sandbox_worktree(&self) -> Result<(PathBuf, String)> {
         let id = uuid::Uuid::new_v4().to_string();
         let branch_name = format!("sandbox-{}", &id[..8]);
         let worktree_path = std::env::temp_dir().join(format!("lifeos-sandbox-{}", &branch_name));
 
         info!("Creating sandbox worktree: {}", worktree_path.display());
 
-        // Create worktree
         let create_output = tokio::process::Command::new("git")
             .args(["worktree", "add", "-b", &branch_name])
             .arg(&worktree_path)
@@ -1587,45 +1621,72 @@ impl Supervisor {
             anyhow::bail!("Failed to create worktree: {}", stderr);
         }
 
-        // Run command in worktree
-        let result = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(&worktree_path)
-            .output()
-            .await;
+        Ok((worktree_path, branch_name))
+    }
 
-        // Always clean up worktree
+    /// Remove a sandbox worktree and its associated branch.
+    async fn cleanup_sandbox_worktree(&self, worktree_path: &std::path::Path, branch_name: &str) {
+        info!("Cleaning up sandbox worktree: {}", worktree_path.display());
         let _ = tokio::process::Command::new("git")
             .args(["worktree", "remove", "--force"])
-            .arg(&worktree_path)
+            .arg(worktree_path)
             .current_dir(&self.work_dir)
             .output()
             .await;
         let _ = tokio::process::Command::new("git")
-            .args(["branch", "-D", &branch_name])
+            .args(["branch", "-D", branch_name])
             .current_dir(&self.work_dir)
             .output()
             .await;
+    }
 
-        match result {
-            Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                Ok(if stdout.is_empty() {
-                    "(sandbox command completed with no output)".into()
-                } else if stdout.len() > 4000 {
-                    format!("{}...\n[truncated]", &stdout[..4000])
-                } else {
-                    stdout.to_string()
-                })
+    /// Run a command inside an existing sandbox worktree directory.
+    fn run_in_worktree(
+        &self,
+        command: &str,
+        worktree_path: &std::path::Path,
+    ) -> impl std::future::Future<Output = Result<String>> + 'static {
+        let command = command.to_string();
+        let worktree_path = worktree_path.to_path_buf();
+        async move {
+            let result = tokio::process::Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .current_dir(&worktree_path)
+                .output()
+                .await;
+
+            match result {
+                Ok(output) if output.status.success() => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    Ok(if stdout.is_empty() {
+                        "(sandbox command completed with no output)".into()
+                    } else if stdout.len() > 4000 {
+                        format!("{}...\n[truncated]", &stdout[..4000])
+                    } else {
+                        stdout.to_string()
+                    })
+                }
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    anyhow::bail!("Sandbox command failed: {}{}", stdout, stderr)
+                }
+                Err(e) => anyhow::bail!("Sandbox execution error: {}", e),
             }
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                anyhow::bail!("Sandbox command failed: {}{}", stdout, stderr)
-            }
-            Err(e) => anyhow::bail!("Sandbox execution error: {}", e),
         }
+    }
+
+    /// Execute a command inside a temporary git worktree (isolated sandbox).
+    /// The worktree is created, the command runs in it, and then it's cleaned up.
+    /// For multi-step tasks, prefer `create_sandbox_worktree` + `run_in_worktree`
+    /// to avoid creating/destroying a worktree per step.
+    async fn execute_in_sandbox(&self, command: &str) -> Result<String> {
+        let (worktree_path, branch_name) = self.create_sandbox_worktree().await?;
+        let result = self.run_in_worktree(command, &worktree_path).await;
+        self.cleanup_sandbox_worktree(&worktree_path, &branch_name)
+            .await;
+        result
     }
 
     /// Query memory for relevant past experiences before planning.
@@ -1840,7 +1901,11 @@ Always end with a "respond" step summarizing what was done."#,
         }
     }
 
-    async fn execute_step(&self, step: &PlanStep) -> Result<String> {
+    async fn execute_step(
+        &self,
+        step: &PlanStep,
+        task_worktree: Option<&std::path::Path>,
+    ) -> Result<String> {
         let risk = Self::classify_risk(&step.action);
         let desc = match &step.action {
             StepAction::ShellCommand { command } => command.clone(),
@@ -1913,7 +1978,13 @@ Always end with a "respond" step summarizing what was done."#,
 
         match &step.action {
             StepAction::ShellCommand { command } => self.execute_shell(command).await,
-            StepAction::SandboxCommand { command } => self.execute_in_sandbox(command).await,
+            StepAction::SandboxCommand { command } => {
+                if let Some(wt_path) = task_worktree {
+                    self.run_in_worktree(command, wt_path).await
+                } else {
+                    self.execute_in_sandbox(command).await
+                }
+            }
             StepAction::BrowseUrl { url } => self.execute_browse(url).await,
             StepAction::WebSearch { query } => self.execute_web_search(query).await,
             StepAction::FileSearch { pattern } => self.execute_file_search(pattern).await,

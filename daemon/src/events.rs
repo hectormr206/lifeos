@@ -62,4 +62,12 @@ pub enum DaemonEvent {
         game_name: Option<String>,
         llm_mode: String,
     },
+    MeetingRecordingStarted {
+        app_name: String,
+        recording_path: String,
+    },
+    MeetingRecordingStopped {
+        recording_path: Option<String>,
+        duration_secs: u64,
+    },
 }

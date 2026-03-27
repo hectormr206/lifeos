@@ -1,62 +1,49 @@
 [Icon Theme]
 Name=LifeOS
-Comment=LifeOS Icon Theme — Teal Axi accent, dark background icons by hectormr.com
-Inherits=Cosmic,Adwaita,hicolor
-Directories=scalable/apps,scalable/categories,scalable/status,scalable/actions,scalable/places,scalable/mimetypes,512x512/apps,512x512/places,512x512/categories
+Comment=LifeOS flat icon theme with Teal Axi accent
+Inherits=Adwaita,hicolor
+Example=folder
+
+Directories=scalable/apps,scalable/places,scalable/mimetypes,scalable/actions,scalable/categories,scalable/status
 
 [scalable/apps]
-Size=128
+Size=512
 MinSize=16
-MaxSize=512
+MaxSize=1024
 Type=Scalable
 Context=Applications
 
-[scalable/categories]
-Size=128
-MinSize=16
-MaxSize=512
-Type=Scalable
-Context=Categories
-
-[scalable/status]
-Size=128
-MinSize=16
-MaxSize=512
-Type=Scalable
-Context=Status
-
-[scalable/actions]
-Size=128
-MinSize=16
-MaxSize=512
-Type=Scalable
-Context=Actions
-
 [scalable/places]
-Size=128
+Size=512
 MinSize=16
-MaxSize=512
+MaxSize=1024
 Type=Scalable
 Context=Places
 
 [scalable/mimetypes]
-Size=128
+Size=512
 MinSize=16
-MaxSize=512
+MaxSize=1024
 Type=Scalable
 Context=MimeTypes
 
-[512x512/apps]
+[scalable/actions]
 Size=512
-Type=Fixed
-Context=Applications
+MinSize=16
+MaxSize=1024
+Type=Scalable
+Context=Actions
 
-[512x512/places]
+[scalable/categories]
 Size=512
-Type=Fixed
-Context=Places
-
-[512x512/categories]
-Size=512
-Type=Fixed
+MinSize=16
+MaxSize=1024
+Type=Scalable
 Context=Categories
+
+[scalable/status]
+Size=512
+MinSize=16
+MaxSize=1024
+Type=Scalable
+Context=Status

@@ -409,7 +409,7 @@ RUN dnf -y install python3-pip python3-numpy && \
 
 # --- Aplicaciones Nativas Esenciales ---
 RUN dnf -y install \
-    mpv evince keepassxc \
+    mpv evince keepassxc loupe \
     && dnf clean all
 
 # bootc-image-builder expects EFI binaries under /boot/efi/EFI/fedora when producing installer ISOs.
@@ -537,6 +537,8 @@ COPY image/files/etc/firefox/policies/policies.json /etc/firefox/policies/polici
 # This creates /etc/skel/.mozilla/firefox/ with default profile
 # --- COSMIC defaults: LifeOS accent color (teal), dark mode, wallpaper ---
 COPY image/files/etc/skel/.config/cosmic/ /etc/skel/.config/cosmic/
+# --- Default MIME associations: Loupe for images, Evince for PDF, mpv for media ---
+COPY image/files/etc/skel/.config/mimeapps.list /etc/skel/.config/mimeapps.list
 
 # --- LifeOS visual identity: theme + auto-apply on first login ---
 COPY image/files/usr/share/lifeos/themes/ /usr/share/lifeos/themes/

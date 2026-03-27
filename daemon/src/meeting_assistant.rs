@@ -13,6 +13,7 @@ use log::info;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::process::Command;
+use tokio::sync::broadcast;
 
 /// Known conferencing applications and their process/window identifiers.
 const CONFERENCING_APPS: &[(&str, &[&str])] = &[
@@ -38,16 +39,42 @@ pub struct MeetingState {
     pub duration_secs: u64,
 }
 
+/// Window title patterns that indicate an active meeting.
+/// Each entry is (app name, list of title substrings to match).
+const MEETING_WINDOW_PATTERNS: &[(&str, &[&str])] = &[
+    ("Zoom", &["Zoom Meeting", "Zoom Webinar"]),
+    ("Google Meet", &["Google Meet", "meet.google.com"]),
+    (
+        "Microsoft Teams",
+        &["Microsoft Teams", "teams.microsoft.com"],
+    ),
+    ("Discord", &["Discord"]),
+    ("Slack Huddle", &["Huddle"]),
+    ("Jitsi", &["Jitsi Meet"]),
+    ("WebEx", &["WebEx Meeting", "Cisco Webex"]),
+];
+
+/// Additional keywords that must appear alongside certain apps to confirm a meeting.
+/// Discord needs "Voice" or "Stage"; Slack needs "Huddle".
+const MEETING_QUALIFIER_PATTERNS: &[(&str, &[&str])] = &[
+    ("Discord", &["Voice", "Stage"]),
+    ("Slack Huddle", &["Huddle"]),
+];
+
 pub struct MeetingAssistant {
     data_dir: PathBuf,
     enabled: bool,
     state: MeetingState,
     recording_process: Option<tokio::process::Child>,
     language: String,
+    event_bus: Option<broadcast::Sender<crate::events::DaemonEvent>>,
 }
 
 impl MeetingAssistant {
-    pub fn new(data_dir: PathBuf) -> Self {
+    pub fn new(
+        data_dir: PathBuf,
+        event_bus: Option<broadcast::Sender<crate::events::DaemonEvent>>,
+    ) -> Self {
         Self {
             data_dir,
             enabled: std::env::var("LIFEOS_MEETING_ASSISTANT")
@@ -56,6 +83,7 @@ impl MeetingAssistant {
             state: MeetingState::default(),
             recording_process: None,
             language: "auto".to_string(),
+            event_bus,
         }
     }
 
@@ -74,7 +102,8 @@ impl MeetingAssistant {
         &self.state
     }
 
-    /// Check if a meeting is currently happening by looking for conferencing app audio streams.
+    /// Check if a meeting is currently happening by looking for conferencing app audio streams,
+    /// window titles, and camera usage.
     pub async fn detect_meeting(&mut self) -> Result<bool> {
         if !self.enabled {
             return Ok(false);
@@ -83,11 +112,18 @@ impl MeetingAssistant {
         // Strategy 1: Check PipeWire/PulseAudio for conferencing app audio streams
         let audio_meeting = detect_meeting_audio().await;
 
-        // Strategy 2: Check if camera is in use by a conferencing app
+        // Strategy 2: Check sway/COSMIC compositor window titles for meeting patterns
+        let window_meeting = if audio_meeting.is_none() {
+            detect_meeting_by_window_title().await
+        } else {
+            None
+        };
+
+        // Strategy 3: Check if camera is in use by a conferencing app
         let camera_in_use = detect_camera_in_use().await;
 
-        let detected = audio_meeting.is_some() || camera_in_use;
-        let app_name = audio_meeting;
+        let detected = audio_meeting.is_some() || window_meeting.is_some() || camera_in_use;
+        let app_name = audio_meeting.or(window_meeting);
 
         if detected && !self.state.detected {
             // Meeting just started
@@ -144,6 +180,19 @@ impl MeetingAssistant {
         self.recording_process = Some(child);
         self.state.recording = true;
         self.state.recording_path = Some(output_path.to_string_lossy().to_string());
+
+        // Emit recording started event via the event bus
+        if let Some(ref tx) = self.event_bus {
+            let _ = tx.send(crate::events::DaemonEvent::MeetingRecordingStarted {
+                app_name: self
+                    .state
+                    .app_name
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".into()),
+                recording_path: output_path.to_string_lossy().to_string(),
+            });
+        }
+
         Ok(())
     }
 
@@ -152,6 +201,15 @@ impl MeetingAssistant {
             let _ = child.start_kill();
         }
         self.recording_process = None;
+
+        // Emit recording stopped event via the event bus
+        if let Some(ref tx) = self.event_bus {
+            let _ = tx.send(crate::events::DaemonEvent::MeetingRecordingStopped {
+                recording_path: self.state.recording_path.clone(),
+                duration_secs: self.state.duration_secs,
+            });
+        }
+
         self.state.recording = false;
     }
 
@@ -327,6 +385,92 @@ async fn detect_meeting_audio() -> Option<String> {
     }
 
     None
+}
+
+/// Detect an active meeting by scanning compositor window titles via swaymsg.
+///
+/// Runs `swaymsg -t get_tree` (works on sway / COSMIC compositor) and walks the
+/// JSON tree looking for window titles that match known conferencing patterns.
+/// Returns the app name if a meeting window is found.
+pub async fn detect_meeting_by_window_title() -> Option<String> {
+    let output = Command::new("swaymsg")
+        .args(["-t", "get_tree"])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let tree: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+
+    // Collect all window titles from the tree
+    let mut titles: Vec<String> = Vec::new();
+    collect_window_titles(&tree, &mut titles);
+
+    // Match titles against meeting patterns
+    for title in &titles {
+        let title_lower = title.to_lowercase();
+
+        for (app_name, patterns) in MEETING_WINDOW_PATTERNS {
+            let has_pattern = patterns
+                .iter()
+                .any(|p| title_lower.contains(&p.to_lowercase()));
+
+            if !has_pattern {
+                continue;
+            }
+
+            // Some apps need a qualifier keyword (e.g. Discord needs "Voice" or "Stage")
+            if let Some((_, qualifiers)) = MEETING_QUALIFIER_PATTERNS
+                .iter()
+                .find(|(name, _)| *name == *app_name)
+            {
+                if qualifiers
+                    .iter()
+                    .any(|q| title_lower.contains(&q.to_lowercase()))
+                {
+                    return Some(app_name.to_string());
+                }
+                // Pattern matched but qualifier did not — skip this app
+                continue;
+            }
+
+            return Some(app_name.to_string());
+        }
+    }
+
+    None
+}
+
+/// Recursively collect window titles from a swaymsg JSON tree.
+fn collect_window_titles(node: &serde_json::Value, titles: &mut Vec<String>) {
+    // Leaf nodes with a "name" field are windows
+    if let Some(name) = node.get("name").and_then(|v| v.as_str()) {
+        // Only collect from actual windows (nodes with a pid or app_id)
+        let is_window = node.get("pid").is_some()
+            || node.get("app_id").is_some()
+            || node
+                .get("window_properties")
+                .and_then(|wp| wp.get("class"))
+                .is_some();
+        if is_window {
+            titles.push(name.to_string());
+        }
+    }
+
+    // Recurse into child containers
+    if let Some(nodes) = node.get("nodes").and_then(|v| v.as_array()) {
+        for child in nodes {
+            collect_window_titles(child, titles);
+        }
+    }
+    if let Some(nodes) = node.get("floating_nodes").and_then(|v| v.as_array()) {
+        for child in nodes {
+            collect_window_titles(child, titles);
+        }
+    }
 }
 
 /// Check if /dev/video0 is in use by any process.

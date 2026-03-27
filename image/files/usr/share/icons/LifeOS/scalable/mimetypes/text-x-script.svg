@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <path d="M112 48 L336 48 L400 112 L400 464 L112 464 Z" fill="#161830"/>
+  <path d="M336 48 L336 112 L400 112 Z" fill="#FF6B9D" opacity="0.5"/>
+  <text x="176" y="240" font-family="monospace" font-size="36" fill="#00D4AA" opacity="0.8">&lt;/&gt;</text><rect x="160" y="280" width="192" height="10" rx="5" fill="#00D4AA" opacity="0.4"/><rect x="160" y="308" width="140" height="10" rx="5" fill="#00D4AA" opacity="0.3"/><rect x="160" y="336" width="170" height="10" rx="5" fill="#FF6B9D" opacity="0.4"/>
+</svg>

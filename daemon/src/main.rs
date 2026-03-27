@@ -769,12 +769,44 @@ async fn main() -> anyhow::Result<()> {
         info!("Rustpotter wake word listener started");
     }
 
-    // Mini-widget disabled — replaced by Axi system tray icon (ksni).
-    // The floating GTK4 orb was visible on the lock screen (greeter) which
-    // is not desired. The tray icon lives in the panel and does not bleed
-    // into the greeter.
-    // #[cfg(feature = "ui-overlay")]
-    // { mini_widget::spawn_mini_widget(...) }
+    // Mini-widget: floating GTK4 orb ("Eye of Axi").
+    // Controlled by overlay config `mini_widget_visible`. Defaults to hidden.
+    // The tray icon (ksni) is the primary indicator; the widget is optional.
+    #[cfg(feature = "ui-overlay")]
+    {
+        let widget_visible = {
+            let overlay = state.overlay_manager.read().await;
+            let cfg = overlay.get_config().await;
+            cfg.mini_widget_visible
+        };
+        if widget_visible {
+            let widget_state = state.clone();
+            let widget_token = state.bootstrap_token.clone().unwrap_or_default();
+            let widget_api_base = format!(
+                "http://127.0.0.1:{}",
+                state.config.api_bind_address.port(),
+            );
+            let widget_dashboard =
+                format!("{}/dashboard?token={}", widget_api_base, widget_token);
+            let current_axi_state = {
+                let overlay = widget_state.overlay_manager.read().await;
+                let s = overlay.get_state().await;
+                format!("{:?}", s.axi_state)
+            };
+            let widget_bus = state.event_bus.clone();
+            info!("[widget] Spawning Axi mini-widget (Eye of Axi)");
+            mini_widget::spawn_mini_widget(
+                widget_bus,
+                widget_dashboard,
+                true,
+                current_axi_state,
+                None,
+                "teal".to_string(),
+            );
+        } else {
+            info!("[widget] Mini-widget disabled in config (use /api/v1/overlay/toggle to enable)");
+        }
+    }
 
     // Launch Axi system tray icon (StatusNotifierItem — top panel)
     #[cfg(feature = "tray")]
@@ -948,7 +980,8 @@ async fn main() -> anyhow::Result<()> {
     let meeting_data_dir = data_dir.clone();
     let meeting_event_bus = state.event_bus.clone();
     let _meeting_handle = tokio::spawn(async move {
-        let mut assistant = meeting_assistant::MeetingAssistant::new(meeting_data_dir);
+        let mut assistant =
+            meeting_assistant::MeetingAssistant::new(meeting_data_dir, Some(meeting_event_bus.clone()));
         let mut interval = tokio::time::interval(Duration::from_secs(15));
         loop {
             interval.tick().await;
@@ -1485,6 +1518,7 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     telemetry: &telemetry_manager,
                     wake_word: always_on.wake_word.as_str(),
                     screen_enabled: runtime.screen_enabled,
+                    wake_word_detector: state.wake_word_detector.as_ref().map(|d| d.as_ref()),
                 };
 
                 // Dispatch: rustpotter (streaming) or legacy whisper-based detection.

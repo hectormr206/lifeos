@@ -45,6 +45,7 @@ adw = { version = "0.7", package = "libadwaita", optional = true }
 # Screen capture dependencies
 image = "0.25"
 base64 = "0.22"
+libc = "0.2"
 uuid = { version = "1", features = ["v4", "serde"] }
 aes-gcm-siv = "0.11"
 sha2 = "0.10"

@@ -78,6 +78,52 @@ const TTS_CHUNK_MAX_CHARS: usize = 260;
 /// the wake word again (continuous conversation window).
 const CONTINUOUS_CONVERSATION_SECS: i64 = 30;
 
+/// Emotional/contextual variation for TTS synthesis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TtsEmotion {
+    Neutral,
+    Urgent,
+    Confirmation,
+    Question,
+    Calm,
+}
+
+/// Simple keyword/pattern matching to detect the emotional tone of a text.
+fn detect_emotion(text: &str) -> TtsEmotion {
+    let lower = text.to_lowercase();
+    if lower.contains("error")
+        || lower.contains("fallo")
+        || lower.contains("alerta")
+        || lower.contains("critico")
+        || lower.contains("urgente")
+        || lower.contains("warning")
+        || lower.contains("failed")
+    {
+        return TtsEmotion::Urgent;
+    }
+    if lower.contains("listo")
+        || lower.contains("hecho")
+        || lower.contains("completado")
+        || lower.contains("exito")
+        || lower.contains("done")
+        || lower.contains("success")
+        || lower.contains("perfecto")
+    {
+        return TtsEmotion::Confirmation;
+    }
+    if lower.contains("buenas noches")
+        || lower.contains("descansa")
+        || lower.contains("relax")
+        || lower.contains("good night")
+    {
+        return TtsEmotion::Calm;
+    }
+    if text.trim_end().ends_with('?') {
+        return TtsEmotion::Question;
+    }
+    TtsEmotion::Neutral
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SensorLeds {
@@ -466,6 +512,8 @@ pub struct AlwaysOnCycle<'a> {
     pub telemetry: &'a TelemetryManager,
     pub wake_word: &'a str,
     pub screen_enabled: bool,
+    /// Optional reference to the wake word detector for auto-refinement.
+    pub wake_word_detector: Option<&'a crate::wake_word::WakeWordDetector>,
 }
 
 #[derive(Clone)]
@@ -917,6 +965,20 @@ impl SensoryPipelineManager {
             state.last_updated_at = Some(Utc::now());
         }
         self.save_state().await?;
+
+        // ── Wake word auto-refinement: save positive sample ──────────
+        if wake_word_found {
+            match save_wake_word_sample(&audio_path).await {
+                Ok(samples_dir) => {
+                    if let Some(detector) = cycle.wake_word_detector {
+                        maybe_refine_wake_word_model(&samples_dir, detector).await;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to save wake word sample: {e}");
+                }
+            }
+        }
 
         if in_continuous_window && !wake_word_found {
             log::info!("Continuous conversation: processing follow-up without wake word");
@@ -2190,6 +2252,7 @@ impl SensoryPipelineManager {
         // Duck system audio before speaking.
         duck_system_audio(true).await;
 
+        let emotion = detect_emotion(text);
         let mut first_audio_path: Option<String> = None;
         let tts_engine = binary.clone();
         let playback_backend = player.clone();
@@ -2202,6 +2265,7 @@ impl SensoryPipelineManager {
             &sentences[0],
             language,
             piper_models.first().map(|v| v.as_str()),
+            emotion,
         )
         .await
         .ok();
@@ -2223,6 +2287,7 @@ impl SensoryPipelineManager {
                 let sent = sentences[i + 1].clone();
                 let lang = language.map(str::to_string);
                 let model = piper_models.first().cloned();
+                let emo = emotion;
                 Some(tokio::spawn(async move {
                     synthesize_single_chunk(
                         &data_dir,
@@ -2230,6 +2295,7 @@ impl SensoryPipelineManager {
                         &sent,
                         lang.as_deref(),
                         model.as_deref(),
+                        emo,
                     )
                     .await
                     .ok()
@@ -2872,9 +2938,10 @@ async fn synthesize_tts(
         return Ok((audio_path, binary));
     }
 
+    let emotion = detect_emotion(&tts_text);
     let mut piper_errors = Vec::new();
     for model in piper_models {
-        match synthesize_with_piper(data_dir, &binary, &tts_text, &model).await {
+        match synthesize_with_piper(data_dir, &binary, &tts_text, &model, emotion).await {
             Ok(audio_path) => return Ok((audio_path, binary.clone())),
             Err(err) => {
                 log::warn!("Piper synthesis failed with model {}: {}", model, err);
@@ -2904,6 +2971,7 @@ async fn synthesize_with_piper(
     binary: &str,
     text: &str,
     model: &str,
+    emotion: TtsEmotion,
 ) -> Result<String> {
     let tts_dir = data_dir.join("tts");
     tokio::fs::create_dir_all(&tts_dir)
@@ -2911,13 +2979,34 @@ async fn synthesize_with_piper(
         .context("Failed to create TTS output dir")?;
     let audio_path = tts_dir.join(format!("axi-{}.wav", uuid::Uuid::new_v4()));
 
+    let mut args = vec![
+        "--model".to_string(),
+        model.to_string(),
+        "--output_file".to_string(),
+        audio_path.to_string_lossy().to_string(),
+    ];
+    match emotion {
+        TtsEmotion::Urgent => {
+            args.extend(["--length-scale".into(), "0.85".into()]);
+            args.extend(["--sentence-silence".into(), "0.1".into()]);
+        }
+        TtsEmotion::Confirmation => {
+            args.extend(["--length-scale".into(), "0.95".into()]);
+            args.extend(["--sentence-silence".into(), "0.3".into()]);
+        }
+        TtsEmotion::Question => {
+            args.extend(["--length-scale".into(), "1.05".into()]);
+            args.extend(["--sentence-silence".into(), "0.4".into()]);
+        }
+        TtsEmotion::Calm => {
+            args.extend(["--length-scale".into(), "1.15".into()]);
+            args.extend(["--sentence-silence".into(), "0.5".into()]);
+        }
+        TtsEmotion::Neutral => {}
+    }
+
     let mut child = Command::new(binary)
-        .args([
-            "--model",
-            model,
-            "--output_file",
-            audio_path.to_string_lossy().as_ref(),
-        ])
+        .args(&args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -2992,12 +3081,13 @@ async fn synthesize_single_chunk(
     text: &str,
     language: Option<&str>,
     piper_model: Option<&str>,
+    emotion: TtsEmotion,
 ) -> Result<String> {
     if binary_basename(binary) == "espeak-ng" {
         return synthesize_with_espeak(data_dir, binary, text, language).await;
     }
     if let Some(model) = piper_model {
-        return synthesize_with_piper(data_dir, binary, text, model).await;
+        return synthesize_with_piper(data_dir, binary, text, model, emotion).await;
     }
     anyhow::bail!("no TTS model available for progressive synthesis")
 }
@@ -5117,14 +5207,31 @@ fn is_camera_busy(device: &str) -> bool {
     }
 }
 
-/// Update meeting state by checking PulseAudio streams and camera availability.
+/// Detect an active meeting by scanning compositor window titles via swaymsg.
+///
+/// Delegates to the meeting assistant module which has the full pattern matching
+/// logic for sway/COSMIC compositor window titles.
+async fn detect_meeting_by_window_title() -> Option<String> {
+    crate::meeting_assistant::detect_meeting_by_window_title().await
+}
+
+/// Update meeting state by checking PulseAudio streams, window titles, and camera availability.
 async fn refresh_meeting_state(camera_device: Option<&str>) -> MeetingState {
     let conferencing_app = detect_active_meeting().await;
+
+    // If audio detection didn't find anything, try window title detection
+    let window_app = if conferencing_app.is_none() {
+        detect_meeting_by_window_title().await
+    } else {
+        None
+    };
+
     let camera_busy = camera_device.map(is_camera_busy).unwrap_or(false);
+    let app = conferencing_app.or(window_app);
 
     MeetingState {
-        active: conferencing_app.is_some() || camera_busy,
-        conferencing_app,
+        active: app.is_some() || camera_busy,
+        conferencing_app: app,
         camera_busy,
         last_checked_at: Some(Utc::now()),
     }
@@ -5153,6 +5260,99 @@ fn average_f32(values: impl Iterator<Item = f32>) -> Option<f32> {
         return None;
     }
     Some(values.iter().sum::<f32>() / values.len() as f32)
+}
+
+// ── Wake word auto-refinement ────────────────────────────────────────────
+
+/// Directory under `$HOME/.local/share/lifeos/` where confirmed wake word
+/// audio samples are stored for progressive model refinement.
+const WAKE_WORD_SAMPLES_SUBDIR: &str = "wake-word-samples";
+/// Maximum number of positive samples to keep on disk.
+const WAKE_WORD_MAX_SAMPLES: usize = 50;
+/// After every N new samples, trigger a model refinement cycle.
+const WAKE_WORD_REFINE_EVERY: usize = 20;
+
+/// Save a confirmed wake word audio sample for future model refinement.
+///
+/// Copies the audio file to `~/.local/share/lifeos/wake-word-samples/positive-{timestamp}.wav`
+/// and prunes old samples if the directory exceeds [`WAKE_WORD_MAX_SAMPLES`].
+async fn save_wake_word_sample(audio_path: &str) -> Result<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let samples_dir = PathBuf::from(home)
+        .join(".local/share/lifeos")
+        .join(WAKE_WORD_SAMPLES_SUBDIR);
+    tokio::fs::create_dir_all(&samples_dir)
+        .await
+        .context("Failed to create wake word samples directory")?;
+
+    let timestamp = Utc::now().format("%Y%m%d_%H%M%S_%3f");
+    let dest = samples_dir.join(format!("positive-{timestamp}.wav"));
+    tokio::fs::copy(audio_path, &dest)
+        .await
+        .with_context(|| format!("Failed to copy wake word sample to {}", dest.display()))?;
+    log::info!("Saved wake word positive sample: {}", dest.display());
+
+    // Prune oldest samples if over limit
+    let mut entries: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    let mut read_dir = tokio::fs::read_dir(&samples_dir).await?;
+    while let Some(entry) = read_dir.next_entry().await? {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("wav") {
+            let modified = entry
+                .metadata()
+                .await
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            entries.push((modified, path));
+        }
+    }
+    if entries.len() > WAKE_WORD_MAX_SAMPLES {
+        entries.sort_by_key(|(t, _)| *t);
+        let to_remove = entries.len() - WAKE_WORD_MAX_SAMPLES;
+        for (_, path) in entries.iter().take(to_remove) {
+            tokio::fs::remove_file(path).await.ok();
+            log::debug!("Pruned old wake word sample: {}", path.display());
+        }
+    }
+
+    Ok(samples_dir)
+}
+
+/// Check if a model refinement cycle should run and trigger it.
+///
+/// When the number of `.wav` samples in the directory is a multiple of
+/// [`WAKE_WORD_REFINE_EVERY`] (and > 0), request a hot-reload of the wake
+/// word model. The actual rustpotter-cli re-training is a future step —
+/// for now we just reload the existing model so the infrastructure is
+/// exercised end-to-end.
+async fn maybe_refine_wake_word_model(
+    samples_dir: &Path,
+    detector: &crate::wake_word::WakeWordDetector,
+) {
+    let count = match tokio::fs::read_dir(samples_dir).await {
+        Ok(mut rd) => {
+            let mut n = 0usize;
+            while let Ok(Some(entry)) = rd.next_entry().await {
+                if entry
+                    .path()
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    == Some("wav")
+                {
+                    n += 1;
+                }
+            }
+            n
+        }
+        Err(_) => return,
+    };
+    if count > 0 && count % WAKE_WORD_REFINE_EVERY == 0 {
+        log::info!(
+            "Wake word refinement triggered with {count} samples"
+        );
+        detector.reload_model();
+    }
 }
 
 #[cfg(test)]

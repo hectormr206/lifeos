@@ -38,7 +38,11 @@ pub struct McpServerInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpCapabilities {
     pub tools: McpToolCapability,
+    pub sampling: McpSamplingCapability,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpSamplingCapability {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolCapability {
@@ -55,6 +59,7 @@ pub fn server_info() -> McpServerInfo {
             tools: McpToolCapability {
                 list_changed: false,
             },
+            sampling: McpSamplingCapability {},
         },
     }
 }
@@ -307,6 +312,109 @@ pub async fn call_tool(
 }
 
 // ---------------------------------------------------------------------------
+// Sampling — allow MCP clients to request LLM completions through LifeOS
+// ---------------------------------------------------------------------------
+
+/// Handle a `sampling/createMessage` request by routing through the LLM router.
+///
+/// Accepts MCP-spec params:
+/// - `messages`: array of `{role, content}` where content is text or structured
+/// - `modelPreferences`: optional hints (unused for now — router picks the best)
+/// - `maxTokens`: optional max output tokens
+///
+/// Returns `{role, content, model}` per the MCP sampling response schema.
+async fn handle_sampling_create_message(
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest};
+    use crate::privacy_filter::PrivacyLevel;
+
+    // Parse messages from the MCP request
+    let messages_val = params
+        .get("messages")
+        .and_then(|v| v.as_array())
+        .ok_or("Missing or invalid 'messages' array")?;
+
+    let mut chat_messages: Vec<ChatMessage> = Vec::with_capacity(messages_val.len());
+    for msg in messages_val {
+        let role = msg
+            .get("role")
+            .and_then(|v| v.as_str())
+            .unwrap_or("user")
+            .to_string();
+
+        // MCP content can be {type: "text", text: "..."} or a plain string
+        let content = match msg.get("content") {
+            Some(c) if c.is_object() => {
+                // Extract text from structured content
+                let text = c
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                serde_json::Value::String(text.to_string())
+            }
+            Some(c) if c.is_array() => {
+                // Array of content parts — concatenate text parts
+                let parts: Vec<&str> = c
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|p| {
+                        if p.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            p.get("text").and_then(|t| t.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                serde_json::Value::String(parts.join("\n"))
+            }
+            Some(c) => c.clone(),
+            None => serde_json::Value::String(String::new()),
+        };
+
+        chat_messages.push(ChatMessage { role, content });
+    }
+
+    if chat_messages.is_empty() {
+        return Err("'messages' array must not be empty".into());
+    }
+
+    let max_tokens = params
+        .get("maxTokens")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+
+    let router_request = RouterRequest {
+        messages: chat_messages,
+        complexity: None,
+        sensitivity: None,
+        preferred_provider: None,
+        max_tokens,
+    };
+
+    let router = LlmRouter::new(PrivacyLevel::Balanced);
+    let response = router
+        .chat(&router_request)
+        .await
+        .map_err(|e| format!("LLM router error: {}", e))?;
+
+    Ok(serde_json::json!({
+        "role": "assistant",
+        "content": {
+            "type": "text",
+            "text": response.text
+        },
+        "model": format!("{}/{}", response.provider, response.model),
+        "_meta": {
+            "provider": response.provider,
+            "latency_ms": response.latency_ms,
+            "tokens_used": response.tokens_used
+        }
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // External MCP server discovery
 // ---------------------------------------------------------------------------
 
@@ -425,7 +533,10 @@ pub async fn handle_jsonrpc(req: JsonRpcRequest) -> JsonRpcResponse {
             Some(serde_json::json!({
                 "protocolVersion": "2025-11-25",
                 "serverInfo": server_info(),
-                "capabilities": { "tools": { "listChanged": false } }
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "sampling": {}
+                }
             })),
             None,
         ),
@@ -451,6 +562,15 @@ pub async fn handle_jsonrpc(req: JsonRpcRequest) -> JsonRpcResponse {
                     ),
                     None,
                 ),
+                Err(e) => (
+                    None,
+                    Some(serde_json::json!({"code": -32603, "message": e})),
+                ),
+            }
+        }
+        "sampling/createMessage" => {
+            match handle_sampling_create_message(&req.params).await {
+                Ok(val) => (Some(val), None),
                 Err(e) => (
                     None,
                     Some(serde_json::json!({"code": -32603, "message": e})),
