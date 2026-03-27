@@ -56,13 +56,54 @@ const UTTERANCE_WINDOW_SECS: f64 = 0.25;
 /// Sample rate for all audio capture.
 const AUDIO_SAMPLE_RATE: u32 = 16000;
 
-/// Read the VAD RMS threshold from environment or return the default.
+/// Read the VAD RMS threshold from environment, calibration cache, or default.
+///
+/// Priority: env var → cached calibration → hardcoded default.
 fn vad_rms_threshold() -> f64 {
-    std::env::var("LIFEOS_VAD_RMS_THRESHOLD")
+    // 1. Explicit env override always wins
+    if let Some(v) = std::env::var("LIFEOS_VAD_RMS_THRESHOLD")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
-        .unwrap_or(PCM_RMS_THRESHOLD_DEFAULT)
+    {
+        return v;
+    }
+
+    // 2. Try cached calibration (synchronous read — acceptable for small JSON)
+    if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
+        let cal_path = home
+            .join(".local/share/lifeos")
+            .join(MIC_CALIBRATION_FILE);
+        if let Ok(data) = std::fs::read_to_string(&cal_path) {
+            if let Ok(cal) = serde_json::from_str::<MicCalibration>(&data) {
+                let age_hours = (Utc::now() - cal.timestamp).num_hours();
+                if age_hours < MIC_CALIBRATION_MAX_AGE_HOURS {
+                    return cal.threshold as f64;
+                }
+            }
+        }
+    }
+
+    PCM_RMS_THRESHOLD_DEFAULT
 }
+/// Path for cached mic calibration data.
+const MIC_CALIBRATION_FILE: &str = "mic-calibration.json";
+/// Maximum age for a cached calibration before re-measuring (hours).
+const MIC_CALIBRATION_MAX_AGE_HOURS: i64 = 24;
+/// Duration of ambient noise sampling for calibration (seconds).
+const MIC_CALIBRATION_SAMPLE_SECS: u64 = 2;
+/// Minimum calibrated threshold to avoid triggering on electrical noise.
+const MIC_CALIBRATION_MIN: u32 = 200;
+/// Maximum calibrated threshold to avoid being too insensitive.
+const MIC_CALIBRATION_MAX: u32 = 1500;
+/// Multiplier over ambient noise floor for calibrated threshold.
+const MIC_CALIBRATION_MULTIPLIER: f64 = 3.0;
+/// Path for the cached wake word chime WAV file.
+const CHIME_CACHE_PATH: &str = "/tmp/lifeos-chime.wav";
+/// Near-field threshold multiplier (headsets).
+const NEAR_FIELD_THRESHOLD_MULT: f64 = 0.6;
+/// Far-field extra gain in dB (laptop mic).
+const FAR_FIELD_EXTRA_GAIN_DB: f64 = 8.0;
+
 const SCREENSHOT_RETENTION_COUNT: usize = 50;
 const SCREENSHOT_RETENTION_DAYS: u64 = 2;
 const IDLE_SCREEN_INTERVAL_SECONDS: u64 = 45;
@@ -86,6 +127,25 @@ enum TtsEmotion {
     Confirmation,
     Question,
     Calm,
+}
+
+/// Near-field vs far-field microphone mode. Near-field (headset) uses lower
+/// thresholds, while far-field (laptop mic) uses higher thresholds and gain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MicFieldMode {
+    /// Headset or close-range mic (<30cm) — lower threshold, no extra gain.
+    NearField,
+    /// Built-in laptop mic (>50cm) — higher threshold, +8dB gain.
+    FarField,
+}
+
+/// Cached mic calibration result persisted to disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MicCalibration {
+    threshold: u32,
+    device: Option<String>,
+    field_mode: Option<MicFieldMode>,
+    timestamp: DateTime<Utc>,
 }
 
 /// Simple keyword/pattern matching to detect the emotional tone of a text.
@@ -617,6 +677,19 @@ impl SensoryPipelineManager {
 
         let snapshot = state.clone();
         drop(state);
+
+        // ── Auto-calibrate mic threshold when voice pipeline activates ──
+        if snapshot.voice.always_on_active
+            && snapshot.leds.mic_active
+            && load_calibrated_threshold().await.is_none()
+        {
+            let source = snapshot.capabilities.always_on_source.clone();
+            tokio::spawn(async move {
+                let threshold = calibrate_mic_threshold(source.as_deref()).await;
+                log::info!("[voice-init] auto-calibrated mic threshold: {threshold}");
+            });
+        }
+
         overlay
             .set_sensor_indicators(
                 snapshot.leds.mic_active,
@@ -966,6 +1039,11 @@ impl SensoryPipelineManager {
         }
         self.save_state().await?;
 
+        // ── Auditory feedback: chime on wake word detection ──────────
+        if wake_word_found {
+            tokio::spawn(async { play_wake_word_chime().await });
+        }
+
         // ── Wake word auto-refinement: save positive sample ──────────
         if wake_word_found {
             match save_wake_word_sample(&audio_path).await {
@@ -1045,6 +1123,9 @@ impl SensoryPipelineManager {
             )
             .await
             .ok();
+
+        // ── Auditory feedback: chime on rustpotter wake word detection ──
+        tokio::spawn(async { play_wake_word_chime().await });
 
         // Capture command audio — listen until the user stops speaking.
         let always_on_source = {
@@ -3250,10 +3331,22 @@ async fn capture_audio_snippet(
         "ffmpeg" => {
             let mut cmd = Command::new(&binary);
             let input_source = source.unwrap_or("default");
-            let gain_db = std::env::var("LIFEOS_MIC_GAIN_DB")
+            let env_gain_db = std::env::var("LIFEOS_MIC_GAIN_DB")
                 .ok()
-                .and_then(|v| v.parse::<f32>().ok())
+                .and_then(|v| v.parse::<f64>().ok())
                 .unwrap_or(8.0);
+            // Read cached field mode for extra gain adjustment
+            let fm = {
+                let home = std::env::var("HOME").ok().map(PathBuf::from);
+                home.and_then(|h| {
+                    let data = std::fs::read_to_string(
+                        h.join(".local/share/lifeos").join(MIC_CALIBRATION_FILE),
+                    ).ok()?;
+                    let cal: MicCalibration = serde_json::from_str(&data).ok()?;
+                    cal.field_mode
+                }).unwrap_or(MicFieldMode::FarField)
+            };
+            let gain_db = env_gain_db + field_mode_extra_gain(fm);
             let af_filter = format!("volume={}dB", gain_db);
             cmd.args([
                 "-y",
@@ -3426,7 +3519,18 @@ async fn audio_has_voice_activity(path: &Path) -> Result<bool> {
     }
 
     let rms = (squared / samples as f64).sqrt();
-    let threshold = vad_rms_threshold();
+    // Apply field-mode adjustment to the threshold
+    let field_mode = {
+        let home = std::env::var("HOME").ok().map(PathBuf::from);
+        home.and_then(|h| {
+            let cal_path = h.join(".local/share/lifeos").join(MIC_CALIBRATION_FILE);
+            let data = std::fs::read_to_string(cal_path).ok()?;
+            let cal: MicCalibration = serde_json::from_str(&data).ok()?;
+            cal.field_mode
+        })
+        .unwrap_or(MicFieldMode::FarField)
+    };
+    let threshold = apply_field_mode_threshold(vad_rms_threshold(), field_mode);
     Ok(rms >= threshold)
 }
 
@@ -3507,8 +3611,24 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
     let mut speech_detected = false;
     let mut last_speech_at = Instant::now();
 
+    // --- Detect mic field mode and apply threshold/gain adjustments ---
+    // This is a sync context wrapper — the actual detection happened or will
+    // happen via the cached calibration. For the streaming loop we read the
+    // cached field mode or default to FarField.
+    let field_mode = {
+        let home = std::env::var("HOME").ok().map(PathBuf::from);
+        home.and_then(|h| {
+            let cal_path = h.join(".local/share/lifeos").join(MIC_CALIBRATION_FILE);
+            let data = std::fs::read_to_string(cal_path).ok()?;
+            let cal: MicCalibration = serde_json::from_str(&data).ok()?;
+            cal.field_mode
+        })
+        .unwrap_or(MicFieldMode::FarField)
+    };
+
     // --- Adaptive VAD: measure ambient noise floor from the first N windows ---
-    let base_threshold = vad_rms_threshold();
+    let raw_base_threshold = vad_rms_threshold();
+    let base_threshold = apply_field_mode_threshold(raw_base_threshold, field_mode);
     let mut noise_floor_sum = 0f64;
     let mut noise_floor_count = 0usize;
     let mut adaptive_threshold = base_threshold;
@@ -3534,11 +3654,13 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
             Ok(Err(_)) | Err(_) => break, // EOF or timeout
         }
 
-        // Apply software gain before storing/analyzing. Default 12 dB for quiet speech.
-        let gain_db: f64 = std::env::var("LIFEOS_MIC_GAIN_DB")
+        // Apply software gain before storing/analyzing. Default 12 dB for quiet speech,
+        // plus field-mode extra gain for far-field (built-in mic) scenarios.
+        let env_gain_db: f64 = std::env::var("LIFEOS_MIC_GAIN_DB")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(12.0);
+        let gain_db = env_gain_db + field_mode_extra_gain(field_mode);
         let gain_linear = 10f64.powf(gain_db / 20.0);
 
         // Amplify samples in-place and store the boosted PCM.
@@ -4573,6 +4695,358 @@ fn resolve_camera_device() -> Option<String> {
         }
     }
     None
+}
+
+// ── Mic calibration, chime, and field mode ──────────────────────────────
+
+/// Calibrate the microphone threshold by sampling 2 seconds of ambient noise.
+///
+/// Records ambient audio, computes the RMS, and sets the threshold to
+/// `ambient_rms * 3` (clamped to 200..1500). The result is cached to disk.
+pub async fn calibrate_mic_threshold(source: Option<&str>) -> u32 {
+    let tmp_path = format!(
+        "/tmp/lifeos-calibration-{}.wav",
+        std::process::id()
+    );
+
+    // Try pw-record first, then parecord
+    let binary = resolve_binary(
+        "LIFEOS_AUDIO_CAPTURE_BIN",
+        &["pw-record", "parecord"],
+    )
+    .await;
+
+    let recorded = if let Some(bin) = binary {
+        let program = Path::new(&bin)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&bin);
+
+        let timeout_bin = resolve_binary("LIFEOS_TIMEOUT_BIN", &["timeout"]).await;
+        let result = match (program, timeout_bin) {
+            ("pw-record", Some(ref tb)) => {
+                let mut cmd = Command::new(tb);
+                cmd.arg(format!("{}s", MIC_CALIBRATION_SAMPLE_SECS))
+                    .arg(&bin);
+                if let Some(src) = source {
+                    cmd.args(["--target", src]);
+                }
+                cmd.args(["--rate", "16000", "--channels", "1", "--format", "s16", &tmp_path]);
+                cmd.stderr(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null());
+                cmd.status().await
+            }
+            ("parecord", Some(ref tb)) => {
+                let mut cmd = Command::new(tb);
+                cmd.arg(format!("{}s", MIC_CALIBRATION_SAMPLE_SECS))
+                    .arg(&bin);
+                if let Some(src) = source {
+                    cmd.args(["-d", src]);
+                }
+                cmd.args([
+                    "--rate=16000",
+                    "--channels=1",
+                    "--format=s16le",
+                    &tmp_path,
+                ]);
+                cmd.stderr(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null());
+                cmd.status().await
+            }
+            _ => {
+                log::warn!("[calibration] no timeout binary or unsupported recorder");
+                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no timeout"))
+            }
+        };
+        result.map(|s| s.success()).unwrap_or(false)
+    } else {
+        false
+    };
+
+    if !recorded {
+        log::warn!("[calibration] failed to record ambient audio, using default threshold");
+        return PCM_RMS_THRESHOLD_DEFAULT as u32;
+    }
+
+    // Read the recorded file and compute RMS
+    let rms = match tokio::fs::read(&tmp_path).await {
+        Ok(bytes) if bytes.len() > 44 => {
+            let pcm = if bytes.starts_with(b"RIFF") {
+                &bytes[44..]
+            } else {
+                &bytes[..]
+            };
+            let mut sum_sq = 0f64;
+            let mut count = 0usize;
+            for chunk in pcm.chunks_exact(2) {
+                let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f64;
+                sum_sq += sample * sample;
+                count += 1;
+            }
+            if count > 0 {
+                (sum_sq / count as f64).sqrt()
+            } else {
+                0.0
+            }
+        }
+        _ => {
+            log::warn!("[calibration] failed to read calibration audio");
+            return PCM_RMS_THRESHOLD_DEFAULT as u32;
+        }
+    };
+
+    // Clean up temp file
+    tokio::fs::remove_file(&tmp_path).await.ok();
+
+    let threshold = (rms * MIC_CALIBRATION_MULTIPLIER)
+        .round()
+        .clamp(MIC_CALIBRATION_MIN as f64, MIC_CALIBRATION_MAX as f64) as u32;
+
+    log::info!(
+        "[calibration] ambient RMS: {rms:.0}, calibrated threshold: {threshold} (device: {:?})",
+        source
+    );
+
+    // Detect field mode and persist to disk
+    let field_mode = detect_mic_field_mode().await;
+    let calibration = MicCalibration {
+        threshold,
+        device: source.map(|s| s.to_string()),
+        field_mode: Some(field_mode),
+        timestamp: Utc::now(),
+    };
+    if let Some(home) = dirs_home() {
+        let cal_dir = home.join(".local/share/lifeos");
+        tokio::fs::create_dir_all(&cal_dir).await.ok();
+        let cal_path = cal_dir.join(MIC_CALIBRATION_FILE);
+        if let Ok(json) = serde_json::to_string_pretty(&calibration) {
+            tokio::fs::write(&cal_path, json).await.ok();
+        }
+    }
+
+    threshold
+}
+
+/// Load a previously cached mic calibration if it exists and is fresh (<24h).
+pub async fn load_calibrated_threshold() -> Option<u32> {
+    let home = dirs_home()?;
+    let cal_path = home
+        .join(".local/share/lifeos")
+        .join(MIC_CALIBRATION_FILE);
+    let data = tokio::fs::read_to_string(&cal_path).await.ok()?;
+    let cal: MicCalibration = serde_json::from_str(&data).ok()?;
+
+    let age_hours = (Utc::now() - cal.timestamp).num_hours();
+    if age_hours < MIC_CALIBRATION_MAX_AGE_HOURS {
+        log::debug!(
+            "[calibration] loaded cached threshold: {} (age: {}h)",
+            cal.threshold,
+            age_hours
+        );
+        Some(cal.threshold)
+    } else {
+        log::debug!("[calibration] cached threshold expired (age: {age_hours}h)");
+        None
+    }
+}
+
+/// Detect whether the current default audio source is near-field (headset)
+/// or far-field (built-in laptop mic).
+///
+/// Bluetooth/USB headsets are classified as NearField; everything else as FarField.
+pub async fn detect_mic_field_mode() -> MicFieldMode {
+    let output = Command::new("pactl")
+        .args(["list", "sources", "short"])
+        .output()
+        .await;
+
+    let sources_text = match output {
+        Ok(ref o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => return MicFieldMode::FarField,
+    };
+
+    // Also get the default source name
+    let info_output = Command::new("pactl").arg("info").output().await;
+    let default_source = info_output.ok().and_then(|o| {
+        let text = String::from_utf8_lossy(&o.stdout).to_string();
+        text.lines()
+            .find(|l| l.starts_with("Default Source:") || l.starts_with("Fuente por defecto:"))
+            .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()))
+    });
+
+    if let Some(ref ds) = default_source {
+        let ds_lower = ds.to_lowercase();
+        if ds_lower.contains("bluez") || ds_lower.contains("usb") {
+            log::info!("[field-mode] NearField detected (source: {ds})");
+            return MicFieldMode::NearField;
+        }
+    }
+
+    // Check if any active non-monitor source is bluetooth/USB
+    for line in sources_text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() >= 2 {
+            let name = cols[1].to_lowercase();
+            if name.contains(".monitor") {
+                continue;
+            }
+            if let Some(ref ds) = default_source {
+                if cols[1] != ds.as_str() {
+                    continue;
+                }
+            }
+            if name.contains("bluez") || name.contains("usb") {
+                log::info!("[field-mode] NearField detected (source: {})", cols[1]);
+                return MicFieldMode::NearField;
+            }
+        }
+    }
+
+    log::info!("[field-mode] FarField detected (built-in mic)");
+    MicFieldMode::FarField
+}
+
+/// Apply field-mode adjustments to a calibrated threshold.
+///
+/// NearField: threshold * 0.6 (headsets pick up voice clearly).
+/// FarField: threshold * 1.0 (no reduction, rely on extra gain).
+fn apply_field_mode_threshold(threshold: f64, mode: MicFieldMode) -> f64 {
+    match mode {
+        MicFieldMode::NearField => (threshold * NEAR_FIELD_THRESHOLD_MULT).max(ADAPTIVE_RMS_FLOOR),
+        MicFieldMode::FarField => threshold,
+    }
+}
+
+/// Return the extra gain (in dB) to apply for a given field mode.
+fn field_mode_extra_gain(mode: MicFieldMode) -> f64 {
+    match mode {
+        MicFieldMode::NearField => 0.0,
+        MicFieldMode::FarField => FAR_FIELD_EXTRA_GAIN_DB,
+    }
+}
+
+/// Generate a two-tone ascending chime WAV (440Hz 100ms + 660Hz 100ms) and
+/// cache it at `/tmp/lifeos-chime.wav`. Plays it at 30% of system volume.
+pub async fn play_wake_word_chime() {
+    // Generate the chime WAV if not already cached
+    if !Path::new(CHIME_CACHE_PATH).exists() {
+        if let Err(e) = generate_chime_wav(CHIME_CACHE_PATH).await {
+            log::warn!("[chime] failed to generate chime WAV: {e}");
+            return;
+        }
+    }
+
+    // Read current system volume to scale to 30%
+    let volume_scale = get_system_volume_scale().await.unwrap_or(0.3);
+    let chime_volume = volume_scale * 0.3;
+
+    // Try pw-play first, then aplay
+    let player = resolve_binary("LIFEOS_PLAYBACK_BIN", &["pw-play", "aplay"]).await;
+    if let Some(bin) = player {
+        let program = Path::new(&bin)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&bin);
+
+        let result = match program {
+            "pw-play" => {
+                let mut cmd = Command::new(&bin);
+                cmd.arg(format!("--volume={:.2}", chime_volume));
+                cmd.arg(CHIME_CACHE_PATH);
+                cmd.stderr(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null());
+                cmd.status().await
+            }
+            _ => {
+                // aplay doesn't have volume control, just play at system volume
+                let mut cmd = Command::new(&bin);
+                cmd.arg(CHIME_CACHE_PATH);
+                cmd.stderr(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null());
+                cmd.status().await
+            }
+        };
+        match result {
+            Ok(s) if s.success() => log::debug!("[chime] played wake word chime"),
+            Ok(s) => log::warn!("[chime] playback exited with {s}"),
+            Err(e) => log::warn!("[chime] playback failed: {e}"),
+        }
+    } else {
+        log::warn!("[chime] no playback binary available");
+    }
+}
+
+/// Generate a simple two-tone WAV file: 440Hz for 100ms, then 660Hz for 100ms.
+async fn generate_chime_wav(path: &str) -> Result<()> {
+    let sample_rate: u32 = 16000;
+    let tone1_hz: f64 = 440.0;
+    let tone2_hz: f64 = 660.0;
+    let tone_duration_samples = (sample_rate as f64 * 0.1) as usize; // 100ms each
+    let total_samples = tone_duration_samples * 2;
+    let amplitude: f64 = 16000.0; // moderate amplitude
+
+    let mut pcm_data: Vec<u8> = Vec::with_capacity(total_samples * 2);
+
+    // Tone 1: 440Hz for 100ms
+    for i in 0..tone_duration_samples {
+        let t = i as f64 / sample_rate as f64;
+        let sample = (amplitude * (2.0 * std::f64::consts::PI * tone1_hz * t).sin()) as i16;
+        pcm_data.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    // Tone 2: 660Hz for 100ms
+    for i in 0..tone_duration_samples {
+        let t = i as f64 / sample_rate as f64;
+        let sample = (amplitude * (2.0 * std::f64::consts::PI * tone2_hz * t).sin()) as i16;
+        pcm_data.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    // Build WAV header (44 bytes)
+    let data_size = (total_samples * 2) as u32;
+    let file_size = data_size + 36;
+    let mut wav: Vec<u8> = Vec::with_capacity(44 + data_size as usize);
+
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&file_size.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+    wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_size.to_le_bytes());
+    wav.extend_from_slice(&pcm_data);
+
+    tokio::fs::write(path, &wav)
+        .await
+        .context("Failed to write chime WAV")?;
+    log::debug!("[chime] generated chime WAV at {path}");
+    Ok(())
+}
+
+/// Read the current system volume as a linear scale (0.0..1.0).
+async fn get_system_volume_scale() -> Option<f64> {
+    let output = Command::new("wpctl")
+        .args(["get-volume", "@DEFAULT_AUDIO_SINK@"])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    // Output looks like: "Volume: 0.50" or "Volume: 0.50 [MUTED]"
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split_whitespace()
+        .find_map(|tok| tok.parse::<f64>().ok())
+}
+
+/// Get the user home directory.
+fn dirs_home() -> Option<PathBuf> {
+    std::env::var("HOME").ok().map(PathBuf::from)
 }
 
 /// Resolve the audio source for always-on wake word capture.

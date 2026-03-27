@@ -361,7 +361,7 @@ fn parse_action(text: &str) -> Result<ParsedAction, String> {
     let trimmed = text.trim().to_lowercase();
     // Patterns: click(x,y), type(text), key(combo), scroll(direction), done(result)
     if let Some(inner) = extract_parens(&trimmed, "click") {
-        let (x, y) = parse_coordinates(&inner)?;
+        let (x, y) = parse_coordinates(inner)?;
         return Ok(ParsedAction::Click { x, y });
     }
     if let Some(inner) = extract_parens(text.trim(), "type") {

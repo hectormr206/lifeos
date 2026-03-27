@@ -100,8 +100,12 @@ mod proactive;
 #[allow(dead_code)]
 mod prompt_tuner;
 #[allow(dead_code)]
+mod reliability;
+#[allow(dead_code)]
 mod scheduled_tasks;
 mod screen_capture;
+#[allow(dead_code)]
+mod security_ai;
 #[allow(dead_code)]
 mod security_daemon;
 #[allow(dead_code)]
@@ -116,10 +120,14 @@ mod skill_generator;
 mod speaker_id;
 mod supervisor;
 mod system;
+#[allow(dead_code)]
+mod system_tuner;
 mod task_queue;
 mod telegram_bridge;
 mod telegram_tools;
 mod telemetry;
+#[allow(dead_code)]
+mod translation;
 mod tuf;
 mod update_scheduler;
 mod updates;

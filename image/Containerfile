@@ -370,8 +370,11 @@ RUN cd /usr/share/plymouth/themes/lifeos && \
     rsvg-convert -w 300 -h 40 brand.svg -o brand.png && \
     rsvg-convert -w 12 -h 12 dot-on.svg -o dot-on.png && \
     rsvg-convert -w 12 -h 12 dot-off.svg -o dot-off.png && \
+    rsvg-convert -w 16 -h 16 spinner-dot.svg -o spinner-dot.png && \
+    rsvg-convert -w 8 -h 8 bullet.svg -o bullet.png && \
     rm -f *.svg && \
-    plymouth-set-default-theme lifeos
+    plymouth-set-default-theme lifeos && \
+    dracut -f --regenerate-all
 
 # --- Herramientas del Sistema ---
 # Incluye toolchain de desarrollo para que LifeOS pueda auto-hospedar

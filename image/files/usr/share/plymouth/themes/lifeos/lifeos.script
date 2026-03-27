@@ -1,23 +1,23 @@
 // LifeOS Plymouth Theme
-// Boot: Animated Axi orb with pulsing teal glow + progress dots
-// Shutdown: Axi orb fading with "Hasta pronto" message
-// Update: Axi orb with "Actualizando LifeOS..." message
+// Boot: Animated orb with rotating spinner ring + systemd status messages
+// Shutdown: "Apagando..." or "Reiniciando..." with fade-out
+// Update: Detects ostree/bootc messages and shows "Aplicando actualizacion..."
 
-// ── Background ──────────────────────────────────────────────
-Window.SetBackgroundTopColor(0.10, 0.10, 0.18);    // #1a1a2e
-Window.SetBackgroundBottomColor(0.06, 0.13, 0.24);  // #0f2140
+// -- Background (solid dark #0F0F1B) ------------------------------------------
+Window.SetBackgroundTopColor(0.059, 0.059, 0.106);    // #0F0F1B
+Window.SetBackgroundBottomColor(0.059, 0.059, 0.106);  // #0F0F1B
 
-// ── Screen dimensions ───────────────────────────────────────
+// -- Screen dimensions --------------------------------------------------------
 screen_width = Window.GetWidth();
 screen_height = Window.GetHeight();
 center_x = screen_width / 2;
 center_y = screen_height / 2;
 
-// ── Detect mode ─────────────────────────────────────────────
+// -- Detect mode --------------------------------------------------------------
 mode = Plymouth.GetMode();
 // mode: "boot", "shutdown", "suspend", "resume", "updates"
 
-// ── Logo image ──────────────────────────────────────────────
+// -- Logo image (teal orb, 200x200) ------------------------------------------
 logo = Image("logo.png");
 logo_width = logo.GetWidth();
 logo_height = logo.GetHeight();
@@ -26,34 +26,60 @@ logo_sprite.SetX(center_x - logo_width / 2);
 logo_sprite.SetY(center_y - logo_height / 2 - 40);
 logo_sprite.SetOpacity(1.0);
 
-// ── Brand text ──────────────────────────────────────────────
+// -- Brand text ("L I F E O S") -----------------------------------------------
 brand = Image("brand.png");
 brand_sprite = Sprite(brand);
 brand_width = brand.GetWidth();
 brand_height = brand.GetHeight();
 brand_sprite.SetX(center_x - brand_width / 2);
-brand_sprite.SetY(center_y + logo_height / 2);
-brand_sprite.SetOpacity(0.8);
+brand_sprite.SetY(center_y + logo_height / 2 - 20);
+brand_sprite.SetOpacity(0.85);
 
-// ── Status message (shown below brand for shutdown/update) ──
+// -- Spinner: 8 dots rotating around the orb ----------------------------------
+spinner_dot_img = Image("spinner-dot.png");
+spinner_count = 8;
+spinner_radius = 85;  // radius of spinner ring around orb center
+spinner_center_y = center_y - 40;  // same vertical center as logo
+
+spinner_dots = [];
+spinner_angles = [];
+for (i = 0; i < spinner_count; i++) {
+    spinner_dots[i] = Sprite(spinner_dot_img);
+    spinner_angles[i] = i * 6.2832 / spinner_count;  // 2*PI / count
+    spinner_dots[i].SetOpacity(0);
+}
+
+show_spinner = (mode == "boot" || mode == "resume" || mode == "updates");
+
+// -- Status text area (below brand) -------------------------------------------
 status_sprite = Sprite();
-status_y = center_y + logo_height / 2 + 50;
+status_y = center_y + logo_height / 2 + 20;
 
-if (mode == "shutdown" || mode == "suspend") {
-    status_text = Image.Text("Hasta pronto", 0.0, 0.83, 0.67, "Sans 16");
-    status_sprite.SetImage(status_text);
-    status_sprite.SetX(center_x - status_text.GetWidth() / 2);
+// Initial status text based on mode
+if (mode == "shutdown") {
+    // Detect reboot vs poweroff: Plymouth itself does not distinguish,
+    // but SetMessageFunction will receive the actual message from systemd.
+    // Default to "Apagando..." -- message_cb overrides if reboot detected.
+    status_img = Image.Text("Apagando...", 0.91, 0.91, 0.91, "Sans 16");
+    status_sprite.SetImage(status_img);
+    status_sprite.SetX(center_x - status_img.GetWidth() / 2);
+    status_sprite.SetY(status_y);
+    status_sprite.SetOpacity(0.9);
+} else if (mode == "suspend") {
+    status_img = Image.Text("Suspendiendo...", 0.91, 0.91, 0.91, "Sans 16");
+    status_sprite.SetImage(status_img);
+    status_sprite.SetX(center_x - status_img.GetWidth() / 2);
     status_sprite.SetY(status_y);
     status_sprite.SetOpacity(0.9);
 } else if (mode == "updates") {
-    status_text = Image.Text("Actualizando LifeOS...", 0.0, 0.83, 0.67, "Sans 16");
-    status_sprite.SetImage(status_text);
-    status_sprite.SetX(center_x - status_text.GetWidth() / 2);
+    status_img = Image.Text("Aplicando actualizacion...", 0.0, 0.83, 0.67, "Sans 16");
+    status_sprite.SetImage(status_img);
+    status_sprite.SetX(center_x - status_img.GetWidth() / 2);
     status_sprite.SetY(status_y);
     status_sprite.SetOpacity(0.9);
 }
 
-// ── Progress dots (only for boot and updates) ───────────────
+// -- Progress dots (boot/updates only) ----------------------------------------
 dot_count = 5;
 dot_spacing = 20;
 dot_y = status_y + 40;
@@ -74,15 +100,20 @@ if (show_dots) {
     }
 }
 
-// ── Animation state ─────────────────────────────────────────
+// -- Systemd message line (bottom of screen, shows service status) ------------
+message_sprite = Sprite();
+message_y = screen_height - 60;
+
+// -- Animation state ----------------------------------------------------------
 progress = 0;
 frame = 0;
 pulse_direction = 1;
 pulse_opacity = 0.7;
-// For shutdown: fade direction
 shutdown_opacity = 1.0;
+spinner_offset = 0;
+is_update_reboot = 0;
 
-// ── Boot/update progress callback ───────────────────────────
+// -- Boot/update progress callback --------------------------------------------
 fun boot_progress_cb(duration, prog) {
     progress = prog;
 
@@ -98,20 +129,25 @@ fun boot_progress_cb(duration, prog) {
 }
 Plymouth.SetBootProgressFunction(boot_progress_cb);
 
-// ── Refresh callback (animation loop) ───────────────────────
+// -- Refresh callback (animation loop, ~50fps) --------------------------------
 fun refresh_cb() {
     frame++;
 
     if (mode == "shutdown" || mode == "suspend") {
-        // Slow fade out for shutdown
-        if (shutdown_opacity > 0.2) {
-            shutdown_opacity -= 0.002;
+        // Slow fade out
+        if (shutdown_opacity > 0.15) {
+            shutdown_opacity -= 0.003;
             logo_sprite.SetOpacity(shutdown_opacity);
-            brand_sprite.SetOpacity(shutdown_opacity * 0.8);
+            brand_sprite.SetOpacity(shutdown_opacity * 0.85);
             status_sprite.SetOpacity(shutdown_opacity * 0.9);
+            message_sprite.SetOpacity(shutdown_opacity * 0.7);
+        }
+        // Keep spinner visible during shutdown too (slower rotation)
+        if (show_spinner != 1) {
+            // No spinner during shutdown -- just fade
         }
     } else {
-        // Pulse for boot/resume/updates
+        // Pulse logo opacity for boot/resume/updates
         pulse_opacity += 0.008 * pulse_direction;
         if (pulse_opacity >= 1.0) {
             pulse_opacity = 1.0;
@@ -123,14 +159,40 @@ fun refresh_cb() {
         }
         logo_sprite.SetOpacity(pulse_opacity);
     }
+
+    // Animate spinner (rotating dots)
+    if (show_spinner) {
+        spinner_offset += 0.04;  // rotation speed
+        for (i = 0; i < spinner_count; i++) {
+            angle = spinner_angles[i] + spinner_offset;
+            // Simple sin/cos approximation using Plymouth's Math
+            dot_x = center_x + Math.Int(spinner_radius * Math.Cos(angle)) - spinner_dot_img.GetWidth() / 2;
+            dot_y_pos = spinner_center_y + Math.Int(spinner_radius * Math.Sin(angle)) - spinner_dot_img.GetHeight() / 2;
+            spinner_dots[i].SetX(dot_x);
+            spinner_dots[i].SetY(dot_y_pos);
+
+            // Fade dots: the "leading" dot is brightest, trailing ones fade
+            // The lead position is at spinner_offset mod 2*PI
+            dist = (spinner_count - i) / spinner_count;
+            opacity = 0.2 + 0.8 * dist;
+            // Shift opacity based on which dot is "leading"
+            lead_index = Math.Int((spinner_offset / 6.2832 * spinner_count)) % spinner_count;
+            fade_pos = (i - lead_index + spinner_count) % spinner_count;
+            opacity = 0.15 + 0.85 * (1.0 - fade_pos / spinner_count);
+            spinner_dots[i].SetOpacity(opacity);
+        }
+    }
 }
 Plymouth.SetRefreshFunction(refresh_cb);
 
-// ── Quit callback ───────────────────────────────────────────
+// -- Quit callback ------------------------------------------------------------
 fun quit_cb() {
     logo_sprite.SetOpacity(0);
     brand_sprite.SetOpacity(0);
     status_sprite.SetOpacity(0);
+    message_sprite.SetOpacity(0);
+    for (i = 0; i < spinner_count; i++)
+        spinner_dots[i].SetOpacity(0);
     if (show_dots) {
         for (i = 0; i < dot_count; i++)
             dots[i].SetOpacity(0);
@@ -138,20 +200,60 @@ fun quit_cb() {
 }
 Plymouth.SetQuitFunction(quit_cb);
 
-// ── Password prompt (for LUKS encryption) ───────────────────
+// -- Password prompt (LUKS encryption) ----------------------------------------
+bullet_img = Image("bullet.png");
+
 fun display_password_cb(prompt, bullets) {
-    // Plymouth renders its built-in password dialog on top
-    // Our theme background and logo remain visible behind it
+    // Plymouth renders its built-in password dialog on top.
+    // Our theme background and logo remain visible behind it.
+    // We just need to show bullet images for entered characters.
 }
 Plymouth.SetDisplayPasswordFunction(display_password_cb);
 
-// ── System messages ─────────────────────────────────────────
-message_sprite = Sprite();
+// -- System messages (from systemd, shown at bottom) --------------------------
 fun message_cb(text) {
-    msg_image = Image.Text(text, 0.9, 0.9, 0.9, "Sans 12");
-    message_sprite.SetImage(msg_image);
-    message_sprite.SetX(center_x - msg_image.GetWidth() / 2);
-    message_sprite.SetY(screen_height - 60);
-    message_sprite.SetOpacity(0.7);
+    // Detect reboot during shutdown mode
+    if (mode == "shutdown") {
+        if (StringString(text, "reboot") || StringString(text, "Reboot") || StringString(text, "reinici")) {
+            reboot_img = Image.Text("Reiniciando...", 0.91, 0.91, 0.91, "Sans 16");
+            status_sprite.SetImage(reboot_img);
+            status_sprite.SetX(center_x - reboot_img.GetWidth() / 2);
+            status_sprite.SetY(status_y);
+        }
+    }
+
+    // Detect update-related messages during any mode
+    if (StringString(text, "ostree") || StringString(text, "bootc") || StringString(text, "rpm-ostree") || StringString(text, "upgrade") || StringString(text, "deploy")) {
+        update_img = Image.Text("Aplicando actualizacion...", 0.0, 0.83, 0.67, "Sans 16");
+        status_sprite.SetImage(update_img);
+        status_sprite.SetX(center_x - update_img.GetWidth() / 2);
+        status_sprite.SetY(status_y);
+        status_sprite.SetOpacity(0.95);
+        is_update_reboot = 1;
+    }
+
+    // Show the raw systemd message at the bottom of the screen
+    if (text) {
+        // Truncate very long messages visually by just rendering them
+        msg_image = Image.Text(text, 0.91, 0.91, 0.91, "Sans 11");
+        message_sprite.SetImage(msg_image);
+        message_sprite.SetX(center_x - msg_image.GetWidth() / 2);
+        message_sprite.SetY(message_y);
+        message_sprite.SetOpacity(0.6);
+    }
 }
 Plymouth.SetMessageFunction(message_cb);
+
+// -- Update status callback (from plymouth update --status) -------------------
+fun update_status_cb(text) {
+    // Forward to message handler for consistent processing
+    message_cb(text);
+}
+Plymouth.SetUpdateStatusFunction(update_status_cb);
+
+// -- Normal display callback --------------------------------------------------
+fun display_normal_cb() {
+    // Called when Plymouth switches to normal display mode
+    // Nothing special needed -- our default layout handles it
+}
+Plymouth.SetDisplayNormalFunction(display_normal_cb);

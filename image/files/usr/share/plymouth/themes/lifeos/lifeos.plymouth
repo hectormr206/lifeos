@@ -1,6 +1,6 @@
 [Plymouth Theme]
 Name=LifeOS
-Description=AI-native Linux distribution boot splash — hectormr.com
+Description=LifeOS boot splash with animated spinner and status messages
 ModuleName=script
 
 [script]

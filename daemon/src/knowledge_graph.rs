@@ -1,8 +1,8 @@
-//! Personal Knowledge Graph (Fase V)
+//! Personal Knowledge Graph (Fase V) + Cross-App Context
 //!
 //! Stores entities and relations extracted from user interactions,
 //! persisted as JSON files. Supports fuzzy search, conflict detection,
-//! and relevance decay.
+//! relevance decay, cross-app ingestion, and LLM-powered context queries.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,12 @@ pub enum EntityType {
     Tool,
     File,
     Topic,
+    Event,
+    Conversation,
+    Commit,
+    Email,
+    Task,
+    Skill,
 }
 
 impl std::fmt::Display for EntityType {
@@ -41,6 +47,12 @@ impl std::fmt::Display for EntityType {
             EntityType::Tool => "Tool",
             EntityType::File => "File",
             EntityType::Topic => "Topic",
+            EntityType::Event => "Event",
+            EntityType::Conversation => "Conversation",
+            EntityType::Commit => "Commit",
+            EntityType::Email => "Email",
+            EntityType::Task => "Task",
+            EntityType::Skill => "Skill",
         };
         write!(f, "{}", s)
     }
@@ -51,6 +63,8 @@ pub struct Entity {
     pub id: String,
     pub name: String,
     pub entity_type: EntityType,
+    #[serde(default)]
+    pub properties: HashMap<String, String>,
     pub created_at: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
     pub relevance_score: f64,
@@ -61,9 +75,15 @@ pub struct Relation {
     pub from_id: String,
     pub to_id: String,
     pub relation_type: String,
+    #[serde(default = "default_weight")]
+    pub weight: f32,
     pub context: String,
     pub timestamp: DateTime<Utc>,
     pub confidence: f64,
+}
+
+fn default_weight() -> f32 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -170,6 +190,7 @@ impl KnowledgeGraph {
             id: Uuid::new_v4().to_string(),
             name: name.to_string(),
             entity_type,
+            properties: HashMap::new(),
             created_at: Utc::now(),
             last_seen: Utc::now(),
             relevance_score: 1.0,
@@ -182,10 +203,23 @@ impl KnowledgeGraph {
 
     /// Add a relation between two entities.
     pub fn add_relation(&mut self, from_id: &str, to_id: &str, relation_type: &str, context: &str) {
+        self.add_relation_weighted(from_id, to_id, relation_type, context, 1.0);
+    }
+
+    /// Add a weighted relation between two entities.
+    pub fn add_relation_weighted(
+        &mut self,
+        from_id: &str,
+        to_id: &str,
+        relation_type: &str,
+        context: &str,
+        weight: f32,
+    ) {
         let relation = Relation {
             from_id: from_id.to_string(),
             to_id: to_id.to_string(),
             relation_type: relation_type.to_string(),
+            weight,
             context: context.to_string(),
             timestamp: Utc::now(),
             confidence: 1.0,
@@ -480,6 +514,351 @@ impl KnowledgeGraph {
             newest,
         }
     }
+
+    // -- context query ------------------------------------------------------
+
+    /// Extract entity names from a question, find them in the graph, and
+    /// return their relations as context results.
+    pub fn query_context(&self, question: &str) -> Vec<ContextResult> {
+        let extracted = Self::extract_entities_from_text(question);
+        let mut results = Vec::new();
+
+        // Also try splitting question into meaningful words (3+ chars) as entity name searches
+        let words: Vec<&str> = question
+            .split_whitespace()
+            .filter(|w| w.len() >= 3)
+            .collect();
+
+        let mut searched_names = std::collections::HashSet::new();
+
+        // Search for extracted entities
+        for (name, _etype) in &extracted {
+            if searched_names.insert(name.to_lowercase()) {
+                for entity in self.query_entity(name) {
+                    let relations = self.query_relations(&entity.id);
+                    results.push(ContextResult {
+                        entity: entity.clone(),
+                        relations: relations.iter().map(|(r, _)| r.clone()).collect(),
+                        related_entities: relations.iter().map(|(_, e)| e.clone()).collect(),
+                    });
+                }
+            }
+        }
+
+        // Also search raw words as potential entity names
+        for word in &words {
+            let w = word
+                .trim_matches(|c: char| c.is_ascii_punctuation())
+                .to_lowercase();
+            if w.len() >= 3 && searched_names.insert(w.clone()) {
+                for entity in self.query_entity(&w) {
+                    // Avoid duplicates
+                    if results.iter().any(|r| r.entity.id == entity.id) {
+                        continue;
+                    }
+                    let relations = self.query_relations(&entity.id);
+                    results.push(ContextResult {
+                        entity: entity.clone(),
+                        relations: relations.iter().map(|(r, _)| r.clone()).collect(),
+                        related_entities: relations.iter().map(|(_, e)| e.clone()).collect(),
+                    });
+                }
+            }
+        }
+
+        results
+    }
+
+    // -- cross-app ingestion ------------------------------------------------
+
+    /// Ingest a Telegram message: extract entities, create a Conversation node,
+    /// and link the sender and mentioned entities.
+    pub async fn ingest_telegram_message(
+        &mut self,
+        from: &str,
+        text: &str,
+        timestamp: DateTime<Utc>,
+    ) -> Result<(), String> {
+        let person_id = self.add_entity(from, EntityType::Person);
+        let conv_id = self.add_entity(
+            &format!("telegram:{}", &text.chars().take(50).collect::<String>()),
+            EntityType::Conversation,
+        );
+
+        // Set timestamp property
+        if let Some(conv) = self.entities.iter_mut().find(|e| e.id == conv_id) {
+            conv.properties
+                .insert("timestamp".into(), timestamp.to_rfc3339());
+            conv.properties.insert("source".into(), "telegram".into());
+            conv.properties.insert("text".into(), text.to_string());
+        }
+        self.save();
+
+        self.add_relation(&person_id, &conv_id, "sent_message", text);
+
+        // Extract and link mentioned entities
+        let extracted = Self::extract_entities_from_text(text);
+        for (name, etype) in extracted {
+            let eid = self.add_entity(&name, etype);
+            self.add_relation(&conv_id, &eid, "mentioned_in", text);
+        }
+
+        Ok(())
+    }
+
+    /// Ingest an email: extract entities from subject+body, create an Email node.
+    pub async fn ingest_email(
+        &mut self,
+        from: &str,
+        subject: &str,
+        body: &str,
+        timestamp: DateTime<Utc>,
+    ) -> Result<(), String> {
+        let person_id = self.add_entity(from, EntityType::Person);
+        let email_id = self.add_entity(
+            &format!("email:{}", subject),
+            EntityType::Email,
+        );
+
+        if let Some(email) = self.entities.iter_mut().find(|e| e.id == email_id) {
+            email
+                .properties
+                .insert("timestamp".into(), timestamp.to_rfc3339());
+            email.properties.insert("subject".into(), subject.into());
+            email
+                .properties
+                .insert("body_preview".into(), body.chars().take(200).collect());
+        }
+        self.save();
+
+        self.add_relation(&person_id, &email_id, "sent_email", subject);
+
+        // Extract entities from subject + body
+        let full_text = format!("{} {}", subject, body);
+        let extracted = Self::extract_entities_from_text(&full_text);
+        for (name, etype) in extracted {
+            let eid = self.add_entity(&name, etype);
+            self.add_relation(&email_id, &eid, "mentioned_in", subject);
+        }
+
+        Ok(())
+    }
+
+    /// Ingest a calendar event: create an Event node, link attendees.
+    pub async fn ingest_calendar_event(
+        &mut self,
+        title: &str,
+        attendees: &[String],
+        timestamp: DateTime<Utc>,
+    ) -> Result<(), String> {
+        let event_id = self.add_entity(title, EntityType::Event);
+
+        if let Some(event) = self.entities.iter_mut().find(|e| e.id == event_id) {
+            event
+                .properties
+                .insert("timestamp".into(), timestamp.to_rfc3339());
+            event
+                .properties
+                .insert("attendees".into(), attendees.join(", "));
+        }
+        self.save();
+
+        for attendee in attendees {
+            let person_id = self.add_entity(attendee, EntityType::Person);
+            self.add_relation(&person_id, &event_id, "attends", title);
+        }
+
+        // Extract entities from the title
+        let extracted = Self::extract_entities_from_text(title);
+        for (name, etype) in extracted {
+            let eid = self.add_entity(&name, etype);
+            self.add_relation(&event_id, &eid, "discussed_in", title);
+        }
+
+        Ok(())
+    }
+
+    /// Ingest a git commit: create a Commit node, link author and files.
+    pub async fn ingest_git_commit(
+        &mut self,
+        author: &str,
+        message: &str,
+        files: &[String],
+        timestamp: DateTime<Utc>,
+    ) -> Result<(), String> {
+        let author_id = self.add_entity(author, EntityType::Person);
+        let commit_id = self.add_entity(
+            &format!("commit:{}", &message.chars().take(60).collect::<String>()),
+            EntityType::Commit,
+        );
+
+        if let Some(commit) = self.entities.iter_mut().find(|e| e.id == commit_id) {
+            commit
+                .properties
+                .insert("timestamp".into(), timestamp.to_rfc3339());
+            commit.properties.insert("message".into(), message.into());
+            commit
+                .properties
+                .insert("files".into(), files.join(", "));
+        }
+        self.save();
+
+        self.add_relation(&author_id, &commit_id, "authored", message);
+
+        for file_path in files {
+            let file_id = self.add_entity(file_path, EntityType::File);
+            self.add_relation(&commit_id, &file_id, "modified", message);
+        }
+
+        // Extract entities from commit message
+        let extracted = Self::extract_entities_from_text(message);
+        for (name, etype) in extracted {
+            let eid = self.add_entity(&name, etype);
+            self.add_relation(&commit_id, &eid, "mentioned_in", message);
+        }
+
+        Ok(())
+    }
+
+    /// Ingest a file interaction (open, edit, save, etc.).
+    pub async fn ingest_file_interaction(
+        &mut self,
+        path: &str,
+        action: &str,
+        timestamp: DateTime<Utc>,
+    ) -> Result<(), String> {
+        let file_id = self.add_entity(path, EntityType::File);
+
+        if let Some(file) = self.entities.iter_mut().find(|e| e.id == file_id) {
+            file.properties
+                .insert("last_action".into(), action.into());
+            file.properties
+                .insert("last_action_at".into(), timestamp.to_rfc3339());
+        }
+        self.save();
+
+        // Try to associate with a project based on the path
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() >= 3 {
+            // Use the directory two levels up as a project hint
+            let project_hint = parts.iter().rev().nth(1).unwrap_or(&"unknown");
+            if project_hint.len() >= 2 {
+                let project_id = self.add_entity(project_hint, EntityType::Project);
+                self.add_relation(&file_id, &project_id, "belongs_to", action);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ContextResult
+// ---------------------------------------------------------------------------
+
+/// Result from a context query: an entity with its related entities and relations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextResult {
+    pub entity: Entity,
+    pub relations: Vec<Relation>,
+    pub related_entities: Vec<Entity>,
+}
+
+impl ContextResult {
+    /// Format this context result as a human-readable summary.
+    pub fn to_summary(&self) -> String {
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "- {} ({})",
+            self.entity.name, self.entity.entity_type
+        ));
+        for (rel, other) in self.relations.iter().zip(self.related_entities.iter()) {
+            lines.push(format!(
+                "  {} {} ({})",
+                rel.relation_type, other.name, other.entity_type
+            ));
+            if !rel.context.is_empty() {
+                let preview: String = rel.context.chars().take(80).collect();
+                lines.push(format!("    context: {}", preview));
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LLM-powered context answer
+// ---------------------------------------------------------------------------
+
+/// Query the knowledge graph and use the LLM router to answer a question
+/// with full cross-app context.
+#[allow(dead_code)]
+pub async fn answer_context_question(
+    question: &str,
+    graph: &KnowledgeGraph,
+    router: &crate::llm_router::LlmRouter,
+) -> Result<String, String> {
+    // 1. Extract entities and query the graph
+    let context_results = graph.query_context(question);
+
+    if context_results.is_empty() {
+        // No context found -- still ask the LLM but note the lack of context
+        let request = crate::llm_router::RouterRequest {
+            messages: vec![crate::llm_router::ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(format!(
+                    "The user asked: \"{}\"\n\n\
+                     No relevant context was found in the LifeOS knowledge graph. \
+                     Answer based on general knowledge, and mention that no personal \
+                     context was available.",
+                    question
+                )),
+            }],
+            complexity: Some(crate::llm_router::TaskComplexity::Medium),
+            sensitivity: None,
+            preferred_provider: None,
+            max_tokens: Some(512),
+        };
+
+        let response = router.chat(&request).await.map_err(|e| e.to_string())?;
+        return Ok(response.text);
+    }
+
+    // 2. Format context summary
+    let context_summary: String = context_results
+        .iter()
+        .map(|cr| cr.to_summary())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    // 3. Build prompt with context and send to LLM
+    let system_prompt = format!(
+        "You are LifeOS, a personal AI assistant with access to the user's knowledge graph. \
+         Use the following context from the knowledge graph to answer the user's question. \
+         Be specific and reference the context when relevant. Answer concisely.\n\n\
+         Context from LifeOS knowledge graph:\n{}\n",
+        context_summary
+    );
+
+    let request = crate::llm_router::RouterRequest {
+        messages: vec![
+            crate::llm_router::ChatMessage {
+                role: "system".into(),
+                content: serde_json::Value::String(system_prompt),
+            },
+            crate::llm_router::ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(question.to_string()),
+            },
+        ],
+        complexity: Some(crate::llm_router::TaskComplexity::Medium),
+        sensitivity: None,
+        preferred_provider: None,
+        max_tokens: Some(512),
+    };
+
+    let response = router.chat(&request).await.map_err(|e| e.to_string())?;
+    Ok(response.text)
 }
 
 // ---------------------------------------------------------------------------
@@ -703,5 +1082,262 @@ mod tests {
         let g2 = KnowledgeGraph::new(dir);
         assert_eq!(g2.entities.len(), 1);
         assert_eq!(g2.entities[0].name, "Persistent");
+    }
+
+    // -- Fase V: new entity types -------------------------------------------
+
+    #[test]
+    fn test_new_entity_types() {
+        let mut g = temp_graph();
+        g.add_entity("team standup", EntityType::Event);
+        g.add_entity("chat with alice", EntityType::Conversation);
+        g.add_entity("fix: resolve bug", EntityType::Commit);
+        g.add_entity("invoice from vendor", EntityType::Email);
+        g.add_entity("deploy v2", EntityType::Task);
+        g.add_entity("rust async", EntityType::Skill);
+
+        assert_eq!(g.entities.len(), 6);
+        let stats = g.stats();
+        assert_eq!(stats.entities_by_type.get("Event"), Some(&1));
+        assert_eq!(stats.entities_by_type.get("Conversation"), Some(&1));
+        assert_eq!(stats.entities_by_type.get("Commit"), Some(&1));
+        assert_eq!(stats.entities_by_type.get("Email"), Some(&1));
+        assert_eq!(stats.entities_by_type.get("Task"), Some(&1));
+        assert_eq!(stats.entities_by_type.get("Skill"), Some(&1));
+    }
+
+    #[test]
+    fn test_entity_properties() {
+        let mut g = temp_graph();
+        let id = g.add_entity("meeting", EntityType::Event);
+        if let Some(e) = g.entities.iter_mut().find(|e| e.id == id) {
+            e.properties.insert("location".into(), "zoom".into());
+            e.properties.insert("recurring".into(), "weekly".into());
+        }
+        g.save();
+
+        // Reload and check properties persist
+        let g2 = KnowledgeGraph::new(g.data_dir.clone());
+        let e = g2.query_entity("meeting");
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].properties.get("location"), Some(&"zoom".to_string()));
+    }
+
+    #[test]
+    fn test_weighted_relation() {
+        let mut g = temp_graph();
+        let a = g.add_entity("Alice", EntityType::Person);
+        let b = g.add_entity("ProjectX", EntityType::Project);
+        g.add_relation_weighted(&a, &b, "works_on", "main contributor", 0.9);
+
+        assert_eq!(g.relations.len(), 1);
+        assert!((g.relations[0].weight - 0.9).abs() < f32::EPSILON);
+    }
+
+    // -- Fase V: query_context ----------------------------------------------
+
+    #[test]
+    fn test_query_context() {
+        let mut g = temp_graph();
+        let hector = g.add_entity("Hector", EntityType::Person);
+        let proj = g.add_entity("LifeOS", EntityType::Project);
+        g.add_relation(&hector, &proj, "works_on", "main developer");
+
+        let results = g.query_context("What is Hector working on?");
+        assert!(!results.is_empty());
+        // Should find Hector entity
+        assert!(results.iter().any(|r| r.entity.name == "Hector"));
+    }
+
+    #[test]
+    fn test_query_context_no_results() {
+        let g = temp_graph();
+        let results = g.query_context("What is the meaning of life?");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_context_result_summary() {
+        let mut g = temp_graph();
+        let hector = g.add_entity("Hector", EntityType::Person);
+        let proj = g.add_entity("LifeOS", EntityType::Project);
+        g.add_relation(&hector, &proj, "works_on", "main developer");
+
+        let results = g.query_context("Tell me about Hector");
+        assert!(!results.is_empty());
+        let summary = results[0].to_summary();
+        assert!(summary.contains("Hector"));
+        assert!(summary.contains("Person"));
+    }
+
+    // -- Fase V: cross-app ingestion ----------------------------------------
+
+    #[tokio::test]
+    async fn test_ingest_telegram_message() {
+        let mut g = temp_graph();
+        g.ingest_telegram_message(
+            "Carlos",
+            "Hey @maria check /home/carlos/docs/report.pdf by 2026-04-15",
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        // Should have: Carlos (Person), conversation, maria (Person), file, date
+        let carlos: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.name == "Carlos" && e.entity_type == EntityType::Person)
+            .collect();
+        assert_eq!(carlos.len(), 1);
+
+        let maria: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.name == "maria" && e.entity_type == EntityType::Person)
+            .collect();
+        assert_eq!(maria.len(), 1);
+
+        let files: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.name == "/home/carlos/docs/report.pdf")
+            .collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].entity_type, EntityType::File);
+
+        // Conversation entity should have properties
+        let convs: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.entity_type == EntityType::Conversation)
+            .collect();
+        assert_eq!(convs.len(), 1);
+        assert_eq!(convs[0].properties.get("source"), Some(&"telegram".into()));
+    }
+
+    #[tokio::test]
+    async fn test_ingest_email() {
+        let mut g = temp_graph();
+        g.ingest_email(
+            "Alice",
+            "Q3 Budget Review",
+            "Please review the budget at https://docs.example.com/budget",
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let alice = g.query_entity("Alice");
+        assert_eq!(alice.len(), 1);
+
+        let emails: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.entity_type == EntityType::Email)
+            .collect();
+        assert_eq!(emails.len(), 1);
+        assert!(emails[0].properties.contains_key("subject"));
+    }
+
+    #[tokio::test]
+    async fn test_ingest_calendar_event() {
+        let mut g = temp_graph();
+        g.ingest_calendar_event(
+            "Sprint Planning",
+            &["Alice".into(), "Bob".into(), "Carlos".into()],
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let events: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.entity_type == EntityType::Event)
+            .collect();
+        assert_eq!(events.len(), 1);
+
+        // All 3 attendees should be Person entities
+        let persons: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.entity_type == EntityType::Person)
+            .collect();
+        assert_eq!(persons.len(), 3);
+
+        // Each attendee should have an "attends" relation to the event
+        let event_id = &events[0].id;
+        let attend_rels: Vec<_> = g
+            .relations
+            .iter()
+            .filter(|r| r.to_id == *event_id && r.relation_type == "attends")
+            .collect();
+        assert_eq!(attend_rels.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_git_commit() {
+        let mut g = temp_graph();
+        g.ingest_git_commit(
+            "Hector",
+            "feat: add knowledge graph module",
+            &[
+                "daemon/src/knowledge_graph.rs".into(),
+                "daemon/src/main.rs".into(),
+            ],
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        let hector = g.query_entity("Hector");
+        assert_eq!(hector.len(), 1);
+
+        let commits: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.entity_type == EntityType::Commit)
+            .collect();
+        assert_eq!(commits.len(), 1);
+        assert!(commits[0].properties.get("message").is_some());
+
+        // Two files should be linked
+        let files: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.entity_type == EntityType::File)
+            .collect();
+        assert_eq!(files.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_ingest_file_interaction() {
+        let mut g = temp_graph();
+        g.ingest_file_interaction("/home/hector/lifeos/README.md", "edit", Utc::now())
+            .await
+            .unwrap();
+
+        let _files = g.query_entity("README.md");
+        // The full path entity should exist
+        let all_files: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.entity_type == EntityType::File)
+            .collect();
+        assert_eq!(all_files.len(), 1);
+        assert_eq!(
+            all_files[0].properties.get("last_action"),
+            Some(&"edit".into())
+        );
+
+        // Should have created a project entity from the path
+        let projects: Vec<_> = g
+            .entities
+            .iter()
+            .filter(|e| e.entity_type == EntityType::Project)
+            .collect();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name, "lifeos");
     }
 }
