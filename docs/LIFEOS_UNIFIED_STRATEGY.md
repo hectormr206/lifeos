@@ -195,6 +195,122 @@ Verificado contra el repo actual de LifeOS y la documentacion oficial de OpenCla
 | 4 | **Shortcuts / deep links (lifeos://)** | Media | Registrar xdg-open handler para lifeos:// protocol + desktop entry con MimeType | Fase I |
 | 5 | **Companion UX madura** | Media | Re-habilitar mini_widget GTK4 (ya esta implementado, solo deshabilitado) o migrar a panel applet COSMIC | Fase I-J |
 
+#### Deuda visual y branding pendiente (2026-03-27)
+
+**Fuentes:** Inter y JetBrains Mono estan instaladas (Containerfile:386) pero COSMIC muestra Open Sans / Noto Sans Mono. `lifeos-apply-theme.sh` NO escribe los archivos de configuracion de fuentes de COSMIC. Falta crear:
+- `~/.config/cosmic/com.system76.CosmicSettings.FontConfig/v1/font_family` → `"Inter"`
+- `~/.config/cosmic/com.system76.CosmicSettings.FontConfig/v1/monospace_family` → `"JetBrains Mono"`
+
+**Icon theme LifeOS:** Seleccionado en COSMIC pero incompleto (~16 iconos). Un theme usable necesita ~80+ iconos. Iconos faltantes criticos:
+
+| Categoria | Iconos necesarios (nombre freedesktop) |
+|-----------|---------------------------------------|
+| apps | firefox, cosmic-files, cosmic-edit, cosmic-term, cosmic-settings, flatpak, steam, discord, telegram, code (VSCode), spotify, thunderbird, lifeos-dashboard, lifeos-axi |
+| places | folder, folder-documents, folder-download, folder-music, folder-pictures, folder-videos, folder-home, user-home, user-trash, network-workgroup |
+| mimetypes | text-plain, text-x-script, image-png, image-svg, audio-x-generic, video-x-generic, application-pdf, application-x-compressed, application-json |
+| actions | document-open, document-save, edit-copy, edit-paste, edit-delete, list-add, list-remove, view-refresh, go-next, go-previous, window-close |
+| categories | preferences-system, preferences-desktop, system-file-manager, utilities-terminal, applications-internet, applications-multimedia |
+| status | dialog-information, dialog-warning, dialog-error, network-online, network-offline, battery-full, audio-volume-high |
+
+**Estilo segun Brand Guide:** Flat design, sin sombras, dos tonos (base #161830 + acento #00D4AA/#FF6B9D), esquinas redondeadas, fondo transparente, SVG escalable.
+
+#### Bugs conocidos y mejoras de UX detectadas (2026-03-27)
+
+| # | Issue | Severidad | Causa raiz | Solucion propuesta | Fase |
+|---|-------|-----------|------------|-------------------|------|
+| 1 | **Tray icon de Axi tarda en aparecer tras boot** | Alta | El daemon arranca antes que el compositor COSMIC setee `WAYLAND_DISPLAY`. El check en `main.rs:782` es one-shot sin retry. La funcion `ensure_graphical_environment()` existe pero esta deshabilitada (dead code) | Habilitar `ensure_graphical_environment()` con retry loop (poll cada 2s, max 30s) o usar D-Bus signal para detectar display ready | Fase I |
+| 2 | **Tray icon desaparece y reaparece** | Alta | `service.spawn()` no tiene error handling. No hay health monitoring del tray task. Si D-Bus session se reinicia o event bus cierra (`RecvError::Closed`), el tray muere sin re-spawn | Agregar health monitor: si el tray task termina, re-spawnearlo con backoff exponencial. Envolver `service.spawn()` en error handling | Fase I |
+| 3 | **Iconos del dock se ven mal (PNG sin transparencia)** | Media | Los iconos actuales en la imagen son PNG rasterizados. El script `generate_brand_assets.sh` genera SVGs con transparencia pero aun no se integro al build pipeline | Integrar SVGs al Containerfile: copiar a `/usr/share/icons/LifeOS/scalable/apps/`, registrar icon theme, generar PNGs multi-resolucion con rsvg-convert | Fase I |
+| 4 | **Wallpaper default no se aplica tras update** | Baja | `lifeos-apply-theme.sh` solo corre una vez por version (marker file). Si el usuario ya tiene una version aplicada, no re-aplica. El wallpaper Orion nebula es el default de COSMIC, no de LifeOS | Agregar opcion de re-aplicar theme en el dashboard. O bump el marker si hay cambios de wallpaper significativos. Wallpapers custom estan en `/usr/share/backgrounds/lifeos/` | Fase I |
+| 6 | **Game Guard no puede offloadear LLM a CPU** | Alta | `/etc/lifeos/llama-server.env` es owned by root, lifeosd corre como uid 1000. `persist_gpu_layers()` falla con "failed to write". Fix en Containerfile: `chown 1000:1000`. Fix inmediato: `sudo chown lifeos:lifeos /etc/lifeos/llama-server.env` | Ya corregido en Containerfile (chown tras COPY). Para fix temporal: `sudo chown lifeos:lifeos /etc/lifeos/llama-server.env` | Inmediato |
+| 7 | **Fuentes Inter/JetBrains Mono no aplicadas en COSMIC** | Media | Fonts estan instaladas pero `lifeos-apply-theme.sh` no escribe los archivos de config de COSMIC para fuentes. COSMIC muestra Open Sans y Noto Sans Mono por default | Agregar a `lifeos-apply-theme.sh`: escribir `~/.config/cosmic/com.system76.CosmicSettings.FontConfig/v1/` con `font_family=Inter` y `monospace_family=JetBrains Mono` | Fase I |
+| 5 | **Script generate_brand_assets.sh apunta a directorio incorrecto** | Baja | TARGET_DIR es `/var/home/lifeos/Music/LifeOS_Brand` en vez de `image/files/usr/share/` | Refactorizar script: output a `image/files/usr/share/icons/LifeOS/scalable/apps/` y `image/files/usr/share/backgrounds/lifeos/`. Agregar paso al Makefile | Fase I |
+| 8 | **Game Guard: llama-server tarda ~90s en morir** | Media | llama-server no responde a SIGTERM rapido cuando tiene modelo cargado en GPU. Systemd espera TimeoutStopSec (default 90s) antes de SIGKILL. Offload funciona pero con retraso | Agregar `TimeoutStopSec=10` al service o usar SIGKILL directamente en `restart_llama_server()`. Tambien considerar `ExecStop=/bin/kill -9 $MAINPID` en el unit | Fase I |
+| 9 | **Audifonos Bluetooth: mic no se usa automaticamente** | Media | HUAWEI FreeClip se conecta en A2DP (audio alta calidad) pero el mic queda en SUSPENDED y COSMIC usa el mic interno. El usuario espera que al conectar BT headset, tanto audio como mic cambien automaticamente | Investigar wireplumber policy para auto-switch input device cuando BT headset con mic se conecta. Posible solucion: wireplumber rule o script en udev/BT connect hook | Fase I |
+| 10 | **Bluetooth: 2 volumenes desincronizados (panel vs real) + blast de audio en reuniones** | Alta | Bug confirmado upstream en WirePlumber 0.5.13 (Fedora 43 actual). Ver seccion detallada abajo | Ver seccion "Analisis BT volume desync" abajo | Inmediato (workaround) + esperando WirePlumber 0.5.14 |
+
+#### Analisis detallado: Bluetooth volume desync (bug #10)
+
+**Sintoma:** COSMIC panel/OSD muestra 100% pero el volumen real del sink BT es 40%. Al entrar a Google Meet, Chrome/WebRTC setea volumen a 100% (blast de audio en audifonos), y al salir lo restaura a 40%.
+
+**Causa raiz:** WirePlumber 0.5.13 crea "sink loopback" nodes (`bluez5.sink-loopback=true`) para soportar auto-switch entre A2DP y HSP/HFP. Esto crea 2 capas de volumen:
+- Nodo loopback (lo que COSMIC lee): vol=1.0 (100%)
+- Sink real BT (`bluez_output.F0:FA:C7:6E:C2:BE`): vol=0.40 (40%)
+
+COSMIC lee el volumen del nodo equivocado. Issues upstream: `pop-os/cosmic-epoch#3094`, `pop-os/cosmic-panel#566`.
+
+**Fix definitivo:** WirePlumber 0.5.14 elimino el sink-loopback por completo (MR !794). Fedora 43 aun no lo tiene. Monitorear: `dnf info wireplumber --available`.
+
+**Workarounds inmediatos para aplicar en image/Containerfile o lifeos-apply-theme.sh:**
+
+**Fix A — Deshabilitar BT autoswitch (recomendado):**
+```
+# ~/.config/wireplumber/wireplumber.conf.d/11-bluetooth-policy.conf
+wireplumber.settings = {
+  bluetooth.autoswitch-to-headset-profile = false
+}
+```
+Trade-off: no cambia auto a HSP/HFP al usar mic. Hay que cambiar perfil manualmente.
+
+**Fix B — Bloquear que Chrome ajuste volumen del sistema:**
+```
+# chrome://flags/#enable-webrtc-allow-input-volume-adjustment → Disabled
+```
+
+**Fix C — Deshabilitar hardware volume para FreeClip:**
+```
+# ~/.config/wireplumber/wireplumber.conf.d/80-bluez-properties.conf
+monitor.bluez.rules = [
+  {
+    matches = [{ device.name = "~bluez_card.F0_FA_C7_6E_C2_BE" }]
+    actions = { update-props = { bluez5.hw-volume = [] } }
+  }
+]
+```
+
+**Accion para LifeOS:** Instalar Fix A como default del sistema en `/etc/wireplumber/wireplumber.conf.d/11-bluetooth-policy.conf` via Containerfile. Cuando WirePlumber 0.5.14 llegue a Fedora, remover el workaround.
+
+#### Analisis detallado: Telegram bot incoherente (2026-03-27)
+
+**Sintoma:** Axi por Telegram da respuestas genericas ("Que necesitas hoy?"), ignora imagenes enviadas, y muestra tags de modelos diferentes ([cerebras-qwen235b] vs [local]) sin coherencia.
+
+**Problemas encontrados (codigo verificado en telegram_bridge.rs, telegram_tools.rs, llm_router.rs):**
+
+| # | Problema | Donde | Impacto |
+|---|---------|-------|---------|
+| 1 | **Imagenes enviadas a modelos sin vision** | `llm_router.rs:304-315` — Vision scoring filtra providers sin vision (score=0), pero el fallback cascade los permite. Cuando local no esta o Gemini key falta, cae a cerebras-qwen235b que NO soporta vision. La imagen se envia pero se ignora silenciosamente | Critico: el usuario manda foto + "que ves?" y recibe saludo generico |
+| 2 | **System prompt generico sin personalidad Axi** | `telegram_tools.rs:39-178` — SYSTEM_PROMPT dice "Responde en espanol de forma natural" pero NO menciona ser Axi, NO tiene personalidad, NO tiene contexto de LifeOS, NO tiene instrucciones de fallback | Alto: las respuestas se sienten como un chatbot generico, no como el asistente AI personal de LifeOS |
+| 3 | **Fallback silencioso cuando vision no disponible** | `telegram_tools.rs:882-940` — Si ningún provider de vision esta disponible, el bot envia la imagen a un modelo de texto que la ignora. No avisa al usuario "no puedo ver imagenes ahora" | Alto: el usuario cree que Axi "vio" la imagen pero la ignoro |
+| 4 | **Tags de modelo visibles al usuario** | `telegram_bridge.rs` — La respuesta incluye `[cerebras-qwen235b]` o `[local]` como suffix. El usuario no deberia ver internals del routing | Bajo: cosmético pero rompe la ilusion de un asistente unificado |
+| 5 | **Modelo local (Qwen3.5-2B) es demasiado pequeno para conversacion rica** | El modelo local es Qwen3.5-2B Q4_K_M — suficiente para tareas simples pero NO para conversacion contextual rica como OpenClaw (que usa modelos 70B+ via cloud) | Medio: las respuestas locales seran siempre limitadas vs cloud |
+
+**Flujo actual vs flujo correcto:**
+
+```
+ACTUAL (roto):
+  User: [foto] "Que ves aqui?"
+  → detect Vision complexity
+  → local down? → fallback cerebras (no vision)
+  → cerebras ignora imagen, procesa solo texto
+  → responde: "Hola! Que necesitas?" [cerebras-qwen235b]
+
+CORRECTO (objetivo):
+  User: [foto] "Que ves aqui?"
+  → detect Vision complexity
+  → filtrar SOLO providers con vision (local, gemini-flash, anthropic-haiku)
+  → si NINGUNO disponible: responder "No puedo analizar imagenes ahora, ¿me lo describes?"
+  → si disponible: enviar multimodal, obtener descripcion de la imagen
+  → responder con personalidad Axi: "Veo tu pantalla de bloqueo de LifeOS..."
+```
+
+**Fixes necesarios (prioridad para Fase H):**
+
+1. **Strict vision filtering**: Si `TaskComplexity::Vision`, NUNCA caer a provider sin vision. Si no hay provider de vision, responder con mensaje claro al usuario
+2. **System prompt con personalidad Axi**: Incluir nombre, personalidad (amigable, inteligente, protector), contexto LifeOS, idioma espanol, instrucciones de fallback
+3. **Ocultar tags de modelo**: No mostrar `[provider]` al usuario. Si se quiere debug, enviarlo como mensaje separado o en logs
+4. **Configurar Gemini API key como vision fallback**: Es gratis y soporta vision. Asi cuando local no esta (ej: Game Guard lo offloadeo), hay fallback de vision real
+5. **Mejorar system prompt con contexto del sistema**: Incluir hora, modo actual, estado de sensores, ultima actividad — para que Axi responda con contexto real
+
 ---
 
 ## 6. Estrategia Unificada: "La Celula Perfecta"
@@ -772,10 +888,10 @@ lifeos/
 - [x] Telegram: recibir mensajes de voz -> descargar OGG -> Whisper local transcribe -> LLM router
 - [x] Telegram: responder con audio -> Piper TTS genera -> convertir a OGG/OPUS -> sendVoice
 - [x] Telegram: recibir fotos -> descargar -> enviar a LLM con vision (local Qwen3.5-2B o Groq)
-- [x] Telegram: recibir videos -> extraer frames clave -> vision LLM analiza
+- [ ] Telegram: recibir videos -> extraer frames clave -> vision LLM analiza (**AUDITORIA 2026-03-27: no existe handle_video() en telegram_bridge.rs — feature completamente ausente**)
 - [x] Telegram: enviar screenshots del desktop como foto (sendPhoto)
 - [x] Telegram: funcionar en grupos (responder solo a @bot o /do, ignorar otros mensajes)
-- [x] Web search: integrar Groq browser_search tool (gratis, alta privacidad, built-in)
+- [ ] Web search: integrar Groq browser_search tool en supervisor principal (**AUDITORIA 2026-03-27: solo implementado en game_assistant.rs, NO en supervisor.rs — el supervisor cae a plain LLM query sin tools**)
 - [x] Web search: Serper API como fallback (2,500 busquedas/mes gratis, $1/1K despues)
 - [x] Web search: supervisor puede usar browse_url + search como herramientas de planning
 - [x] Supervisor: nueva accion `web_search` que busca en internet y devuelve resultados
@@ -872,6 +988,8 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - [x] Privacy filter sigue activo: sanitiza screenshot caption antes de enviar
 - [x] Audit log: `audit_log_screenshot()` escribe a ~/.local/share/lifeos/game-assistant-audit.log
 - [x] Dashboard toggle "Game Assistant" (default ON)
+- [ ] **Fix permisos llama-server.env:** `chown 1000:1000 /etc/lifeos/llama-server.env` en Containerfile (ya corregido en repo, pendiente deploy)
+- [ ] **Fast kill llama-server al offloadear:** `TimeoutStopSec=10` en service o SIGKILL directo — actualmente tarda ~90s en morir
 - [x] **HITO FASE G:** Al jugar, VRAM se libera automaticamente. Pides ayuda y Axi analiza tu juego.
 
 **BUGS CRITICOS ENCONTRADOS (2026-03-24) — CORREGIDOS:**
@@ -881,6 +999,13 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 | **llama-server no se reiniciaba** | `systemctl --user restart llama-server` pero el servicio es del sistema (`/usr/lib/systemd/system/`) | Nuevo helper script `lifeos-llama-gpu-layers.sh` que usa `sudo` + sudoers NOPASSWD |
 | **Override de GPU layers no leido** | Escribia a `~/.config/lifeos/llama-server.env.override` que nadie lee. El servicio tiene `ProtectHome=true` | Helper crea systemd drop-in en `/etc/systemd/system/llama-server.service.d/99-game-guard-gpu-layers.conf` |
 | **Modelo seguia en VRAM mientras se jugaba** | Consecuencia de los 2 bugs anteriores: game_guard detectaba el juego pero no podia hacer nada | Ahora: helper → daemon-reload → restart llama-server con LIFEOS_AI_GPU_LAYERS=0 |
+
+**BUGS ENCONTRADOS (2026-03-27):**
+
+| Bug | Causa Raiz | Fix | Estado |
+|-----|-----------|-----|--------|
+| **persist_gpu_layers() fallaba por permisos** | `/etc/lifeos/llama-server.env` owned by root, lifeosd corre como uid 1000 | `chown 1000:1000` en Containerfile tras COPY | Corregido en Containerfile, fix inmediato: `sudo chown lifeos:lifeos /etc/lifeos/llama-server.env` |
+| **llama-server tarda ~90s en morir al offloadear** | llama-server no responde a SIGTERM rapido con modelo cargado en GPU. Systemd espera TimeoutStopSec default (90s) | Pendiente: agregar `TimeoutStopSec=10` al service o usar SIGKILL en `restart_llama_server()` | Pendiente |
 
 **Archivos del fix:**
 - `daemon/src/game_guard.rs` — `persist_gpu_layers()` ahora usa `sudo lifeos-llama-gpu-layers.sh`
@@ -915,11 +1040,16 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 - [x] **Evaluate-Fix Loop:** Despues de cada paso de ejecucion, evaluar resultado (compilo? tests pasan? output esperado?). Si falla, alimentar el error completo al LLM y generar paso correctivo automatico
 - [x] **Max iteraciones configurables:** Default 5 iteraciones antes de escalar a humano. Evita loops infinitos
-- [x] **Build verification:** Despues de escribir codigo, ejecutar automaticamente `cargo build` / `cargo test` / `cargo clippy`. Solo marcar como exitoso si compila y tests pasan
+- [ ] **Build verification:** Despues de escribir codigo, ejecutar automaticamente `cargo build` / `cargo test` / `cargo clippy`. Solo marcar como exitoso si compila y tests pasan (**AUDITORIA 2026-03-27: solo instruido en prompt del LLM agent_roles.rs, NO enforced por el framework. El supervisor no inserta paso de verificacion automatico tras write_file**)
 - [x] **Error context enrichment:** Cuando un build falla, extraer el error exacto del compilador, las lineas relevantes del codigo, y el contexto del archivo. Enviar todo al LLM para correccion precisa
-- [x] **Diff preview antes de aplicar:** Generar diff de los cambios propuestos, enviarlo a Telegram para revision rapida (o auto-aplicar en modo trust)
+- [ ] **Diff preview antes de aplicar:** Generar diff de los cambios propuestos, enviarlo a Telegram para revision rapida (o auto-aplicar en modo trust) (**AUDITORIA 2026-03-27: funcion `diff_summary()` existe en git_workflow.rs pero NUNCA se llama desde supervisor ni se envia a Telegram**)
 - [x] **Streaming de progreso:** Enviar chunks de progreso a Telegram durante ejecucion larga ("Compilando... 3/5 tests pasan... corrigiendo error en linea 42...")
-- [ ] **HITO FASE H:** Decir a Axi "agrega endpoint GET /api/v1/health que devuelva uptime" y que el solo escriba el codigo, compile, corra tests, corrija errores, y reporte "listo, compila y tests pasan"
+- [ ] **Strict vision filtering en LLM router:** Si `TaskComplexity::Vision`, NUNCA caer a provider sin vision. Si no hay provider disponible, responder "No puedo analizar imagenes ahora" en vez de ignorar la imagen silenciosamente (`llm_router.rs:304-315`)
+- [ ] **System prompt con personalidad Axi:** Reemplazar prompt generico en `telegram_tools.rs:39-178` por uno con: nombre Axi, personalidad (amigable/inteligente/protector del Brand Guide), contexto LifeOS, instrucciones de fallback, estado actual del sistema (hora, modo, sensores)
+- [ ] **Ocultar tags de modelo al usuario:** No mostrar `[cerebras-qwen235b]` o `[local]` en respuestas de Telegram. Mover a logs internos o mensaje de debug separado
+- [ ] **Configurar Gemini API key como vision fallback gratis:** Cuando local no esta (ej: Game Guard lo offloadeo a CPU sin mmproj), usar gemini-flash como fallback de vision real
+- [ ] **Coherencia entre modelos:** Inyectar system prompt con contexto de conversacion y personalidad Axi a TODOS los providers, no solo al local. Que el usuario sienta que habla con el mismo asistente siempre
+- [ ] **HITO FASE H:** Decir a Axi "agrega endpoint GET /api/v1/health que devuelva uptime" y que el solo escriba el codigo, compile, corra tests, corrija errores, y reporte "listo, compila y tests pasan". Enviar imagen por Telegram y que Axi la analice correctamente con personalidad propia
 
 ### Fase I — Auto-Aprobacion + Git Workflow Autonomo
 
@@ -929,14 +1059,23 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 **Benchmark a superar:** Devin (trabaja en sandbox sin aprobacion), Cursor Background Agents (ejecutan en paralelo sin bloquear).
 
-- [x] **Trust mode para Telegram:** Tasks iniciadas desde Telegram con `/do trust: <objetivo>` auto-aprueban writes dentro del git worktree sandbox. Solo notifica al final con el diff completo
-- [x] **Branch por tarea:** Cada tarea crea un feature branch automatico (`axi/<task-id>-<slug>`). Commits automaticos cuando tests pasan
-- [x] **Auto-commit con mensaje semantico:** El LLM genera commit messages descriptivos basados en los cambios realizados
-- [x] **PR creation:** Cuando la tarea termina exitosamente, crear PR en GitHub via `gh` CLI con descripcion generada por LLM
-- [x] **Post-task diff summary:** Enviar a Telegram un resumen del diff total: archivos modificados, lineas cambiadas, tests que pasan
-- [x] **Rollback automatico:** Si una tarea falla despues de 5 iteraciones, `git checkout .` en el worktree y notificar con el contexto completo del error
-- [x] **Workspace persistence:** Mantener el worktree activo entre pasos de la misma tarea (no recrear cada vez)
-- [ ] **HITO FASE I:** Decir "implementa feature X en branch nuevo, prueba y abre PR" y que Axi lo haga completo sin intervenir
+- [ ] **Trust mode para Telegram:** Tasks iniciadas desde Telegram con `/do trust: <objetivo>` auto-aprueban writes dentro del git worktree sandbox. Solo notifica al final con el diff completo (**AUDITORIA 2026-03-27: NO implementado. Existe sistema de approval pero no hay parser para `/do trust:` command**)
+- [ ] **Branch por tarea:** Cada tarea crea un feature branch automatico (`axi/<task-id>-<slug>`). Commits automaticos cuando tests pasan (**AUDITORIA: funcion `create_task_branch()` existe en git_workflow.rs pero NUNCA se llama desde supervisor**)
+- [ ] **Auto-commit con mensaje semantico:** El LLM genera commit messages descriptivos basados en los cambios realizados (**AUDITORIA: funcion `auto_commit()` existe en git_workflow.rs pero NUNCA se llama**)
+- [ ] **PR creation:** Cuando la tarea termina exitosamente, crear PR en GitHub via `gh` CLI con descripcion generada por LLM (**AUDITORIA: funcion `create_pr()` existe en git_workflow.rs pero NUNCA se llama**)
+- [ ] **Post-task diff summary:** Enviar a Telegram un resumen del diff total: archivos modificados, lineas cambiadas, tests que pasan (**AUDITORIA: funcion `diff_summary()` existe pero no integrada con notificaciones**)
+- [ ] **Rollback automatico:** Si una tarea falla despues de 5 iteraciones, `git checkout .` en el worktree y notificar con el contexto completo del error (**AUDITORIA: solo sandbox isolation via worktree temporal, no rollback real de branch principal**)
+- [ ] **Workspace persistence:** Mantener el worktree activo entre pasos de la misma tarea (no recrear cada vez) (**AUDITORIA: worktrees son temporales en /tmp, se eliminan tras ejecucion**)
+- [ ] **Tray icon de Axi: retry al boot:** Habilitar `ensure_graphical_environment()` con retry loop (poll cada 2s, max 30s) o D-Bus signal para detectar display ready. Actualmente es one-shot sin retry (`main.rs:782`)
+- [ ] **Tray icon: health monitor + re-spawn:** Si el tray task muere (D-Bus restart, event bus close), re-spawnearlo con backoff exponencial. Envolver `service.spawn()` en error handling
+- [ ] **Icon theme LifeOS completo (~80 SVGs):** Expandir `generate_brand_assets.sh` con iconos para apps (firefox, cosmic-files, cosmic-term, cosmic-settings, steam, etc.), places (folder, home, trash, downloads), mimetypes, actions, status. Estilo Brand Guide: flat, 2 tonos (#161830 + #00D4AA), transparente, SVG escalable
+- [ ] **Integrar SVGs al Containerfile:** Copiar a `/usr/share/icons/LifeOS/scalable/`, generar PNGs multi-resolucion con rsvg-convert, actualizar icon-theme.cache
+- [ ] **Aplicar fuentes Inter + JetBrains Mono en COSMIC:** Escribir en `lifeos-apply-theme.sh` los archivos `~/.config/cosmic/com.system76.CosmicSettings.FontConfig/v1/` para font_family y monospace_family
+- [ ] **Wallpaper: re-aplicar tras update si cambio:** Bump marker file en `lifeos-apply-theme.sh` cuando hay wallpapers nuevos. O agregar opcion de re-aplicar en dashboard
+- [ ] **Bluetooth volume desync workaround:** Instalar `/etc/wireplumber/wireplumber.conf.d/11-bluetooth-policy.conf` con `bluetooth.autoswitch-to-headset-profile = false` en Containerfile. Remover cuando WirePlumber 0.5.14 llegue a Fedora
+- [ ] **Bluetooth: auto-switch mic input:** Wireplumber rule o script que detecte BT headset con mic y cambie input device automaticamente
+- [ ] **Game Guard: llama-server fast kill:** Agregar `TimeoutStopSec=10` al llama-server.service o usar SIGKILL directo en `restart_llama_server()` para que offload sea instantaneo
+- [ ] **HITO FASE I:** Decir "implementa feature X en branch nuevo, prueba y abre PR" y que Axi lo haga completo sin intervenir. Desktop con iconos LifeOS unicos, fuentes Inter/JetBrains, tray icon estable, audio BT sin glitches de volumen
 
 ### Fase J — Browser Automation Real + Testing Visual
 
