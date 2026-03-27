@@ -565,6 +565,45 @@ impl Supervisor {
 
                 let duration_ms = start.elapsed().as_millis() as u64;
 
+                // Git workflow: auto-commit if task wrote files and trust_mode is on
+                let auto_approve = std::env::var("LIFEOS_AUTO_APPROVE_MEDIUM")
+                    .unwrap_or_default()
+                    == "true";
+                if auto_approve && summary.contains("Wrote") {
+                    match crate::git_workflow::auto_commit(
+                        &self.work_dir,
+                        &task.objective,
+                    )
+                    .await
+                    {
+                        Ok(commit_msg) => {
+                            info!("[supervisor] auto-committed: {}", commit_msg);
+                            // Generate diff summary for notification
+                            if let Ok(diff) =
+                                crate::git_workflow::diff_summary(&self.work_dir).await
+                            {
+                                let _ = self.notify_tx.send(
+                                    SupervisorNotification::TaskCompleted {
+                                        task_id: task.id.clone(),
+                                        objective: format!(
+                                            "{}\n\nDiff:\n{}",
+                                            task.objective,
+                                            &diff[..diff.len().min(1500)]
+                                        ),
+                                        result: commit_msg,
+                                        steps_total,
+                                        steps_ok,
+                                        duration_ms,
+                                    },
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            debug!("[supervisor] auto-commit skipped: {}", e);
+                        }
+                    }
+                }
+
                 if let Ok(mut m) = self.metrics.lock() {
                     m.record(role, true, duration_ms);
                 }
@@ -1365,10 +1404,54 @@ impl Supervisor {
         }
     }
 
-    /// Search the web using Serper API (free tier: 2500/mo).
+    /// Search the web using Groq browser_search (free, ZDR) → Serper API fallback.
     async fn execute_web_search(&self, query: &str) -> Result<String> {
         info!("Web search: {}", query);
 
+        // Priority 1: Groq browser_search (free, zero data retention)
+        let groq_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
+        if !groq_key.is_empty() {
+            let client = reqwest::Client::new();
+            let tools = serde_json::json!([{
+                "type": "function",
+                "function": {
+                    "name": "browser_search",
+                    "description": "Search the web",
+                    "parameters": {
+                        "type": "object",
+                        "properties": { "query": { "type": "string" } },
+                        "required": ["query"]
+                    }
+                }
+            }]);
+            let body = serde_json::json!({
+                "model": "qwen-qwq-32b",
+                "messages": [{"role": "user", "content": format!("Search the web for: {}", query)}],
+                "tools": tools,
+                "tool_choice": "auto",
+                "max_tokens": 2048
+            });
+            if let Ok(res) = client
+                .post("https://api.groq.com/openai/v1/chat/completions")
+                .header("Authorization", format!("Bearer {}", groq_key))
+                .json(&body)
+                .send()
+                .await
+            {
+                if res.status().is_success() {
+                    if let Ok(json) = res.json::<serde_json::Value>().await {
+                        let text = json["choices"][0]["message"]["content"]
+                            .as_str()
+                            .unwrap_or("");
+                        if !text.is_empty() {
+                            return Ok(format!("Web search results for '{}':\n{}", query, text));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Priority 2: Serper API (free tier: 2500/mo)
         let serper_key = std::env::var("SERPER_API_KEY").unwrap_or_default();
 
         if !serper_key.is_empty() {
@@ -1789,11 +1872,41 @@ Always end with a "respond" step summarizing what was done."#,
                 tokio::fs::write(&full_path, content)
                     .await
                     .with_context(|| format!("Failed to write {}", full_path.display()))?;
-                Ok(format!(
+
+                // Auto-verify: if we wrote a Rust file, run cargo check
+                let mut result_msg = format!(
                     "Wrote {} bytes to {}",
                     content.len(),
                     full_path.display()
-                ))
+                );
+                if path.ends_with(".rs") || path.ends_with("Cargo.toml") {
+                    info!("[supervisor] auto-verifying Rust write with cargo check");
+                    let check = tokio::process::Command::new("cargo")
+                        .args(["check", "--message-format=short"])
+                        .current_dir(&self.work_dir)
+                        .output()
+                        .await;
+                    match check {
+                        Ok(output) if output.status.success() => {
+                            result_msg.push_str("\n[cargo check: OK]");
+                        }
+                        Ok(output) => {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            let errors: String = stderr
+                                .lines()
+                                .filter(|l| l.contains("error"))
+                                .take(5)
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            result_msg.push_str(&format!(
+                                "\n[cargo check: FAILED]\n{}",
+                                &errors[..errors.len().min(500)]
+                            ));
+                        }
+                        Err(_) => {} // cargo not available, skip
+                    }
+                }
+                Ok(result_msg)
             }
             StepAction::Respond { message } => Ok(message.clone()),
 

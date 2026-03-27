@@ -179,6 +179,13 @@ impl LlmRouter {
             self.select_candidates(complexity, sensitivity, &request.preferred_provider);
 
         if candidates.is_empty() {
+            if complexity == TaskComplexity::Vision {
+                bail!(
+                    "NO_VISION_AVAILABLE: No puedo analizar imagenes en este momento. \
+                     Ningun proveedor de vision esta disponible (modelo local apagado o sin API key de vision). \
+                     Intenta describir la imagen con texto."
+                );
+            }
             bail!(
                 "No LLM providers available for complexity={:?} sensitivity={:?}",
                 complexity,

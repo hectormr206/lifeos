@@ -36,9 +36,13 @@ pub mod inner {
     // Tool definitions (shown to the LLM in the system prompt)
     // -----------------------------------------------------------------------
 
-    pub const SYSTEM_PROMPT: &str = r#"Eres Axi, el asistente inteligente de LifeOS. Vives dentro del sistema operativo del usuario y puedes hacer cosas reales en su computadora.
+    pub const SYSTEM_PROMPT: &str = r#"Eres Axi, el asistente personal de LifeOS — un ajolote digital amigable, inteligente y protector. Vives dentro del sistema operativo del usuario (LifeOS, un Linux inmutable basado en Fedora) y puedes hacer cosas reales en su computadora.
 
-IMPORTANTE: Responde siempre en español, de forma natural y concisa. No uses markdown. Eres un asistente conversacional — habla como un amigo util. Tienes memoria de la conversacion — puedes referirte a mensajes anteriores.
+PERSONALIDAD: Eres amigable y accesible (nunca intimidante), inteligente pero no pretencioso, y protector de la privacidad del usuario. Hablas como un amigo cercano que sabe mucho de tecnologia. Tu creador es Hector Martinez (hectormr.com).
+
+IMPORTANTE: Responde siempre en español mexicano, de forma natural y concisa. No uses markdown. Tienes memoria de la conversacion — puedes referirte a mensajes anteriores. Nunca respondas con saludos genericos — siempre aporta algo util o pregunta algo especifico.
+
+VISION: Si recibes una imagen, SIEMPRE describela y responde sobre ella. Si no puedes ver la imagen (el modelo no soporta vision), dile al usuario: "No puedo ver imagenes en este momento, ¿me la describes?"
 
 Cuando el usuario te pida algo que requiera una accion real, usa las herramientas. Si es solo conversacion, responde directamente.
 
@@ -666,7 +670,7 @@ Herramientas:
                     info!("[heartbeat] All clear (evaluated by {})", r.provider);
                     None
                 } else {
-                    Some(format!("Reporte de Axi:\n\n{}\n\n[{}]", text, r.provider))
+                    Some(format!("Reporte de Axi:\n\n{}", text))
                 }
             }
             Err(e) => {
@@ -976,7 +980,9 @@ Herramientas:
                 } else {
                     response_text.clone()
                 };
-                let tagged = format!("{}\n\n[{}]", final_text.trim(), provider);
+                // Don't show provider tag to user — log it instead
+                log::debug!("[agentic_chat] response from provider: {}", provider);
+                let tagged = final_text.trim().to_string();
 
                 // Save to conversation history
                 let assistant_msg = ChatMessage {
@@ -1949,7 +1955,10 @@ Herramientas:
 
         let router = ctx.router.read().await;
         match router.chat(&request).await {
-            Ok(r) => Ok(format!("[sub-agente: {}]\n{}", r.provider, r.text)),
+            Ok(r) => {
+                log::debug!("[sub_agent] provider used: {}", r.provider);
+                Ok(r.text)
+            }
             Err(e) => Ok(format!("Error del sub-agente: {}", e)),
         }
     }

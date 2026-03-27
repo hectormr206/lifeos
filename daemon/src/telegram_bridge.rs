@@ -289,6 +289,15 @@ mod inner {
             return handle_voice(bot, msg.clone(), chat_id, voice.file.id.clone(), ctx).await;
         }
 
+        // Videos: extract frame, then vision analysis through agentic loop
+        if let Some(video) = msg.video() {
+            let caption = msg
+                .caption()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "Describe este video en español.".into());
+            return handle_video(bot, chat_id, &video.file.id, &caption, ctx).await;
+        }
+
         // Photos: vision analysis through agentic loop
         if let Some(photo_id) = largest_photo(&msg) {
             let caption = msg
@@ -311,7 +320,7 @@ mod inner {
                 t
             }
             None => {
-                bot.send_message(chat_id, "Acepto texto, voz y fotos.")
+                bot.send_message(chat_id, "Acepto texto, voz, fotos y videos.")
                     .await?;
                 return Ok(());
             }
@@ -335,6 +344,35 @@ mod inner {
             }
             bot.send_message(chat_id, "Conversacion guardada en memoria y reiniciada.")
                 .await?;
+            return Ok(());
+        }
+
+        // /do trust: — execute task with auto-approval (no manual confirmation needed)
+        if text.starts_with("/do trust:") || text.starts_with("/do trust ") {
+            let task_text = text
+                .strip_prefix("/do trust:")
+                .or_else(|| text.strip_prefix("/do trust "))
+                .unwrap_or(&text)
+                .trim();
+            if task_text.is_empty() {
+                bot.send_message(chat_id, "Uso: /do trust: <objetivo>").await?;
+                return Ok(());
+            }
+            bot.send_message(chat_id, format!("Modo trust activado. Ejecutando: {}", task_text))
+                .await?;
+            // Set auto-approve env for this session
+            std::env::set_var("LIFEOS_AUTO_APPROVE_MEDIUM", "true");
+            bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
+            let (response, screenshot_path) =
+                telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, task_text, None).await;
+            if let Some(ref path) = screenshot_path {
+                let screenshot_file = std::path::Path::new(path);
+                if screenshot_file.exists() {
+                    bot.send_photo(chat_id, InputFile::file(screenshot_file)).await.ok();
+                    tokio::fs::remove_file(screenshot_file).await.ok();
+                }
+            }
+            send_chunked(&bot, chat_id, &response).await?;
             return Ok(());
         }
 
@@ -598,6 +636,94 @@ mod inner {
         }
 
         send_chunked(&bot, chat_id, &response).await?;
+
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Video handling — extract frame then vision analysis
+    // -----------------------------------------------------------------------
+
+    async fn handle_video(
+        bot: Bot,
+        chat_id: ChatId,
+        video_file_id: &str,
+        caption: &str,
+        ctx: BotCtx,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("Telegram [{}]: video received", chat_id);
+        bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
+        let _ = bot
+            .send_message(chat_id, "Analizando video...")
+            .await;
+
+        let file = bot.get_file(video_file_id).await?;
+        let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
+        tokio::fs::create_dir_all(&tmp_dir).await.ok();
+        let video_path = tmp_dir.join(format!("video-{}.mp4", chrono::Utc::now().timestamp()));
+        let frame_path = tmp_dir.join(format!("frame-{}.jpg", chrono::Utc::now().timestamp()));
+        let mut dst = tokio::fs::File::create(&video_path).await?;
+        bot.download_file(&file.path, &mut dst).await?;
+
+        // Extract middle frame (frame #5)
+        let ffmpeg = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-i",
+                video_path.to_str().unwrap_or_default(),
+                "-vf",
+                "select=eq(n\\,5)",
+                "-frames:v",
+                "1",
+                frame_path.to_str().unwrap_or_default(),
+            ])
+            .output()
+            .await;
+
+        if ffmpeg.is_err() || !frame_path.exists() {
+            // Fallback: just take first frame
+            let _ = tokio::process::Command::new("ffmpeg")
+                .args([
+                    "-y",
+                    "-i",
+                    video_path.to_str().unwrap_or_default(),
+                    "-vframes",
+                    "1",
+                    frame_path.to_str().unwrap_or_default(),
+                ])
+                .output()
+                .await;
+        }
+
+        if frame_path.exists() {
+            let bytes = tokio::fs::read(&frame_path).await?;
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let data_url = format!("data:image/jpeg;base64,{}", b64);
+
+            let (response, screenshot_path) =
+                telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, caption, Some(&data_url))
+                    .await;
+
+            if let Some(ref path) = screenshot_path {
+                let screenshot_file = std::path::Path::new(path);
+                if screenshot_file.exists() {
+                    bot.send_photo(chat_id, InputFile::file(screenshot_file))
+                        .await
+                        .ok();
+                    tokio::fs::remove_file(screenshot_file).await.ok();
+                }
+            }
+
+            send_chunked(&bot, chat_id, &response).await?;
+        } else {
+            bot.send_message(chat_id, "No pude extraer un frame del video.")
+                .await?;
+        }
+
+        // Cleanup
+        let _ = tokio::fs::remove_file(&video_path).await;
+        let _ = tokio::fs::remove_file(&frame_path).await;
 
         Ok(())
     }

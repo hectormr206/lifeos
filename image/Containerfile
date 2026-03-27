@@ -649,6 +649,7 @@ RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/di
 # Copiar unit files desde el repo
 COPY image/files/etc/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/lifeos-first-boot.service
 COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
+COPY image/files/etc/systemd/system/llama-server.service.d/10-fast-kill.conf /etc/systemd/system/llama-server.service.d/10-fast-kill.conf
 COPY image/files/etc/systemd/system/whisper-stt.service       /usr/lib/systemd/system/whisper-stt.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.service /usr/lib/systemd/system/lifeos-btrfs-snapshot.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.timer   /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer

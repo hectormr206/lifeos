@@ -70,6 +70,20 @@ if [ -f "$WALLPAPER" ]; then
     printf '[("%s", "zoom")]\n' "$WALLPAPER" > "$BG_DIR/all"
 fi
 
+# ── 5b. Fonts: Inter (UI) + JetBrains Mono (terminal) ──
+# --- Fonts: Inter (UI) + JetBrains Mono (terminal) ---
+FONT_DIR="$HOME/.config/cosmic/com.system76.CosmicComp/v1"
+mkdir -p "$FONT_DIR"
+# Note: COSMIC font config uses cosmic-settings FontConfig, path may vary
+# Try both known locations
+for FDIR in \
+    "$HOME/.config/cosmic/com.system76.CosmicSettings.FontConfig/v1" \
+    "$HOME/.config/cosmic/com.system76.CosmicComp/v1"; do
+    mkdir -p "$FDIR"
+    printf '"Inter"\n' > "$FDIR/font_family" 2>/dev/null || true
+    printf '"JetBrains Mono"\n' > "$FDIR/monospace_family" 2>/dev/null || true
+done
+
 # ── 6. Dark mode ──
 MODE_DIR="$HOME/.config/cosmic/com.system76.CosmicTheme.Mode/v1"
 mkdir -p "$MODE_DIR"

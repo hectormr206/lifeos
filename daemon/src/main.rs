@@ -779,28 +779,74 @@ async fn main() -> anyhow::Result<()> {
     // Launch Axi system tray icon (StatusNotifierItem — top panel)
     #[cfg(feature = "tray")]
     {
-        let has_display =
-            std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok();
-        if has_display {
-            let tray_token = state.bootstrap_token.clone().unwrap_or_default();
-            let tray_api_base =
-                format!("http://127.0.0.1:{}", state.config.api_bind_address.port(),);
-            let tray_dashboard = format!("{}/dashboard?token={}", tray_api_base, tray_token,);
-            let tray_state = {
-                let overlay = state.overlay_manager.read().await;
-                let s = overlay.get_state().await;
-                format!("{:?}", s.axi_state)
-            };
-            let tray_rx = state.event_bus.subscribe();
-            axi_tray::spawn_tray(
-                tray_rx,
-                tray_dashboard,
-                tray_api_base,
-                tray_token,
-                tray_state,
-            );
-            info!("Axi system tray icon launched");
-        }
+        let tray_state = state.clone();
+        tokio::spawn(async move {
+            // Wait for display server to be ready (retry up to 30s)
+            let mut display_ready = false;
+            for attempt in 0..15 {
+                if std::env::var("WAYLAND_DISPLAY").is_ok()
+                    || std::env::var("DISPLAY").is_ok()
+                {
+                    display_ready = true;
+                    break;
+                }
+                // Try to discover Wayland socket dynamically
+                if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+                    if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
+                        for entry in entries.flatten() {
+                            if let Ok(name) = entry.file_name().into_string() {
+                                if name.starts_with("wayland-") && !name.ends_with(".lock") {
+                                    unsafe { std::env::set_var("WAYLAND_DISPLAY", &name) };
+                                    info!("Discovered Wayland socket: {}", name);
+                                    display_ready = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if display_ready {
+                    break;
+                }
+                if attempt == 0 {
+                    info!("[tray] Waiting for display server...");
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+
+            if !display_ready {
+                warn!("[tray] No display found after 30s, tray icon disabled");
+                return;
+            }
+
+            // Spawn tray with health monitoring — re-spawn on failure
+            loop {
+                info!("[tray] Spawning Axi system tray icon");
+                let tray_token = tray_state.bootstrap_token.clone().unwrap_or_default();
+                let tray_api_base = format!(
+                    "http://127.0.0.1:{}",
+                    tray_state.config.api_bind_address.port(),
+                );
+                let tray_dashboard =
+                    format!("{}/dashboard?token={}", tray_api_base, tray_token,);
+                let current_state = {
+                    let overlay = tray_state.overlay_manager.read().await;
+                    let s = overlay.get_state().await;
+                    format!("{:?}", s.axi_state)
+                };
+                let tray_rx = tray_state.event_bus.subscribe();
+                axi_tray::spawn_tray(
+                    tray_rx,
+                    tray_dashboard,
+                    tray_api_base,
+                    tray_token,
+                    current_state,
+                );
+                // spawn_tray runs until the tray exits; if we get here it died
+                warn!("[tray] Tray icon exited, re-spawning in 5s...");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        });
     }
 
     // Start background tasks
