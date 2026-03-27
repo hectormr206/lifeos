@@ -112,6 +112,7 @@ system_setup() {
     # Set up Flatpak
     flatpak remote-add --if-not-exists --system flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true
     flatpak remote-modify --system --enable flathub 2>/dev/null || true
+    flatpak remote-add --if-not-exists --system cosmic https://flatpak.pop-os.org/repo/ 2>/dev/null || true
 
     # Create LLM providers env template if it doesn't exist
     if [ ! -f /etc/lifeos/llm-providers.env ]; then

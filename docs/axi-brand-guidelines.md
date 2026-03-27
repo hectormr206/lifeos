@@ -1,184 +1,211 @@
-# Axi Brand Guidelines
+# LifeOS & Axi — Brand Guidelines
 
-Este documento defines the visual identity system for **Axi, el Ajolote tecnológico**.
+Guia oficial de identidad visual para **LifeOS** y su asistente **Axi, el Ajolote tecnologico**.
+Todo elemento visual de LifeOS debe seguir estas reglas.
 
-**Version:** 1.1.0
-**Last Updated:** 2026-03-26
+**Version:** 2.0.0
+**Updated:** 2026-03-26
+**Author:** Hector Martinez — [hectormr.com](https://hectormr.com)
 **Status:** Official
-**Author:** Héctor Martínez — [hectormr.com](https://hectormr.com)
 
-## Color Palette
+---
 
-### Brand Colors (Paleta Oficial)
+## 1. Paleta de Colores
 
-| Color              | Hex       | Uso                                    |
-| ------------------ | --------- | -------------------------------------- |
-| **Rosa Axi**       | `#FF6B9D` | Color base, branquias, acentos cálidos |
-| **Verde Regeneración** | `#00D4AA` | Brillos, efectos de recovery, success  |
-| **Azul LifeOS**    | `#3282B8` | Acentos, complementario, links         |
-| **Púrpura Profundo**   | `#1A1A2E` | Fondos, contornos, neutral dark        |
-| **Blanco Hueso**   | `#E8E8E8` | Detalles, ojos, texto claro            |
+### Colores Primarios
 
-### Semantic Colors
+| Color | Hex | RGBA (0-1) | Uso |
+|-------|-----|------------|-----|
+| **Teal Axi** | `#00D4AA` | (0.0, 0.831, 0.667, 1.0) | Accent principal. Botones, links, selecciones, bordes activos, cursor, iconos activos |
+| **Rosa Axi** | `#FF6B9D` | (1.0, 0.420, 0.612, 1.0) | Accent secundario. Branquias de Axi, errores, destructivo, notificaciones urgentes |
+| **Noche Profunda** | `#0F0F1B` | (0.059, 0.059, 0.106, 1.0) | Background principal dark mode. Fondos de ventanas |
+| **Medianoche** | `#161830` | (0.086, 0.094, 0.188, 1.0) | Surface/container. Paneles, cards, menus |
+| **Blanco Suave** | `#E8E8E8` | (0.910, 0.910, 0.910, 1.0) | Texto principal. Legible sin cansar la vista |
 
-| Token     | Dark Theme | Usage                           |
-| --------- | ---------- | ------------------------------- |
-| **primary**   | `#0f4c75`  | Primary actions, focus rings    |
-| **secondary** | `#3282b8`  | Secondary actions, accents      |
-| **success**   | `#00D4AA`  | Success states, confirmations   |
-| **warning**   | `#e67e22`  | Warning states, alerts          |
-| **error**     | `#e74c3c`  | Error states, destructive       |
-| **neutral**   | `#1a1a2e`  | Dark background, surfaces       |
-| **highlight** | `#f1c40d`  | Yellow glow, emphasis           |
+### Colores Secundarios
 
-## Character Proportions
+| Color | Hex | Uso |
+|-------|-----|-----|
+| **Azul LifeOS** | `#3282B8` | Links, acentos frios, complementario |
+| **Purpura Profundo** | `#5E26CC` | Modo nocturno, premium features |
+| **Amarillo Alerta** | `#F0C420` | Warnings, precauciones |
+| **Naranja Energia** | `#E67E22` | Alertas medias, energia |
 
-Axi sigue proporciones específicas para mantener consistencia visual en todos los formatos:
+### Colores Semanticos
+
+| Token | Color | Uso |
+|-------|-------|-----|
+| **accent** | `#00D4AA` | Teal Axi — SIEMPRE el accent |
+| **success** | `#00D4AA` | Mismo que accent (teal = positivo) |
+| **warning** | `#F0C420` | Amarillo |
+| **destructive** | `#FF6B9D` | Rosa Axi |
+| **info** | `#3282B8` | Azul LifeOS |
+
+### Neutrals (escala de grises con tinte teal)
+
+| Step | Hex | Uso |
+|------|-----|-----|
+| neutral_0 | `#0D0D17` | Fondo mas oscuro |
+| neutral_1 | `#12121F` | Surfaces profundas |
+| neutral_2 | `#1A1A2E` | Surfaces |
+| neutral_3 | `#222338` | Borders |
+| neutral_4 | `#2D2F45` | Borders activos |
+| neutral_5 | `#383A52` | Texto deshabilitado |
+| neutral_6 | `#4A4C61` | Placeholders |
+| neutral_7 | `#5E6078` | Texto secundario |
+| neutral_8 | `#737587` | Texto muted |
+| neutral_9 | `#8C8E9E` | Labels |
+| neutral_10 | `#A8AAB7` | Texto claro sobre oscuro |
+
+---
+
+## 2. Tipografia
+
+### Fuente del Sistema (UI)
+- **Primaria:** Inter (SIL Open Font License)
+- **Fallback:** Noto Sans, sans-serif
+- **Peso base:** Regular (400) para cuerpo, Medium (500) para labels, SemiBold (600) para titulos
+
+### Fuente Monospace (Terminal, Codigo)
+- **Primaria:** JetBrains Mono (Apache 2.0)
+- **Fallback:** Noto Sans Mono, monospace
+- **Ligatures:** Habilitadas por defecto
+
+### Reglas
+- Tamano minimo: 12px para UI, 10px para labels pequenos
+- Line height: 1.5 para texto largo, 1.2 para UI compacta
+- NO usar fuentes decorativas, script, o serif en la UI del sistema
+
+---
+
+## 3. Axi — El Ajolote Tecnologico
+
+### Personalidad
+- **Amigable** — no intimidante, accesible para todos
+- **Inteligente** — sutil, no pretencioso
+- **Protector** — cuida la privacidad y seguridad del usuario
+
+### Proporciones del Personaje
 
 ```
-     ╭─────────────────────────────╮
-     │         Cabeza (30%)         │ ← Ojos expresivos, sonrisa
-     │      ◕ ◕    ◕ ◕             │
-     ╰─────────────────────────────╯
-     ╭─────────────────────────────╮
-     │   Branquias (20%)            │ ← 3 pares, estilo antenas
-     │   ╰┬─┬╯  ╰┬─┬╯  ╰┬─┬╯       │
-     ╰─────────────────────────────╯
-     ╭─────────────────────────────╮
-     │      Cuerpo (40%)            │ ← Redondeado, tierno
-     │      ╭───────────────╮       │
-     │      │   │││││││││   │       │
-     │      ╰───────────────╯       │
-     ╰─────────────────────────────╯
-     ╭─────────────────────────────╮
-     │      Cola (10%)              │ ← Aletada, expresiva
-     │         ~~~~~~~               │
-     ╰─────────────────────────────╯
+     ╭──────────────╮
+     │  Cabeza 30%   │  Ojos expresivos, sonrisa
+     │   ◕   ◕      │
+     ╰──────────────╯
+     ╭──────────────╮
+     │  Branquias 20%│  3 pares, Rosa Axi (#FF6B9D)
+     │  ╰┬╯ ╰┬╯ ╰┬╯ │
+     ╰──────────────╯
+     ╭──────────────╮
+     │  Cuerpo 40%   │  Teal Axi (#00D4AA), redondeado
+     ╰──────────────╯
+     ╭──────────────╮
+     │  Cola 10%     │  Aletada, expresiva
+     ╰──────────────╯
 ```
 
-| Sección    | Proporción | Elementos Clave                          |
-| ---------- | ---------- | ---------------------------------------- |
-| **Cabeza** | 30%        | Ojos expresivos, sonrisa, expresiones    |
-| **Branquias** | 20%     | 3 pares de branquias externas, estilo antenas |
-| **Cuerpo** | 40%        | Forma redondeada, tierna, patas pequeñas |
-| **Cola**   | 10%        | Aleta semi-transparente, expresiva       |
+### Estados de Axi (para tray icon y overlay)
 
-## Typography
-- **Font family**: Rounded, friendly, sans serifs
-- **Logo font**: Bold, geometric sans serifs
-- **Body font**: Clean sans serifs
+| Estado | Color del orbe | Label |
+|--------|---------------|-------|
+| Idle | Verde `#2ED673` | En espera |
+| Listening | Cyan `#00D1D4` | Escuchando |
+| Thinking | Amber `#FFA603` | Pensando |
+| Speaking | Blue `#3842FA` | Hablando |
+| Watching | Teal `#1ABD9C` | Observando |
+| Error | Red `#FF4757` | Atencion |
+| Offline | Gray `#646E73` | Desconectado |
+| Night | Indigo `#5E26CC` | Modo nocturno |
 
-## Character Design
-- **Style**: Cute but expressive, slightly cartoonish
-- **Personality**: Helpful, curious, slightly mischievous but always well-intentioned
-- **Age**: Timeless (can be baby or adult depending on context)
-- **Signature elements**:
-  - Six external gills (feathery, pink/coral)
-  - Permanent smile
-  - Large expressive eyes
-  - Small legs and semi-transparent tail fin
+---
 
-## Animation Guidelines
-- **Idle**: Gentle bobbing (subtle breathing)
-- **Happy**: Tail wag, eyes sparkle
-- **Working**: Focused expression, tools appear
-- **Regenerating**: Green glow pulses through body
-- **Error**: Sad expression, console appears
+## 4. Estilo Visual del Desktop
 
-## Art Style Guidelines
+### COSMIC Theme (lifeos-dark.ron)
+- **Frosted glass:** Habilitado (blur en paneles y dock)
+- **Corner radius:** 12px en elementos medianos, 4px en pequenos
+- **Gaps entre ventanas:** 4px
+- **Active hint:** 2px borde teal en ventana activa
+- **Window hint color:** Teal Axi (#00D4AA)
 
-### Line Style
-- **Líneas:** Redondeadas, sin esquinas agresivas
-- **Grosor:** Consistente, 2-3px en SVG base
-- **Suavidad:** Curvas Bezier, evitar líneas rectas
+### Panel Superior
+- **Opacity:** 85% (frosted glass)
+- **Floating:** Si (no pegado a bordes)
+- **Border radius:** 12px
+- **Spacing:** 4px entre applets
 
-### Color Application
-- **Simplificación:** Máximo 3 colores por variante
-- **Paleta:** Usar siempre colores oficiales de la tabla anterior
-- **Gradientes:** Solo para efectos especiales (regeneración, brillos)
+### Dock Inferior
+- **Opacity:** 75% (mas transparente que panel)
+- **Floating:** Si
+- **Auto-hide:** Si (1 segundo de espera)
+- **Size:** L (no XL)
+- **Border radius:** 160px (pill shape)
 
-### Expressions
-- **Minimalistas pero claras:**
-  - Happy: ◕ ◕ (ojos abiertos, sonrisa)
-  - Neutral: ◕ ◡ (ojos normales, boca relajada)
-  - Worried: ◕︵◕ (ojos preocupados, posible lágrima estilizada)
-  - Focused: ◕ ◕ (ojos concentrados, cejas ligeramente fruncidas)
-  - Sleeping: - - (ojos cerrados, boca relajada)
+---
 
-### Scalability
-- **Reconocibilidad:** Debe ser identificable en 32x32px (favicon) y 512x512px (sticker)
-- **Simplificación:** A tamaños pequeños, reducir detalles manteniendo silueta reconocible
-- **Elementos mínimos:** Branquias, ojos, sonrisa siempre visibles
+## 5. Wallpapers
 
-## Accessibility
+Todas las variantes deben seguir estos principios:
+- **Dark mode first** — fondos oscuros con acentos teal/rosa sutiles
+- **Minimalismo** — sin elementos ruidosos o distractores
+- **Reconocible** — un usuario debe poder identificar que es LifeOS
+- **4K minimo** — 3840x2160
+- **Sin texto** — el wallpaper no debe tener texto visible
 
-### WCAG 2.2 AA Compliance
+### Variantes requeridas
+1. **Default (Axi Night):** Cielo nocturno con nebulosas teal, estrellas, orbe sutil
+2. **Minimal:** Casi negro con un unico glow teal sutil
+3. **Nature:** Aurora boreal abstracta con paleta LifeOS
+4. **Light:** Fondo claro con acentos teal y rosa suaves
+5. **Lock Screen:** Orbe teal central con anillos, elegante
+6. **Greeter:** Similar a lock screen pero mas oscuro
 
-Todos los assets de Axi deben cumplir con los requisitos de accesibilidad:
+---
 
-| Requisito                    | Criterio                           | Implementación                       |
-| ---------------------------- | ---------------------------------- | ------------------------------------ |
-| **Contraste de color**       | Ratio mínimo 4.5:1 para texto      | Usar Blanco Hueso `#E8E8E8` sobre Púrpura Profundo `#1A1A2E` |
-| **Contraste para gráficos**  | Ratio mínimo 3:1 para UI components | Verificar todas las variantes con herramientas de contraste |
-| **Tamaño mínimo**            | 32x32px para iconos distinguibles  | Mantener elementos clave visibles a 32px |
-| **Alternativas de texto**    | Descripción clara para screen readers | Incluir `alt` text y `aria-label` apropiados |
-| **No dependencia de color**  | Información no transmitida solo por color | Usar formas, expresiones y contexto adicionales |
+## 6. Iconos
 
-### High Contrast Variant
-- Disponible para usuarios con necesidades de visibilidad
-- Contornos más gruesos (4-6px)
-- Colores de alto contraste: fondo negro `#000000`, Axi en rosa `#FF6B9D`, detalles en blanco `#FFFFFF`
+### Estilo de Iconos
+- **Flat design** — sin sombras, sin 3D
+- **Rounded corners** — consistente con corner_radii del tema
+- **Two-tone:** Base neutral oscura + accent teal/rosa
+- **512x512 PNG** o SVG vectorial
+- **Background transparente**
 
-### Testing Checklist
-- [ ] Verificar contraste con [WebAIM Contrast Checker](https://webaim.org/resources/contrastchecker/)
-- [ ] Probar visibilidad en modo oscuro y claro
-- [ ] Validar reconocimiento a 32x32px
-- [ ] Confirmar que expresiones son distinguibles sin color
+### Iconos necesarios (custom LifeOS)
+- Carpeta (teal tab)
+- Terminal (cursor teal)
+- Settings (gear con accent teal)
+- Axi (mascota, para tray y launcher)
+- LifeOS logo (para about screen)
 
-## Usage Guidelines
+---
 
-1. **Consistency**: Axi should always look like the same character across all materials
-2. **Adaptability**: Can be simplified for small sizes or detailed for large formats
-3. **Accessibility**: High contrast versions available for users with visual impairments
-4. **Cultural Sensitivity**: Avoid stereotyping; keep the friendly and inclusive
+## 7. Reglas de Uso
 
-## Changelog
+### HACER
+- Usar Teal Axi (#00D4AA) como accent principal en TODA la UI
+- Mantener fondos oscuros (#0F0F1B) para dark mode
+- Usar Rosa Axi (#FF6B9D) solo para errores/destructivo/branquias de Axi
+- Mantener contraste WCAG AA minimo (4.5:1 para texto)
 
-### v1.1.0 (2026-03-05)
-- Synchronized color palette with official spec from `lifeos-ai-distribution.md` section 3.3
-- Fixed typo in success color: `#2abc98e` → `#00D4AA` (Verde Regeneración)
-- Added Rosa Axi `#FF6B9D` as primary brand color
-- Added "Character Proportions" section with ASCII diagram
-- Added "Art Style Guidelines" section
-- Added "Accessibility" section with WCAG 2.2 AA requirements
-- Added semantic color tokens table
+### NO HACER
+- No usar azul System76 (#62a0ea) — ese es el default de COSMIC, no de LifeOS
+- No usar fondos blancos puros (#FFFFFF) en dark mode
+- No mezclar la paleta LifeOS con colores arbitrarios
+- No poner texto sobre wallpapers sin overlay de contraste
+- No cambiar las proporciones de Axi
+- No usar Axi en contextos que contradigan su personalidad (violencia, adulto)
 
-## Asset Files
+---
 
-SVG base assets are located at:
-```
-/usr/share/icons/LifeOS/axi/svg/
-├── axi-healthy.svg    # Base state - smiling
-├── axi-updating.svg   # Updates in progress
-├── axi-rollback.svg   # Regenerating with green glow
-├── axi-autonomy.svg     # Intelligence mode
-├── axi-focus.svg      # Focus/Flow mode
-├── axi-meeting.svg    # Meeting mode
-├── axi-night.svg      # Night mode/sleepy
-├── axi-error.svg      # Error/worried state
-└── axi-offline.svg    # Offline/sleeping
-```
+## 8. Archivos de Referencia
 
-PNG exports (generated via `make axi-pngs`):
-```
-/usr/share/icons/LifeOS/axi/png/
-├── 512/    # High resolution (stickers, merch)
-├── 64/     # Medium resolution (app icons)
-└── 32/     # Low resolution (favicons)
-```
-
-CLI Easter Eggs:
-```bash
-life --axi        # ASCII art with motivational message
-life --axi-facts  # Fun facts about axolotls
-```
+| Archivo | Ubicacion |
+|---------|-----------|
+| Tema COSMIC dark | `/usr/share/lifeos/themes/lifeos-dark.ron` |
+| Tema terminal | `/usr/share/lifeos/themes/lifeos-terminal.ron` |
+| Wallpapers | `/usr/share/backgrounds/lifeos/` |
+| Iconos Axi (SVG) | `/usr/share/icons/LifeOS/axi/svg/` |
+| Logo LifeOS (SVG) | `/usr/share/icons/LifeOS/scalable/apps/lifeos.svg` |
+| Plymouth theme | `/usr/share/plymouth/themes/lifeos/` |
+| Sound theme | `/usr/share/sounds/lifeos/` |
