@@ -398,6 +398,7 @@ LIFEOS_HA_TOKEN=
 }
 
 #[cfg(feature = "ui-overlay")]
+#[allow(dead_code)]
 fn ensure_graphical_environment() {
     if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
         return;

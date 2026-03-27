@@ -5,6 +5,10 @@
 //! the compositor reposition the widget on the desktop.
 //!
 //! Gated behind the `ui-overlay` feature flag (via `mod` in main.rs).
+//!
+//! Currently disabled in favour of the system tray icon (ksni). The module is
+//! kept for future use but marked `#[allow(dead_code)]` to avoid clippy noise.
+#![allow(dead_code)]
 
 use gtk4::gdk::{self, Display};
 use gtk4::prelude::*;

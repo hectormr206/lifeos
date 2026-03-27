@@ -59,7 +59,7 @@ mod inner {
 
     /// Envelope returned by the receive endpoint.
     #[derive(Debug, serde::Deserialize)]
-    struct SignalEnvelope {
+    pub struct SignalEnvelope {
         #[serde(default)]
         envelope: EnvelopeInner,
     }
