@@ -1844,7 +1844,7 @@ LifeOS ya tiene captura sensorial (vision, audio, presencia) pero NO persiste lo
 5. **Fase 4.8:** Engram Protocol + SDD + memoria corto plazo mejorada (cumplido).
 6. **Fase 4.9:** Memorias avanzadas — grafo, procedural, emocional, consolidacion, sensoriales, cross-linking (cumplido).
 7. **Fase 4.10:** Auditoria legal — renombre Autonomy, LICENSE, NOTICE, GPL fix (cumplido).
-8. **Fase 4.11:** Identidad visual completa — Plymouth, tema COSMIC, wallpapers, greeter, sonidos, About (cumplido, 14/15).
+8. **Fase 4.11:** Identidad visual completa — Plymouth, GRUB, tema COSMIC, wallpapers reales, iconos custom, greeter, sonidos, About, Brand Guide v2.0 (cumplido).
 9. **Fase 5:** ecosistema, sincronizacion y escala gobernada (pendiente).
 10. **RFC B2B:** arquitectura multi-agente corporativa (experimental, fuera de compromiso).
 
@@ -1852,7 +1852,7 @@ LifeOS ya tiene captura sensorial (vision, audio, presencia) pero NO persiste lo
 
 **Objetivo:** Que cada pixel de LifeOS refleje la identidad de marca. Desde el boot hasta el shutdown, el usuario debe saber que esta usando LifeOS, no un COSMIC generico.
 
-**Estado:** **CUMPLIDO EN REPO (2026-03-26).** _14/15 items cerrados. Unico pendiente: first boot wizard visual (depende de cosmic-initial-setup upstream). Build + clippy + 219 tests OK._
+**Estado:** **CUMPLIDO EN REPO (2026-03-26).** _20/21 items cerrados. Unico pendiente: first boot wizard visual (depende de cosmic-initial-setup upstream). Build + clippy + 219 tests OK._
 
 **Bloque 1 — Boot y Login (primera impresion):**
 
@@ -1888,6 +1888,19 @@ LifeOS ya tiene captura sensorial (vision, audio, presencia) pero NO persiste lo
 
 - [x] **Bluetooth volume reset en meetings:** WirePlumber auto-switch de A2DP a HSP/HFP resetea volumen a 100%. Fix: WirePlumber config en `/etc/wireplumber/wireplumber.conf.d/` que persiste volumen entre profile switches. _Implementado con `50-lifeos-bluetooth.conf` + `51-lifeos-bt-volume-persist.conf`._
 - [ ] **Multi-monitor workspace alignment:** Ventanas en monitor secundario no se alinean correctamente en el workspace overview. Es un bug conocido de COSMIC compositor ([cosmic-comp#697](https://github.com/pop-os/cosmic-comp/issues/697), [cosmic-epoch#2609](https://github.com/pop-os/cosmic-epoch/issues/2609)). _No es un bug de LifeOS — es upstream COSMIC. Se resolvera con actualizaciones de cosmic-comp. Monitorear._
+
+**Bloque 5 — GRUB Boot Menu + Brand Guide + Assets reales (CUMPLIDO EN REPO 2026-03-26):**
+
+- [x] **GRUB boot menu theme:** Fondo con orbe teal (wallpaper lock screen), menu centrado con texto teal (#00D4AA), fuente Inter convertida a PFF2, footer "hectormr.com", barra de progreso teal. Instalacion segura via `/boot/grub2/themes/lifeos/` + `user.cfg` (sin grub2-mkconfig). _Implementado en `lifeos-grub-theme.sh`._
+- [x] **Brand Guide v2.0:** Documento completo de identidad visual: paleta unificada (Teal Axi como accent principal), tipografia (Inter + JetBrains Mono), reglas DO/DON'T, specs de wallpapers/iconos/personaje. _Implementado en `axi-brand-guidelines.md`._
+- [x] **5 wallpapers reales (PNG, AI-generated):** Axi Night (nebula teal + anillos), Minimal (orbe teal), Aurora (boreal teal/rosa), Light (fondo claro), Lock (orbe con bokeh). _Generados via Gemini, integrados en `/usr/share/backgrounds/lifeos/`._
+- [x] **6 iconos custom (PNG 512x512):** Axi mascota, folder teal, terminal teal, document teal, browser teal, settings teal. Todos flat design con paleta del Brand Guide. _Generados via Gemini, integrados en `/usr/share/icons/LifeOS/512x512/`._
+- [x] **Icon theme LifeOS:** index.theme actualizado con herencia Cosmic > Adwaita > hicolor, directorios 512x512 para PNGs. Se aplica automaticamente via lifeos-apply-theme.sh. _Implementado._
+- [x] **COSMIC Flatpak repo:** Agregado repo `cosmic` (flatpak.pop-os.org) para que "Subprogramas" en COSMIC Store muestre applets. _Implementado en Containerfile + first-boot._
+- [x] **JetBrains Mono:** Fuente monospace instalada en imagen (`jetbrains-mono-fonts`). Para terminal y codigo. _Implementado en Containerfile._
+- [x] **hectormr.com branding en 11 lugares:** os-release, Cargo.toml (ambos), LICENSE, NOTICE, dashboard HTML, brand guide, roadmap, Plymouth, GRUB footer. _Implementado._
+- [x] **Mini-widget desactivado:** La bolita flotante GTK4 ya no aparece en el greeter/login. Reemplazada por tray icon StatusNotifierItem. _Implementado en main.rs._
+- [x] **LLM provider filter:** Proveedores sin API key configurada se excluyen automaticamente. Previene errores 401 Unauthorized en Telegram. _Implementado en llm_router.rs._
 
 ---
 
