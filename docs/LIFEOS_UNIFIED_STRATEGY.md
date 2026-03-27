@@ -159,6 +159,42 @@ Los 6 cierres decisivos originales — estado actual:
 3. Self-improvement (Fase K) — Solo OpenClaw lo tiene, es lo que lo hace viral
 4. Plataforma de desarrollo completa (Fase M) — El differentiator final
 
+### Analisis verificado: LifeOS vs OpenClaw macOS (2026-03-27)
+
+Verificado contra el repo actual de LifeOS y la documentacion oficial de OpenClaw.
+
+| Capacidad | OpenClaw macOS | LifeOS hoy | Veredicto |
+|-----------|---------------|-------------|-----------|
+| Wake word + voz | No nativo (no hay STT/TTS en docs) | Si (wake word "axi", VAD, TTS, voice loop completo) | **LifeOS adelante** |
+| STT/TTS local | No nativo | Si (llama-server + Whisper + pipeline de voz) | **LifeOS adelante** |
+| Screenshot + OCR | Solo canvas snapshot, no OCR nativo | Si (grim/scrot + Tesseract multilingue) | **LifeOS adelante** |
+| Control mouse/teclado | Via Peekaboo (UI automation), no raw input | Si (ydotool/xdotool, 14 funciones, dry-run) | **Paridad** |
+| Browser automation | Si (canvas navigate/eval/a2ui, DOM interaction) | Solo CLI + vision (no DOM interaction) | **OpenClaw adelante** |
+| Canvas interactivo | Si (navigate, eval, snapshot, a2ui tools) | No hay equivalente | **OpenClaw adelante** |
+| screen.record video | Si | Solo screenshots periodicos + meeting audio, no video continuo | **OpenClaw adelante** |
+| Camara como tool | Si (snap/clip) | Presencia + vision + scene description + people counting | **Diferente pero comparable** |
+| Presencia/contexto fisico | No documentado como fortaleza | Si (fatiga, postura, people counting, away-tracking) | **LifeOS muy adelante** |
+| Permisos/companion app | Si (TCC nativo macOS, code signing) | Si (broker D-Bus + zenity + portal con audit log JSON) | **Paridad funcional** |
+| system.run con approvals | Si | Si (risk levels, auto-approve medium, shadow mode, SLA parsing, parallel tasks) | **Paridad — supervisor robusto** |
+| Menu bar / overlay | Si (companion app madura) | Tray activo (ksni), GTK4 widget real pero deshabilitado | **OpenClaw adelante en UX** |
+| UI automation broker (Peekaboo) | Si (AT-SPI via UNIX socket, TCC perms) | No hay equivalente AT-SPI2 | **OpenClaw adelante** |
+| Shortcuts / deep links | Si (openclaw:// protocol) | Solo 3 shortcuts hardcoded, no lifeos:// protocol | **OpenClaw adelante** |
+| Notificaciones nativas | Si | Si (notify-rust + D-Bus) | **Paridad** |
+
+**Contra OpenClaw Linux:** LifeOS va MUY por delante. OpenClaw Linux es solo gateway backend — no hay companion app, no hay Peekaboo, no hay screen recording, no hay canvas. Sus docs dicen: native Linux companion apps "planned" sin timeline.
+
+**Resumen:** ~70% paridad funcional con OpenClaw macOS, con ventajas claras en voz, OCR, presencia y supervisor. LifeOS es la implementacion mas completa de un AI companion en Linux hoy.
+
+#### 5 huecos a cerrar (prioridad para fases futuras)
+
+| # | Hueco | Gravedad | Solucion propuesta | Fase sugerida |
+|---|-------|----------|-------------------|---------------|
+| 1 | **Canvas interactivo / DOM interaction** | Alta | Integrar Playwright o CDP para browser automation real (click, fill, navigate DOM) | Fase J (Browser Operator) |
+| 2 | **UI automation broker (tipo Peekaboo)** | Alta | Implementar bridge AT-SPI2 para leer/controlar elementos UI de apps nativas | Post Fase M |
+| 3 | **screen.record como tool general** | Media | Exponer pw-record + wf-recorder como tool del supervisor (ya hay audio recording en meetings) | Fase H-I |
+| 4 | **Shortcuts / deep links (lifeos://)** | Media | Registrar xdg-open handler para lifeos:// protocol + desktop entry con MimeType | Fase I |
+| 5 | **Companion UX madura** | Media | Re-habilitar mini_widget GTK4 (ya esta implementado, solo deshabilitado) o migrar a panel applet COSMIC | Fase I-J |
+
 ---
 
 ## 6. Estrategia Unificada: "La Celula Perfecta"
