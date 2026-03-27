@@ -664,6 +664,9 @@ impl Supervisor {
                     m.record(role, true, duration_ms);
                 }
 
+                // Record reliability outcome (success)
+                Self::record_reliability(&self.work_dir, &task.id, "supervisor", "scheduled", true, None, steps_total, steps_ok);
+
                 let _ = self.notify_tx.send(SupervisorNotification::TaskCompleted {
                     task_id: task.id,
                     objective: task.objective,
@@ -696,6 +699,9 @@ impl Supervisor {
                 if let Ok(mut m) = self.metrics.lock() {
                     m.record(role, false, start.elapsed().as_millis() as u64);
                 }
+
+                // Record reliability outcome (failure)
+                Self::record_reliability(&self.work_dir, &task.id, "supervisor", "scheduled", false, Some(&error_msg), 0, 0);
 
                 // Apply runbook: suggest recovery if we recognize the error pattern
                 let mut error_with_hint = error_msg.clone();
@@ -2203,6 +2209,17 @@ Respond ONLY with a JSON object (no markdown):
     }
 
     async fn execute_shell(&self, command: &str) -> Result<String> {
+        // Check exec whitelist — warn if not pre-approved but still execute
+        let whitelist = crate::exec_whitelist::ExecWhitelistManager::load(&self.work_dir).await;
+        if whitelist.is_denied(command) {
+            warn!("[exec_whitelist] Command is in deny list: {}", command);
+        } else if !whitelist.is_approved(command) {
+            warn!(
+                "[exec_whitelist] Command not in whitelist (executing anyway): {}",
+                command
+            );
+        }
+
         info!("Executing shell: {}", command);
 
         let output = tokio::process::Command::new("sh")
@@ -2408,6 +2425,45 @@ Respond ONLY with a JSON object (no markdown):
             .await
         {
             let _ = f.write_all(entry.as_bytes()).await;
+        }
+    }
+
+    /// Record a task outcome in the reliability tracker.
+    #[allow(clippy::too_many_arguments)]
+    fn record_reliability(
+        work_dir: &std::path::Path,
+        task_id: &str,
+        task_type: &str,
+        source: &str,
+        success: bool,
+        error: Option<&str>,
+        steps_total: usize,
+        steps_ok: usize,
+    ) {
+        let db_path = work_dir.join("reliability.db");
+        match crate::reliability::ReliabilityTracker::new(db_path) {
+            Ok(tracker) => {
+                let now = chrono::Utc::now();
+                let outcome = crate::reliability::TaskOutcome {
+                    task_id: task_id.to_string(),
+                    task_type: task_type.to_string(),
+                    source: source.to_string(),
+                    started_at: now,
+                    completed_at: now,
+                    success,
+                    error: error.map(|s| s.to_string()),
+                    retries: 0,
+                    rollback_clean: true,
+                    steps_total: steps_total as u32,
+                    steps_completed: steps_ok as u32,
+                };
+                if let Err(e) = tracker.record_outcome(&outcome) {
+                    warn!("[reliability] Failed to record outcome: {}", e);
+                }
+            }
+            Err(e) => {
+                warn!("[reliability] Failed to open tracker: {}", e);
+            }
         }
     }
 }

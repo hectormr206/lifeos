@@ -1018,6 +1018,162 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // --- Eye health: 20-20-20 rule check every 60s ---
+    let eye_event_bus = state.event_bus.clone();
+    let _eye_health_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut last_reminder: Option<std::time::Instant> = None;
+        loop {
+            interval.tick().await;
+            if eye_health::should_remind_20_20_20(&last_reminder, 20) {
+                last_reminder = Some(std::time::Instant::now());
+                let _ = eye_event_bus.send(events::DaemonEvent::Notification {
+                    priority: "info".into(),
+                    message: "Regla 20-20-20: Mira algo a 6 metros por 20 segundos.".into(),
+                });
+                info!("[eye_health] 20-20-20 reminder sent");
+            }
+            // Auto-enable night mode in the evening
+            if eye_health::is_evening() {
+                if let Err(e) = eye_health::enable_night_mode(4500, 3500).await {
+                    debug!("[eye_health] Night mode error: {}", e);
+                }
+            }
+        }
+    });
+    info!("Eye health monitor started (20-20-20 rule every 20 min)");
+
+    // --- Home Assistant: conditional init if env vars are set ---
+    #[cfg(feature = "homeassistant")]
+    {
+        if let Some(ha_config) = home_assistant::homeassistant::HomeAssistantConfig::from_env() {
+            info!(
+                "[home_assistant] Connected to Home Assistant at {}",
+                ha_config.url
+            );
+            // Client is available for API routes; no background bridge spawned yet.
+        } else {
+            info!("[home_assistant] LIFEOS_HA_URL/LIFEOS_HA_TOKEN not set, skipping");
+        }
+    }
+
+    // --- Security AI: threat monitoring every 30s ---
+    let security_event_bus = state.event_bus.clone();
+    let _security_ai_handle = tokio::spawn(async move {
+        let mut daemon = security_ai::SecurityAiDaemon::new();
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            // Run all security checks
+            let mut alerts = Vec::new();
+            alerts.extend(daemon.check_suspicious_connections().await);
+            alerts.extend(daemon.check_anomalous_processes().await);
+            alerts.extend(daemon.check_unauthorized_file_access().await);
+            alerts.extend(daemon.check_system_integrity().await);
+            for alert in &alerts {
+                let priority = match alert.severity {
+                    security_ai::AlertSeverity::Emergency | security_ai::AlertSeverity::Critical => "critical",
+                    security_ai::AlertSeverity::Warning => "warning",
+                    security_ai::AlertSeverity::Info => "info",
+                };
+                let _ = security_event_bus.send(events::DaemonEvent::Notification {
+                    priority: priority.into(),
+                    message: format!("[security] {}", alert.description),
+                });
+            }
+            if !alerts.is_empty() {
+                warn!("[security_ai] {} alerts detected this cycle", alerts.len());
+            }
+        }
+    });
+    info!("Security AI monitor started (every 30s)");
+
+    // --- Privacy hygiene: daily scan ---
+    let privacy_event_bus = state.event_bus.clone();
+    let _privacy_hygiene_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(86400)); // 24h
+        loop {
+            interval.tick().await;
+            let report = privacy_hygiene::run_privacy_scan().await;
+            info!(
+                "[privacy_hygiene] Scan complete: cache={:.0}MB, exposed={}, breaches={}",
+                report.browser_cache_mb,
+                report.sensitive_files_exposed.len(),
+                report.breach_alerts.len()
+            );
+            if !report.sensitive_files_exposed.is_empty() || !report.breach_alerts.is_empty() {
+                let _ = privacy_event_bus.send(events::DaemonEvent::Notification {
+                    priority: "warning".into(),
+                    message: format!(
+                        "Privacy scan: {} archivos sensibles expuestos, {} brechas detectadas.",
+                        report.sensitive_files_exposed.len(),
+                        report.breach_alerts.len()
+                    ),
+                });
+            }
+        }
+    });
+    info!("Privacy hygiene scanner started (daily)");
+
+    // --- System tuner: optimize when idle (check every hour) ---
+    let tuner_data_dir = data_dir.clone();
+    let tuner_event_bus = state.event_bus.clone();
+    let _system_tuner_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(3600)); // 1h
+        let mut tuner = system_tuner::SystemTuner::new(tuner_data_dir.join("tuning"));
+        loop {
+            interval.tick().await;
+            // Only optimize if system is idle (low CPU)
+            if let Ok(load) = std::fs::read_to_string("/proc/loadavg") {
+                if let Some(avg_str) = load.split_whitespace().next() {
+                    if let Ok(avg) = avg_str.parse::<f64>() {
+                        let cpus = num_cpus::get() as f64;
+                        if avg < cpus * 0.3 {
+                            info!("[system_tuner] System idle (load {:.2}), running optimization", avg);
+                            let results = tuner.optimize_vm_settings();
+                            if !results.is_empty() {
+                                let summary = tuner.get_improvement_summary();
+                                let _ = tuner_event_bus.send(events::DaemonEvent::Notification {
+                                    priority: "info".into(),
+                                    message: format!("[system_tuner] {}", summary),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    info!("System tuner started (hourly idle check)");
+
+    // --- Backup monitor: daily health check ---
+    let backup_event_bus = state.event_bus.clone();
+    let _backup_monitor_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(86400)); // 24h
+        loop {
+            interval.tick().await;
+            let status = backup_monitor::check_backup_health().await;
+            info!("[backup_monitor] Check: tool={}, age={:?}h", status.tool, status.last_backup_age_hours);
+            if status.tool == "none" {
+                let _ = backup_event_bus.send(events::DaemonEvent::Notification {
+                    priority: "warning".into(),
+                    message: "No se detecta herramienta de backup (restic/borg). Configura backups.".into(),
+                });
+            } else if let Some(age) = status.last_backup_age_hours {
+                if age > 48.0 {
+                    let _ = backup_event_bus.send(events::DaemonEvent::Notification {
+                        priority: "warning".into(),
+                        message: format!(
+                            "Backup atrasado: ultimo backup hace {:.0} horas ({}).",
+                            age, status.tool
+                        ),
+                    });
+                }
+            }
+        }
+    });
+    info!("Backup monitor started (daily check)");
+
     // Start supervisor loop with self-healing (restarts on panic)
     let supervisor_state = state.clone();
     let supervisor_handle = tokio::spawn(async move {

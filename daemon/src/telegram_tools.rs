@@ -172,6 +172,10 @@ Herramientas:
 31. **procedure_find** — Busca procedimientos guardados.
     args: {"query": "deploy"}
 
+32. **translate** — Traduce texto entre idiomas (offline con Argos, o via LLM).
+    args: {"text": "Hello, how are you?", "target_lang": "es"}
+    Opcional: {"source_lang": "en"} (si no se pone, detecta automaticamente)
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -881,6 +885,7 @@ Herramientas:
             "graph_query" => execute_graph_query(&call.args, ctx).await,
             "procedure_save" => execute_procedure_save(&call.args, ctx).await,
             "procedure_find" => execute_procedure_find(&call.args, ctx).await,
+            "translate" => execute_translate(&call.args, ctx).await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -2272,6 +2277,32 @@ Herramientas:
             }
         } else {
             Ok("Memoria procedural no disponible".into())
+        }
+    }
+
+    async fn execute_translate(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let text = args["text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'text'"))?;
+        let target_lang = args["target_lang"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'target_lang'"))?;
+        let source_lang = args["source_lang"].as_str().map(|s| s.to_string());
+
+        let engine = crate::translation::TranslationEngine::new(None);
+        let req = crate::translation::TranslationRequest {
+            text: text.to_string(),
+            source_lang,
+            target_lang: target_lang.to_string(),
+        };
+
+        let router = ctx.router.read().await;
+        match engine.translate(&req, Some(&router)).await {
+            Ok(result) => Ok(format!(
+                "[{} -> {}] ({})\n{}",
+                result.source_lang, result.target_lang, result.method, result.translated
+            )),
+            Err(e) => Ok(format!("Error de traduccion: {}", e)),
         }
     }
 

@@ -247,6 +247,23 @@ fn test_cli_parses_init_command() {
 }
 ```
 
+## Module Integration Requirements
+
+When creating new daemon modules for LifeOS:
+
+1. **Always wire to runtime** — No `#[allow(dead_code)]` on new modules
+2. **Telegram is the primary UI** — If a user should know about it, add a Telegram tool or notification
+3. **Memory is shared** — Use MemoryPlane for persistent state, KnowledgeGraph for relationships
+4. **Event bus connects everything** — Emit DaemonEvent for cross-module communication
+5. **Supervisor orchestrates tasks** — New capabilities should be available as supervisor actions
+
+### Runtime paths available:
+- `telegram_tools.rs` — Add tool to SYSTEM_PROMPT + handler
+- `api/mod.rs` — Add REST endpoint
+- `main.rs` — Spawn background loop
+- `supervisor.rs` — Add as StepAction
+- `events.rs` — Add DaemonEvent variant
+
 ## Daemon Features
 ```toml
 [features]

@@ -77,6 +77,26 @@ sudo bash scripts/build-iso.sh
 - **Daemon features:** Default features exclude `ui-overlay`. Building `--all-features` requires GTK4 dev headers (`gtk4-devel`, `glib2-devel`, etc.).
 - **User cannot run sudo:** Never run sudo commands directly. Provide commands for the user to run manually.
 
+## Integration Rule: No Orphaned Modules
+
+**Every new module MUST be connected to the runtime before committing.** LifeOS has 40+ modules but historically many were implemented as dead code (`#[allow(dead_code)]`) without being wired to Telegram, the API, the supervisor, or any background loop.
+
+**Before implementing any feature, answer these questions:**
+1. **Who calls this?** — Which existing module will invoke this new code?
+2. **How does it reach the user?** — Via Telegram tool? API endpoint? Proactive notification? Background automation?
+3. **Does it need the event bus?** — Should it emit or listen to DaemonEvent?
+4. **Does it need memory?** — Should it read from or write to MemoryPlane/KnowledgeGraph?
+
+**Checklist for every new module:**
+- [ ] Registered in `main.rs` WITHOUT `#[allow(dead_code)]`
+- [ ] Instantiated in `DaemonState` (if stateful) or called from an existing module
+- [ ] Has at least ONE runtime path: Telegram tool, API route, event bus handler, or background task
+- [ ] If it produces data the user cares about: wired to Telegram notifications
+- [ ] If it stores data: wired to MemoryPlane or KnowledgeGraph
+- [ ] If it needs LLM: receives LlmRouter reference
+
+**Exceptions:** Feature-gated modules (`#[cfg(feature = "...")]`) that require external services (Home Assistant, WhatsApp, etc.) may be compiled but not active until configured. These are NOT dead code — they activate when the user provides credentials.
+
 ## Self-hosted Runner (`/var/lib/lifeos/actions-runner/`)
 
 - Service: `actions.runner.hectormr206-lifeos.hectormr.service` (system-level, user `lifeos`)

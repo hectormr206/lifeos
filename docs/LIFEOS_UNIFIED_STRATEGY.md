@@ -577,6 +577,32 @@ Para saber si la estrategia funciona, medir solo esto:
 
 ---
 
+## Integration Architecture Rule (permanente)
+
+**Regla #1: No hay features huerfanas.**
+
+Cada modulo nuevo DEBE estar conectado a al menos UNA ruta de runtime antes de hacer commit:
+
+| Ruta | Ejemplo | Archivo |
+|------|---------|---------|
+| Telegram tool | "translate", "game_help" | telegram_tools.rs |
+| API endpoint | GET /api/v1/battery/status | api/mod.rs |
+| Background loop | health checks cada 60s | main.rs |
+| Supervisor action | BrowserNavigate, ShellCommand | supervisor.rs |
+| Event bus | MeetingRecordingStarted | events.rs |
+
+**Antes de programar, responder:**
+1. ¿Quien llama a este modulo?
+2. ¿Como llega al usuario? (Telegram, dashboard, notificacion, automatico)
+3. ¿Necesita memoria? (MemoryPlane para datos, KnowledgeGraph para relaciones)
+4. ¿Necesita el event bus? (para comunicarse con otros modulos)
+
+**Si un modulo no tiene respuesta clara a la pregunta 1, NO se implementa.**
+
+Estado actual: 17 de 40 modulos estan conectados al runtime. Los 23 restantes son deuda tecnica de integracion.
+
+---
+
 ## 12. Riesgos y Mitigaciones
 
 | Riesgo | Probabilidad | Mitigacion |
