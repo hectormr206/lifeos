@@ -355,11 +355,15 @@ mod inner {
                 .unwrap_or(&text)
                 .trim();
             if task_text.is_empty() {
-                bot.send_message(chat_id, "Uso: /do trust: <objetivo>").await?;
+                bot.send_message(chat_id, "Uso: /do trust: <objetivo>")
+                    .await?;
                 return Ok(());
             }
-            bot.send_message(chat_id, format!("Modo trust activado. Ejecutando: {}", task_text))
-                .await?;
+            bot.send_message(
+                chat_id,
+                format!("Modo trust activado. Ejecutando: {}", task_text),
+            )
+            .await?;
             // Set auto-approve env for this session
             std::env::set_var("LIFEOS_AUTO_APPROVE_MEDIUM", "true");
             bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
@@ -368,7 +372,9 @@ mod inner {
             if let Some(ref path) = screenshot_path {
                 let screenshot_file = std::path::Path::new(path);
                 if screenshot_file.exists() {
-                    bot.send_photo(chat_id, InputFile::file(screenshot_file)).await.ok();
+                    bot.send_photo(chat_id, InputFile::file(screenshot_file))
+                        .await
+                        .ok();
                     tokio::fs::remove_file(screenshot_file).await.ok();
                 }
             }
@@ -563,32 +569,33 @@ mod inner {
             }
         }
 
-        // Try TTS response
-        if let Some(audio_path) = text_to_voice(&response).await {
+        // Always try to send a voice response for voice messages.
+        // Try Piper first, then fall back to espeak-ng.
+        let voice_path = match text_to_voice(&response).await {
+            Some(path) => Some(path),
+            None => {
+                warn!("Piper TTS failed for Telegram voice reply, trying espeak-ng fallback");
+                text_to_voice_espeak(&response).await
+            }
+        };
+
+        if let Some(audio_path) = voice_path {
             bot.send_voice(chat_id, InputFile::file(&audio_path))
                 .await
                 .ok();
-            bot.send_message(
-                chat_id,
-                format!(
-                    "{}\n\n(tu dijiste: {})",
-                    &response[..response.len().min(3500)],
-                    &transcription[..transcription.len().min(200)]
-                ),
-            )
-            .await?;
             tokio::fs::remove_file(&audio_path).await.ok();
-        } else {
-            bot.send_message(
-                chat_id,
-                format!(
-                    "(Tu dijiste: {})\n\n{}",
-                    &transcription[..transcription.len().min(200)],
-                    &response[..response.len().min(3500)]
-                ),
-            )
-            .await?;
         }
+
+        // Always send text so the user can read the response too.
+        bot.send_message(
+            chat_id,
+            format!(
+                "{}\n\n(tu dijiste: {})",
+                &response[..response.len().min(3500)],
+                &transcription[..transcription.len().min(200)]
+            ),
+        )
+        .await?;
 
         Ok(())
     }
@@ -653,9 +660,7 @@ mod inner {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Telegram [{}]: video received", chat_id);
         bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
-        let _ = bot
-            .send_message(chat_id, "Analizando video...")
-            .await;
+        let _ = bot.send_message(chat_id, "Analizando video...").await;
 
         let file = bot.get_file(video_file_id).await?;
         let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
@@ -920,6 +925,56 @@ mod inner {
                 return None;
             }
         } else {
+            return None;
+        }
+
+        let ffmpeg = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-i",
+                &wav_path.to_string_lossy(),
+                "-c:a",
+                "libopus",
+                "-y",
+                &ogg_path.to_string_lossy(),
+            ])
+            .output()
+            .await;
+
+        tokio::fs::remove_file(&wav_path).await.ok();
+
+        if ffmpeg.map(|o| o.status.success()).unwrap_or(false) {
+            Some(ogg_path)
+        } else {
+            None
+        }
+    }
+
+    /// Fallback TTS using espeak-ng when Piper is unavailable.
+    /// Returns path to OGG file or None.
+    async fn text_to_voice_espeak(text: &str) -> Option<PathBuf> {
+        let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
+        tokio::fs::create_dir_all(&tmp_dir).await.ok();
+        let wav_path = tmp_dir.join(format!("tts-espeak-{}.wav", chrono::Utc::now().timestamp()));
+        let ogg_path = wav_path.with_extension("ogg");
+
+        let clean_text = if let Some(pos) = text.rfind("\n\n[") {
+            &text[..pos]
+        } else {
+            text
+        };
+
+        let espeak = tokio::process::Command::new("espeak-ng")
+            .args([
+                "-v",
+                "es",
+                "-w",
+                &wav_path.to_string_lossy(),
+                &clean_text[..clean_text.len().min(500)],
+            ])
+            .output()
+            .await;
+
+        if !espeak.map(|o| o.status.success()).unwrap_or(false) {
             return None;
         }
 

@@ -193,6 +193,22 @@ pub enum StepAction {
     BrowserScreenshot {
         url: String,
     },
+    /// Click on a DOM element identified by CSS selector.
+    BrowserClick {
+        url: String,
+        selector: String,
+    },
+    /// Fill an input element identified by CSS selector with a value.
+    BrowserFill {
+        url: String,
+        selector: String,
+        value: String,
+    },
+    /// Evaluate arbitrary JavaScript on a page and return the result.
+    BrowserEvalJs {
+        url: String,
+        code: String,
+    },
     /// Install a Flatpak application.
     FlatpakInstall {
         app_id: String,
@@ -495,6 +511,31 @@ impl Supervisor {
         let role = AgentRole::suggest_for(&task.objective);
         let start = std::time::Instant::now();
 
+        // Trust-mode: create a feature branch so changes are isolated
+        let trust_mode = std::env::var("LIFEOS_AUTO_APPROVE_MEDIUM").unwrap_or_default() == "true";
+        let task_branch = if trust_mode {
+            let slug: String = task
+                .objective
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == ' ')
+                .take(30)
+                .collect::<String>()
+                .replace(' ', "-")
+                .to_lowercase();
+            match crate::git_workflow::create_task_branch(&self.work_dir, &task.id, &slug).await {
+                Ok(branch) => {
+                    info!("[supervisor] Created branch: {}", branch);
+                    Some(branch)
+                }
+                Err(e) => {
+                    debug!("[supervisor] Branch creation skipped: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Timeout: 5 minutes max per task (prevents stuck tasks)
         let task_timeout = std::time::Duration::from_secs(300);
         let task_result =
@@ -566,24 +607,16 @@ impl Supervisor {
                 let duration_ms = start.elapsed().as_millis() as u64;
 
                 // Git workflow: auto-commit if task wrote files and trust_mode is on
-                let auto_approve = std::env::var("LIFEOS_AUTO_APPROVE_MEDIUM")
-                    .unwrap_or_default()
-                    == "true";
-                if auto_approve && summary.contains("Wrote") {
-                    match crate::git_workflow::auto_commit(
-                        &self.work_dir,
-                        &task.objective,
-                    )
-                    .await
-                    {
+                if trust_mode && summary.contains("Wrote") {
+                    match crate::git_workflow::auto_commit(&self.work_dir, &task.objective).await {
                         Ok(commit_msg) => {
                             info!("[supervisor] auto-committed: {}", commit_msg);
                             // Generate diff summary for notification
                             if let Ok(diff) =
                                 crate::git_workflow::diff_summary(&self.work_dir).await
                             {
-                                let _ = self.notify_tx.send(
-                                    SupervisorNotification::TaskCompleted {
+                                let _ =
+                                    self.notify_tx.send(SupervisorNotification::TaskCompleted {
                                         task_id: task.id.clone(),
                                         objective: format!(
                                             "{}\n\nDiff:\n{}",
@@ -594,8 +627,31 @@ impl Supervisor {
                                         steps_total,
                                         steps_ok,
                                         duration_ms,
-                                    },
-                                );
+                                    });
+                            }
+
+                            // Create PR if we have a feature branch
+                            if let Some(ref branch) = task_branch {
+                                match crate::git_workflow::create_pr(
+                                    &self.work_dir,
+                                    branch,
+                                    &format!(
+                                        "feat: {}",
+                                        &task.objective[..task.objective.len().min(60)]
+                                    ),
+                                    &format!(
+                                        "Autonomously implemented by Axi supervisor.\n\n\
+                                         Objective: {}\nSteps: {}/{} OK\nDuration: {}ms",
+                                        task.objective, steps_ok, steps_total, duration_ms
+                                    ),
+                                )
+                                .await
+                                {
+                                    Ok(url) => info!("[supervisor] PR created: {}", url),
+                                    Err(e) => debug!("[supervisor] PR creation skipped: {}", e),
+                                }
+                                // Return to main branch
+                                let _ = crate::git_workflow::checkout_main(&self.work_dir).await;
                             }
                         }
                         Err(e) => {
@@ -645,6 +701,17 @@ impl Supervisor {
                 let mut error_with_hint = error_msg.clone();
                 if let Some(hint) = Runbook::suggest_recovery(&error_msg) {
                     error_with_hint = format!("{}\n\nSugerencia: {}", error_msg, hint);
+                }
+
+                // Rollback: discard uncommitted changes and return to main
+                if trust_mode {
+                    let _ = tokio::process::Command::new("git")
+                        .args(["checkout", "."])
+                        .current_dir(&self.work_dir)
+                        .output()
+                        .await;
+                    let _ = crate::git_workflow::checkout_main(&self.work_dir).await;
+                    info!("[supervisor] Rolled back changes after task failure");
                 }
 
                 let _ = self.notify_tx.send(SupervisorNotification::TaskFailed {
@@ -886,6 +953,9 @@ impl Supervisor {
                     StepAction::WriteFile { .. } => "write_file",
                     StepAction::Respond { .. } => "respond",
                     StepAction::BrowserScreenshot { .. } => "browser_screenshot",
+                    StepAction::BrowserClick { .. } => "browser_click",
+                    StepAction::BrowserFill { .. } => "browser_fill",
+                    StepAction::BrowserEvalJs { .. } => "browser_eval_js",
                     StepAction::FlatpakInstall { .. } => "flatpak_install",
                     StepAction::OpenApp { .. } => "open_app",
                     StepAction::OpenFile { .. } => "open_file",
@@ -1759,6 +1829,9 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::ReadFile { .. } | StepAction::AiQuery { .. } => RiskLevel::Low,
             StepAction::ScreenCapture | StepAction::Respond { .. } => RiskLevel::Low,
             StepAction::BrowserScreenshot { .. } => RiskLevel::Low,
+            StepAction::BrowserClick { .. } => RiskLevel::Medium,
+            StepAction::BrowserFill { .. } => RiskLevel::Medium,
+            StepAction::BrowserEvalJs { .. } => RiskLevel::Medium,
             StepAction::FlatpakInstall { .. } => RiskLevel::Medium,
             StepAction::OpenApp { .. } => RiskLevel::Low,
             StepAction::OpenFile { .. } => RiskLevel::Low,
@@ -1777,6 +1850,13 @@ Always end with a "respond" step summarizing what was done."#,
                 format!("type_text: {}...", &text[..text.len().min(40)])
             }
             StepAction::SendKeys { combo } => format!("send_keys: {}", combo),
+            StepAction::BrowserClick { url, selector } => {
+                format!("browser_click: {} @ {}", selector, url)
+            }
+            StepAction::BrowserFill { url, selector, .. } => {
+                format!("browser_fill: {} @ {}", selector, url)
+            }
+            StepAction::BrowserEvalJs { url, .. } => format!("browser_eval_js: {}", url),
             _ => step.description.clone(),
         };
 
@@ -1874,11 +1954,8 @@ Always end with a "respond" step summarizing what was done."#,
                     .with_context(|| format!("Failed to write {}", full_path.display()))?;
 
                 // Auto-verify: if we wrote a Rust file, run cargo check
-                let mut result_msg = format!(
-                    "Wrote {} bytes to {}",
-                    content.len(),
-                    full_path.display()
-                );
+                let mut result_msg =
+                    format!("Wrote {} bytes to {}", content.len(), full_path.display());
                 if path.ends_with(".rs") || path.ends_with("Cargo.toml") {
                     info!("[supervisor] auto-verifying Rust write with cargo check");
                     let check = tokio::process::Command::new("cargo")
@@ -1915,6 +1992,25 @@ Always end with a "respond" step summarizing what was done."#,
                 let browser =
                     crate::browser_automation::BrowserAutomation::new(self.work_dir.join("target"));
                 browser.navigate_and_capture(url).await
+            }
+            StepAction::BrowserClick { url, selector } => {
+                let browser =
+                    crate::browser_automation::BrowserAutomation::new(self.work_dir.join("target"));
+                browser.click_element(url, selector).await
+            }
+            StepAction::BrowserFill {
+                url,
+                selector,
+                value,
+            } => {
+                let browser =
+                    crate::browser_automation::BrowserAutomation::new(self.work_dir.join("target"));
+                browser.fill_input(url, selector, value).await
+            }
+            StepAction::BrowserEvalJs { url, code } => {
+                let browser =
+                    crate::browser_automation::BrowserAutomation::new(self.work_dir.join("target"));
+                browser.evaluate_js_on_page(url, code).await
             }
             StepAction::FlatpakInstall { app_id } => {
                 let result = crate::desktop_operator::DesktopOperator::execute(

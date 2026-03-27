@@ -74,6 +74,9 @@ const OCR_SIMILARITY_SKIP_THRESHOLD: f32 = 0.92;
 const RELEVANT_SIMILARITY_SKIP_THRESHOLD: f32 = 0.60;
 const OCR_LENGTH_DELTA_TRIGGER: usize = 320;
 const TTS_CHUNK_MAX_CHARS: usize = 260;
+/// How long after a voice response to keep listening without requiring
+/// the wake word again (continuous conversation window).
+const CONTINUOUS_CONVERSATION_SECS: i64 = 30;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -166,6 +169,9 @@ pub struct VoiceSessionRuntime {
     pub last_interrupt_at: Option<DateTime<Utc>>,
     pub barge_in_count: u32,
     pub slo_target_ms: u64,
+    /// When set, the voice pipeline skips wake word detection until this
+    /// timestamp, enabling continuous conversation after a response.
+    pub continuous_listen_until: Option<DateTime<Utc>>,
 }
 
 impl Default for VoiceSessionRuntime {
@@ -188,6 +194,7 @@ impl Default for VoiceSessionRuntime {
             last_interrupt_at: None,
             barge_in_count: 0,
             slo_target_ms: 5000,
+            continuous_listen_until: None,
         }
     }
 }
@@ -489,6 +496,17 @@ impl SensoryPipelineManager {
 
     pub async fn status(&self) -> SensoryPipelineState {
         self.state.read().await.clone()
+    }
+
+    /// Returns `true` if we are inside the continuous conversation window
+    /// (user recently interacted and wake word can be skipped).
+    pub async fn is_continuous_listen_active(&self) -> bool {
+        let state = self.state.read().await;
+        state
+            .voice
+            .continuous_listen_until
+            .map(|until| Utc::now() < until)
+            .unwrap_or(false)
     }
 
     pub async fn refresh_capabilities(
@@ -862,7 +880,18 @@ impl SensoryPipelineManager {
         self.save_state().await?;
 
         let hotword = normalized_wake_word(cycle.wake_word);
-        if !contains_wake_word(&transcript, &hotword) {
+
+        // Check if we are inside the continuous conversation window (skip wake word).
+        let in_continuous_window = {
+            let st = self.state.read().await;
+            st.voice
+                .continuous_listen_until
+                .map(|until| Utc::now() < until)
+                .unwrap_or(false)
+        };
+
+        let wake_word_found = contains_wake_word(&transcript, &hotword);
+        if !wake_word_found && !in_continuous_window {
             cycle
                 .telemetry
                 .record_event(
@@ -881,15 +910,26 @@ impl SensoryPipelineManager {
 
         {
             let mut state = self.state.write().await;
-            state.voice.last_hotword_at = Some(Utc::now());
+            if wake_word_found {
+                state.voice.last_hotword_at = Some(Utc::now());
+            }
             state.voice.wake_word = hotword.clone();
             state.last_updated_at = Some(Utc::now());
         }
         self.save_state().await?;
 
-        let prompt = strip_wake_word(&transcript, &hotword)
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "Estoy escuchando. Dime como puedo ayudarte.".to_string());
+        if in_continuous_window && !wake_word_found {
+            log::info!("Continuous conversation: processing follow-up without wake word");
+        }
+
+        let prompt = if wake_word_found {
+            strip_wake_word(&transcript, &hotword)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "Estoy escuchando. Dime como puedo ayudarte.".to_string())
+        } else {
+            // Continuous conversation — use the full transcript as the prompt.
+            transcript.clone()
+        };
         let include_screen = cycle.screen_enabled && should_include_screen_for_prompt(&prompt);
         let result = self
             .run_voice_loop(
@@ -1274,6 +1314,9 @@ impl SensoryPipelineManager {
             if barge_in {
                 state.voice.barge_in_count += 1;
             }
+            // Enable continuous conversation: skip wake word for 30s after response.
+            state.voice.continuous_listen_until =
+                Some(Utc::now() + chrono::Duration::seconds(CONTINUOUS_CONVERSATION_SECS));
             state.gpu.tokens_per_second = tokens_per_second;
             state.last_error = None;
             state.last_updated_at = Some(Utc::now());
@@ -2195,13 +2238,16 @@ impl SensoryPipelineManager {
                 None
             };
 
-            // Play the current sentence (blocking until done).
+            // Play the current sentence with barge-in detection.
+            // We monitor the microphone for voice activity while playing;
+            // if the user starts speaking, we kill the playback immediately.
             let mut child = Command::new(&player)
                 .arg(&current_audio)
                 .spawn()
                 .context("Failed to start playback")?;
 
-            if let Some(pid) = child.id() {
+            let child_pid = child.id();
+            if let Some(pid) = child_pid {
                 let mut playback = self.playback.lock().await;
                 *playback = Some(ActivePlayback {
                     session_id: session_id.to_string(),
@@ -2211,10 +2257,52 @@ impl SensoryPipelineManager {
                 });
             }
             any_played = true;
-            let _ = child.wait().await;
 
-            // Check if we were interrupted (barge-in).
-            let was_interrupted = {
+            // Barge-in monitor: capture short audio snippets while playing and
+            // check for voice activity. If the user speaks, kill the playback.
+            let barge_in_data_dir = self.data_dir.clone();
+            let barge_in_pid = child_pid;
+            let barge_in_detected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let barge_in_flag = barge_in_detected.clone();
+            let barge_in_source = {
+                let st = self.state.read().await;
+                st.capabilities.always_on_source.clone()
+            };
+            let monitor_handle = tokio::spawn(async move {
+                // Wait a short moment before starting to monitor, so the
+                // playback audio doesn't feed back into the microphone.
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                while let Ok(path) = capture_audio_snippet(
+                    &barge_in_data_dir,
+                    1, // 1-second snippet
+                    barge_in_source.as_deref(),
+                )
+                .await
+                {
+                    if audio_has_voice_activity(Path::new(&path))
+                        .await
+                        .unwrap_or(false)
+                    {
+                        log::info!("Barge-in detected during TTS playback");
+                        barge_in_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                        // Kill the playback process.
+                        if let Some(pid) = barge_in_pid {
+                            kill_pid(pid).await.ok();
+                        }
+                        break;
+                    }
+                    // Clean up snippet.
+                    tokio::fs::remove_file(&path).await.ok();
+                }
+            });
+
+            let _ = child.wait().await;
+            monitor_handle.abort();
+
+            let was_barged_in = barge_in_detected.load(std::sync::atomic::Ordering::Relaxed);
+
+            // Check if we were interrupted (barge-in or external interrupt).
+            let was_interrupted = was_barged_in || {
                 let pb = self.playback.lock().await;
                 pb.as_ref()
                     .map(|active| active.session_id != session_id)
@@ -2224,6 +2312,11 @@ impl SensoryPipelineManager {
                 // User interrupted — stop progressive playback.
                 if let Some(handle) = next_synth {
                     handle.abort();
+                }
+                if was_barged_in {
+                    let mut state = self.state.write().await;
+                    state.voice.barge_in_count += 1;
+                    state.voice.last_interrupt_at = Some(Utc::now());
                 }
                 break;
             }

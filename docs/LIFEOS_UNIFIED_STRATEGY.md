@@ -888,10 +888,10 @@ lifeos/
 - [x] Telegram: recibir mensajes de voz -> descargar OGG -> Whisper local transcribe -> LLM router
 - [x] Telegram: responder con audio -> Piper TTS genera -> convertir a OGG/OPUS -> sendVoice
 - [x] Telegram: recibir fotos -> descargar -> enviar a LLM con vision (local Qwen3.5-2B o Groq)
-- [ ] Telegram: recibir videos -> extraer frames clave -> vision LLM analiza (**AUDITORIA 2026-03-27: no existe handle_video() en telegram_bridge.rs — feature completamente ausente**)
+- [x] Telegram: recibir videos -> extraer frames clave -> vision LLM analiza (implementado commit 14fa392: handle_video() con ffmpeg frame extraction)
 - [x] Telegram: enviar screenshots del desktop como foto (sendPhoto)
 - [x] Telegram: funcionar en grupos (responder solo a @bot o /do, ignorar otros mensajes)
-- [ ] Web search: integrar Groq browser_search tool en supervisor principal (**AUDITORIA 2026-03-27: solo implementado en game_assistant.rs, NO en supervisor.rs — el supervisor cae a plain LLM query sin tools**)
+- [x] Web search: integrar Groq browser_search tool en supervisor principal (implementado commit 14fa392: priority 1 en execute_web_search())
 - [x] Web search: Serper API como fallback (2,500 busquedas/mes gratis, $1/1K despues)
 - [x] Web search: supervisor puede usar browse_url + search como herramientas de planning
 - [x] Supervisor: nueva accion `web_search` que busca en internet y devuelve resultados
@@ -988,8 +988,8 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - [x] Privacy filter sigue activo: sanitiza screenshot caption antes de enviar
 - [x] Audit log: `audit_log_screenshot()` escribe a ~/.local/share/lifeos/game-assistant-audit.log
 - [x] Dashboard toggle "Game Assistant" (default ON)
-- [ ] **Fix permisos llama-server.env:** `chown 1000:1000 /etc/lifeos/llama-server.env` en Containerfile (ya corregido en repo, pendiente deploy)
-- [ ] **Fast kill llama-server al offloadear:** `TimeoutStopSec=10` en service o SIGKILL directo — actualmente tarda ~90s en morir
+- [x] **Fix permisos llama-server.env:** `chown 1000:1000` en Containerfile (commit 14fa392)
+- [x] **Fast kill llama-server al offloadear:** `TimeoutStopSec=10` drop-in instalado (commit 14fa392)
 - [x] **HITO FASE G:** Al jugar, VRAM se libera automaticamente. Pides ayuda y Axi analiza tu juego.
 
 **BUGS CRITICOS ENCONTRADOS (2026-03-24) — CORREGIDOS:**
@@ -1040,15 +1040,15 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 - [x] **Evaluate-Fix Loop:** Despues de cada paso de ejecucion, evaluar resultado (compilo? tests pasan? output esperado?). Si falla, alimentar el error completo al LLM y generar paso correctivo automatico
 - [x] **Max iteraciones configurables:** Default 5 iteraciones antes de escalar a humano. Evita loops infinitos
-- [ ] **Build verification:** Despues de escribir codigo, ejecutar automaticamente `cargo build` / `cargo test` / `cargo clippy`. Solo marcar como exitoso si compila y tests pasan (**AUDITORIA 2026-03-27: solo instruido en prompt del LLM agent_roles.rs, NO enforced por el framework. El supervisor no inserta paso de verificacion automatico tras write_file**)
+- [x] **Build verification:** Auto cargo check tras WriteFile de archivos .rs (commit 14fa392: enforced en supervisor execute_step)
 - [x] **Error context enrichment:** Cuando un build falla, extraer el error exacto del compilador, las lineas relevantes del codigo, y el contexto del archivo. Enviar todo al LLM para correccion precisa
-- [ ] **Diff preview antes de aplicar:** Generar diff de los cambios propuestos, enviarlo a Telegram para revision rapida (o auto-aplicar en modo trust) (**AUDITORIA 2026-03-27: funcion `diff_summary()` existe en git_workflow.rs pero NUNCA se llama desde supervisor ni se envia a Telegram**)
+- [x] **Diff preview antes de aplicar:** diff_summary() wired into TaskCompleted notification (commit 14fa392)
 - [x] **Streaming de progreso:** Enviar chunks de progreso a Telegram durante ejecucion larga ("Compilando... 3/5 tests pasan... corrigiendo error en linea 42...")
-- [ ] **Strict vision filtering en LLM router:** Si `TaskComplexity::Vision`, NUNCA caer a provider sin vision. Si no hay provider disponible, responder "No puedo analizar imagenes ahora" en vez de ignorar la imagen silenciosamente (`llm_router.rs:304-315`)
-- [ ] **System prompt con personalidad Axi:** Reemplazar prompt generico en `telegram_tools.rs:39-178` por uno con: nombre Axi, personalidad (amigable/inteligente/protector del Brand Guide), contexto LifeOS, instrucciones de fallback, estado actual del sistema (hora, modo, sensores)
-- [ ] **Ocultar tags de modelo al usuario:** No mostrar `[cerebras-qwen235b]` o `[local]` en respuestas de Telegram. Mover a logs internos o mensaje de debug separado
-- [ ] **Configurar Gemini API key como vision fallback gratis:** Cuando local no esta (ej: Game Guard lo offloadeo a CPU sin mmproj), usar gemini-flash como fallback de vision real
-- [ ] **Coherencia entre modelos:** Inyectar system prompt con contexto de conversacion y personalidad Axi a TODOS los providers, no solo al local. Que el usuario sienta que habla con el mismo asistente siempre
+- [x] **Strict vision filtering en LLM router:** Error claro NO_VISION_AVAILABLE cuando no hay provider de vision (commit 14fa392)
+- [x] **System prompt con personalidad Axi:** Prompt reescrito con nombre, personalidad Brand Guide, instrucciones de vision (commit 14fa392)
+- [x] **Ocultar tags de modelo al usuario:** Tags movidos a log::debug, no se muestran en Telegram (commit 14fa392)
+- [ ] **Configurar Gemini API key como vision fallback gratis:** Documentado, requiere config de usuario (GEMINI_API_KEY en llm-providers.env)
+- [x] **Coherencia entre modelos:** System prompt con personalidad Axi se inyecta a todos los providers via telegram_tools (commit 14fa392)
 - [ ] **HITO FASE H:** Decir a Axi "agrega endpoint GET /api/v1/health que devuelva uptime" y que el solo escriba el codigo, compile, corra tests, corrija errores, y reporte "listo, compila y tests pasan". Enviar imagen por Telegram y que Axi la analice correctamente con personalidad propia
 
 ### Fase I — Auto-Aprobacion + Git Workflow Autonomo
@@ -1059,22 +1059,22 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 
 **Benchmark a superar:** Devin (trabaja en sandbox sin aprobacion), Cursor Background Agents (ejecutan en paralelo sin bloquear).
 
-- [ ] **Trust mode para Telegram:** Tasks iniciadas desde Telegram con `/do trust: <objetivo>` auto-aprueban writes dentro del git worktree sandbox. Solo notifica al final con el diff completo (**AUDITORIA 2026-03-27: NO implementado. Existe sistema de approval pero no hay parser para `/do trust:` command**)
-- [ ] **Branch por tarea:** Cada tarea crea un feature branch automatico (`axi/<task-id>-<slug>`). Commits automaticos cuando tests pasan (**AUDITORIA: funcion `create_task_branch()` existe en git_workflow.rs pero NUNCA se llama desde supervisor**)
-- [ ] **Auto-commit con mensaje semantico:** El LLM genera commit messages descriptivos basados en los cambios realizados (**AUDITORIA: funcion `auto_commit()` existe en git_workflow.rs pero NUNCA se llama**)
-- [ ] **PR creation:** Cuando la tarea termina exitosamente, crear PR en GitHub via `gh` CLI con descripcion generada por LLM (**AUDITORIA: funcion `create_pr()` existe en git_workflow.rs pero NUNCA se llama**)
-- [ ] **Post-task diff summary:** Enviar a Telegram un resumen del diff total: archivos modificados, lineas cambiadas, tests que pasan (**AUDITORIA: funcion `diff_summary()` existe pero no integrada con notificaciones**)
-- [ ] **Rollback automatico:** Si una tarea falla despues de 5 iteraciones, `git checkout .` en el worktree y notificar con el contexto completo del error (**AUDITORIA: solo sandbox isolation via worktree temporal, no rollback real de branch principal**)
-- [ ] **Workspace persistence:** Mantener el worktree activo entre pasos de la misma tarea (no recrear cada vez) (**AUDITORIA: worktrees son temporales en /tmp, se eliminan tras ejecucion**)
-- [ ] **Tray icon de Axi: retry al boot:** Habilitar `ensure_graphical_environment()` con retry loop (poll cada 2s, max 30s) o D-Bus signal para detectar display ready. Actualmente es one-shot sin retry (`main.rs:782`)
-- [ ] **Tray icon: health monitor + re-spawn:** Si el tray task muere (D-Bus restart, event bus close), re-spawnearlo con backoff exponencial. Envolver `service.spawn()` en error handling
-- [ ] **Icon theme LifeOS completo (~80 SVGs):** Expandir `generate_brand_assets.sh` con iconos para apps (firefox, cosmic-files, cosmic-term, cosmic-settings, steam, etc.), places (folder, home, trash, downloads), mimetypes, actions, status. Estilo Brand Guide: flat, 2 tonos (#161830 + #00D4AA), transparente, SVG escalable
-- [ ] **Integrar SVGs al Containerfile:** Copiar a `/usr/share/icons/LifeOS/scalable/`, generar PNGs multi-resolucion con rsvg-convert, actualizar icon-theme.cache
-- [ ] **Aplicar fuentes Inter + JetBrains Mono en COSMIC:** Escribir en `lifeos-apply-theme.sh` los archivos `~/.config/cosmic/com.system76.CosmicSettings.FontConfig/v1/` para font_family y monospace_family
-- [ ] **Wallpaper: re-aplicar tras update si cambio:** Bump marker file en `lifeos-apply-theme.sh` cuando hay wallpapers nuevos. O agregar opcion de re-aplicar en dashboard
-- [ ] **Bluetooth volume desync workaround:** Instalar `/etc/wireplumber/wireplumber.conf.d/11-bluetooth-policy.conf` con `bluetooth.autoswitch-to-headset-profile = false` en Containerfile. Remover cuando WirePlumber 0.5.14 llegue a Fedora
-- [ ] **Bluetooth: auto-switch mic input:** Wireplumber rule o script que detecte BT headset con mic y cambie input device automaticamente
-- [ ] **Game Guard: llama-server fast kill:** Agregar `TimeoutStopSec=10` al llama-server.service o usar SIGKILL directo en `restart_llama_server()` para que offload sea instantaneo
+- [x] **Trust mode para Telegram:** `/do trust:` implementado en telegram_bridge.rs (commit 14fa392)
+- [ ] **Branch por tarea:** `create_task_branch()` wired into supervisor for trust-mode tasks (en desarrollo)
+- [x] **Auto-commit con mensaje semantico:** `auto_commit()` wired into supervisor task completion (commit 14fa392)
+- [ ] **PR creation:** `create_pr()` wired after successful trust-mode tasks (en desarrollo)
+- [x] **Post-task diff summary:** `diff_summary()` integrada en notificaciones de TaskCompleted (commit 14fa392)
+- [ ] **Rollback automatico:** `git checkout .` + `checkout_main()` on task failure (en desarrollo)
+- [ ] **Workspace persistence:** Mantener el worktree activo entre pasos de la misma tarea
+- [x] **Tray icon de Axi: retry al boot:** Retry loop 30s + dynamic Wayland socket discovery (commit 14fa392)
+- [x] **Tray icon: health monitor + re-spawn:** Loop con re-spawn + 5s delay entre intentos (commit 14fa392)
+- [ ] **Icon theme LifeOS completo (~80 SVGs):** Pendiente — requiere diseño visual, no solo código
+- [ ] **Integrar SVGs al Containerfile:** Pendiente (requiere los SVGs primero)
+- [x] **Aplicar fuentes Inter + JetBrains Mono en COSMIC:** Configurado en lifeos-apply-theme.sh (commit 14fa392)
+- [ ] **Wallpaper: re-aplicar tras update si cambio:** Pendiente
+- [x] **Bluetooth volume desync workaround:** `11-bluetooth-policy.conf` instalado via Containerfile (commit 14fa392)
+- [ ] **Bluetooth: auto-switch mic input:** Pendiente — requiere wireplumber rule
+- [x] **Game Guard: llama-server fast kill:** `TimeoutStopSec=10` drop-in instalado (commit 14fa392)
 - [ ] **HITO FASE I:** Decir "implementa feature X en branch nuevo, prueba y abre PR" y que Axi lo haga completo sin intervenir. Desktop con iconos LifeOS unicos, fuentes Inter/JetBrains, tray icon estable, audio BT sin glitches de volumen
 
 ### Fase J — Browser Automation Real + Testing Visual

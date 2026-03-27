@@ -51,6 +51,7 @@ use crate::sensory_pipeline::{
     SensoryBenchmarkReport, SensoryBenchmarkRequest, SensoryPipelineManager, SensoryRuntimeSync,
     TtsRequest, VisionDescribeRequest, VoiceLoopRequest,
 };
+use crate::skill_generator::SkillRegistry;
 use crate::system::SystemMonitor;
 use crate::update_scheduler::UpdateScheduler;
 use crate::visual_comfort::{ComfortProfile, VisualComfortManager};
@@ -176,6 +177,7 @@ pub struct ApiState {
     pub config: ApiConfig,
     pub game_guard: Option<Arc<RwLock<crate::game_guard::GameGuard>>>,
     pub wake_word_detector: Option<Arc<crate::wake_word::WakeWordDetector>>,
+    pub skill_registry: SkillRegistry,
 }
 
 #[derive(Clone, Debug)]
@@ -1473,6 +1475,12 @@ pub fn create_router(state: ApiState) -> Router {
         // Battery management endpoints
         .route("/battery/status", get(get_battery_status))
         .route("/battery/threshold", post(post_battery_threshold))
+        // Skill registry endpoints
+        .route("/skills", get(get_skills_list))
+        .route("/skills/:name", get(get_skill_by_name))
+        .route("/skills/:name/run", post(post_skill_run))
+        .route("/skills/reload", post(post_skills_reload))
+        .route("/skills/diagnostics", get(get_skills_diagnostics))
         // Supervisor endpoints
         .route("/supervisor/status", get(get_supervisor_status))
         .route("/supervisor/metrics", get(get_supervisor_metrics))
@@ -10264,6 +10272,100 @@ async fn post_battery_threshold(
             "error": format!("{}", e)
         }))),
     }
+}
+
+// ==================== SKILL REGISTRY ENDPOINTS ====================
+
+/// GET /api/v1/skills — list all loaded skills
+async fn get_skills_list(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let skills = state.skill_registry.list().await;
+    Ok(Json(serde_json::json!({
+        "skills": skills,
+        "count": skills.len(),
+    })))
+}
+
+/// GET /api/v1/skills/:name — get a single skill by name
+async fn get_skill_by_name(
+    State(state): State<ApiState>,
+    Path(name): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.skill_registry.get(&name).await {
+        Some((manifest, dir)) => Ok(Json(serde_json::json!({
+            "skill": manifest,
+            "directory": dir.display().to_string(),
+        }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".into(),
+                message: format!("Skill '{}' not found in registry", name),
+                code: 404,
+            }),
+        )),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillRunRequest {
+    #[serde(default)]
+    input: String,
+}
+
+/// POST /api/v1/skills/:name/run — execute a skill by name
+async fn post_skill_run(
+    State(state): State<ApiState>,
+    Path(name): Path<String>,
+    body: Option<Json<SkillRunRequest>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let input = body.map(|b| b.input.clone()).unwrap_or_default();
+    match state.skill_registry.run(&name, &input).await {
+        Ok(output) => Ok(Json(serde_json::json!({
+            "success": true,
+            "skill": name,
+            "output": output,
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Skill Execution Failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// POST /api/v1/skills/reload — trigger a hot-reload of all skill directories
+async fn post_skills_reload(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.skill_registry.reload().await {
+        Ok(summary) => Ok(Json(serde_json::json!({
+            "success": true,
+            "summary": summary,
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Reload Failed".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// GET /api/v1/skills/diagnostics — registry diagnostics
+async fn get_skills_diagnostics(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let diag = state.skill_registry.diagnostics().await;
+    Ok(Json(serde_json::json!({
+        "diagnostics": diag,
+    })))
 }
 
 #[cfg(test)]

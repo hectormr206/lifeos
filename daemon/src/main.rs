@@ -784,9 +784,7 @@ async fn main() -> anyhow::Result<()> {
             // Wait for display server to be ready (retry up to 30s)
             let mut display_ready = false;
             for attempt in 0..15 {
-                if std::env::var("WAYLAND_DISPLAY").is_ok()
-                    || std::env::var("DISPLAY").is_ok()
-                {
+                if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
                     display_ready = true;
                     break;
                 }
@@ -827,8 +825,7 @@ async fn main() -> anyhow::Result<()> {
                     "http://127.0.0.1:{}",
                     tray_state.config.api_bind_address.port(),
                 );
-                let tray_dashboard =
-                    format!("{}/dashboard?token={}", tray_api_base, tray_token,);
+                let tray_dashboard = format!("{}/dashboard?token={}", tray_api_base, tray_token,);
                 let current_state = {
                     let overlay = tray_state.overlay_manager.read().await;
                     let s = overlay.get_state().await;
@@ -1176,7 +1173,19 @@ async fn start_api_server(state: Arc<DaemonState>) {
         },
         game_guard: state.game_guard.clone(),
         wake_word_detector: state.wake_word_detector.clone(),
+        skill_registry: skill_generator::SkillRegistry::from_defaults(),
     };
+
+    // Perform initial skill registry load and start file watcher
+    if let Err(e) = api_state.skill_registry.reload().await {
+        log::warn!("Initial skill registry load failed: {}", e);
+    }
+    let watcher_registry = api_state.skill_registry.clone();
+    tokio::spawn(async move {
+        watcher_registry
+            .watch_loop(std::time::Duration::from_secs(30))
+            .await;
+    });
 
     if let Err(e) = api::start_api_server(api_state).await {
         error!("API server error: {}", e);
@@ -1493,7 +1502,18 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                         Ok(None) => {}
                         Err(e) => warn!("Failed to run post-wakeword voice cycle: {}", e),
                     }
-                } else if state.wake_word_detector.is_none() {
+                } else if state.wake_word_detector.is_some() {
+                    // Rustpotter active but no wake word — check continuous conversation window.
+                    let in_continuous = sensory_manager.is_continuous_listen_active().await;
+                    if in_continuous {
+                        match sensory_manager.run_post_wakeword_cycle(cycle).await {
+                            Ok(Some(_)) => continue,
+                            Ok(None) => {}
+                            Err(e) => debug!("Continuous conversation cycle failed: {}", e),
+                        }
+                    }
+                    // Otherwise rustpotter is listening, do nothing.
+                } else {
                     // No rustpotter — fall back to legacy capture-transcribe-match.
                     match sensory_manager.run_always_on_cycle(cycle).await {
                         Ok(Some(_)) => continue,
@@ -1501,7 +1521,6 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                         Err(e) => debug!("Failed to run always-on voice cycle: {}", e),
                     }
                 }
-                // If rustpotter is active but no detection, do nothing (it's listening).
             }
         }
 
