@@ -1063,8 +1063,19 @@ async fn main() -> anyhow::Result<()> {
             let router = state.llm_router.clone();
             let memory = Some(state.memory_plane_manager.clone());
             let notify_rx = state.supervisor.subscribe();
+            let kg = {
+                let data_dir = std::path::PathBuf::from(
+                    std::env::var("LIFEOS_DATA_DIR")
+                        .unwrap_or_else(|_| "/var/lib/lifeos".into()),
+                )
+                .join("knowledge_graph");
+                Arc::new(RwLock::new(knowledge_graph::KnowledgeGraph::new(data_dir)))
+            };
             Some(tokio::spawn(async move {
-                telegram_bridge::run_telegram_bot(tg_config, tq, router, memory, notify_rx).await;
+                telegram_bridge::run_telegram_bot(
+                    tg_config, tq, router, memory, Some(kg), notify_rx,
+                )
+                .await;
             }))
         } else {
             info!("Telegram bridge: LIFEOS_TELEGRAM_BOT_TOKEN not set, skipping");

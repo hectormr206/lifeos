@@ -16,6 +16,7 @@ mod inner {
     };
     use tokio::sync::RwLock;
 
+    use crate::knowledge_graph::KnowledgeGraph;
     use crate::llm_router::LlmRouter;
     use crate::memory_plane::MemoryPlaneManager;
     use crate::supervisor::SupervisorNotification;
@@ -63,6 +64,7 @@ mod inner {
         task_queue: Arc<TaskQueue>,
         router: Arc<RwLock<LlmRouter>>,
         memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
+        knowledge_graph: Option<Arc<RwLock<KnowledgeGraph>>>,
         mut notify_rx: tokio::sync::broadcast::Receiver<SupervisorNotification>,
     ) {
         info!("Starting Telegram bridge (natural language mode)...");
@@ -132,6 +134,7 @@ mod inner {
             router: router.clone(),
             task_queue: task_queue.clone(),
             memory: memory.clone(),
+            knowledge_graph: knowledge_graph.clone(),
             history: history.clone(),
             cron_store: cron_store.clone(),
             sdd_store: sdd_store.clone(),
@@ -227,6 +230,7 @@ mod inner {
             router,
             task_queue,
             memory,
+            knowledge_graph,
             history,
             cron_store,
             sdd_store,

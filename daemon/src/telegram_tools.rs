@@ -22,6 +22,7 @@ pub mod inner {
 
     use crate::browser_automation::BrowserAutomation;
     use crate::computer_use::{ComputerUseAction, ComputerUseManager};
+    use crate::knowledge_graph::KnowledgeGraph;
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
     use crate::memory_plane::MemoryPlaneManager;
     use crate::proactive;
@@ -744,9 +745,33 @@ Herramientas:
         pub router: Arc<RwLock<LlmRouter>>,
         pub task_queue: Arc<TaskQueue>,
         pub memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
+        pub knowledge_graph: Option<Arc<RwLock<KnowledgeGraph>>>,
         pub history: Arc<ConversationHistory>,
         pub cron_store: Arc<CronStore>,
         pub sdd_store: Arc<SddStore>,
+    }
+
+    /// Check if the user's message contains keywords that suggest they want
+    /// to recall something from past conversations (works case-insensitively).
+    fn needs_memory_recall(text: &str) -> bool {
+        let lower = text.to_lowercase();
+        let keywords = [
+            "recuerdas",
+            "remember",
+            "acuerdas",
+            "dijiste",
+            "hablamos",
+            "mencionaste",
+            "prometiste",
+            "acordamos",
+            "la vez que",
+            "yesterday",
+            "ayer",
+            "la semana pasada",
+            "last week",
+            "antes",
+        ];
+        keywords.iter().any(|kw| lower.contains(kw))
     }
 
     // -----------------------------------------------------------------------
@@ -895,9 +920,9 @@ Herramientas:
             messages.extend(history);
         }
 
-        // Proactive context recall: if this is a new session, search memory
-        // for relevant context and inject it
-        if is_new_session {
+        // Proactive context recall: search memory on new sessions or when the
+        // user's message contains memory-related keywords (e.g. "recuerdas", "dijiste")
+        if is_new_session || needs_memory_recall(user_text) {
             if let Some(memory) = &ctx.memory {
                 let mem = memory.read().await;
                 // Search for recent and relevant memories
@@ -1001,6 +1026,29 @@ Herramientas:
                         .compact_with_llm(chat_id, &compact_ctx.router)
                         .await;
                 });
+
+                // Ingest user message and Axi's response into knowledge graph (background)
+                if let Some(kg) = &ctx.knowledge_graph {
+                    let kg = kg.clone();
+                    let user_text = user_text.to_string();
+                    let axi_response = tagged.clone();
+                    tokio::spawn(async move {
+                        let now = chrono::Utc::now();
+                        let mut graph = kg.write().await;
+                        if let Err(e) = graph
+                            .ingest_telegram_message("user", &user_text, now)
+                            .await
+                        {
+                            warn!("[knowledge_graph] Failed to ingest user message: {}", e);
+                        }
+                        if let Err(e) = graph
+                            .ingest_telegram_message("axi", &axi_response, now)
+                            .await
+                        {
+                            warn!("[knowledge_graph] Failed to ingest Axi response: {}", e);
+                        }
+                    });
+                }
 
                 return (tagged, screenshot_path);
             }
@@ -1393,7 +1441,34 @@ Herramientas:
                 )
                 .await
             {
-                Ok(entry) => Ok(format!("Guardado en memoria (id: {})", entry.entry_id)),
+                Ok(entry) => {
+                    // Also create a knowledge graph entity for the memory
+                    if let Some(kg) = &ctx.knowledge_graph {
+                        let kg = kg.clone();
+                        let entity_name = if !title.is_empty() {
+                            title.to_string()
+                        } else {
+                            structured_content.chars().take(60).collect::<String>()
+                        };
+                        let entity_type = match mem_type {
+                            "decision" | "architecture" => {
+                                crate::knowledge_graph::EntityType::Decision
+                            }
+                            "bugfix" | "discovery" | "pattern" => {
+                                crate::knowledge_graph::EntityType::Topic
+                            }
+                            "preference" | "config" => {
+                                crate::knowledge_graph::EntityType::Topic
+                            }
+                            _ => crate::knowledge_graph::EntityType::Topic,
+                        };
+                        tokio::spawn(async move {
+                            let mut graph = kg.write().await;
+                            graph.add_entity(&entity_name, entity_type);
+                        });
+                    }
+                    Ok(format!("Guardado en memoria (id: {})", entry.entry_id))
+                }
                 Err(e) => Ok(format!("Error guardando en memoria: {}", e)),
             }
         } else {
