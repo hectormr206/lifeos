@@ -1,0 +1,61 @@
+# LifeOS GRUB Theme
+# Minimal, branded boot menu with teal accent
+
+# Desktop background image
+desktop-image: "background.png"
+desktop-color: "#0F0F1B"
+
+# Title
+title-text: "LifeOS"
+title-color: "#00D4AA"
+title-font: "Inter Regular 24"
+
+# Global font
+terminal-font: "Inter Regular 16"
+
+# Message bar (bottom)
+message-font: "Inter Regular 14"
+message-color: "#8C8E9E"
+message-bg-color: "#00000000"
+
+# Boot menu
++ boot_menu {
+    left = 30%
+    top = 35%
+    width = 40%
+    height = 40%
+    item_font = "Inter Regular 18"
+    item_color = "#E8E8E8"
+    selected_item_font = "Inter Regular 18"
+    selected_item_color = "#00D4AA"
+    item_height = 40
+    item_padding = 8
+    item_spacing = 4
+    icon_width = 0
+    icon_height = 0
+    scrollbar = false
+}
+
+# Progress bar (bottom center)
++ progress_bar {
+    id = "__timeout__"
+    left = 35%
+    top = 80%
+    width = 30%
+    height = 8
+    fg_color = "#00D4AA"
+    bg_color = "#1A1A2E"
+    border_color = "#1A1A2E"
+    text_color = "#00000000"
+}
+
+# Label at bottom
++ label {
+    left = 0
+    top = 92%
+    width = 100%
+    align = "center"
+    color = "#5E6078"
+    font = "Inter Regular 12"
+    text = "hectormr.com"
+}

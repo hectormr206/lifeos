@@ -109,6 +109,11 @@ system_setup() {
         xdg-user-dirs-update --force 2>/dev/null || true
     fi
 
+    # Install GRUB theme (safe — only touches /boot/grub2/themes/)
+    if [ -x /usr/local/bin/lifeos-grub-theme.sh ]; then
+        /usr/local/bin/lifeos-grub-theme.sh || log_warn "GRUB theme installation failed (non-fatal)"
+    fi
+
     # Set up Flatpak
     flatpak remote-add --if-not-exists --system flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true
     flatpak remote-modify --system --enable flathub 2>/dev/null || true
