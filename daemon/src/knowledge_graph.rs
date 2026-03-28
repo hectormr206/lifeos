@@ -615,10 +615,7 @@ impl KnowledgeGraph {
         timestamp: DateTime<Utc>,
     ) -> Result<(), String> {
         let person_id = self.add_entity(from, EntityType::Person);
-        let email_id = self.add_entity(
-            &format!("email:{}", subject),
-            EntityType::Email,
-        );
+        let email_id = self.add_entity(&format!("email:{}", subject), EntityType::Email);
 
         if let Some(email) = self.entities.iter_mut().find(|e| e.id == email_id) {
             email
@@ -697,9 +694,7 @@ impl KnowledgeGraph {
                 .properties
                 .insert("timestamp".into(), timestamp.to_rfc3339());
             commit.properties.insert("message".into(), message.into());
-            commit
-                .properties
-                .insert("files".into(), files.join(", "));
+            commit.properties.insert("files".into(), files.join(", "));
         }
         self.save();
 
@@ -730,8 +725,7 @@ impl KnowledgeGraph {
         let file_id = self.add_entity(path, EntityType::File);
 
         if let Some(file) = self.entities.iter_mut().find(|e| e.id == file_id) {
-            file.properties
-                .insert("last_action".into(), action.into());
+            file.properties.insert("last_action".into(), action.into());
             file.properties
                 .insert("last_action_at".into(), timestamp.to_rfc3339());
         }

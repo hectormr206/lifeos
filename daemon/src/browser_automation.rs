@@ -14,6 +14,61 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tokio::time::Duration;
 
+use crate::cdp_client::CdpClient;
+
+/// A persistent browser session that keeps a single Firefox process alive
+/// so that page state (cookies, storage, sessions) is preserved across
+/// multiple operations.
+pub struct PersistentBrowserSession {
+    cdp: CdpClient,
+    process: tokio::process::Child,
+    port: u16,
+}
+
+impl PersistentBrowserSession {
+    /// Launch Firefox headless with CDP remote debugging and connect.
+    pub async fn start() -> Result<Self, String> {
+        Self::start_on_port(9222).await
+    }
+
+    /// Launch Firefox headless with CDP on a specific port.
+    pub async fn start_on_port(port: u16) -> Result<Self, String> {
+        let process = tokio::process::Command::new("firefox")
+            .args([
+                "--headless",
+                &format!("--remote-debugging-port={}", port),
+                "--no-remote",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to launch Firefox: {}", e))?;
+
+        // CdpClient::connect retries discovery for up to 10 seconds
+        let cdp = CdpClient::connect(port).await?;
+
+        Ok(Self { cdp, process, port })
+    }
+
+    /// Get a reference to the underlying CDP client.
+    pub fn cdp(&self) -> &CdpClient {
+        &self.cdp
+    }
+
+    /// The port this session is running on.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+impl Drop for PersistentBrowserSession {
+    fn drop(&mut self) {
+        // Best-effort kill when the session is dropped.
+        // We can't .await here, but start() ensures the process handle is valid.
+        let _ = self.process.start_kill();
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserSession {
     pub url: String,

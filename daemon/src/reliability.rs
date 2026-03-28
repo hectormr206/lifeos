@@ -193,8 +193,7 @@ impl ReliabilityTracker {
 
         let mut patterns = Vec::new();
         for row in rows {
-            let (raw_error, count, last_seen_str) =
-                row.map_err(|e| format!("Row error: {e}"))?;
+            let (raw_error, count, last_seen_str) = row.map_err(|e| format!("Row error: {e}"))?;
             let sig = normalise_error(&raw_error);
             let last_seen = DateTime::parse_from_rfc3339(&last_seen_str)
                 .map(|dt| dt.with_timezone(&Utc))
@@ -268,9 +267,7 @@ impl ReliabilityTracker {
 
         // Trend — fetch all outcomes ordered by time
         let mut stmt = conn
-            .prepare(
-                "SELECT success FROM task_outcomes ORDER BY completed_at ASC",
-            )
+            .prepare("SELECT success FROM task_outcomes ORDER BY completed_at ASC")
             .map_err(|e| format!("Prepare error: {e}"))?;
         let outcomes: Vec<bool> = stmt
             .query_map([], |row| {
@@ -435,7 +432,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn tmp_db() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("lifeos_reliability_test_{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("lifeos_reliability_test_{}", uuid::Uuid::new_v4()));
         dir.join("reliability.db")
     }
 
@@ -486,10 +484,16 @@ mod tests {
         let tracker = ReliabilityTracker::new(db).unwrap();
 
         tracker
-            .record_outcome(&make_outcome(false, Some("connection refused to service X")))
+            .record_outcome(&make_outcome(
+                false,
+                Some("connection refused to service X"),
+            ))
             .unwrap();
         tracker
-            .record_outcome(&make_outcome(false, Some("connection refused to service Y")))
+            .record_outcome(&make_outcome(
+                false,
+                Some("connection refused to service Y"),
+            ))
             .unwrap();
         tracker
             .record_outcome(&make_outcome(false, Some("permission denied: /etc/shadow")))

@@ -35,6 +35,8 @@ mod browser_automation;
 #[allow(dead_code)]
 mod calendar;
 #[allow(dead_code)]
+mod cdp_client;
+#[allow(dead_code)]
 mod comm_bridges;
 mod computer_use;
 #[allow(dead_code)]
@@ -790,12 +792,9 @@ async fn main() -> anyhow::Result<()> {
         if widget_visible {
             let widget_state = state.clone();
             let widget_token = state.bootstrap_token.clone().unwrap_or_default();
-            let widget_api_base = format!(
-                "http://127.0.0.1:{}",
-                state.config.api_bind_address.port(),
-            );
-            let widget_dashboard =
-                format!("{}/dashboard?token={}", widget_api_base, widget_token);
+            let widget_api_base =
+                format!("http://127.0.0.1:{}", state.config.api_bind_address.port(),);
+            let widget_dashboard = format!("{}/dashboard?token={}", widget_api_base, widget_token);
             let current_axi_state = {
                 let overlay = widget_state.overlay_manager.read().await;
                 let s = overlay.get_state().await;
@@ -988,8 +987,10 @@ async fn main() -> anyhow::Result<()> {
     let meeting_data_dir = data_dir.clone();
     let meeting_event_bus = state.event_bus.clone();
     let _meeting_handle = tokio::spawn(async move {
-        let mut assistant =
-            meeting_assistant::MeetingAssistant::new(meeting_data_dir, Some(meeting_event_bus.clone()));
+        let mut assistant = meeting_assistant::MeetingAssistant::new(
+            meeting_data_dir,
+            Some(meeting_event_bus.clone()),
+        );
         let mut interval = tokio::time::interval(Duration::from_secs(15));
         loop {
             interval.tick().await;
@@ -1072,7 +1073,8 @@ async fn main() -> anyhow::Result<()> {
             alerts.extend(daemon.check_system_integrity().await);
             for alert in &alerts {
                 let priority = match alert.severity {
-                    security_ai::AlertSeverity::Emergency | security_ai::AlertSeverity::Critical => "critical",
+                    security_ai::AlertSeverity::Emergency
+                    | security_ai::AlertSeverity::Critical => "critical",
                     security_ai::AlertSeverity::Warning => "warning",
                     security_ai::AlertSeverity::Info => "info",
                 };
@@ -1129,7 +1131,10 @@ async fn main() -> anyhow::Result<()> {
                     if let Ok(avg) = avg_str.parse::<f64>() {
                         let cpus = num_cpus::get() as f64;
                         if avg < cpus * 0.3 {
-                            info!("[system_tuner] System idle (load {:.2}), running optimization", avg);
+                            info!(
+                                "[system_tuner] System idle (load {:.2}), running optimization",
+                                avg
+                            );
                             let results = tuner.optimize_vm_settings();
                             if !results.is_empty() {
                                 let summary = tuner.get_improvement_summary();
@@ -1153,11 +1158,16 @@ async fn main() -> anyhow::Result<()> {
         loop {
             interval.tick().await;
             let status = backup_monitor::check_backup_health().await;
-            info!("[backup_monitor] Check: tool={}, age={:?}h", status.tool, status.last_backup_age_hours);
+            info!(
+                "[backup_monitor] Check: tool={}, age={:?}h",
+                status.tool, status.last_backup_age_hours
+            );
             if status.tool == "none" {
                 let _ = backup_event_bus.send(events::DaemonEvent::Notification {
                     priority: "warning".into(),
-                    message: "No se detecta herramienta de backup (restic/borg). Configura backups.".into(),
+                    message:
+                        "No se detecta herramienta de backup (restic/borg). Configura backups."
+                            .into(),
                 });
             } else if let Some(age) = status.last_backup_age_hours {
                 if age > 48.0 {
@@ -1221,15 +1231,19 @@ async fn main() -> anyhow::Result<()> {
             let notify_rx = state.supervisor.subscribe();
             let kg = {
                 let data_dir = std::path::PathBuf::from(
-                    std::env::var("LIFEOS_DATA_DIR")
-                        .unwrap_or_else(|_| "/var/lib/lifeos".into()),
+                    std::env::var("LIFEOS_DATA_DIR").unwrap_or_else(|_| "/var/lib/lifeos".into()),
                 )
                 .join("knowledge_graph");
                 Arc::new(RwLock::new(knowledge_graph::KnowledgeGraph::new(data_dir)))
             };
             Some(tokio::spawn(async move {
                 telegram_bridge::run_telegram_bot(
-                    tg_config, tq, router, memory, Some(kg), notify_rx,
+                    tg_config,
+                    tq,
+                    router,
+                    memory,
+                    Some(kg),
+                    notify_rx,
                 )
                 .await;
             }))

@@ -1121,7 +1121,15 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - [x] **Form automation:** click_element() + fill_input() via CDP JavaScript evaluation, con event dispatch para reactivity frameworks
 - [x] **Console error detection:** get_console_errors() via CDP JS injection (commit dee2ed0)
 - [x] **LibreOffice verification:** `lifeos-libreoffice-verify.py` — Python UNO bridge con 5 comandos: read-cells, verify-formula, check-format, sheet-info, export-pdf. Auto-lanza soffice con socket listener
-- [x] **HITO FASE J:** CDP browser automation completo: navegacion, click, fill, JS eval, console errors, visual verification loop, localhost testing, LibreOffice UNO bridge para verificacion de datos sin vision
+- [x] **Canvas CDP WebSocket (paridad con OpenClaw):** `cdp_client.rs` — conexion WebSocket persistente a Firefox headless via CDP. Sesion que mantiene cookies/localStorage/login. Reemplaza el approach roto de spawn-por-operacion
+- [x] **Persistent browser session:** `BrowserSession` — Firefox se lanza UNA vez y se reutiliza para todas las operaciones. No mas browsers nuevos por cada click
+- [x] **Real page-context JS execution:** `Runtime.evaluate` ejecuta JavaScript en la pagina REAL (no en un data: URI separado)
+- [x] **DOM interaction nativa:** `DOM.querySelector` + `DOM.getBoxModel` + `Input.dispatchMouseEvent` para clicks precisos por CSS selector
+- [x] **Accessibility tree (a2ui):** `Accessibility.getFullAXTree` — extrae elementos UI con roles, nombres, bounding boxes. Equivalente al a2ui() de OpenClaw
+- [x] **Cookie/session management:** `Storage.getCookies/setCookies` — mantiene login entre operaciones
+- [x] **Multi-tab real:** `Target.createTarget/activateTarget/closeTarget` — tabs reales del browser, no procesos separados
+- [x] **Network interception:** `Network.enable` para monitorear requests. `Browser.setDownloadBehavior` para descargas
+- [x] **HITO FASE J:** CDP browser automation completo: navegacion, click, fill, JS eval, console errors, visual verification loop, localhost testing, LibreOffice UNO bridge para verificacion de datos sin vision. Canvas CDP WebSocket con sesion persistente, DOM nativo, a2ui, cookies, multi-tab, network interception — paridad con OpenClaw
 
 ### Fase K — Self-Improvement + Skill Ecosystem
 
@@ -1186,7 +1194,7 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 |-----------|----------|--------|-----|
 | Messaging channels | 21+ (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Teams, Matrix, IRC, LINE, Twitch, Nostr...) | 4 (Telegram, WhatsApp, Matrix, Signal) | **Medio** — tenemos los principales, faltan Slack/Discord/iMessage |
 | Skills ecosystem | 13,729+ community skills en ClawHub | Skill generator + auto-learning (Fase K implementada) | **Medio** — sistema funcional, falta contenido |
-| Browser automation | Headless browser completo, OAuth, forms, scraping | Headless screenshots + vision LLM analysis (Fase J) | **Medio** — basico funcional, falta interaccion DOM |
+| Browser automation | Headless browser completo, OAuth, forms, scraping | Canvas CDP WebSocket: sesion persistente, DOM nativo, a2ui, cookies, multi-tab, JS eval en pagina real (Fase J) | **Paridad** — CDP WebSocket completo con interaccion DOM nativa |
 | Self-improvement | Escribe sus propios skills, edita prompts, hot-reload | Skill generation + lookup before planning (Fase K) | **Paridad basica** — genera skills, hot-reload |
 | Voice | Wake word macOS/iOS, push-to-talk, ElevenLabs | Wake word rustpotter + Whisper STT + Piper TTS | **Paridad** — funcional |
 | Desktop integration | Solo macOS menu bar. Linux = headless gateway | COSMIC overlay + widget + systemd nativo | **VENTAJA LifeOS** |
@@ -1596,7 +1604,7 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 | A-G | Completadas | — | — | Base funcional |
 | **H** | Loop Iterativo | — | Media | **COMPLETADO** — evaluate-fix loop, build verification, error enrichment, Gemini vision, personalidad Axi |
 | **I** | Auto-Aprobacion + Git | H | Media | **COMPLETADO** — trust mode, branch/commit/PR, workspace persistence, wallpaper re-apply, BT mic auto-switch |
-| **J** | Browser Automation | H | Alta | **COMPLETADO** — CDP headless, form automation, JS eval, console errors, LibreOffice UNO bridge |
+| **J** | Browser Automation + Canvas CDP | H | Alta | **COMPLETADO** — CDP headless, form automation, JS eval, console errors, LibreOffice UNO bridge, Canvas CDP WebSocket (persistent session, DOM nativo, a2ui, cookies, multi-tab, network interception) |
 | **K** | Self-Improvement + Skills | H, I | Alta | **COMPLETADO** — skill authoring/testing/hot-reload, prompt self-editing, learning from failures |
 | **L** | Multimodalidad Avanzada | — | Media | **COMPLETADO** — conversacion continua, TTS emocional, desktop widget overlay, screen context. Pendiente: wake word personalizado |
 | **M** | Plataforma Completa | H, I, J | Alta | **COMPLETADO** — scaffolding, git clone, multi-file edit, test gen, deploy, monitoring, parallel tasks, code review |

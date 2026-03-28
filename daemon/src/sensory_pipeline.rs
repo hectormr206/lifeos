@@ -70,9 +70,7 @@ fn vad_rms_threshold() -> f64 {
 
     // 2. Try cached calibration (synchronous read — acceptable for small JSON)
     if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
-        let cal_path = home
-            .join(".local/share/lifeos")
-            .join(MIC_CALIBRATION_FILE);
+        let cal_path = home.join(".local/share/lifeos").join(MIC_CALIBRATION_FILE);
         if let Ok(data) = std::fs::read_to_string(&cal_path) {
             if let Ok(cal) = serde_json::from_str::<MicCalibration>(&data) {
                 let age_hours = (Utc::now() - cal.timestamp).num_hours();
@@ -3341,10 +3339,12 @@ async fn capture_audio_snippet(
                 home.and_then(|h| {
                     let data = std::fs::read_to_string(
                         h.join(".local/share/lifeos").join(MIC_CALIBRATION_FILE),
-                    ).ok()?;
+                    )
+                    .ok()?;
                     let cal: MicCalibration = serde_json::from_str(&data).ok()?;
                     cal.field_mode
-                }).unwrap_or(MicFieldMode::FarField)
+                })
+                .unwrap_or(MicFieldMode::FarField)
             };
             let gain_db = env_gain_db + field_mode_extra_gain(fm);
             let af_filter = format!("volume={}dB", gain_db);
@@ -4704,17 +4704,10 @@ fn resolve_camera_device() -> Option<String> {
 /// Records ambient audio, computes the RMS, and sets the threshold to
 /// `ambient_rms * 3` (clamped to 200..1500). The result is cached to disk.
 pub async fn calibrate_mic_threshold(source: Option<&str>) -> u32 {
-    let tmp_path = format!(
-        "/tmp/lifeos-calibration-{}.wav",
-        std::process::id()
-    );
+    let tmp_path = format!("/tmp/lifeos-calibration-{}.wav", std::process::id());
 
     // Try pw-record first, then parecord
-    let binary = resolve_binary(
-        "LIFEOS_AUDIO_CAPTURE_BIN",
-        &["pw-record", "parecord"],
-    )
-    .await;
+    let binary = resolve_binary("LIFEOS_AUDIO_CAPTURE_BIN", &["pw-record", "parecord"]).await;
 
     let recorded = if let Some(bin) = binary {
         let program = Path::new(&bin)
@@ -4731,7 +4724,15 @@ pub async fn calibrate_mic_threshold(source: Option<&str>) -> u32 {
                 if let Some(src) = source {
                     cmd.args(["--target", src]);
                 }
-                cmd.args(["--rate", "16000", "--channels", "1", "--format", "s16", &tmp_path]);
+                cmd.args([
+                    "--rate",
+                    "16000",
+                    "--channels",
+                    "1",
+                    "--format",
+                    "s16",
+                    &tmp_path,
+                ]);
                 cmd.stderr(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null());
                 cmd.status().await
@@ -4743,19 +4744,17 @@ pub async fn calibrate_mic_threshold(source: Option<&str>) -> u32 {
                 if let Some(src) = source {
                     cmd.args(["-d", src]);
                 }
-                cmd.args([
-                    "--rate=16000",
-                    "--channels=1",
-                    "--format=s16le",
-                    &tmp_path,
-                ]);
+                cmd.args(["--rate=16000", "--channels=1", "--format=s16le", &tmp_path]);
                 cmd.stderr(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null());
                 cmd.status().await
             }
             _ => {
                 log::warn!("[calibration] no timeout binary or unsupported recorder");
-                Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no timeout"))
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no timeout",
+                ))
             }
         };
         result.map(|s| s.success()).unwrap_or(false)
@@ -4830,9 +4829,7 @@ pub async fn calibrate_mic_threshold(source: Option<&str>) -> u32 {
 /// Load a previously cached mic calibration if it exists and is fresh (<24h).
 pub async fn load_calibrated_threshold() -> Option<u32> {
     let home = dirs_home()?;
-    let cal_path = home
-        .join(".local/share/lifeos")
-        .join(MIC_CALIBRATION_FILE);
+    let cal_path = home.join(".local/share/lifeos").join(MIC_CALIBRATION_FILE);
     let data = tokio::fs::read_to_string(&cal_path).await.ok()?;
     let cal: MicCalibration = serde_json::from_str(&data).ok()?;
 
@@ -5808,12 +5805,7 @@ async fn maybe_refine_wake_word_model(
         Ok(mut rd) => {
             let mut n = 0usize;
             while let Ok(Some(entry)) = rd.next_entry().await {
-                if entry
-                    .path()
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    == Some("wav")
-                {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("wav") {
                     n += 1;
                 }
             }
@@ -5822,9 +5814,7 @@ async fn maybe_refine_wake_word_model(
         Err(_) => return,
     };
     if count > 0 && count % WAKE_WORD_REFINE_EVERY == 0 {
-        log::info!(
-            "Wake word refinement triggered with {count} samples"
-        );
+        log::info!("Wake word refinement triggered with {count} samples");
         detector.reload_model();
     }
 }

@@ -327,9 +327,8 @@ impl SystemTuner {
         let total = self.history.len();
         let improved = applied.len();
 
-        let mut summary = format!(
-            "System Tuning Summary: {improved}/{total} parameters improved.\n"
-        );
+        let mut summary =
+            format!("System Tuning Summary: {improved}/{total} parameters improved.\n");
 
         for r in &applied {
             summary.push_str(&format!(
@@ -496,7 +495,10 @@ impl ResourcePredictor {
     fn read_gpu_percent() -> f32 {
         // Try nvidia-smi for GPU utilization
         let output = std::process::Command::new("nvidia-smi")
-            .args(["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"])
+            .args([
+                "--query-gpu=utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ])
             .output();
 
         match output {
@@ -669,7 +671,10 @@ pub async fn run_fine_tune_cycle(data_dir: &Path) -> Result<String, String> {
         if let Ok(data) = std::fs::read_to_string(&path) {
             // Each interaction file: {"prompt": "...", "completion": "...", "success": true}
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&data) {
-                let success = val.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                let success = val
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 if !success {
                     continue;
                 }
@@ -720,10 +725,7 @@ pub async fn run_fine_tune_cycle(data_dir: &Path) -> Result<String, String> {
 /// Check if the GPU is idle (no heavy processes running).
 async fn is_gpu_idle() -> bool {
     let output = tokio::process::Command::new("nvidia-smi")
-        .args([
-            "--query-compute-apps=pid",
-            "--format=csv,noheader",
-        ])
+        .args(["--query-compute-apps=pid", "--format=csv,noheader"])
         .output()
         .await;
 
@@ -802,7 +804,9 @@ mod tests {
     fn test_improvement_summary_empty() {
         let dir = std::env::temp_dir().join("lifeos-test-summary");
         let tuner = SystemTuner::new(dir);
-        assert!(tuner.get_improvement_summary().contains("No tuning results"));
+        assert!(tuner
+            .get_improvement_summary()
+            .contains("No tuning results"));
     }
 
     #[test]

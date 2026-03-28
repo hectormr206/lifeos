@@ -193,8 +193,7 @@ impl VirtualGamepad {
         use std::os::unix::io::RawFd;
 
         let path = CString::new("/dev/uinput").unwrap();
-        let fd: RawFd =
-            unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NONBLOCK) };
+        let fd: RawFd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_NONBLOCK) };
         if fd < 0 {
             return Err(format!(
                 "cannot open /dev/uinput: errno {}",
@@ -220,8 +219,19 @@ impl VirtualGamepad {
 
         // Register buttons
         let buttons: &[u16] = &[
-            BTN_A, BTN_B, BTN_X, BTN_Y, BTN_TL, BTN_TR, BTN_TL2, BTN_TR2,
-            BTN_START, BTN_SELECT, BTN_DPAD_UP, BTN_DPAD_DOWN, BTN_DPAD_LEFT,
+            BTN_A,
+            BTN_B,
+            BTN_X,
+            BTN_Y,
+            BTN_TL,
+            BTN_TR,
+            BTN_TL2,
+            BTN_TR2,
+            BTN_START,
+            BTN_SELECT,
+            BTN_DPAD_UP,
+            BTN_DPAD_DOWN,
+            BTN_DPAD_LEFT,
             BTN_DPAD_RIGHT,
         ];
         for &btn in buttons {
@@ -287,9 +297,7 @@ impl VirtualGamepad {
 
     /// Write a raw input_event to the uinput fd.
     fn write_event(&self, ev_type: u16, code: u16, value: i32) -> Result<(), String> {
-        let fd = self
-            .fd
-            .ok_or_else(|| "uinput not available".to_string())?;
+        let fd = self.fd.ok_or_else(|| "uinput not available".to_string())?;
 
         // struct input_event: timeval (16 bytes on 64-bit), type (u16), code (u16), value (i32)
         // Total: 24 bytes on 64-bit Linux
@@ -299,8 +307,7 @@ impl VirtualGamepad {
         buf[18..20].copy_from_slice(&code.to_le_bytes());
         buf[20..24].copy_from_slice(&value.to_le_bytes());
 
-        let written =
-            unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
+        let written = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
         if written < 0 {
             return Err(format!(
                 "write input_event failed: {}",
@@ -639,7 +646,10 @@ impl GamingAgent {
             .map_err(|e| format!("LLM vision analysis failed: {}", e))?;
 
         let raw = response.text.trim().to_string();
-        info!("[gaming] Game state analysis: {}", &raw[..raw.len().min(200)]);
+        info!(
+            "[gaming] Game state analysis: {}",
+            &raw[..raw.len().min(200)]
+        );
 
         // Try to parse the LLM JSON response; fall back gracefully.
         let analysis = parse_game_state_json(&raw);
@@ -657,8 +667,7 @@ impl GamingAgent {
         game_name: &str,
         router: &crate::llm_router::LlmRouter,
     ) -> Result<String, String> {
-        let state_json =
-            serde_json::to_string(game_state).unwrap_or_else(|_| "{}".to_string());
+        let state_json = serde_json::to_string(game_state).unwrap_or_else(|_| "{}".to_string());
 
         let prompt = format!(
             "You are a real-time gaming coach for '{}'. Based on the following game state, \
@@ -770,10 +779,7 @@ impl GamingAgent {
 
                 match fallback {
                     Ok(o) if o.status.success() => {
-                        let play = Command::new("aplay")
-                            .arg(tmp_path)
-                            .output()
-                            .await;
+                        let play = Command::new("aplay").arg(tmp_path).output().await;
                         match play {
                             Ok(p) if p.status.success() => {
                                 info!("[gaming] Voice coach played suggestion via piper+aplay");

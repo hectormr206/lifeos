@@ -134,11 +134,10 @@ fn heuristic_detect(text: &str) -> Option<String> {
     }
 
     // Common English words (high-frequency function words)
-    let english_words = ["the ", " is ", " are ", " have ", " has ", " was ", " were "];
-    let english_hits: usize = english_words
-        .iter()
-        .filter(|&&w| lower.contains(w))
-        .count();
+    let english_words = [
+        "the ", " is ", " are ", " have ", " has ", " was ", " were ",
+    ];
+    let english_hits: usize = english_words.iter().filter(|&&w| lower.contains(w)).count();
     if english_hits >= 2 {
         return Some("en".into());
     }
@@ -210,7 +209,9 @@ impl TranslationEngine {
         // Resolve source language
         let source_lang = match &req.source_lang {
             Some(lang) => lang.clone(),
-            None => detect_language(&req.text, router).await.unwrap_or_else(|_| "auto".into()),
+            None => detect_language(&req.text, router)
+                .await
+                .unwrap_or_else(|_| "auto".into()),
         };
 
         // 1. Try Argos Translate
@@ -273,12 +274,7 @@ impl TranslationEngine {
 
     // --- Backend: Argos Translate ---
 
-    async fn try_argos(
-        &self,
-        text: &str,
-        source: &str,
-        target: &str,
-    ) -> Result<String, String> {
+    async fn try_argos(&self, text: &str, source: &str, target: &str) -> Result<String, String> {
         let output = Command::new("argos-translate")
             .arg("--from")
             .arg(source)
@@ -569,20 +565,19 @@ impl RealtimeTranslator {
             }
 
             // 2. Transcribe with Whisper
-            let transcript =
-                match transcribe_audio(chunk_file.to_str().unwrap_or_default()).await {
-                    Ok(t) if !t.trim().is_empty() => t,
-                    Ok(_) => {
-                        debug!("translation: empty transcript for chunk {chunk_idx}");
-                        chunk_idx += 1;
-                        continue;
-                    }
-                    Err(e) => {
-                        warn!("translation: transcription failed for chunk {chunk_idx}: {e}");
-                        chunk_idx += 1;
-                        continue;
-                    }
-                };
+            let transcript = match transcribe_audio(chunk_file.to_str().unwrap_or_default()).await {
+                Ok(t) if !t.trim().is_empty() => t,
+                Ok(_) => {
+                    debug!("translation: empty transcript for chunk {chunk_idx}");
+                    chunk_idx += 1;
+                    continue;
+                }
+                Err(e) => {
+                    warn!("translation: transcription failed for chunk {chunk_idx}: {e}");
+                    chunk_idx += 1;
+                    continue;
+                }
+            };
 
             // 3. Translate the transcript
             let req = TranslationRequest {
@@ -671,9 +666,7 @@ pub async fn interpret_voice(
     let result = engine.translate(&req, router).await?;
 
     // 3. Synthesize via Piper TTS
-    let parent = audio
-        .parent()
-        .unwrap_or_else(|| Path::new("/tmp"));
+    let parent = audio.parent().unwrap_or_else(|| Path::new("/tmp"));
     let stem = audio
         .file_stem()
         .and_then(|s| s.to_str())
@@ -775,10 +768,7 @@ mod tests {
     #[test]
     fn test_heuristic_detect_spanish() {
         assert_eq!(heuristic_detect("¿Cómo estás hoy?"), Some("es".into()));
-        assert_eq!(
-            heuristic_detect("El niño corrió rápido"),
-            Some("es".into())
-        );
+        assert_eq!(heuristic_detect("El niño corrió rápido"), Some("es".into()));
     }
 
     #[test]
@@ -828,7 +818,11 @@ mod tests {
             .join("\n\n");
         let chunks = split_into_chunks(&text, 50);
         // Should split into roughly 2 chunks (40 words, 40 words, 20 words -> depends on boundary)
-        assert!(chunks.len() >= 2, "Expected at least 2 chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 2,
+            "Expected at least 2 chunks, got {}",
+            chunks.len()
+        );
     }
 
     #[test]

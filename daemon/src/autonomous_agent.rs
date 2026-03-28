@@ -295,10 +295,7 @@ fn build_vision_message(text: &str, data_url: &str) -> ChatMessage {
 /// 1. Captures a screenshot via `grim`
 /// 2. Sends it to a vision-capable LLM asking for coordinates of the described element
 /// 3. Parses and returns the (x, y) pair
-pub async fn visual_grounding(
-    description: &str,
-    router: &LlmRouter,
-) -> Result<(i32, i32), String> {
+pub async fn visual_grounding(description: &str, router: &LlmRouter) -> Result<(i32, i32), String> {
     let screenshot_path = capture_screenshot("grounding").await?;
     let data_url = screenshot_to_data_url(&screenshot_path).await?;
 
@@ -421,12 +418,7 @@ async fn execute_action(action: &ParsedAction) -> Result<String, String> {
         }
         ParsedAction::Type { text } => {
             manager
-                .execute(
-                    ComputerUseAction::TypeText {
-                        text: text.clone(),
-                    },
-                    false,
-                )
+                .execute(ComputerUseAction::TypeText { text: text.clone() }, false)
                 .await
                 .map_err(|e| format!("Type failed: {}", e))?;
             Ok(format!("Typed: {}", text))
@@ -497,7 +489,12 @@ pub async fn action_loop(
     let mut steps_taken = 0u32;
 
     for step in 0..max_steps {
-        info!("[action_loop] Step {}/{} for goal: {}", step + 1, max_steps, goal);
+        info!(
+            "[action_loop] Step {}/{} for goal: {}",
+            step + 1,
+            max_steps,
+            goal
+        );
 
         // 1. Capture current state
         let before_path = capture_screenshot(&format!("step{}-before", step)).await?;
@@ -671,7 +668,10 @@ pub async fn read_terminal_buffer() -> Result<String, String> {
         if output.status.success() {
             let text = String::from_utf8_lossy(&output.stdout).to_string();
             if !text.trim().is_empty() {
-                info!("[terminal_buffer] Read {} chars via wl-paste -p", text.len());
+                info!(
+                    "[terminal_buffer] Read {} chars via wl-paste -p",
+                    text.len()
+                );
                 return Ok(text);
             }
         }
@@ -801,7 +801,10 @@ pub async fn open_browser_in_workspace(url: &str) -> Result<(), String> {
 pub async fn wait_for_download(download_dir: &str, timeout_secs: u64) -> Result<PathBuf, String> {
     let dir = PathBuf::from(download_dir);
     if !dir.is_dir() {
-        return Err(format!("Download directory does not exist: {}", download_dir));
+        return Err(format!(
+            "Download directory does not exist: {}",
+            download_dir
+        ));
     }
 
     // Snapshot existing files
@@ -817,8 +820,7 @@ pub async fn wait_for_download(download_dir: &str, timeout_secs: u64) -> Result<
         existing.len()
     );
 
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let poll_interval = std::time::Duration::from_millis(500);
 
     loop {
@@ -916,10 +918,7 @@ pub async fn browser_switch_tab(index: u32) -> Result<(), String> {
         // Ctrl+1..9 switches to that tab directly
         let combo = format!("ctrl+{}", index);
         manager
-            .execute(
-                ComputerUseAction::Key { combo },
-                false,
-            )
+            .execute(ComputerUseAction::Key { combo }, false)
             .await
             .map_err(|e| format!("Failed to switch tab: {}", e))?;
     } else {

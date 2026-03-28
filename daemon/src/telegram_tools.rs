@@ -1040,9 +1040,7 @@ Herramientas:
                     tokio::spawn(async move {
                         let now = chrono::Utc::now();
                         let mut graph = kg.write().await;
-                        if let Err(e) = graph
-                            .ingest_telegram_message("user", &user_text, now)
-                            .await
+                        if let Err(e) = graph.ingest_telegram_message("user", &user_text, now).await
                         {
                             warn!("[knowledge_graph] Failed to ingest user message: {}", e);
                         }
@@ -1462,9 +1460,7 @@ Herramientas:
                             "bugfix" | "discovery" | "pattern" => {
                                 crate::knowledge_graph::EntityType::Topic
                             }
-                            "preference" | "config" => {
-                                crate::knowledge_graph::EntityType::Topic
-                            }
+                            "preference" | "config" => crate::knowledge_graph::EntityType::Topic,
                             _ => crate::knowledge_graph::EntityType::Topic,
                         };
                         tokio::spawn(async move {

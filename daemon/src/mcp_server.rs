@@ -347,10 +347,7 @@ async fn handle_sampling_create_message(
         let content = match msg.get("content") {
             Some(c) if c.is_object() => {
                 // Extract text from structured content
-                let text = c
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let text = c.get("text").and_then(|v| v.as_str()).unwrap_or("");
                 serde_json::Value::String(text.to_string())
             }
             Some(c) if c.is_array() => {
@@ -568,15 +565,13 @@ pub async fn handle_jsonrpc(req: JsonRpcRequest) -> JsonRpcResponse {
                 ),
             }
         }
-        "sampling/createMessage" => {
-            match handle_sampling_create_message(&req.params).await {
-                Ok(val) => (Some(val), None),
-                Err(e) => (
-                    None,
-                    Some(serde_json::json!({"code": -32603, "message": e})),
-                ),
-            }
-        }
+        "sampling/createMessage" => match handle_sampling_create_message(&req.params).await {
+            Ok(val) => (Some(val), None),
+            Err(e) => (
+                None,
+                Some(serde_json::json!({"code": -32603, "message": e})),
+            ),
+        },
         _ => (
             None,
             Some(

@@ -665,7 +665,16 @@ impl Supervisor {
                 }
 
                 // Record reliability outcome (success)
-                Self::record_reliability(&self.work_dir, &task.id, "supervisor", "scheduled", true, None, steps_total, steps_ok);
+                Self::record_reliability(
+                    &self.work_dir,
+                    &task.id,
+                    "supervisor",
+                    "scheduled",
+                    true,
+                    None,
+                    steps_total,
+                    steps_ok,
+                );
 
                 let _ = self.notify_tx.send(SupervisorNotification::TaskCompleted {
                     task_id: task.id,
@@ -701,7 +710,16 @@ impl Supervisor {
                 }
 
                 // Record reliability outcome (failure)
-                Self::record_reliability(&self.work_dir, &task.id, "supervisor", "scheduled", false, Some(&error_msg), 0, 0);
+                Self::record_reliability(
+                    &self.work_dir,
+                    &task.id,
+                    "supervisor",
+                    "scheduled",
+                    false,
+                    Some(&error_msg),
+                    0,
+                    0,
+                );
 
                 // Apply runbook: suggest recovery if we recognize the error pattern
                 let mut error_with_hint = error_msg.clone();

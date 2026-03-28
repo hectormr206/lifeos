@@ -440,9 +440,8 @@ impl SecurityAiDaemon {
         }
 
         // Clean up tracker entries for PIDs that no longer exist.
-        self.high_cpu_tracker.retain(|pid, _| {
-            std::path::Path::new(&format!("/proc/{}", pid)).exists()
-        });
+        self.high_cpu_tracker
+            .retain(|pid, _| std::path::Path::new(&format!("/proc/{}", pid)).exists());
 
         alerts
     }
@@ -547,7 +546,13 @@ impl SecurityAiDaemon {
         let mut alerts = Vec::new();
 
         // --- rpm -V for critical packages ---
-        let critical_packages = ["coreutils", "systemd", "openssh-server", "shadow-utils", "sudo"];
+        let critical_packages = [
+            "coreutils",
+            "systemd",
+            "openssh-server",
+            "shadow-utils",
+            "sudo",
+        ];
         for pkg in &critical_packages {
             let output = Command::new("rpm").args(["-V", pkg]).output();
             match output {
@@ -605,10 +610,7 @@ impl SecurityAiDaemon {
                         id: Uuid::new_v4().to_string(),
                         severity: AlertSeverity::Critical,
                         alert_type: AlertType::IntegrityViolation,
-                        description: format!(
-                            "SELinux is {} -- system hardening degraded",
-                            status
-                        ),
+                        description: format!("SELinux is {} -- system hardening degraded", status),
                         process_name: None,
                         process_pid: None,
                         remote_addr: None,
@@ -690,10 +692,7 @@ impl SecurityAiDaemon {
                 Err(msg)
             }
             Err(e) => {
-                let msg = format!(
-                    "Cannot execute kill for pid {}: {}",
-                    pid, e
-                );
+                let msg = format!("Cannot execute kill for pid {}: {}", pid, e);
                 error!("security_ai: {}", msg);
                 Err(msg)
             }
@@ -755,10 +754,7 @@ impl SecurityAiDaemon {
                     Err(msg)
                 }
                 Err(e) => {
-                    let msg = format!(
-                        "Cannot execute iptables to block {}: {}",
-                        remote_addr, e
-                    );
+                    let msg = format!("Cannot execute iptables to block {}: {}", remote_addr, e);
                     error!("security_ai: {}", msg);
                     Err(msg)
                 }
@@ -776,9 +772,7 @@ impl SecurityAiDaemon {
     /// 2. For Critical/Emergency alerts: takes immediate action (isolate/block).
     /// 3. Emits events for all alerts via the event bus.
     /// 4. Stores alert history.
-    pub async fn run_security_monitor(
-        event_bus: broadcast::Sender<DaemonEvent>,
-    ) {
+    pub async fn run_security_monitor(event_bus: broadcast::Sender<DaemonEvent>) {
         let mut daemon = SecurityAiDaemon::new();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
 
@@ -896,7 +890,10 @@ impl SecurityAiDaemon {
 
         // Header.
         report.push_str(&format!("Alert ID:    {}\n", alert.id));
-        report.push_str(&format!("Timestamp:   {}\n", alert.timestamp.format("%Y-%m-%d %H:%M:%S UTC")));
+        report.push_str(&format!(
+            "Timestamp:   {}\n",
+            alert.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
+        ));
         report.push_str(&format!("Severity:    {}\n", alert.severity));
         report.push_str(&format!("Type:        {}\n", alert.alert_type));
         report.push_str(&format!("Description: {}\n\n", alert.description));
@@ -1205,10 +1202,7 @@ fn extract_process_name(info: &str) -> Option<String> {
 fn extract_pid(info: &str) -> Option<u32> {
     if let Some(start) = info.find("pid=") {
         let after = &info[start + 4..];
-        let pid_str: String = after
-            .chars()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
+        let pid_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
         return pid_str.parse().ok();
     }
     None
