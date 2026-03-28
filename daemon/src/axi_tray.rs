@@ -374,8 +374,9 @@ pub mod inner {
         }
     }
 
-    /// Spawn the system tray icon in a background thread.
-    pub fn spawn_tray(
+    /// Spawn the system tray icon. Blocks until the tray exits.
+    /// Must be called from a blocking context (e.g. `spawn_blocking`).
+    pub async fn spawn_tray(
         mut event_rx: broadcast::Receiver<DaemonEvent>,
         dashboard_url: String,
         api_base: String,
@@ -399,9 +400,6 @@ pub mod inner {
 
         let service = TrayService::new(tray);
         let handle = service.handle();
-
-        service.spawn();
-        info!("[tray] Axi tray icon active");
 
         // Listen for state and sensor updates
         tokio::spawn(async move {
@@ -433,6 +431,21 @@ pub mod inner {
                 }
             }
         });
+
+        // run() blocks the current thread until the tray service exits.
+        // We use spawn_blocking so we don't block the tokio runtime.
+        info!("[tray] Axi tray icon active");
+        let run_result = tokio::task::spawn_blocking(move || {
+            if let Err(e) = service.run() {
+                log::error!("[tray] Tray service error: {}", e);
+            }
+        })
+        .await;
+
+        if let Err(e) = run_result {
+            log::error!("[tray] Tray service panicked: {}", e);
+        }
+        info!("[tray] Tray service exited");
     }
 }
 

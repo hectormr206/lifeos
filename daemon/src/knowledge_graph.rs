@@ -1294,7 +1294,7 @@ mod tests {
             .filter(|e| e.entity_type == EntityType::Commit)
             .collect();
         assert_eq!(commits.len(), 1);
-        assert!(commits[0].properties.get("message").is_some());
+        assert!(commits[0].properties.contains_key("message"));
 
         // Two files should be linked
         let files: Vec<_> = g

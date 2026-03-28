@@ -877,8 +877,9 @@ async fn main() -> anyhow::Result<()> {
                     tray_api_base,
                     tray_token,
                     current_state,
-                );
-                // spawn_tray runs until the tray exits; if we get here it died
+                )
+                .await;
+                // spawn_tray now actually blocks until the tray exits
                 warn!("[tray] Tray icon exited, re-spawning in 5s...");
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
