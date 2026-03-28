@@ -603,6 +603,26 @@ Estado actual: 17 de 40 modulos estan conectados al runtime. Los 23 restantes so
 
 ---
 
+## Sudo Policy: Least Privilege (permanente)
+
+El usuario `lifeos` (UID 1000) ejecuta `lifeosd`. Los permisos root estan en `/etc/sudoers.d/lifeos-axi` con NOPASSWD solo para comandos especificos.
+
+| Categoria | Comandos | Fuente |
+|-----------|----------|--------|
+| Service mgmt | systemctl start/stop/restart llama-server, whisper-stt | game_guard.rs, agent_runtime.rs, api/mod.rs |
+| OS updates | bootc status/upgrade/rollback | updates.rs, health.rs |
+| Flatpak | flatpak install/uninstall/update --system | telegram_tools.rs, proactive.rs |
+| Hardware diag | smartctl -j -a (read-only) | security_daemon.rs, proactive.rs |
+| Network security | nft list/add rule, iptables block | proactive.rs, security_ai.rs |
+| System tuning | sysctl -w | system_tuner.rs |
+| Battery | tee charge_control_end_threshold | battery_manager.rs |
+| Process isolation | kill -STOP | security_ai.rs |
+| RPM verify | rpm -V | security_ai.rs |
+
+**Regla para agregar nuevas:** comando exacto, scope minimo, comentario con archivo fuente. **NUNCA** `ALL=(ALL) NOPASSWD: ALL`.
+
+---
+
 ## 12. Riesgos y Mitigaciones
 
 | Riesgo | Probabilidad | Mitigacion |

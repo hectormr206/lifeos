@@ -97,6 +97,27 @@ sudo bash scripts/build-iso.sh
 
 **Exceptions:** Feature-gated modules (`#[cfg(feature = "...")]`) that require external services (Home Assistant, WhatsApp, etc.) may be compiled but not active until configured. These are NOT dead code — they activate when the user provides credentials.
 
+## Sudo Policy: Least Privilege for lifeos User
+
+The `lifeos` user runs the daemon (lifeosd) as UID 1000. It has targeted NOPASSWD sudo rules in `/etc/sudoers.d/lifeos-axi` for specific operations only.
+
+**When adding a new feature that needs root:**
+1. Identify the EXACT command and arguments needed
+2. Add a specific sudoers rule (no wildcards on the command itself)
+3. Document the source file and line that uses it in a comment
+4. Use the NARROWEST possible scope (e.g., specific service name, not `systemctl *`)
+
+**Current sudo categories:**
+- Service management: llama-server, whisper-stt (systemctl start/stop/restart)
+- OS updates: bootc status/upgrade/rollback
+- Hardware diagnostics: smartctl (read-only)
+- Network security: nft list/add rule, iptables (blocking)
+- System tuning: sysctl -w (kernel parameters)
+- Battery management: charge threshold via sysfs
+- Process isolation: kill -STOP (security response)
+
+**NEVER add:** `lifeos ALL=(ALL) NOPASSWD: ALL` — this defeats the entire security model.
+
 ## Self-hosted Runner (`/var/lib/lifeos/actions-runner/`)
 
 - Service: `actions.runner.hectormr206-lifeos.hectormr.service` (system-level, user `lifeos`)

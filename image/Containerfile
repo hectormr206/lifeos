@@ -461,7 +461,8 @@ RUN set -eux && \
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
 RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
-    chmod 0700 /var/roothome
+    chmod 0700 /var/roothome && \
+    chown 1000:1000 /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos
 
 COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
 COPY --from=piper-voice-builder /out/models/piper /usr/share/lifeos/models/piper
