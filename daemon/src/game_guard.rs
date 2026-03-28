@@ -453,7 +453,17 @@ pub fn detect_vram_heavy_processes(threshold_mb: u64) -> Vec<GameInfo> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_nvidia_pmon_output(&stdout, threshold_mb)
+    let mut results = parse_nvidia_pmon_output(&stdout, threshold_mb);
+
+    // Enhance names from /proc (nvidia-smi may truncate command names)
+    for info in &mut results {
+        if let Some(resolved) = get_game_name_from_pid(info.pid) {
+            info.name = resolved;
+        }
+        info.window_title = get_game_window_title(info.pid);
+    }
+
+    results
 }
 
 /// Parse the output of `nvidia-smi pmon -c 1 -s m`.
@@ -519,14 +529,10 @@ fn parse_nvidia_pmon_output(output: &str, threshold_mb: u64) -> Vec<GameInfo> {
             continue;
         }
 
-        // Get the authoritative name from /proc (nvidia-smi may truncate it)
-        let name = get_game_name_from_pid(pid).unwrap_or_else(|| command.to_string());
-        let window_title = get_game_window_title(pid);
-
         results.push(GameInfo {
             pid,
-            name,
-            window_title,
+            name: command.to_string(),
+            window_title: None,
             detection_method: DetectionMethod::VramUsage,
         });
     }
