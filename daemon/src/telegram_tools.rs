@@ -37,13 +37,35 @@ pub mod inner {
     // Tool definitions (shown to the LLM in the system prompt)
     // -----------------------------------------------------------------------
 
-    pub const SYSTEM_PROMPT: &str = r#"Eres Axi, el asistente personal de LifeOS — un ajolote digital amigable, inteligente y protector. Vives dentro del sistema operativo del usuario (LifeOS, un Linux inmutable basado en Fedora) y puedes hacer cosas reales en su computadora.
+    const SYSTEM_PROMPT_BASE: &str = r#"Eres Axi, el asistente personal de LifeOS — un ajolote digital amigable, inteligente y protector. Vives dentro del sistema operativo del usuario (LifeOS, un Linux inmutable basado en Fedora) y puedes hacer cosas reales en su computadora.
 
-PERSONALIDAD: Eres amigable y accesible (nunca intimidante), inteligente pero no pretencioso, y protector de la privacidad del usuario. Hablas como un amigo cercano que sabe mucho de tecnologia. Tu creador es Hector Martinez (hectormr.com).
+PERSONALIDAD: Eres amigable y accesible (nunca intimidante), inteligente pero no pretencioso, y protector de la privacidad del usuario. Hablas como un amigo cercano que sabe mucho de tecnologia.
+
+## Identidad
+- Mi nombre es Axi, el asistente AI de LifeOS.
+- Fui creado y programado por **Hector Martinez Resediz** (hectormr.com).
+- LifeOS es un sistema operativo AI-native basado en Fedora bootc.
+- Si alguien pregunta quien me creo, quien es mi desarrollador, o quien me programo,
+  SIEMPRE respondo: "Fui creado por Hector Martinez Resediz (hectormr.com),
+  el fundador y desarrollador de LifeOS."
+- NUNCA invento otros creadores ni atribuyo mi creacion a nadie mas.
+
+## Reglas estrictas
+- NUNCA inventes contenido de archivos, carpetas, o resultados de comandos.
+- Si no ejecutaste una herramienta para verificar algo, di "no lo he verificado, dejame revisarlo".
+- NUNCA adivines la estructura de un proyecto — usa list_files o run_command para verificar.
+- Cuando el usuario te pregunte sobre sus archivos, SIEMPRE usa una herramienta primero.
 
 IMPORTANTE: Responde siempre en español mexicano, de forma natural y concisa. No uses markdown. Tienes memoria de la conversacion — puedes referirte a mensajes anteriores. Nunca respondas con saludos genericos — siempre aporta algo util o pregunta algo especifico.
 
 VISION: Si recibes una imagen, SIEMPRE describela y responde sobre ella. Si no puedes ver la imagen (el modelo no soporta vision), dile al usuario: "No puedo ver imagenes en este momento, ¿me la describes?"
+
+REGLAS DE TIEMPO:
+- SIEMPRE usa la hora del [Contexto temporal] mostrado arriba. NUNCA inventes una hora.
+- Cuando el usuario diga "manana", "en 2 horas", "el lunes", calcula la fecha/hora EXACTA.
+- SIEMPRE confirma la hora calculada: "Te recuerdo el lunes 31 de marzo a las 15:00 (CST)."
+- Para programar tareas usa la herramienta cron_add con la hora EXACTA en formato cron.
+- Si no estas seguro de la hora que quiere el usuario, PREGUNTA.
 
 Cuando el usuario te pida algo que requiera una accion real, usa las herramientas. Si es solo conversacion, responde directamente.
 
@@ -180,6 +202,13 @@ Herramientas:
     args: {"period": "24h"}
     Periodos validos: "1h", "6h", "12h", "24h", "7d". Por defecto: "24h".
 
+34. **current_time** — Devuelve la fecha y hora actual exacta con zona horaria. Usar cuando necesites precision.
+    args: {} (sin parametros)
+
+35. **search_memories_by_date** — Busca memorias en un rango de fecha/hora.
+    args: {"date": "2026-03-28", "time_from": "18:00", "time_to": "23:59"}
+    Si no se pone time_from/time_to, busca todo el dia. La fecha se interpreta en tu zona horaria local.
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -189,6 +218,16 @@ Herramientas:
 - Cuando aprendas un PROCEDIMIENTO (secuencia de pasos para lograr algo), usa procedure_save.
 - Si el usuario dice "y eso?", busca en memoria con recall o refierete al contexto previo.
 "#;
+
+    /// Build the full system prompt with live time context prepended.
+    /// Must be called fresh for every LLM request (never cache).
+    fn build_system_prompt() -> String {
+        format!(
+            "{}\n\n{}",
+            crate::time_context::time_context(),
+            SYSTEM_PROMPT_BASE
+        )
+    }
 
     // -----------------------------------------------------------------------
     // Conversation history store — with compaction, disk persistence,
@@ -891,6 +930,8 @@ Herramientas:
             "procedure_find" => execute_procedure_find(&call.args, ctx).await,
             "translate" => execute_translate(&call.args, ctx).await,
             "audit_query" => execute_audit_query(&call.args).await,
+            "current_time" => Ok(crate::time_context::time_context()),
+            "search_memories_by_date" => execute_search_memories_by_date(&call.args, ctx).await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -917,10 +958,10 @@ Herramientas:
         user_text: &str,
         image_b64: Option<&str>,
     ) -> (String, Option<String>) {
-        // Build messages starting with system prompt
+        // Build messages starting with system prompt (fresh time context each call)
         let mut messages = vec![ChatMessage {
             role: "system".into(),
-            content: serde_json::Value::String(SYSTEM_PROMPT.into()),
+            content: serde_json::Value::String(build_system_prompt()),
         }];
 
         // Inject conversation history for multi-turn context
@@ -1015,9 +1056,8 @@ Herramientas:
                 } else {
                     response_text.clone()
                 };
-                // Don't show provider tag to user — log it instead
-                log::debug!("[agentic_chat] response from provider: {}", provider);
-                let tagged = final_text.trim().to_string();
+                // Always show provider tag so user can debug which model responded
+                let tagged = format!("{}\n\n[{}]", final_text.trim(), provider);
 
                 // Save to conversation history
                 let assistant_msg = ChatMessage {
@@ -1344,7 +1384,9 @@ Herramientas:
             )
         } else {
             // Sanitize pattern: allow glob chars (*, ?, [, ]) but reject shell injection chars
-            let bad_chars = [';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\'', '"', '\\', '\n'];
+            let bad_chars = [
+                ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\'', '"', '\\', '\n',
+            ];
             let safe_pattern: String = pattern.chars().filter(|c| !bad_chars.contains(c)).collect();
             format!(
                 "ls -la '{}'/{} 2>/dev/null; echo '---'; ls '{}' 2>/dev/null | wc -l",
@@ -1684,9 +1726,10 @@ Herramientas:
             messages: vec![
                 ChatMessage {
                     role: "system".into(),
-                    content: serde_json::Value::String(
-                        "Eres un asistente que analiza capturas de paginas web. Describe el contenido de forma concisa en español.".into(),
-                    ),
+                    content: serde_json::Value::String(format!(
+                        "{}\n\nEres un asistente que analiza capturas de paginas web. Describe el contenido de forma concisa en español.",
+                        crate::time_context::time_context_short()
+                    )),
                 },
                 ChatMessage {
                     role: "user".into(),
@@ -2015,8 +2058,9 @@ Herramientas:
         let thinking = args["thinking"].as_str().unwrap_or("medium");
 
         let system_prompt = format!(
-            "Eres un sub-agente especializado de LifeOS. Tu nivel de pensamiento es: {}.\n\
+            "{}\n\nEres un sub-agente especializado de LifeOS. Tu nivel de pensamiento es: {}.\n\
              Responde de forma concisa y directa en español.",
+            crate::time_context::time_context(),
             thinking
         );
 
@@ -2040,8 +2084,8 @@ Herramientas:
         let router = ctx.router.read().await;
         match router.chat(&request).await {
             Ok(r) => {
-                log::debug!("[sub_agent] provider used: {}", r.provider);
-                Ok(r.text)
+                // Include provider tag so user sees which model the sub-agent used
+                Ok(format!("{}\n\n[{}]", r.text.trim(), r.provider))
             }
             Err(e) => Ok(format!("Error del sub-agente: {}", e)),
         }
@@ -2311,10 +2355,7 @@ Herramientas:
     }
 
     async fn execute_audit_query(args: &serde_json::Value) -> Result<String> {
-        let period = args
-            .get("period")
-            .and_then(|v| v.as_str())
-            .unwrap_or("24h");
+        let period = args.get("period").and_then(|v| v.as_str()).unwrap_or("24h");
 
         // Parse period into hours
         let hours: u64 = match period {
@@ -2366,8 +2407,7 @@ Herramientas:
                                 "Total tareas: {} (exitosas: {}, fallidas: {})",
                                 report.total_tasks, report.successful, report.failed
                             ));
-                            sections
-                                .push(format!("Tendencia: {}", report.trend));
+                            sections.push(format!("Tendencia: {}", report.trend));
                             if report.mtbf_hours > 0.0 {
                                 sections.push(format!(
                                     "Tiempo medio entre fallos: {:.1}h",
@@ -2386,10 +2426,8 @@ Herramientas:
                                         )
                                     })
                                     .collect();
-                                sections.push(format!(
-                                    "Fallos frecuentes:\n{}",
-                                    failures.join("\n")
-                                ));
+                                sections
+                                    .push(format!("Fallos frecuentes:\n{}", failures.join("\n")));
                             }
                             sections.push(format!(
                                 "Objetivo 95%: {}",
@@ -2425,10 +2463,7 @@ Herramientas:
             let lines: Vec<&str> = content.lines().collect();
             let recent_count = lines.len().min(10);
             if recent_count > 0 {
-                sections.push(format!(
-                    "Ultimas {} entradas del audit log:",
-                    recent_count
-                ));
+                sections.push(format!("Ultimas {} entradas del audit log:", recent_count));
                 for line in lines.iter().rev().take(recent_count) {
                     sections.push(format!("  {}", line));
                 }
@@ -2438,7 +2473,86 @@ Herramientas:
         if sections.is_empty() {
             Ok("No hay datos de auditoria disponibles todavia.".into())
         } else {
-            Ok(format!("=== Auditoria Axi ({}) ===\n{}", period, sections.join("\n")))
+            Ok(format!(
+                "=== Auditoria Axi ({}) ===\n{}",
+                period,
+                sections.join("\n")
+            ))
+        }
+    }
+
+    /// Search memories by date range. Converts local time to UTC using user timezone.
+    async fn execute_search_memories_by_date(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let date = args.get("date").and_then(|v| v.as_str()).unwrap_or("");
+        let time_from = args
+            .get("time_from")
+            .and_then(|v| v.as_str())
+            .unwrap_or("00:00");
+        let time_to = args
+            .get("time_to")
+            .and_then(|v| v.as_str())
+            .unwrap_or("23:59");
+
+        if date.is_empty() {
+            return Ok("Falta el parametro 'date' (formato: YYYY-MM-DD).".into());
+        }
+
+        // Get user timezone and convert to UTC range
+        let user_tz = crate::time_context::get_user_timezone();
+        let (from_utc, to_utc) =
+            match crate::time_context::date_time_range_to_utc(date, time_from, time_to, &user_tz) {
+                Ok(range) => range,
+                Err(e) => return Ok(format!("Error parseando fecha/hora: {}", e)),
+            };
+
+        // Query memory plane
+        if let Some(memory) = &ctx.memory {
+            let mem = memory.read().await;
+            match mem.search_by_time_range(&from_utc, &to_utc, 20).await {
+                Ok(entries) => {
+                    if entries.is_empty() {
+                        Ok(format!(
+                            "No encontre memorias entre {} {}–{} ({}).",
+                            date, time_from, time_to, user_tz
+                        ))
+                    } else {
+                        let formatted: Vec<String> = entries
+                            .iter()
+                            .map(|e| {
+                                let local_time =
+                                    crate::time_context::utc_to_local(&e.created_at, &user_tz)
+                                        .unwrap_or_else(|_| {
+                                            e.created_at.format("%Y-%m-%d %H:%M").to_string()
+                                        });
+                                format!(
+                                    "- [{}] {} — {}",
+                                    e.kind,
+                                    local_time,
+                                    if e.content.len() > 100 {
+                                        format!("{}...", &e.content[..100])
+                                    } else {
+                                        e.content.clone()
+                                    }
+                                )
+                            })
+                            .collect();
+                        Ok(format!(
+                            "Memorias del {} ({}–{}, {}):\n{}",
+                            date,
+                            time_from,
+                            time_to,
+                            user_tz,
+                            formatted.join("\n")
+                        ))
+                    }
+                }
+                Err(e) => Ok(format!("Error buscando en memoria: {}", e)),
+            }
+        } else {
+            Ok("La memoria persistente no esta disponible.".into())
         }
     }
 
@@ -2508,9 +2622,10 @@ Herramientas:
                 messages: vec![
                     ChatMessage {
                         role: "system".into(),
-                        content: serde_json::Value::String(
-                            "Eres un sub-agente SDD de LifeOS. Ejecuta SOLO la fase indicada. Conciso y directo. En espanol.".into(),
-                        ),
+                        content: serde_json::Value::String(format!(
+                            "{}\n\nEres un sub-agente SDD de LifeOS. Ejecuta SOLO la fase indicada. Conciso y directo. En espanol.",
+                            crate::time_context::time_context_short()
+                        )),
                     },
                     ChatMessage {
                         role: "user".into(),

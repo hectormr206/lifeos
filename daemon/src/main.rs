@@ -23,8 +23,6 @@ mod ai;
 mod api;
 #[allow(dead_code)]
 mod app_contracts;
-mod circuit_breaker;
-mod config_store;
 #[allow(dead_code)]
 mod autonomous_agent;
 mod axi_tray;
@@ -38,9 +36,11 @@ mod browser_automation;
 mod calendar;
 #[allow(dead_code)]
 mod cdp_client;
+mod circuit_breaker;
 #[allow(dead_code)]
 mod comm_bridges;
 mod computer_use;
+mod config_store;
 #[allow(dead_code)]
 mod connector_registry;
 mod context_policies;
@@ -101,11 +101,11 @@ mod privacy_filter;
 mod privacy_hygiene;
 #[allow(dead_code)]
 mod proactive;
-mod safe_mode;
 #[allow(dead_code)]
 mod prompt_tuner;
 #[allow(dead_code)]
 mod reliability;
+mod safe_mode;
 #[allow(dead_code)]
 mod scheduled_tasks;
 mod screen_capture;
@@ -135,6 +135,7 @@ mod task_queue;
 mod telegram_bridge;
 mod telegram_tools;
 mod telemetry;
+mod time_context;
 #[allow(dead_code)]
 mod translation;
 mod tuf;

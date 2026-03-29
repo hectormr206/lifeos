@@ -658,13 +658,22 @@ pub fn persist_gpu_layers(layers: i32, _env_path: &str) -> Result<()> {
         // Game detected: create override file to force CPU mode
         fs::write(GAME_GUARD_ENV_PATH, "LIFEOS_AI_GPU_LAYERS=0\n")
             .with_context(|| format!("failed to write {}", GAME_GUARD_ENV_PATH))?;
-        info!("[game_guard] created {} with GPU_LAYERS=0", GAME_GUARD_ENV_PATH);
+        info!(
+            "[game_guard] created {} with GPU_LAYERS=0",
+            GAME_GUARD_ENV_PATH
+        );
     } else {
         // Game closed: remove override so main env value takes effect
         match fs::remove_file(GAME_GUARD_ENV_PATH) {
-            Ok(_) => info!("[game_guard] removed {} — restoring GPU from main env", GAME_GUARD_ENV_PATH),
+            Ok(_) => info!(
+                "[game_guard] removed {} — restoring GPU from main env",
+                GAME_GUARD_ENV_PATH
+            ),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                info!("[game_guard] {} already absent, nothing to clean up", GAME_GUARD_ENV_PATH);
+                info!(
+                    "[game_guard] {} already absent, nothing to clean up",
+                    GAME_GUARD_ENV_PATH
+                );
             }
             Err(e) => warn!("[game_guard] failed to remove {}: {e}", GAME_GUARD_ENV_PATH),
         }

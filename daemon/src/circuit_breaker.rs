@@ -108,9 +108,8 @@ impl CircuitBreaker {
                 self.cooldown_multiplier.store(new_mult, Ordering::Relaxed);
             }
 
-            let cooldown_hrs = COOLDOWN_SECS
-                * self.cooldown_multiplier.load(Ordering::Relaxed) as u64
-                / 3600;
+            let cooldown_hrs =
+                COOLDOWN_SECS * self.cooldown_multiplier.load(Ordering::Relaxed) as u64 / 3600;
             warn!(
                 "[circuit_breaker] {} failures — circuit OPEN (cooldown: {}h)",
                 count, cooldown_hrs
@@ -122,8 +121,7 @@ impl CircuitBreaker {
     pub async fn status(&self) -> CircuitBreakerStatus {
         let state = *self.state.read().await;
         let failures = self.failure_count.load(Ordering::Relaxed);
-        let cooldown_secs =
-            COOLDOWN_SECS * self.cooldown_multiplier.load(Ordering::Relaxed) as u64;
+        let cooldown_secs = COOLDOWN_SECS * self.cooldown_multiplier.load(Ordering::Relaxed) as u64;
         let remaining_cooldown = if state == CircuitState::Open {
             let last = self.last_failure.read().await;
             if let Some(t) = *last {

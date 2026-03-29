@@ -87,8 +87,7 @@ pub async fn check_all_databases(data_dir: &Path) -> Vec<(String, bool)> {
                 name
             );
             let restore_path = path.clone();
-            let _ =
-                tokio::task::spawn_blocking(move || restore_from_backup(&restore_path)).await;
+            let _ = tokio::task::spawn_blocking(move || restore_from_backup(&restore_path)).await;
         }
 
         results.push((name.to_string(), healthy));
@@ -120,10 +119,6 @@ pub async fn backup_all_databases(data_dir: &Path) -> usize {
         }
     }
 
-    info!(
-        "[sqlite] Backed up {}/{} databases",
-        count,
-        db_names.len()
-    );
+    info!("[sqlite] Backed up {}/{} databases", count, db_names.len());
     count
 }

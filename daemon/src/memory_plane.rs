@@ -212,9 +212,12 @@ impl MemoryPlaneManager {
     fn run_migrations(db: &Connection) -> Result<()> {
         // Helper: returns true if `table` already has a column called `col`.
         let has_column = |table: &str, col: &str| -> bool {
-            db.prepare(&format!("SELECT 1 FROM pragma_table_info('{}') WHERE name = ?1", table))
-                .and_then(|mut stmt| stmt.exists(rusqlite::params![col]))
-                .unwrap_or(false)
+            db.prepare(&format!(
+                "SELECT 1 FROM pragma_table_info('{}') WHERE name = ?1",
+                table
+            ))
+            .and_then(|mut stmt| stmt.exists(rusqlite::params![col]))
+            .unwrap_or(false)
         };
 
         // -- memory_entries migrations (added after v0.2) --
@@ -460,6 +463,70 @@ impl MemoryPlaneManager {
                     continue;
                 }
             }
+            out.push(decrypt_entry(&enc)?);
+        }
+        Ok(out)
+    }
+
+    /// Search memories within a UTC time range.
+    ///
+    /// Both `from_utc` and `to_utc` should be RFC3339 UTC strings.
+    /// The caller is responsible for converting from local time to UTC
+    /// (use `time_context::date_time_range_to_utc`).
+    pub async fn search_by_time_range(
+        &self,
+        from_utc: &str,
+        to_utc: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryEntry>> {
+        let limit = limit.clamp(1, 500);
+        let from = from_utc.to_string();
+        let to = to_utc.to_string();
+        let db_path = self.db_path.clone();
+
+        let entries = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+
+            let mut stmt = db.prepare(
+                "SELECT entry_id, created_at, updated_at, kind, scope, tags, source,
+                        importance, nonce_b64, ciphertext_b64, plaintext_sha256
+                 FROM memory_entries
+                 WHERE created_at >= ?1 AND created_at <= ?2
+                 ORDER BY created_at DESC
+                 LIMIT ?3",
+            )?;
+
+            let entries = stmt
+                .query_map(rusqlite::params![from, to, limit as i32], |row| {
+                    let tags_json: String = row.get(5)?;
+                    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+
+                    Ok(EncryptedMemoryEntry {
+                        entry_id: row.get(0)?,
+                        created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(1)?)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now()),
+                        updated_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                            .map(|dt| dt.with_timezone(&Utc))
+                            .unwrap_or_else(|_| Utc::now()),
+                        kind: row.get(3)?,
+                        scope: row.get(4)?,
+                        tags,
+                        source: row.get(6)?,
+                        importance: row.get::<_, i32>(7)? as u8,
+                        nonce_b64: row.get(8)?,
+                        ciphertext_b64: row.get(9)?,
+                        plaintext_sha256: row.get(10)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok::<_, anyhow::Error>(entries)
+        })
+        .await??;
+
+        let mut out = Vec::new();
+        for enc in entries {
             out.push(decrypt_entry(&enc)?);
         }
         Ok(out)

@@ -111,10 +111,7 @@ fn ws_state() -> &'static Arc<WsState> {
 // ---------------------------------------------------------------------------
 
 /// Axum handler — upgrades the HTTP connection to a WebSocket.
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<ApiState>,
-) -> impl IntoResponse {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<ApiState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws_client(socket, state))
 }
 
@@ -128,7 +125,8 @@ async fn handle_ws_client(mut socket: WebSocket, state: ApiState) {
                 let _ = send_msg(
                     &mut socket,
                     &WsServerMessage::Error {
-                        message: "First message must be {\"type\":\"connect\",\"token\":\"...\"}".into(),
+                        message: "First message must be {\"type\":\"connect\",\"token\":\"...\"}"
+                            .into(),
                     },
                 )
                 .await;
@@ -154,9 +152,12 @@ async fn handle_ws_client(mut socket: WebSocket, state: ApiState) {
 
     let ws_st = ws_state().clone();
     let current_seq = ws_st.seq.load(Ordering::Relaxed);
-    if send_msg(&mut socket, &WsServerMessage::Connected { seq: current_seq })
-        .await
-        .is_err()
+    if send_msg(
+        &mut socket,
+        &WsServerMessage::Connected { seq: current_seq },
+    )
+    .await
+    .is_err()
     {
         return;
     }
@@ -374,10 +375,16 @@ mod tests {
         assert_eq!(s2, 2);
 
         state
-            .store_event(1, r#"{"seq":1,"type":"event","event":{"type":"test1"}}"#.to_string())
+            .store_event(
+                1,
+                r#"{"seq":1,"type":"event","event":{"type":"test1"}}"#.to_string(),
+            )
             .await;
         state
-            .store_event(2, r#"{"seq":2,"type":"event","event":{"type":"test2"}}"#.to_string())
+            .store_event(
+                2,
+                r#"{"seq":2,"type":"event","event":{"type":"test2"}}"#.to_string(),
+            )
             .await;
 
         let missed = state.events_since(0).await;
@@ -395,9 +402,7 @@ mod tests {
         let state = WsState::new();
         for i in 1..=(RESYNC_BUFFER_SIZE + 10) {
             let seq = i as u64;
-            state
-                .store_event(seq, format!(r#"{{"seq":{seq}}}"#))
-                .await;
+            state.store_event(seq, format!(r#"{{"seq":{seq}}}"#)).await;
         }
         let buf = state.recent_events.read().await;
         assert_eq!(buf.len(), RESYNC_BUFFER_SIZE);

@@ -229,10 +229,7 @@ pub async fn call_tool(
             ];
             for pattern in &blocked {
                 if lower.contains(pattern) {
-                    return Err(format!(
-                        "Command blocked by security policy: {}",
-                        pattern
-                    ));
+                    return Err(format!("Command blocked by security policy: {}", pattern));
                 }
             }
 

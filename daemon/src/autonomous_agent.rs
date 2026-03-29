@@ -310,11 +310,11 @@ pub async fn visual_grounding(description: &str, router: &LlmRouter) -> Result<(
         messages: vec![
             ChatMessage {
                 role: "system".into(),
-                content: serde_json::Value::String(
-                    "You are a visual grounding assistant. You identify UI elements in screenshots \
-                     and return their pixel coordinates. Always return ONLY x,y with no extra text."
-                        .into(),
-                ),
+                content: serde_json::Value::String(format!(
+                    "{}\n\nYou are a visual grounding assistant. You identify UI elements in screenshots \
+                     and return their pixel coordinates. Always return ONLY x,y with no extra text.",
+                    crate::time_context::time_context_short()
+                )),
             },
             build_vision_message(&prompt, &data_url),
         ],
@@ -472,7 +472,8 @@ pub async fn action_loop(
     router: &LlmRouter,
 ) -> Result<ActionLoopResult, String> {
     let system_prompt = format!(
-        "You are Axi, an autonomous desktop agent for LifeOS. Your goal: {}\n\
+        "{}\n\n\
+         You are Axi, an autonomous desktop agent for LifeOS. Your goal: {}\n\
          You control a Linux Wayland desktop. At each step you see a screenshot.\n\
          Respond with EXACTLY ONE action:\n\
          - click(x,y) — click at pixel coordinates\n\
@@ -481,6 +482,7 @@ pub async fn action_loop(
          - scroll(up|down) — scroll the page\n\
          - done(result) — goal achieved, describe what was accomplished\n\
          Return ONLY the action, no explanation.",
+        crate::time_context::time_context_short(),
         goal
     );
 

@@ -827,10 +827,11 @@ pub async fn answer_context_question(
 
     // 3. Build prompt with context and send to LLM
     let system_prompt = format!(
-        "You are LifeOS, a personal AI assistant with access to the user's knowledge graph. \
+        "{}\n\nYou are LifeOS, a personal AI assistant with access to the user's knowledge graph. \
          Use the following context from the knowledge graph to answer the user's question. \
          Be specific and reference the context when relevant. Answer concisely.\n\n\
          Context from LifeOS knowledge graph:\n{}\n",
+        crate::time_context::time_context_short(),
         context_summary
     );
 

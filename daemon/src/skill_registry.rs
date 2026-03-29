@@ -167,11 +167,7 @@ impl SkillRegistry {
             let mut entries = match tokio::fs::read_dir(dir).await {
                 Ok(e) => e,
                 Err(e) => {
-                    warn!(
-                        "[skill_registry_v2] Cannot read {}: {}",
-                        dir.display(),
-                        e
-                    );
+                    warn!("[skill_registry_v2] Cannot read {}: {}", dir.display(), e);
                     continue;
                 }
             };
@@ -184,10 +180,7 @@ impl SkillRegistry {
 
                 let manifest_path = path.join("skill.json");
                 if !manifest_path.exists() {
-                    debug!(
-                        "[skill_registry_v2] No skill.json in {}",
-                        path.display()
-                    );
+                    debug!("[skill_registry_v2] No skill.json in {}", path.display());
                     continue;
                 }
 
@@ -199,10 +192,7 @@ impl SkillRegistry {
                             .and_then(|n| n.to_str())
                             .unwrap_or("unknown")
                             .to_string();
-                        warn!(
-                            "[skill_registry_v2] Failed to load skill '{}': {}",
-                            name, e
-                        );
+                        warn!("[skill_registry_v2] Failed to load skill '{}': {}", name, e);
                         RegisteredSkill {
                             manifest: SkillManifest {
                                 name: name.clone(),
@@ -245,11 +235,7 @@ impl SkillRegistry {
     }
 
     /// Load and validate a single skill directory.
-    async fn load_skill(
-        &self,
-        skill_dir: &Path,
-        manifest_path: &Path,
-    ) -> Result<RegisteredSkill> {
+    async fn load_skill(&self, skill_dir: &Path, manifest_path: &Path) -> Result<RegisteredSkill> {
         // 1. Check directory is not world-writable.
         check_not_world_writable(skill_dir)?;
 
@@ -351,7 +337,9 @@ impl SkillRegistry {
                 match tokio::fs::read_to_string(&manifest_path).await {
                     Ok(content) => {
                         if serde_json::from_str::<SkillManifest>(&content).is_err() {
-                            issues.push("skill.json is not valid JSON or has wrong schema".to_string());
+                            issues.push(
+                                "skill.json is not valid JSON or has wrong schema".to_string(),
+                            );
                         }
                     }
                     Err(e) => {
@@ -367,10 +355,11 @@ impl SkillRegistry {
 
             // 3. Check for executable entry point
             let has_run_sh = skill.path.join("run.sh").exists();
-            let has_main = skill.path.join("main.py").exists()
-                || skill.path.join("main.sh").exists();
+            let has_main =
+                skill.path.join("main.py").exists() || skill.path.join("main.sh").exists();
             if !has_run_sh && !has_main {
-                issues.push("No executable entry point found (run.sh, main.py, main.sh)".to_string());
+                issues
+                    .push("No executable entry point found (run.sh, main.py, main.sh)".to_string());
             } else if has_run_sh {
                 // Check run.sh is executable
                 #[cfg(unix)]
@@ -443,8 +432,8 @@ fn check_not_world_writable(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::metadata(path)
-            .with_context(|| format!("Cannot stat {}", path.display()))?;
+        let meta =
+            std::fs::metadata(path).with_context(|| format!("Cannot stat {}", path.display()))?;
         let mode = meta.permissions().mode();
         if mode & 0o002 != 0 {
             anyhow::bail!(
@@ -470,8 +459,11 @@ mod tests {
     struct TmpDir(PathBuf);
     impl TmpDir {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("lifeos-test-sr-{}-{}", name, std::process::id()));
+            let dir = std::env::temp_dir().join(format!(
+                "lifeos-test-sr-{}-{}",
+                name,
+                std::process::id()
+            ));
             fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }
@@ -685,11 +677,7 @@ mod tests {
         let mut updated = manifest.clone();
         updated.version = "2.0.0".to_string();
         let json = serde_json::to_string_pretty(&updated).unwrap();
-        fs::write(
-            tmp.path().join("test-skill").join("skill.json"),
-            json,
-        )
-        .unwrap();
+        fs::write(tmp.path().join("test-skill").join("skill.json"), json).unwrap();
 
         // Reload
         registry.reload_skill("test-skill").await.unwrap();

@@ -1332,7 +1332,8 @@ impl SensoryPipelineManager {
         };
 
         let base_system_prompt = format!(
-            "You are Axi, the local LifeOS assistant. Answer in ONE or TWO short sentences in natural spoken Spanish. Be direct and concise — this will be read aloud via TTS. No markdown, no code, no lists, no internal reasoning.{}",
+            "{}\n\nYou are Axi, the local LifeOS assistant. Answer in ONE or TWO short sentences in natural spoken Spanish. Be direct and concise — this will be read aloud via TTS. No markdown, no code, no lists, no internal reasoning.{}",
+            crate::time_context::time_context_short(),
             greeting_context
         );
 
@@ -1551,7 +1552,7 @@ impl SensoryPipelineManager {
                 ai_manager,
                 &question,
                 &screen_context.screen_path,
-                Some("Describe the user's screen in concise spoken Spanish. Avoid markdown and never expose internal reasoning."),
+                Some(&format!("{} Describe the user's screen in concise spoken Spanish. Avoid markdown and never expose internal reasoning.", crate::time_context::time_context_short())),
             )
             .await?
         } else {
@@ -1561,8 +1562,8 @@ impl SensoryPipelineManager {
                     vec![
                         (
                             "system".to_string(),
-                            "You are Axi. Use OCR context to describe the current screen in spoken Spanish, answer directly, avoid markdown, and do not reveal internal reasoning."
-                                .to_string(),
+                            format!("{} You are Axi. Use OCR context to describe the current screen in spoken Spanish, answer directly, avoid markdown, and do not reveal internal reasoning.",
+                                crate::time_context::time_context_short()),
                         ),
                         (
                             "user".to_string(),
@@ -1734,8 +1735,8 @@ impl SensoryPipelineManager {
                     vec![
                         (
                             "system".to_string(),
-                            "Resume la pantalla actual para la memoria del asistente en una o dos oraciones concisas."
-                                .to_string(),
+                            format!("{} Resume la pantalla actual para la memoria del asistente en una o dos oraciones concisas.",
+                                crate::time_context::time_context_short()),
                         ),
                         (
                             "user".to_string(),

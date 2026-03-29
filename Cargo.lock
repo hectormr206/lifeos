@@ -2730,6 +2730,7 @@ dependencies = [
  "glib",
  "gtk4",
  "half",
+ "iana-time-zone",
  "image",
  "ksni",
  "libadwaita",

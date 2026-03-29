@@ -684,10 +684,7 @@ fn load_providers_from_toml() -> Result<Vec<ProviderConfig>> {
             // SSRF guard: validate each endpoint before use
             for p in &active {
                 if let Err(e) = validate_endpoint_safe(&p.api_base) {
-                    warn!(
-                        "[llm_router] SSRF: provider '{}' blocked — {}",
-                        p.name, e
-                    );
+                    warn!("[llm_router] SSRF: provider '{}' blocked — {}", p.name, e);
                 }
             }
             let safe: Vec<ProviderConfig> = active

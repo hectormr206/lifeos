@@ -365,7 +365,10 @@ impl OverlayManager {
         history: &[ChatMessage],
         include_screen: bool,
     ) -> Result<AiChatResponse> {
-        const SYSTEM_PROMPT: &str = "You are Axi, the local LifeOS assistant. Respond in natural spoken Spanish, concise and practical. Treat the attached screenshot as the source of truth for this turn, describe only what is currently visible, do not claim memory of previous screens, avoid markdown/code, and never expose internal reasoning.";
+        let overlay_system_prompt = format!(
+            "{}\n\nYou are Axi, the local LifeOS assistant. Respond in natural spoken Spanish, concise and practical. Treat the attached screenshot as the source of truth for this turn, describe only what is currently visible, do not claim memory of previous screens, avoid markdown/code, and never expose internal reasoning.",
+            crate::time_context::time_context_short()
+        );
 
         let ai_manager = AiManager::new();
         let latest_user_message = history
@@ -385,11 +388,16 @@ impl OverlayManager {
             );
             let screenshot_path = screenshot.to_string_lossy().to_string();
             return ai_manager
-                .chat_multimodal(None, Some(SYSTEM_PROMPT), &prompt, &screenshot_path)
+                .chat_multimodal(
+                    None,
+                    Some(&overlay_system_prompt),
+                    &prompt,
+                    &screenshot_path,
+                )
                 .await;
         }
 
-        let mut messages = vec![("system".to_string(), SYSTEM_PROMPT.to_string())];
+        let mut messages = vec![("system".to_string(), overlay_system_prompt)];
         messages.extend(history.iter().rev().take(12).rev().filter_map(|message| {
             let role = match message.role {
                 ChatRole::User => "user",

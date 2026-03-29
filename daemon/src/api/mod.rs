@@ -1466,6 +1466,9 @@ pub fn create_router(state: ApiState) -> Router {
         // Settings: API keys management
         .route("/settings/keys", get(get_api_keys_status))
         .route("/settings/keys", post(post_api_keys))
+        // Settings: Timezone (AM.3)
+        .route("/settings/timezone", get(get_timezone))
+        .route("/settings/timezone", post(post_timezone))
         // Messaging channels status
         .route("/messaging/channels", get(get_messaging_channels))
         // Game Guard endpoints
@@ -9405,7 +9408,10 @@ async fn handle_metrics(
     if let Ok(metrics) = state.system_monitor.write().await.collect_metrics() {
         output.push_str("# HELP lifeos_cpu_usage_percent CPU usage\n");
         output.push_str("# TYPE lifeos_cpu_usage_percent gauge\n");
-        output.push_str(&format!("lifeos_cpu_usage_percent {:.1}\n", metrics.cpu_usage));
+        output.push_str(&format!(
+            "lifeos_cpu_usage_percent {:.1}\n",
+            metrics.cpu_usage
+        ));
 
         output.push_str("# HELP lifeos_memory_used_bytes Memory used in bytes\n");
         output.push_str("# TYPE lifeos_memory_used_bytes gauge\n");
@@ -9898,6 +9904,64 @@ async fn get_file_content_search(
             Json(ApiError {
                 error: "search_failed".into(),
                 message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+// ==================== TIMEZONE SETTINGS (AM.3) ====================
+
+/// GET /api/v1/settings/timezone — returns current timezone
+async fn get_timezone() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let tz = crate::time_context::get_user_timezone();
+    Ok(Json(serde_json::json!({
+        "timezone": tz,
+        "valid": crate::time_context::is_valid_iana_timezone(&tz),
+    })))
+}
+
+/// POST /api/v1/settings/timezone — set timezone (body: {"timezone": "America/Mexico_City"})
+async fn post_timezone(
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let tz = body.get("timezone").and_then(|t| t.as_str()).unwrap_or("");
+
+    if tz.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "bad_request".into(),
+                message: "timezone is required".into(),
+                code: 400,
+            }),
+        ));
+    }
+
+    if !crate::time_context::is_valid_iana_timezone(tz) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "invalid_timezone".into(),
+                message: format!(
+                    "'{}' is not a valid IANA timezone (e.g., America/Mexico_City)",
+                    tz
+                ),
+                code: 400,
+            }),
+        ));
+    }
+
+    match crate::time_context::save_user_timezone(tz) {
+        Ok(()) => Ok(Json(serde_json::json!({
+            "timezone": tz,
+            "saved": true,
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "save_failed".into(),
+                message: format!("Failed to save timezone: {}", e),
                 code: 500,
             }),
         )),

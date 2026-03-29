@@ -1391,9 +1391,10 @@ impl Supervisor {
             messages: vec![
                 ChatMessage {
                     role: "system".into(),
-                    content: serde_json::Value::String(
-                        "You are a visual analyst for LifeOS. Describe what you see concisely in Spanish.".into(),
-                    ),
+                    content: serde_json::Value::String(format!(
+                        "{}\n\nYou are a visual analyst for LifeOS. Describe what you see concisely in Spanish.",
+                        crate::time_context::time_context_short()
+                    )),
                 },
                 ChatMessage {
                     role: "user".into(),
@@ -1752,8 +1753,11 @@ impl Supervisor {
 
     async fn create_plan_with_role(&self, objective: &str, role: AgentRole) -> Result<Plan> {
         let role_context = role.system_prompt();
+        let time_ctx = crate::time_context::time_context();
         let system_prompt = format!(
-            r#"{role_context}
+            r#"{time_ctx}
+
+{role_context}
 
 You are an autonomous executor inside LifeOS, an AI-native operating system.
 The working directory is: {}

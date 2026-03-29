@@ -389,7 +389,8 @@ mod inner {
             std::env::set_var("LIFEOS_AUTO_APPROVE_MEDIUM", "true");
             let (response, screenshot_path) = with_typing(&bot, chat_id, async {
                 telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, task_text, None).await
-            }).await;
+            })
+            .await;
             if let Some(ref path) = screenshot_path {
                 let screenshot_file = std::path::Path::new(path);
                 if screenshot_file.exists() {
@@ -410,7 +411,8 @@ mod inner {
             let side_id = chat_id.0 ^ 0x7F7F_7F7F; // XOR to create distinct ID
             let (response, screenshot_path) = with_typing(&bot, chat_id, async {
                 telegram_tools::agentic_chat(&ctx.tool_ctx, side_id, side_text, None).await
-            }).await;
+            })
+            .await;
             // Clear the side conversation immediately after (no summary for /btw)
             let _ = ctx.tool_ctx.history.clear(side_id).await;
 
@@ -430,7 +432,8 @@ mod inner {
         // Everything else goes through the agentic loop (with conversation history)
         let (response, screenshot_path) = with_typing(&bot, chat_id, async {
             telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, &text, None).await
-        }).await;
+        })
+        .await;
 
         // If SDD checkpoint, send inline buttons for approval
         if response.contains("--- CHECKPOINT ---") {
@@ -577,7 +580,8 @@ mod inner {
         // Process transcription through agentic loop (natural language!)
         let (response, screenshot_path) = with_typing(&bot, chat_id, async {
             telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, &transcription, None).await
-        }).await;
+        })
+        .await;
 
         // Send screenshot if one was taken
         if let Some(ref path) = screenshot_path {
@@ -650,7 +654,8 @@ mod inner {
         // Process through agentic loop with image
         let (response, screenshot_path) = with_typing(&bot, chat_id, async {
             telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, caption, Some(&data_url)).await
-        }).await;
+        })
+        .await;
 
         if let Some(ref path) = screenshot_path {
             let screenshot_file = std::path::Path::new(path);
@@ -729,7 +734,8 @@ mod inner {
             let (response, screenshot_path) = with_typing(&bot, chat_id, async {
                 telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, caption, Some(&data_url))
                     .await
-            }).await;
+            })
+            .await;
 
             if let Some(ref path) = screenshot_path {
                 let screenshot_file = std::path::Path::new(path);

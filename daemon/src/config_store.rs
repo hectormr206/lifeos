@@ -150,12 +150,12 @@ impl ConfigStore {
             } else {
                 String::new()
             };
-            let timestamp = if let Ok(meta) = tokio::fs::read_to_string(path.join(".metadata")).await
-            {
-                meta.lines().next().unwrap_or("").to_string()
-            } else {
-                String::new()
-            };
+            let timestamp =
+                if let Ok(meta) = tokio::fs::read_to_string(path.join(".metadata")).await {
+                    meta.lines().next().unwrap_or("").to_string()
+                } else {
+                    String::new()
+                };
             result.push(CheckpointInfo {
                 name,
                 timestamp,
@@ -312,10 +312,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_factory_defaults() {
-        let tmp = std::env::temp_dir().join(format!(
-            "lifeos-config-factory-test-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("lifeos-config-factory-test-{}", std::process::id()));
         let store = ConfigStore::new(&tmp);
         store.init().await.unwrap();
 
