@@ -287,7 +287,10 @@ impl LlmRouter {
             .providers
             .iter()
             .filter(|p| allowed_tiers.contains(&p.tier))
-            .filter(|p| !(block_low_privacy && p.privacy.eq_ignore_ascii_case("low")))
+            .filter(|p| !(block_low_privacy && (
+                p.privacy.eq_ignore_ascii_case("low") ||
+                p.privacy.eq_ignore_ascii_case("variable")
+            )))
             .filter(|p| !candidates.iter().any(|c| c.name == p.name))
             .map(|p| {
                 let score = match complexity {
