@@ -381,7 +381,67 @@ function addFeedItem(icon, text) {
   }
 }
 
-// --- SSE connection ---
+// --- WebSocket connection ---
+const wsBadge = $('#ws-badge');
+let ws = null;
+let wsReconnectTimer = null;
+let wsReconnectDelay = 1000;
+
+function connectWebSocket() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${location.host}/ws`;
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    wsReconnectDelay = 1000;
+    if (wsBadge) { wsBadge.textContent = 'WS'; wsBadge.className = 'badge badge-ws badge-online'; }
+    addFeedItem('&#128279;', 'WebSocket conectado');
+
+    // Subscribe to all events and send auth
+    const subMsg = { type: 'subscribe', events: ['*'] };
+    if (token) subMsg.token = token;
+    ws.send(JSON.stringify(subMsg));
+  };
+
+  ws.onmessage = (e) => {
+    if (!e.data) return;
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+
+    // Handle server messages
+    if (msg.type === 'event' && msg.data) {
+      handleEvent(msg.data);
+    } else if (msg.type === 'state_sync') {
+      // Full state sync from WS
+      if (msg.data?.axi_state) updateOrb(msg.data.axi_state, null, msg.data.reason || '');
+    } else if (msg.type) {
+      // Treat as direct event
+      handleEvent(msg);
+    }
+  };
+
+  ws.onclose = () => {
+    if (wsBadge) { wsBadge.textContent = 'WS'; wsBadge.className = 'badge badge-ws badge-offline'; }
+    scheduleWsReconnect();
+  };
+
+  ws.onerror = () => {
+    if (wsBadge) { wsBadge.textContent = 'WS'; wsBadge.className = 'badge badge-ws badge-offline'; }
+  };
+}
+
+function scheduleWsReconnect() {
+  if (wsReconnectTimer) return;
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    wsReconnectDelay = Math.min(wsReconnectDelay * 1.5, 30000);
+    connectWebSocket();
+  }, wsReconnectDelay);
+}
+
+// --- SSE connection (fallback / primary for event stream) ---
 function connectSSE() {
   const url = `${API}/events/stream?token=${encodeURIComponent(token)}`;
   const sse = new EventSource(url);
@@ -507,6 +567,28 @@ function handleEvent(event) {
       break;
     case 'notification':
       addFeedItem('&#128276;', `[${event.data.priority}] ${event.data.message}`);
+      break;
+    case 'safe_mode_entered':
+      if (safeBanner) safeBanner.classList.add('visible');
+      addFeedItem('&#9888;', 'Axi entro en modo seguro');
+      break;
+    case 'safe_mode_exited':
+      if (safeBanner) safeBanner.classList.remove('visible');
+      addFeedItem('&#9989;', 'Axi salio de modo seguro');
+      break;
+    case 'health_check':
+      addFeedItem('&#128154;', `Diagnostico: ${event.data.status || 'completado'}`);
+      refreshDoctor();
+      break;
+    case 'task_completed':
+    case 'task_failed':
+      refreshTasks();
+      refreshSupervisor();
+      addFeedItem(event.type === 'task_completed' ? '&#9989;' : '&#10060;',
+        `Tarea ${event.type === 'task_completed' ? 'completada' : 'fallida'}: ${event.data.objective || ''}`);
+      break;
+    case 'telegram_message':
+      addFeedItem('&#128172;', `Telegram: ${(event.data.text || '').substring(0, 80)}`);
       break;
   }
 }
@@ -1671,6 +1753,9 @@ setInterval(() => {
   refreshAiStatus();
   refreshKeyStatus();
   refreshGameGuard();
+  checkSafeMode();
+  refreshDoctor();
+  refreshConversations();
 }, 30000);
 
 // --- System Health ---
@@ -1929,6 +2014,196 @@ document.getElementById('toggle-game-assistant')?.addEventListener('change', asy
   } catch (err) { /* silent */ }
 });
 
+// ==================== SAFE MODE ====================
+const safeBanner = $('#safe-mode-banner');
+const safeModeExitBtn = $('#safe-mode-exit');
+
+async function checkSafeMode() {
+  try {
+    const res = await fetch(`${API}/safe-mode`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (safeBanner) {
+      if (data.active) {
+        safeBanner.classList.add('visible');
+      } else {
+        safeBanner.classList.remove('visible');
+      }
+    }
+  } catch (e) { /* silent */ }
+}
+
+if (safeModeExitBtn) {
+  safeModeExitBtn.addEventListener('click', async () => {
+    safeModeExitBtn.textContent = 'Saliendo...';
+    try {
+      await fetch(`${API}/safe-mode/exit`, { method: 'POST', headers: apiHeaders() });
+      safeBanner.classList.remove('visible');
+      addFeedItem('&#9989;', 'Modo seguro desactivado');
+    } catch (err) {
+      safeModeExitBtn.textContent = 'Error';
+      addFeedItem('&#10060;', `Error al salir de modo seguro: ${err.message}`);
+    } finally {
+      setTimeout(() => { safeModeExitBtn.textContent = 'Salir de modo seguro'; }, 2000);
+    }
+  });
+}
+
+// ==================== TIME & TIMEZONE DISPLAY ====================
+const headerClock = $('#header-clock');
+const headerTz = $('#header-tz');
+let detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+
+function updateClock() {
+  const now = new Date();
+  const time = now.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  if (headerClock) headerClock.textContent = time;
+  if (headerTz && detectedTimezone) headerTz.textContent = detectedTimezone;
+}
+
+// Update clock every second
+setInterval(updateClock, 1000);
+updateClock();
+
+// ==================== DOCTOR HEALTH CHECKS ====================
+const doctorGrid = $('#doctor-grid');
+const doctorBadge = $('#doctor-badge');
+const doctorTimestamp = $('#doctor-timestamp');
+const doctorRunBtn = $('#doctor-run-btn');
+
+async function refreshDoctor() {
+  try {
+    const res = await fetch(`${API}/health`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (!doctorGrid) return;
+
+    const checks = data.checks || [];
+    const overall = data.status || data.overall || 'unknown';
+
+    // Update badge
+    if (doctorBadge) {
+      if (overall === 'healthy' || overall === 'ok') {
+        doctorBadge.textContent = 'Saludable';
+        doctorBadge.className = 'badge badge-online';
+      } else if (overall === 'degraded' || overall === 'warning') {
+        doctorBadge.textContent = 'Degradado';
+        doctorBadge.className = 'badge badge-warn';
+      } else {
+        doctorBadge.textContent = 'Problemas';
+        doctorBadge.className = 'badge badge-offline';
+      }
+    }
+
+    if (checks.length === 0) {
+      doctorGrid.innerHTML = '<p class="task-empty">Sin resultados de diagnostico</p>';
+      return;
+    }
+
+    doctorGrid.innerHTML = checks.map(c => {
+      const status = (c.status || '').toLowerCase();
+      const cls = status === 'pass' || status === 'ok' || status === 'healthy' ? 'check-pass'
+                : status === 'warn' || status === 'warning' || status === 'degraded' ? 'check-warn'
+                : 'check-fail';
+      const icon = cls === 'check-pass' ? '&#9989;' : cls === 'check-warn' ? '&#9888;' : '&#10060;';
+      const detail = c.message || c.detail || '';
+      return `<div class="doctor-check ${cls}">
+        <div>
+          <div class="doctor-check-name">${icon} ${escapeHtml(c.name || c.component || '?')}</div>
+          <div class="doctor-check-status">${escapeHtml(c.status || '?')}</div>
+          ${detail ? `<div class="doctor-check-detail">${escapeHtml(detail)}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    if (doctorTimestamp) {
+      doctorTimestamp.textContent = `Ultimo diagnostico: ${new Date().toLocaleTimeString('es')}`;
+    }
+  } catch (e) {
+    if (doctorGrid) doctorGrid.innerHTML = '<p class="task-empty">Error al ejecutar diagnostico</p>';
+  }
+}
+
+if (doctorRunBtn) {
+  doctorRunBtn.addEventListener('click', async () => {
+    doctorRunBtn.textContent = 'Ejecutando...';
+    await refreshDoctor();
+    doctorRunBtn.textContent = 'Ejecutar diagnostico';
+  });
+}
+
+// ==================== CONVERSATION HISTORY ====================
+const conversationList = $('#conversation-list');
+
+async function refreshConversations() {
+  try {
+    const res = await fetch(`${API}/conversations?limit=15`, { headers: apiHeaders() });
+    if (!res.ok) {
+      // Fallback: try sessions endpoint
+      const sessRes = await fetch(`${API}/sessions?limit=15`, { headers: apiHeaders() });
+      if (!sessRes.ok) {
+        if (conversationList) conversationList.innerHTML = '<p class="task-empty">Sin conversaciones recientes</p>';
+        return;
+      }
+      const sessData = await sessRes.json();
+      renderConversations(sessData.sessions || sessData.conversations || []);
+      return;
+    }
+    const data = await res.json();
+    renderConversations(data.conversations || data.sessions || []);
+  } catch (e) {
+    if (conversationList) conversationList.innerHTML = '<p class="task-empty">Sin conversaciones recientes</p>';
+  }
+}
+
+function renderConversations(convos) {
+  if (!conversationList) return;
+  if (!convos || convos.length === 0) {
+    conversationList.innerHTML = '<p class="task-empty">Sin conversaciones recientes</p>';
+    return;
+  }
+
+  conversationList.innerHTML = convos.map((c, idx) => {
+    const source = c.source || c.channel || 'desconocido';
+    const time = c.updated_at || c.created_at || c.timestamp || '';
+    const preview = c.preview || c.last_message || c.summary || '';
+    const messages = c.messages || [];
+    const msgCount = c.message_count || messages.length || 0;
+
+    let transcriptHtml = '';
+    if (messages.length > 0) {
+      transcriptHtml = messages.map(m => {
+        const role = (m.role || 'user').toLowerCase();
+        const cls = role === 'assistant' || role === 'axi' ? 'transcript-msg-axi' : 'transcript-msg-user';
+        const roleName = role === 'assistant' || role === 'axi' ? 'Axi' : 'Tu';
+        return `<div class="transcript-msg ${cls}">
+          <div class="transcript-msg-role">${roleName}</div>
+          ${escapeHtml((m.content || '').substring(0, 500))}
+        </div>`;
+      }).join('');
+    }
+
+    return `<div class="conversation-item" data-conv-idx="${idx}">
+      <div class="conversation-header">
+        <span class="conversation-source">${escapeHtml(source)}${msgCount ? ` (${msgCount} msgs)` : ''}</span>
+        <span class="conversation-time">${time ? timeAgo(time) : ''}</span>
+      </div>
+      ${preview ? `<div class="conversation-preview">${escapeHtml(preview.substring(0, 120))}</div>` : ''}
+      ${transcriptHtml ? `<div class="conversation-transcript">${transcriptHtml}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  // Add click to expand
+  conversationList.querySelectorAll('.conversation-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const wasExpanded = item.classList.contains('expanded');
+      conversationList.querySelectorAll('.conversation-item.expanded').forEach(i => i.classList.remove('expanded'));
+      if (!wasExpanded) item.classList.add('expanded');
+    });
+  });
+}
+
 // --- Tabs Initialization ---
 function initTabs() {
   const main = document.querySelector('main');
@@ -1938,10 +2213,10 @@ function initTabs() {
   nav.className = 'dashboard-tabs';
 
   const tabs = [
-    { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['hero-panel', 'orb-section', 'controls-section', 'status-section', 'chat-section'] },
-    { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'metrics-section', 'sched-section', 'feed-section'] },
+    { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['safe-mode-banner', 'hero-panel', 'orb-section', 'controls-section', 'status-section', 'chat-section'] },
+    { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'metrics-section', 'sched-section', 'conversations-section', 'feed-section'] },
     { id: 'tab-memory', icon: '&#128450;', label: 'Memoria', keywords: ['memory-section'] },
-    { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'health-section', 'battery-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'settings-section'] }
+    { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'doctor-section', 'health-section', 'battery-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'services-section', 'settings-section'] }
   ];
 
   const tabContents = document.createElement('div');
@@ -1987,6 +2262,10 @@ function initTabs() {
   await ensureBootstrapToken();
   await fetchInitialState();
   connectSSE();
+  connectWebSocket();
+  checkSafeMode();
+  refreshDoctor();
+  refreshConversations();
   refreshSupervisor();
   refreshTasks();
   refreshResources();

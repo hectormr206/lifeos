@@ -15,12 +15,24 @@
       <span class="header-subtitle">AI-first control plane de Axi</span>
     </div>
     <div class="header-right">
+      <div class="time-display">
+        <span id="header-clock" class="time-clock">--:--</span>
+        <span id="header-tz" class="time-tz"></span>
+      </div>
       <span id="connection-badge" class="badge badge-offline">Desconectado</span>
+      <span id="ws-badge" class="badge badge-ws badge-offline" title="WebSocket">WS</span>
       <button id="theme-toggle" class="icon-btn" title="Cambiar tema">&#9789;</button>
     </div>
   </header>
 
   <main>
+    <!-- Safe Mode Banner -->
+    <div id="safe-mode-banner" class="safe-mode-banner">
+      <span class="safe-mode-icon">&#9888;</span>
+      <span class="safe-mode-text">Axi esta en <strong>modo seguro</strong> tras crashes repetidos. Responde mensajes pero no ejecuta acciones autonomas.</span>
+      <button class="safe-mode-exit-btn" id="safe-mode-exit">Salir de modo seguro</button>
+    </div>
+
     <section class="hero-panel">
       <div class="hero-copy">
         <p class="hero-kicker">AI-first orchestration</p>
@@ -287,6 +299,14 @@
       </div>
     </section>
 
+    <!-- Conversation History -->
+    <section class="conversations-section">
+      <h2>Historial de Conversaciones</h2>
+      <div class="conversation-list" id="conversation-list">
+        <p class="task-empty">Cargando conversaciones...</p>
+      </div>
+    </section>
+
     <!-- System Resources -->
     <section class="resources-section">
       <h2>Recursos del Sistema</h2>
@@ -450,6 +470,18 @@
           <span class="health-value" id="health-ram">—</span>
         </div>
       </div>
+    </section>
+
+    <!-- Doctor Health Checks -->
+    <section class="doctor-section">
+      <h2>Doctor <span id="doctor-badge" class="badge badge-offline">Sin datos</span></h2>
+      <div class="doctor-grid" id="doctor-grid">
+        <p class="task-empty">Ejecutando diagnostico...</p>
+      </div>
+      <div class="doctor-actions">
+        <button type="button" class="quick-action-btn" id="doctor-run-btn">Ejecutar diagnostico</button>
+      </div>
+      <p class="doctor-timestamp" id="doctor-timestamp"></p>
     </section>
 
     <!-- Service Status -->
