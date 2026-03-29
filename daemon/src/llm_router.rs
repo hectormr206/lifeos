@@ -276,11 +276,18 @@ impl LlmRouter {
             ],
         };
 
+        // Block low-privacy providers (Gemini free, Chinese) for sensitive data
+        let block_low_privacy = matches!(
+            sensitivity,
+            SensitivityLevel::Medium | SensitivityLevel::High | SensitivityLevel::Critical
+        );
+
         // Score providers by suitability for this complexity
         let mut scored: Vec<(&ProviderConfig, u32)> = self
             .providers
             .iter()
             .filter(|p| allowed_tiers.contains(&p.tier))
+            .filter(|p| !(block_low_privacy && p.privacy.eq_ignore_ascii_case("low")))
             .filter(|p| !candidates.iter().any(|c| c.name == p.name))
             .map(|p| {
                 let score = match complexity {
@@ -653,7 +660,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 16384,
             tier: ProviderTier::Local,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "max".into(),
         },
         // ===== Priority 2: Cerebras — zero data retention, 2000+ tok/s =====
         // Qwen3 235B (A22B MoE) — most powerful free model
@@ -671,7 +678,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "high".into(),
         },
         // Llama 3.1 8B on Cerebras — fastest for simple tasks (~2200 tok/s)
         ProviderConfig {
@@ -688,7 +695,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "high".into(),
         },
         // ===== Priority 3: Groq — zero data retention, ~500-1000 tok/s =====
         // Llama 3.3 70B on Groq — strong general purpose
@@ -706,7 +713,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "high".into(),
         },
         // Qwen3 32B on Groq — reasoning and coding
         ProviderConfig {
@@ -723,7 +730,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "high".into(),
         },
         // Llama 3.1 8B on Groq — fast lightweight tasks
         ProviderConfig {
@@ -740,7 +747,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "high".into(),
         },
         // GPT-OSS 120B on Groq — strong reasoning
         ProviderConfig {
@@ -757,7 +764,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "high".into(),
         },
         // ===== Priority 4: Premium US providers (medium privacy, paid) =====
         // Anthropic Claude — no training on API data
@@ -775,7 +782,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 200_000,
             tier: ProviderTier::Premium,
             chat_path: Some("/v1/messages".into()),
-            privacy: String::new(),
+            privacy: "medium".into(),
         },
         // OpenAI GPT-5.4-nano — cheapest OpenAI, no training on API data
         ProviderConfig {
@@ -792,7 +799,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Premium,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "medium".into(),
         },
         // Google Gemini Flash (free tier trains on data! use with caution)
         ProviderConfig {
@@ -809,7 +816,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 1_000_000,
             tier: ProviderTier::Free,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "low".into(),
         },
         // ===== Priority 5: Chinese providers (low privacy, paid) =====
         ProviderConfig {
@@ -826,7 +833,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 200_000,
             tier: ProviderTier::Cheap,
             chat_path: Some("/v4/chat/completions".into()),
-            privacy: String::new(),
+            privacy: "low".into(),
         },
         // Kimi K2.5 — multimodal vision, 256K context
         ProviderConfig {
@@ -843,7 +850,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 256_000,
             tier: ProviderTier::Cheap,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "low".into(),
         },
         // MiniMax M2.5 — strong coding (80% SWE-Bench)
         ProviderConfig {
@@ -860,7 +867,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Cheap,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "low".into(),
         },
         // ===== Priority 6: OpenRouter fallback (mixed privacy) =====
         ProviderConfig {
@@ -877,7 +884,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 262_144,
             tier: ProviderTier::Free,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "variable".into(),
         },
         ProviderConfig {
             name: "openrouter-gptoss120b".into(),
@@ -893,7 +900,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_context: 128_000,
             tier: ProviderTier::Free,
             chat_path: None,
-            privacy: String::new(),
+            privacy: "variable".into(),
         },
     ]
 }
