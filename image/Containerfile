@@ -750,15 +750,17 @@ RUN mkdir -p /etc/systemd/system && \
 RUN rm -f /usr/lib/os-release && \
     printf '%s\n' \
     'NAME="LifeOS"' \
-    'VERSION="0.2 Aegis"' \
+    'VERSION="0.3 Axolotl"' \
     'ID=fedora' \
     'VARIANT_ID=lifeos' \
     'VARIANT="LifeOS"' \
     "VERSION_ID=\"${FEDORA_MAJOR}\"" \
     "PLATFORM_ID=\"platform:f${FEDORA_MAJOR}\"" \
-    "PRETTY_NAME=\"LifeOS 0.2 Aegis - hectormr.com (Fedora ${FEDORA_MAJOR})\"" \
+    "PRETTY_NAME=\"LifeOS 0.3 Axolotl - by Hector Martinez (hectormr.com) (Fedora ${FEDORA_MAJOR})\"" \
     'ANSI_COLOR="0;36"' \
     'LOGO="lifeos"' \
+    'VENDOR_NAME="Hector Martinez Resediz"' \
+    'VENDOR_URL="https://hectormr.com"' \
     "CPE_NAME=\"cpe:/o:fedoraproject:fedora:${FEDORA_MAJOR}\"" \
     'HOME_URL="https://lifeos.hectormr.com"' \
     'DOCUMENTATION_URL="https://lifeos.hectormr.com/docs"' \
