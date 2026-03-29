@@ -2082,8 +2082,8 @@ El tema LifeOS tiene 177 iconos en 8 contextos (antes: 77 en 6). Script generado
 | **Y** | AI Security + Self-Healing Avanzado | IMPLEMENTADA 50% | **HEADLINE** — "nunca muestra errores" |
 | **Z** | Ecosystem + Distribution + World | IMPLEMENTADA 20% | **ESCALA** — de proyecto a plataforma global |
 | **AA** | Visual Identity Completa | COMPLETADA 95% | 657 SVGs brand-compliant, fuentes, wallpaper, theme system |
-| **AB** | Gateway WebSocket + Session Durability | COMPLETADA 80% | WS gateway + session store (falta compaction LLM) |
-| **AC** | Plugin SDK + Capability Registry | PENDIENTE | Ecosistema de skills escalable |
+| **AB** | Gateway WebSocket + Session Durability | COMPLETADA | WS gateway + session store + compaction LLM + channel routing |
+| **AC** | Plugin SDK + Capability Registry | COMPLETADA | skill_registry.rs 775 LOC, manifest v2, discovery, doctor, 17 tests |
 | **AD** | Anti-Breakage Engineering | COMPLETADA | 4 guardrails CI + config validator + test conventions |
 | **AE** | First-Boot User Creation + Welcome | COMPLETADA | Anaconda interactivo, sudoers %wheel, cosmic-initial-setup |
 | **AF** | Canales Extra (Slack, Discord) | COMPLETADA | slack_bridge.rs + discord_bridge.rs feature-gated |
@@ -2149,49 +2149,49 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 **AB.2 — Session Durability**
 - [x] Session store con sessionId estable y sessionKey tipado (`agent:axi:telegram:dm:123456`)
 - [x] Transcript persistente JSONL en `~/.local/share/lifeos/sessions/<sessionId>.jsonl`
-- [ ] Compaction via LLM cuando transcript supera N tokens
+- [x] Compaction via LLM cuando transcript supera N tokens
 - [x] Tool result truncation (>2000 tokens)
 - [x] Session metadata: lastChannel, lastPeerId, deliveryContext, lastActiveAt
 - [x] Disk budget configurable con auto-prune de sesiones viejas
 
 **AB.3 — Unified Channel Routing**
-- [ ] Session key contract para todos los bridges: `agent:axi:<channel>:<scope>:<peerId>`
-- [ ] Cross-channel context: misma sesion entre Telegram/voz/CLI
-- [ ] Inbound dedupe por (channel, peerId, messageId)
-- [ ] Routing determinista: respuesta va al canal de origen
+- [x] Session key contract para todos los bridges: `agent:axi:<channel>:<scope>:<peerId>`
+- [x] Cross-channel context: misma sesion entre Telegram/voz/CLI
+- [x] Inbound dedupe por (channel, peerId, messageId)
+- [x] Routing determinista: respuesta va al canal de origen
 
 **AB.4 — Doctor Mejorado**
-- [ ] Config migration automatica entre versiones
-- [ ] Config backup rotado (max 5) antes de escribir
-- [ ] Stale reference cleanup (skills/providers que ya no existen)
-- [ ] Health check at boot con reporte via evento
+- [x] Config migration automatica entre versiones
+- [x] Config backup rotado (max 5) antes de escribir
+- [x] Stale reference cleanup (skills/providers que ya no existen)
+- [x] Health check at boot con reporte via evento
 
 ### Fase AC — Plugin SDK + Capability Registry
 
 **Objetivo:** Plataforma de extensiones con contratos formales, SDK, registry, y boundaries.
 
 **AC.1 — Skill Manifest v2**
-- [ ] JSON Schema para skill.json: name, version, capabilities[], permissions[], triggers[]
-- [ ] Capabilities tipadas: tool, channel, provider, hook, sensor
-- [ ] Permissions declaradas: filesystem.read/write, network, shell.execute, llm.query
-- [ ] Validacion al cargar: manifest invalido = skill no carga
+- [x] JSON Schema para skill.json: name, version, capabilities[], permissions[], triggers[]
+- [x] Capabilities tipadas: tool, channel, provider, hook, sensor
+- [x] Permissions declaradas: filesystem.read/write, network, shell.execute, llm.query
+- [x] Validacion al cargar: manifest invalido = skill no carga
 
 **AC.2 — Skill Registry Central**
-- [ ] SkillRegistry centralizado en daemon
-- [ ] Runtime snapshot inmutable por tarea del supervisor
-- [ ] Conflict resolution: user > workspace > system > bundled
-- [ ] Hot-reload seguro con verificacion de referencias activas
+- [x] SkillRegistry centralizado en daemon
+- [x] Runtime snapshot inmutable por tarea del supervisor
+- [x] Conflict resolution: user > workspace > system > bundled
+- [x] Hot-reload seguro con verificacion de referencias activas
 
 **AC.3 — Boundaries Arquitectonicas**
-- [ ] Check CI: skills no importan modulos internos del daemon
-- [ ] Contract tests: registry acepta validos, rechaza invalidos
-- [ ] Baseline de superficie publica de APIs
-- [ ] `life skills doctor` para detectar/reparar skills rotos
+- [x] Check CI: skills no importan modulos internos del daemon
+- [x] Contract tests: registry acepta validos, rechaza invalidos
+- [x] Baseline de superficie publica de APIs
+- [x] `life skills doctor` para detectar/reparar skills rotos
 
 **AC.4 — Discovery Seguro**
-- [ ] Rutas: user skills > workspace skills > system skills
-- [ ] Ownership check: no cargar de directorios world-writable
-- [ ] Signature opcional en manifest para skills verificados
+- [x] Rutas: user skills > workspace skills > system skills
+- [x] Ownership check: no cargar de directorios world-writable
+- [x] Signature opcional en manifest para skills verificados
 
 ### Fase AD — Anti-Breakage Engineering
 
@@ -2204,9 +2204,9 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 - [x] check-skill-boundaries.sh: skills no importan daemon/src/
 
 **AD.2 — Config como Contrato**
-- [ ] JSON Schema generado desde structs Rust de config
-- [ ] Config baseline doc autogenerado. CI detecta drift
-- [ ] Migration framework: lista ordenada de transformaciones version_from → version_to
+- [x] JSON Schema generado desde structs Rust de config
+- [x] Config baseline doc autogenerado. CI detecta drift
+- [x] Migration framework: lista ordenada de transformaciones version_from → version_to
 
 **AD.3 — CI Mejorada**
 - [ ] Scope-aware CI: solo compilar/testear lo que cambio
@@ -2214,7 +2214,7 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 - [ ] Live test suite: daemon real + HTTP requests + verificacion
 
 **AD.4 — Observabilidad de Runtime**
-- [ ] Structured logging con campos queryables (session_id, task_id, provider, latency_ms)
+- [x] Structured logging con campos queryables (session_id, task_id, provider, latency_ms)
 - [ ] Metrics exporter Prometheus-compatible
 - [ ] `life audit query --since 24h --type llm_call`
 
