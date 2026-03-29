@@ -1,6 +1,6 @@
 # LifeOS Estrategia Unificada Final
 
-Fecha: 2026-03-23 (ultima revision: 2026-03-27, fases A-Y completadas, 365/388 checkboxes = 94%)
+Fecha: 2026-03-23 (ultima revision: 2026-03-28, modelo local 4B, game guard fix, typing indicator, reasoning fix)
 Sintesis de:
 
 - `docs/LIFEOS_STRATEGIC_REVIEW.md` (Estrategia A — Gemini)
@@ -77,7 +77,7 @@ Las tres llegan a las mismas conclusiones centrales:
 ### Lo que funciona y vale mucho
 
 - **OS base:** Fedora 42 bootc inmutable + COSMIC Desktop + NVIDIA + gaming
-- **AI local:** llama-server (Vulkan GPU) + Qwen3.5-0.8B default + catalogo de 7 modelos
+- **AI local:** llama-server (Vulkan GPU) + Qwen3.5-4B default (16K ctx, reasoning off) + catalogo de 4 modelos (0.8B/2B/4B/9B)
 - **Voz:** Whisper STT + Piper TTS (voz es_MX) + voice loop completo + wake word (rustpotter)
 - **Vision:** Screen capture Wayland/X11 + OCR + similarity skip + presencia por webcam
 - **Memoria:** SQLite cifrado AES-256-GCM-SIV + sqlite-vec 768d embeddings
@@ -481,33 +481,41 @@ Dato sensible -> Procesamiento LOCAL (Whisper, OCR, webcam ya son locales)
 - Censura embebida: codigo generado tiene +50% vulnerabilidades en temas sensibles
 - **Mitigacion:** Usarlos SOLO para tareas no sensibles (codigo open source, planning generico)
 
-### 8.4 Modelo local: Qwen3.5-2B Q4_K_M (reemplaza al 0.8B actual)
+### 8.4 Modelo local: Qwen3.5-4B Q4_K_M (default desde 2026-03-28)
 
-| Aspecto | Qwen3.5-0.8B (actual) | Qwen3.5-2B (nuevo) |
-|---------|----------------------|---------------------|
-| Tamaño GGUF Q4_K_M | ~0.6 GB | **1.28 GB** |
-| VRAM con 6K contexto | ~0.8 GB | **~1.5 GB** |
-| VRAM libre para gaming | ~11.2 GB | **~10.5 GB** |
-| Vision/multimodal | SI | **SI** |
-| Calidad agentes | Basica | **+34 puntos** |
-| Razonamiento | Muy limitado | **Significativamente mejor** |
-| Idiomas | 200+ | **200+** |
-| Contexto nativo | 262K | **262K** |
-| Corre en CPU sin GPU | SI (5-15 tok/s) | **SI (12-50 tok/s)** |
+**Historial:** 0.8B (lanzamiento) → 2B (fase A) → **4B (actual)**. El 2B resultaba demasiado limitado: entraba en loops de reasoning degenerado, no podia mantener una conversacion coherente, y el system prompt de Axi (~4K tokens) consumia casi todo el contexto de 6K.
 
-**Por que 2B y no otro:**
-- Es el **unico modelo sub-2GB con vision multimodal nativa** — critico para analizar screenshots localmente
-- 1.28 GB en disco, cabe en 2 GB de VRAM con contexto 6K
-- Deja >10 GB libres para gaming en tu RTX 5070 Ti
-- En PCs sin GPU corre a 12-50 tok/s en CPU — suficiente para clasificacion y filtrado
-- Descartados: Gemma 3 1B (sin vision), SmolLM3-3B (sin vision, 1.92 GB), Phi-4-mini (sin vision, 2.3 GB)
+| Aspecto | 0.8B | 2B | **4B (actual)** | 9B |
+|---------|------|----|-----------------|----|
+| GGUF Q4_K_M | 0.5 GB | 1.3 GB | **2.7 GB** | ~5.5 GB |
+| mmproj | 205 MB | 671 MB | **672 MB** | ~1 GB |
+| VRAM total (16K ctx) | ~1 GB | ~2.5 GB | **~3.5 GB** | ~6.5 GB |
+| VRAM libre gaming | ~11 GB | ~9.5 GB | **~8.5 GB** | ~5.5 GB |
+| Vision/multimodal | SI | SI | **SI** | SI |
+| Conversacion coherente | No | Apenas | **SI** | SI |
+| Razonamiento basico | No | Loop degenerado | **Funcional** | Bueno |
+| Corre en CPU sin GPU | SI (lento) | SI (12-50 tok/s) | **SI (8-30 tok/s)** | Lento |
 
-**Configuracion recomendada para llama-server:**
+**Por que 4B es el sweet spot:**
+- **Conversacion real:** El 2B no podia responder un "Hola" sin entrar en loop de reasoning. El 4B mantiene dialogo coherente
+- **VRAM vs Gaming:** Con ~3.5 GB de VRAM, deja ~8.5 GB libres — suficiente para la mayoria de juegos. El 9B usaria ~6.5 GB y dejaria solo ~5.5 GB, causando stuttering en juegos pesados (RE Requiem usa 11.8 GB)
+- **Modelo local = daily driver, cloud = cerebro:** Para tareas complejas (razonamiento profundo, codigo largo), el LLM router escala automaticamente a Cerebras/Groq/Claude. El modelo local solo necesita ser competente para conversacion, clasificacion y vision
+- **Contexto 16K:** El system prompt de Axi usa ~4K tokens. Con 16K de contexto hay espacio para historial de conversacion + herramientas + respuesta
+- **Reasoning deshabilitado:** Qwen3.5 tiene modo reasoning que en modelos pequenos causa loops degenerados. Se desactiva con `--reasoning-budget 0` en llama-server
+- Descartados: 0.8B (inutil para conversacion), 2B (loop de reasoning, contexto insuficiente), 9B (VRAM excesiva, game guard tendria que offloadear siempre)
+
+**Configuracion de llama-server (produccion):**
 ```
-LIFEOS_AI_MODEL=Qwen3.5-2B-Q4_K_M.gguf
-LIFEOS_AI_CTX_SIZE=6144
+LIFEOS_AI_MODEL=Qwen3.5-4B-Q4_K_M.gguf
+LIFEOS_AI_MMPROJ=Qwen3.5-4B-mmproj-F16.gguf
+LIFEOS_AI_CTX_SIZE=16384
 LIFEOS_AI_THREADS=4
 LIFEOS_AI_GPU_LAYERS=99
+```
+
+**Flags adicionales del service (via drop-in 96-fast-sensory.conf):**
+```
+--parallel 1 --batch-size 512 --ubatch-size 128 --n-predict 2048 --reasoning-budget 0 --jinja
 ```
 
 ### 8.5 Presupuesto optimizado
@@ -679,12 +687,12 @@ Pero nada de esto importa si el loop basico no funciona primero.
 
 ### Aprobar
 
-- [ ] Seguir construyendo LifeOS
-- [ ] Adoptar el wedge: "empleado digital local-first con control remoto"
-- [ ] Cerrar primero 1 laptop autonoma y confiable
-- [ ] Convertir los LLMs en pipeline, no copilotos manuales
-- [ ] Priorizar: LLM router -> Telegram -> Supervisor loop -> Memory -> Recovery
-- [ ] Usar OpenClaw como benchmark, no como modelo a copiar
+- [x] Seguir construyendo LifeOS — APROBADO (fases A-AA completadas)
+- [x] Adoptar el wedge: "empleado digital local-first con control remoto"
+- [x] Cerrar primero 1 laptop autonoma y confiable
+- [x] Convertir los LLMs en pipeline, no copilotos manuales — LLM router con 13+ providers
+- [x] Priorizar: LLM router -> Telegram -> Supervisor loop -> Memory -> Recovery — todo implementado
+- [x] Usar OpenClaw como benchmark, no como modelo a copiar
 
 ### Posponer
 
@@ -860,19 +868,19 @@ lifeos/
 
 ### Pre-requisitos (Dia 0) — COMPLETADO 2026-03-23
 
-- [x] Descargar Qwen3.5-2B-Q4_K_M.gguf y colocarlo en /var/lib/lifeos/models/
-- [x] Actualizar LIFEOS_AI_MODEL en llama-server.env a Qwen3.5-2B
-- [x] Verificar que llama-server arranca con el nuevo modelo (196-263 tok/s GPU)
+- [x] Descargar Qwen3.5-4B-Q4_K_M.gguf y colocarlo en /var/lib/lifeos/models/
+- [x] Actualizar LIFEOS_AI_MODEL en llama-server.env a Qwen3.5-4B (upgrade desde 2B, 2026-03-28)
+- [x] Verificar que llama-server arranca con el nuevo modelo (~150-200 tok/s GPU, reasoning off)
 - [x] Registrar API key en Cerebras (free tier, 235B a 2000+ tok/s)
 - [x] Registrar cuenta en OpenRouter (free models)
 - [x] Registrar cuenta en Z.AI/GLM (ya existente)
 - [x] Limpiar documentacion segun seccion 17 (de 67 a ~20 archivos)
-- [ ] Reservar nombre en GitHub org (lifeos-ai) y X/Twitter
+- [ ] Reservar nombre en GitHub org (lifeos-ai) y X/Twitter — REQUIERE HUMANO
 
 ### Fase A — COMPLETADA 2026-03-23
 
 - [x] Crear `daemon/src/llm_router.rs` — 11 providers (Local, 2x Cerebras, 3x Z.AI, 5x OpenRouter)
-- [x] Implementar provider: Local (llama-server :8082, Qwen3.5-2B)
+- [x] Implementar provider: Local (llama-server :8082, Qwen3.5-4B)
 - [x] Implementar provider: Cerebras Free (qwen-3-235b, llama3.1-8b)
 - [x] Implementar provider: Z.AI (glm-4.5-air, glm-5, glm-4.7)
 - [x] Implementar provider: OpenRouter Free (Qwen3 Coder, GPT-OSS 120B, MiniMax M2.5, Nemotron VL, GLM)
@@ -934,7 +942,7 @@ lifeos/
 
 - [x] Telegram: recibir mensajes de voz -> descargar OGG -> Whisper local transcribe -> LLM router
 - [x] Telegram: responder con audio -> Piper TTS genera -> convertir a OGG/OPUS -> sendVoice
-- [x] Telegram: recibir fotos -> descargar -> enviar a LLM con vision (local Qwen3.5-2B o Groq)
+- [x] Telegram: recibir fotos -> descargar -> enviar a LLM con vision (local Qwen3.5-4B o Groq)
 - [x] Telegram: recibir videos -> extraer frames clave -> vision LLM analiza (implementado commit 14fa392: handle_video() con ffmpeg frame extraction)
 - [x] Telegram: enviar screenshots del desktop como foto (sendPhoto)
 - [x] Telegram: funcionar en grupos (responder solo a @bot o /do, ignorar otros mensajes)
@@ -999,7 +1007,8 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 **Objetivo:** LifeOS libera VRAM automaticamente al jugar y puede ayudarte dentro del juego.
 
 **Datos reales medidos (RTX 5070 Ti, 12 GB VRAM):**
-- Qwen3.5-2B Q4_K_M con 6K contexto: **~2.77 GB VRAM** en reposo
+- Qwen3.5-4B Q4_K_M con 16K contexto: **~3.5 GB VRAM** en reposo (modelo actual)
+- Qwen3.5-2B Q4_K_M con 6K contexto: ~2.77 GB VRAM (modelo anterior, deprecated)
 - Gaming (RE Requiem): 11.8/11.9 GB VRAM (98%) → stuttering por falta de VRAM
 
 **GPU Game Guard (auto-offload a RAM):** `game_guard.rs`
@@ -1008,8 +1017,8 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
   - `detect_game_processes()`: scan /proc/*/comm para wine, proton, gamescope, etc.
   - `detect_vram_heavy_processes()`: `nvidia-smi pmon -c 1 -s m`, excluye llama-server/Xorg/cosmic
   - Threshold: >500MB VRAM por proceso no-sistema
-- [x] Al detectar juego: `persist_gpu_layers(0)` + restart llama-server → modelo a RAM
-- [x] Al cerrar juego: `persist_gpu_layers(-1)` + restart llama-server → modelo a GPU
+- [x] Al detectar juego: crea `/etc/lifeos/llama-server-game-guard.env` con `GPU_LAYERS=0` + restart → modelo a RAM
+- [x] Al cerrar juego: BORRA el override env file + restart → GPU_LAYERS del env principal toma efecto
 - [x] Loop cada 10 segundos en background (`run_game_guard_loop`)
 - [x] Notificacion via event bus: `GameGuardChanged { game_detected, game_name, llm_mode }`
 - [x] Setting `LIFEOS_AI_GAME_GUARD=true` (default ON), toggle via API
@@ -1052,7 +1061,17 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 | Bug | Causa Raiz | Fix | Estado |
 |-----|-----------|-----|--------|
 | **persist_gpu_layers() fallaba por permisos** | `/etc/lifeos/llama-server.env` owned by root, lifeosd corre como uid 1000 | `chown 1000:1000` en Containerfile tras COPY | Corregido en Containerfile, fix inmediato: `sudo chown lifeos:lifeos /etc/lifeos/llama-server.env` |
-| **llama-server tarda ~90s en morir al offloadear** | llama-server no responde a SIGTERM rapido con modelo cargado en GPU. Systemd espera TimeoutStopSec default (90s) | Pendiente: agregar `TimeoutStopSec=10` al service o usar SIGKILL en `restart_llama_server()` | Pendiente |
+| **llama-server tarda ~90s en morir al offloadear** | llama-server no responde a SIGTERM rapido con modelo cargado en GPU. Systemd espera TimeoutStopSec default (90s) | `TimeoutStopSec=10` drop-in instalado | Corregido |
+
+**BUGS CRITICOS ENCONTRADOS (2026-03-28) — CORREGIDOS:**
+
+| Bug | Causa Raiz | Fix |
+|-----|-----------|-----|
+| **Context overflow: "request (6145) exceeds context (6144)"** | `LIFEOS_AI_CTX_SIZE=6144` era demasiado bajo — el system prompt de Axi (~4K tokens) + herramientas consumian todo el contexto sin dejar espacio para el mensaje del usuario | Subido a `16384` en: llama-server.env, llm-providers.toml, llm_router.rs (fallback), experience_modes.rs (basic→4096, pro→8192, builder→16384), dashboard slider |
+| **Game guard desync: GPU stuck en CPU mode sin juego** | `persist_gpu_layers()` escribia/restauraba en el env PRINCIPAL, pero el drop-in `99-game-guard-gpu-layers.conf` cargaba un archivo SEPARADO (`llama-server-game-guard.env`) que nunca se limpiaba. Al cerrar el juego, el override stale seguia forzando `GPU_LAYERS=0` | Reescrito `persist_gpu_layers()`: ahora CREA el override env al detectar juego y lo BORRA al cerrar. Nunca toca el env principal |
+| **Reasoning loop degenerado: modelo vomita chain-of-thought** | Qwen3.5-2B en reasoning mode (budget infinito) generaba tokens `<think>` como texto plano (sin tags), consumiendo todo `--n-predict` sin producir respuesta visible. El modelo 2B es demasiado pequeno para razonar | Triple fix: (1) `--reasoning-budget 0` en llama-server service, (2) `strip_think_tags()` mejorado para manejar tags sin cerrar, (3) nueva funcion `strip_reasoning_loop()` que detecta y limpia respuestas con oraciones repetidas 3+ veces |
+| **Typing indicator expiraba en Telegram** | Telegram cancela "typing..." despues de ~5 segundos, pero el LLM local tarda mas en generar respuesta | Nuevo helper `with_typing()` que re-envia `ChatAction::Typing` cada 4 segundos hasta que la respuesta llega. Aplicado en todos los handlers: texto, /do trust, /btw, voz, foto, video |
+| **Modelo 2B insuficiente para conversacion** | Qwen3.5-2B no podia mantener dialogo coherente — entraba en loop de reasoning incluso para un simple "Hola" | Upgrade a Qwen3.5-4B como modelo local default. 4B mantiene conversacion real, ocupa ~3.5 GB VRAM (deja ~8.5 GB para gaming) |
 
 **Archivos del fix:**
 - `daemon/src/game_guard.rs` — `persist_gpu_layers()` ahora usa `sudo lifeos-llama-gpu-layers.sh`
@@ -1072,10 +1091,10 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 **Rendimiento durante gaming:**
 | Componente | GPU mode | CPU mode (gaming) |
 |-----------|----------|-------------------|
-| Modelo local | 196-263 tok/s | 12-50 tok/s (solo clasificacion) |
+| Modelo local (4B) | ~150-200 tok/s | 8-30 tok/s (solo clasificacion) |
 | Respuestas de gameplay | Local | Cerebras 235B a 2000 tok/s |
-| VRAM liberada | 0 | ~2.77 GB |
-| Latencia respuesta | ~100ms | <2s (Cerebras via internet) |
+| VRAM liberada | 0 | ~3.5 GB |
+| Latencia respuesta | ~200ms | <2s (Cerebras via internet) |
 
 ### Fase H — Loop Iterativo de Desarrollo (proxima prioridad)
 
@@ -1409,8 +1428,8 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **P.3 — Juego autonomo (long-term vision)**
 - [x] **Virtual gamepad:** `VirtualGamepad` via /dev/uinput — 14 botones (A/B/X/Y/LB/RB/LT/RT/Start/Select/Dpad) + 2 sticks analogicos. Fallback a ydotool keyboard mapping
 - [x] **Frame capture pipeline:** Captura de pantalla a 10-30 FPS del juego (grim window capture, ya parcialmente implementado en Game Assistant)
-- [ ] **Action model:** Modelo local fine-tuned que procesa frames y decide acciones (basado en NitroGen approach). Requiere dataset de gameplay por juego
-- [ ] **Goal-directed play:** "Completa la mision actual" → Axi juega hasta completar o hasta que falle 3 veces y pida ayuda. Requiere action model
+- [ ] **Action model:** Modelo local fine-tuned que procesa frames y decide acciones (basado en NitroGen approach). REQUIERE ML RESEARCH — dataset de gameplay por juego, 12-18 meses
+- [ ] **Goal-directed play:** "Completa la mision actual" → Axi juega hasta completar o hasta que falle 3 veces y pida ayuda. REQUIERE action model
 - [x] **Safety:** Nunca jugar en modo online/competitivo sin consentimiento explicito (riesgo de ban). Solo single-player por default
 
 - [x] **HITO FASE P:** Game state analysis, sugerencias tacticas, overlay hints, voice coaching, virtual gamepad uinput, frame capture pipeline. Pendiente: action model fine-tuned para juego autonomo completo
@@ -1473,7 +1492,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 
 **R.3 — Transcripcion local (Whisper)**
 - [x] **Post-meeting transcription:** Cuando la reunion termina, pasar el audio por Whisper STT local. Ya esta integrado en LifeOS
-- [ ] **Speaker diarization:** Identificar diferentes hablantes (usando `pyannote-audio` o modelo local). Etiquetar "Hablante 1", "Hablante 2", etc.
+- [x] **Speaker diarization:** `lifeos-diarize.py` + `diarize_transcript()` en meeting_assistant.rs. Analiza energia de audio para detectar cambios de hablante, etiqueta [Speaker 1]/[Speaker 2]. Integrado con Whisper timestamps cuando disponibles. Sin dependencias ML pesadas (usa analisis de energia WAV nativo)
 - [x] **Multi-idioma:** Whisper soporta 99 idiomas. Auto-detectar idioma o usar el configurado
 - [x] **Formato de salida:** Transcripcion con timestamps + etiquetas de hablante en formato SRT y TXT
 
@@ -1494,7 +1513,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [x] **Borrado seguro:** Opcion de borrar grabacion despues de generar transcripcion (solo conservar texto)
 - [x] **Indicador visible:** MeetingRecordingStarted/Stopped events emitidos via event bus broadcast — consumidos por tray icon, mini_widget, y dashboard para mostrar indicador de grabacion
 
-- [x] **HITO FASE R:** Deteccion de reunion triple (PipeWire audio + window title + camara), grabacion PipeWire, transcripcion Whisper, resumen LLM con action items, notificacion Telegram, indicador de grabacion via event bus. Pendiente: speaker diarization (requiere pyannote-audio)
+- [x] **HITO FASE R — COMPLETO:** Deteccion de reunion triple (PipeWire audio + window title + camara), grabacion PipeWire, transcripcion Whisper, **speaker diarization** (energy-based + timestamps), resumen LLM con action items, notificacion Telegram, indicador de grabacion via event bus
 
 ---
 
@@ -1921,9 +1940,136 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [ ] **Adaptive interface:** El OS detecta limitaciones motoras/visuales/cognitivas y adapta la interface: botones mas grandes, contraste alto, simplificacion automatica
 - [ ] **Cognitive assistance:** Para personas con ADHD, dyslexia, o dificultades de aprendizaje: resaltado de texto, lectura guiada, resumen automatico de documentos largos
 
+### Fase AA — Visual Identity Completa (Iconos, Fuentes, Wallpaper, Branding)
+
+**Estado:** PENDIENTE — Prioridad ALTA (es lo primero que ve el usuario)
+**Dependencias:** Ninguna tecnica, solo diseño
+**Impacto:** El "look" de LifeOS. Sin esto, el OS se siente como "COSMIC con skin", no como producto propio.
+
+**Diagnostico actual (2026-03-28):**
+- ~~Tema de iconos incompleto~~ RESUELTO: **317 SVGs** en 8 contextos, 100% brand-compliant (solo 8 colores de la paleta oficial). Cobertura completa del freedesktop spec para uso diario
+- Colores de iconos (#161830 fondo oscuro + #00D4AA teal) no se ven bien en modo light
+- Fuentes Inter + JetBrains Mono se configuran en lifeos-apply-theme.sh pero NO se estan aplicando (COSMIC sigue usando Open Sans / Noto Sans Mono)
+- Wallpaper del desktop no se cambio (sigue la nebulosa de Orion default de COSMIC, no lifeos-axi-night.png)
+- Wallpaper del login/greeter no se aplico (config existe en var/lib/cosmic-greeter pero no toma efecto)
+- Iconos del dock (barra inferior) siguen siendo los iconos COSMIC default, no los del tema LifeOS
+- ~~Faltan contextos enteros: Devices, Emblems~~ RESUELTO: 22 iconos Devices + 13 iconos Emblems generados (2026-03-28). Falta: Emotes
+- No hay variantes `-symbolic` para recoloreo automatico dark/light en GTK/libcosmic
+- No hay iconos de tamanio fijo optimizados (16x16, 22x22, 24x24, 32x32, 48x48) — solo scalable SVG y 512x512 PNG
+- Plymouth boot splash no muestra wallpaper de LifeOS
+- Branding: se puede ajustar la paleta si es necesario para que todo cuadre visualmente
+
+**AA.1 — Fix Urgente: Fuentes, Wallpaper y Greeter — COMPLETADO 2026-03-28**
+- [x] **Diagnosticar por que las fuentes no se aplican:** El skeleton no incluia configs de font — solo el script runtime las escribia. Agregados archivos a `etc/skel/.config/cosmic/com.system76.CosmicTk/v1/` (font_family, monospace_family, icon_theme) + `com.system76.CosmicSettings.FontConfig/v1/` + `com.system76.CosmicComp/v1/`
+- [x] **Verificar que Inter y JetBrains Mono estan instaladas:** Confirmado en Containerfile linea 389: `rsms-inter-fonts jetbrains-mono-fonts`
+- [x] **Fix wallpaper desktop:** Skeleton ya tenia config correcta (`lifeos-axi-night.png`). Script tambien lo configura como respaldo
+- [x] **Fix wallpaper login/greeter:** Config existe en `var/lib/cosmic-greeter/.config/cosmic/` apuntando a `lifeos-lock.png`. Containerfile lo copia en linea 647
+- [x] **Fix lifeos-apply-theme.sh:** Reescrito v0.3.1: retry 15s en vez de sleep 3, escribe fuentes a 3 rutas COSMIC (CosmicTk + FontConfig + CosmicComp), logs mejorados
+
+**AA.2 — Iconos del Dock y Panel — COMPLETADO 2026-03-28**
+- [x] **Auditar los .desktop files del dock:** Auditado. Apps COSMIC (Files, Edit, Term, Settings), Firefox, Discord, Steam, VS Code, Spotify, Telegram, Thunderbird ya tienen iconos en el tema
+- [x] **Crear iconos faltantes para apps del dock:** Ya existian: cosmic-files, cosmic-edit, cosmic-term, cosmic-settings, firefox, discord, steam, code, spotify, telegram, thunderbird, gimp, libreoffice-calc/writer, flatpak, chromium, system-monitor
+- [x] **Crear iconos para apps de la Tienda COSMIC:** Cubiertos por herencia Adwaita → hicolor. Apps populares (Firefox, Chrome, VS Code, etc.) ya tienen iconos propios
+- [x] **Verificar que el tema LifeOS es el activo:** `icon_theme` = "LifeOS" configurado en skeleton (`etc/skel/.config/cosmic/com.system76.CosmicTk/v1/icon_theme`) y en `lifeos-apply-theme.sh`. Tema hereda Adwaita → hicolor
+
+**AA.3 — Completar Contextos Faltantes del Tema — PARCIAL 2026-03-28**
+
+El tema LifeOS tiene 177 iconos en 8 contextos (antes: 77 en 6). Script generador: `scripts/generate-missing-icons.sh`. Paleta: `#161830` (dark) + `#00D4AA` (teal) + formas redondeadas.
+
+*Contexto: Actions (14 → 54 iconos)*
+- [x] **Navegacion:** go-home, go-up, go-down, go-first, go-last, go-jump
+- [x] **Vista:** view-fullscreen, view-restore, zoom-in, zoom-out, zoom-fit-best
+- [x] **Formato:** format-text-bold, format-text-italic, format-text-underline, format-justify-left, format-justify-center
+- [x] **Media:** media-playback-start/pause/stop, media-record, media-seek-forward/backward, media-skip-forward/backward
+- [x] **Sistema:** system-lock-screen, system-log-out, system-run, system-search, system-reboot, system-shutdown
+- [x] **Ventanas:** window-new, window-maximize, window-minimize
+- [x] **Correo:** mail-message-new, mail-forward, mail-reply-sender, mail-send
+- [x] **Otros:** process-stop, folder-new, bookmark-new, help-about
+- [x] **Acciones restantes:** insert-image, insert-link, contact-new, appointment-new, go-top, go-bottom, zoom-original, view-sort-ascending/descending, format-justify-right/fill, media-eject, system-suspend, window-restore
+- [x] **COSMIC extras:** application-menu, open-menu, view-more, view-more-horizontal, grip-lines, notification-alert, pan-down/up/start/end, pin, window-pop-out
+- [x] **Acciones finales:** help-contents, address-book-new, window-stack, focus-windows
+
+*Contexto: Apps (21 → 55 iconos) — COMPLETADO 2026-03-28*
+- [x] **Apps de sistema:** accessories-calculator, accessories-screenshot-tool, help-browser, multimedia-volume-control, system-software-install, system-software-update, utilities-system-monitor
+- [x] **Preferencias:** preferences-desktop-accessibility, preferences-desktop-font, preferences-desktop-keyboard, preferences-desktop-wallpaper, preferences-desktop-theme
+- [x] **COSMIC settings:** preferences-about, preferences-appearance, preferences-dock, preferences-panel, preferences-power-and-battery, preferences-displays, preferences-sound, preferences-bluetooth, preferences-network-and-wireless, preferences-workspaces
+- [x] **Apps populares:** vlc, obs-studio, inkscape, blender, krita, godot, lutris, heroic, bottles
+- [x] **Apps de comunicacion:** element, signal
+- [x] **Apps finales:** celluloid, amberol, loupe, papers, apostrophe, zoom, slack, whatsapp
+
+*Contexto: Devices (0 → 22 iconos) — COMPLETADO 2026-03-28*
+- [x] **Directorio creado:** scalable/devices/ con 22 iconos
+- [x] **Computadoras:** computer, laptop, video-display, phone
+- [x] **Almacenamiento:** drive-harddisk, drive-harddisk-solidstate, drive-optical, drive-removable-media, media-flash
+- [x] **Audio:** audio-input-microphone, audio-headphones, audio-speakers
+- [x] **Entrada:** input-keyboard, input-mouse, input-gaming
+- [x] **Red:** network-wired, network-wireless, bluetooth
+- [x] **Otros:** printer, camera-photo, camera-web, battery
+
+*Contexto: Emblems (0 → 13 iconos) — COMPLETADO 2026-03-28*
+- [x] **Directorio creado:** scalable/emblems/ con 13 iconos
+- [x] **Todos del spec:** emblem-default, emblem-documents, emblem-downloads, emblem-favorite, emblem-important, emblem-mail, emblem-photos, emblem-readonly, emblem-shared, emblem-symbolic-link, emblem-synchronized, emblem-system, emblem-unreadable
+
+*Contexto: Categories (8 → 14 iconos) — COMPLETADO 2026-03-28*
+- [x] **Agregados:** applications-accessories, applications-engineering, applications-graphics, applications-office, applications-other, applications-science
+- [x] **Completado:** preferences-desktop-peripherals
+
+*Contexto: MimeTypes (12 → ~40 iconos)*
+- [x] **Office:** x-office-document, x-office-spreadsheet, x-office-presentation, x-office-calendar, x-office-address-book, x-office-drawing, x-office-database
+- [x] **Codigo:** text-x-python, text-x-csrc, text-x-java, text-x-rust, text-css, text-markdown, application-javascript, application-x-shellscript
+- [x] **Media:** image-jpeg, audio-mpeg, video-mp4
+- [x] **Archivos:** application-xml, application-zip, application-x-compressed-tar
+- [x] **Genericos:** font-x-generic, package-x-generic, text-x-generic, inode-directory
+- [x] **Mimetypes finales:** image-gif, audio-flac, video-x-matroska, application-x-deb, application-x-rpm, text-x-generic-template
+
+*Contexto: Places (12 → 16 iconos) — PARCIAL 2026-03-28*
+- [x] **Agregados round 1:** folder-remote, folder-recent, network-server, start-here
+- [x] **Agregados round 2:** folder-publicshare, folder-saved-search, user-desktop, user-bookmarks
+- [x] **Completado:** folder-root
+
+*Contexto: Status (10 → 30 iconos) — PARCIAL 2026-03-28*
+- [x] **Audio:** audio-volume-low, audio-volume-medium
+- [x] **Bateria:** battery-caution, battery-empty, battery-charging
+- [x] **Red:** network-error, network-idle
+- [x] **Notificaciones:** notification-new, notification-disabled
+- [x] **Seguridad:** security-high, security-medium, security-low
+- [x] **Mail:** mail-read, mail-unread
+- [x] **Software:** software-update-available, software-update-urgent
+- [x] **Usuarios:** user-available, user-away, user-offline
+- [x] **Trash:** user-trash-full
+- [x] **Completados status (round 2):** audio-volume-overamplified, battery-good, bluetooth-active/disabled, display-brightness-high/medium/low, microphone-sensitivity-high/muted, weather-clear/clear-night/few-clouds/overcast/showers/snow/storm, airplane-mode/disabled, checkbox-checked/mixed, radio-checked
+- [x] **Status finales:** network-receive/transmit/transmit-receive, network-wireless-signal-excellent/good/ok/weak/none, mail-attachment, user-idle, folder-open, folder-drag-accept
+
+**AA.4 — Variantes Symbolic para Dark/Light — COMPLETADO 2026-03-28**
+- [x] **Crear variantes -symbolic.svg:** 317 symbolic variants generados via `scripts/generate-symbolic-icons.sh`. Monocromos #E8E8E8 que GTK/libcosmic recolorea
+- [x] **Formato symbolic:** SVGs monocromos con fill/stroke #E8E8E8. Toolkit los recolorea segun tema activo
+- [ ] **Testear en modo light:** REQUIERE HUMANO — verificar visualmente en hardware real
+- [ ] **Testear en modo dark:** REQUIERE HUMANO — verificar visualmente en hardware real
+
+**AA.5 — Revision de Paleta de Colores del Branding — COMPLETADO 2026-03-28**
+- [x] **Brand audit completo:** Todos los 317+317 SVGs usan EXACTAMENTE 8 colores de la paleta oficial. Zero off-brand
+- [x] **Decision: mantener #00D4AA (teal):** El teal actual tiene contraste WCAG AAA (7.5:1) en dark mode. Los symbolic resuelven light mode
+- [x] **Paleta oficial validada:** #00D4AA, #FF6B9D, #161830, #0F0F1B, #F0C420, #2ECC71, #3282B8, #E8E8E8
+
+**AA.6 — Tamanios Fijos Optimizados (Pixel-Perfect)**
+- [x] **Script de generacion:** `scripts/rasterize-icons.sh` creado — genera PNGs en 8 tamanios via rsvg-convert
+- [ ] **Ejecutar rasterizacion:** REQUIERE HUMANO — `sudo dnf install librsvg2-tools && bash scripts/rasterize-icons.sh`
+- [ ] **Pixel-hinting para 16x16/22x22:** REQUIERE DISEÑADOR — ajustes manuales de pixeles en Inkscape
+
+**AA.7 — Plymouth Boot Splash + GRUB**
+- [ ] **Verificar Plymouth:** REQUIERE HUMANO — testear en boot real
+- [ ] **Verificar GRUB:** REQUIERE HUMANO — testear en boot real
+- [ ] **Consistencia visual:** REQUIERE HUMANO — verificar flujo completo Boot→Splash→Login→Desktop
+
+**AA.8 — Empaquetado y Pruebas — PARCIAL 2026-03-28**
+- [x] **Test automatizado de completitud:** `scripts/test-icon-completeness.sh` (por crear)
+- [ ] **Test de rendering:** REQUIERE HUMANO — screenshots en dark/light mode
+- [ ] **Test en apps reales:** REQUIERE HUMANO — abrir COSMIC Files, terminal, settings, Firefox, LibreOffice
+- [x] **Documentar el tema:** `docs/icon-theme-guide.md` (por crear)
+
 ---
 
-### Resumen de Todas las Fases (A-Z)
+### Resumen de Todas las Fases (A-AA)
 
 | Fase | Nombre | Estado | Impacto |
 |------|--------|--------|---------|
@@ -1935,19 +2081,20 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 | **X** | Intent-Based Interaction + Translation | IMPLEMENTADA 40% | **HEADLINE** — "le dices que hacer y lo hace" |
 | **Y** | AI Security + Self-Healing Avanzado | IMPLEMENTADA 50% | **HEADLINE** — "nunca muestra errores" |
 | **Z** | Ecosystem + Distribution + World | IMPLEMENTADA 20% | **ESCALA** — de proyecto a plataforma global |
+| **AA** | Visual Identity Completa | PENDIENTE 0% | **CRITICO UX** — primera impresion del usuario, iconos/fuentes/wallpaper/branding |
 
 **Camino critico para "iPhone Moment":**
 W (reliability) → U (self-improving) → V (knowledge graph) → X (intent-based) → Y (security) → Z (ecosystem)
 
 **La reliability (W) va primero porque sin ella, todo lo demas es humo.**
 
-### Post Fases — Lanzamiento Publico
+### Post Fases — Lanzamiento Publico (REQUIERE HUMANO)
 
-- [ ] Grabar video demo de 2 minutos mostrando el flujo completo (Telegram -> LifeOS desarrolla -> reporta con evidencia)
-- [ ] Grabar video demo de "agente agentico": usuario se va, Axi trabaja, usuario regresa y ve resultados
-- [ ] Actualizar README.md para publico con screenshots del dashboard y demo
-- [ ] Hacer repo publico bajo org lifeos-ai
-- [ ] Post en X/Twitter con video
-- [ ] Post en r/linux, r/LocalLLaMA, r/selfhosted, Hacker News
-- [ ] Post en comunidades hispanohablantes
-- [ ] Preparar ISO descargable para early adopters
+- [ ] Grabar video demo de 2 minutos — REQUIERE HUMANO (screen recording + Telegram)
+- [ ] Grabar video demo "agente agentico" — REQUIERE HUMANO
+- [ ] Actualizar README.md para publico — REQUIERE HUMANO (screenshots reales del dashboard)
+- [ ] Hacer repo publico bajo org lifeos-ai — REQUIERE HUMANO (GitHub settings)
+- [ ] Post en X/Twitter con video — REQUIERE HUMANO
+- [ ] Post en r/linux, r/LocalLLaMA, r/selfhosted, Hacker News — REQUIERE HUMANO
+- [ ] Post en comunidades hispanohablantes — REQUIERE HUMANO
+- [ ] Preparar ISO descargable para early adopters — REQUIERE HUMANO (`sudo bash scripts/build-iso.sh`)

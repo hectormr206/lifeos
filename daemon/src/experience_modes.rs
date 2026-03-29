@@ -220,8 +220,8 @@ impl ExperienceManager {
                     },
                     ai: AiSettings {
                         enabled: true,
-                        model: "llama-3.2-3b-instruct-q4_k_m.gguf".to_string(),
-                        context_size: 2048,
+                        model: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+                        context_size: 4096,
                         auto_response: true,
                     },
                     updates: UpdateSettings {
@@ -258,7 +258,7 @@ impl ExperienceManager {
                     ai: AiSettings {
                         enabled: true,
                         model: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
-                        context_size: 4096,
+                        context_size: 8192,
                         auto_response: false,
                     },
                     updates: UpdateSettings {
@@ -304,7 +304,7 @@ impl ExperienceManager {
                     ai: AiSettings {
                         enabled: true,
                         model: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
-                        context_size: 8192,
+                        context_size: 16384,
                         auto_response: false,
                     },
                     updates: UpdateSettings {

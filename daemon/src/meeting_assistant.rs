@@ -9,7 +9,7 @@
 //! Transcription: Whisper STT post-meeting, then LLM summarization.
 
 use anyhow::{Context, Result};
-use log::info;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::process::Command;
@@ -246,6 +246,60 @@ impl MeetingAssistant {
             .unwrap_or_else(|_| String::from_utf8_lossy(&output.stdout).to_string());
 
         Ok(transcript)
+    }
+
+    /// Apply speaker diarization to a transcript.
+    ///
+    /// Uses `lifeos-diarize.py` which analyzes audio energy patterns to detect
+    /// speaker turns and labels each line with `[Speaker 1]`, `[Speaker 2]`, etc.
+    pub async fn diarize_transcript(&self, audio_path: &str, transcript: &str) -> Result<String> {
+        // Write transcript to temp file for the Python script
+        let transcript_path = format!("{}.transcript.txt", audio_path);
+        let diarized_path = format!("{}.diarized.txt", audio_path);
+
+        tokio::fs::write(&transcript_path, transcript)
+            .await
+            .context("Failed to write transcript for diarization")?;
+
+        let output = Command::new("python3")
+            .args([
+                "/usr/local/bin/lifeos-diarize.py",
+                audio_path,
+                &transcript_path,
+                "--output",
+                &diarized_path,
+            ])
+            .output()
+            .await;
+
+        // Clean up temp transcript
+        let _ = tokio::fs::remove_file(&transcript_path).await;
+
+        match output {
+            Ok(o) if o.status.success() => {
+                if let Ok(diarized) = tokio::fs::read_to_string(&diarized_path).await {
+                    let _ = tokio::fs::remove_file(&diarized_path).await;
+                    if !diarized.trim().is_empty() {
+                        info!("[meeting] Diarization completed successfully");
+                        return Ok(diarized);
+                    }
+                }
+                // Fallback: return original transcript
+                warn!("[meeting] Diarization produced empty output, using raw transcript");
+                Ok(transcript.to_string())
+            }
+            Ok(o) => {
+                warn!(
+                    "[meeting] Diarization failed: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                );
+                Ok(transcript.to_string())
+            }
+            Err(e) => {
+                warn!("[meeting] Diarization script not available: {e}");
+                Ok(transcript.to_string())
+            }
+        }
     }
 
     /// Generate a meeting summary from a transcript using the LLM router.

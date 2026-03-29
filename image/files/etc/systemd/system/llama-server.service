@@ -21,6 +21,11 @@ ExecStart=/usr/sbin/llama-server \
     --ctx-size ${LIFEOS_AI_CTX_SIZE} \
     --threads ${LIFEOS_AI_THREADS} \
     --n-gpu-layers ${LIFEOS_AI_GPU_LAYERS} \
+    --parallel 1 \
+    --batch-size 512 \
+    --ubatch-size 128 \
+    --n-predict 2048 \
+    --reasoning-budget 0 \
     --jinja
 Restart=on-failure
 RestartSec=10

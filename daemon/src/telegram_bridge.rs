@@ -370,9 +370,9 @@ mod inner {
             .await?;
             // Set auto-approve env for this session
             std::env::set_var("LIFEOS_AUTO_APPROVE_MEDIUM", "true");
-            bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
-            let (response, screenshot_path) =
-                telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, task_text, None).await;
+            let (response, screenshot_path) = with_typing(&bot, chat_id, async {
+                telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, task_text, None).await
+            }).await;
             if let Some(ref path) = screenshot_path {
                 let screenshot_file = std::path::Path::new(path);
                 if screenshot_file.exists() {
@@ -389,11 +389,11 @@ mod inner {
         // /btw — side conversation that doesn't pollute main history
         if text.starts_with("/btw ") {
             let side_text = text.strip_prefix("/btw ").unwrap_or(&text);
-            bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
             // Use a separate "side" chat_id so it doesn't mix with main history
             let side_id = chat_id.0 ^ 0x7F7F_7F7F; // XOR to create distinct ID
-            let (response, screenshot_path) =
-                telegram_tools::agentic_chat(&ctx.tool_ctx, side_id, side_text, None).await;
+            let (response, screenshot_path) = with_typing(&bot, chat_id, async {
+                telegram_tools::agentic_chat(&ctx.tool_ctx, side_id, side_text, None).await
+            }).await;
             // Clear the side conversation immediately after (no summary for /btw)
             let _ = ctx.tool_ctx.history.clear(side_id).await;
 
@@ -411,10 +411,9 @@ mod inner {
         }
 
         // Everything else goes through the agentic loop (with conversation history)
-        bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
-
-        let (response, screenshot_path) =
-            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, &text, None).await;
+        let (response, screenshot_path) = with_typing(&bot, chat_id, async {
+            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, &text, None).await
+        }).await;
 
         // If SDD checkpoint, send inline buttons for approval
         if response.contains("--- CHECKPOINT ---") {
@@ -559,8 +558,9 @@ mod inner {
         );
 
         // Process transcription through agentic loop (natural language!)
-        let (response, screenshot_path) =
-            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, &transcription, None).await;
+        let (response, screenshot_path) = with_typing(&bot, chat_id, async {
+            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, &transcription, None).await
+        }).await;
 
         // Send screenshot if one was taken
         if let Some(ref path) = screenshot_path {
@@ -616,8 +616,6 @@ mod inner {
         ctx: BotCtx,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Telegram [{}]: photo received", chat_id);
-        bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
-
         let file = bot.get_file(&file_id).await?;
         let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
         tokio::fs::create_dir_all(&tmp_dir).await.ok();
@@ -633,8 +631,9 @@ mod inner {
         tokio::fs::remove_file(&img_path).await.ok();
 
         // Process through agentic loop with image
-        let (response, screenshot_path) =
-            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, caption, Some(&data_url)).await;
+        let (response, screenshot_path) = with_typing(&bot, chat_id, async {
+            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, caption, Some(&data_url)).await
+        }).await;
 
         if let Some(ref path) = screenshot_path {
             let screenshot_file = std::path::Path::new(path);
@@ -710,9 +709,10 @@ mod inner {
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
             let data_url = format!("data:image/jpeg;base64,{}", b64);
 
-            let (response, screenshot_path) =
+            let (response, screenshot_path) = with_typing(&bot, chat_id, async {
                 telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, caption, Some(&data_url))
-                    .await;
+                    .await
+            }).await;
 
             if let Some(ref path) = screenshot_path {
                 let screenshot_file = std::path::Path::new(path);
@@ -866,6 +866,30 @@ mod inner {
     // -----------------------------------------------------------------------
     // Shared helpers
     // -----------------------------------------------------------------------
+
+    /// Run a future while keeping the Telegram "typing..." indicator alive.
+    ///
+    /// Telegram's typing indicator expires after ~5 seconds, so we re-send it
+    /// every 4 seconds until the future completes.
+    async fn with_typing<F, T>(bot: &Bot, chat_id: ChatId, fut: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        let bot_clone = bot.clone();
+        let typing_handle = tokio::spawn(async move {
+            loop {
+                bot_clone
+                    .send_chat_action(chat_id, ChatAction::Typing)
+                    .await
+                    .ok();
+                tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
+            }
+        });
+
+        let result = fut.await;
+        typing_handle.abort();
+        result
+    }
 
     /// Send a long message in chunks (Telegram has 4096 char limit).
     async fn send_chunked(

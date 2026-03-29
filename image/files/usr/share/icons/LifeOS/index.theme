@@ -1,10 +1,10 @@
 [Icon Theme]
 Name=LifeOS
-Comment=LifeOS flat icon theme with Teal Axi accent
+Comment=LifeOS flat icon theme with Teal Axi accent — 317 icons + symbolic variants
 Inherits=Adwaita,hicolor
 Example=folder
 
-Directories=scalable/apps,scalable/places,scalable/mimetypes,scalable/actions,scalable/categories,scalable/status
+Directories=scalable/apps,scalable/places,scalable/mimetypes,scalable/actions,scalable/categories,scalable/status,scalable/devices,scalable/emblems,axi/svg
 
 [scalable/apps]
 Size=512
@@ -42,6 +42,27 @@ Type=Scalable
 Context=Categories
 
 [scalable/status]
+Size=512
+MinSize=16
+MaxSize=1024
+Type=Scalable
+Context=Status
+
+[scalable/devices]
+Size=512
+MinSize=16
+MaxSize=1024
+Type=Scalable
+Context=Devices
+
+[scalable/emblems]
+Size=512
+MinSize=16
+MaxSize=1024
+Type=Scalable
+Context=Emblems
+
+[axi/svg]
 Size=512
 MinSize=16
 MaxSize=1024

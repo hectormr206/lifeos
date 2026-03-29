@@ -418,6 +418,7 @@ impl LlmRouter {
                             .unwrap_or("")
                             .to_string();
                         let text = strip_think_tags(&raw_text);
+                        let text = strip_reasoning_loop(&text);
                         let tokens_used = retry_body["usage"]["total_tokens"]
                             .as_u64()
                             .and_then(|t| u32::try_from(t).ok());
@@ -452,8 +453,9 @@ impl LlmRouter {
             .unwrap_or("")
             .to_string();
 
-        // Strip <think>...</think> blocks from Qwen3/DeepSeek reasoning models
+        // Strip <think>...</think> blocks and degenerate reasoning loops
         let text = strip_think_tags(&raw_text);
+        let text = strip_reasoning_loop(&text);
 
         let tokens_used = body["usage"]["total_tokens"]
             .as_u64()
@@ -648,7 +650,7 @@ fn default_providers() -> Vec<ProviderConfig> {
             max_rpm: None,
             max_rpd: None,
             supports_vision: true,
-            max_context: 6144,
+            max_context: 16384,
             tier: ProviderTier::Local,
             chat_path: None,
             privacy: String::new(),
@@ -957,6 +959,65 @@ pub fn strip_think_tags(text: &str) -> String {
                 .trim()
                 .to_string();
         }
+        // Unclosed <think> — the model used all tokens on reasoning with no output.
+        // Return everything before the tag (if any), otherwise empty.
+        let before = text[..start].trim();
+        if !before.is_empty() {
+            return before.to_string();
+        }
+        return String::new();
     }
     text.to_string()
+}
+
+/// Detect and strip degenerate reasoning loops where the model repeats the same
+/// sentences over and over (common with small models like Qwen3.5-2B in reasoning mode).
+///
+/// Heuristic: split into sentences, if any sentence appears 3+ times, the response
+/// is degenerate — return only the unique content before the loop started.
+pub fn strip_reasoning_loop(text: &str) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+
+    // Split on sentence boundaries (period/newline followed by capital or common patterns)
+    let sentences: Vec<&str> = text
+        .split('\n')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if sentences.len() < 4 {
+        return text.to_string();
+    }
+
+    // Count occurrences of each sentence
+    let mut counts = std::collections::HashMap::new();
+    for s in &sentences {
+        *counts.entry(*s).or_insert(0u32) += 1;
+    }
+
+    // If any sentence repeats 3+ times, the output is degenerate
+    let has_loop = counts.values().any(|&c| c >= 3);
+    if !has_loop {
+        return text.to_string();
+    }
+
+    // Collect unique sentences in order (first occurrence only), stop at first repeat
+    let mut seen = std::collections::HashSet::new();
+    let mut unique = Vec::new();
+    for s in &sentences {
+        if !seen.insert(*s) {
+            break; // Loop started
+        }
+        unique.push(*s);
+    }
+
+    let result = unique.join("\n").trim().to_string();
+    if result.is_empty() {
+        // Everything was a loop — return a fallback
+        return String::new();
+    }
+    result
 }

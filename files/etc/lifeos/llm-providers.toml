@@ -18,7 +18,7 @@ api_format = "openai_compatible"
 cost_input_per_m = 0.0
 cost_output_per_m = 0.0
 supports_vision = true
-max_context = 6144
+max_context = 16384
 tier = "local"
 privacy = "max"
 

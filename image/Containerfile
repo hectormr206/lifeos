@@ -590,6 +590,7 @@ COPY image/files/usr/local/bin/lifeos-check.sh                  /usr/local/bin/l
 COPY image/files/usr/local/bin/lifeos-llama-gpu-layers.sh       /usr/local/bin/lifeos-llama-gpu-layers.sh
 COPY image/files/usr/local/bin/lifeos-generate-wakeword.sh     /usr/local/bin/lifeos-generate-wakeword.sh
 COPY image/files/usr/local/bin/lifeos-speaker-embedding.py     /usr/local/bin/lifeos-speaker-embedding.py
+COPY image/files/usr/local/bin/lifeos-diarize.py               /usr/local/bin/lifeos-diarize.py
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
              /usr/local/bin/lifeos-stt-setup.sh \
@@ -603,6 +604,7 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-llama-gpu-layers.sh \
              /usr/local/bin/lifeos-generate-wakeword.sh \
              /usr/local/bin/lifeos-speaker-embedding.py \
+             /usr/local/bin/lifeos-diarize.py \
              /usr/local/bin/lifeos-check
 
 # --- Pre-trained wake word model (works from first boot) ---
