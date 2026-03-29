@@ -890,6 +890,19 @@ async fn main() -> anyhow::Result<()> {
                     let s = overlay.get_state().await;
                     format!("{:?}", s.axi_state)
                 };
+                // Read persisted sensor state so tray doesn't revert to hardcoded defaults
+                let sensors = {
+                    let arm = tray_state.agent_runtime_manager.read().await;
+                    let runtime = arm.sensory_capture_runtime().await;
+                    let always_on = arm.always_on_runtime().await;
+                    axi_tray::InitialSensorState {
+                        mic: runtime.audio_enabled,
+                        camera: runtime.camera_enabled,
+                        screen: runtime.screen_enabled,
+                        always_on: always_on.enabled,
+                        tts: runtime.audio_enabled, // TTS follows mic setting
+                    }
+                };
                 let tray_rx = tray_state.event_bus.subscribe();
                 axi_tray::spawn_tray(
                     tray_rx,
@@ -897,6 +910,7 @@ async fn main() -> anyhow::Result<()> {
                     tray_api_base,
                     tray_token,
                     current_state,
+                    sensors,
                 )
                 .await;
                 // spawn_tray now actually blocks until the tray exits

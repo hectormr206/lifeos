@@ -374,6 +374,16 @@ pub mod inner {
         }
     }
 
+    /// Initial sensor state passed to the tray at spawn time.
+    /// Read from AgentRuntimeManager (persisted to disk) so user toggles survive restarts.
+    pub struct InitialSensorState {
+        pub mic: bool,
+        pub camera: bool,
+        pub screen: bool,
+        pub always_on: bool,
+        pub tts: bool,
+    }
+
     /// Spawn the system tray icon. Blocks until the tray exits.
     /// Must be called from a blocking context (e.g. `spawn_blocking`).
     pub async fn spawn_tray(
@@ -382,16 +392,17 @@ pub mod inner {
         api_base: String,
         api_token: String,
         initial_state: String,
+        sensors: InitialSensorState,
     ) {
         info!("[tray] Spawning Axi system tray icon");
 
         let tray = AxiTray {
             state: initial_state,
-            mic: true,
-            camera: false,
-            screen: true,
-            always_on: true,
-            tts: true,
+            mic: sensors.mic,
+            camera: sensors.camera,
+            screen: sensors.screen,
+            always_on: sensors.always_on,
+            tts: sensors.tts,
             kill_switch: false,
             dashboard_url,
             api_base,
