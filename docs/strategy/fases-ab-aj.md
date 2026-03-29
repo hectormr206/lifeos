@@ -417,14 +417,14 @@ Layer 0: Heartbeat (systemd watchdog)
 - Cron jobs mezclan UTC y Local en comparaciones de tiempo
 
 **AM.1 — Inyeccion de Tiempo en System Prompts (P0)**
-- [ ] Crear funcion `time_context()` que genera bloque de contexto temporal:
+- [x] Crear funcion `time_context()` que genera bloque de contexto temporal:
   ```
   [Contexto temporal]
   Fecha y hora actual: 2026-03-29 10:45:23
   Zona horaria: America/Mexico_City (CST, UTC-6)
   Dia de la semana: sabado
   ```
-- [ ] Inyectar `time_context()` en TODOS los system prompts:
+- [x] Inyectar `time_context()` en TODOS los system prompts:
   - `telegram_tools.rs` → `agentic_chat()` (prompt principal de Axi)
   - `supervisor.rs` → `create_plan_with_role()` (planificacion de tareas)
   - `autonomous_agent.rs` → `action_loop()` (agente autonomo)
@@ -432,13 +432,13 @@ Layer 0: Heartbeat (systemd watchdog)
   - `sensory_pipeline.rs` → prompt de percepcion
   - `knowledge_graph.rs` → prompt de extraction
   - `telegram_tools.rs` → sub-agent calls
-- [ ] El tiempo se genera FRESCO en cada llamada al LLM (no cacheado)
+- [x] El tiempo se genera FRESCO en cada llamada al LLM (no cacheado)
 
 **AM.2 — Herramienta `current_time` para el LLM**
-- [ ] Agregar tool #34 `current_time` en telegram_tools.rs:
+- [x] Agregar tool #34 `current_time` en telegram_tools.rs:
   - Sin parametros, devuelve fecha/hora/timezone/dia de la semana
   - Permite al LLM pedir la hora explicitamente cuando necesita precision
-- [ ] Agregar al SYSTEM_PROMPT la instruccion:
+- [x] Agregar al SYSTEM_PROMPT la instruccion:
   ```
   Cuando el usuario use expresiones de tiempo relativo ("manana", "en 2 horas", "el lunes"),
   calcula la fecha/hora exacta usando el contexto temporal y confirma:
@@ -446,32 +446,32 @@ Layer 0: Heartbeat (systemd watchdog)
   ```
 
 **AM.3 — Deteccion de Timezone IANA**
-- [ ] Agregar crate `iana-time-zone` a daemon/Cargo.toml
-- [ ] Detectar timezone automaticamente al arrancar el daemon (`iana_time_zone::get_timezone()`)
-- [ ] Guardar en config: `~/.config/lifeos/timezone` como fallback
-- [ ] Permitir override manual via API: `POST /api/v1/settings/timezone`
+- [x] Agregar crate `iana-time-zone` a daemon/Cargo.toml
+- [x] Detectar timezone automaticamente al arrancar el daemon (`iana_time_zone::get_timezone()`)
+- [x] Guardar en config: `~/.config/lifeos/timezone` como fallback
+- [x] Permitir override manual via API: `POST /api/v1/settings/timezone`
 
 **AM.4 — Estandarizar Storage: UTC + Timezone**
-- [ ] **Regla:** Todas las DBs almacenan timestamps en UTC (RFC3339 con +00:00)
-- [ ] **calendar.rs:** Migrar `start_time` a UTC. Agregar columna `timezone TEXT DEFAULT 'UTC'` para cada evento
-- [ ] **memory_plane.rs:** Ya usa UTC — correcto, no cambiar
-- [ ] **scheduled_tasks.rs:** Verificar que `next_run` se calcula en local pero se almacena en UTC
-- [ ] **telegram_tools.rs (cron):** Estandarizar `last_run` a UTC, comparar contra UTC
+- [x] **Regla:** Todas las DBs almacenan timestamps en UTC (RFC3339 con +00:00)
+- [x] **calendar.rs:** Migrar `start_time` a UTC. Agregar columna `timezone TEXT DEFAULT 'UTC'` para cada evento
+- [x] **memory_plane.rs:** Ya usa UTC — correcto, no cambiar
+- [x] **scheduled_tasks.rs:** Verificar que `next_run` se calcula en local pero se almacena en UTC
+- [x] **telegram_tools.rs (cron):** Estandarizar `last_run` a UTC, comparar contra UTC
 
 **AM.5 — Memory Queries por Rango de Tiempo**
-- [ ] Agregar `search_by_time_range(from: DateTime<Utc>, to: DateTime<Utc>)` a memory_plane.rs
-- [ ] Cuando el usuario pregunta "que hice ayer a las 6pm":
+- [x] Agregar `search_by_time_range(from: DateTime<Utc>, to: DateTime<Utc>)` a memory_plane.rs
+- [x] Cuando el usuario pregunta "que hice ayer a las 6pm":
   1. Axi sabe su timezone (AM.3)
   2. Calcula "ayer 18:00-18:59" en hora local
   3. Convierte a UTC
   4. Busca en memory_entries con `WHERE created_at BETWEEN ?1 AND ?2`
-- [ ] Agregar herramienta `search_memories_by_date` al LLM con parametros `{date, time_from, time_to}`
+- [x] Agregar herramienta `search_memories_by_date` al LLM con parametros `{date, time_from, time_to}`
 
 **AM.6 — Calendario Timezone-Aware**
-- [ ] Cada evento almacena `timezone` del creador
-- [ ] Al mostrar eventos: convertir UTC → timezone del evento
-- [ ] Al crear evento: si el usuario dice "3pm", usar SU timezone
-- [ ] Soportar eventos en diferentes zonas (ej: "reunion a las 3pm hora de Madrid")
+- [x] Cada evento almacena `timezone` del creador
+- [x] Al mostrar eventos: convertir UTC → timezone del evento
+- [x] Al crear evento: si el usuario dice "3pm", usar SU timezone
+- [x] Soportar eventos en diferentes zonas (ej: "reunion a las 3pm hora de Madrid")
 
 **Arquitectura de tiempo:**
 ```
