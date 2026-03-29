@@ -1,49 +1,52 @@
 # LifeOS
 
-AI-native Linux distribution based on Fedora bootc, focused on reliable daily-driver workflows for founders and developers.
+AI-native Linux distribution built on Fedora 42 bootc (immutable) with COSMIC Desktop. Your personal AI assistant **Axi** lives at the OS level — voice, vision, memory, autonomous execution, and privacy by default.
 
-## Current Status
+## What Makes LifeOS Different
 
-- Active wedge: AI local-first workstation (1.0 scope).
-- Phases 0, 1, 2 and 2.5: closed at baseline.
-- Phase 3 hardening closeout: tracked in `evidence/phase-3/phase-3-closeout.md`.
+- **IS the OS** — not an app inside an OS. Access to kernel, systemd, GPU, hardware
+- **Immutable + rollback** — bootc atomic updates, if AI breaks something, rollback in seconds
+- **Privacy first** — local LLM (Qwen3.5-4B), 13+ cloud providers with sensitivity routing
+- **24/7 assistant** — Telegram, Slack, Discord, WhatsApp, Matrix, Signal, voice, desktop overlay
+- **GPU Game Guard** — auto-offloads AI from GPU when gaming, restores when done
 
-## Source Of Truth
+## Quick Start
 
-- Normative spec: `docs/lifeos-ai-distribution.md`
-- Project execution state: `docs/PROJECT_STATE.md`
-- Historical snapshots (deprecated): `ROADMAP.md`, `PROJECT_STATUS.md`, `FINAL_STATUS.md`
+```bash
+make build      # Build CLI + daemon
+make test       # Run 309 tests
+make lint       # Clippy + fmt
+```
 
-## Workspace Layout
+## Repository Layout
 
 ```
 lifeos/
-├── cli/        # `life` command-line interface
-├── daemon/     # `lifeosd` daemon + REST API
-├── tests/      # integration and E2E tests
-├── image/      # bootc container image definition
-├── scripts/    # build and validation automation
-└── docs/       # architecture, ops and user docs
+├── cli/        # `life` command-line tool
+├── daemon/     # `lifeosd` system daemon (50+ modules, 309 tests)
+├── image/      # Containerfile + system files for bootc image
+├── scripts/    # Build, CI, icon generation, verification scripts
+├── docs/       # Organized documentation (see docs/README.md)
+├── evidence/   # Phase closeout evidence (auditable history)
+├── contracts/  # JSON schemas for intents and identity
+├── CLAUDE.md   # Instructions for Claude Code
+├── GEMINI.md   # Instructions for Gemini
+└── AGENTS.md   # Quick onboarding for any AI agent
 ```
 
-## Quick Commands
+## Documentation
 
-```bash
-# Build and test
-make build
-make test
-make lint
+All documentation is organized in [`docs/`](docs/README.md):
 
-# Phase 3 hardening gate
-make check-daemon-prereqs
-make phase3-hardening
+| Topic | Location |
+|-------|----------|
+| Strategy & roadmap | `docs/strategy/` |
+| Architecture & specs | `docs/architecture/` |
+| Operations & runbooks | `docs/operations/` |
+| User guides | `docs/user/` |
+| Branding & design | `docs/branding/` |
+| Privacy analysis | `docs/privacy/` |
 
-# Build ISO
-sudo bash scripts/build-iso-without-model.sh
-```
+## License
 
-## Recovery And Ops
-
-- Incident runbook: `docs/incident-response-playbook.md`
-- Recovery kit generation: `scripts/create-recovery-kit.sh`
-- ISO/VM workflow: `docs/Reconstruir imagen y generar ISO.md`
+Proprietary — Hector Martinez (hectormr.com)
