@@ -2229,24 +2229,24 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 **Investigacion (2026-03-28):** Anaconda (el instalador de Fedora) ya tiene un "spoke" de creacion de usuario. Si el kickstart no incluye la linea `user`, Anaconda lo pide interactivamente. Bazzite, Aurora y Universal Blue hacen exactamente esto. `cosmic-initial-setup` (paquete Fedora `cosmic-initial-setup-1.0.8`) da wizard post-login para tema/layout/accesibilidad.
 
 **AE.1 — Anaconda Interactive User Creation (ISO builds)**
-- [ ] **Quitar usuario hardcodeado del kickstart:** Remover `user --name=lifeos --password=...` de `generate-iso-simple.sh` y `generate-iso.sh`. Anaconda mostrara el spoke "User Creation" obligatorio
-- [ ] **Quitar `chage -d 0` del %post:** Ya no es necesario si el usuario elige su password durante la instalacion
-- [ ] **Actualizar mensajes de build:** Quitar "user: lifeos / password: lifeos" de los mensajes de output
-- [ ] **Adaptar sudoers:** El sudoers actual usa `lifeos ALL=(root)`. Para soportar cualquier username, cambiar a `%wheel ALL=(root) NOPASSWD:` para los comandos especificos, ya que el usuario se agrega a wheel durante la instalacion
+- [x] **Quitar usuario hardcodeado del kickstart:** Remover `user --name=lifeos --password=...` de `generate-iso-simple.sh` y `generate-iso.sh`. Anaconda mostrara el spoke "User Creation" obligatorio
+- [x] **Quitar `chage -d 0` del %post:** Ya no es necesario si el usuario elige su password durante la instalacion
+- [x] **Actualizar mensajes de build:** Quitar "user: lifeos / password: lifeos" de los mensajes de output
+- [x] **Adaptar sudoers:** El sudoers actual usa `lifeos ALL=(root)`. Para soportar cualquier username, cambiar a `%wheel ALL=(root) NOPASSWD:` para los comandos especificos, ya que el usuario se agrega a wheel durante la instalacion
 
 **AE.2 — cosmic-initial-setup (Post-Login Personalization)**
-- [ ] **Verificar que cosmic-initial-setup esta en la imagen:** Confirmar que el paquete viene con `@cosmic-desktop-environment` o agregarlo al Containerfile
-- [ ] **Welcome wizard post-login:** Al primer login, cosmic-initial-setup muestra: accesibilidad, layout (panel arriba/abajo + dock), seleccion de tema
-- [ ] **LifeOS-specific pages (futuro):** Considerar extender el wizard con paginas para: configurar Telegram bot token, elegir modelo de IA preferido, nivel de privacidad
+- [x] **Verificar que cosmic-initial-setup esta en la imagen:** Confirmar que el paquete viene con `@cosmic-desktop-environment` o agregarlo al Containerfile
+- [x] **Welcome wizard post-login:** Al primer login, cosmic-initial-setup muestra: accesibilidad, layout (panel arriba/abajo + dock), seleccion de tema
+- [ ] **LifeOS-specific pages:** FUTURO (requiere GUI libcosmic) Considerar extender el wizard con paginas para: configurar Telegram bot token, elegir modelo de IA preferido, nivel de privacidad
 
 **AE.3 — Fallback para builds raw/qcow2/vmdk (sin Anaconda)**
-- [ ] **Mantener `enforce_password_change` en first-boot.sh:** Para deployments donde no hay Anaconda (testing, VMs), el usuario default `lifeos` sigue existiendo pero se fuerza cambio de password
-- [ ] **Documentar claramente:** Builds raw/qcow2 son solo para desarrollo/testing, no para usuarios finales
+- [x] **Mantener `enforce_password_change` en first-boot.sh:** Para deployments donde no hay Anaconda (testing, VMs), el usuario default `lifeos` sigue existiendo pero se fuerza cambio de password
+- [x] **Documentar claramente:** Builds raw/qcow2 son solo para desarrollo/testing, no para usuarios finales
 
 **AE.4 — Sudoers Dinamico**
-- [ ] **Migrar de `lifeos ALL=` a `%wheel ALL=`:** Para que cualquier username funcione con los permisos de Axi
-- [ ] **Polkit rules por grupo:** Actualizar las reglas polkit para usar grupo `wheel` en vez de usuario `lifeos` especifico
-- [ ] **Daemon ownership:** lifeosd debe correr como el UID del usuario creado, no hardcoded UID 1000. O usar un usuario de sistema `axi` dedicado para el daemon
+- [x] **Migrar de `lifeos ALL=` a `%wheel ALL=`:** Para que cualquier username funcione con los permisos de Axi
+- [x] **Polkit rules por grupo:** Actualizar las reglas polkit para usar grupo `wheel` en vez de usuario `lifeos` especifico
+- [x] **Daemon ownership:** lifeosd debe correr como el UID del usuario creado, no hardcoded UID 1000. O usar un usuario de sistema `axi` dedicado para el daemon
 
 ### Fase AF — Canales de Mensajeria Adicionales (Paridad OpenClaw Channels)
 
@@ -2268,8 +2268,8 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 - [ ] Responder emails en hilo manteniendo contexto
 
 **AF.4 — SMS/iMessage (futuro)**
-- [ ] SMS via Twilio API o similar
-- [ ] iMessage requiere bridge de terceros (no hay API oficial)
+- [ ] SMS via Twilio — FUTURO (requiere API externa) API o similar
+- [ ] iMessage — FUTURO (requiere bridge de terceros) bridge de terceros (no hay API oficial)
 
 **Prioridad:** Slack > Discord > Email conversacional > SMS. Los 2 primeros cubren el 90% de la demanda empresarial.
 
