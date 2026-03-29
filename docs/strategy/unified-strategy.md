@@ -19,8 +19,8 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | A-M | COMPLETADAS | Core: LLM router, Telegram, supervisor, browser, self-improvement, multimodal |
 | N-AA | COMPLETADAS | Desktop operator, gaming, MCP, meetings, security AI, visual identity (657 SVGs) |
 | AB-AG | COMPLETADAS | WebSocket gateway, session store, plugin SDK, first-boot, Slack/Discord, dedupe |
-| **AK** | **PROXIMA PRIORIDAD** | **Project Axolotl: Self-Healing Engine (5 capas independientes)** |
-| **AL** | **PROXIMA** | **Hardening operativo: SSRF guard, tests seguridad, coverage ratchet, progreso observable** |
+| **AK** | **COMPLETADA** | Project Axolotl: 5-layer self-healing (watchdog, safe mode, config store, circuit breaker, sentinel, SQLite) |
+| **AL** | **COMPLETADA** | Hardening: SSRF guard, security tests, coverage ratchet, progress events, enhanced doctor, troubleshooting |
 | *AH/AI/AJ* | *Vision futura* | *Firefox ext, LibreOffice AI, Cloud hosting — sacadas del consecutivo, revisar post-launch* |
 
 ## Como usar esta documentacion

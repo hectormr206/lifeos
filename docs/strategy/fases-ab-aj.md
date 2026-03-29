@@ -270,63 +270,63 @@ Break-even: 12 usuarios Starter cubren los $60/mes de presupuesto actual.
 | **Rediferenciacion** (celulas se especializan de nuevo) | El loop de self-improvement re-aprende gradualmente | SelfImprovingDaemon con guardrails |
 
 **AK.0 — Watchdog systemd (epitelio de herida)**
-- [ ] Agregar `WatchdogSec=30` y `Restart=on-watchdog` a `lifeosd.service`
-- [ ] Background task en main.rs que envia `sd_notify::Watchdog` cada 15 segundos
-- [ ] `StartLimitBurst=5` + `StartLimitIntervalSec=300` — max 5 reinicios en 5 min, despues para
-- [ ] Si el daemon se congela (deadlock tokio, loop infinito en LLM), systemd lo mata y reinicia
+- [x] Agregar `WatchdogSec=30` y `Restart=on-watchdog` a `lifeosd.service`
+- [x] Background task en main.rs que envia `sd_notify::Watchdog` cada 15 segundos
+- [x] `StartLimitBurst=5` + `StartLimitIntervalSec=300` — max 5 reinicios en 5 min, despues para
+- [x] Si el daemon se congela (deadlock tokio, loop infinito en LLM), systemd lo mata y reinicia
 
 **AK.1 — Boot Counter + Safe Mode (prevencion death spiral)**
-- [ ] `/var/lib/lifeos/boot_count`: incrementa en cada arranque, reset a 0 tras 10 min estable
-- [ ] Si `boot_count > 3` al arrancar → entrar en **safe mode** automaticamente
-- [ ] Safe mode desactiva: SelfImprovingDaemon, PromptTuner, SkillGenerator, AutonomousAgent
-- [ ] Safe mode mantiene: API, Telegram (respond-only), health checks, comandos basicos
-- [ ] Notificacion Telegram: "Entre en modo seguro tras crashes repetidos. Respondo mensajes pero no hare cambios autonomos. Di 'exit safe mode' cuando quieras"
-- [ ] Comando `life safe-mode status` y `life safe-mode exit`
+- [x] `/var/lib/lifeos/boot_count`: incrementa en cada arranque, reset a 0 tras 10 min estable
+- [x] Si `boot_count > 3` al arrancar → entrar en **safe mode** automaticamente
+- [x] Safe mode desactiva: SelfImprovingDaemon, PromptTuner, SkillGenerator, AutonomousAgent
+- [x] Safe mode mantiene: API, Telegram (respond-only), health checks, comandos basicos
+- [x] Notificacion Telegram: safe mode' cuando quieras"
+- [x] Comando `life safe-mode status` y `life safe-mode exit`
 
 **AK.2 — Config Time Machine (git versionado)**
 - [ ] `/var/lib/lifeos/config.git/`: repositorio git local con toda la config mutable
-- [ ] Archivos versionados: config.toml, llm-providers.toml, prompts/, skills/, identity.json
-- [ ] `checkpoint(msg)`: git add + commit ANTES de cualquier auto-modificacion
-- [ ] `validate_and_commit(msg)`: checkpoint + validar. Si falla, auto-rollback a HEAD~1
-- [ ] `rollback_to_last_good()`: buscar el commit mas reciente taggeado `known-good`
-- [ ] `tag_known_good()`: se tagea automaticamente tras 10 min de health checks exitosos
-- [ ] **Probation timer**: si el daemon crashea dentro de 5 min de una auto-modificacion, rollback automatico al checkpoint pre-modificacion
+- [x] Archivos versionados: config.toml, llm-providers.toml, prompts/, skills/, identity.json
+- [x] `checkpoint(msg)`: git add + commit ANTES de cualquier auto-modificacion
+- [x] `validate_and_commit(msg)`: checkpoint + validar. Si falla, auto-rollback a HEAD~1
+- [x] `rollback_to_last_good()`: buscar el commit mas reciente taggeado `known-good`
+- [x] `tag_known_good()`: se tagea automaticamente tras 10 min de health checks exitosos
+- [x] **Probation timer**: si el daemon crashea dentro de 5 min de una auto-modificacion, rollback automatico al checkpoint pre-modificacion
 
 **AK.3 — Circuit Breaker para Self-Modification**
-- [ ] Estado: Closed (normal) → Open (tras 3 fallos) → HalfOpen (tras cooldown 6h)
-- [ ] Closed: auto-modificaciones proceden con checkpoint/validate/rollback
-- [ ] Open: TODAS las auto-modificaciones bloqueadas. Axi corre en modo estable
-- [ ] HalfOpen: permite 1 modificacion de prueba. Si exito → Closed. Si fallo → Open con backoff exponencial (max 48h)
-- [ ] Integrar con self_improving.rs, prompt tuner, skill generator
+- [x] Estado: Closed (normal) → Open (tras 3 fallos) → HalfOpen (tras cooldown 6h)
+- [x] Closed: auto-modificaciones proceden con checkpoint/validate/rollback
+- [x] Open: TODAS las auto-modificaciones bloqueadas. Axi corre en modo estable
+- [x] HalfOpen: permite 1 modificacion de prueba. Si exito → Closed. Si fallo → Open con backoff exponencial (max 48h)
+- [x] Integrar con self_improving.rs, prompt tuner, skill generator
 
 **AK.4 — Health Probes (diagnostico estructurado)**
-- [ ] `/api/v1/health/alive` — solo "estoy vivo?" (sin DB, sin config, solo event loop)
-- [ ] `/api/v1/health/ready` — subsistemas inicializados? (config, DBs, LLM router, Telegram)
-- [ ] `/api/v1/health/deep` — diagnostico completo: integridad SQLite, config hashes, skill manifests, disk space
-- [ ] Background task cada 60s: deep probe. Si detecta degradacion → trigger rollback (AK.2)
+- [x] `/api/v1/health/alive` — solo "estoy vivo?" (sin DB, sin config, solo event loop)
+- [x] `/api/v1/health/ready` — subsistemas inicializados? (config, DBs, LLM router, Telegram)
+- [x] `/api/v1/health/deep` — diagnostico completo: integridad SQLite, config hashes, skill manifests, disk space
+- [x] Background task cada 60s: deep probe. Si detecta degradacion → trigger rollback (AK.2)
 
 **AK.5 — Factory Default (blastema compilado)**
-- [ ] `defaults/config.toml`, `defaults/prompts/*.md` embebidos en el binario con `include_str!`
-- [ ] Secuencia de arranque con cascading fallback:
+- [x] `defaults/config.toml`, `defaults/prompts/*.md` embebidos en el binario con `include_str!`
+- [x] Secuencia de arranque con cascading fallback:
   1. Config de config.git → 2. Rollback to last-good → 3. .bak files → 4. Factory defaults
-- [ ] Si llega a factory defaults, notificacion: "Tuve que resetear a configuracion de fabrica. Mis personalizaciones se perdieron pero estoy vivo"
-- [ ] Factory defaults viven en /usr (inmutable via bootc) — IMPOSIBLE de corromper
+- [x] Si llega a factory defaults, notificacion: "Tuve que resetear a configuracion de fabrica. Mis personalizaciones se perdieron pero estoy vivo"
+- [x] Factory defaults viven en /usr (inmutable via bootc) — IMPOSIBLE de corromper
 
 **AK.6 — Sentinel (proceso independiente out-of-band)**
-- [ ] `lifeos-sentinel.service`: proceso separado, minimo, sin dependencias de lifeosd
-- [ ] Checa `/api/v1/health/alive` cada 30s via curl
-- [ ] Escalation ladder:
+- [x] `lifeos-sentinel.service`: proceso separado, minimo, sin dependencias de lifeosd
+- [x] Checa `/api/v1/health/alive` cada 30s via curl
+- [x] Escalation ladder:
   - 1 fallo: log warning
   - 3 fallos: `systemctl restart lifeosd`
   - 5 fallos: `life doctor --repair` (trigger factory reset si necesario)
   - 10 fallos: notificacion Telegram directa (bypassing lifeosd) diciendo "Axi no puede recuperarse"
-- [ ] El sentinel NO tiene logica de negocio, NO usa LLM, NO parsea config — es tan simple que no puede romperse
+- [x] El sentinel NO tiene logica de negocio, NO usa LLM, NO parsea config — es tan simple que no puede romperse
 
 **AK.7 — Proteccion SQLite**
-- [ ] WAL mode habilitado en todas las DBs (crash resilience nativo)
-- [ ] `PRAGMA integrity_check` en el deep health probe cada 60s
-- [ ] Backup automatico cada hora via `sqlite3_backup_init` (hot backup, sin locking)
-- [ ] Pre-modification snapshot antes de cada ciclo de self-improvement
+- [x] WAL mode habilitado en todas las DBs (crash resilience nativo)
+- [x] `PRAGMA integrity_check` en el deep health probe cada 60s
+- [x] Backup automatico cada hora via `sqlite3_backup_init` (hot backup, sin locking)
+- [x] Pre-modification snapshot antes de cada ciclo de self-improvement
 
 **Arquitectura completa (5 capas independientes):**
 ```
@@ -358,43 +358,43 @@ Layer 0: Heartbeat (systemd watchdog)
 **Investigacion (2026-03-29):** Analisis profundo de NemoClaw (10 documentos, 953 lineas). NemoClaw es una capa de operacion para OpenShell con fortalezas en onboarding guiado, policy desde dia uno, recovery clasificado, y tests de seguridad del propio sistema. LifeOS es superior en 9 areas (LLM routing, plugins, self-healing, OS control, Telegram, migrations, CI guardrails, privacy filter, bootc), pero NemoClaw expone 6 gaps valiosos.
 
 **AL.1 — SSRF Guard para LLM Router**
-- [ ] `validate_endpoint(url)` en `llm_router.rs`: rechaza RFC1918, loopback, link-local, metadata (169.254.169.254)
-- [ ] Solo permitir http:// y https:// como schemes
-- [ ] Excepcion explicita para 127.0.0.1:8082 (llama-server local)
-- [ ] Validacion al registrar providers y al cambiar endpoint via API
-- [ ] Test: endpoint `http://10.0.0.1:8080` debe ser rechazado
+- [x] `validate_endpoint(url)` en `llm_router.rs`: rechaza RFC1918, loopback, link-local, metadata (169.254.169.254)
+- [x] Solo permitir http:// y https:// como schemes
+- [x] Excepcion explicita para 127.0.0.1:8082 (llama-server local)
+- [x] Validacion al registrar providers y al cambiar endpoint via API
+- [x] Test: endpoint `http://10.0.0.1:8080` debe ser rechazado
 
 **AL.2 — Tests de Seguridad Interna**
-- [ ] `test_api_keys_not_in_logs`: provider con API key → structured logs no contienen la key
-- [ ] `test_config_backup_no_secrets`: config con tokens → .bak files no tienen tokens en claro
-- [ ] `test_bootstrap_token_entropy`: token generado tiene minimo 128 bits de entropia
-- [ ] `test_telegram_chat_id_enforcement`: mensajes de chat_ids no autorizados son rechazados
-- [ ] `test_audit_ledger_no_message_content`: audit registra acciones pero no contenido de usuario
+- [x] `test_api_keys_not_in_logs`: provider con API key → structured logs no contienen la key
+- [x] `test_config_backup_no_secrets`: config con tokens → .bak files no tienen tokens en claro
+- [x] `test_bootstrap_token_entropy`: token generado tiene minimo 128 bits de entropia
+- [x] `test_telegram_chat_id_enforcement`: mensajes de chat_ids no autorizados son rechazados
+- [x] `test_audit_ledger_no_message_content`: audit registra acciones pero no contenido de usuario
 
 **AL.3 — Coverage Ratchet en CI**
-- [ ] Agregar `cargo-llvm-cov` o `cargo-tarpaulin` al workflow de PR
-- [ ] Script `check-coverage-ratchet.sh` que compara con ultimo valor y falla si baja >1%
-- [ ] Badge de cobertura en README (cuando sea publico)
+- [x] Agregar `cargo-llvm-cov` o `cargo-tarpaulin` al workflow de PR
+- [x] Script `check-coverage-ratchet.sh` que compara con ultimo valor y falla si baja >1%
+- [x] Badge de cobertura en README (cuando sea publico)
 
 **AL.4 — Progreso Observable en Supervisor**
-- [ ] Evento WebSocket `task.progress` con `{task_id, step_index, total_steps, step_label, percent}`
-- [ ] Evento `task.step_completed` con resultado parcial al terminar cada step
-- [ ] Telegram: tareas con 3+ steps → mensaje "Paso 2/5: ejecutando tests..."
-- [ ] Dashboard: barra de progreso por tarea activa
+- [x] Evento WebSocket `task.progress` con `{task_id, step_index, total_steps, step_label, percent}`
+- [x] Evento `task.step_completed` con resultado parcial al terminar cada step
+- [x] Telegram: tareas con 3+ steps → mensaje "Paso 2/5: ejecutando tests..."
+- [x] Dashboard: barra de progreso por tarea activa
 
 **AL.5 — Doctor Mejorado (complementa AK.4)**
-- [ ] PRAGMA integrity_check en cada SQLite DB
-- [ ] Test de conectividad a provider LLM activo (timeout 5s)
-- [ ] Validacion de token de Telegram si configurado
-- [ ] Verificacion de skill manifests en directorio de skills
-- [ ] Disk space check (warning <1GB, error <500MB)
-- [ ] Verificar que llama-server responde en :8082 si provider local activo
-- [ ] Clasificacion de estados: healthy, degraded, impaired, unreachable, safe_mode
+- [x] PRAGMA integrity_check en cada SQLite DB
+- [x] Test de conectividad a provider LLM activo (timeout 5s)
+- [x] Validacion de token de Telegram si configurado
+- [x] Verificacion de skill manifests en directorio de skills
+- [x] Disk space check (warning <1GB, error <500MB)
+- [x] Verificar que llama-server responde en :8082 si provider local activo
+- [x] Clasificacion de estados: healthy, degraded, impaired, unreachable, safe_mode
 
 **AL.6 — Guia de Troubleshooting para Usuario Final**
-- [ ] `docs/user/troubleshooting.md` con formato problema-diagnostico-solucion
-- [ ] Cubrir: "Axi no responde", "Telegram no conecta", "Modelo local lento", "Permiso denegado", "Actualizacion fallo"
-- [ ] Cada entrada con comando concreto (`life doctor`, `systemctl status lifeosd`)
+- [x] `docs/user/troubleshooting.md` con formato problema-diagnostico-solucion
+- [x] Cubrir: "Axi no responde", "Telegram no conecta", "Modelo local lento", "Permiso denegado", "Actualizacion fallo"
+- [x] Cada entrada con comando concreto (`life doctor`, `systemctl status lifeosd`)
 
 **Prioridad:** MEDIA. AL.1 y AL.2 son rapidos y de alto impacto (seguridad). AL.4 mejora UX perceptiblemente. Puede ejecutarse en paralelo con AK.
 
