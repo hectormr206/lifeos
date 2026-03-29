@@ -594,6 +594,7 @@ COPY image/files/usr/local/bin/lifeos-llama-gpu-layers.sh       /usr/local/bin/l
 COPY image/files/usr/local/bin/lifeos-generate-wakeword.sh     /usr/local/bin/lifeos-generate-wakeword.sh
 COPY image/files/usr/local/bin/lifeos-speaker-embedding.py     /usr/local/bin/lifeos-speaker-embedding.py
 COPY image/files/usr/local/bin/lifeos-diarize.py               /usr/local/bin/lifeos-diarize.py
+COPY image/files/usr/local/bin/lifeos-sentinel.sh              /usr/local/bin/lifeos-sentinel.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
              /usr/local/bin/lifeos-stt-setup.sh \
@@ -636,7 +637,6 @@ RUN cp -n /etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml || true
 
 # --- LifeOS system sounds (subtle tones generated via sox) ---
 COPY image/files/usr/share/sounds/lifeos/index.theme /usr/share/sounds/lifeos/index.theme
-COPY image/files/usr/local/bin/lifeos-sentinel.sh         /usr/local/bin/lifeos-sentinel.sh
 COPY image/files/usr/local/bin/lifeos-generate-sounds.sh /usr/local/bin/lifeos-generate-sounds.sh
 RUN chmod +x /usr/local/bin/lifeos-generate-sounds.sh && \
     dnf -y install sox && \
