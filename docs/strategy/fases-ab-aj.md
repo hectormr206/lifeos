@@ -400,6 +400,53 @@ Layer 0: Heartbeat (systemd watchdog)
 
 ---
 
+### Fase AN — Provider Marketplace: Modelos al Dia sin Esperar Updates (PROXIMA)
+
+**Objetivo:** Que el usuario pueda agregar, quitar y actualizar modelos LLM sin esperar una actualizacion de LifeOS. Tres niveles: via Telegram (natural language), via dashboard, y via TOML manual.
+
+**Por que es critico:** Los proveedores de LLM lanzan modelos nuevos cada semana. Si el usuario tiene que esperar a que LifeOS lance un update para usar un modelo nuevo, pierde competitividad. Debe poder decirle a Axi: "agrega este modelo" y que funcione inmediatamente.
+
+**AN.1 — Agregar Modelos via Telegram (natural language)**
+- [ ] Tool `add_provider` en telegram_tools.rs: "Axi, agrega el modelo nvidia/nemotron-ultra de OpenRouter"
+- [ ] Axi parsea: provider base (OpenRouter/Cerebras/Groq/custom), model name, estima context size y capabilities
+- [ ] Valida endpoint con SSRF guard (AL.1)
+- [ ] Escribe al `llm-providers.toml` del usuario sin tocar los defaults del sistema
+- [ ] Hot-reload: el router recarga providers sin reiniciar el daemon
+- [ ] Confirma: "Modelo nvidia/nemotron-ultra agregado a OpenRouter. Contexto: 128K. Privacy: variable. Listo para usar."
+
+**AN.2 — Quitar/Deshabilitar Modelos via Telegram**
+- [ ] Tool `remove_provider`: "Axi, quita el modelo de Z.AI, no lo quiero"
+- [ ] Tool `disable_provider`: "Axi, deshabilita Gemini" (no borra, solo desactiva)
+- [ ] Tool `list_providers`: "Axi, que modelos tengo configurados?"
+
+**AN.3 — Dashboard de Modelos**
+- [ ] Seccion en el dashboard web para ver/agregar/quitar/reordenar providers
+- [ ] Formulario: provider name, API base, model, API key env var, tier, privacy
+- [ ] Toggle enable/disable por provider
+- [ ] Test de conectividad (enviar request de prueba)
+
+**AN.4 — Hot-Reload del Router sin Reiniciar**
+- [ ] `LlmRouter::reload_providers()` — re-lee el TOML y actualiza la lista en memoria
+- [ ] Signal handler: `SIGHUP` al daemon trigger reload (estandar Unix)
+- [ ] API endpoint: `POST /api/v1/llm/reload` para trigger manual
+- [ ] Watcher de archivo: detectar cambios en llm-providers.toml y auto-reload
+
+**AN.5 — User TOML vs System TOML**
+- [ ] System defaults: `/usr/share/lifeos/llm-providers.toml` (read-only, viene con la imagen)
+- [ ] User overrides: `/etc/lifeos/llm-providers.toml` (editable, persiste en updates)
+- [ ] Merge strategy: user TOML tiene prioridad. Si el user define un provider con el mismo nombre, gana el del user
+- [ ] Nuevos providers del system TOML se agregan automaticamente sin borrar los del user
+
+**AN.6 — Auto-Discovery de Modelos Nuevos (futuro)**
+- [ ] Periodicamente consultar `/v1/models` endpoint de cada provider activo
+- [ ] Detectar modelos nuevos que no estan en la config
+- [ ] Notificar: "Cerebras tiene un modelo nuevo: qwen3-405b. Quieres agregarlo?"
+- [ ] El usuario aprueba → se agrega automaticamente
+
+**Prioridad:** AN.1-AN.2 son los mas importantes (Telegram). AN.4 es prerequisito tecnico. AN.3 y AN.5 son mejoras de UX. AN.6 es futuro.
+
+---
+
 ### Fase AM — Reloj Perfecto: Timezone-Aware Time Handling (CRITICA)
 
 **Objetivo:** Que Axi SIEMPRE sepa la fecha, hora y zona horaria exacta del usuario. Que nunca se equivoque al programar recordatorios, consultar memorias por fecha, o interpretar expresiones como "mañana a las 3pm". Que todas las memorias guarden la hora correcta para consultas futuras precisas.
