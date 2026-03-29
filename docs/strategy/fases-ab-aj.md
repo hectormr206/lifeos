@@ -1,4 +1,4 @@
-# Fases AB-AL — OpenClaw/NemoClaw Gaps, Cloud, Security, Axolotl
+# Fases AB-AL — Roadmap Activo + Vision Futura
 
 Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/](.) para el indice.
 
@@ -181,70 +181,15 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 
 **Prioridad:** Slack > Discord > Email conversacional > SMS. Los 2 primeros cubren el 90% de la demanda empresarial.
 
-### Fase AH — Firefox AI Local-First (exploratoria, pendiente)
+### Gaps Menores (documentados, ya resueltos o incrementales)
 
-**Objetivo:** Evaluar una experiencia de IA privada dentro de Firefox en LifeOS, aprovechando el modelo local ya expuesto via `llama.cpp` y manteniendo el hardening/privacy defaults del navegador.
-
-**Estado:** Idea estrategica a considerar a futuro. No esta planteada a fondo ni implementada. La meta aqui es dejarla visible en el roadmap para cuando toque priorizar producto.
-
-**AH.1 — Companion de Axi dentro de Firefox**
-- [ ] Explorar una extension/sidebar de Firefox para "Ask Axi about this page"
-- [ ] Soportar resumen de pagina, reescritura de texto seleccionado, traduccion y extraccion estructurada
-- [ ] Evaluar acceso a DOM/seleccion actual sin romper privacidad ni endurecimiento actual del perfil
-
-**AH.2 — Integracion con modelo local de LifeOS**
-- [ ] Conectar la extension a un endpoint local de Axi/LifeOS que hable con `llama.cpp` OpenAI-compatible en loopback
-- [ ] Definir limites de contexto: pagina completa, seleccion, formularios, PDFs, pestaña actual
-- [ ] Diseñar controles de permisos claros: por sitio, por accion, por tipo de dato
-
-**AH.3 — Modos local y remoto**
-- [ ] Priorizar modo local-first como experiencia por defecto
-- [ ] Mantener opcionalmente un modo remoto para casos donde el modelo local no alcance
-- [ ] Dejar DuckDuckGo como buscador y Duck.ai como opcion remota separada, sin plan actual de integrarlo al flujo local de LifeOS
-
-**AH.4 — Agente web a futuro**
-- [ ] Evaluar puente entre extension de Firefox y capacidades existentes de browser automation/CDP para tareas mas agenticas
-- [ ] Explorar prompts de "sobre esta pestaña" y "completa esta accion en la web" con aprobaciones y audit trail
-
-### Fase AI — LibreOffice AI + UNO/MCP (exploratoria, pendiente)
-
-**Objetivo:** Evaluar una integracion de IA para LibreOffice en LifeOS, idealmente local-first, que combine extension nativa para usuario final con herramientas estructuradas para Axi.
-
-**Estado:** Idea estrategica a considerar a futuro. No esta planteada a fondo ni implementada. Se documenta para no perder la oportunidad de producto.
-
-**AI.1 — Extension nativa para LibreOffice**
-- [ ] Explorar una extension `.oxt` para Writer como primer objetivo
-- [ ] Casos iniciales: resumir, reescribir, traducir, expandir texto, cambiar tono, explicar contenido
-- [ ] Evaluar crecimiento posterior hacia Calc e Impress
-
-**AI.2 — Integracion con modelo local**
-- [ ] Conectar la extension al modelo local de LifeOS via `llama.cpp`, preferentemente a traves de un endpoint de Axi/LifeOS y no directo al runtime
-- [ ] Diseñar fallback remoto opcional solo si aporta valor real y con privacidad claramente etiquetada
-- [ ] Definir limites de tamaño/contexto para documentos y selecciones grandes
-
-**AI.3 — UNO como camino principal**
-- [ ] Priorizar UNO para lectura/escritura estructurada del documento, en vez de depender solo de teclado y raton
-- [ ] Reutilizar y expandir el puente existente de LibreOffice/UNO en LifeOS
-- [ ] Evaluar comandos estructurados: leer seleccion, reemplazar seleccion, leer/escribir celdas, exportar PDF, explicar formulas
-
-**AI.4 — MCP interno para Axi**
-- [ ] Diseñar un MCP interno o set de tools de LifeOS para que Axi manipule LibreOffice de forma segura y auditable
-- [ ] Separar dos modos: herramientas estructuradas via UNO y fallback universal via desktop operator (teclado/raton/screenshot)
-- [ ] Explorar skills por app para Writer/Calc/Impress, usando Axi como operador y verificador
-
-**AI.5 — Vision de producto**
-- [ ] Posicionar a LibreOffice + LifeOS como alternativa privada/local-first frente a Office con copilotos cloud
-- [ ] Evaluar si esta experiencia merece branding propio tipo "LibreOffice AI for LifeOS" o "Axi for Documents"
-
-### Gaps Menores de OpenClaw (documentados, no requieren fase propia)
-
-| Gap | Severidad | Accion | Donde |
-|-----|-----------|--------|-------|
-| **Pairing system** (codigo 8 chars para vincular nuevo dispositivo/usuario) | BAJO | Implementar cuando soporte multi-dispositivo | Fase Z |
-| **Session target validation** (cron jobs validan destino de delivery) | BAJO | Agregar a scheduled_tasks.rs | Mejora incremental |
-| **Inbound message dedupe** (evitar procesar mismo mensaje 2 veces) | BAJO | Agregar cache en telegram_bridge.rs | Mejora incremental |
-| **Transcript export** (exportar conversaciones como PDF/HTML) | BAJO | Agregar como tool del supervisor | Mejora incremental |
-| **Native apps (iOS/Android)** | BAJO hoy | Requiere equipo, post-lanzamiento | Fase Z+ |
+| Gap | Estado | Nota |
+|-----|--------|------|
+| **Session target validation** | RESUELTO | Cron failure tracking en AG.2 |
+| **Inbound message dedupe** | RESUELTO | message_dedupe.rs en AG.1 |
+| **Transcript export** | RESUELTO | export_conversation tool en AG.3 |
+| **Pairing system** | FUTURO | Implementar cuando soporte multi-dispositivo |
+| **Native apps (iOS/Android)** | FUTURO | Requiere equipo, post-lanzamiento |
 
 ### Fase AJ — LifeOS Cloud: Hosting Multi-Tenant + Acceso Movil 24/7 (FUTURA)
 
@@ -486,3 +431,29 @@ Layer 0: Heartbeat (systemd watchdog)
 - [ ] Post en r/linux, r/LocalLLaMA, r/selfhosted, Hacker News — REQUIERE HUMANO
 - [ ] Post en comunidades hispanohablantes — REQUIERE HUMANO
 - [ ] Preparar ISO descargable para early adopters — REQUIERE HUMANO (`sudo bash scripts/build-iso.sh`)
+
+---
+
+## Vision Futura (NO bloquea lanzamiento, revisar post-launch)
+
+Estas fases se sacaron del roadmap activo porque no son necesarias para que LifeOS compita con OpenClaw al lanzamiento. Se revisaran cuando el producto este estable y en manos de usuarios.
+
+### Firefox AI Local-First (ex-Fase AH, exploratoria)
+
+Extension/sidebar de Firefox para "Ask Axi about this page". Requiere: extension .xpi, endpoint local llama.cpp, permisos por sitio, modo local-first vs remoto. Se documenta para no perder la idea.
+
+### LibreOffice AI + UNO/MCP (ex-Fase AI, exploratoria)
+
+Extension .oxt para Writer/Calc/Impress con resumir, reescribir, traducir, expandir texto. Conecta al modelo local via UNO bridge. Posible branding "Axi for Documents". Se documenta para cuando haya demanda.
+
+### LifeOS Cloud: Hosting Multi-Tenant (ex-Fase AJ, futura)
+
+Servicio cloud para acceso movil 24/7. Podman rootless multi-tenant, CPU-only + Cerebras/Groq, 5 tiers ($0-$30/mes), cr-sqlite sync local-cloud. Ejecutar cuando haya 50+ usuarios interesados. Investigacion completa ya realizada (costos, arquitectura, pricing).
+
+### Pairing System Multi-Dispositivo (futura)
+
+Codigo 8 chars con TTL 1h para vincular nuevo dispositivo/usuario. Prerequisito: soporte multi-dispositivo y cloud hosting.
+
+### Native Apps iOS/Android (futura)
+
+Requiere equipo de desarrollo. PWA es el camino intermedio (ya planificado en AJ.4). App nativa solo si hay revenue para justificar el costo de mantenimiento de 2 app stores.
