@@ -2340,6 +2340,66 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 | **Transcript export** (exportar conversaciones como PDF/HTML) | BAJO | Agregar como tool del supervisor | Mejora incremental |
 | **Native apps (iOS/Android)** | BAJO hoy | Requiere equipo, post-lanzamiento | Fase Z+ |
 
+### Fase AJ — LifeOS Cloud: Hosting Multi-Tenant + Acceso Movil 24/7 (FUTURA)
+
+**Objetivo:** Ofrecer LifeOS como servicio cloud para que usuarios accedan a Axi desde sus celulares 24/7 sin necesidad de tener su PC encendida. Modelo SaaS con tiers gratuito y de pago.
+
+**Por que es critico para crecimiento:** La mayoria de usuarios interactuan desde el celular. Tener la PC encendida 24/7 no es viable para la mayoria. Un servicio cloud con acceso via Telegram/PWA resuelve ambos problemas.
+
+**Investigacion completada (2026-03-28):** Analisis de costos GPU vs CPU-only, precios Hetzner/Vast.ai/RunPod, limites free tier Cerebras/Groq, arquitectura multi-tenant Podman, competencia (OpenClaw $24-40/mes, Devin $20/mes), sync local-cloud con cr-sqlite, privacidad con AMD SEV/Intel TDX.
+
+**Descubrimiento clave:** CPU-only + Cerebras/Groq (zero data retention) = costo por usuario ~$0.50-2/mes. No se necesita GPU en servidores. El LLM router ya rutea a 13+ providers remotos.
+
+**AJ.1 — Infraestructura Multi-Tenant**
+- [ ] Imagen Docker/Podman de `lifeosd` sin desktop (solo daemon + bridges) — <200MB
+- [ ] Podman rootless: un contenedor por usuario con namespaces aislados
+- [ ] Orquestacion: auto-start al recibir mensaje de Telegram, idle timeout 30min, auto-stop
+- [ ] Almacenamiento: bind-mount `/data/users/{userId}/` por usuario con SQLite propias
+- [ ] Hetzner CX23 (EUR 3.49/mes) soporta ~50+ usuarios con uso tipico
+
+**AJ.2 — Tiers de Servicio**
+
+| Tier | Precio | Incluye | COGS estimado |
+|------|--------|---------|---------------|
+| **Self-hosted** | Gratis | LifeOS completo en tu hardware | $0 |
+| **Free Cloud** | $0 | Telegram bot, 50 msgs/dia, BYOK para LLM | ~$0.50/user |
+| **Starter** | $5/mes | 500 msgs/dia, Cerebras inference incluido, 5GB, sync | ~$2/user |
+| **Pro** | $15/mes | Ilimitado, modelos rapidos, 25GB, PWA dashboard, sync bidireccional | ~$4/user |
+| **GPU** | $30/mes | Todo Pro + GPU dedicada (Hetzner GEX44, time-sliced entre ~20 users) | ~$9/user |
+
+Break-even: 12 usuarios Starter cubren los $60/mes de presupuesto actual.
+
+**AJ.3 — Sync Local ↔ Cloud (cr-sqlite)**
+- [ ] Integrar cr-sqlite para sync bidireccional de memory.db, calendar.db, knowledge_graph
+- [ ] Syncthing "untrusted device" mode para archivos (datos cifrados en el servidor)
+- [ ] Flujo: usuario usa Axi en Telegram (cloud) de dia, laptop sincroniza al encender
+
+**AJ.4 — PWA Dashboard Movil**
+- [ ] Dashboard web responsive que habla con la API REST de lifeosd
+- [ ] Instalable en home screen (iOS/Android)
+- [ ] Push notifications via service workers
+- [ ] Complementa a Telegram (dashboard para config, metricas, historial — chat en Telegram)
+
+**AJ.5 — Privacidad en Cloud**
+- [ ] Cifrado at-rest con clave derivada del password del usuario (el servidor no ve datos en disco)
+- [ ] LLM inference solo via providers zero-data-retention (Cerebras, Groq)
+- [ ] Tier premium futuro: AMD SEV / Intel TDX para VMs con cifrado en RAM
+- [ ] Logs sin contenido de usuario (solo metadata: timestamps, token counts)
+
+**AJ.6 — Facturacion y Onboarding**
+- [ ] Stripe para pagos recurrentes
+- [ ] Onboarding: usuario se registra, vincula Telegram, Axi responde en <1 minuto
+- [ ] Trial 14 dias de Starter sin tarjeta
+
+**Competencia directa:**
+- OpenClaw managed: $24-40/mes SIN inference — LifeOS Starter es 5x mas barato CON inference
+- Devin: $20/mes base + $2.25/ACU — solo coding, no asistente de vida
+- Replit Agent: $25/mes — solo desarrollo web
+
+**Prerequisitos:** Fases AB (gateway WS para streaming) y AC (plugin SDK) ya completadas. Falta: imagen Docker headless, orquestacion Podman, cr-sqlite, PWA, Stripe.
+
+**Prioridad:** FUTURA — ejecutar cuando haya demanda validada (50+ usuarios interesados).
+
 ### Post Fases — Lanzamiento Publico (REQUIERE HUMANO)
 
 - [ ] Grabar video demo de 2 minutos — REQUIERE HUMANO (screen recording + Telegram)
