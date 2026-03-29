@@ -1163,6 +1163,19 @@ mod inner {
                     truncate(action_description, 500)
                 )
             }
+            SupervisorNotification::TaskProgress {
+                step_index,
+                steps_total,
+                description,
+                ..
+            } => {
+                format!(
+                    "Paso {}/{}: {}",
+                    step_index + 1,
+                    steps_total,
+                    truncate(description, 200)
+                )
+            }
         }
     }
 

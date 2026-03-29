@@ -722,7 +722,15 @@ mod inner {
                 action_description, ..
             } => {
                 format!(
-                    "⚠️ Aprobación requerida:\n{}",
+                    "⚠️ Aprobación requerida:\n{}
+            SupervisorNotification::TaskProgress {
+                step_index,
+                steps_total,
+                description,
+                ..
+            } => {
+                format!("Paso {}/{}: {}", step_index + 1, steps_total, &description[..description.len().min(200)])
+            }",
                     truncate(action_description, 500)
                 )
             }
