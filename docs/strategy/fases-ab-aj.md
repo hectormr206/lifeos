@@ -308,6 +308,108 @@ Break-even: 12 usuarios Starter cubren los $60/mes de presupuesto actual.
 
 ### Post Fases — Lanzamiento Publico (REQUIERE HUMANO)
 
+### Fase AK — Project Axolotl: Self-Healing Engine (PROXIMA PRIORIDAD)
+
+**Objetivo:** Que Axi sea verdaderamente indestructible — como un ajolote que regenera cualquier parte de su cuerpo. Si Axi se rompe a si mismo (por self-improvement, config corrupta, o cualquier razon), debe auto-repararse sin intervencion humana, sin reiniciar el ordenador, sin ejecutar comandos manuales.
+
+**Por que es critico:** OpenClaw tiene `doctor` y `repair`, pero cuando el agente se modifica a si mismo lo suficiente, puede entrar en un "death spiral" donde ni siquiera su propio reparador funciona. Esto le paso al usuario con OpenClaw en WSL. LifeOS NUNCA debe llegar a ese estado — la esencia del ajolote es que siempre se regenera.
+
+**Investigacion (2026-03-28):** Analisis de patrones de auto-reparacion: Erlang supervisors ("let it crash"), Kubernetes liveness/readiness probes, circuit breaker pattern, bootc immutable rollback, biologia del ajolote (5 fases de regeneracion), OpenClaw death spirals documentados, SQLite WAL crash resilience.
+
+**La metafora del ajolote mapeada a software:**
+
+| Fase biologica | Equivalente software | Componente LifeOS |
+|---|---|---|
+| **Epitelio de herida** (sello inmediato) | Watchdog detecta crash, systemd reinicia con config anterior | systemd WatchdogSec + Restart |
+| **Capa apical (AEC)** (centro de señalizacion) | Health probes diagnostican que esta roto y que estrategia usar | /api/v1/health/deep + HealthMonitor |
+| **Desdiferenciacion** (celulas revierten a estado madre) | Rollback a checkpoint anterior — config, prompts, skills | Git versionado en /var/lib/lifeos/config.git |
+| **Formacion de blastema** (celulas progenitoras) | Config factory-default embebida en el binario, siempre disponible | DEFAULT_CONFIG compilado con include_str! |
+| **Rediferenciacion** (celulas se especializan de nuevo) | El loop de self-improvement re-aprende gradualmente | SelfImprovingDaemon con guardrails |
+
+**AK.0 — Watchdog systemd (epitelio de herida)**
+- [ ] Agregar `WatchdogSec=30` y `Restart=on-watchdog` a `lifeosd.service`
+- [ ] Background task en main.rs que envia `sd_notify::Watchdog` cada 15 segundos
+- [ ] `StartLimitBurst=5` + `StartLimitIntervalSec=300` — max 5 reinicios en 5 min, despues para
+- [ ] Si el daemon se congela (deadlock tokio, loop infinito en LLM), systemd lo mata y reinicia
+
+**AK.1 — Boot Counter + Safe Mode (prevencion death spiral)**
+- [ ] `/var/lib/lifeos/boot_count`: incrementa en cada arranque, reset a 0 tras 10 min estable
+- [ ] Si `boot_count > 3` al arrancar → entrar en **safe mode** automaticamente
+- [ ] Safe mode desactiva: SelfImprovingDaemon, PromptTuner, SkillGenerator, AutonomousAgent
+- [ ] Safe mode mantiene: API, Telegram (respond-only), health checks, comandos basicos
+- [ ] Notificacion Telegram: "Entre en modo seguro tras crashes repetidos. Respondo mensajes pero no hare cambios autonomos. Di 'exit safe mode' cuando quieras"
+- [ ] Comando `life safe-mode status` y `life safe-mode exit`
+
+**AK.2 — Config Time Machine (git versionado)**
+- [ ] `/var/lib/lifeos/config.git/`: repositorio git local con toda la config mutable
+- [ ] Archivos versionados: config.toml, llm-providers.toml, prompts/, skills/, identity.json
+- [ ] `checkpoint(msg)`: git add + commit ANTES de cualquier auto-modificacion
+- [ ] `validate_and_commit(msg)`: checkpoint + validar. Si falla, auto-rollback a HEAD~1
+- [ ] `rollback_to_last_good()`: buscar el commit mas reciente taggeado `known-good`
+- [ ] `tag_known_good()`: se tagea automaticamente tras 10 min de health checks exitosos
+- [ ] **Probation timer**: si el daemon crashea dentro de 5 min de una auto-modificacion, rollback automatico al checkpoint pre-modificacion
+
+**AK.3 — Circuit Breaker para Self-Modification**
+- [ ] Estado: Closed (normal) → Open (tras 3 fallos) → HalfOpen (tras cooldown 6h)
+- [ ] Closed: auto-modificaciones proceden con checkpoint/validate/rollback
+- [ ] Open: TODAS las auto-modificaciones bloqueadas. Axi corre en modo estable
+- [ ] HalfOpen: permite 1 modificacion de prueba. Si exito → Closed. Si fallo → Open con backoff exponencial (max 48h)
+- [ ] Integrar con self_improving.rs, prompt tuner, skill generator
+
+**AK.4 — Health Probes (diagnostico estructurado)**
+- [ ] `/api/v1/health/alive` — solo "estoy vivo?" (sin DB, sin config, solo event loop)
+- [ ] `/api/v1/health/ready` — subsistemas inicializados? (config, DBs, LLM router, Telegram)
+- [ ] `/api/v1/health/deep` — diagnostico completo: integridad SQLite, config hashes, skill manifests, disk space
+- [ ] Background task cada 60s: deep probe. Si detecta degradacion → trigger rollback (AK.2)
+
+**AK.5 — Factory Default (blastema compilado)**
+- [ ] `defaults/config.toml`, `defaults/prompts/*.md` embebidos en el binario con `include_str!`
+- [ ] Secuencia de arranque con cascading fallback:
+  1. Config de config.git → 2. Rollback to last-good → 3. .bak files → 4. Factory defaults
+- [ ] Si llega a factory defaults, notificacion: "Tuve que resetear a configuracion de fabrica. Mis personalizaciones se perdieron pero estoy vivo"
+- [ ] Factory defaults viven en /usr (inmutable via bootc) — IMPOSIBLE de corromper
+
+**AK.6 — Sentinel (proceso independiente out-of-band)**
+- [ ] `lifeos-sentinel.service`: proceso separado, minimo, sin dependencias de lifeosd
+- [ ] Checa `/api/v1/health/alive` cada 30s via curl
+- [ ] Escalation ladder:
+  - 1 fallo: log warning
+  - 3 fallos: `systemctl restart lifeosd`
+  - 5 fallos: `life doctor --repair` (trigger factory reset si necesario)
+  - 10 fallos: notificacion Telegram directa (bypassing lifeosd) diciendo "Axi no puede recuperarse"
+- [ ] El sentinel NO tiene logica de negocio, NO usa LLM, NO parsea config — es tan simple que no puede romperse
+
+**AK.7 — Proteccion SQLite**
+- [ ] WAL mode habilitado en todas las DBs (crash resilience nativo)
+- [ ] `PRAGMA integrity_check` en el deep health probe cada 60s
+- [ ] Backup automatico cada hora via `sqlite3_backup_init` (hot backup, sin locking)
+- [ ] Pre-modification snapshot antes de cada ciclo de self-improvement
+
+**Arquitectura completa (5 capas independientes):**
+```
+Layer 4: Sentinel (out-of-band, proceso separado)
+  ↓ Monitorea lifeosd externamente
+Layer 3: Factory Default (compilado en el binario, en /usr inmutable)
+  ↓ Ultimo recurso, IMPOSIBLE de corromper
+Layer 2: Config Time Machine (git local con checkpoints)
+  ↓ Rollback automatico tras fallos de auto-modificacion
+Layer 1: Health Probes (liveness + readiness + deep diagnosis)
+  ↓ Detecta degradacion, trigger rollback
+Layer 0: Heartbeat (systemd watchdog)
+  ↓ Detecta proceso congelado, reinicio automatico
+[Hardware/OS: bootc — rollback del OS completo]
+```
+
+**Cada capa es INDEPENDIENTE de las demas.** Si Layer 2 esta rota (git corrupt), Layer 3 funciona. Si el daemon entero no responde, Layer 4 (sentinel) funciona. Si el sentinel tambien fallo, Layer 0 (systemd) funciona. Y debajo de todo, bootc puede rollback el OS completo.
+
+**Diferenciador unico:** Ningun competidor (OpenClaw, Devin, Replit) tiene este nivel de self-healing. OpenClaw tiene doctor+repair pero depende del mismo proceso que esta roto. LifeOS tiene 5 capas independientes — como el ajolote que puede regenerar extremidades completas.
+
+**Prioridad:** ALTA — implementar AK.0 (watchdog) y AK.1 (safe mode) primero, son cambios pequenos con impacto maximo.
+
+---
+
+### Post Fases — Lanzamiento Publico (REQUIERE HUMANO)
+
 - [ ] Grabar video demo de 2 minutos — REQUIERE HUMANO (screen recording + Telegram)
 - [ ] Grabar video demo "agente agentico" — REQUIERE HUMANO
 - [ ] Actualizar README.md para publico — REQUIERE HUMANO (screenshots reales del dashboard)

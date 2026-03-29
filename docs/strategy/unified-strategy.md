@@ -21,6 +21,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | AB-AG | COMPLETADAS | WebSocket gateway, session store, plugin SDK, first-boot, Slack/Discord, dedupe |
 | AH-AI | EXPLORATORIAS | Firefox extension, LibreOffice AI (pendientes) |
 | AJ | FUTURA | LifeOS Cloud hosting multi-tenant |
+| **AK** | **PROXIMA PRIORIDAD** | **Project Axolotl: Self-Healing Engine (5 capas independientes)** |
 
 ## Como usar esta documentacion
 
