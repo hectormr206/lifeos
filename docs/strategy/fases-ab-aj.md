@@ -1,4 +1,4 @@
-# Fases AB-AJ — OpenClaw Gaps, Cloud, Security
+# Fases AB-AL — OpenClaw/NemoClaw Gaps, Cloud, Security, Axolotl
 
 Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/](.) para el indice.
 
@@ -306,8 +306,6 @@ Break-even: 12 usuarios Starter cubren los $60/mes de presupuesto actual.
 
 **Prioridad:** FUTURA — ejecutar cuando haya demanda validada (50+ usuarios interesados).
 
-### Post Fases — Lanzamiento Publico (REQUIERE HUMANO)
-
 ### Fase AK — Project Axolotl: Self-Healing Engine (PROXIMA PRIORIDAD)
 
 **Objetivo:** Que Axi sea verdaderamente indestructible — como un ajolote que regenera cualquier parte de su cuerpo. Si Axi se rompe a si mismo (por self-improvement, config corrupta, o cualquier razon), debe auto-repararse sin intervencion humana, sin reiniciar el ordenador, sin ejecutar comandos manuales.
@@ -405,6 +403,76 @@ Layer 0: Heartbeat (systemd watchdog)
 **Diferenciador unico:** Ningun competidor (OpenClaw, Devin, Replit) tiene este nivel de self-healing. OpenClaw tiene doctor+repair pero depende del mismo proceso que esta roto. LifeOS tiene 5 capas independientes — como el ajolote que puede regenerar extremidades completas.
 
 **Prioridad:** ALTA — implementar AK.0 (watchdog) y AK.1 (safe mode) primero, son cambios pequenos con impacto maximo.
+
+---
+
+### Fase AL — Hardening Operativo (inspirado en NemoClaw, complementa Axolotl AK)
+
+**Objetivo:** Cerrar los gaps de seguridad interna, observabilidad de progreso, y experiencia de troubleshooting que NemoClaw (ingenieria inversa 2026-03-29) resuelve bien y que LifeOS aun no cubre.
+
+**Investigacion (2026-03-29):** Analisis profundo de NemoClaw (10 documentos, 953 lineas). NemoClaw es una capa de operacion para OpenShell con fortalezas en onboarding guiado, policy desde dia uno, recovery clasificado, y tests de seguridad del propio sistema. LifeOS es superior en 9 areas (LLM routing, plugins, self-healing, OS control, Telegram, migrations, CI guardrails, privacy filter, bootc), pero NemoClaw expone 6 gaps valiosos.
+
+**AL.1 — SSRF Guard para LLM Router**
+- [ ] `validate_endpoint(url)` en `llm_router.rs`: rechaza RFC1918, loopback, link-local, metadata (169.254.169.254)
+- [ ] Solo permitir http:// y https:// como schemes
+- [ ] Excepcion explicita para 127.0.0.1:8082 (llama-server local)
+- [ ] Validacion al registrar providers y al cambiar endpoint via API
+- [ ] Test: endpoint `http://10.0.0.1:8080` debe ser rechazado
+
+**AL.2 — Tests de Seguridad Interna**
+- [ ] `test_api_keys_not_in_logs`: provider con API key → structured logs no contienen la key
+- [ ] `test_config_backup_no_secrets`: config con tokens → .bak files no tienen tokens en claro
+- [ ] `test_bootstrap_token_entropy`: token generado tiene minimo 128 bits de entropia
+- [ ] `test_telegram_chat_id_enforcement`: mensajes de chat_ids no autorizados son rechazados
+- [ ] `test_audit_ledger_no_message_content`: audit registra acciones pero no contenido de usuario
+
+**AL.3 — Coverage Ratchet en CI**
+- [ ] Agregar `cargo-llvm-cov` o `cargo-tarpaulin` al workflow de PR
+- [ ] Script `check-coverage-ratchet.sh` que compara con ultimo valor y falla si baja >1%
+- [ ] Badge de cobertura en README (cuando sea publico)
+
+**AL.4 — Progreso Observable en Supervisor**
+- [ ] Evento WebSocket `task.progress` con `{task_id, step_index, total_steps, step_label, percent}`
+- [ ] Evento `task.step_completed` con resultado parcial al terminar cada step
+- [ ] Telegram: tareas con 3+ steps → mensaje "Paso 2/5: ejecutando tests..."
+- [ ] Dashboard: barra de progreso por tarea activa
+
+**AL.5 — Doctor Mejorado (complementa AK.4)**
+- [ ] PRAGMA integrity_check en cada SQLite DB
+- [ ] Test de conectividad a provider LLM activo (timeout 5s)
+- [ ] Validacion de token de Telegram si configurado
+- [ ] Verificacion de skill manifests en directorio de skills
+- [ ] Disk space check (warning <1GB, error <500MB)
+- [ ] Verificar que llama-server responde en :8082 si provider local activo
+- [ ] Clasificacion de estados: healthy, degraded, impaired, unreachable, safe_mode
+
+**AL.6 — Guia de Troubleshooting para Usuario Final**
+- [ ] `docs/user/troubleshooting.md` con formato problema-diagnostico-solucion
+- [ ] Cubrir: "Axi no responde", "Telegram no conecta", "Modelo local lento", "Permiso denegado", "Actualizacion fallo"
+- [ ] Cada entrada con comando concreto (`life doctor`, `systemctl status lifeosd`)
+
+**Prioridad:** MEDIA. AL.1 y AL.2 son rapidos y de alto impacto (seguridad). AL.4 mejora UX perceptiblemente. Puede ejecutarse en paralelo con AK.
+
+### NemoClaw vs LifeOS — Resumen Comparativo
+
+| Capacidad | NemoClaw | LifeOS | Ventaja |
+|-----------|----------|--------|---------|
+| LLM Routing | 6 perfiles estaticos | 13+ providers, privacy-aware, complexity-aware | **LifeOS** |
+| Plugin System | JSON simple | SkillManifest v2 con capabilities, permissions, hot-reload | **LifeOS** |
+| Self-Healing | Recovery de gateway/sandbox (mismo proceso) | Project Axolotl: 5 capas independientes | **LifeOS** |
+| Control de OS | Sandbox limitado (OpenShell) | ES el OS (kernel, systemd, bootc, GPU) | **LifeOS** |
+| Telegram | Bridge JS por SSH | Crate Rust integrado, 851 LOC, voz, fotos, grupos | **LifeOS** |
+| Schema migrations | JSON plano sin migraciones | ALTER TABLE idempotente en cada modulo SQLite | **LifeOS** |
+| CI Guardrails | PR lint + coverage ratchet | 6 scripts custom de arquitectura | **LifeOS** |
+| Privacy Filter | No tiene | 4 niveles sensibilidad + audit trail | **LifeOS** |
+| Inmutabilidad | No (host mutable) | bootc atomic rollback | **LifeOS** |
+| SSRF Guard | Si, bloquea rangos privados | No tiene (gap) | **NemoClaw** |
+| Tests seguridad interna | Si (credential leak, injection) | No tiene (gap) | **NemoClaw** |
+| Coverage ratchet | Si en CI | No tiene (gap) | **NemoClaw** |
+| Progreso observable | Runner con PROGRESS events | Supervisor sin progreso granular (gap) | **NemoClaw** |
+| Onboarding AI | Wizard de provider + validacion | Solo onboarding de OS (gap parcial) | **NemoClaw** |
+
+**Conclusion:** LifeOS gana 9 a 5 en capacidades. Los 5 gaps de NemoClaw (SSRF, tests seguridad, coverage, progreso, onboarding AI) son todos resolubles y estan planificados en Fase AL.
 
 ---
 

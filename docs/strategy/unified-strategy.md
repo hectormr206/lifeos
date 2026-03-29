@@ -9,7 +9,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [vision-y-decisiones.md](vision-y-decisiones.md) | Estrategia core, metricas, riesgos, reglas (secciones 1-12) | ~655 |
 | [fases-a-m.md](fases-a-m.md) | Fases completadas A-M (core development) | ~364 |
 | [fases-n-aa.md](fases-n-aa.md) | Fases N-AA (desktop operator, gaming, MCP, meetings, security, visual identity) | ~830 |
-| [fases-ab-aj.md](fases-ab-aj.md) | Fases AB-AJ (OpenClaw gaps, WebSocket, Plugin SDK, Slack/Discord, Cloud hosting) | ~318 |
+| [fases-ab-aj.md](fases-ab-aj.md) | Fases AB-AL (OpenClaw/NemoClaw gaps, Axolotl self-healing, hardening) | ~480 |
 | [competencia.md](competencia.md) | Analisis competitivo detallado (OpenClaw, Devin, Replit, gigantes tech) | ~292 |
 
 ## Estado de Fases (resumen rapido)
@@ -22,6 +22,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | AH-AI | EXPLORATORIAS | Firefox extension, LibreOffice AI (pendientes) |
 | AJ | FUTURA | LifeOS Cloud hosting multi-tenant |
 | **AK** | **PROXIMA PRIORIDAD** | **Project Axolotl: Self-Healing Engine (5 capas independientes)** |
+| **AL** | PENDIENTE | Hardening operativo: SSRF guard, tests seguridad, coverage ratchet, progreso observable |
 
 ## Como usar esta documentacion
 
