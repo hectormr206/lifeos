@@ -120,6 +120,7 @@ mod signal_bridge;
 mod skill_generator;
 #[allow(dead_code)]
 mod speaker_id;
+mod storage_housekeeping;
 mod supervisor;
 mod system;
 #[allow(dead_code)]
@@ -1184,6 +1185,19 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     info!("Backup monitor started (daily check)");
+
+    // --- Storage housekeeping: enforce file limits + purge old data (every 6h) ---
+    let housekeeping_data_dir = data_dir.clone();
+    let _housekeeping_handle = tokio::spawn(async move {
+        // Wait 5 minutes after boot before first housekeeping run
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        let mut interval = tokio::time::interval(Duration::from_secs(6 * 3600)); // 6 hours
+        loop {
+            interval.tick().await;
+            storage_housekeeping::run_housekeeping(&housekeeping_data_dir).await;
+        }
+    });
+    info!("Storage housekeeping started (every 6h, 120-file limit per dir)");
 
     // Start supervisor loop with self-healing (restarts on panic)
     let supervisor_state = state.clone();

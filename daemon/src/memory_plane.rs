@@ -1459,14 +1459,37 @@ fn normalize_tags(tags: &[String]) -> Vec<String> {
 }
 
 fn cipher() -> Result<Aes256GcmSiv> {
+    // Priority: env var > machine-derived key > hardcoded fallback
     let passphrase = std::env::var("LIFEOS_MEMORY_KEY")
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_MEMORY_KEY.to_string());
+        .unwrap_or_else(|| derive_machine_key());
     let key = Sha256::digest(passphrase.as_bytes());
     Aes256GcmSiv::new_from_slice(&key)
         .map_err(|e| anyhow::anyhow!("failed to initialize memory cipher: {}", e))
+}
+
+/// Derive a unique encryption key from the machine's identity.
+/// Uses /etc/machine-id (unique per install, stable across reboots) + hostname
+/// so each LifeOS installation has a different key without user configuration.
+fn derive_machine_key() -> String {
+    let machine_id = std::fs::read_to_string("/etc/machine-id")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let hostname = std::fs::read_to_string("/etc/hostname")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if machine_id.is_empty() {
+        // Fallback to hardcoded key only if machine-id is unavailable
+        return DEFAULT_MEMORY_KEY.to_string();
+    }
+
+    // Combine machine-id + hostname + salt for a unique-per-machine passphrase
+    format!("lifeos:{}:{}:axi-memory-v1", machine_id, hostname)
 }
 
 fn encrypt_content(content: &str) -> Result<(String, String, String)> {
