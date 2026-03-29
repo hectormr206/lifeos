@@ -333,6 +333,21 @@ privacy = "low"
 # =============================================================================
 
 [[providers]]
+name = "openrouter-nemotron"
+api_base = "https://openrouter.ai/api"
+api_key_env = "OPENROUTER_API_KEY"
+model = "nvidia/nemotron-3-super:free"
+api_format = "openai_compatible"
+cost_input_per_m = 0.0
+cost_output_per_m = 0.0
+max_rpm = 20
+max_rpd = 200
+supports_vision = false
+max_context = 131072
+tier = "free"
+privacy = "variable"
+
+[[providers]]
 name = "openrouter-coder"
 api_base = "https://openrouter.ai/api"
 api_key_env = "OPENROUTER_API_KEY"

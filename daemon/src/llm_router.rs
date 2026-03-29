@@ -940,6 +940,24 @@ fn default_providers() -> Vec<ProviderConfig> {
             privacy: "low".into(),
         },
         // ===== Priority 6: OpenRouter fallback (mixed privacy) =====
+        // Nemotron 3 Super — NVIDIA's best free model on OpenRouter
+        ProviderConfig {
+            name: "openrouter-nemotron".into(),
+            api_base: "https://openrouter.ai/api".into(),
+            api_key_env: "OPENROUTER_API_KEY".into(),
+            model: "nvidia/nemotron-3-super:free".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.0,
+            cost_output_per_m: 0.0,
+            max_rpm: Some(20),
+            max_rpd: Some(200),
+            supports_vision: false,
+            max_context: 131_072,
+            tier: ProviderTier::Free,
+            chat_path: None,
+            privacy: "variable".into(),
+        },
+        // Qwen3 Coder — strong coding fallback
         ProviderConfig {
             name: "openrouter-coder".into(),
             api_base: "https://openrouter.ai/api".into(),
