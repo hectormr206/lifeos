@@ -61,6 +61,7 @@ COPY tests/integration tests/integration/
 COPY cli/src cli/src/
 COPY cli/assets cli/assets/
 COPY daemon/src daemon/src/
+COPY daemon/defaults daemon/defaults/
 COPY daemon/static daemon/static/
 
 # Copy contracts for model catalog (needed by CLI include_str!)
