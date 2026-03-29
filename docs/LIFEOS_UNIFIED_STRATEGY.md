@@ -2081,12 +2081,141 @@ El tema LifeOS tiene 177 iconos en 8 contextos (antes: 77 en 6). Script generado
 | **X** | Intent-Based Interaction + Translation | IMPLEMENTADA 40% | **HEADLINE** — "le dices que hacer y lo hace" |
 | **Y** | AI Security + Self-Healing Avanzado | IMPLEMENTADA 50% | **HEADLINE** — "nunca muestra errores" |
 | **Z** | Ecosystem + Distribution + World | IMPLEMENTADA 20% | **ESCALA** — de proyecto a plataforma global |
-| **AA** | Visual Identity Completa | PENDIENTE 0% | **CRITICO UX** — primera impresion del usuario, iconos/fuentes/wallpaper/branding |
+| **AA** | Visual Identity Completa | COMPLETADA 95% | 657 SVGs brand-compliant, fuentes, wallpaper, theme system |
+| **AB** | Gateway WebSocket + Session Durability | PENDIENTE | Paridad con OpenClaw control plane |
+| **AC** | Plugin SDK + Capability Registry | PENDIENTE | Ecosistema de skills escalable |
+| **AD** | Anti-Breakage Engineering | PENDIENTE | Guardrails CI, config contracts, observabilidad |
 
 **Camino critico para "iPhone Moment":**
-W (reliability) → U (self-improving) → V (knowledge graph) → X (intent-based) → Y (security) → Z (ecosystem)
+AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) → AC (plugin SDK) → Z (ecosystem)
 
-**La reliability (W) va primero porque sin ella, todo lo demas es humo.**
+**AD va primero porque previene regresiones al construir todo lo demas.**
+
+---
+
+## OpenClaw vs LifeOS: Analisis de Paridad (ingenieria inversa, 2026-03-28)
+
+### Gaps criticos a cerrar (de OpenClaw)
+
+| Gap | Severidad | En OpenClaw | En LifeOS | Fase |
+|-----|-----------|-------------|-----------|------|
+| Gateway WS control plane | ALTO | WS tipado, roles/scopes, event bus con seq | REST-only, polling | AB |
+| Session durability + compaction | ALTO | Transcripts JSONL, compaction, tool truncation | Ad-hoc en memoria | AB |
+| Deterministic channel routing | MEDIO | 8 niveles prioridad, session keys | Per-bridge hardcoded | AB.3 |
+| Plugin SDK + boundaries | MEDIO | SDK publico, baseline CI, contract tests | Skills sin SDK formal | AC |
+| Config migration + doctor | MEDIO | Audit trail, lastKnownGood, doctor incremental | Basico | AB.4 |
+| Architecture guardrails | MEDIO | 6+ scripts custom en CI | Solo fmt+clippy | AD |
+
+### Ventajas de LifeOS sobre OpenClaw (17 capacidades unicas)
+
+| Capacidad | Detalle |
+|-----------|---------|
+| **ES el OS** | Acceso a kernel, systemd, bootc, hardware — irreplicable |
+| **Immutabilidad + rollback** | bootc atomic updates, 3 canales |
+| **GPU Game Guard** | Auto-offload LLM a CPU cuando detecta juego |
+| **Meeting assistant** | Auto-detect triple, transcripcion, diarization, resumen |
+| **Health monitoring** | 12 checks (CPU/GPU/SSD/battery/ergonomia/audio/privacy) |
+| **Security AI daemon** | 4 detectores, auto-isolation, forensic reports |
+| **Voz local completa** | Wake word + Whisper + Piper + TTS emocional + conversacion continua |
+| **Computer use real** | ydotool/xdotool, 14 funciones, vision-guided |
+| **Desktop automation** | Visual grounding, action loop, workspace aislado, kill switch |
+| **Gaming agent** | Game state analysis, sugerencias, virtual gamepad uinput |
+| **Knowledge graph local** | Entity graph, 5 ingestores, temporal reasoning, privacy layers |
+| **Battery manager** | sysfs + UPower, charge thresholds, NVIDIA RTD3 |
+| **Privacy filter** | 4 niveles sensibilidad, routing por proveedor, audit |
+| **Translation engine** | Argos + LLM, subtitulos, voice interpreter |
+| **MCP (estandar industria)** | 9 tools, client Y server — OpenClaw usa protocolo propietario |
+| **OCR local** | Tesseract multilingue sin API |
+| **Presencia/biometricas** | Fatiga, postura, breaks, hidratacion, vista 20-20-20 |
+
+---
+
+### Fase AB — Gateway WebSocket + Session Durability
+
+**Objetivo:** Plano de control WebSocket bidireccional con sesiones durables, protocolo versionado, y event streaming. Prerequisito para UX rica.
+
+**AB.1 — WebSocket Control Plane**
+- [ ] WebSocket endpoint `ws://127.0.0.1:8081/ws` en Axum (coexiste con REST)
+- [ ] Protocol versioning: `connect` frame con protocolVersion, role, scopes[], capabilities[]
+- [ ] Auth por frame: primer frame = `connect` con token. Timeout 5s. Cierre duro si invalido
+- [ ] Roles: `operator` (dashboard, CLI, bridges) y `node` (futuro multi-dispositivo)
+- [ ] Event streaming: push de task.started/completed/failed, agent.typing, llm.streaming, health.alert, game_guard.changed
+- [ ] Sequence numbers para resync en reconexion
+- [ ] Slow consumer handling: drop + snapshot si >30s sin consumir
+
+**AB.2 — Session Durability**
+- [ ] Session store con sessionId estable y sessionKey tipado (`agent:axi:telegram:dm:123456`)
+- [ ] Transcript persistente JSONL en `~/.local/share/lifeos/sessions/<sessionId>.jsonl`
+- [ ] Compaction via LLM cuando transcript supera N tokens
+- [ ] Tool result truncation (>2000 tokens)
+- [ ] Session metadata: lastChannel, lastPeerId, deliveryContext, lastActiveAt
+- [ ] Disk budget configurable con auto-prune de sesiones viejas
+
+**AB.3 — Unified Channel Routing**
+- [ ] Session key contract para todos los bridges: `agent:axi:<channel>:<scope>:<peerId>`
+- [ ] Cross-channel context: misma sesion entre Telegram/voz/CLI
+- [ ] Inbound dedupe por (channel, peerId, messageId)
+- [ ] Routing determinista: respuesta va al canal de origen
+
+**AB.4 — Doctor Mejorado**
+- [ ] Config migration automatica entre versiones
+- [ ] Config backup rotado (max 5) antes de escribir
+- [ ] Stale reference cleanup (skills/providers que ya no existen)
+- [ ] Health check at boot con reporte via evento
+
+### Fase AC — Plugin SDK + Capability Registry
+
+**Objetivo:** Plataforma de extensiones con contratos formales, SDK, registry, y boundaries.
+
+**AC.1 — Skill Manifest v2**
+- [ ] JSON Schema para skill.json: name, version, capabilities[], permissions[], triggers[]
+- [ ] Capabilities tipadas: tool, channel, provider, hook, sensor
+- [ ] Permissions declaradas: filesystem.read/write, network, shell.execute, llm.query
+- [ ] Validacion al cargar: manifest invalido = skill no carga
+
+**AC.2 — Skill Registry Central**
+- [ ] SkillRegistry centralizado en daemon
+- [ ] Runtime snapshot inmutable por tarea del supervisor
+- [ ] Conflict resolution: user > workspace > system > bundled
+- [ ] Hot-reload seguro con verificacion de referencias activas
+
+**AC.3 — Boundaries Arquitectonicas**
+- [ ] Check CI: skills no importan modulos internos del daemon
+- [ ] Contract tests: registry acepta validos, rechaza invalidos
+- [ ] Baseline de superficie publica de APIs
+- [ ] `life skills doctor` para detectar/reparar skills rotos
+
+**AC.4 — Discovery Seguro**
+- [ ] Rutas: user skills > workspace skills > system skills
+- [ ] Ownership check: no cargar de directorios world-writable
+- [ ] Signature opcional en manifest para skills verificados
+
+### Fase AD — Anti-Breakage Engineering
+
+**Objetivo:** Guardrails CI, config contracts, y observabilidad para prevenir regresiones.
+
+**AD.1 — Guardrails Custom**
+- [ ] check-dead-code.sh: modulos .rs no referenciados ni feature-gated
+- [ ] check-orphan-api-routes.sh: endpoints sin test ni uso documentado
+- [ ] check-event-bus-consumers.sh: eventos sin consumidor
+- [ ] check-skill-boundaries.sh: skills no importan daemon/src/
+
+**AD.2 — Config como Contrato**
+- [ ] JSON Schema generado desde structs Rust de config
+- [ ] Config baseline doc autogenerado. CI detecta drift
+- [ ] Migration framework: lista ordenada de transformaciones version_from → version_to
+
+**AD.3 — CI Mejorada**
+- [ ] Scope-aware CI: solo compilar/testear lo que cambio
+- [ ] Regression tests nombrados con ID del bug de origen
+- [ ] Live test suite: daemon real + HTTP requests + verificacion
+
+**AD.4 — Observabilidad de Runtime**
+- [ ] Structured logging con campos queryables (session_id, task_id, provider, latency_ms)
+- [ ] Metrics exporter Prometheus-compatible
+- [ ] `life audit query --since 24h --type llm_call`
+
+**Orden recomendado:** AD (rapido, previene regresiones) → AB (habilita UX rica) → AC (ecosistema)
 
 ### Post Fases — Lanzamiento Publico (REQUIERE HUMANO)
 
