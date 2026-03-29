@@ -2082,11 +2082,12 @@ El tema LifeOS tiene 177 iconos en 8 contextos (antes: 77 en 6). Script generado
 | **Y** | AI Security + Self-Healing Avanzado | IMPLEMENTADA 50% | **HEADLINE** — "nunca muestra errores" |
 | **Z** | Ecosystem + Distribution + World | IMPLEMENTADA 20% | **ESCALA** — de proyecto a plataforma global |
 | **AA** | Visual Identity Completa | COMPLETADA 95% | 657 SVGs brand-compliant, fuentes, wallpaper, theme system |
-| **AB** | Gateway WebSocket + Session Durability | PENDIENTE | Paridad con OpenClaw control plane |
+| **AB** | Gateway WebSocket + Session Durability | COMPLETADA 80% | WS gateway + session store (falta compaction LLM) |
 | **AC** | Plugin SDK + Capability Registry | PENDIENTE | Ecosistema de skills escalable |
-| **AD** | Anti-Breakage Engineering | PENDIENTE | Guardrails CI, config contracts, observabilidad |
-| **AE** | First-Boot User Creation + Welcome | PENDIENTE | Seguridad: eliminar usuario/password hardcoded |
-| **AF** | Canales Extra (Slack, Discord, Email conv.) | PENDIENTE | Paridad con 21+ canales de OpenClaw |
+| **AD** | Anti-Breakage Engineering | COMPLETADA | 4 guardrails CI + config validator + test conventions |
+| **AE** | First-Boot User Creation + Welcome | COMPLETADA | Anaconda interactivo, sudoers %wheel, cosmic-initial-setup |
+| **AF** | Canales Extra (Slack, Discord) | COMPLETADA | slack_bridge.rs + discord_bridge.rs feature-gated |
+| **AG** | Mejoras Incrementales de Robustez | COMPLETADA 80% | Dedupe, cron validation, transcript export (falta pairing) |
 
 **Camino critico para "iPhone Moment":**
 AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) → AC (plugin SDK) → Z (ecosystem)
@@ -2137,21 +2138,21 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 **Objetivo:** Plano de control WebSocket bidireccional con sesiones durables, protocolo versionado, y event streaming. Prerequisito para UX rica.
 
 **AB.1 — WebSocket Control Plane**
-- [ ] WebSocket endpoint `ws://127.0.0.1:8081/ws` en Axum (coexiste con REST)
-- [ ] Protocol versioning: `connect` frame con protocolVersion, role, scopes[], capabilities[]
-- [ ] Auth por frame: primer frame = `connect` con token. Timeout 5s. Cierre duro si invalido
-- [ ] Roles: `operator` (dashboard, CLI, bridges) y `node` (futuro multi-dispositivo)
-- [ ] Event streaming: push de task.started/completed/failed, agent.typing, llm.streaming, health.alert, game_guard.changed
-- [ ] Sequence numbers para resync en reconexion
-- [ ] Slow consumer handling: drop + snapshot si >30s sin consumir
+- [x] WebSocket endpoint `ws://127.0.0.1:8081/ws` en Axum (coexiste con REST)
+- [x] Protocol versioning: `connect` frame con protocolVersion, role, scopes[], capabilities[]
+- [x] Auth por frame: primer frame = `connect` con token. Timeout 5s. Cierre duro si invalido
+- [x] Roles: `operator` (dashboard, CLI, bridges) y `node` (futuro multi-dispositivo)
+- [x] Event streaming: push de task.started/completed/failed, agent.typing, llm.streaming, health.alert, game_guard.changed
+- [x] Sequence numbers para resync en reconexion
+- [x] Slow consumer handling: drop + snapshot si >30s sin consumir
 
 **AB.2 — Session Durability**
-- [ ] Session store con sessionId estable y sessionKey tipado (`agent:axi:telegram:dm:123456`)
-- [ ] Transcript persistente JSONL en `~/.local/share/lifeos/sessions/<sessionId>.jsonl`
+- [x] Session store con sessionId estable y sessionKey tipado (`agent:axi:telegram:dm:123456`)
+- [x] Transcript persistente JSONL en `~/.local/share/lifeos/sessions/<sessionId>.jsonl`
 - [ ] Compaction via LLM cuando transcript supera N tokens
-- [ ] Tool result truncation (>2000 tokens)
-- [ ] Session metadata: lastChannel, lastPeerId, deliveryContext, lastActiveAt
-- [ ] Disk budget configurable con auto-prune de sesiones viejas
+- [x] Tool result truncation (>2000 tokens)
+- [x] Session metadata: lastChannel, lastPeerId, deliveryContext, lastActiveAt
+- [x] Disk budget configurable con auto-prune de sesiones viejas
 
 **AB.3 — Unified Channel Routing**
 - [ ] Session key contract para todos los bridges: `agent:axi:<channel>:<scope>:<peerId>`
@@ -2197,10 +2198,10 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 **Objetivo:** Guardrails CI, config contracts, y observabilidad para prevenir regresiones.
 
 **AD.1 — Guardrails Custom**
-- [ ] check-dead-code.sh: modulos .rs no referenciados ni feature-gated
-- [ ] check-orphan-api-routes.sh: endpoints sin test ni uso documentado
-- [ ] check-event-bus-consumers.sh: eventos sin consumidor
-- [ ] check-skill-boundaries.sh: skills no importan daemon/src/
+- [x] check-dead-code.sh: modulos .rs no referenciados ni feature-gated
+- [x] check-orphan-api-routes.sh: endpoints sin test ni uso documentado
+- [x] check-event-bus-consumers.sh: eventos sin consumidor
+- [x] check-skill-boundaries.sh: skills no importan daemon/src/
 
 **AD.2 — Config como Contrato**
 - [ ] JSON Schema generado desde structs Rust de config
@@ -2252,14 +2253,14 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 **Objetivo:** OpenClaw soporta 21+ canales de mensajeria. LifeOS tiene 4 (Telegram, WhatsApp, Matrix, Signal). Agregar los canales mas demandados.
 
 **AF.1 — Slack Integration**
-- [ ] Slack Bot API via `slack-api` crate o HTTP
-- [ ] Soporte texto, threads, reactions, file uploads
-- [ ] Feature flag `slack`
+- [x] Slack Bot API via `slack-api` crate o HTTP
+- [x] Soporte texto, threads, reactions, file uploads
+- [x] Feature flag `slack`
 
 **AF.2 — Discord Integration**
-- [ ] Discord Bot via `serenity` crate
-- [ ] Soporte texto, embeds, slash commands, voice channels
-- [ ] Feature flag `discord`
+- [x] Discord Bot via `serenity` crate
+- [x] Soporte texto, embeds, slash commands, voice channels
+- [x] Feature flag `discord`
 
 **AF.3 — Email como Canal Conversacional**
 - [ ] El email_bridge existente (IMAP+SMTP) ya lee/envia, pero no es conversacional
