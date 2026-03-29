@@ -12,10 +12,12 @@ use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 const MAX_TOOL_RESULT_CHARS: usize = 2000;
 const SESSION_TTL_HOURS: u64 = 72;
+const COMPACTION_THRESHOLD: usize = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionKey {
@@ -33,6 +35,51 @@ impl SessionKey {
             scope: scope.to_string(),
             peer_id: peer_id.to_string(),
         }
+    }
+
+    /// Create a session key for Telegram DM
+    pub fn telegram_dm(chat_id: i64) -> Self {
+        Self::new("telegram", "dm", &chat_id.to_string())
+    }
+
+    /// Create a session key for Telegram group
+    pub fn telegram_group(chat_id: i64) -> Self {
+        Self::new("telegram", "group", &chat_id.to_string())
+    }
+
+    /// Create a session key for voice interaction
+    pub fn voice(session_id: &str) -> Self {
+        Self::new("voice", "dm", session_id)
+    }
+
+    /// Create a session key for WhatsApp
+    pub fn whatsapp(phone: &str) -> Self {
+        Self::new("whatsapp", "dm", phone)
+    }
+
+    /// Create a session key for Matrix
+    pub fn matrix(room_id: &str) -> Self {
+        Self::new("matrix", "room", room_id)
+    }
+
+    /// Create a session key for Signal
+    pub fn signal(phone: &str) -> Self {
+        Self::new("signal", "dm", phone)
+    }
+
+    /// Create a session key for Slack
+    pub fn slack(channel_id: &str) -> Self {
+        Self::new("slack", "channel", channel_id)
+    }
+
+    /// Create a session key for Discord
+    pub fn discord(channel_id: &str) -> Self {
+        Self::new("discord", "channel", channel_id)
+    }
+
+    /// Create a session key for CLI
+    pub fn cli() -> Self {
+        Self::new("cli", "local", "default")
     }
 
     /// Canonical string representation: `agent:axi:<channel>:<scope>:<peer_id>`
@@ -301,5 +348,75 @@ impl SessionStore {
     pub async fn list_sessions(&self) -> Vec<SessionMetadata> {
         let sessions = self.sessions.read().await;
         sessions.values().cloned().collect()
+    }
+
+    /// Compact a session's transcript by summarizing old turns via LLM.
+    /// Keeps the last `KEEP_RECENT` turns verbatim and summarizes everything before.
+    pub async fn compact_session(
+        &self,
+        key: &SessionKey,
+        router: &Arc<RwLock<crate::llm_router::LlmRouter>>,
+    ) -> Result<()> {
+        const KEEP_RECENT: usize = 10;
+
+        let all_turns = self.load_recent_turns(key, 9999).await?;
+        if all_turns.len() < COMPACTION_THRESHOLD {
+            return Ok(()); // Not enough turns to compact
+        }
+
+        let old_turns = &all_turns[..all_turns.len().saturating_sub(KEEP_RECENT)];
+
+        // Build text from old turns for summarization
+        let mut old_text = String::new();
+        for turn in old_turns {
+            old_text.push_str(&format!("[{}] {}\n", turn.role, turn.content));
+        }
+
+        // Summarize via LLM
+        let prompt = format!(
+            "Resume esta conversacion en maximo 500 palabras, conservando: \
+             decisiones tomadas, datos importantes, contexto del usuario, \
+             y cualquier compromiso o tarea pendiente:\n\n{}",
+            &old_text[..old_text.len().min(8000)]
+        );
+
+        let request = crate::llm_router::RouterRequest {
+            messages: vec![crate::llm_router::ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(prompt),
+            }],
+            complexity: Some(crate::llm_router::TaskComplexity::Simple),
+            sensitivity: None,
+            preferred_provider: None,
+            max_tokens: Some(1024),
+        };
+
+        let router_guard = router.read().await;
+        let response = router_guard.chat(&request).await?;
+        drop(router_guard);
+
+        // Save summary
+        self.set_compaction_summary(key, response.text).await?;
+
+        // Rewrite transcript with only recent turns
+        let recent_turns = &all_turns[all_turns.len().saturating_sub(KEEP_RECENT)..];
+        let session_dir = self.base_dir.join(key.dir_name());
+        let transcript_path = session_dir.join("transcript.jsonl");
+
+        let mut content = String::new();
+        for turn in recent_turns {
+            content.push_str(&serde_json::to_string(turn)?);
+            content.push('\n');
+        }
+        tokio::fs::write(&transcript_path, content).await?;
+
+        info!(
+            "[session_store] Compacted session {}: {} turns -> {} recent + summary",
+            key.to_string(),
+            all_turns.len(),
+            recent_turns.len()
+        );
+
+        Ok(())
     }
 }

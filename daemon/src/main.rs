@@ -120,6 +120,7 @@ mod session_store;
 mod signal_bridge;
 #[allow(dead_code)]
 mod skill_generator;
+mod skill_registry;
 #[allow(dead_code)]
 mod speaker_id;
 mod storage_housekeeping;
@@ -477,6 +478,7 @@ pub struct DaemonState {
     pub event_bus: tokio::sync::broadcast::Sender<events::DaemonEvent>,
     pub session_store: Arc<session_store::SessionStore>,
     pub game_guard: Option<Arc<RwLock<game_guard::GameGuard>>>,
+    pub skill_registry_v2: Arc<skill_registry::SkillRegistry>,
 }
 
 #[tokio::main]
@@ -677,6 +679,7 @@ async fn main() -> anyhow::Result<()> {
         game_guard: Some(Arc::new(RwLock::new(game_guard::GameGuard::new(
             game_guard::GameGuardConfig::default(),
         )))),
+        skill_registry_v2: Arc::new(skill_registry::SkillRegistry::from_defaults()),
     });
 
     // Attach scheduled tasks manager to supervisor.
