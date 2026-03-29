@@ -398,6 +398,100 @@ Layer 0: Heartbeat (systemd watchdog)
 
 **Prioridad:** MEDIA. AL.1 y AL.2 son rapidos y de alto impacto (seguridad). AL.4 mejora UX perceptiblemente. Puede ejecutarse en paralelo con AK.
 
+---
+
+### Fase AM — Reloj Perfecto: Timezone-Aware Time Handling (CRITICA)
+
+**Objetivo:** Que Axi SIEMPRE sepa la fecha, hora y zona horaria exacta del usuario. Que nunca se equivoque al programar recordatorios, consultar memorias por fecha, o interpretar expresiones como "mañana a las 3pm". Que todas las memorias guarden la hora correcta para consultas futuras precisas.
+
+**Por que es critico:** Los LLMs no tienen reloj interno — si no les inyectas la hora, no la saben. OpenClaw tenia este problema constantemente: el usuario tenia que recordarle la hora. Esto destruye la confianza. Un asistente que no sabe qué hora es no sirve para organizar tu vida.
+
+**Investigacion (2026-03-29):** Analisis del estado actual de LifeOS + investigacion de mejores practicas (ChatGPT inyecta hora en system prompt, Claude también, produccion requiere UTC storage + local display).
+
+**Estado actual (BUG CRITICO):**
+- NINGUNO de los 7+ system prompts inyecta fecha/hora/timezone
+- Mezcla de `Utc::now()` y `Local::now()` sin patron consistente
+- memory_plane usa UTC (correcto), calendar usa Local (inconsistente)
+- No hay deteccion de timezone IANA (solo depende de /etc/localtime)
+- No existe herramienta `current_time` para el LLM
+- Cron jobs mezclan UTC y Local en comparaciones de tiempo
+
+**AM.1 — Inyeccion de Tiempo en System Prompts (P0)**
+- [ ] Crear funcion `time_context()` que genera bloque de contexto temporal:
+  ```
+  [Contexto temporal]
+  Fecha y hora actual: 2026-03-29 10:45:23
+  Zona horaria: America/Mexico_City (CST, UTC-6)
+  Dia de la semana: sabado
+  ```
+- [ ] Inyectar `time_context()` en TODOS los system prompts:
+  - `telegram_tools.rs` → `agentic_chat()` (prompt principal de Axi)
+  - `supervisor.rs` → `create_plan_with_role()` (planificacion de tareas)
+  - `autonomous_agent.rs` → `action_loop()` (agente autonomo)
+  - `overlay.rs` → prompt del overlay
+  - `sensory_pipeline.rs` → prompt de percepcion
+  - `knowledge_graph.rs` → prompt de extraction
+  - `telegram_tools.rs` → sub-agent calls
+- [ ] El tiempo se genera FRESCO en cada llamada al LLM (no cacheado)
+
+**AM.2 — Herramienta `current_time` para el LLM**
+- [ ] Agregar tool #34 `current_time` en telegram_tools.rs:
+  - Sin parametros, devuelve fecha/hora/timezone/dia de la semana
+  - Permite al LLM pedir la hora explicitamente cuando necesita precision
+- [ ] Agregar al SYSTEM_PROMPT la instruccion:
+  ```
+  Cuando el usuario use expresiones de tiempo relativo ("manana", "en 2 horas", "el lunes"),
+  calcula la fecha/hora exacta usando el contexto temporal y confirma:
+  "Perfecto, te recuerdo el lunes 31 de marzo a las 15:00 (CST)."
+  ```
+
+**AM.3 — Deteccion de Timezone IANA**
+- [ ] Agregar crate `iana-time-zone` a daemon/Cargo.toml
+- [ ] Detectar timezone automaticamente al arrancar el daemon (`iana_time_zone::get_timezone()`)
+- [ ] Guardar en config: `~/.config/lifeos/timezone` como fallback
+- [ ] Permitir override manual via API: `POST /api/v1/settings/timezone`
+
+**AM.4 — Estandarizar Storage: UTC + Timezone**
+- [ ] **Regla:** Todas las DBs almacenan timestamps en UTC (RFC3339 con +00:00)
+- [ ] **calendar.rs:** Migrar `start_time` a UTC. Agregar columna `timezone TEXT DEFAULT 'UTC'` para cada evento
+- [ ] **memory_plane.rs:** Ya usa UTC — correcto, no cambiar
+- [ ] **scheduled_tasks.rs:** Verificar que `next_run` se calcula en local pero se almacena en UTC
+- [ ] **telegram_tools.rs (cron):** Estandarizar `last_run` a UTC, comparar contra UTC
+
+**AM.5 — Memory Queries por Rango de Tiempo**
+- [ ] Agregar `search_by_time_range(from: DateTime<Utc>, to: DateTime<Utc>)` a memory_plane.rs
+- [ ] Cuando el usuario pregunta "que hice ayer a las 6pm":
+  1. Axi sabe su timezone (AM.3)
+  2. Calcula "ayer 18:00-18:59" en hora local
+  3. Convierte a UTC
+  4. Busca en memory_entries con `WHERE created_at BETWEEN ?1 AND ?2`
+- [ ] Agregar herramienta `search_memories_by_date` al LLM con parametros `{date, time_from, time_to}`
+
+**AM.6 — Calendario Timezone-Aware**
+- [ ] Cada evento almacena `timezone` del creador
+- [ ] Al mostrar eventos: convertir UTC → timezone del evento
+- [ ] Al crear evento: si el usuario dice "3pm", usar SU timezone
+- [ ] Soportar eventos en diferentes zonas (ej: "reunion a las 3pm hora de Madrid")
+
+**Arquitectura de tiempo:**
+```
+Usuario dice "recuerdame mañana a las 3pm"
+  ↓
+LLM lee [Contexto temporal] del system prompt
+  ↓ sabe que hoy es 2026-03-29 y timezone es America/Mexico_City
+Calcula: mañana = 2026-03-30, 3pm CST = 2026-03-30T21:00:00Z (UTC)
+  ↓
+Crea scheduled_task con next_run = "2026-03-30T21:00:00Z"
+  ↓
+Confirma: "Te recuerdo el domingo 30 de marzo a las 3:00 PM (CST)"
+  ↓
+A las 3pm CST, el cron matcher ejecuta y envia recordatorio
+```
+
+**Prioridad:** CRITICA — AM.1 y AM.2 se deben implementar INMEDIATAMENTE. Sin esto, Axi es un asistente ciego al tiempo. Los demas items (AM.3-AM.6) son mejoras incrementales importantes pero menos urgentes.
+
+---
+
 ### NemoClaw vs LifeOS — Resumen Comparativo
 
 | Capacidad | NemoClaw | LifeOS | Ventaja |

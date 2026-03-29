@@ -21,6 +21,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | AB-AG | COMPLETADAS | WebSocket gateway, session store, plugin SDK, first-boot, Slack/Discord, dedupe |
 | **AK** | **COMPLETADA** | Project Axolotl: 5-layer self-healing (watchdog, safe mode, config store, circuit breaker, sentinel, SQLite) |
 | **AL** | **COMPLETADA** | Hardening: SSRF guard, security tests, coverage ratchet, progress events, enhanced doctor, troubleshooting |
+| **AM** | **CRITICA — PROXIMA** | **Reloj Perfecto: timezone-aware time en system prompts, memorias, calendario, cron** |
 | *AH/AI/AJ* | *Vision futura* | *Firefox ext, LibreOffice AI, Cloud hosting — sacadas del consecutivo, revisar post-launch* |
 
 ## Como usar esta documentacion
