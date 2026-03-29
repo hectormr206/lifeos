@@ -23,6 +23,8 @@ mod ai;
 mod api;
 #[allow(dead_code)]
 mod app_contracts;
+mod circuit_breaker;
+mod config_store;
 #[allow(dead_code)]
 mod autonomous_agent;
 mod axi_tray;
@@ -99,6 +101,7 @@ mod privacy_filter;
 mod privacy_hygiene;
 #[allow(dead_code)]
 mod proactive;
+mod safe_mode;
 #[allow(dead_code)]
 mod prompt_tuner;
 #[allow(dead_code)]
@@ -122,6 +125,7 @@ mod skill_generator;
 mod skill_registry;
 #[allow(dead_code)]
 mod speaker_id;
+mod sqlite_protection;
 mod storage_housekeeping;
 mod supervisor;
 mod system;
@@ -483,6 +487,31 @@ pub struct DaemonState {
     pub session_store: Arc<session_store::SessionStore>,
     pub game_guard: Option<Arc<RwLock<game_guard::GameGuard>>>,
     pub skill_registry_v2: Arc<skill_registry::SkillRegistry>,
+    pub config_store: Arc<config_store::ConfigStore>,
+    pub circuit_breaker: Arc<circuit_breaker::CircuitBreaker>,
+}
+
+/// Notify systemd watchdog that the daemon is alive.
+/// Uses the NOTIFY_SOCKET env var directly (no crate dependency).
+fn notify_watchdog() {
+    if let Ok(socket_path) = std::env::var("NOTIFY_SOCKET") {
+        use std::os::unix::net::UnixDatagram;
+        let sock = UnixDatagram::unbound().ok();
+        if let Some(s) = sock {
+            let _ = s.send_to(b"WATCHDOG=1", &socket_path);
+        }
+    }
+}
+
+/// Notify systemd that the daemon is fully initialized and ready.
+fn notify_ready() {
+    if let Ok(socket_path) = std::env::var("NOTIFY_SOCKET") {
+        use std::os::unix::net::UnixDatagram;
+        let sock = UnixDatagram::unbound().ok();
+        if let Some(s) = sock {
+            let _ = s.send_to(b"READY=1", &socket_path);
+        }
+    }
 }
 
 #[tokio::main]
@@ -565,6 +594,9 @@ async fn main() -> anyhow::Result<()> {
             info!("Using dev data directory: {}", fallback.display());
             fallback
         });
+
+    // --- Safe mode: detect repeated crashes before spawning background tasks ---
+    let in_safe_mode = safe_mode::init(&data_dir).await.unwrap_or(false);
 
     // Shared instances for supervisor integration
     let shared_privacy = Arc::new(privacy_filter::PrivacyFilter::new(
@@ -684,7 +716,14 @@ async fn main() -> anyhow::Result<()> {
             game_guard::GameGuardConfig::default(),
         )))),
         skill_registry_v2: Arc::new(skill_registry::SkillRegistry::from_defaults()),
+        config_store: Arc::new(config_store::ConfigStore::new(&data_dir)),
+        circuit_breaker: Arc::new(circuit_breaker::CircuitBreaker::new()),
     });
+
+    // Initialize config store (creates checkpoint directories).
+    if let Err(e) = state.config_store.init().await {
+        warn!("Failed to initialize ConfigStore: {}", e);
+    }
 
     // Attach scheduled tasks manager to supervisor.
     state
@@ -762,6 +801,15 @@ async fn main() -> anyhow::Result<()> {
         "Accessibility audit complete: {} theme reports generated",
         audit_results.len()
     );
+
+    // --- Safe mode notification ---
+    if in_safe_mode {
+        warn!("SAFE MODE ACTIVE — self-improvement and autonomous actions disabled");
+        let _ = state.event_bus.send(events::DaemonEvent::Notification {
+            priority: "warning".into(),
+            message: "Axi entro en modo seguro tras crashes repetidos. Respondo mensajes pero no hare cambios autonomos. Di 'exit safe mode' cuando quieras.".into(),
+        });
+    }
 
     // Start API server if enabled
     let api_handle = if config.enable_api {
@@ -1009,6 +1057,10 @@ async fn main() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
+            if safe_mode::is_safe_mode() {
+                debug!("[safe_mode] Skipping autonomous agent tick — safe mode active");
+                continue;
+            }
             if agent.check_presence().await.is_ok() && agent.should_work() {
                 let _ = autonomous_event_bus.send(events::DaemonEvent::Notification {
                     priority: "info".into(),
@@ -1228,6 +1280,8 @@ async fn main() -> anyhow::Result<()> {
         loop {
             interval.tick().await;
             storage_housekeeping::run_housekeeping(&housekeeping_data_dir).await;
+            sqlite_protection::backup_all_databases(&housekeeping_data_dir).await;
+            sqlite_protection::check_all_databases(&housekeeping_data_dir).await;
         }
     });
     info!("Storage housekeeping started (every 6h, 120-file limit per dir)");
@@ -1389,6 +1443,18 @@ async fn main() -> anyhow::Result<()> {
     };
     #[cfg(not(feature = "telegram"))]
     let _email_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Notify systemd that the daemon is fully initialized
+    notify_ready();
+    info!("Notified systemd: READY=1");
+
+    // Watchdog: ping systemd every 15s to prove we're alive
+    tokio::spawn(async {
+        loop {
+            notify_watchdog();
+            tokio::time::sleep(Duration::from_secs(15)).await;
+        }
+    });
 
     // Wait for shutdown signal
     info!("Daemon running. Press Ctrl+C to stop.");

@@ -7,8 +7,11 @@ Wants=network.target
 [Service]
 Type=notify
 ExecStart=/usr/bin/lifeosd
-Restart=on-failure
+Restart=always
 RestartSec=5
+WatchdogSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=5
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=lifeosd

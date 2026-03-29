@@ -123,6 +123,13 @@ pub enum SupervisorNotification {
         objective: String,
         action_description: String,
     },
+    /// AL.4 — Observable progress: emitted before each step execution.
+    TaskProgress {
+        task_id: String,
+        step_index: usize,
+        steps_total: usize,
+        description: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1073,9 +1080,15 @@ impl Supervisor {
                 }
             }
 
-            // Stream progress to Telegram
+            // Stream progress to Telegram and event subscribers
             let progress_msg = format!("Paso {}/{}: {}", i + 1, plan.steps.len(), step.description);
             info!("Task {} {}", task_id, progress_msg);
+            let _ = self.notify_tx.send(SupervisorNotification::TaskProgress {
+                task_id: task_id.to_string(),
+                step_index: i,
+                steps_total: plan.steps.len(),
+                description: step.description.clone(),
+            });
             let _ = self.notify_tx.send(SupervisorNotification::TaskStarted {
                 task_id: format!("{}-step-{}", task_id, i + 1),
                 objective: progress_msg,

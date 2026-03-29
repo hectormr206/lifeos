@@ -1210,6 +1210,9 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/system/command", post(post_system_command))
         // Health endpoints
         .route("/health", get(get_health_status))
+        // Safe mode endpoints
+        .route("/safe-mode", get(get_safe_mode_status))
+        .route("/safe-mode/exit", post(post_exit_safe_mode))
         // AI endpoints
         .route("/ai/status", get(get_ai_status))
         .route("/ai/models", get(get_ai_models))
@@ -1839,6 +1842,30 @@ async fn get_health_status(
     };
 
     Ok(Json(response))
+}
+
+/// Get safe mode status
+async fn get_safe_mode_status() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "active": crate::safe_mode::is_safe_mode(),
+    }))
+}
+
+/// Exit safe mode manually and reset boot counter
+async fn post_exit_safe_mode() -> Json<serde_json::Value> {
+    let was_active = crate::safe_mode::is_safe_mode();
+    crate::safe_mode::exit_safe_mode();
+    // Reset boot counter so next restart doesn't re-enter safe mode
+    let data_dir = std::env::var("LIFEOS_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/var/lib/lifeos"));
+    if let Err(e) = crate::safe_mode::reset_counter(&data_dir).await {
+        log::warn!("Failed to reset boot counter: {}", e);
+    }
+    Json(serde_json::json!({
+        "was_active": was_active,
+        "active": crate::safe_mode::is_safe_mode(),
+    }))
 }
 
 /// Get AI service status

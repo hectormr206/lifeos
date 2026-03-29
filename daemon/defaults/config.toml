@@ -1,0 +1,14 @@
+# LifeOS Factory Default Configuration
+# Used as absolute last resort when all config is corrupt.
+
+[ai]
+model = "Qwen3.5-4B-Q4_K_M.gguf"
+ctx_size = 16384
+gpu_layers = 99
+reasoning_budget = 0
+
+[api]
+bind = "127.0.0.1:8081"
+
+[privacy]
+level = "careful"

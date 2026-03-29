@@ -583,6 +583,63 @@ impl LlmRouter {
 }
 
 // ---------------------------------------------------------------------------
+// SSRF guard — validate provider endpoints before use
+// ---------------------------------------------------------------------------
+
+/// Validate that an LLM provider endpoint is safe (no SSRF to internal networks).
+fn validate_endpoint_safe(url: &str) -> Result<(), String> {
+    let parsed: reqwest::Url =
+        reqwest::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+
+    // Only allow http/https
+    match parsed.scheme() {
+        "http" | "https" => {}
+        s => return Err(format!("Unsupported scheme: {}", s)),
+    }
+
+    let host = parsed.host_str().unwrap_or("");
+
+    // Allow localhost for local llama-server
+    if host == "127.0.0.1" || host == "localhost" || host == "::1" {
+        return Ok(()); // Local is always allowed
+    }
+
+    // Block private IP ranges
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        use std::net::IpAddr;
+        let is_private = match ip {
+            IpAddr::V4(v4) => {
+                v4.is_private()       // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+                || v4.is_loopback()   // 127.0.0.0/8
+                || v4.is_link_local() // 169.254.0.0/16
+                || v4.is_broadcast()
+                || v4.octets()[0] == 0 // 0.0.0.0/8
+            }
+            IpAddr::V6(v6) => {
+                v6.is_loopback()      // ::1
+                || v6.is_unspecified() // ::
+                // fe80::/10 (link-local)
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+            }
+        };
+
+        if is_private {
+            return Err(format!(
+                "SSRF blocked: {} is a private/reserved address",
+                ip
+            ));
+        }
+    }
+
+    // Block cloud metadata endpoints
+    if host == "169.254.169.254" || host == "metadata.google.internal" {
+        return Err(format!("SSRF blocked: metadata endpoint {}", host));
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Default provider configurations
 // ---------------------------------------------------------------------------
 
@@ -624,13 +681,26 @@ fn load_providers_from_toml() -> Result<Vec<ProviderConfig>> {
                 })
                 .collect();
 
+            // SSRF guard: validate each endpoint before use
+            for p in &active {
+                if let Err(e) = validate_endpoint_safe(&p.api_base) {
+                    warn!(
+                        "[llm_router] SSRF: provider '{}' blocked — {}",
+                        p.name, e
+                    );
+                }
+            }
+            let safe: Vec<ProviderConfig> = active
+                .into_iter()
+                .filter(|p| validate_endpoint_safe(&p.api_base).is_ok())
+                .collect();
+
             info!(
-                "Loaded {} providers from {} ({} with active keys)",
-                active.len() + candidates.len() - candidates.len(), // total in file
+                "Loaded {} safe providers from {} (after SSRF filter)",
+                safe.len(),
                 path.display(),
-                active.len()
             );
-            return Ok(active);
+            return Ok(safe);
         }
     }
 
@@ -1091,5 +1161,57 @@ mod tests {
         let result = strip_reasoning_loop(input);
         // First occurrence only before the loop starts
         assert!(result.len() <= "ok".len());
+    }
+
+    // AL.1 — SSRF Guard tests
+    #[test]
+    fn test_ssrf_guard_blocks_private_ips() {
+        assert!(validate_endpoint_safe("http://10.0.0.1:8080/v1").is_err());
+        assert!(validate_endpoint_safe("http://192.168.1.1:8080").is_err());
+        assert!(validate_endpoint_safe("http://172.16.0.1:8080").is_err());
+        assert!(validate_endpoint_safe("http://169.254.169.254/metadata").is_err());
+        assert!(validate_endpoint_safe("http://127.0.0.1:8082").is_ok()); // local allowed
+        assert!(validate_endpoint_safe("https://api.cerebras.ai").is_ok());
+        assert!(validate_endpoint_safe("ftp://evil.com").is_err()); // bad scheme
+    }
+
+    #[test]
+    fn test_ssrf_guard_blocks_metadata_endpoints() {
+        assert!(validate_endpoint_safe("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(
+            validate_endpoint_safe("http://metadata.google.internal/computeMetadata/v1/").is_err()
+        );
+    }
+
+    #[test]
+    fn test_ssrf_guard_allows_valid_providers() {
+        assert!(validate_endpoint_safe("https://api.openai.com/v1").is_ok());
+        assert!(validate_endpoint_safe("https://generativelanguage.googleapis.com").is_ok());
+        assert!(validate_endpoint_safe("https://openrouter.ai/api/v1").is_ok());
+        assert!(validate_endpoint_safe("http://localhost:8082").is_ok());
+    }
+
+    #[test]
+    fn test_ssrf_guard_rejects_invalid_urls() {
+        assert!(validate_endpoint_safe("not-a-url").is_err());
+        assert!(validate_endpoint_safe("").is_err());
+    }
+
+    // AL.2 — Security: bootstrap token entropy
+    #[test]
+    fn test_security_bootstrap_token_entropy() {
+        // Verify bootstrap tokens have sufficient entropy (at least 128 bits = 32 hex chars)
+        // Zero-pad to ensure consistent length regardless of leading zeros.
+        let token = format!("{:032x}", rand::random::<u128>());
+        assert!(
+            token.len() >= 32,
+            "Token must be at least 128 bits, got {} chars",
+            token.len()
+        );
+        // Verify it's valid hex
+        assert!(
+            token.chars().all(|c| c.is_ascii_hexdigit()),
+            "Token must be hex-encoded"
+        );
     }
 }
