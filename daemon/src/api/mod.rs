@@ -1431,6 +1431,7 @@ pub fn create_router(state: ApiState) -> Router {
         // LLM Router endpoints
         .route("/llm/chat", post(post_llm_chat))
         .route("/llm/providers", get(get_llm_providers))
+        .route("/llm/reload", post(post_llm_reload))
         // Task Queue endpoints
         .route("/tasks", get(get_tasks))
         .route("/tasks", post(post_task))
@@ -10388,6 +10389,26 @@ async fn get_llm_providers(
         .collect();
 
     Ok(Json(serde_json::json!({ "providers": providers })))
+}
+
+async fn post_llm_reload(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mut router = state.llm_router.write().await;
+    match router.reload_providers() {
+        Ok(count) => Ok(Json(serde_json::json!({
+            "reloaded": true,
+            "provider_count": count,
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "reload_failed".into(),
+                message: format!("Failed to reload providers: {}", e),
+                code: 500,
+            }),
+        )),
+    }
 }
 
 // ==================== SERVER STARTUP ====================

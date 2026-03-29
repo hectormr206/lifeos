@@ -287,10 +287,11 @@ impl LlmRouter {
             .providers
             .iter()
             .filter(|p| allowed_tiers.contains(&p.tier))
-            .filter(|p| !(block_low_privacy && (
-                p.privacy.eq_ignore_ascii_case("low") ||
-                p.privacy.eq_ignore_ascii_case("variable")
-            )))
+            .filter(|p| {
+                !(block_low_privacy
+                    && (p.privacy.eq_ignore_ascii_case("low")
+                        || p.privacy.eq_ignore_ascii_case("variable")))
+            })
             .filter(|p| !candidates.iter().any(|c| c.name == p.name))
             .map(|p| {
                 let score = match complexity {
@@ -583,6 +584,33 @@ impl LlmRouter {
             })
             .collect()
     }
+
+    /// Return a snapshot of all active provider configurations.
+    pub fn provider_configs(&self) -> &[ProviderConfig] {
+        &self.providers
+    }
+
+    /// Reload providers from the TOML config file.
+    /// Called via API endpoint or SIGHUP signal.
+    pub fn reload_providers(&mut self) -> Result<usize> {
+        let providers = load_providers_from_toml().unwrap_or_else(|e| {
+            warn!(
+                "[llm_router] Failed to reload TOML ({}), using default providers",
+                e
+            );
+            default_providers()
+        });
+        let count = providers.len();
+        // Rebuild cost trackers for new provider set
+        let cost_trackers = providers
+            .iter()
+            .map(|p| (p.name.clone(), ProviderCostTracker::default()))
+            .collect();
+        self.providers = providers;
+        self.cost_trackers = cost_trackers;
+        info!("[llm_router] Reloaded {} providers", count);
+        Ok(count)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -590,7 +618,7 @@ impl LlmRouter {
 // ---------------------------------------------------------------------------
 
 /// Validate that an LLM provider endpoint is safe (no SSRF to internal networks).
-fn validate_endpoint_safe(url: &str) -> Result<(), String> {
+pub(crate) fn validate_endpoint_safe(url: &str) -> Result<(), String> {
     let parsed: reqwest::Url =
         reqwest::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
 
@@ -653,7 +681,7 @@ struct ProvidersFile {
 }
 
 /// Load providers from TOML config file. Searches multiple locations.
-fn load_providers_from_toml() -> Result<Vec<ProviderConfig>> {
+pub(crate) fn load_providers_from_toml() -> Result<Vec<ProviderConfig>> {
     let candidates = [
         // User config
         dirs_home()

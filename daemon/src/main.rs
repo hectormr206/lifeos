@@ -1459,6 +1459,24 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // SIGHUP handler — reload LLM providers without restarting the daemon
+    {
+        let sighup_router = state.llm_router.clone();
+        tokio::spawn(async move {
+            let mut sighup = signal::unix::signal(signal::unix::SignalKind::hangup())
+                .expect("failed to create SIGHUP handler");
+            loop {
+                sighup.recv().await;
+                info!("[main] SIGHUP received — reloading LLM providers");
+                let mut router = sighup_router.write().await;
+                match router.reload_providers() {
+                    Ok(n) => info!("[main] Reloaded {} providers", n),
+                    Err(e) => warn!("[main] Provider reload failed: {}", e),
+                }
+            }
+        });
+    }
+
     // Wait for shutdown signal
     info!("Daemon running. Press Ctrl+C to stop.");
 

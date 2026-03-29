@@ -407,17 +407,17 @@ Layer 0: Heartbeat (systemd watchdog)
 **Por que es critico:** Los proveedores de LLM lanzan modelos nuevos cada semana. Si el usuario tiene que esperar a que LifeOS lance un update para usar un modelo nuevo, pierde competitividad. Debe poder decirle a Axi: "agrega este modelo" y que funcione inmediatamente.
 
 **AN.1 — Agregar Modelos via Telegram (natural language)**
-- [ ] Tool `add_provider` en telegram_tools.rs: "Axi, agrega el modelo nvidia/nemotron-ultra de OpenRouter"
-- [ ] Axi parsea: provider base (OpenRouter/Cerebras/Groq/custom), model name, estima context size y capabilities
-- [ ] Valida endpoint con SSRF guard (AL.1)
-- [ ] Escribe al `llm-providers.toml` del usuario sin tocar los defaults del sistema
-- [ ] Hot-reload: el router recarga providers sin reiniciar el daemon
-- [ ] Confirma: "Modelo nvidia/nemotron-ultra agregado a OpenRouter. Contexto: 128K. Privacy: variable. Listo para usar."
+- [x] Tool `add_provider` en telegram_tools.rs: "Axi, agrega el modelo nvidia/nemotron-ultra de OpenRouter"
+- [x] Axi parsea: provider base (OpenRouter/Cerebras/Groq/custom), model name, estima context size y capabilities
+- [x] Valida endpoint con SSRF guard (AL.1)
+- [x] Escribe al `llm-providers.toml` del usuario sin tocar los defaults del sistema
+- [x] Hot-reload: el router recarga providers sin reiniciar el daemon
+- [x] Confirma: "Modelo nvidia/nemotron-ultra agregado a OpenRouter. Contexto: 128K. Privacy: variable. Listo para usar."
 
 **AN.2 — Quitar/Deshabilitar Modelos via Telegram**
 - [ ] Tool `remove_provider`: "Axi, quita el modelo de Z.AI, no lo quiero"
 - [ ] Tool `disable_provider`: "Axi, deshabilita Gemini" (no borra, solo desactiva)
-- [ ] Tool `list_providers`: "Axi, que modelos tengo configurados?"
+- [x] Tool `list_providers`: "Axi, que modelos tengo configurados?"
 
 **AN.3 — Dashboard de Modelos**
 - [ ] Seccion en el dashboard web para ver/agregar/quitar/reordenar providers
@@ -426,9 +426,9 @@ Layer 0: Heartbeat (systemd watchdog)
 - [ ] Test de conectividad (enviar request de prueba)
 
 **AN.4 — Hot-Reload del Router sin Reiniciar**
-- [ ] `LlmRouter::reload_providers()` — re-lee el TOML y actualiza la lista en memoria
+- [x] `LlmRouter::reload_providers()` — re-lee el TOML y actualiza la lista en memoria
 - [ ] Signal handler: `SIGHUP` al daemon trigger reload (estandar Unix)
-- [ ] API endpoint: `POST /api/v1/llm/reload` para trigger manual
+- [x] API endpoint: `POST /api/v1/llm/reload` para trigger manual
 - [ ] Watcher de archivo: detectar cambios en llm-providers.toml y auto-reload
 
 **AN.5 — User TOML vs System TOML**
@@ -456,9 +456,9 @@ Layer 0: Heartbeat (systemd watchdog)
 **Nota legal:** Ningun codigo de OpenClaw fue copiado. Las features son funcionalidad generica de la API publica de Telegram Bot. Nuestra implementacion es 100% propia en Rust/teloxide.
 
 **AO.1 — P0: Critico para lanzar a otros usuarios**
-- [ ] **Reply-to-bot como trigger en grupos** — si el usuario responde a un mensaje de Axi, tratarlo como mencion directa. Agregar check en `is_addressed_to_bot()` para `msg.reply_to_message()` (3 lineas)
-- [ ] **Registrar bot commands** — `bot.set_my_commands()` al inicio: /help, /new, /status, /btw, /do. Aparecen como menu cuando el usuario escribe "/" (3 lineas)
-- [ ] **/status sin LLM** — comando rapido que muestra uptime, disco, memoria, servicios, modelo activo sin pasar por el agentic loop (respuesta instantanea)
+- [x] **Reply-to-bot como trigger en grupos** — si el usuario responde a un mensaje de Axi, tratarlo como mencion directa. Agregar check en `is_addressed_to_bot()` para `msg.reply_to_message()` (3 lineas)
+- [x] **Registrar bot commands** — `bot.set_my_commands()` al inicio: /help, /new, /status, /btw, /do. Aparecen como menu cuando el usuario escribe "/" (3 lineas)
+- [x] **/status sin LLM** — comando rapido que muestra uptime, disco, memoria, servicios, modelo activo sin pasar por el agentic loop (respuesta instantanea)
 
 **AO.2 — P1: Primera semana post-launch**
 - [ ] **Threads/topics en grupos forum** — usar `(chat_id, thread_id)` como clave de historial para mantener contexto separado por topic

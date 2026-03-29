@@ -12,7 +12,8 @@ mod inner {
     use teloxide::net::Download;
     use teloxide::prelude::*;
     use teloxide::types::{
-        ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MediaKind, MessageKind,
+        BotCommand, ChatAction, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, MediaKind,
+        MessageKind,
     };
     use tokio::sync::RwLock;
 
@@ -58,6 +59,10 @@ mod inner {
         dedupe: Arc<crate::message_dedupe::MessageDedupe>,
         allowed_ids: Vec<i64>,
         bot_username: String,
+        /// Group policy: "mention_only" (default), "all", or "none"
+        group_policy: String,
+        /// Allowed group IDs (empty = all groups with valid chat IDs)
+        group_ids: Vec<i64>,
     }
 
     pub async fn run_telegram_bot(
@@ -69,6 +74,19 @@ mod inner {
         mut notify_rx: tokio::sync::broadcast::Receiver<SupervisorNotification>,
     ) {
         info!("Starting Telegram bridge (natural language mode)...");
+
+        // Group policy configuration from environment
+        let group_policy =
+            std::env::var("LIFEOS_TELEGRAM_GROUP_POLICY").unwrap_or_else(|_| "mention_only".into());
+        let group_ids: Vec<i64> = std::env::var("LIFEOS_TELEGRAM_GROUP_IDS")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        info!(
+            "Telegram group policy: {}, allowed groups: {:?}",
+            group_policy, group_ids
+        );
 
         let bot = Bot::new(&config.bot_token);
         let notify_bot = bot.clone();
@@ -83,6 +101,17 @@ mod inner {
             .map(|me| me.username.clone().unwrap_or_default())
             .unwrap_or_default();
         info!("Telegram bot username: @{}", bot_username);
+
+        // Register bot commands so Telegram shows a "/" menu
+        bot.set_my_commands(vec![
+            BotCommand::new("help", "Ayuda y comandos disponibles"),
+            BotCommand::new("new", "Nueva conversacion (limpiar historial)"),
+            BotCommand::new("status", "Estado del sistema"),
+            BotCommand::new("btw", "Conversacion lateral (no guarda historial)"),
+            BotCommand::new("do", "Ejecutar tarea del supervisor"),
+        ])
+        .await
+        .ok();
 
         // Supervisor notification listener
         tokio::spawn(async move {
@@ -242,6 +271,8 @@ mod inner {
             dedupe: Arc::new(crate::message_dedupe::MessageDedupe::new()),
             allowed_ids: config.allowed_chat_ids,
             bot_username,
+            group_policy,
+            group_ids,
         };
 
         let message_handler =
@@ -282,7 +313,16 @@ mod inner {
 
         // Auth check
         if is_group {
-            if !is_addressed_to_bot(&msg, &ctx.bot_username) {
+            // Group policy: "none" ignores all groups, "all" responds to everything,
+            // "mention_only" (default) requires @mention or reply-to-bot
+            if ctx.group_policy == "none" {
+                return Ok(());
+            }
+            // If group_ids is set, only allow listed groups
+            if !ctx.group_ids.is_empty() && !ctx.group_ids.contains(&chat_id.0) {
+                return Ok(());
+            }
+            if ctx.group_policy != "all" && !is_addressed_to_bot(&msg, &ctx.bot_username) {
                 return Ok(());
             }
         } else if !ctx.allowed_ids.is_empty() && !ctx.allowed_ids.contains(&chat_id.0) {
@@ -367,6 +407,9 @@ mod inner {
                 .await?;
             return Ok(());
         }
+        if text == "/status" || text.starts_with("/status ") {
+            return handle_status(bot, chat_id, &ctx).await;
+        }
 
         // /do trust: — execute task with auto-approval (no manual confirmation needed)
         if text.starts_with("/do trust:") || text.starts_with("/do trust ") {
@@ -429,9 +472,15 @@ mod inner {
             return Ok(());
         }
 
+        // Thread/topic support: use composite key when message is in a forum topic
+        let history_key = msg
+            .thread_id
+            .map(|tid| chat_id.0 ^ (tid.0 .0 as i64))
+            .unwrap_or(chat_id.0);
+
         // Everything else goes through the agentic loop (with conversation history)
         let (response, screenshot_path) = with_typing(&bot, chat_id, async {
-            telegram_tools::agentic_chat(&ctx.tool_ctx, chat_id.0, &text, None).await
+            telegram_tools::agentic_chat(&ctx.tool_ctx, history_key, &text, None).await
         })
         .await;
 
@@ -491,8 +540,29 @@ mod inner {
             }
         }
 
-        // Send the text response (chunked for Telegram's 4096 limit)
-        send_chunked(&bot, chat_id, &response).await?;
+        // Check for send_file marker in the response
+        if response.contains("__SEND_FILE__:") {
+            for part in response.split("__SEND_FILE__:").skip(1) {
+                let file_path = part.lines().next().unwrap_or("").trim();
+                if !file_path.is_empty() && std::path::Path::new(file_path).exists() {
+                    bot.send_document(chat_id, InputFile::file(file_path))
+                        .await
+                        .ok();
+                }
+            }
+            // Send text response without the markers
+            let clean = response
+                .lines()
+                .filter(|l| !l.contains("__SEND_FILE__:"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !clean.trim().is_empty() {
+                send_chunked(&bot, chat_id, &clean).await?;
+            }
+        } else {
+            // Send the text response (chunked for Telegram's 4096 limit)
+            send_chunked(&bot, chat_id, &response).await?;
+        }
 
         Ok(())
     }
@@ -879,10 +949,99 @@ mod inner {
              \"Abre google.com y dime que ves\"\n\
              \"Cada dia a las 7am dame un resumen del sistema\"\n\n\
              /new — Reiniciar conversacion\n\
+             /status — Estado del sistema (sin LLM)\n\
+             /btw <texto> — Conversacion lateral\n\
+             /do <tarea> — Ejecutar tarea\n\
              /help — Este mensaje\n\n\
-             En grupos, mencioname con @. Te monitoreo cada 30 min.",
+             En grupos, mencioname con @ o responde a mis mensajes. Te monitoreo cada 30 min.",
         )
         .await?;
+        Ok(())
+    }
+
+    /// Quick system status without going through the LLM agentic loop.
+    async fn handle_status(
+        bot: Bot,
+        chat_id: ChatId,
+        ctx: &BotCtx,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut monitor = crate::system::SystemMonitor::new();
+        let metrics = monitor
+            .collect_metrics()
+            .unwrap_or_else(|_| crate::system::SystemMetrics {
+                timestamp: chrono::Local::now(),
+                cpu_usage: 0.0,
+                memory_usage: 0.0,
+                memory_used_mb: 0,
+                memory_total_mb: 0,
+                disk_usage: 0.0,
+                disk_used_gb: 0,
+                disk_total_gb: 0,
+                network_rx_mbps: 0.0,
+                network_tx_mbps: 0.0,
+                load_average: (0.0, 0.0, 0.0),
+                uptime_seconds: 0,
+                process_count: 0,
+            });
+
+        // Format uptime as human-readable
+        let uptime_h = metrics.uptime_seconds / 3600;
+        let uptime_m = (metrics.uptime_seconds % 3600) / 60;
+        let uptime_str = if uptime_h > 0 {
+            format!("{}h {}m", uptime_h, uptime_m)
+        } else {
+            format!("{}m", uptime_m)
+        };
+
+        // Local model: check what llama-server is running
+        let local_model = std::env::var("LIFEOS_LOCAL_MODEL")
+            .or_else(|_| std::env::var("LIFEOS_LLM_MODEL"))
+            .unwrap_or_else(|_| "desconocido".into());
+
+        // Active providers count
+        let providers_count = ctx.tool_ctx.router.read().await.cost_summary().len();
+
+        // Pending tasks
+        let tasks_summary = ctx.tool_ctx.task_queue.summary().unwrap_or_default();
+        let tasks_pending = tasks_summary
+            .get("pending")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let tasks_running = tasks_summary
+            .get("running")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let status_text = format!(
+            "Estado de LifeOS\n\n\
+             Uptime: {}\n\
+             CPU: {:.1}%\n\
+             RAM: {} MB / {} MB ({:.0}%)\n\
+             Disco: {} GB / {} GB ({:.0}%)\n\
+             Load: {:.2} {:.2} {:.2}\n\
+             Procesos: {}\n\
+             Modelo local: {}\n\
+             Providers activos: {}\n\
+             Tareas pendientes: {} | ejecutando: {}",
+            uptime_str,
+            metrics.cpu_usage,
+            metrics.memory_used_mb,
+            metrics.memory_total_mb,
+            metrics.memory_usage,
+            metrics.disk_used_gb,
+            metrics.disk_total_gb,
+            metrics.disk_usage,
+            metrics.load_average.0,
+            metrics.load_average.1,
+            metrics.load_average.2,
+            metrics.process_count,
+            local_model,
+            providers_count,
+            tasks_pending,
+            tasks_running,
+        );
+
+        bot.send_message(chat_id, status_text).await?;
         Ok(())
     }
 
@@ -914,25 +1073,117 @@ mod inner {
         result
     }
 
-    /// Send a long message in chunks (Telegram has 4096 char limit).
+    /// Convert basic markdown to Telegram-safe HTML.
+    fn markdown_to_html(text: &str) -> String {
+        use std::borrow::Cow;
+
+        // First, escape HTML special chars in the raw text (but not our tags)
+        let escaped: Cow<'_, str> = Cow::Owned(
+            text.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;"),
+        );
+
+        let mut result = String::with_capacity(escaped.len());
+        let mut chars = escaped.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            if ch == '`' {
+                // Check for ``` code blocks
+                if chars.peek() == Some(&'`') {
+                    chars.next();
+                    if chars.peek() == Some(&'`') {
+                        chars.next();
+                        // Skip optional language tag on the same line
+                        while chars.peek().map(|c| *c != '\n').unwrap_or(false) {
+                            chars.next();
+                        }
+                        if chars.peek() == Some(&'\n') {
+                            chars.next();
+                        }
+                        // Collect until closing ```
+                        let mut code = String::new();
+                        loop {
+                            match chars.next() {
+                                Some('`') if chars.peek() == Some(&'`') => {
+                                    chars.next();
+                                    if chars.peek() == Some(&'`') {
+                                        chars.next();
+                                        break;
+                                    }
+                                    code.push_str("``");
+                                }
+                                Some(c) => code.push(c),
+                                None => break,
+                            }
+                        }
+                        result.push_str("<pre>");
+                        result.push_str(code.trim_end());
+                        result.push_str("</pre>");
+                        continue;
+                    }
+                    // Two backticks but not three — treat as inline
+                    result.push_str("``");
+                    continue;
+                }
+                // Inline code
+                let mut code = String::new();
+                loop {
+                    match chars.next() {
+                        Some('`') => break,
+                        Some(c) => code.push(c),
+                        None => break,
+                    }
+                }
+                result.push_str("<code>");
+                result.push_str(&code);
+                result.push_str("</code>");
+            } else if ch == '*' && chars.peek() == Some(&'*') {
+                chars.next(); // consume second *
+                let mut bold = String::new();
+                loop {
+                    match chars.next() {
+                        Some('*') if chars.peek() == Some(&'*') => {
+                            chars.next();
+                            break;
+                        }
+                        Some(c) => bold.push(c),
+                        None => break,
+                    }
+                }
+                result.push_str("<b>");
+                result.push_str(&bold);
+                result.push_str("</b>");
+            } else {
+                result.push(ch);
+            }
+        }
+
+        result
+    }
+
+    /// Send a long message in chunks (Telegram has 4096 char limit), using HTML parse mode.
     async fn send_chunked(
         bot: &Bot,
         chat_id: ChatId,
         text: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let html = markdown_to_html(text);
         // Split on char boundaries respecting Telegram's limit
         let max = 4000;
         let mut start = 0;
-        while start < text.len() {
-            let mut end = (start + max).min(text.len());
+        while start < html.len() {
+            let mut end = (start + max).min(html.len());
             // Find char boundary
-            while end > start && !text.is_char_boundary(end) {
+            while end > start && !html.is_char_boundary(end) {
                 end -= 1;
             }
             if end == start {
                 break;
             }
-            bot.send_message(chat_id, &text[start..end]).await?;
+            bot.send_message(chat_id, &html[start..end])
+                .parse_mode(teloxide::types::ParseMode::Html)
+                .await?;
             start = end;
         }
         Ok(())
@@ -1053,6 +1304,12 @@ mod inner {
     fn is_addressed_to_bot(msg: &Message, bot_username: &str) -> bool {
         if bot_username.is_empty() {
             return false;
+        }
+        // Reply-to-bot: if user is replying to one of Axi's own messages, treat as addressed
+        if let Some(reply) = msg.reply_to_message() {
+            if reply.from.as_ref().map(|u| u.is_bot).unwrap_or(false) {
+                return true;
+            }
         }
         if let Some(text) = msg.text() {
             if text.contains(&format!("@{}", bot_username)) {

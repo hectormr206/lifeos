@@ -209,6 +209,23 @@ Herramientas:
     args: {"date": "2026-03-28", "time_from": "18:00", "time_to": "23:59"}
     Si no se pone time_from/time_to, busca todo el dia. La fecha se interpreta en tu zona horaria local.
 
+36. **add_provider** — Agrega un nuevo proveedor de LLM. El usuario dice el nombre del provider y modelo.
+    args: {"provider_base": "openrouter|cerebras|groq|custom", "model": "nvidia/nemotron-ultra", "api_base": "https://...", "api_key_env": "OPENROUTER_API_KEY"}
+    provider_base y model son obligatorios. api_base y api_key_env se infieren si el provider_base es conocido.
+
+37. **list_providers** — Lista todos los proveedores de LLM configurados con su estado.
+    args: {}
+
+38. **remove_provider** — Elimina un proveedor de LLM del archivo de configuracion.
+    args: {"name": "openrouter-nvidia-nemotron-ultra"}
+
+39. **disable_provider** — Deshabilita (o habilita) un proveedor de LLM sin eliminarlo.
+    args: {"name": "openrouter-nvidia-nemotron-ultra", "enable": false}
+    Si enable=true, reactiva el proveedor.
+
+40. **send_file** — Envia un archivo al usuario via Telegram.
+    args: {"path": "/home/lifeos/documento.pdf"}
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -932,6 +949,11 @@ Herramientas:
             "audit_query" => execute_audit_query(&call.args).await,
             "current_time" => Ok(crate::time_context::time_context()),
             "search_memories_by_date" => execute_search_memories_by_date(&call.args, ctx).await,
+            "add_provider" => execute_add_provider(&call.args, ctx).await,
+            "list_providers" => execute_list_providers(ctx).await,
+            "remove_provider" => execute_remove_provider(&call.args, ctx).await,
+            "disable_provider" => execute_disable_provider(&call.args, ctx).await,
+            "send_file" => execute_send_file(&call.args).await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -2816,6 +2838,353 @@ Herramientas:
                 .await
                 .ok();
             info!("[engram] Session summary saved for chat {}", chat_id);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // AN.1 — LLM Provider management tools
+    // -----------------------------------------------------------------------
+
+    async fn execute_add_provider(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let provider_base = args
+            .get("provider_base")
+            .and_then(|v| v.as_str())
+            .unwrap_or("custom");
+        let model = args.get("model").and_then(|v| v.as_str()).unwrap_or("");
+        if model.is_empty() {
+            return Ok("Error: se requiere el campo 'model'.".into());
+        }
+
+        // Infer api_base from known providers
+        let api_base = args
+            .get("api_base")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| match provider_base {
+                "openrouter" => "https://openrouter.ai/api".into(),
+                "cerebras" => "https://api.cerebras.ai".into(),
+                "groq" => "https://api.groq.com/openai".into(),
+                _ => String::new(),
+            });
+        if api_base.is_empty() {
+            return Ok("Error: se requiere 'api_base' para proveedores custom.".into());
+        }
+
+        // Infer api_key_env from known providers
+        let api_key_env = args
+            .get("api_key_env")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| match provider_base {
+                "openrouter" => "OPENROUTER_API_KEY".into(),
+                "cerebras" => "CEREBRAS_API_KEY".into(),
+                "groq" => "GROQ_API_KEY".into(),
+                _ => String::new(),
+            });
+
+        // SSRF guard
+        if let Err(e) = crate::llm_router::validate_endpoint_safe(&api_base) {
+            return Ok(format!("Error SSRF: endpoint bloqueado — {}", e));
+        }
+
+        // Build a safe provider name from base + model
+        let provider_name = format!("{}-{}", provider_base, model.replace(['/', ' '], "-"));
+
+        // Build TOML entry
+        let toml_entry = format!(
+            r#"
+
+[[providers]]
+name = "{name}"
+api_base = "{api_base}"
+api_key_env = "{api_key_env}"
+model = "{model}"
+api_format = "open_ai_compatible"
+tier = "free"
+privacy = "standard"
+max_context = 128000
+"#,
+            name = provider_name,
+            api_base = api_base,
+            api_key_env = api_key_env,
+            model = model,
+        );
+
+        // Determine TOML path (prefer user config, writable)
+        let toml_path = dirs_home()
+            .map(|h| h.join(".config/lifeos/llm-providers.toml"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/etc/lifeos/llm-providers.toml"));
+
+        // Ensure parent directory exists
+        if let Some(parent) = toml_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        // If file doesn't exist yet, create it with a header
+        if !toml_path.exists() {
+            if let Err(e) = std::fs::write(&toml_path, "# LifeOS LLM Providers — auto-generated\n")
+            {
+                return Ok(format!("Error creando archivo de providers: {}", e));
+            }
+        }
+
+        // Append entry
+        use std::io::Write;
+        let mut file = match std::fs::OpenOptions::new().append(true).open(&toml_path) {
+            Ok(f) => f,
+            Err(e) => return Ok(format!("Error abriendo {}: {}", toml_path.display(), e)),
+        };
+        if let Err(e) = file.write_all(toml_entry.as_bytes()) {
+            return Ok(format!("Error escribiendo provider: {}", e));
+        }
+
+        // Trigger reload
+        let mut router = ctx.router.write().await;
+        let count = router.reload_providers().unwrap_or(0);
+
+        Ok(format!(
+            "Proveedor agregado: {} (modelo: {})\nArchivo: {}\nProveedores activos tras recarga: {}",
+            provider_name,
+            model,
+            toml_path.display(),
+            count,
+        ))
+    }
+
+    fn dirs_home() -> Option<std::path::PathBuf> {
+        std::env::var("HOME").ok().map(std::path::PathBuf::from)
+    }
+
+    async fn execute_list_providers(ctx: &ToolContext) -> Result<String> {
+        let router = ctx.router.read().await;
+        let configs = router.provider_configs();
+        if configs.is_empty() {
+            return Ok("No hay proveedores configurados.".into());
+        }
+
+        let summary = router.cost_summary();
+        let summary_map: std::collections::HashMap<String, (u64, u64, u64)> = summary
+            .into_iter()
+            .map(|(name, reqs, toks, fails)| (name, (reqs, toks, fails)))
+            .collect();
+
+        let mut lines = Vec::with_capacity(configs.len() + 1);
+        lines.push(format!("Proveedores LLM activos: {}", configs.len()));
+        for cfg in configs {
+            let stats = summary_map.get(&cfg.name);
+            let (reqs, _toks, fails) = stats.copied().unwrap_or((0, 0, 0));
+            lines.push(format!(
+                "• {} — modelo: {}, tier: {:?}, reqs: {}, fails: {}",
+                cfg.name, cfg.model, cfg.tier, reqs, fails,
+            ));
+        }
+        Ok(lines.join("\n"))
+    }
+
+    // -----------------------------------------------------------------------
+    // Provider management tools (remove / disable)
+    // -----------------------------------------------------------------------
+
+    /// Read the providers TOML file and split into (header_lines, provider_blocks).
+    /// Each provider block starts with `[[providers]]` and includes all subsequent
+    /// lines until the next `[[providers]]` or end-of-file.
+    fn parse_provider_blocks(content: &str) -> (String, Vec<String>) {
+        let mut header = String::new();
+        let mut blocks: Vec<String> = Vec::new();
+        let mut current_block = String::new();
+        let mut in_providers = false;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed == "[[providers]]" {
+                if in_providers && !current_block.is_empty() {
+                    blocks.push(current_block.clone());
+                    current_block.clear();
+                }
+                in_providers = true;
+                current_block.push_str(line);
+                current_block.push('\n');
+            } else if in_providers {
+                current_block.push_str(line);
+                current_block.push('\n');
+            } else {
+                header.push_str(line);
+                header.push('\n');
+            }
+        }
+        if in_providers && !current_block.is_empty() {
+            blocks.push(current_block);
+        }
+        (header, blocks)
+    }
+
+    /// Extract the `name = "..."` value from a provider block.
+    fn block_provider_name(block: &str) -> Option<String> {
+        for line in block.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("name") {
+                if let Some(val) = trimmed.split('=').nth(1) {
+                    return Some(val.trim().trim_matches('"').trim_matches('\'').to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn providers_toml_path() -> std::path::PathBuf {
+        dirs_home()
+            .map(|h| h.join(".config/lifeos/llm-providers.toml"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/etc/lifeos/llm-providers.toml"))
+    }
+
+    async fn execute_remove_provider(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if name.is_empty() {
+            return Ok("Error: se requiere el campo 'name'.".into());
+        }
+
+        let toml_path = providers_toml_path();
+        if !toml_path.exists() {
+            return Ok(format!(
+                "Archivo de providers no encontrado: {}",
+                toml_path.display()
+            ));
+        }
+
+        let content = std::fs::read_to_string(&toml_path)?;
+        let (header, blocks) = parse_provider_blocks(&content);
+
+        let original_count = blocks.len();
+        let remaining: Vec<String> = blocks
+            .into_iter()
+            .filter(|b| block_provider_name(b).map(|n| n != name).unwrap_or(true))
+            .collect();
+
+        if remaining.len() == original_count {
+            return Ok(format!(
+                "Proveedor '{}' no encontrado en {}",
+                name,
+                toml_path.display()
+            ));
+        }
+
+        // Rewrite file
+        let mut output = header;
+        for block in &remaining {
+            output.push_str(block);
+        }
+        std::fs::write(&toml_path, &output)?;
+
+        // Trigger reload
+        let mut router = ctx.router.write().await;
+        let count = router.reload_providers().unwrap_or(0);
+
+        Ok(format!(
+            "Proveedor '{}' eliminado.\nArchivo: {}\nProveedores activos tras recarga: {}",
+            name,
+            toml_path.display(),
+            count,
+        ))
+    }
+
+    async fn execute_disable_provider(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if name.is_empty() {
+            return Ok("Error: se requiere el campo 'name'.".into());
+        }
+
+        let enable = args
+            .get("enable")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let toml_path = providers_toml_path();
+        if !toml_path.exists() {
+            return Ok(format!(
+                "Archivo de providers no encontrado: {}",
+                toml_path.display()
+            ));
+        }
+
+        let content = std::fs::read_to_string(&toml_path)?;
+        let (header, blocks) = parse_provider_blocks(&content);
+
+        let mut found = false;
+        let mut new_blocks = Vec::with_capacity(blocks.len());
+
+        for block in &blocks {
+            let block_name = block_provider_name(block).unwrap_or_default();
+            if block_name == name {
+                found = true;
+                // Remove any existing `enabled = ...` line, then add the new value
+                let mut lines: Vec<&str> = block
+                    .lines()
+                    .filter(|l| !l.trim().starts_with("enabled"))
+                    .collect();
+
+                if !enable {
+                    // Insert `enabled = false` after the `[[providers]]` header
+                    lines.insert(1, "enabled = false");
+                }
+                // else: removing the `enabled` line defaults to enabled=true
+
+                let mut new_block = lines.join("\n");
+                new_block.push('\n');
+                new_blocks.push(new_block);
+            } else {
+                new_blocks.push(block.clone());
+            }
+        }
+
+        if !found {
+            return Ok(format!(
+                "Proveedor '{}' no encontrado en {}",
+                name,
+                toml_path.display()
+            ));
+        }
+
+        // Rewrite file
+        let mut output = header;
+        for block in &new_blocks {
+            output.push_str(block);
+        }
+        std::fs::write(&toml_path, &output)?;
+
+        // Trigger reload
+        let mut router = ctx.router.write().await;
+        let count = router.reload_providers().unwrap_or(0);
+
+        let action = if enable {
+            "habilitado"
+        } else {
+            "deshabilitado"
+        };
+        Ok(format!(
+            "Proveedor '{}' {}.\nArchivo: {}\nProveedores activos tras recarga: {}",
+            name,
+            action,
+            toml_path.display(),
+            count,
+        ))
+    }
+
+    async fn execute_send_file(args: &serde_json::Value) -> Result<String> {
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        if path.is_empty() {
+            return Ok("Error: se requiere el campo 'path'.".into());
+        }
+        let expanded = expand_home(path);
+        if std::path::Path::new(&expanded).exists() {
+            Ok(format!("__SEND_FILE__:{}", expanded))
+        } else {
+            Ok(format!("Archivo no encontrado: {}", expanded))
         }
     }
 
