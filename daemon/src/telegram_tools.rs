@@ -176,6 +176,10 @@ Herramientas:
     args: {"text": "Hello, how are you?", "target_lang": "es"}
     Opcional: {"source_lang": "en"} (si no se pone, detecta automaticamente)
 
+33. **audit_query** — Consulta que hizo Axi en un periodo. Muestra tareas, resultados y confiabilidad.
+    args: {"period": "24h"}
+    Periodos validos: "1h", "6h", "12h", "24h", "7d". Por defecto: "24h".
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -886,6 +890,7 @@ Herramientas:
             "procedure_save" => execute_procedure_save(&call.args, ctx).await,
             "procedure_find" => execute_procedure_find(&call.args, ctx).await,
             "translate" => execute_translate(&call.args, ctx).await,
+            "audit_query" => execute_audit_query(&call.args).await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -2302,6 +2307,138 @@ Herramientas:
                 result.source_lang, result.target_lang, result.method, result.translated
             )),
             Err(e) => Ok(format!("Error de traduccion: {}", e)),
+        }
+    }
+
+    async fn execute_audit_query(args: &serde_json::Value) -> Result<String> {
+        let period = args
+            .get("period")
+            .and_then(|v| v.as_str())
+            .unwrap_or("24h");
+
+        // Parse period into hours
+        let hours: u64 = match period {
+            "1h" => 1,
+            "6h" => 6,
+            "12h" => 12,
+            "24h" => 24,
+            "7d" => 168,
+            other => {
+                // Try to parse as Nh or Nd
+                if let Some(h) = other.strip_suffix('h') {
+                    h.parse().unwrap_or(24)
+                } else if let Some(d) = other.strip_suffix('d') {
+                    d.parse::<u64>().unwrap_or(1) * 24
+                } else {
+                    24
+                }
+            }
+        };
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let db_path =
+            std::path::PathBuf::from(format!("{}/.local/share/lifeos/reliability.db", home));
+
+        let mut sections = Vec::new();
+
+        // Query reliability database
+        if db_path.exists() {
+            match crate::reliability::ReliabilityTracker::new(db_path) {
+                Ok(tracker) => {
+                    // Success rate for the period
+                    match tracker.success_rate_period(hours) {
+                        Ok(rate) => {
+                            sections.push(format!(
+                                "Tasa de exito (ultimas {}): {:.0}%",
+                                period,
+                                rate * 100.0
+                            ));
+                        }
+                        Err(e) => {
+                            sections.push(format!("Error consultando tasa: {}", e));
+                        }
+                    }
+
+                    // Full report
+                    match tracker.get_reliability_report() {
+                        Ok(report) => {
+                            sections.push(format!(
+                                "Total tareas: {} (exitosas: {}, fallidas: {})",
+                                report.total_tasks, report.successful, report.failed
+                            ));
+                            sections
+                                .push(format!("Tendencia: {}", report.trend));
+                            if report.mtbf_hours > 0.0 {
+                                sections.push(format!(
+                                    "Tiempo medio entre fallos: {:.1}h",
+                                    report.mtbf_hours
+                                ));
+                            }
+                            if !report.top_failures.is_empty() {
+                                let failures: Vec<String> = report
+                                    .top_failures
+                                    .iter()
+                                    .take(3)
+                                    .map(|f| {
+                                        format!(
+                                            "  - {} (x{}, ultimo: {})",
+                                            f.error_signature, f.count, f.last_seen
+                                        )
+                                    })
+                                    .collect();
+                                sections.push(format!(
+                                    "Fallos frecuentes:\n{}",
+                                    failures.join("\n")
+                                ));
+                            }
+                            sections.push(format!(
+                                "Objetivo 95%: {}",
+                                if report.meets_target {
+                                    "CUMPLIDO"
+                                } else {
+                                    "NO CUMPLIDO"
+                                }
+                            ));
+                        }
+                        Err(e) => {
+                            sections.push(format!("Error en reporte: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    sections.push(format!("No se pudo abrir reliability.db: {}", e));
+                }
+            }
+        } else {
+            sections.push("Sin datos de reliability (aun no hay tareas registradas).".into());
+        }
+
+        // Also read supervisor audit log for recent activity
+        let log_paths = [
+            std::path::PathBuf::from("/var/log/lifeos/supervisor-audit.log"),
+            std::path::PathBuf::from("/var/lib/lifeos/supervisor-audit.log"),
+        ];
+        if let Some(content) = log_paths
+            .iter()
+            .find_map(|p| std::fs::read_to_string(p).ok())
+        {
+            let lines: Vec<&str> = content.lines().collect();
+            let recent_count = lines.len().min(10);
+            if recent_count > 0 {
+                sections.push(format!(
+                    "Ultimas {} entradas del audit log:",
+                    recent_count
+                ));
+                for line in lines.iter().rev().take(recent_count) {
+                    sections.push(format!("  {}", line));
+                }
+            }
+        }
+
+        if sections.is_empty() {
+            Ok("No hay datos de auditoria disponibles todavia.".into())
+        } else {
+            Ok(format!("=== Auditoria Axi ({}) ===\n{}", period, sections.join("\n")))
         }
     }
 

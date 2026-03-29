@@ -1021,3 +1021,68 @@ pub fn strip_reasoning_loop(text: &str) -> String {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bug_reasoning_loop_qwen35_repeats_same_sentence() {
+        let input = "I should respond.\nLet me check.\nI should respond.\nLet me check.\nI should respond.\nLet me check.\nI should respond.";
+        let result = strip_reasoning_loop(input);
+        assert!(result.len() < input.len(), "Loop should be stripped");
+        assert!(!result.contains("I should respond.\nLet me check.\nI should respond."));
+    }
+
+    #[test]
+    fn test_bug_unclosed_think_tag_returns_empty() {
+        let input = "<think>This is internal reasoning that never closes";
+        let result = strip_think_tags(input);
+        assert!(
+            result.is_empty() || !result.contains("internal reasoning"),
+            "Unclosed think tag should not leak reasoning"
+        );
+    }
+
+    #[test]
+    fn test_strip_think_tags_normal() {
+        let input = "<think>reasoning here</think>The actual answer.";
+        let result = strip_think_tags(input);
+        assert_eq!(result, "The actual answer.");
+    }
+
+    #[test]
+    fn test_strip_think_tags_multiple_blocks() {
+        let input = "<think>first</think>Hello <think>second</think>world";
+        let result = strip_think_tags(input);
+        assert_eq!(result, "Hello world");
+    }
+
+    #[test]
+    fn test_strip_think_tags_no_tags() {
+        let input = "Just a normal response without any tags.";
+        let result = strip_think_tags(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_reasoning_loop_no_loop() {
+        let input = "First sentence.\nSecond sentence.\nThird sentence.";
+        let result = strip_reasoning_loop(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_reasoning_loop_empty() {
+        let result = strip_reasoning_loop("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_bug_reasoning_loop_degenerate_all_same() {
+        let input = "ok\nok\nok\nok\nok";
+        let result = strip_reasoning_loop(input);
+        // First occurrence only before the loop starts
+        assert!(result.len() <= "ok".len());
+    }
+}

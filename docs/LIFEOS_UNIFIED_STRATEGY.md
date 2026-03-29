@@ -2088,6 +2088,8 @@ El tema LifeOS tiene 177 iconos en 8 contextos (antes: 77 en 6). Script generado
 | **AE** | First-Boot User Creation + Welcome | COMPLETADA | Anaconda interactivo, sudoers %wheel, cosmic-initial-setup |
 | **AF** | Canales Extra (Slack, Discord) | COMPLETADA | slack_bridge.rs + discord_bridge.rs feature-gated |
 | **AG** | Mejoras Incrementales de Robustez | COMPLETADA 80% | Dedupe, cron validation, transcript export (falta pairing) |
+| **AH** | Firefox AI Local-First | PENDIENTE / EXPLORATORIA | Extension o sidebar Axi sobre modelo local, con opcion remota acotada |
+| **AI** | LibreOffice AI + UNO/MCP | PENDIENTE / EXPLORATORIA | Integracion nativa para Writer/Calc/Impress sobre modelo local y automatizacion estructurada |
 
 **Camino critico para "iPhone Moment":**
 AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) → AC (plugin SDK) → Z (ecosystem)
@@ -2272,6 +2274,61 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 - [ ] iMessage — FUTURO (requiere bridge de terceros) bridge de terceros (no hay API oficial)
 
 **Prioridad:** Slack > Discord > Email conversacional > SMS. Los 2 primeros cubren el 90% de la demanda empresarial.
+
+### Fase AH — Firefox AI Local-First (exploratoria, pendiente)
+
+**Objetivo:** Evaluar una experiencia de IA privada dentro de Firefox en LifeOS, aprovechando el modelo local ya expuesto via `llama.cpp` y manteniendo el hardening/privacy defaults del navegador.
+
+**Estado:** Idea estrategica a considerar a futuro. No esta planteada a fondo ni implementada. La meta aqui es dejarla visible en el roadmap para cuando toque priorizar producto.
+
+**AH.1 — Companion de Axi dentro de Firefox**
+- [ ] Explorar una extension/sidebar de Firefox para "Ask Axi about this page"
+- [ ] Soportar resumen de pagina, reescritura de texto seleccionado, traduccion y extraccion estructurada
+- [ ] Evaluar acceso a DOM/seleccion actual sin romper privacidad ni endurecimiento actual del perfil
+
+**AH.2 — Integracion con modelo local de LifeOS**
+- [ ] Conectar la extension a un endpoint local de Axi/LifeOS que hable con `llama.cpp` OpenAI-compatible en loopback
+- [ ] Definir limites de contexto: pagina completa, seleccion, formularios, PDFs, pestaña actual
+- [ ] Diseñar controles de permisos claros: por sitio, por accion, por tipo de dato
+
+**AH.3 — Modos local y remoto**
+- [ ] Priorizar modo local-first como experiencia por defecto
+- [ ] Mantener opcionalmente un modo remoto para casos donde el modelo local no alcance
+- [ ] Dejar DuckDuckGo como buscador y Duck.ai como opcion remota separada, sin plan actual de integrarlo al flujo local de LifeOS
+
+**AH.4 — Agente web a futuro**
+- [ ] Evaluar puente entre extension de Firefox y capacidades existentes de browser automation/CDP para tareas mas agenticas
+- [ ] Explorar prompts de "sobre esta pestaña" y "completa esta accion en la web" con aprobaciones y audit trail
+
+### Fase AI — LibreOffice AI + UNO/MCP (exploratoria, pendiente)
+
+**Objetivo:** Evaluar una integracion de IA para LibreOffice en LifeOS, idealmente local-first, que combine extension nativa para usuario final con herramientas estructuradas para Axi.
+
+**Estado:** Idea estrategica a considerar a futuro. No esta planteada a fondo ni implementada. Se documenta para no perder la oportunidad de producto.
+
+**AI.1 — Extension nativa para LibreOffice**
+- [ ] Explorar una extension `.oxt` para Writer como primer objetivo
+- [ ] Casos iniciales: resumir, reescribir, traducir, expandir texto, cambiar tono, explicar contenido
+- [ ] Evaluar crecimiento posterior hacia Calc e Impress
+
+**AI.2 — Integracion con modelo local**
+- [ ] Conectar la extension al modelo local de LifeOS via `llama.cpp`, preferentemente a traves de un endpoint de Axi/LifeOS y no directo al runtime
+- [ ] Diseñar fallback remoto opcional solo si aporta valor real y con privacidad claramente etiquetada
+- [ ] Definir limites de tamaño/contexto para documentos y selecciones grandes
+
+**AI.3 — UNO como camino principal**
+- [ ] Priorizar UNO para lectura/escritura estructurada del documento, en vez de depender solo de teclado y raton
+- [ ] Reutilizar y expandir el puente existente de LibreOffice/UNO en LifeOS
+- [ ] Evaluar comandos estructurados: leer seleccion, reemplazar seleccion, leer/escribir celdas, exportar PDF, explicar formulas
+
+**AI.4 — MCP interno para Axi**
+- [ ] Diseñar un MCP interno o set de tools de LifeOS para que Axi manipule LibreOffice de forma segura y auditable
+- [ ] Separar dos modos: herramientas estructuradas via UNO y fallback universal via desktop operator (teclado/raton/screenshot)
+- [ ] Explorar skills por app para Writer/Calc/Impress, usando Axi como operador y verificador
+
+**AI.5 — Vision de producto**
+- [ ] Posicionar a LibreOffice + LifeOS como alternativa privada/local-first frente a Office con copilotos cloud
+- [ ] Evaluar si esta experiencia merece branding propio tipo "LibreOffice AI for LifeOS" o "Axi for Documents"
 
 ### Gaps Menores de OpenClaw (documentados, no requieren fase propia)
 

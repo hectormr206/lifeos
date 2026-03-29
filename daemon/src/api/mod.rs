@@ -1510,10 +1510,16 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/dashboard/bootstrap", get(dashboard_bootstrap))
         .with_state(state.clone());
 
+    // Prometheus metrics endpoint — no auth required (standard practice)
+    let metrics_route = Router::new()
+        .route("/metrics", get(handle_metrics))
+        .with_state(state.clone());
+
     Router::new()
         .nest("/api/v1", api_v1)
         .merge(sse_route)
         .merge(ws_route)
+        .merge(metrics_route)
         .merge(dashboard_bootstrap_route)
         .nest_service("/dashboard", dashboard_service)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
@@ -9344,6 +9350,78 @@ async fn get_supervisor_metrics(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let metrics = state.supervisor.metrics();
     Ok(Json(serde_json::to_value(metrics).unwrap_or_default()))
+}
+
+// ==================== PROMETHEUS METRICS ENDPOINT ====================
+
+async fn handle_metrics(
+    State(state): State<ApiState>,
+) -> (StatusCode, [(&'static str, &'static str); 1], String) {
+    let mut output = String::new();
+
+    // Task metrics from task_queue
+    if let Ok(summary) = state.task_queue.summary() {
+        output.push_str("# HELP lifeos_tasks_total Total tasks by status\n");
+        output.push_str("# TYPE lifeos_tasks_total gauge\n");
+        if let Some(obj) = summary.as_object() {
+            for (status, count) in obj {
+                let n = count.as_i64().unwrap_or(0);
+                output.push_str(&format!(
+                    "lifeos_tasks_total{{status=\"{}\"}} {}\n",
+                    status, n
+                ));
+            }
+        }
+    }
+
+    // System metrics from SystemMonitor
+    if let Ok(metrics) = state.system_monitor.write().await.collect_metrics() {
+        output.push_str("# HELP lifeos_cpu_usage_percent CPU usage\n");
+        output.push_str("# TYPE lifeos_cpu_usage_percent gauge\n");
+        output.push_str(&format!("lifeos_cpu_usage_percent {:.1}\n", metrics.cpu_usage));
+
+        output.push_str("# HELP lifeos_memory_used_bytes Memory used in bytes\n");
+        output.push_str("# TYPE lifeos_memory_used_bytes gauge\n");
+        output.push_str(&format!(
+            "lifeos_memory_used_bytes {}\n",
+            metrics.memory_used_mb * 1024 * 1024
+        ));
+
+        output.push_str("# HELP lifeos_memory_usage_percent Memory usage percent\n");
+        output.push_str("# TYPE lifeos_memory_usage_percent gauge\n");
+        output.push_str(&format!(
+            "lifeos_memory_usage_percent {:.1}\n",
+            metrics.memory_usage
+        ));
+
+        output.push_str("# HELP lifeos_disk_used_percent Disk usage percent\n");
+        output.push_str("# TYPE lifeos_disk_used_percent gauge\n");
+        output.push_str(&format!(
+            "lifeos_disk_used_percent {:.1}\n",
+            metrics.disk_usage
+        ));
+    }
+
+    // Supervisor reliability
+    let reliability = state.supervisor.reliability_stats();
+    output.push_str("# HELP lifeos_supervisor_tasks_total Total supervisor tasks\n");
+    output.push_str("# TYPE lifeos_supervisor_tasks_total gauge\n");
+    output.push_str(&format!(
+        "lifeos_supervisor_tasks_total {}\n",
+        reliability.total_tasks
+    ));
+    output.push_str("# HELP lifeos_supervisor_success_rate Success rate (0.0-1.0)\n");
+    output.push_str("# TYPE lifeos_supervisor_success_rate gauge\n");
+    output.push_str(&format!(
+        "lifeos_supervisor_success_rate {:.3}\n",
+        reliability.success_rate
+    ));
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        output,
+    )
 }
 
 // ==================== SCHEDULED TASKS ENDPOINTS ====================

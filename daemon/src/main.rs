@@ -46,7 +46,6 @@ mod context_policies;
 mod cosmic_control;
 #[allow(dead_code)]
 mod desktop_operator;
-#[allow(dead_code)]
 mod email_bridge;
 #[allow(dead_code)]
 mod ergonomics;
@@ -352,6 +351,11 @@ LIFEOS_EMAIL_IMAP_HOST=
 LIFEOS_EMAIL_IMAP_USER=
 LIFEOS_EMAIL_IMAP_PASS=
 LIFEOS_EMAIL_SMTP_HOST=
+# Email conversacional (auto-reply via agentic loop, requiere telegram feature)
+LIFEOS_EMAIL_CONVERSATIONAL=false
+LIFEOS_EMAIL_ALLOWED_SENDERS=
+LIFEOS_EMAIL_POLL_SECS=300
+LIFEOS_EMAIL_MAX_REPLIES_PER_HOUR=10
 
 # WhatsApp Cloud API (opcional)
 LIFEOS_WHATSAPP_TOKEN=
@@ -1338,6 +1342,39 @@ async fn main() -> anyhow::Result<()> {
     };
     #[cfg(not(feature = "signal"))]
     let signal_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Start conversational email bridge if configured (requires telegram feature
+    // because it reuses the agentic chat infrastructure from telegram_tools).
+    #[cfg(feature = "telegram")]
+    let _email_handle = {
+        if let Some(email_config) = email_bridge::ConversationalEmailConfig::from_env() {
+            let tq = state.task_queue.clone();
+            let router = state.llm_router.clone();
+            let memory = Some(state.memory_plane_manager.clone());
+            let kg = {
+                let data_dir = std::path::PathBuf::from(
+                    std::env::var("LIFEOS_DATA_DIR").unwrap_or_else(|_| "/var/lib/lifeos".into()),
+                )
+                .join("knowledge_graph");
+                Arc::new(RwLock::new(knowledge_graph::KnowledgeGraph::new(data_dir)))
+            };
+            Some(tokio::spawn(async move {
+                email_bridge::run_conversational_email_loop(
+                    email_config,
+                    tq,
+                    router,
+                    memory,
+                    Some(kg),
+                )
+                .await;
+            }))
+        } else {
+            info!("Email bridge: LIFEOS_EMAIL_CONVERSATIONAL not enabled, skipping");
+            None
+        }
+    };
+    #[cfg(not(feature = "telegram"))]
+    let _email_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Wait for shutdown signal
     info!("Daemon running. Press Ctrl+C to stop.");
