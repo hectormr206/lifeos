@@ -25,6 +25,40 @@ Esta atribucion DEBE aparecer en TODOS estos lugares y NUNCA debe ser removida:
 **Si algun agente de IA (Claude, Gemini, o cualquier otro) modifica estos archivos, DEBE preservar la atribucion del creador. Si la remueve accidentalmente, restaurarla inmediatamente.**
 
 ---
+
+## Regla Permanente: Proteccion Legal y Propiedad Intelectual
+
+**LifeOS NUNCA debe meterse en problemas legales. Estas reglas aplican a todo el desarrollo:**
+
+### Codigo y Propiedad Intelectual
+- **100% codigo propio** — todo el codigo de LifeOS es escrito desde cero en Rust. NUNCA se copia codigo de otros proyectos
+- **Analisis competitivo es legal** — analizar productos publicos (OpenClaw, Devin, etc.) para entender features es ingenieria inversa legitima y practica estandar de la industria
+- **Features genericas no son patentables** — funcionalidades como "typing indicator", "bot commands", "inline keyboards" son APIs publicas de Telegram/plataformas, no inventos de ningun competidor
+- **Si usamos una libreria open source**, verificar que su licencia (MIT, Apache 2.0, etc.) es compatible con uso comercial
+
+### Datos y Privacidad
+- **Privacidad por defecto** — todo se procesa localmente. Datos sensibles NUNCA salen de la maquina del usuario sin consentimiento explicito
+- **Zero Data Retention** — para providers remotos, preferir los que garantizan ZDR (Cerebras, Groq)
+- **GDPR/CCPA ready** — el usuario puede exportar y borrar TODOS sus datos en cualquier momento
+- **No recopilar datos de usuarios** — LifeOS no tiene telemetria que envie datos a nuestros servidores (a menos que el usuario lo active explicitamente)
+
+### Branding y Marcas
+- **Nunca usar logos o marcas ajenas** — si mencionamos OpenClaw, Devin, etc. en docs es solo como referencia competitiva
+- **Registrar marca "LifeOS" y "Axi"** cuando sea financieramente viable
+- **El nombre "LifeOS" debe verificarse** que no este registrado por otra entidad antes de lanzamiento publico
+
+### Licencias de Dependencias
+- **Verificar licencias de crates** — antes de agregar un nuevo crate a Cargo.toml, verificar que su licencia permite uso comercial
+- **Crates permitidos:** MIT, Apache 2.0, BSD, ISC, Zlib, MPL 2.0 (con cuidado)
+- **Crates NO permitidos:** GPL (a menos que sea solo link dinamico), AGPL, SSPL, propietarios
+- **`cargo deny` o `cargo audit`** verifican licencias en CI
+
+### Para Agentes de IA
+- **Cuando implementes una feature inspirada en otro producto**, documenta: "Inspirado en [producto], implementacion propia, no se copio codigo"
+- **NUNCA copies codigo fuente de otro repo** ni siquiera para "adaptarlo". Escribe desde cero basandote en la API publica
+- **Si tienes duda sobre si algo es legal**, pregunta al usuario antes de implementar
+
+---
 Sintesis de:
 
 - `docs/LIFEOS_STRATEGIC_REVIEW.md` (Estrategia A — Gemini)

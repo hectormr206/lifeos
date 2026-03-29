@@ -447,6 +447,52 @@ Layer 0: Heartbeat (systemd watchdog)
 
 ---
 
+### Fase AO — Telegram UX: De Bot Funcional a Asistente Pulido (PROXIMA)
+
+**Objetivo:** Cerrar las brechas de UX entre LifeOS y OpenClaw en Telegram, adoptando SOLO lo que mejora la experiencia del usuario real. LifeOS ya esta ADELANTE en voz, vision, video, 35 tools, computer use, knowledge graph y smart home. Lo que falta es "plomeria" que hace al bot sentirse profesional.
+
+**Investigacion (2026-03-29):** Comparacion profunda OpenClaw Telegram (194 archivos, extension completa) vs LifeOS (telegram_bridge.rs + telegram_tools.rs). LifeOS gana en 10+ capacidades tecnicas. OpenClaw gana en 9 aspectos de infraestructura/UX.
+
+**Nota legal:** Ningun codigo de OpenClaw fue copiado. Las features son funcionalidad generica de la API publica de Telegram Bot. Nuestra implementacion es 100% propia en Rust/teloxide.
+
+**AO.1 — P0: Critico para lanzar a otros usuarios**
+- [ ] **Reply-to-bot como trigger en grupos** — si el usuario responde a un mensaje de Axi, tratarlo como mencion directa. Agregar check en `is_addressed_to_bot()` para `msg.reply_to_message()` (3 lineas)
+- [ ] **Registrar bot commands** — `bot.set_my_commands()` al inicio: /help, /new, /status, /btw, /do. Aparecen como menu cuando el usuario escribe "/" (3 lineas)
+- [ ] **/status sin LLM** — comando rapido que muestra uptime, disco, memoria, servicios, modelo activo sin pasar por el agentic loop (respuesta instantanea)
+
+**AO.2 — P1: Primera semana post-launch**
+- [ ] **Threads/topics en grupos forum** — usar `(chat_id, thread_id)` como clave de historial para mantener contexto separado por topic
+- [ ] **Markdown en respuestas** — usar `ParseMode::MarkdownV2` para negritas, codigo, listas. Escapar caracteres especiales del LLM
+- [ ] **Envio de archivos** — tool `send_file` que use `bot.send_document()` para enviar PDFs, logs, configs cuando el usuario los pida
+- [ ] **Politica de grupos configurable** — `LIFEOS_TELEGRAM_GROUP_POLICY`: mention_only (default), reply_only, all_messages
+- [ ] **Grupos permitidos via config** — `LIFEOS_TELEGRAM_GROUP_IDS` separado del chat_id personal
+
+**AO.3 — P2: Polish**
+- [ ] **Webhook transport** — `LIFEOS_TELEGRAM_WEBHOOK_URL` para modo eficiente sin polling constante
+- [ ] **Cola de mensajes con steering** — si llega mensaje mientras se procesa otro, encolar y alimentar como contexto al terminar
+- [ ] **Pairing para usuarios adicionales** — /pair genera codigo 6 digitos, nuevo usuario lo manda, se agrega a allowed_ids
+- [ ] **Notificaciones con acciones** — inline keyboards en notificaciones: "Disco al 90%" -> boton "Limpiar" + boton "Ignorar"
+- [ ] **Streaming de respuestas** — enviar mensaje parcial y editarlo conforme llega la respuesta del LLM (`bot.edit_message_text`)
+
+**Donde LifeOS ya esta ADELANTE de OpenClaw:**
+
+| Capacidad LifeOS | OpenClaw |
+|-------------------|----------|
+| Voz nativa (Whisper STT + Piper TTS) | Requiere plugin separado |
+| Video analysis (frame extraction) | No tiene |
+| 35 tools agenticos | Depende de plugins |
+| Computer use (ydotool/xdotool) | Solo macOS (Peekaboo) |
+| Knowledge graph local | No nativo |
+| Smart home (Home Assistant) | No nativo |
+| Memory consolidation (6h cycle) | Archivos planos |
+| Traduccion (Argos + LLM) | No nativo |
+| Typing indicator persistente (4s) | Desconocido |
+| Deduplicacion de mensajes | Similar |
+
+**Prioridad:** AO.1 es critico (P0, ~30 lineas de codigo total). AO.2 es importante para la primera semana. AO.3 es polish para despues.
+
+---
+
 ### Fase AM — Reloj Perfecto: Timezone-Aware Time Handling (CRITICA)
 
 **Objetivo:** Que Axi SIEMPRE sepa la fecha, hora y zona horaria exacta del usuario. Que nunca se equivoque al programar recordatorios, consultar memorias por fecha, o interpretar expresiones como "mañana a las 3pm". Que todas las memorias guarden la hora correcta para consultas futuras precisas.
