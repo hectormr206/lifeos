@@ -2084,9 +2084,9 @@ El tema LifeOS tiene 177 iconos en 8 contextos (antes: 77 en 6). Script generado
 | **AA** | Visual Identity Completa | COMPLETADA 95% | 657 SVGs brand-compliant, fuentes, wallpaper, theme system |
 | **AB** | Gateway WebSocket + Session Durability | COMPLETADA | WS gateway + session store + compaction LLM + channel routing |
 | **AC** | Plugin SDK + Capability Registry | COMPLETADA | skill_registry.rs 775 LOC, manifest v2, discovery, doctor, 17 tests |
-| **AD** | Anti-Breakage Engineering | COMPLETADA | 4 guardrails CI + config validator + test conventions |
+| **AD** | Anti-Breakage Engineering | COMPLETADA | 4 guardrails CI + config validator + scope-aware CI + Prometheus /metrics + audit query + live tests + 8 regression tests |
 | **AE** | First-Boot User Creation + Welcome | COMPLETADA | Anaconda interactivo, sudoers %wheel, cosmic-initial-setup |
-| **AF** | Canales Extra (Slack, Discord) | COMPLETADA | slack_bridge.rs + discord_bridge.rs feature-gated |
+| **AF** | Canales Extra (Slack, Discord, Email conv.) | COMPLETADA | slack_bridge + discord_bridge + email conversacional con threading |
 | **AG** | Mejoras Incrementales de Robustez | COMPLETADA 80% | Dedupe, cron validation, transcript export (falta pairing) |
 | **AH** | Firefox AI Local-First | PENDIENTE / EXPLORATORIA | Extension o sidebar Axi sobre modelo local, con opcion remota acotada |
 | **AI** | LibreOffice AI + UNO/MCP | PENDIENTE / EXPLORATORIA | Integracion nativa para Writer/Calc/Impress sobre modelo local y automatizacion estructurada |
@@ -2211,14 +2211,14 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 - [x] Migration framework: lista ordenada de transformaciones version_from → version_to
 
 **AD.3 — CI Mejorada**
-- [ ] Scope-aware CI: solo compilar/testear lo que cambio
-- [ ] Regression tests nombrados con ID del bug de origen
-- [ ] Live test suite: daemon real + HTTP requests + verificacion
+- [x] Scope-aware CI: solo compilar/testear lo que cambio
+- [x] Regression tests nombrados con ID del bug de origen
+- [x] Live test suite: daemon real + HTTP requests + verificacion
 
 **AD.4 — Observabilidad de Runtime**
 - [x] Structured logging con campos queryables (session_id, task_id, provider, latency_ms)
-- [ ] Metrics exporter Prometheus-compatible
-- [ ] `life audit query --since 24h --type llm_call`
+- [x] Metrics exporter Prometheus-compatible
+- [x] `life audit query --since 24h --type llm_call`
 
 **Orden recomendado:** AE (first-boot, rapido) → AD (anti-breakage) → AB (gateway) → AC (ecosistema) → AF (canales extra)
 
@@ -2265,9 +2265,9 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 - [x] Feature flag `discord`
 
 **AF.3 — Email como Canal Conversacional**
-- [ ] El email_bridge existente (IMAP+SMTP) ya lee/envia, pero no es conversacional
-- [ ] Convertir emails entrantes en mensajes del agentic loop (como Telegram)
-- [ ] Responder emails en hilo manteniendo contexto
+- [x] El email_bridge existente (IMAP+SMTP) ya lee/envia, pero no es conversacional
+- [x] Convertir emails entrantes en mensajes del agentic loop (como Telegram)
+- [x] Responder emails en hilo manteniendo contexto
 
 **AF.4 — SMS/iMessage (futuro)**
 - [ ] SMS via Twilio — FUTURO (requiere API externa) API o similar
