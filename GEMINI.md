@@ -1,6 +1,6 @@
 # GEMINI.md — LifeOS Context
 
-LifeOS — AI-native Linux distribution on Fedora 42 bootc. Rust CLI (`life`) + daemon (`lifeosd`) + COSMIC Desktop.
+LifeOS — AI-native Linux distribution on Fedora bootc. Rust CLI (`life`) + daemon (`lifeosd`) + COSMIC Desktop.
 
 ## Build & Test
 

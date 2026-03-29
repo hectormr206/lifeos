@@ -2,7 +2,7 @@
 
 ## What is LifeOS?
 
-AI-native Linux distribution (Fedora 42 bootc + COSMIC Desktop). Three Rust crates:
+AI-native Linux distribution (Fedora bootc + COSMIC Desktop). Three Rust crates:
 
 | Crate | Binary | Purpose |
 |-------|--------|---------|

@@ -1,6 +1,6 @@
 # LifeOS
 
-AI-native Linux distribution built on Fedora 42 bootc (immutable) with COSMIC Desktop. Your personal AI assistant **Axi** lives at the OS level — voice, vision, memory, autonomous execution, and privacy by default.
+AI-native Linux distribution built on Fedora bootc (immutable) with COSMIC Desktop. Your personal AI assistant **Axi** lives at the OS level — voice, vision, memory, autonomous execution, and privacy by default.
 
 ## What Makes LifeOS Different
 
