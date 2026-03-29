@@ -1579,7 +1579,7 @@ fn cipher() -> Result<Aes256GcmSiv> {
         .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| derive_machine_key());
+        .unwrap_or_else(derive_machine_key);
     let key = Sha256::digest(passphrase.as_bytes());
     Aes256GcmSiv::new_from_slice(&key)
         .map_err(|e| anyhow::anyhow!("failed to initialize memory cipher: {}", e))
@@ -1616,7 +1616,11 @@ fn derive_machine_key() -> String {
         // Generate a new random key, save it with restrictive permissions
         let mut rng_bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut rng_bytes);
-        let generated_key: String = rng_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+        let generated_key: String = rng_bytes.iter().fold(String::new(), |mut acc, b| {
+            use std::fmt::Write;
+            let _ = write!(acc, "{:02x}", b);
+            acc
+        });
 
         if let Some(parent) = key_path.parent() {
             let _ = std::fs::create_dir_all(parent);

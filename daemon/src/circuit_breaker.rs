@@ -42,6 +42,12 @@ pub struct CircuitBreaker {
     cooldown_multiplier: AtomicU32,
 }
 
+impl Default for CircuitBreaker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CircuitBreaker {
     pub fn new() -> Self {
         Self {

@@ -120,6 +120,7 @@ pub fn local_to_utc(datetime_str: &str, iana_tz: &str) -> Result<DateTime<Utc>> 
 
 /// Convert a UTC datetime to a local datetime string in the given IANA timezone.
 /// Used by calendar event display and memory search result formatting.
+#[allow(dead_code)]
 pub fn utc_to_local(utc_dt: &DateTime<Utc>, iana_tz: &str) -> Result<String> {
     let offset = resolve_tz_offset(iana_tz)?;
     let local = utc_dt.with_timezone(&offset);

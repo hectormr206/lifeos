@@ -412,7 +412,7 @@ impl SessionStore {
 
         info!(
             "[session_store] Compacted session {}: {} turns -> {} recent + summary",
-            key.to_string(),
+            key,
             all_turns.len(),
             recent_turns.len()
         );

@@ -86,6 +86,7 @@ mod mcp_server;
 #[allow(dead_code)]
 mod meeting_assistant;
 mod memory_plane;
+#[allow(dead_code)]
 mod message_dedupe;
 #[cfg(feature = "ui-overlay")]
 mod mini_widget;
@@ -125,6 +126,7 @@ mod skill_generator;
 mod skill_registry;
 #[allow(dead_code)]
 mod speaker_id;
+#[allow(dead_code)]
 mod sqlite_protection;
 mod storage_housekeeping;
 mod supervisor;

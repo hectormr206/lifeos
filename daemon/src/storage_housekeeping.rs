@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use log::{info, warn};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tokio::fs;
 
 /// Maximum files per directory. Files beyond this limit are deleted (oldest first).
@@ -166,10 +166,8 @@ async fn cleanup_dir_by_age(dir: &Path, max_days: u64) -> Result<usize> {
         if path.is_file() {
             if let Ok(meta) = fs::metadata(&path).await {
                 if let Ok(modified) = meta.modified() {
-                    if modified < cutoff {
-                        if fs::remove_file(&path).await.is_ok() {
-                            removed += 1;
-                        }
+                    if modified < cutoff && fs::remove_file(&path).await.is_ok() {
+                        removed += 1;
                     }
                 }
             }
