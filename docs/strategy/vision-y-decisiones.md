@@ -2,7 +2,29 @@
 
 > Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/](../strategy/) para el indice completo.
 
-Fecha: 2026-03-23 (ultima revision: 2026-03-28, modelo local 4B, game guard fix, typing indicator, reasoning fix)
+Fecha: 2026-03-23 (ultima revision: 2026-03-29)
+
+---
+
+## Regla Permanente: Atribucion del Creador
+
+**LifeOS fue creado por Hector Martinez Resediz (hectormr.com).**
+
+Esta atribucion DEBE aparecer en TODOS estos lugares y NUNCA debe ser removida:
+
+| Lugar | Archivo | Que dice |
+|-------|---------|----------|
+| **os-release** (Acerca de) | `image/Containerfile:759` | `PRETTY_NAME="LifeOS 0.3 Axolotl - by Hector Martinez (hectormr.com)"` |
+| **os-release** (vendor) | `image/Containerfile:762` | `VENDOR_NAME="Hector Martinez Resediz"` + `VENDOR_URL="https://hectormr.com"` |
+| **System prompt de Axi** | `daemon/src/telegram_tools.rs` | `Fui creado por Hector Martinez Resediz (hectormr.com)` |
+| **GRUB boot** | `image/files/usr/share/lifeos/grub-theme/theme.txt:60` | `text = "hectormr.com"` |
+| **README.md** | `README.md` | `Hector Martinez (hectormr.com)` |
+| **OCI labels** | `image/Containerfile:206` | `org.opencontainers.image.source` |
+| **URLs del OS** | `image/Containerfile:763-766` | `HOME_URL`, `DOCS_URL`, `SUPPORT_URL`, `BUG_REPORT_URL` |
+
+**Si algun agente de IA (Claude, Gemini, o cualquier otro) modifica estos archivos, DEBE preservar la atribucion del creador. Si la remueve accidentalmente, restaurarla inmediatamente.**
+
+---
 Sintesis de:
 
 - `docs/LIFEOS_STRATEGIC_REVIEW.md` (Estrategia A — Gemini)
