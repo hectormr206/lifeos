@@ -85,6 +85,7 @@ mod mcp_server;
 #[allow(dead_code)]
 mod meeting_assistant;
 mod memory_plane;
+mod message_dedupe;
 #[cfg(feature = "ui-overlay")]
 mod mini_widget;
 mod models;
@@ -114,6 +115,7 @@ mod security_daemon;
 mod self_improving;
 mod sensory_memory;
 mod sensory_pipeline;
+mod session_store;
 #[allow(dead_code)]
 mod signal_bridge;
 #[allow(dead_code)]
@@ -140,6 +142,8 @@ mod visual_comfort;
 mod wake_word;
 #[allow(dead_code)]
 mod whatsapp_bridge;
+#[cfg(feature = "http-api")]
+mod ws_gateway;
 
 use accessibility::AccessibilityManager;
 use agent_runtime::AgentRuntimeManager;
@@ -471,6 +475,7 @@ pub struct DaemonState {
     pub wake_word_detector: Option<Arc<wake_word::WakeWordDetector>>,
     pub wake_word_notify: Arc<tokio::sync::Notify>,
     pub event_bus: tokio::sync::broadcast::Sender<events::DaemonEvent>,
+    pub session_store: Arc<session_store::SessionStore>,
     pub game_guard: Option<Arc<RwLock<game_guard::GameGuard>>>,
 }
 
@@ -574,6 +579,12 @@ async fn main() -> anyhow::Result<()> {
         }),
     ));
 
+    // Initialize session store (durable conversation sessions)
+    let shared_session_store = Arc::new(session_store::SessionStore::new(&data_dir));
+    if let Err(e) = shared_session_store.init().await {
+        warn!("Failed to initialize SessionStore: {}", e);
+    }
+
     // Initialize state
     let state = Arc::new(DaemonState {
         config: config.clone(),
@@ -662,6 +673,7 @@ async fn main() -> anyhow::Result<()> {
         wake_word_detector,
         wake_word_notify: wake_word_notify.clone(),
         event_bus: event_tx,
+        session_store: shared_session_store,
         game_guard: Some(Arc::new(RwLock::new(game_guard::GameGuard::new(
             game_guard::GameGuardConfig::default(),
         )))),

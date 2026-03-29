@@ -1,63 +1,64 @@
 # LifeOS Axi — controlled sudo permissions for automated system management.
 # Each permission is audited and specific. No blanket root access.
+# Uses %wheel group so any user created during installation gets access.
 # Audit date: 2026-03-26 | Source: daemon/src/ privilege audit (26 locations)
 
 # === LLAMA-SERVER (Game Guard GPU offload) ===
 # game_guard.rs, agent_runtime.rs, sensory_pipeline.rs, api/mod.rs
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl restart llama-server.service
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl stop llama-server.service
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl start llama-server.service
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl try-restart llama-server.service
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl is-active llama-server.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl restart llama-server.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl stop llama-server.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl start llama-server.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl try-restart llama-server.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl is-active llama-server.service
 
 # === STT SERVICE (Speech-to-text lifecycle) ===
 # api/mod.rs — start/stop/enable speech recognition
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl start whisper-stt.service
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl stop whisper-stt.service
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl restart whisper-stt.service
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl enable whisper-stt.service
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl is-active whisper-stt.service
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl is-enabled whisper-stt.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl start whisper-stt.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl stop whisper-stt.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl restart whisper-stt.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl enable whisper-stt.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl is-active whisper-stt.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl is-enabled whisper-stt.service
 
 # === SYSTEMD DAEMON RELOAD ===
 # Needed after writing drop-in configs
-lifeos ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
 
 # === BOOTC UPDATES (atomic OS updates) ===
 # updates.rs, health.rs, agent_runtime.rs
-lifeos ALL=(root) NOPASSWD: /usr/bin/bootc status --json
-lifeos ALL=(root) NOPASSWD: /usr/bin/bootc upgrade --check
-lifeos ALL=(root) NOPASSWD: /usr/bin/bootc upgrade
-lifeos ALL=(root) NOPASSWD: /usr/bin/bootc upgrade --apply
-lifeos ALL=(root) NOPASSWD: /usr/bin/bootc rollback
+%wheel ALL=(root) NOPASSWD: /usr/bin/bootc status --json
+%wheel ALL=(root) NOPASSWD: /usr/bin/bootc upgrade --check
+%wheel ALL=(root) NOPASSWD: /usr/bin/bootc upgrade
+%wheel ALL=(root) NOPASSWD: /usr/bin/bootc upgrade --apply
+%wheel ALL=(root) NOPASSWD: /usr/bin/bootc rollback
 
 # === FLATPAK SYSTEM INSTALLS ===
 # telegram_tools.rs, security_daemon.rs, proactive.rs
-lifeos ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub *
-lifeos ALL=(root) NOPASSWD: /usr/bin/flatpak uninstall --unused -y
-lifeos ALL=(root) NOPASSWD: /usr/bin/flatpak update --system -y --noninteractive
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub *
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak uninstall --unused -y
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak update --system -y --noninteractive
 
 # === HARDWARE DIAGNOSTICS (read-only) ===
 # security_daemon.rs, proactive.rs — SSD health monitoring
-lifeos ALL=(root) NOPASSWD: /usr/sbin/smartctl -j -a /dev/nvme*
-lifeos ALL=(root) NOPASSWD: /usr/sbin/smartctl -j -a /dev/sd*
+%wheel ALL=(root) NOPASSWD: /usr/sbin/smartctl -j -a /dev/nvme*
+%wheel ALL=(root) NOPASSWD: /usr/sbin/smartctl -j -a /dev/sd*
 
 # === NETWORK SECURITY (read-only) ===
 # proactive.rs — firewall status check
-lifeos ALL=(root) NOPASSWD: /usr/sbin/nft list ruleset
+%wheel ALL=(root) NOPASSWD: /usr/sbin/nft list ruleset
 
 # === NETWORK SECURITY (blocking — security_ai.rs) ===
-lifeos ALL=(root) NOPASSWD: /usr/sbin/nft add rule inet filter input ip saddr * drop
-lifeos ALL=(root) NOPASSWD: /usr/sbin/iptables -A INPUT -s * -j DROP
+%wheel ALL=(root) NOPASSWD: /usr/sbin/nft add rule inet filter input ip saddr * drop
+%wheel ALL=(root) NOPASSWD: /usr/sbin/iptables -A INPUT -s * -j DROP
 
 # === SYSTEM TUNER (sysctl optimization — system_tuner.rs) ===
-lifeos ALL=(root) NOPASSWD: /usr/sbin/sysctl -w *
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w *
 
 # === BATTERY MANAGER (charge thresholds — battery_manager.rs) ===
-lifeos ALL=(root) NOPASSWD: /usr/bin/tee /sys/class/power_supply/BAT*/charge_control_end_threshold
+%wheel ALL=(root) NOPASSWD: /usr/bin/tee /sys/class/power_supply/BAT*/charge_control_end_threshold
 
 # === PROCESS ISOLATION (security_ai.rs) ===
-lifeos ALL=(root) NOPASSWD: /usr/bin/kill -STOP *
+%wheel ALL=(root) NOPASSWD: /usr/bin/kill -STOP *
 
 # === RPM VERIFICATION (security_ai.rs system integrity) ===
-lifeos ALL=(root) NOPASSWD: /usr/bin/rpm -V *
+%wheel ALL=(root) NOPASSWD: /usr/bin/rpm -V *

@@ -226,6 +226,7 @@ RUN dnf -y install dnf5-plugins && \
 RUN dnf -y install --skip-unavailable \
     cosmic-desktop cosmic-files cosmic-term cosmic-edit cosmic-store \
     cosmic-screenshot cosmic-player cosmic-idle \
+    cosmic-initial-setup \
     xdg-desktop-portal-cosmic xdg-desktop-portal-gtk xdg-desktop-portal-wlr \
     xdg-user-dirs \
     NetworkManager NetworkManager-wifi wpa_supplicant wireless-regdb iwd \
@@ -462,7 +463,8 @@ RUN set -eux && \
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
 RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
     chmod 0700 /var/roothome && \
-    chown 1000:1000 /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos
+    chmod 0775 /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos && \
+    chgrp wheel /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos
 
 COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
 COPY --from=piper-voice-builder /out/models/piper /usr/share/lifeos/models/piper
@@ -497,8 +499,8 @@ RUN set -eux && \
 COPY image/files/etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml.default
 COPY image/files/etc/lifeos/channels.toml       /etc/lifeos/channels.toml
 COPY image/files/etc/lifeos/llama-server.env    /etc/lifeos/llama-server.env
-# Game Guard needs to toggle LIFEOS_AI_GPU_LAYERS at runtime (lifeosd runs as uid 1000)
-RUN chown 1000:1000 /etc/lifeos/llama-server.env
+# Game Guard needs to toggle LIFEOS_AI_GPU_LAYERS at runtime (lifeosd runs as logged-in user)
+RUN chgrp wheel /etc/lifeos/llama-server.env && chmod 0664 /etc/lifeos/llama-server.env
 COPY image/files/etc/lifeos/maintenance-cleanup.env /etc/lifeos/maintenance-cleanup.env
 COPY image/files/etc/lifeos/tuf/root.json       /etc/lifeos/tuf/root.json
 COPY image/files/etc/lifeos/tuf/timestamp.json  /etc/lifeos/tuf/timestamp.json
@@ -617,7 +619,7 @@ RUN set -eux && \
     test -f /usr/share/lifeos/models/rustpotter/axi.rpw && \
     echo ">>> Pre-trained wake word model generated successfully"
 
-# Axi polkit: allow lifeosd to manage its own services without password
+# Axi polkit: allow wheel group to manage LifeOS services without password
 COPY image/files/etc/polkit-1/rules.d/40-lifeos-axi.rules /etc/polkit-1/rules.d/40-lifeos-axi.rules
 # Game Guard: polkit + sudoers for llama-server GPU offload
 COPY image/files/etc/polkit-1/rules.d/50-lifeos-llama-server.rules /etc/polkit-1/rules.d/50-lifeos-llama-server.rules

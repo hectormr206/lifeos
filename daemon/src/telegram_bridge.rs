@@ -55,6 +55,7 @@ mod inner {
     #[derive(Clone)]
     struct BotCtx {
         tool_ctx: ToolContext,
+        dedupe: Arc<crate::message_dedupe::MessageDedupe>,
         allowed_ids: Vec<i64>,
         bot_username: String,
     }
@@ -238,6 +239,7 @@ mod inner {
 
         let ctx = BotCtx {
             tool_ctx,
+            dedupe: Arc::new(crate::message_dedupe::MessageDedupe::new()),
             allowed_ids: config.allowed_chat_ids,
             bot_username,
         };
@@ -285,6 +287,21 @@ mod inner {
             }
         } else if !ctx.allowed_ids.is_empty() && !ctx.allowed_ids.contains(&chat_id.0) {
             bot.send_message(chat_id, "No autorizado.").await?;
+            return Ok(());
+        }
+
+        // Deduplication check — drop retried/duplicate messages
+        let dedupe_key = crate::message_dedupe::DedupeKey {
+            channel: "telegram".to_string(),
+            peer_id: chat_id.0.to_string(),
+            message_id: msg.id.0.to_string(),
+        };
+        if ctx.dedupe.is_duplicate(dedupe_key).await {
+            log::debug!(
+                "Telegram: duplicate message {} from {}, skipping",
+                msg.id.0,
+                chat_id.0
+            );
             return Ok(());
         }
 

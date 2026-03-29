@@ -314,10 +314,8 @@ generate_iso() {
         bib_opts+=("--target-arch" "aarch64")
     fi
     
-    # Generar un hash válido para la contraseña 'lifeos'
-    local pass_hash
-    pass_hash=$(python3 -c "import crypt; print(crypt.crypt('lifeos', crypt.mksalt(crypt.METHOD_SHA512)))" 2>/dev/null || \
-                openssl passwd -6 lifeos)
+    # No hardcoded user — Anaconda / cosmic-initial-setup will prompt the user
+    # to create their own account during installation.
 
     local iso_volume_id="${LIFEOS_ISO_VOLUME_ID:-LIFEOS_INSTALL}"
     local iso_application_id="${LIFEOS_ISO_APPLICATION_ID:-LIFEOS_INSTALLER}"
@@ -338,7 +336,6 @@ keyboard latam
 timezone UTC --utc
 network --bootproto=dhcp --device=link --activate --onboot=on
 rootpw --lock
-user --name=lifeos --password=${pass_hash} --iscrypted --groups=wheel
 bootloader --append="quiet rhgb"
 reboot
 """
@@ -356,14 +353,6 @@ CONFIG
 {
   "blueprint": {
     "customizations": {
-      "user": [
-        {
-          "name": "lifeos",
-          "password": "${pass_hash}",
-          "key": "",
-          "groups": ["wheel"]
-        }
-      ],
       "kernel": {
         "append": "quiet rhgb"
       },
@@ -384,14 +373,6 @@ CONFIG
 {
   "blueprint": {
     "customizations": {
-      "user": [
-        {
-          "name": "lifeos",
-          "password": "${pass_hash}",
-          "key": "",
-          "groups": ["wheel"]
-        }
-      ],
       "kernel": {
         "append": "quiet rhgb"
       },
@@ -643,7 +624,7 @@ main() {
             ;;
     esac
     echo ""
-    echo "  Default login: lifeos / lifeos"
+    echo "  User and password: configured during installation"
     echo "  Security baseline: Secure Boot + LUKS2 enforced at runtime"
     echo "  (create /etc/lifeos/allow-insecure-platform only for lab/dev bypass)"
 }

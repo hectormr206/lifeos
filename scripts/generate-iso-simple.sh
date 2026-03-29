@@ -261,9 +261,8 @@ fi
 
 log "Output efectivo: $OUTPUT_DIR"
 
-# Generar hash de contraseña para el usuario default
-PASS_HASH=$(python3 -c "import crypt; print(crypt.crypt('lifeos', crypt.mksalt(crypt.METHOD_SHA512)))" 2>/dev/null || \
-            openssl passwd -6 lifeos)
+# No hardcoded user — Anaconda / cosmic-initial-setup will prompt the user
+# to create their own account during installation.
 
 CONFIG_FILE="$OUTPUT_DIR/config.json"
 CONFIG_TARGET="/config.json"
@@ -279,14 +278,8 @@ keyboard latam
 timezone UTC --utc
 network --bootproto=dhcp --device=link --activate --onboot=on
 rootpw --lock
-user --name=lifeos --password=${PASS_HASH} --iscrypted --groups=wheel
 bootloader --append="quiet rhgb"
 reboot
-
-%post --erroronfail
-# Force password change on first login — the default password is well-known.
-chage -d 0 lifeos
-%end
 """
 
 [customizations.iso]
@@ -299,13 +292,6 @@ cat > "$CONFIG_FILE" << CONFIGEOF
 {
   "blueprint": {
     "customizations": {
-      "user": [
-        {
-          "name": "lifeos",
-          "password": "${PASS_HASH}",
-          "groups": ["wheel"]
-        }
-      ],
       "kernel": {
         "append": "quiet rhgb"
       },
@@ -323,13 +309,6 @@ cat > "$CONFIG_FILE" << CONFIGEOF
 {
   "blueprint": {
     "customizations": {
-      "user": [
-        {
-          "name": "lifeos",
-          "password": "${PASS_HASH}",
-          "groups": ["wheel"]
-        }
-      ],
       "kernel": {
         "append": "quiet rhgb"
       }
@@ -340,8 +319,7 @@ CONFIGEOF
 fi
 
 success "Configuración generada"
-echo "  Usuario: lifeos"
-echo "  Password: lifeos (must change on first login)"
+echo "  User and password: configured during installation"
 echo "  Install mode: $INSTALL_MODE"
 if [[ "$BUILD_TYPE" == "iso" && "$INSTALL_MODE" == "interactive" ]]; then
     echo "  Disco destino: seleccion manual en Anaconda"
@@ -497,7 +475,7 @@ case "$BUILD_TYPE" in
 esac
 
 echo ""
-echo "  Usuario: lifeos / Password: lifeos"
+echo "  User and password: configured during installation"
 if [[ "$BUILD_TYPE" == "iso" && "$INSTALL_MODE" == "unattended" ]]; then
     warn "Modo unattended puede sobrescribir discos sin pedir confirmación."
 fi

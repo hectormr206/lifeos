@@ -1497,6 +1497,11 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/api/v1/events/stream", get(event_stream))
         .with_state(state.clone());
 
+    // WebSocket control plane — handles its own auth on first message.
+    let ws_route = Router::new()
+        .route("/ws", get(crate::ws_gateway::ws_handler))
+        .with_state(state.clone());
+
     // Dashboard static files (no auth required — local-only server).
     let dashboard_dir = std::env::var("LIFEOS_DASHBOARD_DIR")
         .unwrap_or_else(|_| "daemon/static/dashboard".to_string());
@@ -1508,6 +1513,7 @@ pub fn create_router(state: ApiState) -> Router {
     Router::new()
         .nest("/api/v1", api_v1)
         .merge(sse_route)
+        .merge(ws_route)
         .merge(dashboard_bootstrap_route)
         .nest_service("/dashboard", dashboard_service)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
