@@ -282,6 +282,11 @@ rootpw --lock
 user --name=lifeos --password=${PASS_HASH} --iscrypted --groups=wheel
 bootloader --append="quiet rhgb"
 reboot
+
+%post --erroronfail
+# Force password change on first login — the default password is well-known.
+chage -d 0 lifeos
+%end
 """
 
 [customizations.iso]
@@ -336,7 +341,7 @@ fi
 
 success "Configuración generada"
 echo "  Usuario: lifeos"
-echo "  Password: lifeos"
+echo "  Password: lifeos (must change on first login)"
 echo "  Install mode: $INSTALL_MODE"
 if [[ "$BUILD_TYPE" == "iso" && "$INSTALL_MODE" == "interactive" ]]; then
     echo "  Disco destino: seleccion manual en Anaconda"

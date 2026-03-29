@@ -323,5 +323,5 @@ if [[ "$BUILD_TYPE" == "iso" ]]; then
         echo "  3. Install unattended (automatic partitioning)"
     fi
     echo "  4. After install, run: sudo life check"
-    echo "     (user: lifeos / password: lifeos)"
+    echo "     (user: lifeos / password: lifeos — must change on first login)"
 fi

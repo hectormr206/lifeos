@@ -1338,9 +1338,12 @@ Herramientas:
                 expanded, expanded
             )
         } else {
+            // Sanitize pattern: allow glob chars (*, ?, [, ]) but reject shell injection chars
+            let bad_chars = [';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\'', '"', '\\', '\n'];
+            let safe_pattern: String = pattern.chars().filter(|c| !bad_chars.contains(c)).collect();
             format!(
                 "ls -la '{}'/{} 2>/dev/null; echo '---'; ls '{}' 2>/dev/null | wc -l",
-                expanded, pattern, expanded
+                expanded, safe_pattern, expanded
             )
         };
 

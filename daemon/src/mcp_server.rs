@@ -215,6 +215,27 @@ pub async fn call_tool(
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'command' parameter")?;
 
+            // Blocklist check — same patterns as telegram_tools.rs
+            let lower = command.to_lowercase();
+            let blocked = [
+                "rm -rf /",
+                "mkfs",
+                "dd if=",
+                ":(){",
+                "fork bomb",
+                "chmod -R 777 /",
+                "mv /* ",
+                ">(){ :|:",
+            ];
+            for pattern in &blocked {
+                if lower.contains(pattern) {
+                    return Err(format!(
+                        "Command blocked by security policy: {}",
+                        pattern
+                    ));
+                }
+            }
+
             // Execute with risk gating
             let output = tokio::process::Command::new("sh")
                 .arg("-c")

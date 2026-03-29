@@ -100,10 +100,39 @@ impl ReliabilityTracker {
         )
         .map_err(|e| format!("Failed to initialise reliability tables: {e}"))?;
 
+        // Forward-compatible migrations for OS upgrades.
+        Self::run_migrations(&conn)
+            .map_err(|e| format!("Failed to run reliability migrations: {e}"))?;
+
         Ok(Self {
             db: Mutex::new(conn),
             db_path,
         })
+    }
+
+    /// Apply forward-compatible schema migrations for OS upgrades.
+    fn run_migrations(db: &Connection) -> Result<(), String> {
+        let has_column = |table: &str, col: &str| -> bool {
+            db.prepare(&format!(
+                "SELECT 1 FROM pragma_table_info('{}') WHERE name = ?1",
+                table
+            ))
+            .and_then(|mut stmt| stmt.exists(params![col]))
+            .unwrap_or(false)
+        };
+
+        // Migration: add `duration_ms` column for performance tracking.
+        if !has_column("task_outcomes", "duration_ms") {
+            db.execute_batch("ALTER TABLE task_outcomes ADD COLUMN duration_ms INTEGER;")
+                .map_err(|e| format!("migration duration_ms: {e}"))?;
+        }
+        // Migration: add `category` column for failure categorization.
+        if !has_column("task_outcomes", "category") {
+            db.execute_batch("ALTER TABLE task_outcomes ADD COLUMN category TEXT;")
+                .map_err(|e| format!("migration category: {e}"))?;
+        }
+
+        Ok(())
     }
 
     /// Persist a task outcome.

@@ -56,10 +56,38 @@ impl ScheduledTaskManager {
             );",
         )?;
 
+        // Forward-compatible migrations for OS upgrades.
+        Self::run_migrations(&conn)?;
+
         info!("Scheduled tasks manager initialized");
         Ok(Self {
             db: Mutex::new(conn),
         })
+    }
+
+    /// Apply forward-compatible schema migrations for OS upgrades.
+    fn run_migrations(db: &Connection) -> Result<()> {
+        let has_column = |table: &str, col: &str| -> bool {
+            db.prepare(&format!(
+                "SELECT 1 FROM pragma_table_info('{}') WHERE name = ?1",
+                table
+            ))
+            .and_then(|mut stmt| stmt.exists(params![col]))
+            .unwrap_or(false)
+        };
+
+        // Migration: add `run_count` column to track how many times the task has run.
+        if !has_column("scheduled_tasks", "run_count") {
+            db.execute_batch(
+                "ALTER TABLE scheduled_tasks ADD COLUMN run_count INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        // Migration: add `last_error` column for debugging failed scheduled tasks.
+        if !has_column("scheduled_tasks", "last_error") {
+            db.execute_batch("ALTER TABLE scheduled_tasks ADD COLUMN last_error TEXT;")?;
+        }
+
+        Ok(())
     }
 
     /// Add a new scheduled task.

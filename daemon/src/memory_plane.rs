@@ -193,11 +193,59 @@ impl MemoryPlaneManager {
         db.execute_batch(SCHEMA)
             .context("Failed to initialize memory schema")?;
 
+        // Run forward-compatible migrations for columns added after initial release.
+        Self::run_migrations(&db)?;
+
         Ok(Self {
             data_dir,
             db_path,
             ai_manager,
         })
+    }
+
+    /// Apply forward-compatible schema migrations for upgrades.
+    ///
+    /// Each migration uses `ALTER TABLE ... ADD COLUMN` wrapped in a check so it
+    /// is idempotent — safe to run on every startup regardless of the current
+    /// schema version.  SQLite does not support `ADD COLUMN IF NOT EXISTS`, so
+    /// we probe `pragma_table_info` first.
+    fn run_migrations(db: &Connection) -> Result<()> {
+        // Helper: returns true if `table` already has a column called `col`.
+        let has_column = |table: &str, col: &str| -> bool {
+            db.prepare(&format!("SELECT 1 FROM pragma_table_info('{}') WHERE name = ?1", table))
+                .and_then(|mut stmt| stmt.exists(rusqlite::params![col]))
+                .unwrap_or(false)
+        };
+
+        // -- memory_entries migrations (added after v0.2) --
+        if !has_column("memory_entries", "embedding_source") {
+            db.execute_batch(
+                "ALTER TABLE memory_entries ADD COLUMN embedding_source TEXT NOT NULL DEFAULT 'fallback';",
+            )?;
+        }
+        if !has_column("memory_entries", "last_accessed") {
+            db.execute_batch("ALTER TABLE memory_entries ADD COLUMN last_accessed TEXT;")?;
+        }
+        if !has_column("memory_entries", "access_count") {
+            db.execute_batch(
+                "ALTER TABLE memory_entries ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        if !has_column("memory_entries", "mood") {
+            db.execute_batch("ALTER TABLE memory_entries ADD COLUMN mood TEXT;")?;
+        }
+
+        // -- knowledge_graph migrations --
+        if !has_column("knowledge_graph", "confidence") {
+            db.execute_batch(
+                "ALTER TABLE knowledge_graph ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0;",
+            )?;
+        }
+        if !has_column("knowledge_graph", "source_entry_id") {
+            db.execute_batch("ALTER TABLE knowledge_graph ADD COLUMN source_entry_id TEXT;")?;
+        }
+
+        Ok(())
     }
 
     fn open_db(db_path: &Path) -> Result<Connection> {
@@ -1484,7 +1532,51 @@ fn derive_machine_key() -> String {
         .to_string();
 
     if machine_id.is_empty() {
-        // Fallback to hardcoded key only if machine-id is unavailable
+        // Try to load or generate a persistent key file instead of using a hardcoded fallback
+        let key_path = std::env::var("LIFEOS_DATA_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("/var/lib/lifeos"))
+            .join("memory.key");
+
+        // Try reading an existing key file
+        if let Ok(existing) = std::fs::read_to_string(&key_path) {
+            let trimmed = existing.trim().to_string();
+            if !trimmed.is_empty() {
+                return trimmed;
+            }
+        }
+
+        // Generate a new random key, save it with restrictive permissions
+        let mut rng_bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut rng_bytes);
+        let generated_key: String = rng_bytes.iter().map(|b| format!("{:02x}", b)).collect();
+
+        if let Some(parent) = key_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        // Write with 0o600 permissions
+        let wrote_ok = (|| -> std::io::Result<()> {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&key_path)?;
+            std::io::Write::write_all(&mut f, generated_key.as_bytes())?;
+            Ok(())
+        })();
+
+        if wrote_ok.is_ok() {
+            return generated_key;
+        }
+
+        // Only fall back to hardcoded key if both machine-id AND file generation fail
+        log::warn!(
+            "Could not read /etc/machine-id or create {}: falling back to default memory key",
+            key_path.display()
+        );
         return DEFAULT_MEMORY_KEY.to_string();
     }
 

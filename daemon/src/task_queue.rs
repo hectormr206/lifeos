@@ -113,12 +113,48 @@ impl TaskQueue {
             CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);",
         )?;
 
+        // Forward-compatible migrations for columns added after initial release.
+        Self::run_migrations(&conn)?;
+
         info!("Task queue initialized at {}", db_path.display());
 
         Ok(Self {
             db: Mutex::new(conn),
             db_path,
         })
+    }
+
+    /// Apply forward-compatible schema migrations for OS upgrades.
+    fn run_migrations(db: &Connection) -> Result<()> {
+        let has_column = |table: &str, col: &str| -> bool {
+            db.prepare(&format!(
+                "SELECT 1 FROM pragma_table_info('{}') WHERE name = ?1",
+                table
+            ))
+            .and_then(|mut stmt| stmt.exists(params![col]))
+            .unwrap_or(false)
+        };
+
+        // Example future migration: add a `tags` column to tasks.
+        // Uncomment when the column is introduced:
+        // if !has_column("tasks", "tags") {
+        //     db.execute_batch("ALTER TABLE tasks ADD COLUMN tags TEXT;")?;
+        // }
+
+        // Ensure `plan`, `result`, `error` columns exist (added after initial schema).
+        for col in ["plan", "result", "error"] {
+            if !has_column("tasks", col) {
+                db.execute_batch(&format!("ALTER TABLE tasks ADD COLUMN {} TEXT;", col))?;
+            }
+        }
+        if !has_column("tasks", "started_at") {
+            db.execute_batch("ALTER TABLE tasks ADD COLUMN started_at TEXT;")?;
+        }
+        if !has_column("tasks", "completed_at") {
+            db.execute_batch("ALTER TABLE tasks ADD COLUMN completed_at TEXT;")?;
+        }
+
+        Ok(())
     }
 
     /// Add a new task to the queue.

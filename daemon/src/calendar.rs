@@ -45,10 +45,36 @@ impl CalendarManager {
             CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_time);",
         )?;
 
+        // Forward-compatible migrations for OS upgrades.
+        Self::run_migrations(&conn)?;
+
         info!("Calendar manager initialized");
         Ok(Self {
             db: Mutex::new(conn),
         })
+    }
+
+    /// Apply forward-compatible schema migrations for OS upgrades.
+    fn run_migrations(db: &Connection) -> Result<()> {
+        let has_column = |table: &str, col: &str| -> bool {
+            db.prepare(&format!(
+                "SELECT 1 FROM pragma_table_info('{}') WHERE name = ?1",
+                table
+            ))
+            .and_then(|mut stmt| stmt.exists(params![col]))
+            .unwrap_or(false)
+        };
+
+        // Migration: add `location` column (added after v0.2).
+        if !has_column("events", "location") {
+            db.execute_batch("ALTER TABLE events ADD COLUMN location TEXT;")?;
+        }
+        // Migration: add `recurrence` column for recurring events.
+        if !has_column("events", "recurrence") {
+            db.execute_batch("ALTER TABLE events ADD COLUMN recurrence TEXT;")?;
+        }
+
+        Ok(())
     }
 
     /// Add a new event.

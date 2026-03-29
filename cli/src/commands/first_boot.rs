@@ -410,8 +410,17 @@ async fn run_interactive_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBoo
         std::process::exit(0);
     }
 
-    // Store password temporarily for user creation
-    std::fs::write("/tmp/lifeos-setup-password", password)?;
+    // Store password temporarily for user creation (restricted permissions)
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open("/tmp/lifeos-setup-password")?;
+        std::io::Write::write_all(&mut f, password.as_bytes())?;
+    }
 
     Ok(FirstBootState {
         hostname,
@@ -458,7 +467,16 @@ async fn run_gui_wizard(args: &FirstBootArgs) -> anyhow::Result<FirstBootState> 
     )?;
     let timezone = zenity_entry("Timezone", &detect_timezone(), false)?;
     let password = zenity_entry("Password", "", true)?;
-    std::fs::write("/tmp/lifeos-setup-password", password)?;
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open("/tmp/lifeos-setup-password")?;
+        std::io::Write::write_all(&mut f, password.as_bytes())?;
+    }
 
     let theme = if zenity_select("Theme", &["Simple", "Pro"], 0)? == "Pro" {
         ThemeChoice::Pro

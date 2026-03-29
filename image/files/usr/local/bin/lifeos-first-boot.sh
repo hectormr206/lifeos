@@ -92,6 +92,37 @@ check_first_boot() {
     fi
 }
 
+# Ensure the default 'lifeos' user cannot keep the well-known password.
+# On kickstart installs `chage -d 0` is run in %post, but for raw/qcow2
+# or direct bootc deployments the kickstart does not execute, so we
+# enforce it here as well (idempotent).
+enforce_password_change() {
+    if id lifeos &>/dev/null; then
+        # Check if the password has already been changed by the user.
+        # `chage -l` shows "Last password change" — if it is "password must be changed",
+        # the user was already forced (or this is a re-run).  We only force when the
+        # last-change date is epoch-0 OR the shadow entry still holds the well-known hash.
+        local last_change
+        last_change="$(chage -l lifeos 2>/dev/null | grep 'Last password change' || true)"
+        if echo "$last_change" | grep -qi 'must be changed'; then
+            log "Password change already enforced for user lifeos"
+        else
+            # Check if current password matches the well-known default.
+            local shadow_hash
+            shadow_hash="$(getent shadow lifeos 2>/dev/null | cut -d: -f2 || true)"
+            # If we can verify it is the default, or this is the very first boot, force change.
+            if [[ -z "$shadow_hash" ]] || \
+               python3 -c "import crypt; import sys; sys.exit(0 if crypt.crypt('lifeos','${shadow_hash}')=='${shadow_hash}' else 1)" 2>/dev/null; then
+                chage -d 0 lifeos 2>/dev/null && \
+                    log_success "Forced password change on next login for user lifeos" || \
+                    log_warn "Could not enforce password change (non-fatal)"
+            else
+                log "User lifeos has a non-default password — skipping forced change"
+            fi
+        fi
+    fi
+}
+
 # System setup
 system_setup() {
     log "Performing system setup..."
@@ -387,6 +418,7 @@ main() {
     log "Starting LifeOS first-boot setup..."
     log "Log file: $LOG_FILE"
 
+    enforce_password_change
     system_setup
     configure_gpu
     setup_ai
