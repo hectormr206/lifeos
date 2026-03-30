@@ -868,3 +868,28 @@ evadir restricciones de ToS de CLIs de IA no lo tiene.
 - [RPA legal issues (Lexology)](https://www.lexology.com/library/detail.aspx?g=5ea86cc2-b6d6-4572-8be0-f47ac93a4663)
 - [BeCAPTCHA: Bot detection via behavioral biometrics](https://www.sciencedirect.com/science/article/abs/pii/S0952197620303274)
 - [ydotool (GitHub)](https://github.com/ReimuNotMoe/ydotool)
+
+---
+
+## 11. Resumen ejecutivo: ¿Puede Axi usar CLIs con teclado y raton como humano?
+
+| CLI | API/Subprocess | Computer Use (teclado+pantalla) | Recomendacion |
+|-----|---------------|-------------------------------|---------------|
+| **Gemini CLI** | **LEGAL** (Apache 2.0, headless) | Innecesario — subprocess es mejor | Usar subprocess |
+| **Codex CLI** | **LEGAL** (`codex exec` oficial) | Innecesario — exec es mejor | Usar subprocess |
+| **Claude Code** | **PROHIBIDO** (ToS 3.7) | **ALTO RIESGO** — ToS prohibe "bots, scripts, or otherwise" | **NO USAR** |
+| **OpenCode** | **LEGAL** (MIT, `serve` mode) | Innecesario | Usar HTTP API |
+
+### La verdad incomoda
+
+La deteccion ocurre en el **SERVIDOR**, no en el cliente. Aunque `ydotool` es indetectable por el CLI (parece un humano tecleando), el servidor de Anthropic/Google/OpenAI ve los mismos patrones de uso anomalos: frecuencia, volumen, horarios. Ser indetectable en el teclado **no te salva** si el servidor detecta uso automatizado.
+
+### Conclusion final
+
+**No vale la pena usar computer-use para CLIs de IA** — es mas lento, mas fragil, y no reduce el riesgo de deteccion. Pero **si vale la pena para apps GUI que no tienen API** (formularios web, apps de escritorio, etc.). Eso es exactamente para lo que diseñamos las Fases N-O de desktop automation.
+
+### La estrategia de 3 niveles para LifeOS:
+
+1. **API directa** → lo mejor (rapido, legal, confiable)
+2. **Subprocess CLI** → para Gemini/Codex cuando no hay API key
+3. **Computer use** → solo para apps SIN API (no para CLIs de IA)
