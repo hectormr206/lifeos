@@ -123,9 +123,9 @@ pub async fn run_doctor(data_dir: &Path) -> Vec<DoctorFinding> {
             match rusqlite::Connection::open(&db_path) {
                 Ok(conn) => {
                     // Full integrity check (not just SELECT 1)
-                    match conn.query_row("PRAGMA integrity_check", [], |row| {
-                        row.get::<_, String>(0)
-                    }) {
+                    match conn
+                        .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                    {
                         Ok(ref result) if result == "ok" => {
                             // Database is healthy
                         }
@@ -133,10 +133,7 @@ pub async fn run_doctor(data_dir: &Path) -> Vec<DoctorFinding> {
                             findings.push(DoctorFinding {
                                 severity: Severity::Error,
                                 component: "database".into(),
-                                message: format!(
-                                    "{} integrity check failed: {}",
-                                    db_name, result
-                                ),
+                                message: format!("{} integrity check failed: {}", db_name, result),
                                 fix: Some(format!(
                                     "Backup and recreate: cp {} {}.corrupt",
                                     db_path.display(),
@@ -193,16 +190,11 @@ pub async fn run_doctor(data_dir: &Path) -> Vec<DoctorFinding> {
     {
         use sysinfo::Disks;
         let disks = Disks::new_with_refreshed_list();
-        let data_mount = data_dir
-            .to_str()
-            .unwrap_or("/var")
-            .as_bytes();
+        let data_mount = data_dir.to_str().unwrap_or("/var").as_bytes();
         // Find the disk that contains data_dir (longest mount-point prefix match)
         let best_disk = disks
             .iter()
-            .filter(|d| {
-                data_dir.starts_with(d.mount_point())
-            })
+            .filter(|d| data_dir.starts_with(d.mount_point()))
             .max_by_key(|d| d.mount_point().as_os_str().len());
         if let Some(disk) = best_disk {
             let free_gb = disk.available_space() as f64 / 1_073_741_824.0;
@@ -239,11 +231,7 @@ pub async fn run_doctor(data_dir: &Path) -> Vec<DoctorFinding> {
             .timeout(std::time::Duration::from_secs(3))
             .build();
         if let Ok(client) = client {
-            match client
-                .get("http://127.0.0.1:8082/health")
-                .send()
-                .await
-            {
+            match client.get("http://127.0.0.1:8082/health").send().await {
                 Ok(resp) if resp.status().is_success() => {
                     info!("[doctor] llama-server is reachable");
                 }
@@ -251,13 +239,8 @@ pub async fn run_doctor(data_dir: &Path) -> Vec<DoctorFinding> {
                     findings.push(DoctorFinding {
                         severity: Severity::Warning,
                         component: "llama-server".into(),
-                        message: format!(
-                            "llama-server returned HTTP {}",
-                            resp.status()
-                        ),
-                        fix: Some(
-                            "sudo systemctl restart llama-server".into(),
-                        ),
+                        message: format!("llama-server returned HTTP {}", resp.status()),
+                        fix: Some("sudo systemctl restart llama-server".into()),
                     });
                 }
                 Err(_) => {
@@ -265,9 +248,7 @@ pub async fn run_doctor(data_dir: &Path) -> Vec<DoctorFinding> {
                         severity: Severity::Warning,
                         component: "llama-server".into(),
                         message: "llama-server not reachable on :8082".into(),
-                        fix: Some(
-                            "sudo systemctl restart llama-server".into(),
-                        ),
+                        fix: Some("sudo systemctl restart llama-server".into()),
                     });
                 }
             }
