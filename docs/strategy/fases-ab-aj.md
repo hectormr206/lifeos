@@ -493,6 +493,78 @@ Layer 0: Heartbeat (systemd watchdog)
 
 ---
 
+### Fase AP — Axi Siempre Libre: Async Workers + Sub-Agentes (CRITICA)
+
+**Objetivo:** Que Axi NUNCA se bloquee esperando una tarea. Cuando le pides algo que tarda (resumen de PDF, busqueda web, ejecucion de codigo), Axi delega a un worker asincrono y queda libre al instante para atender tu siguiente mensaje. Los workers pueden tener sub-workers para tareas complejas.
+
+**Por que es critico:** Hoy Axi se bloquea 3-120 segundos por cada mensaje. Si le pides algo pesado, no puedes ni preguntarle la hora mientras tanto. Esto destruye la experiencia de "asistente siempre disponible". OpenClaw y Claude Code procesan multiples tareas en paralelo — LifeOS debe hacer lo mismo.
+
+**Arquitectura:**
+```
+Usuario manda mensaje
+  ↓
+Axi (coordinator) — SIEMPRE libre, responde en <1 segundo
+  ├── Mensaje simple? (saludo, hora, status) → responde directo
+  └── Tarea larga? → spawn worker asincrono
+       ↓
+       Worker ejecuta: LLM call + tools + iteraciones
+       ├── Sub-tarea? → spawn sub-worker
+       │    └── Sub-sub-tarea? → spawn otro sub-worker
+       └── Termina → envia resultado a Telegram
+           (Axi ya respondio otros 5 mensajes mientras tanto)
+```
+
+**AP.1 — Clasificador Rapido (Axi como Coordinador)**
+- [ ] Antes de llamar agentic_chat, clasificar el mensaje en <100ms:
+  - `instant`: saludos, hora, status, help → responder directo sin LLM
+  - `quick`: preguntas simples → LLM call rapido (max 5s timeout)
+  - `task`: tareas que requieren tools → delegar a worker asincrono
+- [ ] Heuristicas de clasificacion: longitud del mensaje, keywords (haz, ejecuta, busca, resume, analiza), presencia de archivos/fotos
+- [ ] Si es `task`, responder inmediatamente: "Estoy en eso, te aviso cuando termine" y hacer spawn del worker
+
+**AP.2 — Worker Pool Asincrono**
+- [ ] `tokio::spawn` por cada tarea larga — no bloquea el handler de Telegram
+- [ ] Cada worker tiene su propio contexto (chat_id, history, tools)
+- [ ] Limite de workers concurrentes por usuario (default: 3)
+- [ ] Cuando el worker termina, envia el resultado al chat via `bot.send_message()`
+- [ ] Si el worker falla, notifica: "No pude completar la tarea: {error}"
+- [ ] Progress updates: el worker envia mensajes parciales ("Analizando archivo... Buscando en internet... Generando resumen...")
+
+**AP.3 — Sub-Agentes con Delegacion**
+- [ ] Un worker puede crear sub-workers para sub-tareas:
+  - "Investiga X" → worker principal delega a sub-worker de busqueda web
+  - "Resume este PDF y busca articulos relacionados" → 2 sub-workers en paralelo
+- [ ] Sub-workers reportan al worker padre, no directamente al usuario
+- [ ] El worker padre consolida resultados y envia respuesta unificada
+- [ ] Profundidad maxima: 3 niveles (Axi → worker → sub-worker → sub-sub-worker)
+
+**AP.4 — Cola de Mensajes Inteligente**
+- [ ] Si llega un nuevo mensaje mientras un worker procesa, NO esperar — procesarlo inmediatamente
+- [ ] Cada mensaje se clasifica y rutea independientemente
+- [ ] Si el usuario manda "cancela" o "para", cancelar el worker activo
+- [ ] Si el usuario manda un mensaje relacionado con la tarea en curso, alimentarlo como contexto al worker (steering)
+
+**AP.5 — Dashboard de Workers**
+- [ ] Seccion en el dashboard mostrando workers activos con:
+  - Tarea en ejecucion
+  - Tiempo transcurrido
+  - Sub-workers activos
+  - Boton "Cancelar"
+- [ ] Evento WebSocket `worker.started`, `worker.progress`, `worker.completed`, `worker.failed`
+
+**AP.6 — Respuestas Instantaneas sin LLM**
+- [ ] Mapa de respuestas rapidas que NO necesitan LLM:
+  - "hola/hi/hey" → "Hola! En que te puedo ayudar?"
+  - "que hora es" → current_time() directo
+  - "/status" → system metrics directo (ya implementado en AO.1)
+  - "/help" → texto de ayuda estatico
+  - "gracias" → "De nada! Aqui estoy."
+- [ ] Estas respuestas se dan en <50ms, sin latencia de LLM
+
+**Prioridad:** CRITICA — AP.1 y AP.2 son los mas importantes. Sin esto, cada mejora que hagamos a Axi (mas tools, mas providers) solo lo hace MAS LENTO. Con workers asincronos, Axi escala horizontalmente.
+
+---
+
 ### Fase AM — Reloj Perfecto: Timezone-Aware Time Handling (CRITICA)
 
 **Objetivo:** Que Axi SIEMPRE sepa la fecha, hora y zona horaria exacta del usuario. Que nunca se equivoque al programar recordatorios, consultar memorias por fecha, o interpretar expresiones como "mañana a las 3pm". Que todas las memorias guarden la hora correcta para consultas futuras precisas.

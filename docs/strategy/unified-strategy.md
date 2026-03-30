@@ -22,7 +22,9 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | **AK** | **COMPLETADA** | Project Axolotl: 5-layer self-healing (watchdog, safe mode, config store, circuit breaker, sentinel, SQLite) |
 | **AL** | **COMPLETADA** | Hardening: SSRF guard, security tests, coverage ratchet, progress events, enhanced doctor, troubleshooting |
 | **AM** | **COMPLETADA** | Reloj Perfecto: timezone-aware time en system prompts, memorias, calendario, cron |
-| **AN** | **PROXIMA** | **Provider Marketplace: agregar/quitar modelos via Telegram, hot-reload, auto-discovery** |
+| **AN** | **PROXIMA** | Provider Marketplace: agregar/quitar modelos via Telegram, hot-reload, auto-discovery |
+| **AO** | **PROXIMA** | Telegram UX: reply-to-bot, set_my_commands, markdown, threads, send_file |
+| **AP** | **CRITICA** | **Axi Siempre Libre: async workers + sub-agentes + clasificador rapido** |
 | *AH/AI/AJ* | *Vision futura* | *Firefox ext, LibreOffice AI, Cloud hosting — sacadas del consecutivo, revisar post-launch* |
 
 ## Como usar esta documentacion
