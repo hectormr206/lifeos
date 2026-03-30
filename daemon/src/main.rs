@@ -43,6 +43,8 @@ mod comm_bridges;
 mod computer_use;
 mod config_store;
 #[allow(dead_code)]
+mod config_validator;
+#[allow(dead_code)]
 mod connector_registry;
 mod context_policies;
 #[allow(dead_code)]

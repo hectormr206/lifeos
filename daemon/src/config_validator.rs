@@ -100,15 +100,13 @@ pub async fn run_doctor(data_dir: &Path) -> Vec<DoctorFinding> {
     let config_files = ["/etc/lifeos/llm-providers.toml"];
     for path in &config_files {
         let p = Path::new(path);
-        if p.exists() {
-            if validate_toml(p).is_err() {
-                findings.push(DoctorFinding {
-                    severity: Severity::Error,
-                    component: "config".into(),
-                    message: format!("{} is invalid TOML", path),
-                    fix: Some(format!("Check {}.bak.1 for backup", path)),
-                });
-            }
+        if p.exists() && validate_toml(p).is_err() {
+            findings.push(DoctorFinding {
+                severity: Severity::Error,
+                component: "config".into(),
+                message: format!("{} is invalid TOML", path),
+                fix: Some(format!("Check {}.bak.1 for backup", path)),
+            });
         }
     }
 
