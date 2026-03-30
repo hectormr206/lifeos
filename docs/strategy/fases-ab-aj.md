@@ -284,7 +284,7 @@ Break-even: 12 usuarios Starter cubren los $60/mes de presupuesto actual.
 - [x] Comando `life safe-mode status` y `life safe-mode exit`
 
 **AK.2 — Config Time Machine (git versionado)**
-- [ ] `/var/lib/lifeos/config.git/`: repositorio git local con toda la config mutable
+- [x] `/var/lib/lifeos/config-checkpoints/`: repositorio git local con toda la config mutable
 - [x] Archivos versionados: config.toml, llm-providers.toml, prompts/, skills/, identity.json
 - [x] `checkpoint(msg)`: git add + commit ANTES de cualquier auto-modificacion
 - [x] `validate_and_commit(msg)`: checkpoint + validar. Si falla, auto-rollback a HEAD~1
@@ -415,8 +415,8 @@ Layer 0: Heartbeat (systemd watchdog)
 - [x] Confirma: "Modelo nvidia/nemotron-ultra agregado a OpenRouter. Contexto: 128K. Privacy: variable. Listo para usar."
 
 **AN.2 — Quitar/Deshabilitar Modelos via Telegram**
-- [ ] Tool `remove_provider`: "Axi, quita el modelo de Z.AI, no lo quiero"
-- [ ] Tool `disable_provider`: "Axi, deshabilita Gemini" (no borra, solo desactiva)
+- [x] Tool `remove_provider`: "Axi, quita el modelo de Z.AI, no lo quiero"
+- [x] Tool `disable_provider`: "Axi, deshabilita Gemini" (no borra, solo desactiva)
 - [x] Tool `list_providers`: "Axi, que modelos tengo configurados?"
 
 **AN.3 — Dashboard de Modelos**
@@ -427,7 +427,7 @@ Layer 0: Heartbeat (systemd watchdog)
 
 **AN.4 — Hot-Reload del Router sin Reiniciar**
 - [x] `LlmRouter::reload_providers()` — re-lee el TOML y actualiza la lista en memoria
-- [ ] Signal handler: `SIGHUP` al daemon trigger reload (estandar Unix)
+- [x] Signal handler: `SIGHUP` al daemon trigger reload (estandar Unix)
 - [x] API endpoint: `POST /api/v1/llm/reload` para trigger manual
 - [ ] Watcher de archivo: detectar cambios en llm-providers.toml y auto-reload
 
@@ -461,11 +461,11 @@ Layer 0: Heartbeat (systemd watchdog)
 - [x] **/status sin LLM** — comando rapido que muestra uptime, disco, memoria, servicios, modelo activo sin pasar por el agentic loop (respuesta instantanea)
 
 **AO.2 — P1: Primera semana post-launch**
-- [ ] **Threads/topics en grupos forum** — usar `(chat_id, thread_id)` como clave de historial para mantener contexto separado por topic
-- [ ] **Markdown en respuestas** — usar `ParseMode::MarkdownV2` para negritas, codigo, listas. Escapar caracteres especiales del LLM
-- [ ] **Envio de archivos** — tool `send_file` que use `bot.send_document()` para enviar PDFs, logs, configs cuando el usuario los pida
-- [ ] **Politica de grupos configurable** — `LIFEOS_TELEGRAM_GROUP_POLICY`: mention_only (default), reply_only, all_messages
-- [ ] **Grupos permitidos via config** — `LIFEOS_TELEGRAM_GROUP_IDS` separado del chat_id personal
+- [x] **Threads/topics en grupos forum** — usar `(chat_id, thread_id)` como clave de historial para mantener contexto separado por topic
+- [x] **Markdown en respuestas** — usar `ParseMode::MarkdownV2` para negritas, codigo, listas. Escapar caracteres especiales del LLM
+- [x] **Envio de archivos** — tool `send_file` que use `bot.send_document()` para enviar PDFs, logs, configs cuando el usuario los pida
+- [x] **Politica de grupos configurable** — `LIFEOS_TELEGRAM_GROUP_POLICY`: mention_only (default), reply_only, all_messages
+- [x] **Grupos permitidos via config** — `LIFEOS_TELEGRAM_GROUP_IDS` separado del chat_id personal
 
 **AO.3 — P2: Polish**
 - [ ] **Webhook transport** — `LIFEOS_TELEGRAM_WEBHOOK_URL` para modo eficiente sin polling constante
@@ -515,19 +515,19 @@ Axi (coordinator) — SIEMPRE libre, responde en <1 segundo
 ```
 
 **AP.1 — Clasificador Rapido (Axi como Coordinador)**
-- [ ] Antes de llamar agentic_chat, clasificar el mensaje en <100ms:
+- [x] Antes de llamar agentic_chat, clasificar el mensaje en <100ms:
   - `instant`: saludos, hora, status, help → responder directo sin LLM
   - `quick`: preguntas simples → LLM call rapido (max 5s timeout)
   - `task`: tareas que requieren tools → delegar a worker asincrono
-- [ ] Heuristicas de clasificacion: longitud del mensaje, keywords (haz, ejecuta, busca, resume, analiza), presencia de archivos/fotos
-- [ ] Si es `task`, responder inmediatamente: "Estoy en eso, te aviso cuando termine" y hacer spawn del worker
+- [x] Heuristicas de clasificacion: longitud del mensaje, keywords (haz, ejecuta, busca, resume, analiza), presencia de archivos/fotos
+- [x] Si es `task`, responder inmediatamente: "Estoy en eso, te aviso cuando termine" y hacer spawn del worker
 
 **AP.2 — Worker Pool Asincrono**
-- [ ] `tokio::spawn` por cada tarea larga — no bloquea el handler de Telegram
-- [ ] Cada worker tiene su propio contexto (chat_id, history, tools)
-- [ ] Limite de workers concurrentes por usuario (default: 3)
-- [ ] Cuando el worker termina, envia el resultado al chat via `bot.send_message()`
-- [ ] Si el worker falla, notifica: "No pude completar la tarea: {error}"
+- [x] `tokio::spawn` por cada tarea larga — no bloquea el handler de Telegram
+- [x] Cada worker tiene su propio contexto (chat_id, history, tools)
+- [x] Limite de workers concurrentes por usuario (default: 3)
+- [x] Cuando el worker termina, envia el resultado al chat via `bot.send_message()`
+- [x] Si el worker falla, notifica: "No pude completar la tarea: {error}"
 - [ ] Progress updates: el worker envia mensajes parciales ("Analizando archivo... Buscando en internet... Generando resumen...")
 
 **AP.3 — Sub-Agentes con Delegacion**
@@ -539,8 +539,8 @@ Axi (coordinator) — SIEMPRE libre, responde en <1 segundo
 - [ ] Profundidad maxima: 3 niveles (Axi → worker → sub-worker → sub-sub-worker)
 
 **AP.4 — Cola de Mensajes Inteligente**
-- [ ] Si llega un nuevo mensaje mientras un worker procesa, NO esperar — procesarlo inmediatamente
-- [ ] Cada mensaje se clasifica y rutea independientemente
+- [x] Si llega un nuevo mensaje mientras un worker procesa, NO esperar — procesarlo inmediatamente
+- [x] Cada mensaje se clasifica y rutea independientemente
 - [ ] Si el usuario manda "cancela" o "para", cancelar el worker activo
 - [ ] Si el usuario manda un mensaje relacionado con la tarea en curso, alimentarlo como contexto al worker (steering)
 
@@ -553,13 +553,13 @@ Axi (coordinator) — SIEMPRE libre, responde en <1 segundo
 - [ ] Evento WebSocket `worker.started`, `worker.progress`, `worker.completed`, `worker.failed`
 
 **AP.6 — Respuestas Instantaneas sin LLM**
-- [ ] Mapa de respuestas rapidas que NO necesitan LLM:
+- [x] Mapa de respuestas rapidas que NO necesitan LLM:
   - "hola/hi/hey" → "Hola! En que te puedo ayudar?"
   - "que hora es" → current_time() directo
   - "/status" → system metrics directo (ya implementado en AO.1)
   - "/help" → texto de ayuda estatico
   - "gracias" → "De nada! Aqui estoy."
-- [ ] Estas respuestas se dan en <50ms, sin latencia de LLM
+- [x] Estas respuestas se dan en <50ms, sin latencia de LLM
 
 **Prioridad:** CRITICA — AP.1 y AP.2 son los mas importantes. Sin esto, cada mejora que hagamos a Axi (mas tools, mas providers) solo lo hace MAS LENTO. Con workers asincronos, Axi escala horizontalmente.
 

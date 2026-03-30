@@ -7,6 +7,7 @@
 #[cfg(feature = "telegram")]
 mod inner {
     use log::{error, info, warn};
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::Arc;
     use teloxide::net::Download;
@@ -28,6 +29,101 @@ mod inner {
     const HEARTBEAT_INTERVAL_SECS: u64 = 30 * 60; // 30 minutes
     /// Cron check interval — how often we check for due cron jobs.
     const CRON_CHECK_INTERVAL_SECS: u64 = 60; // every minute
+    /// Pairing code TTL in seconds (10 minutes).
+    const PAIRING_TTL_SECS: u64 = 600;
+
+    // -----------------------------------------------------------------------
+    // Pairing store — allows authorized users to invite new users via /pair
+    // -----------------------------------------------------------------------
+
+    struct PendingPair {
+        created_by: i64,
+        created_at: std::time::Instant,
+    }
+
+    #[derive(Clone)]
+    struct PairingStore {
+        /// Pending codes: code -> PendingPair
+        pending: Arc<RwLock<HashMap<u32, PendingPair>>>,
+        /// Dynamically added chat IDs (persisted to disk on changes)
+        dynamic_ids: Arc<RwLock<Vec<i64>>>,
+    }
+
+    impl PairingStore {
+        fn new() -> Self {
+            let dynamic: Vec<i64> = Self::load_dynamic_ids().unwrap_or_default();
+            Self {
+                pending: Arc::new(RwLock::new(HashMap::new())),
+                dynamic_ids: Arc::new(RwLock::new(dynamic)),
+            }
+        }
+
+        /// Generate a pairing code for an authorized user.
+        async fn create_code(&self, created_by: i64) -> u32 {
+            let code: u32 = rand::random::<u32>() % 900_000 + 100_000;
+            let mut pending = self.pending.write().await;
+            pending.insert(
+                code,
+                PendingPair {
+                    created_by,
+                    created_at: std::time::Instant::now(),
+                },
+            );
+            code
+        }
+
+        /// Try to redeem a pairing code. Returns the inviter's chat_id on success.
+        async fn try_redeem(&self, code_text: &str) -> Option<i64> {
+            let code: u32 = code_text.trim().parse().ok()?;
+            let mut pending = self.pending.write().await;
+            if let Some(pair) = pending.remove(&code) {
+                if pair.created_at.elapsed().as_secs() <= PAIRING_TTL_SECS {
+                    return Some(pair.created_by);
+                }
+            }
+            None
+        }
+
+        /// Add a chat_id to the dynamic allowed list and persist.
+        async fn add_dynamic_id(&self, chat_id: i64) {
+            let mut ids = self.dynamic_ids.write().await;
+            if !ids.contains(&chat_id) {
+                ids.push(chat_id);
+                Self::save_dynamic_ids(&ids);
+            }
+        }
+
+        /// Check if a chat_id is in the dynamic list.
+        async fn is_dynamic_allowed(&self, chat_id: i64) -> bool {
+            self.dynamic_ids.read().await.contains(&chat_id)
+        }
+
+        /// Purge expired codes periodically.
+        async fn purge_expired(&self) {
+            let mut pending = self.pending.write().await;
+            pending.retain(|_, p| p.created_at.elapsed().as_secs() <= PAIRING_TTL_SECS);
+        }
+
+        fn dynamic_ids_path() -> std::path::PathBuf {
+            let data_dir = std::env::var("LIFEOS_DATA_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("/var/lib/lifeos"));
+            data_dir.join("telegram-paired-ids.json")
+        }
+
+        fn load_dynamic_ids() -> Option<Vec<i64>> {
+            let path = Self::dynamic_ids_path();
+            let content = std::fs::read_to_string(path).ok()?;
+            serde_json::from_str(&content).ok()
+        }
+
+        fn save_dynamic_ids(ids: &[i64]) {
+            let path = Self::dynamic_ids_path();
+            if let Ok(json) = serde_json::to_string(ids) {
+                std::fs::write(path, json).ok();
+            }
+        }
+    }
 
     #[derive(Debug, Clone)]
     pub struct TelegramConfig {
@@ -64,6 +160,8 @@ mod inner {
         group_policy: String,
         /// Allowed group IDs (empty = all groups with valid chat IDs)
         group_ids: Vec<i64>,
+        /// Pairing store for /pair command (invite new users)
+        pairing: PairingStore,
     }
 
     pub async fn run_telegram_bot(
@@ -75,6 +173,16 @@ mod inner {
         mut notify_rx: tokio::sync::broadcast::Receiver<SupervisorNotification>,
     ) {
         info!("Starting Telegram bridge (natural language mode)...");
+
+        // Webhook transport: log if configured (full webhook requires HTTPS reverse proxy)
+        if let Ok(webhook_url) = std::env::var("LIFEOS_TELEGRAM_WEBHOOK_URL") {
+            if !webhook_url.is_empty() {
+                info!(
+                    "[telegram] Webhook URL configured: {} (not active yet — requires HTTPS reverse proxy. Using polling.)",
+                    webhook_url
+                );
+            }
+        }
 
         // Group policy configuration from environment
         let group_policy =
@@ -110,6 +218,7 @@ mod inner {
             BotCommand::new("status", "Estado del sistema"),
             BotCommand::new("btw", "Conversacion lateral (no guarda historial)"),
             BotCommand::new("do", "Ejecutar tarea del supervisor"),
+            BotCommand::new("pair", "Generar codigo para vincular nuevo usuario"),
         ])
         .await
         .ok();
@@ -139,10 +248,18 @@ mod inner {
                             }
                         } else {
                             let text = format_notification(&notification);
+                            // Add action buttons for specific notification types
+                            let keyboard = notification_action_keyboard(&text);
                             for &chat_id in &notify_chat_ids {
-                                if let Err(e) =
+                                let result = if let Some(ref kb) = keyboard {
+                                    notify_bot
+                                        .send_message(ChatId(chat_id), &text)
+                                        .reply_markup(kb.clone())
+                                        .await
+                                } else {
                                     notify_bot.send_message(ChatId(chat_id), &text).await
-                                {
+                                };
+                                if let Err(e) = result {
                                     error!("Telegram notification failed: {}", e);
                                 }
                             }
@@ -273,6 +390,17 @@ mod inner {
         let cleanup_pool = (*worker_pool).clone();
         tokio::spawn(crate::async_workers::cleanup_loop(cleanup_pool));
 
+        let pairing = PairingStore::new();
+
+        // Spawn pairing code expiry cleanup loop
+        let purge_pairing = pairing.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                purge_pairing.purge_expired().await;
+            }
+        });
+
         let ctx = BotCtx {
             tool_ctx,
             dedupe: Arc::new(crate::message_dedupe::MessageDedupe::new()),
@@ -281,6 +409,7 @@ mod inner {
             bot_username,
             group_policy,
             group_ids,
+            pairing,
         };
 
         let message_handler =
@@ -426,7 +555,28 @@ mod inner {
             if ctx.group_policy != "all" && !is_addressed_to_bot(&msg, &ctx.bot_username) {
                 return Ok(());
             }
-        } else if !ctx.allowed_ids.is_empty() && !ctx.allowed_ids.contains(&chat_id.0) {
+        } else if !ctx.allowed_ids.is_empty()
+            && !ctx.allowed_ids.contains(&chat_id.0)
+            && !ctx.pairing.is_dynamic_allowed(chat_id.0).await
+        {
+            // Unknown user — check if their message is a pairing code
+            if let Some(text) = msg.text() {
+                let trimmed = text.trim();
+                if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
+                    if let Some(inviter) = ctx.pairing.try_redeem(trimmed).await {
+                        ctx.pairing.add_dynamic_id(chat_id.0).await;
+                        bot.send_message(chat_id, "Vinculacion exitosa! Ya puedes hablar conmigo.")
+                            .await?;
+                        bot.send_message(
+                            ChatId(inviter),
+                            format!("Usuario {} vinculado exitosamente.", chat_id.0),
+                        )
+                        .await
+                        .ok();
+                        return Ok(());
+                    }
+                }
+            }
             bot.send_message(chat_id, "No autorizado.").await?;
             return Ok(());
         }
@@ -498,6 +648,20 @@ mod inner {
         if text == "/help" || text == "/start" {
             return handle_help(bot, chat_id).await;
         }
+        if text == "/pair" || text.starts_with("/pair ") {
+            let code = ctx.pairing.create_code(chat_id.0).await;
+            bot.send_message(
+                chat_id,
+                format!(
+                    "Codigo de vinculacion: {}\n\n\
+                     Dale este codigo a la persona que quieres agregar. \
+                     Tiene 10 minutos para enviarmelo.",
+                    code
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
         if text == "/new" || text == "/reset" {
             // Save session summary before clearing
             let old_messages = ctx.tool_ctx.history.clear(chat_id.0).await;
@@ -510,6 +674,48 @@ mod inner {
         }
         if text == "/status" || text.starts_with("/status ") {
             return handle_status(bot, chat_id, &ctx).await;
+        }
+
+        // Cancel active worker — "cancela", "para", "stop"
+        {
+            let lower = text.to_lowercase();
+            let trimmed = lower.trim();
+            if trimmed == "cancela" || trimmed == "para" || trimmed == "stop" || trimmed == "cancel"
+            {
+                let active = ctx.worker_pool.active_workers(chat_id.0).await;
+                if let Some(latest) = active.last() {
+                    let tid = latest.task_id.clone();
+                    let desc = latest.description.clone();
+                    if ctx.worker_pool.cancel(&tid).await {
+                        bot.send_message(
+                            chat_id,
+                            format!("Tarea cancelada: {}", &desc[..desc.len().min(60)]),
+                        )
+                        .await?;
+                    } else {
+                        bot.send_message(chat_id, "No se pudo cancelar la tarea.")
+                            .await?;
+                    }
+                } else {
+                    bot.send_message(chat_id, "No hay tareas activas para cancelar.")
+                        .await?;
+                }
+                return Ok(());
+            }
+        }
+
+        // Steering — if there's an active worker, feed the message as context
+        if let Some(active_tid) = ctx.worker_pool.active_worker_for_chat(chat_id.0).await {
+            // Only steer if the message doesn't look like a new command
+            if !text.starts_with('/') {
+                ctx.worker_pool.steer(&active_tid, text.clone()).await;
+                bot.send_message(
+                    chat_id,
+                    "Contexto adicional recibido. La tarea activa lo tomara en cuenta.",
+                )
+                .await?;
+                return Ok(());
+            }
         }
 
         // /do trust: — execute task with auto-approval (no manual confirmation needed)
@@ -549,12 +755,38 @@ mod inner {
             let worker_bot = bot.clone();
             let worker_pool = ctx.worker_pool.clone();
             let worker_text = task_text.to_string();
+            let cancel_flag = ctx.worker_pool.get_cancel_flag(&task_id).await;
 
             tokio::spawn(async move {
+                worker_bot
+                    .send_message(chat_id, "Ejecutando en modo trust...")
+                    .await
+                    .ok();
+
                 // Set auto-approve env for this session
                 std::env::set_var("LIFEOS_AUTO_APPROVE_MEDIUM", "true");
+
+                // Check cancellation
+                if let Some(ref flag) = cancel_flag {
+                    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        worker_pool.cancel(&task_id).await;
+                        return;
+                    }
+                }
+
                 let (response, screenshot_path) =
                     telegram_tools::agentic_chat(&worker_ctx, chat_id.0, &worker_text, None).await;
+
+                // Check cancellation after work
+                if let Some(ref flag) = cancel_flag {
+                    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        worker_bot
+                            .send_message(chat_id, "Tarea cancelada.")
+                            .await
+                            .ok();
+                        return;
+                    }
+                }
 
                 send_full_response(&worker_bot, chat_id, &response, screenshot_path.as_deref())
                     .await
@@ -628,12 +860,29 @@ mod inner {
                 return Ok(());
             }
             MessageType::Quick => {
-                // Short LLM call — still inline (fast enough)
+                // Streaming UX: send placeholder, then edit with final response
+                let placeholder = bot.send_message(chat_id, "...").await?;
                 let (response, screenshot_path) = with_typing(&bot, chat_id, async {
                     telegram_tools::agentic_chat(&ctx.tool_ctx, history_key, &text, None).await
                 })
                 .await;
-                send_full_response(&bot, chat_id, &response, screenshot_path.as_deref()).await?;
+                // If response is short and has no special markers, edit the placeholder
+                if screenshot_path.is_none()
+                    && !response.contains("--- CHECKPOINT ---")
+                    && !response.contains("__SEND_FILE__:")
+                    && response.len() <= 4000
+                {
+                    let html = markdown_to_html(&response);
+                    bot.edit_message_text(chat_id, placeholder.id, &html)
+                        .parse_mode(teloxide::types::ParseMode::Html)
+                        .await
+                        .ok();
+                } else {
+                    // Complex response — delete placeholder and send full response
+                    bot.delete_message(chat_id, placeholder.id).await.ok();
+                    send_full_response(&bot, chat_id, &response, screenshot_path.as_deref())
+                        .await?;
+                }
             }
             MessageType::Task => {
                 // Long task — delegate to async worker so Axi stays free
@@ -660,11 +909,34 @@ mod inner {
                 let worker_bot = bot.clone();
                 let worker_pool = ctx.worker_pool.clone();
                 let worker_text = text.clone();
+                let cancel_flag = ctx.worker_pool.get_cancel_flag(&task_id).await;
 
                 tokio::spawn(async move {
+                    // Progress: starting
+                    worker_bot.send_message(chat_id, "Analizando...").await.ok();
+
+                    // Check cancellation before expensive work
+                    if let Some(ref flag) = cancel_flag {
+                        if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                            worker_pool.cancel(&task_id).await;
+                            return;
+                        }
+                    }
+
                     let (response, screenshot_path) =
                         telegram_tools::agentic_chat(&worker_ctx, history_key, &worker_text, None)
                             .await;
+
+                    // Check cancellation after work completes
+                    if let Some(ref flag) = cancel_flag {
+                        if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                            worker_bot
+                                .send_message(chat_id, "Tarea cancelada.")
+                                .await
+                                .ok();
+                            return;
+                        }
+                    }
 
                     if let Err(e) = send_full_response(
                         &worker_bot,
@@ -1124,6 +1396,30 @@ mod inner {
         } else if let Some(task_id) = data.strip_prefix("reject:") {
             info!("Telegram: task {} rejected via button", task_id);
             bot.send_message(chat_id, "Tarea rechazada.").await?;
+        } else if let Some(action) = data.strip_prefix("action:") {
+            match action {
+                "cleanup_cache" => {
+                    info!("Telegram: cleanup_cache action triggered");
+                    bot.send_message(chat_id, "Limpiando cache del sistema...")
+                        .await?;
+                    let (response, _) = telegram_tools::agentic_chat(
+                        &ctx.tool_ctx,
+                        chat_id.0,
+                        "Limpia caches del sistema: journalctl --vacuum-size=200M, \
+                         elimina /tmp/lifeos-* antiguos, y reporta espacio liberado.",
+                        None,
+                    )
+                    .await;
+                    send_chunked(&bot, chat_id, &response).await?;
+                }
+                "dismiss" => {
+                    bot.send_message(chat_id, "Notificacion descartada.")
+                        .await?;
+                }
+                _ => {
+                    warn!("Unknown action callback: {}", action);
+                }
+            }
         }
 
         Ok(())
@@ -1164,6 +1460,7 @@ mod inner {
              /status — Estado del sistema (sin LLM)\n\
              /btw <texto> — Conversacion lateral\n\
              /do <tarea> — Ejecutar tarea\n\
+             /pair — Generar codigo para vincular nuevo usuario\n\
              /help — Este mensaje\n\n\
              En grupos, mencioname con @ o responde a mis mensajes. Te monitoreo cada 30 min.",
         )
@@ -1676,6 +1973,28 @@ mod inner {
         .await?;
 
         Ok(())
+    }
+
+    /// Build inline keyboard for actionable supervisor notifications.
+    fn notification_action_keyboard(text: &str) -> Option<InlineKeyboardMarkup> {
+        let lower = text.to_lowercase();
+
+        // Disk space warnings
+        if lower.contains("disco") || lower.contains("disk") || lower.contains("espacio") {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Limpiar cache", "action:cleanup_cache"),
+                InlineKeyboardButton::callback("Ignorar", "action:dismiss"),
+            ]]));
+        }
+
+        // Task failures — offer to dismiss
+        if lower.contains("fallid") || lower.contains("error") {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Descartar", "action:dismiss"),
+            ]]));
+        }
+
+        None
     }
 
     fn format_notification(n: &SupervisorNotification) -> String {

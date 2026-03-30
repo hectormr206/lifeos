@@ -285,6 +285,14 @@
       </div>
     </section>
 
+    <!-- Active Workers -->
+    <section class="workers-section">
+      <h2>Workers Activos <span id="workers-count" class="feed-count">0</span></h2>
+      <div class="workers-grid" id="workers-grid">
+        <p class="task-empty">Sin workers activos</p>
+      </div>
+    </section>
+
     <!-- Chat with Axi -->
     <section class="chat-section">
       <h2>Chat con Axi</h2>
@@ -317,10 +325,34 @@
 
     <!-- LLM Providers -->
     <section class="providers-section">
-      <h2>Proveedores LLM</h2>
+      <h2>Proveedores LLM <button type="button" class="quick-action-btn" id="reload-providers-btn" style="margin-left:8px;font-size:0.75rem;padding:6px 12px;">Recargar proveedores</button></h2>
       <div class="providers-grid" id="providers-grid">
         <p class="task-empty">Cargando proveedores...</p>
       </div>
+
+      <!-- Add Provider Form -->
+      <div class="add-provider-form">
+        <h4>Agregar Proveedor</h4>
+        <div class="add-provider-fields">
+          <input type="text" id="new-provider-name" placeholder="Nombre (ej: my-groq)">
+          <input type="text" id="new-provider-base" placeholder="API Base (ej: https://api.groq.com/openai)">
+          <input type="text" id="new-provider-model" placeholder="Modelo (ej: llama-3.3-70b)">
+          <input type="text" id="new-provider-key-env" placeholder="Env var API key (ej: GROQ_API_KEY)">
+          <select id="new-provider-tier">
+            <option value="free">Free</option>
+            <option value="cheap">Cheap</option>
+            <option value="premium">Premium</option>
+          </select>
+          <select id="new-provider-privacy">
+            <option value="high">High (ZDR)</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+          <button type="button" class="quick-action-btn" id="add-provider-btn">Agregar</button>
+        </div>
+        <p class="setting-hint" id="add-provider-hint">Agrega un nuevo proveedor LLM compatible con OpenAI API.</p>
+      </div>
+
       <div class="providers-config">
         <h3>Configurar API Keys</h3>
         <div class="provider-key-form">

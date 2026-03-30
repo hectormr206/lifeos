@@ -590,6 +590,25 @@ function handleEvent(event) {
     case 'telegram_message':
       addFeedItem('&#128172;', `Telegram: ${(event.data.text || '').substring(0, 80)}`);
       break;
+    case 'worker.started':
+    case 'worker_started':
+      addWorkerCard(event.data);
+      addFeedItem('&#9881;', `Worker iniciado: ${(event.data.task || event.data.objective || '').substring(0, 60)}`);
+      break;
+    case 'worker.progress':
+    case 'worker_progress':
+      updateWorkerProgress(event.data);
+      break;
+    case 'worker.completed':
+    case 'worker_completed':
+      markWorkerCompleted(event.data);
+      addFeedItem('&#9989;', `Worker completado: ${(event.data.task || event.data.objective || '').substring(0, 60)}`);
+      break;
+    case 'worker.failed':
+    case 'worker_failed':
+      markWorkerFailed(event.data);
+      addFeedItem('&#10060;', `Worker fallido: ${(event.data.task || event.data.objective || '').substring(0, 60)}`);
+      break;
   }
 }
 
@@ -1356,6 +1375,36 @@ function setBar(barId, labelId, pct, label) {
 }
 
 // --- LLM Providers ---
+function inferProviderTier(name) {
+  const n = name.toLowerCase();
+  if (n.startsWith('local')) return 'local';
+  if (n.startsWith('cerebras') || n.startsWith('groq')) return 'free';
+  if (n.startsWith('zai') || n.startsWith('kimi') || n.startsWith('minimax')) return 'cheap';
+  if (n.startsWith('anthropic') || n.startsWith('openai')) return 'premium';
+  return 'free';
+}
+
+function inferProviderPrivacy(name) {
+  const n = name.toLowerCase();
+  if (n.startsWith('local')) return { label: 'Maxima', level: 'max' };
+  if (n.startsWith('cerebras') || n.startsWith('groq')) return { label: 'Alta (ZDR)', level: 'high' };
+  if (n.startsWith('anthropic') || n.startsWith('openai')) return { label: 'Media (no training)', level: 'medium' };
+  if (n.startsWith('gemini')) return { label: 'Baja (free entrena)', level: 'low' };
+  if (n.startsWith('zai') || n.startsWith('kimi') || n.startsWith('minimax')) return { label: 'Baja (China)', level: 'low' };
+  if (n.startsWith('openrouter')) return { label: 'Variable', level: 'variable' };
+  return { label: '?', level: 'variable' };
+}
+
+function providerPrivacyColor(level) {
+  switch (level) {
+    case 'max': return 'var(--success)';
+    case 'high': return 'var(--accent-2)';
+    case 'medium': return 'var(--warning)';
+    case 'low': return 'var(--danger)';
+    default: return 'var(--text-muted)';
+  }
+}
+
 async function refreshProviders() {
   try {
     const res = await fetch(`${API}/llm/providers`, { headers: apiHeaders() });
@@ -1366,26 +1415,33 @@ async function refreshProviders() {
 
     grid.innerHTML = data.providers.map(p => {
       const n = p.name;
-      const tier = n.startsWith('local') ? 'local' :
-                   n.startsWith('cerebras') ? 'free' :
-                   n.startsWith('groq') ? 'free' :
-                   n.startsWith('zai') ? 'cheap' : 'free';
-      const privacy = n.startsWith('local') ? 'Maxima' :
-                      n.startsWith('cerebras') ? 'Alta (ZDR)' :
-                      n.startsWith('groq') ? 'Alta (ZDR)' :
-                      n.startsWith('anthropic') ? 'Media (no training)' :
-                      n.startsWith('openai') ? 'Media (no training)' :
-                      n.startsWith('gemini') ? 'Baja (free entrena)' :
-                      n.startsWith('zai') || n.startsWith('kimi') || n.startsWith('minimax') ? 'Baja (China)' :
-                      n.startsWith('openrouter') ? 'Variable' : '?';
-      const privacyColor = privacy.startsWith('Max') ? 'var(--success)' :
-                           privacy.startsWith('Alta') ? 'var(--accent-2)' :
-                           privacy.startsWith('Media') ? 'var(--warning)' :
-                           privacy.startsWith('Baja') ? 'var(--danger)' : 'var(--text-muted)';
-      return `<div class="provider-card" data-tier="${tier}">
-        <div class="provider-name">${escapeHtml(n)}</div>
-        <div class="provider-stats">${p.total_requests} req | ${p.total_output_tokens} tok | ${p.total_failures} err</div>
-        <div class="provider-stats" style="color:${privacyColor}">Privacidad: ${privacy}</div>
+      const tier = p.tier || inferProviderTier(n);
+      const priv = inferProviderPrivacy(n);
+      const privLabel = p.privacy_level || priv.label;
+      const privLevel = priv.level;
+      const model = p.model || '';
+      const enabled = p.enabled !== false;
+      const disabledClass = enabled ? '' : ' disabled';
+      const reqCount = p.total_requests || 0;
+      const errCount = p.total_failures || 0;
+      const tokCount = p.total_output_tokens || 0;
+
+      return `<div class="provider-card${disabledClass}" data-tier="${tier}" data-provider="${escapeHtml(n)}">
+        <div class="provider-card-header">
+          <div class="provider-name">${escapeHtml(n)}</div>
+          <span class="provider-tier">${escapeHtml(tier)}</span>
+        </div>
+        ${model ? `<div class="provider-model-name">${escapeHtml(model)}</div>` : ''}
+        <div class="provider-stats">${reqCount} req | ${tokCount} tok | ${errCount} err</div>
+        <div class="provider-req-count">${reqCount} solicitudes totales</div>
+        <div class="provider-stats" style="color:${providerPrivacyColor(privLevel)}">Privacidad: ${escapeHtml(privLabel)}</div>
+        <div class="provider-card-actions">
+          <label class="provider-toggle" title="${enabled ? 'Desactivar' : 'Activar'}">
+            <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleProvider('${escapeHtml(n)}', this.checked)">
+            <span class="slider"></span>
+          </label>
+          <button class="provider-test-btn" onclick="testProvider('${escapeHtml(n)}')">Test</button>
+        </div>
       </div>`;
     }).join('');
 
@@ -1395,6 +1451,94 @@ async function refreshProviders() {
     updateKeyStatus('zai', data.providers.some(p => p.name.includes('zai') && p.total_requests > 0));
     updateKeyStatus('openrouter', data.providers.some(p => p.name.includes('openrouter') && p.total_requests > 0));
   } catch (e) { /* silent */ }
+}
+
+// --- Provider actions ---
+window.toggleProvider = async (name, enabled) => {
+  try {
+    await fetch(`${API}/llm/providers/${encodeURIComponent(name)}/toggle`, {
+      method: 'POST', headers: apiHeaders(),
+      body: JSON.stringify({ enabled })
+    });
+    addFeedItem('&#9881;', `Proveedor ${name}: ${enabled ? 'activado' : 'desactivado'}`);
+    setTimeout(refreshProviders, 500);
+  } catch (err) {
+    addFeedItem('&#10060;', `Error toggle ${name}: ${err.message}`);
+  }
+};
+
+window.testProvider = async (name) => {
+  const card = document.querySelector(`.provider-card[data-provider="${name}"]`);
+  const btn = card?.querySelector('.provider-test-btn');
+  if (btn) { btn.textContent = '...'; btn.disabled = true; }
+  try {
+    const result = await api('POST', '/llm/chat', {
+      messages: [{ role: 'user', content: 'Respond with OK in one word.' }],
+      provider: name
+    });
+    if (btn) { btn.textContent = 'OK'; btn.style.background = 'rgba(0, 212, 170, 0.3)'; }
+    addFeedItem('&#9989;', `Test ${name}: OK (${result.provider || name})`);
+  } catch (err) {
+    if (btn) { btn.textContent = 'Fail'; btn.style.background = 'rgba(255, 71, 87, 0.3)'; }
+    addFeedItem('&#10060;', `Test ${name}: ${err.message}`);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = 'Test'; btn.style.background = ''; }, 3000);
+    }
+  }
+};
+
+// --- Reload providers ---
+const reloadProvidersBtn = document.getElementById('reload-providers-btn');
+if (reloadProvidersBtn) {
+  reloadProvidersBtn.addEventListener('click', async () => {
+    reloadProvidersBtn.textContent = 'Recargando...';
+    try {
+      await fetch(`${API}/llm/reload`, { method: 'POST', headers: apiHeaders() });
+      addFeedItem('&#9989;', 'Proveedores LLM recargados');
+      await refreshProviders();
+    } catch (err) {
+      addFeedItem('&#10060;', `Error recargando proveedores: ${err.message}`);
+    } finally {
+      setTimeout(() => { reloadProvidersBtn.textContent = 'Recargar proveedores'; }, 2000);
+    }
+  });
+}
+
+// --- Add Provider ---
+window.addProvider = async () => {
+  const name = $('#new-provider-name')?.value?.trim();
+  const base = $('#new-provider-base')?.value?.trim();
+  const model = $('#new-provider-model')?.value?.trim();
+  const keyEnv = $('#new-provider-key-env')?.value?.trim();
+  const tier = $('#new-provider-tier')?.value || 'free';
+  const privacy = $('#new-provider-privacy')?.value || 'high';
+  const hint = $('#add-provider-hint');
+
+  if (!name || !base || !model) {
+    if (hint) hint.textContent = 'Nombre, API Base y Modelo son obligatorios.';
+    return;
+  }
+
+  try {
+    await api('POST', '/llm/providers', { name, api_base: base, model, api_key_env: keyEnv, tier, privacy_level: privacy });
+    addFeedItem('&#9989;', `Proveedor ${name} agregado`);
+    if (hint) hint.textContent = `Proveedor "${name}" agregado correctamente.`;
+    if ($('#new-provider-name')) $('#new-provider-name').value = '';
+    if ($('#new-provider-base')) $('#new-provider-base').value = '';
+    if ($('#new-provider-model')) $('#new-provider-model').value = '';
+    if ($('#new-provider-key-env')) $('#new-provider-key-env').value = '';
+    await refreshProviders();
+  } catch (err) {
+    if (hint) hint.textContent = `Error: ${err.message}. Puedes agregar proveedores via Telegram: /provider add ${name}`;
+    addFeedItem('&#10060;', `Error agregando proveedor: ${err.message}`);
+  }
+};
+
+const addProviderBtn = document.getElementById('add-provider-btn');
+if (addProviderBtn) {
+  addProviderBtn.addEventListener('click', () => window.addProvider());
 }
 
 function updateKeyStatus(name, working) {
@@ -1735,6 +1879,151 @@ window.triggerSystemAction = async (action) => {
   }
 };
 
+// ==================== WORKERS ====================
+const activeWorkers = new Map(); // id -> { id, task, chat_id, status, started_at }
+let workerElapsedTimer = null;
+
+function formatElapsed(startedAt) {
+  if (!startedAt) return '0s';
+  const sec = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
+  if (sec < 0) return '0s';
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+}
+
+function renderWorkers() {
+  const grid = $('#workers-grid');
+  const countEl = $('#workers-count');
+  if (!grid) return;
+
+  const workers = Array.from(activeWorkers.values());
+  if (countEl) countEl.textContent = workers.length;
+
+  if (workers.length === 0) {
+    grid.innerHTML = '<p class="task-empty">Sin workers activos</p>';
+    return;
+  }
+
+  grid.innerHTML = workers.map(w => {
+    const statusClass = `status-${w.status || 'running'}`;
+    const statusLabel = { running: 'Corriendo', completed: 'Completado', failed: 'Fallido' }[w.status] || w.status || 'Corriendo';
+    const elapsed = formatElapsed(w.started_at);
+    const taskText = (w.task || w.objective || 'Tarea sin descripcion').substring(0, 80);
+    const chatId = w.chat_id || '';
+    const cancelBtn = w.status === 'running'
+      ? `<button class="worker-cancel-btn" onclick="cancelWorker('${escapeHtml(w.id || '')}')">Cancelar</button>`
+      : '';
+
+    return `<div class="worker-card" data-status="${w.status || 'running'}" data-worker-id="${escapeHtml(w.id || '')}">
+      <div class="worker-card-header">
+        <span class="worker-task" title="${escapeHtml(w.task || w.objective || '')}">${escapeHtml(taskText)}</span>
+        <span class="worker-status ${statusClass}">${statusLabel}</span>
+      </div>
+      <div class="worker-meta">
+        ${chatId ? `<span>Chat: ${escapeHtml(String(chatId))}</span>` : ''}
+        <span class="worker-elapsed" data-started="${w.started_at || ''}">${elapsed}</span>
+        ${cancelBtn}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function startWorkerElapsedTimer() {
+  if (workerElapsedTimer) return;
+  workerElapsedTimer = setInterval(() => {
+    document.querySelectorAll('.worker-elapsed[data-started]').forEach(el => {
+      const started = el.dataset.started;
+      if (started) el.textContent = formatElapsed(started);
+    });
+  }, 1000);
+}
+
+function addWorkerCard(data) {
+  const id = data.id || data.worker_id || `w-${Date.now()}`;
+  activeWorkers.set(id, {
+    id,
+    task: data.task || data.objective || data.description || '',
+    chat_id: data.chat_id || '',
+    status: 'running',
+    started_at: data.started_at || new Date().toISOString(),
+  });
+  renderWorkers();
+  startWorkerElapsedTimer();
+}
+
+function updateWorkerProgress(data) {
+  const id = data.id || data.worker_id;
+  if (!id) return;
+  const w = activeWorkers.get(id);
+  if (w) {
+    if (data.task || data.objective) w.task = data.task || data.objective;
+    if (data.progress) w.progress = data.progress;
+    renderWorkers();
+  }
+}
+
+function markWorkerCompleted(data) {
+  const id = data.id || data.worker_id;
+  if (!id) return;
+  const w = activeWorkers.get(id);
+  if (w) {
+    w.status = 'completed';
+    renderWorkers();
+    // Remove after 10s
+    setTimeout(() => { activeWorkers.delete(id); renderWorkers(); }, 10000);
+  }
+}
+
+function markWorkerFailed(data) {
+  const id = data.id || data.worker_id;
+  if (!id) return;
+  const w = activeWorkers.get(id);
+  if (w) {
+    w.status = 'failed';
+    renderWorkers();
+    // Remove after 15s
+    setTimeout(() => { activeWorkers.delete(id); renderWorkers(); }, 15000);
+  }
+}
+
+window.cancelWorker = async (id) => {
+  if (!id) return;
+  try {
+    await fetch(`${API}/workers/${encodeURIComponent(id)}/cancel`, { method: 'POST', headers: apiHeaders() });
+    addFeedItem('&#9888;', `Worker ${id} cancelado`);
+    activeWorkers.delete(id);
+    renderWorkers();
+  } catch (err) {
+    addFeedItem('&#10060;', `Error cancelando worker: ${err.message}`);
+  }
+};
+
+// Try fetching active workers from API on load
+async function refreshWorkers() {
+  try {
+    const res = await fetch(`${API}/workers`, { headers: apiHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    const workers = data.workers || [];
+    // Merge with existing tracked workers
+    workers.forEach(w => {
+      const id = w.id || w.worker_id;
+      if (id && !activeWorkers.has(id)) {
+        activeWorkers.set(id, {
+          id,
+          task: w.task || w.objective || w.description || '',
+          chat_id: w.chat_id || '',
+          status: w.status || 'running',
+          started_at: w.started_at || w.created_at || new Date().toISOString(),
+        });
+      }
+    });
+    renderWorkers();
+    if (activeWorkers.size > 0) startWorkerElapsedTimer();
+  } catch (e) { /* silent — endpoint may not exist yet */ }
+}
+
 // --- Polling ---
 setInterval(() => {
   refreshSupervisor();
@@ -1742,6 +2031,7 @@ setInterval(() => {
   refreshResources();
   refreshMetrics();
   refreshScheduledTasks();
+  refreshWorkers();
   refreshSystemHealth();
 }, 10000);
 
@@ -2214,7 +2504,7 @@ function initTabs() {
 
   const tabs = [
     { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['safe-mode-banner', 'hero-panel', 'orb-section', 'controls-section', 'status-section', 'chat-section'] },
-    { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'metrics-section', 'sched-section', 'conversations-section', 'feed-section'] },
+    { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'workers-section', 'metrics-section', 'sched-section', 'conversations-section', 'feed-section'] },
     { id: 'tab-memory', icon: '&#128450;', label: 'Memoria', keywords: ['memory-section'] },
     { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'doctor-section', 'health-section', 'battery-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'services-section', 'settings-section'] }
   ];
@@ -2277,6 +2567,7 @@ function initTabs() {
   refreshAiStatus();
   refreshKeyStatus();
   refreshGameGuard();
+  refreshWorkers();
   refreshSystemHealth();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();

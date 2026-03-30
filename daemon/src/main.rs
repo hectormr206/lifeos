@@ -1290,6 +1290,64 @@ async fn main() -> anyhow::Result<()> {
     });
     info!("Storage housekeeping started (every 6h, 120-file limit per dir)");
 
+    // --- Config file watcher: auto-reload llm-providers.toml on change (polling) ---
+    {
+        let config_router = state.llm_router.clone();
+        tokio::spawn(async move {
+            let toml_paths = [
+                std::path::PathBuf::from("/etc/lifeos/llm-providers.toml"),
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| std::path::PathBuf::from(h).join(".config/lifeos/llm-providers.toml"))
+                    .unwrap_or_default(),
+            ];
+
+            let mut last_modified: std::collections::HashMap<
+                std::path::PathBuf,
+                std::time::SystemTime,
+            > = std::collections::HashMap::new();
+
+            // Initialize timestamps
+            for path in &toml_paths {
+                if let Ok(meta) = tokio::fs::metadata(path).await {
+                    if let Ok(modified) = meta.modified() {
+                        last_modified.insert(path.clone(), modified);
+                    }
+                }
+            }
+
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+
+                for path in &toml_paths {
+                    if let Ok(meta) = tokio::fs::metadata(path).await {
+                        if let Ok(modified) = meta.modified() {
+                            let changed = last_modified
+                                .get(path)
+                                .map(|lm| modified > *lm)
+                                .unwrap_or(true);
+                            if changed {
+                                info!(
+                                    "[config] {} changed, reloading providers...",
+                                    path.display()
+                                );
+                                let mut router = config_router.write().await;
+                                match router.reload_providers() {
+                                    Ok(n) => info!("[config] Reloaded {} providers", n),
+                                    Err(e) => {
+                                        log::warn!("[config] Provider reload failed: {}", e)
+                                    }
+                                }
+                                last_modified.insert(path.clone(), modified);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        info!("Config file watcher started (polls every 30s)");
+    }
+
     // Start supervisor loop with self-healing (restarts on panic)
     let supervisor_state = state.clone();
     let supervisor_handle = tokio::spawn(async move {

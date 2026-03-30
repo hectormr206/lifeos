@@ -680,59 +680,118 @@ struct ProvidersFile {
     providers: Vec<ProviderConfig>,
 }
 
-/// Load providers from TOML config file. Searches multiple locations.
+/// Load providers from a single TOML file.
+fn load_providers_from_file(path: &std::path::Path) -> Result<Vec<ProviderConfig>> {
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let file: ProvidersFile =
+        toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(file.providers)
+}
+
+/// Load providers using merged system/user TOML strategy.
+///
+/// Priority (highest to lowest):
+/// 1. `~/.config/lifeos/llm-providers.toml` — user overrides
+/// 2. `/etc/lifeos/llm-providers.toml` — admin/user config
+/// 3. `/usr/share/lifeos/llm-providers.toml` — system defaults (read-only, shipped with image)
+/// 4. `files/etc/lifeos/llm-providers.toml` — repo-local (development)
+///
+/// User-defined providers override system defaults with the same name.
 pub(crate) fn load_providers_from_toml() -> Result<Vec<ProviderConfig>> {
-    let candidates = [
-        // User config
+    let user_paths = [
+        // User home config (highest priority)
         dirs_home()
             .map(|h| h.join(".config/lifeos/llm-providers.toml"))
             .unwrap_or_default(),
-        // System config
+        // Admin/user system config
         std::path::PathBuf::from("/etc/lifeos/llm-providers.toml"),
+    ];
+    let system_paths = [
+        // System defaults (bootc read-only image)
+        std::path::PathBuf::from("/usr/share/lifeos/llm-providers.toml"),
         // Repo-local (for development)
         std::path::PathBuf::from("files/etc/lifeos/llm-providers.toml"),
     ];
 
-    for path in &candidates {
-        if path.exists() {
-            let content = std::fs::read_to_string(path)
-                .with_context(|| format!("reading {}", path.display()))?;
-            let file: ProvidersFile =
-                toml::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+    let mut providers = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
 
-            // Filter: only keep providers whose API key env var is set (or empty = local)
-            let active: Vec<ProviderConfig> = file
-                .providers
-                .into_iter()
-                .filter(|p| {
-                    p.api_key_env.is_empty()
-                        || std::env::var(&p.api_key_env)
-                            .map(|v| !v.is_empty())
-                            .unwrap_or(false)
-                })
-                .collect();
-
-            // SSRF guard: validate each endpoint before use
-            for p in &active {
-                if let Err(e) = validate_endpoint_safe(&p.api_base) {
-                    warn!("[llm_router] SSRF: provider '{}' blocked — {}", p.name, e);
-                }
-            }
-            let safe: Vec<ProviderConfig> = active
-                .into_iter()
-                .filter(|p| validate_endpoint_safe(&p.api_base).is_ok())
-                .collect();
-
+    // User TOML files take priority
+    for path in &user_paths {
+        if path.as_os_str().is_empty() || !path.exists() {
+            continue;
+        }
+        if let Ok(file_providers) = load_providers_from_file(path) {
             info!(
-                "Loaded {} safe providers from {} (after SSRF filter)",
-                safe.len(),
-                path.display(),
+                "[llm_router] Loaded {} providers from {} (user)",
+                file_providers.len(),
+                path.display()
             );
-            return Ok(safe);
+            for p in file_providers {
+                seen_names.insert(p.name.clone());
+                providers.push(p);
+            }
+            break; // Use the first user TOML found
         }
     }
 
-    bail!("no providers.toml found")
+    // System TOML fills in what user doesn't override
+    for path in &system_paths {
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(sys_providers) = load_providers_from_file(path) {
+            let mut added = 0usize;
+            for p in sys_providers {
+                if !seen_names.contains(&p.name) {
+                    seen_names.insert(p.name.clone());
+                    providers.push(p);
+                    added += 1;
+                }
+            }
+            if added > 0 {
+                info!(
+                    "[llm_router] Merged {} system-default providers from {}",
+                    added,
+                    path.display()
+                );
+            }
+            break; // Use the first system TOML found
+        }
+    }
+
+    if providers.is_empty() {
+        bail!("no providers.toml found");
+    }
+
+    // Filter: only keep providers whose API key env var is set (or empty = local)
+    let active: Vec<ProviderConfig> = providers
+        .into_iter()
+        .filter(|p| {
+            p.api_key_env.is_empty()
+                || std::env::var(&p.api_key_env)
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+        })
+        .collect();
+
+    // SSRF guard: validate each endpoint before use
+    for p in &active {
+        if let Err(e) = validate_endpoint_safe(&p.api_base) {
+            warn!("[llm_router] SSRF: provider '{}' blocked — {}", p.name, e);
+        }
+    }
+    let safe: Vec<ProviderConfig> = active
+        .into_iter()
+        .filter(|p| validate_endpoint_safe(&p.api_base).is_ok())
+        .collect();
+
+    info!(
+        "[llm_router] {} total safe providers (after SSRF filter + merge)",
+        safe.len()
+    );
+    Ok(safe)
 }
 
 fn dirs_home() -> Option<std::path::PathBuf> {
