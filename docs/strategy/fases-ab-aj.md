@@ -420,22 +420,22 @@ Layer 0: Heartbeat (systemd watchdog)
 - [x] Tool `list_providers`: "Axi, que modelos tengo configurados?"
 
 **AN.3 — Dashboard de Modelos**
-- [ ] Seccion en el dashboard web para ver/agregar/quitar/reordenar providers
-- [ ] Formulario: provider name, API base, model, API key env var, tier, privacy
-- [ ] Toggle enable/disable por provider
-- [ ] Test de conectividad (enviar request de prueba)
+- [x] Seccion en el dashboard web para ver/agregar/quitar/reordenar providers
+- [x] Formulario: provider name, API base, model, API key env var, tier, privacy
+- [x] Toggle enable/disable por provider
+- [x] Test de conectividad (enviar request de prueba)
 
 **AN.4 — Hot-Reload del Router sin Reiniciar**
 - [x] `LlmRouter::reload_providers()` — re-lee el TOML y actualiza la lista en memoria
 - [x] Signal handler: `SIGHUP` al daemon trigger reload (estandar Unix)
 - [x] API endpoint: `POST /api/v1/llm/reload` para trigger manual
-- [ ] Watcher de archivo: detectar cambios en llm-providers.toml y auto-reload
+- [x] Watcher de archivo: detectar cambios en llm-providers.toml y auto-reload
 
 **AN.5 — User TOML vs System TOML**
-- [ ] System defaults: `/usr/share/lifeos/llm-providers.toml` (read-only, viene con la imagen)
-- [ ] User overrides: `/etc/lifeos/llm-providers.toml` (editable, persiste en updates)
-- [ ] Merge strategy: user TOML tiene prioridad. Si el user define un provider con el mismo nombre, gana el del user
-- [ ] Nuevos providers del system TOML se agregan automaticamente sin borrar los del user
+- [x] System defaults: `/usr/share/lifeos/llm-providers.toml` (read-only, viene con la imagen)
+- [x] User overrides: `/etc/lifeos/llm-providers.toml` (editable, persiste en updates)
+- [x] Merge strategy: user TOML tiene prioridad. Si el user define un provider con el mismo nombre, gana el del user
+- [x] Nuevos providers del system TOML se agregan automaticamente sin borrar los del user
 
 **AN.6 — Auto-Discovery de Modelos Nuevos (futuro)**
 - [ ] Periodicamente consultar `/v1/models` endpoint de cada provider activo
@@ -468,11 +468,11 @@ Layer 0: Heartbeat (systemd watchdog)
 - [x] **Grupos permitidos via config** — `LIFEOS_TELEGRAM_GROUP_IDS` separado del chat_id personal
 
 **AO.3 — P2: Polish**
-- [ ] **Webhook transport** — `LIFEOS_TELEGRAM_WEBHOOK_URL` para modo eficiente sin polling constante
-- [ ] **Cola de mensajes con steering** — si llega mensaje mientras se procesa otro, encolar y alimentar como contexto al terminar
-- [ ] **Pairing para usuarios adicionales** — /pair genera codigo 6 digitos, nuevo usuario lo manda, se agrega a allowed_ids
-- [ ] **Notificaciones con acciones** — inline keyboards en notificaciones: "Disco al 90%" -> boton "Limpiar" + boton "Ignorar"
-- [ ] **Streaming de respuestas** — enviar mensaje parcial y editarlo conforme llega la respuesta del LLM (`bot.edit_message_text`)
+- [x] **Webhook transport** — `LIFEOS_TELEGRAM_WEBHOOK_URL` para modo eficiente sin polling constante
+- [x] **Cola de mensajes con steering** — si llega mensaje mientras se procesa otro, encolar y alimentar como contexto al terminar
+- [x] **Pairing para usuarios adicionales** — /pair genera codigo 6 digitos, nuevo usuario lo manda, se agrega a allowed_ids
+- [x] **Notificaciones con acciones** — inline keyboards en notificaciones: "Disco al 90%" -> boton "Limpiar" + boton "Ignorar"
+- [x] **Streaming de respuestas** — enviar mensaje parcial y editarlo conforme llega la respuesta del LLM (`bot.edit_message_text`)
 
 **Donde LifeOS ya esta ADELANTE de OpenClaw:**
 
@@ -528,29 +528,29 @@ Axi (coordinator) — SIEMPRE libre, responde en <1 segundo
 - [x] Limite de workers concurrentes por usuario (default: 3)
 - [x] Cuando el worker termina, envia el resultado al chat via `bot.send_message()`
 - [x] Si el worker falla, notifica: "No pude completar la tarea: {error}"
-- [ ] Progress updates: el worker envia mensajes parciales ("Analizando archivo... Buscando en internet... Generando resumen...")
+- [x] Progress updates: el worker envia mensajes parciales ("Analizando archivo... Buscando en internet... Generando resumen...")
 
 **AP.3 — Sub-Agentes con Delegacion**
-- [ ] Un worker puede crear sub-workers para sub-tareas:
+- [x] Un worker puede crear sub-workers para sub-tareas:
   - "Investiga X" → worker principal delega a sub-worker de busqueda web
   - "Resume este PDF y busca articulos relacionados" → 2 sub-workers en paralelo
-- [ ] Sub-workers reportan al worker padre, no directamente al usuario
-- [ ] El worker padre consolida resultados y envia respuesta unificada
-- [ ] Profundidad maxima: 3 niveles (Axi → worker → sub-worker → sub-sub-worker)
+- [x] Sub-workers reportan al worker padre, no directamente al usuario
+- [x] El worker padre consolida resultados y envia respuesta unificada
+- [x] Profundidad maxima: 3 niveles (Axi → worker → sub-worker → sub-sub-worker)
 
 **AP.4 — Cola de Mensajes Inteligente**
 - [x] Si llega un nuevo mensaje mientras un worker procesa, NO esperar — procesarlo inmediatamente
 - [x] Cada mensaje se clasifica y rutea independientemente
-- [ ] Si el usuario manda "cancela" o "para", cancelar el worker activo
-- [ ] Si el usuario manda un mensaje relacionado con la tarea en curso, alimentarlo como contexto al worker (steering)
+- [x] Si el usuario manda "cancela" o "para", cancelar el worker activo
+- [x] Si el usuario manda un mensaje relacionado con la tarea en curso, alimentarlo como contexto al worker (steering)
 
 **AP.5 — Dashboard de Workers**
-- [ ] Seccion en el dashboard mostrando workers activos con:
+- [x] Seccion en el dashboard mostrando workers activos con:
   - Tarea en ejecucion
   - Tiempo transcurrido
   - Sub-workers activos
   - Boton "Cancelar"
-- [ ] Evento WebSocket `worker.started`, `worker.progress`, `worker.completed`, `worker.failed`
+- [x] Evento WebSocket `worker.started`, `worker.progress`, `worker.completed`, `worker.failed`
 
 **AP.6 — Respuestas Instantaneas sin LLM**
 - [x] Mapa de respuestas rapidas que NO necesitan LLM:

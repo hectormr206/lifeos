@@ -23,8 +23,8 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | **AL** | **COMPLETADA** | Hardening: SSRF guard, security tests, coverage ratchet, progress events, enhanced doctor, troubleshooting |
 | **AM** | **COMPLETADA** | Reloj Perfecto: timezone-aware time en system prompts, memorias, calendario, cron |
 | **AN** | **COMPLETADA** | Provider Marketplace: agregar/quitar modelos via Telegram, hot-reload, auto-discovery |
-| **AO** | **COMPLETADA 80%** | Telegram UX: reply-to-bot, set_my_commands, markdown, threads, send_file |
-| **AP** | **COMPLETADA 80%** | **Axi Siempre Libre: async workers + sub-agentes + clasificador rapido** |
+| **AO** | **COMPLETADA** | Telegram UX: reply-to-bot, set_my_commands, markdown, threads, send_file |
+| **AP** | **COMPLETADA** | **Axi Siempre Libre: async workers + sub-agentes + clasificador rapido** |
 | *AH/AI/AJ* | *Vision futura* | *Firefox ext, LibreOffice AI, Cloud hosting — sacadas del consecutivo, revisar post-launch* |
 
 ## Como usar esta documentacion
