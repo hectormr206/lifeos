@@ -59,6 +59,38 @@ Esta atribucion DEBE aparecer en TODOS estos lugares y NUNCA debe ser removida:
 - **Si tienes duda sobre si algo es legal**, pregunta al usuario antes de implementar
 
 ---
+
+## Regla Permanente: Versionamiento Obligatorio
+
+**CADA push a GitHub con cambios de codigo DEBE tener un numero de version nuevo.** La version cambia segun el TIPO de cambio, no automaticamente.
+
+**Script:** `bash scripts/bump-version.sh [patch|minor|major]`
+
+Actualiza automaticamente: daemon/Cargo.toml, cli/Cargo.toml, Containerfile (VERSION + PRETTY_NAME), lifeos-apply-theme.sh
+
+### Cuando cambiar cada posicion (MAYOR.MENOR.PARCHE)
+
+| Posicion | Cuando cambia | Ejemplos |
+|----------|--------------|----------|
+| **PARCHE** (+0.0.1) | Fixes de bugs, mejoras internas, ajustes de config, seguridad menor | Fix clippy, fix CI, fix NVIDIA signing, ajustar dashboard |
+| **MENOR** (+0.1.0) | Fase nueva completada, feature visible para el usuario, nuevo canal/bridge | Fases AK-AP, WebSocket gateway, Slack/Discord, async workers |
+| **MAYOR** (+1.0.0) | Lanzamiento publico, cambio que rompe compatibilidad, reescritura grande | LifeOS 1.0 release publico |
+
+### Cuando NO cambiar version
+- Commits que SOLO tocan documentacion/markdown sin codigo
+- El commit automatico `chore: update edge channel manifest [skip ci]`
+- Commits vacios para re-trigger CI
+
+### Proceso obligatorio antes de push
+1. Desarrollar y testear localmente (build, clippy, tests)
+2. Evaluar: que cambio? → elegir `patch`, `minor`, o `major`
+3. `bash scripts/bump-version.sh [tipo]`
+4. `git add -A && git commit -m "chore: bump version to vX.Y.Z"`
+5. `git push`
+
+**Si un agente de IA (Claude, Gemini, o cualquier otro) hace push sin bumpar la version cuando hay cambios de codigo, es un ERROR que debe corregirse inmediatamente.**
+
+---
 Sintesis de:
 
 - `docs/LIFEOS_STRATEGIC_REVIEW.md` (Estrategia A — Gemini)
