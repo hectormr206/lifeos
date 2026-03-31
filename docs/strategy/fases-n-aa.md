@@ -64,7 +64,7 @@ LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el org
   - Enchufado → `balanced` o `performance`
   - "Axi, pon modo ahorro de energia" → switch a power-saver
 - [x] **CLI:** `life battery` subcommand para ver status, cambiar threshold, forzar carga completa
-- [ ] **API endpoints completos:** Hoy existen GET `/api/v1/battery/status` y POST `/api/v1/battery/threshold`, pero no aparecio GET `/api/v1/battery/history` en el API real
+- [x] **API endpoints completos:** Existen GET `/api/v1/battery/status`, POST `/api/v1/battery/threshold` y GET `/api/v1/battery/history`. Nota honesta: `battery/history` hoy devuelve un snapshot actual, no historico muestreado
 
 - [x] **HITO FASE N:** System settings, COSMIC control (ventanas/workspaces/monitores), window search, coordenadas inteligentes via vision LLM, flatpak management, battery manager, 77 iconos SVG del theme LifeOS completo
 
@@ -222,23 +222,23 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [x] **Duracion automatica:** Comenzar al detectar reunion, parar automaticamente cuando el audio sink desaparece (la reunion termino)
 
 **R.3 — Transcripcion local (Whisper)**
-- [ ] **Post-meeting transcription:** Cuando la reunion termina, pasar el audio por Whisper STT local. La funcion existe, pero el pipeline post-meeting no esta cableado
-- [ ] **Speaker diarization:** `lifeos-diarize.py` + `diarize_transcript()` existen, pero no estan invocados automaticamente al terminar la reunion
-- [ ] **Multi-idioma:** Whisper soporta 99 idiomas, pero falta el wiring final de configuracion/ejecucion en el flujo de reuniones
-- [ ] **Formato de salida:** Transcripcion con timestamps + etiquetas de hablante en formato SRT y TXT
+- [x] **Post-meeting transcription:** Cuando la reunion termina, se ejecuta Whisper STT local automaticamente
+- [x] **Speaker diarization:** `lifeos-diarize.py` + `diarize_transcript()` se invocan automaticamente al terminar la reunion
+- [x] **Multi-idioma:** Whisper soporta 99 idiomas y el flujo usa el lenguaje configurado del meeting assistant
+- [ ] **Formato de salida:** Hay `.txt` y `.diarized.txt` intermedios; no aparecio una salida final SRT/TXT establecida y documentada como contrato del producto
 
-**Evidencia host real (2026-03-31):** En `/var/lib/lifeos/meetings/` hay grabaciones `.wav`, pero no hay `.txt`, `.opus`, `.json` ni artefactos de resumen generados automaticamente.
+**Estado repo (2026-03-31):** El pipeline post-meeting ya esta cableado en repo (transcribe → diarize → summarize → memory → notify → compress). Sigue pendiente validacion host real del flujo completo tras estos cambios.
 
 **R.4 — Resumen inteligente + Action Items**
-- [ ] **Meeting summary:** Al terminar la transcripcion, enviar al LLM (local o Cerebras) para generar:
+- [x] **Meeting summary:** Al terminar la transcripcion, el daemon intenta generar resumen estructurado via LLM:
   - Resumen ejecutivo (3-5 bullet points)
   - Temas principales discutidos
   - Decisiones tomadas
   - Action items (quien, que, cuando)
   - Preguntas sin resolver
 - [ ] **Templates configurables:** El usuario elige el formato de resumen (ejecutivo, detallado, solo action items, etc.)
-- [ ] **Notificacion post-reunion:** Enviar resumen a Telegram automaticamente: "Tu reunion de Zoom termino (47 min). Resumen: ..."
-- [ ] **Archivo en memoria:** Guardar la transcripcion y resumen en la memoria de Axi para consulta futura: "Que acordamos en la reunion del lunes?"
+- [x] **Notificacion post-reunion:** El pipeline emite una notificacion/resumen via event bus al terminar
+- [x] **Archivo en memoria:** Guarda transcripcion+resumen en Memory Plane cuando esta disponible
 
 **R.5 — Privacidad**
 - [ ] **Todo local:** Audio, transcripcion, y resumen procesados localmente. NUNCA enviar audio crudo a la nube
@@ -254,7 +254,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [ ] **Soporte para reuniones largas:** procesar reuniones de minutos u horas sin asumir duraciones cortas ni romper por tamano
 - [ ] **Evidencia observable:** dashboard/logs/API deben dejar claro que se grabo, que se transcribio, que se resumio y que se elimino
 
-- [ ] **HITO FASE R — REABIERTO:** La deteccion y grabacion basica existen, pero falta cablear el pipeline post-meeting completo, corregir almacenamiento/retencion y validar el flujo end-to-end en host real
+- [ ] **HITO FASE R:** El pipeline repo ya llega de extremo a extremo, pero aun faltan validacion host real, politica final de retencion y evidencia observable completa del flujo
 
 ---
 
@@ -824,12 +824,12 @@ El tema LifeOS tiene 177 iconos en 8 contextos (antes: 77 en 6). Script generado
 | **Y** | AI Security + Self-Healing Avanzado | IMPLEMENTADA 50% | **HEADLINE** — "nunca muestra errores" |
 | **Z** | Ecosystem + Distribution + World | IMPLEMENTADA 20% | **ESCALA** — de proyecto a plataforma global |
 | **AA** | Visual Identity Completa | REPO INTEGRADO / PARCIAL | Branding fuerte en repo e imagen; falta validacion humana completa en boot/rendering/flujo visual real |
-| **AB** | Gateway WebSocket + Session Durability | REABIERTA / PARCIAL | `/ws` existe, pero protocolo y session layer siguen sobredeclarados |
-| **AC** | Plugin SDK + Capability Registry | PARCIAL | registry y manifest v2 si; `life skills doctor` no |
+| **AB** | Gateway WebSocket + Session Durability | REABIERTA / PARCIAL | `/ws` existe y SessionStore ya persiste en Telegram; protocolo y capa transversal siguen sobredeclarados |
+| **AC** | Plugin SDK + Capability Registry | REPO INTEGRADO | registry, manifest v2 y `life skills doctor` baseline ya existen |
 | **AD** | Anti-Breakage Engineering | PARCIAL | guardrails y `/metrics` si; `life audit query` y otros claims siguen pendientes |
 | **AE** | First-Boot User Creation + Welcome | COMPLETADA | Anaconda interactivo, sudoers %wheel, cosmic-initial-setup |
-| **AF** | Canales Extra (Slack, Discord, Email conv.) | PARCIAL | Slack/Discord existen como modulos, pero no estan cableados al arranque real |
-| **AG** | Mejoras Incrementales de Robustez | PARCIAL | Dedupe y pairing basico existen; cron validation es baseline y transcript export no quedo comprobado |
+| **AF** | Canales Extra (Slack, Discord, Email conv.) | REPO INTEGRADO | Slack/Discord ya se spawnean en `main.rs` bajo feature flags; falta imagen default |
+| **AG** | Mejoras Incrementales de Robustez | PARCIAL | Dedupe, pairing basico y export de conversacion existen; cron validation sigue siendo baseline |
 | **AH** | Firefox AI Local-First | PENDIENTE / EXPLORATORIA | Extension o sidebar Axi sobre modelo local, con opcion remota acotada |
 | **AI** | LibreOffice AI + UNO/MCP | PENDIENTE / EXPLORATORIA | Integracion nativa para Writer/Calc/Impress sobre modelo local y automatizacion estructurada |
 

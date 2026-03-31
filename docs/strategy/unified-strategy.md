@@ -32,7 +32,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | F | Parcial: varios bridges existen, pero la imagen por defecto no los shippea habilitados |
 | G | Repo integrado: fix de falsos positivos con tests, pendiente deploy host |
 | H-M | Mayormente integradas en repo, pero aun no todas estan re-validadas por AX |
-| N | Parcial: desktop operator fuerte, pero bateria/API aun tenia claims inflados |
+| N | Repo integrado: desktop operator fuerte; `battery/history` ya existe con contrato honesto |
 | O | Parcial: desktop operator funciona; skill learning desde uso real no wired |
 | P | Repo integrado: gaming assist y captura existen; falta validacion host dedicada |
 | Q | Parcial: MCP client/server base funciona; dashboard integration basica |
@@ -45,17 +45,17 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | X | Parcial: traduccion existe en repo, pero no esta integrada como experiencia completa del producto |
 | Y | Repo integrado: Security AI existe, pendiente validacion host dedicada |
 | AB | Repo integrado: SessionStore conectado a Telegram bridge, persiste across restarts |
-| AC | Parcial: registry/manifest si; `life skills doctor` no |
-| AD | Parcial: guardrails y `/metrics` si; claims adicionales aun no todos comprobados |
+| AC | Repo integrado: registry/manifest y `life skills doctor` baseline ya existen |
+| AD | Parcial: guardrails, `/metrics` y `life audit` existen; la query fina prometida sigue por debajo de lo dicho |
 | AE | Repo integrado con incidentes de runtime que siguen bajo vigilancia |
 | AF | Repo integrado: Slack/Discord wired a startup, feature-gated; pendiente compilar en imagen |
-| AG | Parcial: dedupe y pairing basico si; transcript export y parte de la narrativa de robustez menor no cerraron |
+| AG | Parcial: dedupe, pairing basico y export de conversacion existen; cron validation sigue siendo baseline |
 | AK | Repo integrado: `life doctor` + `life safe-mode` CLI implementados, sentinel funcional |
 | AL | Parcial: seguridad si, pero doctor/eventos WS/troubleshooting aun no estaban totalmente alineados |
 | AM | Repo integrado: tiempo/timezone quedaron bien aterrizados en repo; falta validacion host fina |
 | AN | Repo integrado: providers y hot reload tienen evidencia fuerte |
 | AO | Parcial: Telegram UX mejorada; webhook es polling-only, no webhook real |
-| AP | Repo integrado: worker lifecycle events emitidos a WebSocket; sub-workers pendientes |
+| AP | Parcial: worker pool si, pero lifecycle `worker.*` sigue sin aparecer estructurado end-to-end para dashboard/WS |
 
 ### Fases Consecutivas Proximas (implementables sin investigacion profunda)
 

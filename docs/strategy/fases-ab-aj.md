@@ -24,7 +24,7 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 | **ES el OS** | Acceso a kernel, systemd, bootc, hardware — irreplicable |
 | **Immutabilidad + rollback** | bootc atomic updates, 3 canales |
 | **GPU Game Guard** | Auto-offload LLM a CPU cuando detecta juego |
-| **Meeting assistant** | Auto-detect + grabacion basica. Transcripcion, diarizacion y resumen siguen pendientes de cableado end-to-end |
+| **Meeting assistant** | Auto-detect + grabacion basica + pipeline repo de transcripcion/diarizacion/resumen. Falta validacion host y politica final de retencion |
 | **Health monitoring** | 12 checks (CPU/GPU/SSD/battery/ergonomia/audio/privacy) |
 | **Security AI daemon** | 4 detectores, auto-isolation, forensic reports |
 | **Voz local completa** | Wake word + Whisper + Piper + TTS emocional + conversacion continua |
@@ -55,12 +55,12 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 - [ ] Slow consumer handling: drop + snapshot si >30s sin consumir
 
 **AB.2 — Session Durability**
-- [ ] Session store con sessionId estable y sessionKey tipado (`agent:axi:telegram:dm:123456`)
-- [ ] Transcript persistente JSONL en `~/.local/share/lifeos/sessions/<sessionId>.jsonl`
-- [ ] Compaction via LLM cuando transcript supera N tokens
-- [ ] Tool result truncation (>2000 tokens)
-- [ ] Session metadata: lastChannel, lastPeerId, deliveryContext, lastActiveAt
-- [ ] Disk budget configurable con auto-prune de sesiones viejas
+- [x] Session store con sessionId estable y sessionKey tipado (`agent:axi:telegram:dm:123456`)
+- [x] Transcript persistente JSONL en `~/.local/share/lifeos/sessions/<sessionId>.jsonl`
+- [x] Compaction via LLM cuando transcript supera N tokens
+- [x] Tool result truncation (>2000 tokens)
+- [x] Session metadata: lastChannel, lastPeerId, deliveryContext, lastActiveAt
+- [x] Disk budget configurable con auto-prune de sesiones viejas
 
 **AB.3 — Unified Channel Routing**
 - [ ] Session key contract para todos los bridges: `agent:axi:<channel>:<scope>:<peerId>`
@@ -94,7 +94,7 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 - [x] Check CI: skills no importan modulos internos del daemon
 - [x] Contract tests: registry acepta validos, rechaza invalidos
 - [x] Baseline de superficie publica de APIs
-- [ ] `life skills doctor` para detectar/reparar skills rotos
+- [x] `life skills doctor` para detectar/reparar skills rotos (baseline diagnostics via `/api/v1/skills/diagnostics`)
 
 **AC.4 — Discovery Seguro**
 - [x] Rutas: user skills > workspace skills > system skills
@@ -125,6 +125,7 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 - [x] Structured logging con campos queryables (session_id, task_id, provider, latency_ms)
 - [x] Metrics exporter Prometheus-compatible
 - [ ] `life audit query --since 24h --type llm_call`
+  Hoy existe `life audit --since ... --type ...`, pero funciona como reporte agregado de health/supervisor/skills, no como query fino de ledger por tipo `llm_call`
 
 **Orden recomendado:** AE (first-boot, rapido) → AD (anti-breakage) → AB (gateway) → AC (ecosistema) → AF (canales extra)
 
@@ -187,7 +188,7 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 |-----|--------|------|
 | **Session target validation** | RESUELTO | Cron failure tracking en AG.2 |
 | **Inbound message dedupe** | RESUELTO | message_dedupe.rs en AG.1 |
-| **Transcript export** | REABIERTO / NO COMPROBADO | No aparecio evidencia clara de `export_conversation` como capacidad real del producto |
+| **Transcript export** | PARCIAL | `export_conversation` existe y exporta la conversacion actual, pero no equivale todavia a una capa general de transcript/session export transversal |
 | **Pairing system** | PARCIAL | Existe pairing basico en Telegram para usuarios adicionales, pero no el pairing multi-dispositivo mas amplio |
 
 ### Fase AG — Mejoras Incrementales de Robustez
@@ -206,7 +207,9 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 - [ ] Pairing multi-dispositivo o con metadatos de superficie: sigue siendo futuro
 
 **AG.4 — Export de Conversaciones**
-- [ ] No aparecio evidencia clara de un flujo end-to-end de export de transcript/conversation como capability operativa ya disponible
+- [x] Existe `export_conversation` en `telegram_tools.rs`: exporta la conversacion activa a archivo y lo envia al usuario via `__SEND_FILE__`
+- [ ] No equivale todavia a export general de sesiones durables multicanal o session store completo
+
 | **Native apps (iOS/Android)** | FUTURO | Requiere equipo, post-lanzamiento |
 
 ### Fase AJ — LifeOS Cloud: Hosting Multi-Tenant + Acceso Movil 24/7 (FUTURA)
@@ -299,7 +302,7 @@ Break-even: 12 usuarios Starter cubren los $60/mes de presupuesto actual.
 - [x] Safe mode desactiva: SelfImprovingDaemon, PromptTuner, SkillGenerator, AutonomousAgent
 - [x] Safe mode mantiene: API, Telegram (respond-only), health checks, comandos basicos
 - [x] Notificacion Telegram: safe mode' cuando quieras"
-- [ ] Comando `life safe-mode status` y `life safe-mode exit`
+- [x] Comando `life safe-mode status` y `life safe-mode exit`
 
 **AK.2 — Config Time Machine (git versionado)**
 - [x] `/var/lib/lifeos/config-checkpoints/`: repositorio git local con toda la config mutable
@@ -413,7 +416,7 @@ Layer 0: Heartbeat (systemd watchdog)
 **AL.6 — Guia de Troubleshooting para Usuario Final**
 - [x] `docs/user/troubleshooting.md` con formato problema-diagnostico-solucion
 - [x] Cubrir: "Axi no responde", "Telegram no conecta", "Modelo local lento", "Permiso denegado", "Actualizacion fallo"
-- [ ] Cada entrada con comando concreto (`life doctor`, `systemctl status lifeosd`)
+- [x] Cada entrada con comando concreto (`life doctor`, `systemctl status lifeosd`, `curl /api/v1/health`, etc.)
 
 **Prioridad:** MEDIA. AL.1 y AL.2 son rapidos y de alto impacto (seguridad). AL.4 mejora UX perceptiblemente. Puede ejecutarse en paralelo con AK.
 

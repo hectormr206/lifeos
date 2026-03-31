@@ -2,7 +2,7 @@
 
 **Objetivo:** Dejar de tratarnos el roadmap como marketing interno. Cada checkbox marcado debe corresponder a un flujo realmente cableado, ejecutable, observable y sostenible en host real. Si una capacidad existe solo como modulo suelto, helper no invocado, TODO pendiente, o depende de pasos manuales no documentados, NO cuenta como completa.
 
-**Problema que corrige:** Ya tenemos evidencia de claims optimistas. Ejemplo concreto: Fase R (reuniones) tenia checkboxes de transcripcion, diarizacion, resumen, Telegram y archivo en memoria, pero el flujo real en runtime se corta al terminar la reunion y deja solo `.wav` en `/var/lib/lifeos/meetings/`.
+**Problema que corrige:** Ya tenemos evidencia de claims optimistas. Ejemplo concreto: Fase R (reuniones) estuvo documentada como completa cuando el runtime real solo detectaba y grababa `.wav`. Tras las correcciones recientes el repo ya cablea post-procesamiento end-to-end, pero la validacion host real y la politica final de retencion siguen pendientes.
 
 **Documento de seguimiento:** Ver [auditoria-estados-reales.md](auditoria-estados-reales.md) para la matriz viva de estados reales, diferencias repo vs imagen vs host, y huecos documentados.
 
@@ -53,9 +53,14 @@ Si falla cualquiera de esas condiciones:
 - [x] Game Guard tenia falsos positivos por GameMode y por detectar a `llama-server` como juego
 - [x] El default de modelo estaba desalineado entre plantilla de sistema, config de usuario y runtime
 - [x] Fix R: meeting pipeline wired end-to-end (transcribe → diarize → summarize → memory → notify)
+- [x] Fix N: `battery/history` ya existe como endpoint con contrato honesto de snapshot actual
 - [x] Fix AF: Slack/Discord bridges spawned in main.rs with feature gates
 - [x] Fix AB: SessionStore connected to Telegram bridge (persists across restarts)
-- [x] Fix AP: Worker lifecycle events emitted to WebSocket event bus
+- [x] Fix AC: `life skills doctor` existe como baseline diagnostics
+- [x] Fix AD: `life audit` existe como comando baseline, aunque no como query fino de ledger
+- [x] Fix AG: `export_conversation` existe para exportar la conversacion activa
+- [x] Fix X: existe `POST /api/v1/translate`, aunque la experiencia completa del producto sigue parcial
+- [ ] Fix AP: Worker lifecycle structured events siguen pendientes end-to-end para dashboard/WS
 - [x] Fix G: Game Guard false positive fixes verified with tests
 - [x] Fix AK: life doctor + life safe-mode CLI commands implemented
 - [ ] El roadmap ya refleja todas las demas discrepancias historicas
