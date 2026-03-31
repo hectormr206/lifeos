@@ -12,6 +12,8 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fases-ab-aj.md](fases-ab-aj.md) | Fases AB-AL (roadmap activo) + vision futura (AH/AI/AJ sacadas del consecutivo) | ~460 |
 | [competencia.md](competencia.md) | Analisis competitivo detallado (OpenClaw, Devin, Replit, gigantes tech) | ~292 |
 | [fase-aq-personalizacion.md](fase-aq-personalizacion.md) | Fase AQ: experiencias personalizadas (10 sub-fases, User Model, adaptacion, proactividad) | ~160 |
+| [fase-ar-custom-training.md](fase-ar-custom-training.md) | Fase AR: entrenamiento local de modelos (LoRA/QLoRA, Unsloth, distillation, DPO) | ~280 |
+| [mejoras-memoria.md](mejoras-memoria.md) | Mejoras al memory_plane: filtro basura, decay exponencial, dedup, resumen, permanentes | ~80 |
 
 ## Estado de Fases (resumen rapido)
 
@@ -27,6 +29,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | **AO** | **COMPLETADA** | Telegram UX: reply-to-bot, set_my_commands, markdown, threads, send_file |
 | **AP** | **COMPLETADA** | **Axi Siempre Libre: async workers + sub-agentes + clasificador rapido** |
 | **AQ** | **PROXIMA** | **Experiencias Personalizadas: User Model, adaptacion de tono, prediccion proactiva, contextos, workflows** |
+| **AR** | **INVESTIGACION** | **Entrenamiento Local: QLoRA fine-tuning, knowledge distillation, DPO, modelos especializados** |
 | *AH/AI/AJ* | *Vision futura* | *Firefox ext, LibreOffice AI, Cloud hosting — sacadas del consecutivo, revisar post-launch* |
 
 ## Como usar esta documentacion
@@ -36,4 +39,4 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 - **Quieres ver la vision y reglas?** `vision-y-decisiones.md`
 - **Quieres ver los gaps de OpenClaw?** `fases-ab-aj.md` (tabla comparativa al inicio)
 
-Ultima actualizacion: 2026-03-28
+Ultima actualizacion: 2026-03-30
