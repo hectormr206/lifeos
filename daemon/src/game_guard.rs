@@ -362,13 +362,15 @@ pub fn detect_gamemode_active() -> bool {
     // Try gamemoded --status first (fast path)
     if let Ok(output) = Command::new("gamemoded").arg("--status").output() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.contains("active") {
-            return true;
-        }
+        return gamemode_status_is_active(&stdout);
     }
 
-    // Fallback: look for a running gamemoded process in /proc
-    proc_find_process_by_name("gamemoded").is_some()
+    false
+}
+
+fn gamemode_status_is_active(stdout: &str) -> bool {
+    let normalized = stdout.trim().to_ascii_lowercase();
+    !normalized.contains("inactive") && normalized.contains("active")
 }
 
 /// Find a real game process that is a descendant of gamemoded / Steam.
@@ -469,6 +471,9 @@ pub fn detect_vram_heavy_processes(threshold_mb: u64) -> Vec<GameInfo> {
     }
 
     results
+        .into_iter()
+        .filter(|info| !is_non_game_gpu_process(&info.name))
+        .collect()
 }
 
 /// Parse the output of `nvidia-smi pmon -c 1 -s m`.
@@ -527,10 +532,7 @@ fn parse_nvidia_pmon_output(output: &str, threshold_mb: u64) -> Vec<GameInfo> {
         }
 
         // Exclude known non-game GPU consumers
-        if NON_GAME_GPU_PROCESSES
-            .iter()
-            .any(|n| command.eq_ignore_ascii_case(n))
-        {
+        if is_non_game_gpu_process(command) {
             continue;
         }
 
@@ -543,6 +545,12 @@ fn parse_nvidia_pmon_output(output: &str, threshold_mb: u64) -> Vec<GameInfo> {
     }
 
     results
+}
+
+fn is_non_game_gpu_process(name: &str) -> bool {
+    NON_GAME_GPU_PROCESSES
+        .iter()
+        .any(|candidate| name.eq_ignore_ascii_case(candidate))
 }
 
 // ---------------------------------------------------------------------------
@@ -847,6 +855,22 @@ mod tests {
     fn test_parse_nvidia_pmon_empty() {
         let results = parse_nvidia_pmon_output("", 500);
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_gamemode_status_requires_real_active_state() {
+        assert!(gamemode_status_is_active("gamemode is active"));
+        assert!(gamemode_status_is_active("GameMode is ACTIVE\n"));
+        assert!(!gamemode_status_is_active("gamemode is inactive"));
+        assert!(!gamemode_status_is_active(""));
+    }
+
+    #[test]
+    fn test_is_non_game_gpu_process_matches_llama_server_variants() {
+        assert!(is_non_game_gpu_process("llama-server"));
+        assert!(is_non_game_gpu_process("LLAMA-SERVER"));
+        assert!(is_non_game_gpu_process("cosmic-comp"));
+        assert!(!is_non_game_gpu_process("RERequiem"));
     }
 
     #[test]
