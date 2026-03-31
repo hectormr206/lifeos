@@ -15,6 +15,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fase-ar-custom-training.md](fase-ar-custom-training.md) | Fase AR: entrenamiento local de modelos (LoRA/QLoRA, Unsloth, distillation, DPO) | ~280 |
 | [mejoras-memoria.md](mejoras-memoria.md) | Mejoras al memory_plane: filtro basura, decay exponencial, dedup, resumen, permanentes | ~80 |
 | [fase-as-lifeos-android.md](fase-as-lifeos-android.md) | Fase AS: LifeOS Mobile para Pixel (GrapheneOS, hibrido local+server) | ~120 |
+| [fase-at-android-app-nativa.md](fase-at-android-app-nativa.md) | Fase AT: App Android nativa con todos los sentidos de Axi (cualquier telefono) | ~420 |
 | [fase-au-seguridad-por-defecto.md](fase-au-seguridad-por-defecto.md) | Fase AU: seguro desde primer boot (firewall, sysctl, SSH, auditd, DNS, USB) | ~130 |
 
 ## Estado de Fases (resumen rapido)
@@ -34,6 +35,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | **AR** | **INVESTIGACION** | **Entrenamiento Local: QLoRA fine-tuning, knowledge distillation, DPO, modelos especializados** |
 | *AH/AI/AJ* | *Vision futura* | *Firefox ext, LibreOffice AI, Cloud hosting — sacadas del consecutivo, revisar post-launch* |
 | *AS* | *Vision futura* | *LifeOS Android: companion app + ROM para Pixel 7 Pro* |
+| *AT* | *Vision futura* | *App Android nativa: todos los sentidos de Axi en cualquier telefono (alternativa practica a AS)* |
 
 ## Como usar esta documentacion
 
