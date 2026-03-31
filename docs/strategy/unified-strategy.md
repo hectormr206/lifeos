@@ -19,27 +19,46 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fase-au-seguridad-por-defecto.md](fase-au-seguridad-por-defecto.md) | Fase AU: seguro desde primer boot (firewall, sysctl, SSH, auditd, DNS, USB) | ~130 |
 | [fase-av-financiamiento.md](fase-av-financiamiento.md) | Fase AV: financiamiento y sostenibilidad (NLnet, grants, sponsors, monetizacion) | ~60 |
 | [fase-aw-cross-platform.md](fase-aw-cross-platform.md) | Fase AW: cross-platform controller (Windows, Mac, Android, iOS clients) | ~80 |
+| [fase-ax-auditoria-de-realidad.md](fase-ax-auditoria-de-realidad.md) | Fase AX: auditoria de realidad, verificacion por evidencia y cierre de claims rotos | ~140 |
+| [auditoria-estados-reales.md](auditoria-estados-reales.md) | Matriz viva de estados reales: que esta validado en host, que esta parcial y que esta solo en repo o feature-flag | ~110 |
 
 ## Estado de Fases (resumen rapido)
 
-### Fases Completadas (A-AP)
+### Estado Real Actual
 
 | Fases | Descripcion |
 |-------|-------------|
-| A-M | Core: LLM router, Telegram, supervisor, browser, self-improvement, multimodal |
-| N-AA | Desktop operator, gaming, MCP, meetings, security AI, visual identity (657 SVGs) |
-| AB-AG | WebSocket gateway, session store, plugin SDK, first-boot, Slack/Discord, dedupe |
-| AK | Project Axolotl: 5-layer self-healing (watchdog, safe mode, config store, circuit breaker, sentinel, SQLite) |
-| AL | Hardening: SSRF guard, security tests, coverage ratchet, progress events, enhanced doctor, troubleshooting |
-| AM | Reloj Perfecto: timezone-aware time en system prompts, memorias, calendario, cron |
-| AN | Provider Marketplace: agregar/quitar modelos via Telegram, hot-reload, auto-discovery |
-| AO | Telegram UX: reply-to-bot, set_my_commands, markdown, threads, send_file |
-| AP | Axi Siempre Libre: async workers + sub-agentes + clasificador rapido |
+| A-E | Base fuerte de producto en repo; A tuvo evidencia host clara |
+| F | Parcial: varios bridges existen, pero la imagen por defecto no los shippea habilitados |
+| G | Reabierta por auditoria y bugs reales de host |
+| H-M | Mayormente integradas en repo, pero aun no todas estan re-validadas por AX |
+| N | Parcial: desktop operator fuerte, pero bateria/API aun tenia claims inflados |
+| O | Parcial: autonomia visual fuerte; skill extraction/refinement desde uso real sigue pendiente |
+| P | Repo integrado: gaming assist y captura existen; falta validacion host dedicada |
+| Q | Parcial: MCP base fuerte, pero dashboard/pre-integraciones aun no cierran del todo |
+| R | Reabierta: detecta y graba, pero no procesa reuniones end-to-end |
+| S-T | Parciales: salud y voz existen, pero varios claims de cierre total siguen sin evidencia suficiente |
+| U-W | Parciales: self-improvement, knowledge graph y reliability existen en repo, pero no como historia totalmente cerrada |
+| X | Parcial: traduccion existe en repo, pero no esta integrada como experiencia completa del producto |
+| Y | Repo integrado: Security AI existe, pendiente validacion host dedicada |
+| AB | Parcial: `/ws` existe, pero protocolo y sesiones estaban sobredeclarados |
+| AC | Parcial: registry/manifest si; `life skills doctor` no |
+| AD | Parcial: guardrails y `/metrics` si; claims adicionales aun no todos comprobados |
+| AE | Repo integrado con incidentes de runtime que siguen bajo vigilancia |
+| AF | Parcial: Slack/Discord existen como modulos, pero no estan cableados al arranque real |
+| AG | Parcial: dedupe y pairing basico si; transcript export y parte de la narrativa de robustez menor no cerraron |
+| AK | Parcial: la base de self-healing existe, pero health/repair CLI y sentinel estaban sobredeclarados |
+| AL | Parcial: seguridad si, pero doctor/eventos WS/troubleshooting aun no estaban totalmente alineados |
+| AM | Repo integrado: tiempo/timezone quedaron bien aterrizados en repo; falta validacion host fina |
+| AN | Repo integrado: providers y hot reload tienen evidencia fuerte |
+| AO | Parcial: Telegram UX mejoro, pero webhook y parte del polish seguian inflados |
+| AP | Parcial: worker pool si, pero sub-agentes/worker WS/dashboard siguen incompletos |
 
 ### Fases Consecutivas Proximas (implementables sin investigacion profunda)
 
 | Fase | Descripcion |
 |------|-------------|
+| **AX** | **Auditoria de realidad: seguir corrigiendo claims, fases y docs hasta que 100% vuelva a significar “funciona de verdad”** |
 | **AQ** | **Experiencias Personalizadas: User Model, adaptacion de tono, prediccion proactiva, contextos, workflows** |
 | **AU** | **Seguridad por Defecto: firewall, sysctl, SSH hardening, auditd, DNS seguro, USB guard** |
 
@@ -68,4 +87,4 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 - **Quieres ver la vision y reglas?** `vision-y-decisiones.md`
 - **Quieres ver los gaps de OpenClaw?** `fases-ab-aj.md` (tabla comparativa al inicio)
 
-Ultima actualizacion: 2026-03-30
+Ultima actualizacion: 2026-03-31
