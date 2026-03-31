@@ -14,6 +14,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fase-aq-personalizacion.md](fase-aq-personalizacion.md) | Fase AQ: experiencias personalizadas (10 sub-fases, User Model, adaptacion, proactividad) | ~160 |
 | [fase-ar-custom-training.md](fase-ar-custom-training.md) | Fase AR: entrenamiento local de modelos (LoRA/QLoRA, Unsloth, distillation, DPO) | ~280 |
 | [mejoras-memoria.md](mejoras-memoria.md) | Mejoras al memory_plane: filtro basura, decay exponencial, dedup, resumen, permanentes | ~80 |
+| [fase-as-lifeos-android.md](fase-as-lifeos-android.md) | Fase AS: LifeOS Mobile para Pixel (GrapheneOS, hibrido local+server) | ~120 |
 
 ## Estado de Fases (resumen rapido)
 
@@ -31,6 +32,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | **AQ** | **PROXIMA** | **Experiencias Personalizadas: User Model, adaptacion de tono, prediccion proactiva, contextos, workflows** |
 | **AR** | **INVESTIGACION** | **Entrenamiento Local: QLoRA fine-tuning, knowledge distillation, DPO, modelos especializados** |
 | *AH/AI/AJ* | *Vision futura* | *Firefox ext, LibreOffice AI, Cloud hosting — sacadas del consecutivo, revisar post-launch* |
+| *AS* | *Vision futura* | *LifeOS Android: companion app + ROM para Pixel 7 Pro* |
 
 ## Como usar esta documentacion
 
