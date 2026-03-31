@@ -15,6 +15,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fase-ar-custom-training.md](fase-ar-custom-training.md) | Fase AR: entrenamiento local de modelos (LoRA/QLoRA, Unsloth, distillation, DPO) | ~280 |
 | [mejoras-memoria.md](mejoras-memoria.md) | Mejoras al memory_plane: filtro basura, decay exponencial, dedup, resumen, permanentes | ~80 |
 | [fase-as-lifeos-android.md](fase-as-lifeos-android.md) | Fase AS: LifeOS Mobile para Pixel (GrapheneOS, hibrido local+server) | ~120 |
+| [fase-au-seguridad-por-defecto.md](fase-au-seguridad-por-defecto.md) | Fase AU: seguro desde primer boot (firewall, sysctl, SSH, auditd, DNS, USB) | ~130 |
 
 ## Estado de Fases (resumen rapido)
 
