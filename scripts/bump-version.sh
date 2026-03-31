@@ -55,12 +55,15 @@ sed -i "0,/^version = \"$CURRENT\"/s//version = \"$NEW\"/" cli/Cargo.toml
 echo "  ✓ cli/Cargo.toml"
 
 # 3. Containerfile VERSION
-sed -i "s/VERSION=\"[0-9]*\.[0-9]* Axolotl\"/VERSION=\"$NEW Axolotl\"/" image/Containerfile
+sed -i "s/VERSION=\"[0-9]*\.[0-9]*\.[0-9]* Axolotl\"/VERSION=\"$NEW Axolotl\"/" image/Containerfile
 echo "  ✓ image/Containerfile (VERSION)"
 
 # 4. Containerfile PRETTY_NAME
 sed -i "s/LifeOS [0-9]*\.[0-9]*\.[0-9]* Axolotl/LifeOS $NEW Axolotl/g" image/Containerfile
 echo "  ✓ image/Containerfile (PRETTY_NAME)"
+
+# 5b. GRUB title (update if codename changes in the future)
+# Currently: title-text: "LifeOS"  — no version in GRUB title (intentional)
 
 # 5. lifeos-apply-theme.sh
 sed -i "s/CURRENT_VERSION=\"[0-9]*\.[0-9]*\.[0-9]*\"/CURRENT_VERSION=\"$NEW\"/" image/files/usr/local/bin/lifeos-apply-theme.sh
