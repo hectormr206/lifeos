@@ -5,7 +5,7 @@
   <path d="M 392 180 Q 472 160 452 120 Q 432 180 372 210" fill="none" stroke="#FF6B9D" stroke-width="24" stroke-linecap="round"/>
   <path d="M 412 256 Q 492 256 482 200 Q 452 256 392 256" fill="none" stroke="#FF6B9D" stroke-width="24" stroke-linecap="round"/>
   <path d="M 392 332 Q 472 352 452 392 Q 432 332 372 302" fill="none" stroke="#FF6B9D" stroke-width="24" stroke-linecap="round"/>
-  <rect x="106" y="106" width="300" height="260" rx="130" fill="#00D4AA"/>
+  <rect x="106" y="106" rx="130" fill="#00D4AA"/>
   <circle cx="196" cy="226" r="24" fill="#0F0F1B"/>
   <circle cx="204" cy="218" r="8" fill="#E8E8E8"/>
   <circle cx="316" cy="226" r="24" fill="#0F0F1B"/>

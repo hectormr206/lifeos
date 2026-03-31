@@ -1,3 +1,3 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <path d="M128 64 L384 64 L384 448 L256 352 L128 448 Z" fill="#161830"/><rect x="224" y="128" width="64" height="160" rx="8" fill="#00D4AA"/><rect x="176" y="176" width="160" height="64" rx="8" fill="#00D4AA"/>
+  <path d="M128 64 L384 64 L384 448 L256 352 L128 448 Z" fill="#2A2A3E"/><rect x="224" y="128" rx="8" fill="#00D4AA"/><rect x="176" y="176" rx="8" fill="#00D4AA"/>
 </svg>

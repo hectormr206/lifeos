@@ -2,10 +2,10 @@
   <line x1="256" y1="160" x2="152" y2="336" stroke="#00D4AA" stroke-width="8"/>
   <line x1="256" y1="160" x2="360" y2="336" stroke="#00D4AA" stroke-width="8"/>
   <line x1="152" y1="336" x2="360" y2="336" stroke="#00D4AA" stroke-width="8"/>
-  <circle cx="256" cy="152" r="48" fill="#161830" stroke="#00D4AA" stroke-width="8"/>
-  <circle cx="152" cy="344" r="48" fill="#161830" stroke="#00D4AA" stroke-width="8"/>
-  <circle cx="360" cy="344" r="48" fill="#161830" stroke="#00D4AA" stroke-width="8"/>
-  <rect x="232" y="128" width="48" height="48" rx="8" fill="#00D4AA"/>
-  <rect x="128" y="320" width="48" height="48" rx="8" fill="#00D4AA"/>
-  <rect x="336" y="320" width="48" height="48" rx="8" fill="#00D4AA"/>
+  <circle cx="256" cy="152" r="48" fill="#2A2A3E" stroke="#00D4AA" stroke-width="8"/>
+  <circle cx="152" cy="344" r="48" fill="#2A2A3E" stroke="#00D4AA" stroke-width="8"/>
+  <circle cx="360" cy="344" r="48" fill="#2A2A3E" stroke="#00D4AA" stroke-width="8"/>
+  <rect x="232" y="128" rx="8" fill="#00D4AA"/>
+  <rect x="128" y="320" rx="8" fill="#00D4AA"/>
+  <rect x="336" y="320" rx="8" fill="#00D4AA"/>
 </svg>

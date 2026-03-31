@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <path d="M112 48 L336 48 L400 112 L400 464 L112 464 Z" fill="#161830"/>
+  <path d="M112 48 L336 48 L400 112 L400 464 L112 464 Z" fill="#2A2A3E"/>
   <path d="M336 48 L336 112 L400 112 Z" fill="#00D4AA" opacity="0.5"/>
   <text x="188" y="340" font-family="serif" font-size="160" font-weight="bold" fill="#00D4AA" opacity="0.6">A</text>
 </svg>

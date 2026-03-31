@@ -5,7 +5,7 @@
   <circle cx="256" cy="152" r="48" fill="#E8E8E8" stroke="#E8E8E8" stroke-width="8"/>
   <circle cx="152" cy="344" r="48" fill="#E8E8E8" stroke="#E8E8E8" stroke-width="8"/>
   <circle cx="360" cy="344" r="48" fill="#E8E8E8" stroke="#E8E8E8" stroke-width="8"/>
-  <rect x="232" y="128" width="48" height="48" rx="8" fill="#E8E8E8"/>
-  <rect x="128" y="320" width="48" height="48" rx="8" fill="#E8E8E8"/>
-  <rect x="336" y="320" width="48" height="48" rx="8" fill="#E8E8E8"/>
+  <rect x="232" y="128" rx="8" fill="#E8E8E8"/>
+  <rect x="128" y="320" rx="8" fill="#E8E8E8"/>
+  <rect x="336" y="320" rx="8" fill="#E8E8E8"/>
 </svg>

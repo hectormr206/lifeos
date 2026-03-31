@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect x="64" y="80" width="384" height="352" rx="32" fill="#161830"/>
+  <rect x="64" y="80" rx="32" fill="#2A2A3E"/>
   <path d="M64 140 C64 118 82 100 104 100 L200 100 L232 132 L408 132 C430 132 448 150 448 172 L448 400 C448 422 430 440 408 440 L104 440 C82 440 64 422 64 400 Z" fill="#00D4AA"/>
-  <rect x="180" y="260" width="152" height="16" rx="8" fill="#161830" opacity="0.3"/>
-  <rect x="180" y="300" width="100" height="16" rx="8" fill="#161830" opacity="0.2"/>
+  <rect x="180" y="260" rx="8" fill="#2A2A3E" opacity="0.3"/>
+  <rect x="180" y="300" rx="8" fill="#2A2A3E" opacity="0.2"/>
 </svg>

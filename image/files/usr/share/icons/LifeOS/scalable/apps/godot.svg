@@ -1,3 +1,3 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <circle cx="256" cy="256" r="200" fill="#161830"/><circle cx="200" cy="200" r="40" fill="#00D4AA"/><circle cx="312" cy="200" r="40" fill="#00D4AA"/><path d="M200 312 Q256 368 312 312" fill="none" stroke="#00D4AA" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="200" fill="#2A2A3E"/><circle cx="200" cy="200" r="40" fill="#00D4AA"/><circle cx="312" cy="200" r="40" fill="#00D4AA"/><path d="M200 312 Q256 368 312 312" fill="none" stroke="#00D4AA" stroke-width="16" stroke-linecap="round"/>
 </svg>

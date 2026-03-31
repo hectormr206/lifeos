@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <path d="M112 48 L336 48 L400 112 L400 464 L112 464 Z" fill="#161830"/>
+  <path d="M112 48 L336 48 L400 112 L400 464 L112 464 Z" fill="#2A2A3E"/>
   <path d="M336 48 L336 112 L400 112 Z" fill="#00D4AA" opacity="0.5"/>
-  <rect x="160" y="168" width="192" height="12" rx="6" fill="#00D4AA" opacity="0.6"/><rect x="160" y="204" width="160" height="12" rx="6" fill="#00D4AA" opacity="0.5"/><rect x="160" y="240" width="192" height="12" rx="6" fill="#00D4AA" opacity="0.6"/><rect x="160" y="276" width="140" height="12" rx="6" fill="#00D4AA" opacity="0.5"/><rect x="160" y="312" width="192" height="12" rx="6" fill="#00D4AA" opacity="0.6"/><rect x="160" y="348" width="120" height="12" rx="6" fill="#00D4AA" opacity="0.4"/>
+  <rect x="160" y="168" rx="6" fill="#00D4AA" opacity="0.6"/><rect x="160" y="204" rx="6" fill="#00D4AA" opacity="0.5"/><rect x="160" y="240" rx="6" fill="#00D4AA" opacity="0.6"/><rect x="160" y="276" rx="6" fill="#00D4AA" opacity="0.5"/><rect x="160" y="312" rx="6" fill="#00D4AA" opacity="0.6"/><rect x="160" y="348" rx="6" fill="#00D4AA" opacity="0.4"/>
 </svg>
