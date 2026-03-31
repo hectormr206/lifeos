@@ -17,25 +17,49 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fase-as-lifeos-android.md](fase-as-lifeos-android.md) | Fase AS: LifeOS Mobile para Pixel (GrapheneOS, hibrido local+server) | ~120 |
 | [fase-at-android-app-nativa.md](fase-at-android-app-nativa.md) | Fase AT: App Android nativa con todos los sentidos de Axi (cualquier telefono) | ~420 |
 | [fase-au-seguridad-por-defecto.md](fase-au-seguridad-por-defecto.md) | Fase AU: seguro desde primer boot (firewall, sysctl, SSH, auditd, DNS, USB) | ~130 |
+| [fase-av-financiamiento.md](fase-av-financiamiento.md) | Fase AV: financiamiento y sostenibilidad (NLnet, grants, sponsors, monetizacion) | ~60 |
+| [fase-aw-cross-platform.md](fase-aw-cross-platform.md) | Fase AW: cross-platform controller (Windows, Mac, Android, iOS clients) | ~80 |
 
 ## Estado de Fases (resumen rapido)
 
-| Fases | Estado | Descripcion |
-|-------|--------|-------------|
-| A-M | COMPLETADAS | Core: LLM router, Telegram, supervisor, browser, self-improvement, multimodal |
-| N-AA | COMPLETADAS | Desktop operator, gaming, MCP, meetings, security AI, visual identity (657 SVGs) |
-| AB-AG | COMPLETADAS | WebSocket gateway, session store, plugin SDK, first-boot, Slack/Discord, dedupe |
-| **AK** | **COMPLETADA** | Project Axolotl: 5-layer self-healing (watchdog, safe mode, config store, circuit breaker, sentinel, SQLite) |
-| **AL** | **COMPLETADA** | Hardening: SSRF guard, security tests, coverage ratchet, progress events, enhanced doctor, troubleshooting |
-| **AM** | **COMPLETADA** | Reloj Perfecto: timezone-aware time en system prompts, memorias, calendario, cron |
-| **AN** | **COMPLETADA** | Provider Marketplace: agregar/quitar modelos via Telegram, hot-reload, auto-discovery |
-| **AO** | **COMPLETADA** | Telegram UX: reply-to-bot, set_my_commands, markdown, threads, send_file |
-| **AP** | **COMPLETADA** | **Axi Siempre Libre: async workers + sub-agentes + clasificador rapido** |
-| **AQ** | **PROXIMA** | **Experiencias Personalizadas: User Model, adaptacion de tono, prediccion proactiva, contextos, workflows** |
-| **AR** | **INVESTIGACION** | **Entrenamiento Local: QLoRA fine-tuning, knowledge distillation, DPO, modelos especializados** |
-| *AH/AI/AJ* | *Vision futura* | *Firefox ext, LibreOffice AI, Cloud hosting — sacadas del consecutivo, revisar post-launch* |
-| *AS* | *Vision futura* | *LifeOS Android: companion app + ROM para Pixel 7 Pro* |
-| *AT* | *Vision futura* | *App Android nativa: todos los sentidos de Axi en cualquier telefono (alternativa practica a AS)* |
+### Fases Completadas (A-AP)
+
+| Fases | Descripcion |
+|-------|-------------|
+| A-M | Core: LLM router, Telegram, supervisor, browser, self-improvement, multimodal |
+| N-AA | Desktop operator, gaming, MCP, meetings, security AI, visual identity (657 SVGs) |
+| AB-AG | WebSocket gateway, session store, plugin SDK, first-boot, Slack/Discord, dedupe |
+| AK | Project Axolotl: 5-layer self-healing (watchdog, safe mode, config store, circuit breaker, sentinel, SQLite) |
+| AL | Hardening: SSRF guard, security tests, coverage ratchet, progress events, enhanced doctor, troubleshooting |
+| AM | Reloj Perfecto: timezone-aware time en system prompts, memorias, calendario, cron |
+| AN | Provider Marketplace: agregar/quitar modelos via Telegram, hot-reload, auto-discovery |
+| AO | Telegram UX: reply-to-bot, set_my_commands, markdown, threads, send_file |
+| AP | Axi Siempre Libre: async workers + sub-agentes + clasificador rapido |
+
+### Fases Consecutivas Proximas (implementables sin investigacion profunda)
+
+| Fase | Descripcion |
+|------|-------------|
+| **AQ** | **Experiencias Personalizadas: User Model, adaptacion de tono, prediccion proactiva, contextos, workflows** |
+| **AU** | **Seguridad por Defecto: firewall, sysctl, SSH hardening, auditd, DNS seguro, USB guard** |
+
+### Fases de Investigacion (requieren mas research antes de implementar)
+
+| Fase | Descripcion |
+|------|-------------|
+| **AR** | **Entrenamiento Local: QLoRA fine-tuning, knowledge distillation, DPO, modelos especializados** |
+| **AV** | **Financiamiento y Sostenibilidad: NLnet (URGENTE), grants, sponsors, monetizacion** |
+
+### Vision Futura (ideas a largo plazo, no para desarrollo inmediato)
+
+| Fase | Descripcion |
+|------|-------------|
+| *AH* | *Firefox extension: Axi dentro del navegador* |
+| *AI* | *LibreOffice AI: asistente en documentos, hojas de calculo, presentaciones* |
+| *AJ* | *Cloud hosting: LifeOS como servicio hospedado* |
+| *AS* | *LifeOS Android: companion app + ROM para Pixel 7 Pro* |
+| *AT* | *App Android nativa: todos los sentidos de Axi en cualquier telefono* |
+| *AW* | *Cross-Platform Controller: LifeOS gobierna Windows, Mac, Android, iOS* |
 
 ## Como usar esta documentacion
 
