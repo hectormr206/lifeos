@@ -10,7 +10,10 @@ mod system;
 #[cfg(test)]
 mod main_tests;
 
-use commands::{first_boot::FirstBootArgs, init::InitArgs, status::StatusArgs, update::UpdateArgs};
+use commands::{
+    doctor::DoctorArgs, first_boot::FirstBootArgs, init::InitArgs, status::StatusArgs,
+    update::UpdateArgs,
+};
 
 #[derive(Parser)]
 #[command(name = "life")]
@@ -39,6 +42,11 @@ enum Commands {
     Status(StatusArgs),
     /// Update system
     Update(UpdateArgs),
+    /// Run system health diagnostics
+    Doctor(DoctorArgs),
+    /// Safe mode controls
+    #[clap(subcommand)]
+    SafeMode(commands::safe_mode::SafeModeCommands),
     /// Rollback to previous state
     Rollback,
     /// Recover from failures
@@ -198,6 +206,8 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::FirstBoot(args)) => commands::first_boot::execute(args).await,
         Some(Commands::Status(args)) => commands::status::execute(args).await,
         Some(Commands::Update(args)) => commands::update::execute(args).await,
+        Some(Commands::Doctor(args)) => commands::doctor::execute(args).await,
+        Some(Commands::SafeMode(cmd)) => commands::safe_mode::execute(cmd).await,
         Some(Commands::Rollback) => commands::rollback::execute().await,
         Some(Commands::Recover) => commands::recover::execute().await,
         Some(Commands::Check) => {
