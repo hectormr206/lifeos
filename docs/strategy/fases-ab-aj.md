@@ -24,7 +24,7 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 | **ES el OS** | Acceso a kernel, systemd, bootc, hardware — irreplicable |
 | **Immutabilidad + rollback** | bootc atomic updates, 3 canales |
 | **GPU Game Guard** | Auto-offload LLM a CPU cuando detecta juego |
-| **Meeting assistant** | Auto-detect triple, transcripcion, diarization, resumen |
+| **Meeting assistant** | Auto-detect + grabacion basica. Transcripcion, diarizacion y resumen siguen pendientes de cableado end-to-end |
 | **Health monitoring** | 12 checks (CPU/GPU/SSD/battery/ergonomia/audio/privacy) |
 | **Security AI daemon** | 4 detectores, auto-isolation, forensic reports |
 | **Voz local completa** | Wake word + Whisper + Piper + TTS emocional + conversacion continua |
@@ -47,26 +47,26 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 
 **AB.1 — WebSocket Control Plane**
 - [x] WebSocket endpoint `ws://127.0.0.1:8081/ws` en Axum (coexiste con REST)
-- [x] Protocol versioning: `connect` frame con protocolVersion, role, scopes[], capabilities[]
+- [ ] Protocol versioning: `connect` frame con protocolVersion, role, scopes[], capabilities[]
 - [x] Auth por frame: primer frame = `connect` con token. Timeout 5s. Cierre duro si invalido
-- [x] Roles: `operator` (dashboard, CLI, bridges) y `node` (futuro multi-dispositivo)
+- [ ] Roles: `operator` (dashboard, CLI, bridges) y `node` (futuro multi-dispositivo)
 - [x] Event streaming: push de task.started/completed/failed, agent.typing, llm.streaming, health.alert, game_guard.changed
 - [x] Sequence numbers para resync en reconexion
-- [x] Slow consumer handling: drop + snapshot si >30s sin consumir
+- [ ] Slow consumer handling: drop + snapshot si >30s sin consumir
 
 **AB.2 — Session Durability**
-- [x] Session store con sessionId estable y sessionKey tipado (`agent:axi:telegram:dm:123456`)
-- [x] Transcript persistente JSONL en `~/.local/share/lifeos/sessions/<sessionId>.jsonl`
-- [x] Compaction via LLM cuando transcript supera N tokens
-- [x] Tool result truncation (>2000 tokens)
-- [x] Session metadata: lastChannel, lastPeerId, deliveryContext, lastActiveAt
-- [x] Disk budget configurable con auto-prune de sesiones viejas
+- [ ] Session store con sessionId estable y sessionKey tipado (`agent:axi:telegram:dm:123456`)
+- [ ] Transcript persistente JSONL en `~/.local/share/lifeos/sessions/<sessionId>.jsonl`
+- [ ] Compaction via LLM cuando transcript supera N tokens
+- [ ] Tool result truncation (>2000 tokens)
+- [ ] Session metadata: lastChannel, lastPeerId, deliveryContext, lastActiveAt
+- [ ] Disk budget configurable con auto-prune de sesiones viejas
 
 **AB.3 — Unified Channel Routing**
-- [x] Session key contract para todos los bridges: `agent:axi:<channel>:<scope>:<peerId>`
-- [x] Cross-channel context: misma sesion entre Telegram/voz/CLI
-- [x] Inbound dedupe por (channel, peerId, messageId)
-- [x] Routing determinista: respuesta va al canal de origen
+- [ ] Session key contract para todos los bridges: `agent:axi:<channel>:<scope>:<peerId>`
+- [ ] Cross-channel context: misma sesion entre Telegram/voz/CLI
+- [ ] Inbound dedupe por (channel, peerId, messageId)
+- [ ] Routing determinista: respuesta va al canal de origen
 
 **AB.4 — Doctor Mejorado**
 - [x] Config migration automatica entre versiones
@@ -94,7 +94,7 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 - [x] Check CI: skills no importan modulos internos del daemon
 - [x] Contract tests: registry acepta validos, rechaza invalidos
 - [x] Baseline de superficie publica de APIs
-- [x] `life skills doctor` para detectar/reparar skills rotos
+- [ ] `life skills doctor` para detectar/reparar skills rotos
 
 **AC.4 — Discovery Seguro**
 - [x] Rutas: user skills > workspace skills > system skills
@@ -124,7 +124,7 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 **AD.4 — Observabilidad de Runtime**
 - [x] Structured logging con campos queryables (session_id, task_id, provider, latency_ms)
 - [x] Metrics exporter Prometheus-compatible
-- [x] `life audit query --since 24h --type llm_call`
+- [ ] `life audit query --since 24h --type llm_call`
 
 **Orden recomendado:** AE (first-boot, rapido) → AD (anti-breakage) → AB (gateway) → AC (ecosistema) → AF (canales extra)
 
@@ -161,13 +161,13 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 **Objetivo:** OpenClaw soporta 21+ canales de mensajeria. LifeOS tiene 4 (Telegram, WhatsApp, Matrix, Signal). Agregar los canales mas demandados.
 
 **AF.1 — Slack Integration**
-- [x] Slack Bot API via `slack-api` crate o HTTP
-- [x] Soporte texto, threads, reactions, file uploads
+- [ ] Slack Bot API via `slack-api` crate o HTTP
+- [ ] Soporte texto, threads, reactions, file uploads
 - [x] Feature flag `slack`
 
 **AF.2 — Discord Integration**
-- [x] Discord Bot via `serenity` crate
-- [x] Soporte texto, embeds, slash commands, voice channels
+- [ ] Discord Bot via `serenity` crate
+- [ ] Soporte texto, embeds, slash commands, voice channels
 - [x] Feature flag `discord`
 
 **AF.3 — Email como Canal Conversacional**
@@ -187,8 +187,26 @@ Este archivo es parte de la Estrategia Unificada de LifeOS. Ver [docs/strategy/]
 |-----|--------|------|
 | **Session target validation** | RESUELTO | Cron failure tracking en AG.2 |
 | **Inbound message dedupe** | RESUELTO | message_dedupe.rs en AG.1 |
-| **Transcript export** | RESUELTO | export_conversation tool en AG.3 |
-| **Pairing system** | FUTURO | Implementar cuando soporte multi-dispositivo |
+| **Transcript export** | REABIERTO / NO COMPROBADO | No aparecio evidencia clara de `export_conversation` como capacidad real del producto |
+| **Pairing system** | PARCIAL | Existe pairing basico en Telegram para usuarios adicionales, pero no el pairing multi-dispositivo mas amplio |
+
+### Fase AG — Mejoras Incrementales de Robustez
+
+**Objetivo:** Cerrar huecos pequenos pero importantes de operacion diaria sin inflar una fase mayor. Esta fase sirve para registrar fixes reales de robustez que hoy si tienen evidencia concreta.
+
+**AG.1 — Inbound Message Dedupe**
+- [x] `message_dedupe.rs` evita procesar mensajes duplicados en Telegram usando una llave estable por mensaje
+
+**AG.2 — Validacion Basica de Cron**
+- [x] Validacion minima en `telegram_tools.rs`: una expresion cron invalida es rechazada si no tiene 5 campos
+- [ ] Validacion cron completa y mas rica: no quedo demostrada una capa mas profunda de lint/normalizacion de cron fuera de ese baseline
+
+**AG.3 — Pairing Basico de Usuarios en Telegram**
+- [x] `/pair` genera codigo temporal y el bridge puede redimirlo para agregar usuarios dinamicamente
+- [ ] Pairing multi-dispositivo o con metadatos de superficie: sigue siendo futuro
+
+**AG.4 — Export de Conversaciones**
+- [ ] No aparecio evidencia clara de un flujo end-to-end de export de transcript/conversation como capability operativa ya disponible
 | **Native apps (iOS/Android)** | FUTURO | Requiere equipo, post-lanzamiento |
 
 ### Fase AJ — LifeOS Cloud: Hosting Multi-Tenant + Acceso Movil 24/7 (FUTURA)
@@ -281,7 +299,7 @@ Break-even: 12 usuarios Starter cubren los $60/mes de presupuesto actual.
 - [x] Safe mode desactiva: SelfImprovingDaemon, PromptTuner, SkillGenerator, AutonomousAgent
 - [x] Safe mode mantiene: API, Telegram (respond-only), health checks, comandos basicos
 - [x] Notificacion Telegram: safe mode' cuando quieras"
-- [x] Comando `life safe-mode status` y `life safe-mode exit`
+- [ ] Comando `life safe-mode status` y `life safe-mode exit`
 
 **AK.2 — Config Time Machine (git versionado)**
 - [x] `/var/lib/lifeos/config-checkpoints/`: repositorio git local con toda la config mutable
@@ -300,10 +318,11 @@ Break-even: 12 usuarios Starter cubren los $60/mes de presupuesto actual.
 - [x] Integrar con self_improving.rs, prompt tuner, skill generator
 
 **AK.4 — Health Probes (diagnostico estructurado)**
-- [x] `/api/v1/health/alive` — solo "estoy vivo?" (sin DB, sin config, solo event loop)
-- [x] `/api/v1/health/ready` — subsistemas inicializados? (config, DBs, LLM router, Telegram)
-- [x] `/api/v1/health/deep` — diagnostico completo: integridad SQLite, config hashes, skill manifests, disk space
-- [x] Background task cada 60s: deep probe. Si detecta degradacion → trigger rollback (AK.2)
+- [x] `/api/v1/health` — reporte agregado de salud del sistema disponible via API
+- [ ] `/api/v1/health/alive` — solo "estoy vivo?" (sin DB, sin config, solo event loop)
+- [ ] `/api/v1/health/ready` — subsistemas inicializados? (config, DBs, LLM router, Telegram)
+- [ ] `/api/v1/health/deep` — diagnostico completo: integridad SQLite, config hashes, skill manifests, disk space
+- [ ] Background task cada 60s: deep probe. Si detecta degradacion → trigger rollback (AK.2)
 
 **AK.5 — Factory Default (blastema compilado)**
 - [x] `defaults/config.toml`, `defaults/prompts/*.md` embebidos en el binario con `include_str!`
@@ -314,11 +333,11 @@ Break-even: 12 usuarios Starter cubren los $60/mes de presupuesto actual.
 
 **AK.6 — Sentinel (proceso independiente out-of-band)**
 - [x] `lifeos-sentinel.service`: proceso separado, minimo, sin dependencias de lifeosd
-- [x] Checa `/api/v1/health/alive` cada 30s via curl
+- [x] Checa `/api/v1/health` cada 30s via curl
 - [x] Escalation ladder:
   - 1 fallo: log warning
   - 3 fallos: `systemctl restart lifeosd`
-  - 5 fallos: `life doctor --repair` (trigger factory reset si necesario)
+  - [ ] 5 fallos: `life doctor --repair` (trigger factory reset si necesario)
   - 10 fallos: notificacion Telegram directa (bypassing lifeosd) diciendo "Axi no puede recuperarse"
 - [x] El sentinel NO tiene logica de negocio, NO usa LLM, NO parsea config — es tan simple que no puede romperse
 
@@ -377,10 +396,10 @@ Layer 0: Heartbeat (systemd watchdog)
 - [x] Badge de cobertura en README (cuando sea publico)
 
 **AL.4 — Progreso Observable en Supervisor**
-- [x] Evento WebSocket `task.progress` con `{task_id, step_index, total_steps, step_label, percent}`
-- [x] Evento `task.step_completed` con resultado parcial al terminar cada step
+- [ ] Evento WebSocket `task.progress` con `{task_id, step_index, total_steps, step_label, percent}`
+- [ ] Evento `task.step_completed` con resultado parcial al terminar cada step
 - [x] Telegram: tareas con 3+ steps → mensaje "Paso 2/5: ejecutando tests..."
-- [x] Dashboard: barra de progreso por tarea activa
+- [ ] Dashboard: barra de progreso por tarea activa
 
 **AL.5 — Doctor Mejorado (complementa AK.4)**
 - [x] PRAGMA integrity_check en cada SQLite DB
@@ -394,7 +413,7 @@ Layer 0: Heartbeat (systemd watchdog)
 **AL.6 — Guia de Troubleshooting para Usuario Final**
 - [x] `docs/user/troubleshooting.md` con formato problema-diagnostico-solucion
 - [x] Cubrir: "Axi no responde", "Telegram no conecta", "Modelo local lento", "Permiso denegado", "Actualizacion fallo"
-- [x] Cada entrada con comando concreto (`life doctor`, `systemctl status lifeosd`)
+- [ ] Cada entrada con comando concreto (`life doctor`, `systemctl status lifeosd`)
 
 **Prioridad:** MEDIA. AL.1 y AL.2 son rapidos y de alto impacto (seguridad). AL.4 mejora UX perceptiblemente. Puede ejecutarse en paralelo con AK.
 
@@ -468,7 +487,7 @@ Layer 0: Heartbeat (systemd watchdog)
 - [x] **Grupos permitidos via config** — `LIFEOS_TELEGRAM_GROUP_IDS` separado del chat_id personal
 
 **AO.3 — P2: Polish**
-- [x] **Webhook transport** — `LIFEOS_TELEGRAM_WEBHOOK_URL` para modo eficiente sin polling constante
+- [ ] **Webhook transport** — `LIFEOS_TELEGRAM_WEBHOOK_URL` hoy solo se detecta/loguea; el bridge real sigue en polling y no aparecio webhook end-to-end
 - [x] **Cola de mensajes con steering** — si llega mensaje mientras se procesa otro, encolar y alimentar como contexto al terminar
 - [x] **Pairing para usuarios adicionales** — /pair genera codigo 6 digitos, nuevo usuario lo manda, se agrega a allowed_ids
 - [x] **Notificaciones con acciones** — inline keyboards en notificaciones: "Disco al 90%" -> boton "Limpiar" + boton "Ignorar"
@@ -531,26 +550,26 @@ Axi (coordinator) — SIEMPRE libre, responde en <1 segundo
 - [x] Progress updates: el worker envia mensajes parciales ("Analizando archivo... Buscando en internet... Generando resumen...")
 
 **AP.3 — Sub-Agentes con Delegacion**
-- [x] Un worker puede crear sub-workers para sub-tareas:
+- [ ] Un worker puede crear sub-workers para sub-tareas:
   - "Investiga X" → worker principal delega a sub-worker de busqueda web
   - "Resume este PDF y busca articulos relacionados" → 2 sub-workers en paralelo
-- [x] Sub-workers reportan al worker padre, no directamente al usuario
-- [x] El worker padre consolida resultados y envia respuesta unificada
-- [x] Profundidad maxima: 3 niveles (Axi → worker → sub-worker → sub-sub-worker)
+- [ ] Sub-workers reportan al worker padre, no directamente al usuario
+- [ ] El worker padre consolida resultados y envia respuesta unificada
+- [ ] Profundidad maxima: 3 niveles (Axi → worker → sub-worker → sub-sub-worker)
 
 **AP.4 — Cola de Mensajes Inteligente**
 - [x] Si llega un nuevo mensaje mientras un worker procesa, NO esperar — procesarlo inmediatamente
 - [x] Cada mensaje se clasifica y rutea independientemente
 - [x] Si el usuario manda "cancela" o "para", cancelar el worker activo
-- [x] Si el usuario manda un mensaje relacionado con la tarea en curso, alimentarlo como contexto al worker (steering)
+- [ ] Si el usuario manda un mensaje relacionado con la tarea en curso, alimentarlo como contexto al worker (steering)
 
 **AP.5 — Dashboard de Workers**
-- [x] Seccion en el dashboard mostrando workers activos con:
+- [ ] Seccion en el dashboard mostrando workers activos con:
   - Tarea en ejecucion
   - Tiempo transcurrido
   - Sub-workers activos
   - Boton "Cancelar"
-- [x] Evento WebSocket `worker.started`, `worker.progress`, `worker.completed`, `worker.failed`
+- [ ] Evento WebSocket `worker.started`, `worker.progress`, `worker.completed`, `worker.failed`
 
 **AP.6 — Respuestas Instantaneas sin LLM**
 - [x] Mapa de respuestas rapidas que NO necesitan LLM:

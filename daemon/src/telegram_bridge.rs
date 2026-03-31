@@ -164,6 +164,7 @@ mod inner {
         pairing: PairingStore,
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_telegram_bot(
         config: TelegramConfig,
         task_queue: Arc<TaskQueue>,
@@ -171,6 +172,8 @@ mod inner {
         memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
         knowledge_graph: Option<Arc<RwLock<KnowledgeGraph>>>,
         mut notify_rx: tokio::sync::broadcast::Receiver<SupervisorNotification>,
+        session_store: Option<Arc<crate::session_store::SessionStore>>,
+        event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
     ) {
         info!("Starting Telegram bridge (natural language mode)...");
 
@@ -286,6 +289,7 @@ mod inner {
             history: history.clone(),
             cron_store: cron_store.clone(),
             sdd_store: sdd_store.clone(),
+            session_store: session_store.clone(),
         };
 
         // Heartbeat — configurable HEARTBEAT.md evaluation loop
@@ -382,9 +386,14 @@ mod inner {
             history,
             cron_store,
             sdd_store,
+            session_store,
         };
 
-        let worker_pool = Arc::new(crate::async_workers::WorkerPool::new());
+        let worker_pool = Arc::new(if let Some(ref bus) = event_bus {
+            crate::async_workers::WorkerPool::with_event_bus(bus.clone())
+        } else {
+            crate::async_workers::WorkerPool::new()
+        });
 
         // Spawn background worker cleanup loop
         let cleanup_pool = (*worker_pool).clone();

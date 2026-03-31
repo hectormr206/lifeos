@@ -84,10 +84,7 @@ pub async fn execute(args: DoctorArgs) -> anyhow::Result<()> {
                 println!("    Error: {}", format!("{e}").dimmed());
                 println!();
                 println!("  {} Is the daemon running?", "Hint:".dimmed());
-                println!(
-                    "    {}",
-                    "systemctl --user status lifeosd".cyan()
-                );
+                println!("    {}", "systemctl --user status lifeosd".cyan());
             }
         }
     }

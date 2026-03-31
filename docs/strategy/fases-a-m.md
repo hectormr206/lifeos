@@ -113,15 +113,15 @@
 
 **Objetivo:** LifeOS puede comunicarse por multiples canales ademas de Telegram.
 
-- [x] WhatsApp integration: `whatsapp_bridge.rs` con WhatsApp Cloud API (Meta Graph API). Webhook listener en 127.0.0.1:8085, soporte texto/imagen/vision, /do commands, notificaciones push. Feature flag `whatsapp`. Config: LIFEOS_WHATSAPP_TOKEN, LIFEOS_WHATSAPP_PHONE_ID, LIFEOS_WHATSAPP_VERIFY_TOKEN, LIFEOS_WHATSAPP_ALLOWED_NUMBERS
-- [x] Matrix/Element bridge: `matrix_bridge.rs` con Matrix CS API via HTTP (reqwest). Long-polling /sync, soporte texto/imagen/vision, typing indicators, /do commands, notificaciones push a rooms. Feature flag `matrix`. Config: LIFEOS_MATRIX_HOMESERVER, LIFEOS_MATRIX_USER_ID, LIFEOS_MATRIX_ACCESS_TOKEN, LIFEOS_MATRIX_ROOM_IDS
-- [x] Signal bridge: `signal_bridge.rs` via signal-cli JSON-RPC (HTTP daemon). Polling cada 2s, soporte texto/imagen, reactions, /do commands, notificaciones push. Feature flag `signal`. Config: LIFEOS_SIGNAL_CLI_URL, LIFEOS_SIGNAL_PHONE, LIFEOS_SIGNAL_ALLOWED_NUMBERS
-- [x] Smart home: `home_assistant.rs` con Home Assistant REST API. get_states, call_service, toggle, turn_on/off, set_temperature, trigger_automation, SSE events listener. NLP command parser basico (enciende/apaga/pon). Feature flag `homeassistant`. Config: LIFEOS_HA_URL, LIFEOS_HA_TOKEN
+- [ ] WhatsApp integration: `whatsapp_bridge.rs` existe en repo y se lanza si el binario se compila con feature `whatsapp`, pero la imagen por defecto hoy NO incluye esa feature
+- [ ] Matrix/Element bridge: `matrix_bridge.rs` existe en repo y se lanza si el binario se compila con feature `matrix`, pero la imagen por defecto hoy NO incluye esa feature
+- [ ] Signal bridge: `signal_bridge.rs` existe en repo y se lanza si el binario se compila con feature `signal`, pero la imagen por defecto hoy NO incluye esa feature
+- [ ] Smart home: `home_assistant.rs` existe en repo y el daemon lo arranca si se compila con feature `homeassistant`, pero la imagen por defecto hoy NO incluye esa feature
 - [x] Health tracking: `health_tracking.rs` con timers de break/hidratacion/descanso visual (regla 20-20-20). Loop de fondo cada 60s incrementa minutos activos y envia reminders via event bus. API endpoints: GET /health/tracking, POST /health/tracking/break, GET /health/tracking/reminders
   (presencia/fatiga por webcam ya existe en sensory_pipeline — se puede conectar para posture_alerts futuro)
-- [x] Messaging channels API: GET /messaging/channels muestra estado de todos los canales (Telegram, WhatsApp, Matrix, Signal, Home Assistant) con enabled/configured/status
-- [x] API keys management extendido: GET/POST /settings/keys soporta todas las keys de todos los canales
-- [x] **HITO FASE F:** Puedes hablar con LifeOS desde Telegram, WhatsApp, Matrix o Signal indistintamente. Home Assistant conectado para smart home.
+- [ ] Messaging channels API: GET /messaging/channels existe, pero no convierte automaticamente estos bridges en canales realmente activos si la imagen fue compilada sin sus features
+- [ ] API keys management extendido: el soporte documental existe, pero la auditoria de canales muestra que no todos esos bridges estan realmente shipped en la imagen actual
+- [ ] **HITO FASE F:** No cuenta como completo mientras la imagen por defecto siga saliendo practicamente Telegram-only
 
 ### Busqueda Web — Estrategia de Providers
 
@@ -142,7 +142,7 @@ SERPER_API_KEY=          # opcional, 2500 busquedas/mes gratis
 BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 ```
 
-### Fase G — GPU Game Guard + Game Assistant (proxima iteracion)
+### Fase G — GPU Game Guard + Game Assistant (reabierta por auditoria 2026-03-31)
 
 **Objetivo:** LifeOS libera VRAM automaticamente al jugar y puede ayudarte dentro del juego.
 
@@ -152,13 +152,13 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - Gaming (RE Requiem): 11.8/11.9 GB VRAM (98%) → stuttering por falta de VRAM
 
 **GPU Game Guard (auto-offload a RAM):** `game_guard.rs`
-- [x] Detectar juego corriendo (GameMode dbus > proceso conocido > VRAM threshold)
-  - `detect_gamemode_active()`: check `gamemoded --status` o /proc
+- [ ] Detectar juego corriendo (GameMode dbus > proceso conocido > VRAM threshold)
+  - `detect_gamemode_active()`: el repo ya fue corregido para no tratar la mera existencia de `gamemoded` como juego activo, pero el host demostro falsos positivos antes de desplegar ese fix
   - `detect_game_processes()`: scan /proc/*/comm para wine, proton, gamescope, etc.
-  - `detect_vram_heavy_processes()`: `nvidia-smi pmon -c 1 -s m`, excluye llama-server/Xorg/cosmic
+  - `detect_vram_heavy_processes()`: `nvidia-smi pmon -c 1 -s m`, ahora tambien debe excluir correctamente `llama-server` tras resolver nombre real desde `/proc`
   - Threshold: >500MB VRAM por proceso no-sistema
 - [x] Al detectar juego: crea `/etc/lifeos/llama-server-game-guard.env` con `GPU_LAYERS=0` + restart → modelo a RAM
-- [x] Al cerrar juego: BORRA el override env file + restart → GPU_LAYERS del env principal toma efecto
+- [ ] Al cerrar juego: BORRA el override env file + restart → GPU_LAYERS del env principal toma efecto
 - [x] Loop cada 10 segundos en background (`run_game_guard_loop`)
 - [x] Notificacion via event bus: `GameGuardChanged { game_detected, game_name, llm_mode }`
 - [x] Setting `LIFEOS_AI_GAME_GUARD=true` (default ON), toggle via API
@@ -186,7 +186,7 @@ BRAVE_SEARCH_API_KEY=    # opcional, alternativa a Serper
 - [x] Dashboard toggle "Game Assistant" (default ON)
 - [x] **Fix permisos llama-server.env:** `chown 1000:1000` en Containerfile (commit 14fa392)
 - [x] **Fast kill llama-server al offloadear:** `TimeoutStopSec=10` drop-in instalado (commit 14fa392)
-- [x] **HITO FASE G:** Al jugar, VRAM se libera automaticamente. Pides ayuda y Axi analiza tu juego.
+- [ ] **HITO FASE G:** Reabierto. El host real mostro falsos positivos, override stale y degradacion a CPU fuera de juego. El repo ya tiene fix, pero no cuenta como cerrado hasta desplegarlo y revalidarlo en laptop real.
 
 **BUGS CRITICOS ENCONTRADOS (2026-03-24) — CORREGIDOS:**
 

@@ -1,3 +1,4 @@
+use crate::daemon_client;
 use clap::Subcommand;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
@@ -73,6 +74,12 @@ pub enum SkillsCommands {
         /// Optional trust filter (core|verified|community)
         #[arg(long)]
         trust: Option<String>,
+    },
+    /// Run diagnostics on all loaded skills (daemon-side registry)
+    Doctor {
+        /// Output in JSON format
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -154,6 +161,7 @@ pub async fn execute(cmd: SkillsCommands) -> anyhow::Result<()> {
         SkillsCommands::McpExport { output, trust } => {
             cmd_mcp_export(output.as_deref(), trust.as_deref())
         }
+        SkillsCommands::Doctor { json } => cmd_doctor(json).await,
     }
 }
 
@@ -426,6 +434,82 @@ fn cmd_mcp_export(output: Option<&str>, trust: Option<&str>) -> anyhow::Result<(
     } else {
         println!("{}", rendered);
     }
+    Ok(())
+}
+
+async fn cmd_doctor(json: bool) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let base = daemon_client::daemon_url();
+    let url = format!("{}/api/v1/skills/diagnostics", base);
+
+    if !json {
+        println!(
+            "{}",
+            "LifeOS Skills Doctor - Registry Diagnostics".bold().blue()
+        );
+        println!();
+    }
+
+    match client.get(&url).send().await {
+        Ok(r) if r.status().is_success() => {
+            let body: serde_json::Value = r
+                .json()
+                .await
+                .unwrap_or_else(|_| serde_json::json!({"diagnostics": {}}));
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&body)?);
+            } else {
+                if let Some(diag) = body.get("diagnostics") {
+                    if let Some(obj) = diag.as_object() {
+                        for (key, value) in obj {
+                            println!("  {}: {}", key.bold(), value);
+                        }
+                    } else {
+                        println!("  {}", diag);
+                    }
+                } else {
+                    println!("  {}", "No diagnostics data returned.".dimmed());
+                }
+                println!();
+                println!(
+                    "  {}",
+                    "Tip: use --json for machine-readable output.".dimmed()
+                );
+            }
+        }
+        Ok(r) => {
+            let status = r.status();
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "error": format!("Daemon returned HTTP {}", status),
+                    }))?
+                );
+            } else {
+                println!("  {} Daemon returned HTTP {}", "!".yellow().bold(), status);
+            }
+        }
+        Err(e) => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "error": format!("Cannot reach lifeosd: {}", e),
+                    }))?
+                );
+            } else {
+                println!(
+                    "  {} Cannot reach lifeosd at {}",
+                    "X".red().bold(),
+                    base.dimmed()
+                );
+                println!("    Error: {}", format!("{e}").dimmed());
+            }
+        }
+    }
+
     Ok(())
 }
 

@@ -51,6 +51,8 @@ mod context_policies;
 mod cosmic_control;
 #[allow(dead_code)]
 mod desktop_operator;
+#[allow(dead_code)]
+mod discord_bridge;
 mod email_bridge;
 #[allow(dead_code)]
 mod ergonomics;
@@ -127,6 +129,8 @@ mod signal_bridge;
 #[allow(dead_code)]
 mod skill_generator;
 mod skill_registry;
+#[allow(dead_code)]
+mod slack_bridge;
 #[allow(dead_code)]
 mod speaker_id;
 #[allow(dead_code)]
@@ -1079,10 +1083,14 @@ async fn main() -> anyhow::Result<()> {
     // Meeting assistant — check for active meetings every 15s
     let meeting_data_dir = data_dir.clone();
     let meeting_event_bus = state.event_bus.clone();
+    let meeting_router = state.llm_router.clone();
+    let meeting_memory = state.memory_plane_manager.clone();
     let _meeting_handle = tokio::spawn(async move {
         let mut assistant = meeting_assistant::MeetingAssistant::new(
             meeting_data_dir,
             Some(meeting_event_bus.clone()),
+            Some(meeting_router),
+            Some(meeting_memory),
         );
         let mut interval = tokio::time::interval(Duration::from_secs(15));
         loop {
@@ -1395,6 +1403,8 @@ async fn main() -> anyhow::Result<()> {
             let router = state.llm_router.clone();
             let memory = Some(state.memory_plane_manager.clone());
             let notify_rx = state.supervisor.subscribe();
+            let ss = Some(state.session_store.clone());
+            let eb = Some(state.event_bus.clone());
             let kg = {
                 let data_dir = std::path::PathBuf::from(
                     std::env::var("LIFEOS_DATA_DIR").unwrap_or_else(|_| "/var/lib/lifeos".into()),
@@ -1410,6 +1420,8 @@ async fn main() -> anyhow::Result<()> {
                     memory,
                     Some(kg),
                     notify_rx,
+                    ss,
+                    eb,
                 )
                 .await;
             }))
@@ -1474,6 +1486,42 @@ async fn main() -> anyhow::Result<()> {
     };
     #[cfg(not(feature = "signal"))]
     let signal_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Start Slack bridge if configured
+    #[cfg(feature = "slack")]
+    let slack_handle = {
+        if let Some(slack_config) = slack_bridge::SlackConfig::from_env() {
+            let tq = state.task_queue.clone();
+            let router = state.llm_router.clone();
+            let notify_rx = state.supervisor.subscribe();
+            Some(tokio::spawn(async move {
+                slack_bridge::run_slack_bridge(slack_config, tq, router, notify_rx).await;
+            }))
+        } else {
+            info!("Slack bridge: LIFEOS_SLACK_BOT_TOKEN not set, skipping");
+            None
+        }
+    };
+    #[cfg(not(feature = "slack"))]
+    let slack_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Start Discord bridge if configured
+    #[cfg(feature = "discord")]
+    let discord_handle = {
+        if let Some(discord_config) = discord_bridge::DiscordConfig::from_env() {
+            let tq = state.task_queue.clone();
+            let router = state.llm_router.clone();
+            let notify_rx = state.supervisor.subscribe();
+            Some(tokio::spawn(async move {
+                discord_bridge::run_discord_bridge(discord_config, tq, router, notify_rx).await;
+            }))
+        } else {
+            info!("Discord bridge: LIFEOS_DISCORD_BOT_TOKEN not set, skipping");
+            None
+        }
+    };
+    #[cfg(not(feature = "discord"))]
+    let discord_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start conversational email bridge if configured (requires telegram feature
     // because it reuses the agentic chat infrastructure from telegram_tools).
@@ -1576,6 +1624,12 @@ async fn main() -> anyhow::Result<()> {
         h.abort();
     }
     if let Some(h) = signal_handle {
+        h.abort();
+    }
+    if let Some(h) = slack_handle {
+        h.abort();
+    }
+    if let Some(h) = discord_handle {
         h.abort();
     }
     dbus_handle.abort();

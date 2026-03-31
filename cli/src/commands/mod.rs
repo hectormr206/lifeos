@@ -3,6 +3,7 @@ pub mod adapters;
 pub mod agents;
 pub mod ai;
 pub mod assistant;
+pub mod audit;
 pub mod browser;
 pub mod capsule;
 pub mod computer_use;

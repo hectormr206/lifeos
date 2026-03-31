@@ -228,10 +228,7 @@ mod inner {
             // Acknowledge the envelope immediately
             if let Some(envelope_id) = envelope.get("envelope_id").and_then(|v| v.as_str()) {
                 let ack = serde_json::json!({ "envelope_id": envelope_id });
-                if let Err(e) = write
-                    .send(Message::Text(ack.to_string().into()))
-                    .await
-                {
+                if let Err(e) = write.send(Message::Text(ack.to_string().into())).await {
                     error!("Slack Socket Mode: failed to send ack: {}", e);
                 }
             }
@@ -320,7 +317,8 @@ mod inner {
         }
 
         // Auth check — reject channels not in the allow-list
-        if !config.allowed_channels.is_empty() && !config.allowed_channels.contains(&channel.to_string())
+        if !config.allowed_channels.is_empty()
+            && !config.allowed_channels.contains(&channel.to_string())
         {
             warn!(
                 "Slack: message from non-allowed channel {}; ignoring",
@@ -329,11 +327,7 @@ mod inner {
             return;
         }
 
-        info!(
-            "Slack [{}]: {}",
-            channel,
-            &text[..text.len().min(100)]
-        );
+        info!("Slack [{}]: {}", channel, &text[..text.len().min(100)]);
 
         if text.starts_with("/do ") || text.starts_with("/task ") {
             let objective = text
@@ -373,10 +367,11 @@ mod inner {
                     "Tarea creada:\n{}\n\nID: {}\nTe avisare cuando termine.",
                     objective, task.id
                 );
-                if let Err(e) =
-                    send_slack_message(http, &config.bot_token, channel, &reply).await
-                {
-                    error!("Slack: failed to confirm task creation in {}: {}", channel, e);
+                if let Err(e) = send_slack_message(http, &config.bot_token, channel, &reply).await {
+                    error!(
+                        "Slack: failed to confirm task creation in {}: {}",
+                        channel, e
+                    );
                 }
             }
             Err(e) => {

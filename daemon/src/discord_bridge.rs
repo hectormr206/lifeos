@@ -109,10 +109,7 @@ mod inner {
                                 )
                                 .await
                                 {
-                                    error!(
-                                        "Discord notification to {} failed: {}",
-                                        channel_id, e
-                                    );
+                                    error!("Discord notification to {} failed: {}", channel_id, e);
                                 }
                             }
                         }
@@ -303,8 +300,7 @@ mod inner {
                                 }
                             }
                         });
-                        if let Err(e) =
-                            write.send(Message::Text(identify.to_string().into())).await
+                        if let Err(e) = write.send(Message::Text(identify.to_string().into())).await
                         {
                             error!("Discord Gateway: identify error: {}", e);
                             break;
@@ -530,9 +526,7 @@ mod inner {
                 ));
             }
         }
-        if let Err(e) =
-            send_discord_message(http, &config.bot_token, channel_id, &reply).await
-        {
+        if let Err(e) = send_discord_message(http, &config.bot_token, channel_id, &reply).await {
             error!("Discord: failed to send status in {}: {}", channel_id, e);
         }
     }
@@ -564,9 +558,7 @@ mod inner {
         let reply = chat_with_llm(router, text).await;
         // Discord has a 2000-char message limit
         for chunk in split_message(&reply, 1900) {
-            if let Err(e) =
-                send_discord_message(http, &config.bot_token, channel_id, chunk).await
-            {
+            if let Err(e) = send_discord_message(http, &config.bot_token, channel_id, chunk).await {
                 error!(
                     "Discord: failed to send chat reply in {}: {}",
                     channel_id, e
@@ -623,10 +615,7 @@ mod inner {
         bot_token: &str,
         channel_id: &str,
     ) -> Result<(), String> {
-        let url = format!(
-            "https://discord.com/api/v10/channels/{}/typing",
-            channel_id
-        );
+        let url = format!("https://discord.com/api/v10/channels/{}/typing", channel_id);
 
         let resp = http
             .post(&url)

@@ -6,7 +6,7 @@
 ```bash
 systemctl status lifeosd          # El daemon esta corriendo?
 systemctl status llama-server     # El modelo local esta corriendo?
-life doctor                       # Diagnostico completo
+curl http://127.0.0.1:8081/api/v1/health  # Estado agregado de salud
 journalctl -u lifeosd --since "10 min ago"  # Logs recientes
 ```
 
@@ -42,7 +42,7 @@ Esto pasa cuando el daemon crasheo 3+ veces seguidas. Axi deja de hacer cambios 
 
 **Para salir:**
 - Escribe "exit safe mode" en Telegram
-- O: `life safe-mode exit`
+- O: `curl -X POST http://127.0.0.1:8081/api/v1/safe-mode/exit`
 
 ## El dashboard no abre
 
@@ -52,9 +52,9 @@ curl http://127.0.0.1:8081/api/v1/health  # La API responde?
 
 Si no responde, reinicia el daemon: `sudo systemctl restart lifeosd`
 
-## Doctor reporta base de datos corrupta
+## La API de health reporta base de datos corrupta
 
-Si `life doctor` reporta un error de integridad en alguna base de datos:
+Si `curl http://127.0.0.1:8081/api/v1/health` o los logs reportan un error de integridad en alguna base de datos:
 
 ```bash
 # Hacer backup del archivo corrupto
@@ -69,7 +69,7 @@ sudo systemctl restart lifeosd
 
 ## Espacio en disco bajo
 
-Si `life doctor` reporta espacio bajo:
+Si `curl http://127.0.0.1:8081/api/v1/health` o los logs reportan espacio bajo:
 
 ```bash
 # Ver uso de disco

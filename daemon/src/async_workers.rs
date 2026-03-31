@@ -53,12 +53,35 @@ pub struct WorkerInfo {
 #[derive(Clone)]
 pub struct WorkerPool {
     workers: Arc<RwLock<HashMap<String, WorkerInfo>>>,
+    /// Optional event bus for broadcasting worker lifecycle events to the dashboard.
+    event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
 }
 
 impl WorkerPool {
     pub fn new() -> Self {
         Self {
             workers: Arc::new(RwLock::new(HashMap::new())),
+            event_bus: None,
+        }
+    }
+
+    /// Create a WorkerPool with an event bus for real-time dashboard updates.
+    pub fn with_event_bus(
+        event_bus: tokio::sync::broadcast::Sender<crate::events::DaemonEvent>,
+    ) -> Self {
+        Self {
+            workers: Arc::new(RwLock::new(HashMap::new())),
+            event_bus: Some(event_bus),
+        }
+    }
+
+    /// Emit a worker lifecycle event to the WebSocket event bus.
+    fn emit_worker_event(&self, message: String, priority: &str) {
+        if let Some(ref bus) = self.event_bus {
+            let _ = bus.send(crate::events::DaemonEvent::Notification {
+                priority: priority.to_string(),
+                message,
+            });
         }
     }
 
@@ -74,6 +97,7 @@ impl WorkerPool {
 
     /// Register a new top-level worker.
     pub async fn register(&self, task_id: String, chat_id: i64, description: String) {
+        let desc_clone = description.clone();
         let info = WorkerInfo {
             task_id: task_id.clone(),
             chat_id,
@@ -86,7 +110,11 @@ impl WorkerPool {
             steering_messages: Arc::new(RwLock::new(Vec::new())),
             result: Arc::new(RwLock::new(None)),
         };
-        self.workers.write().await.insert(task_id, info);
+        self.workers.write().await.insert(task_id.clone(), info);
+        self.emit_worker_event(
+            format!("worker.started:{}:{}", task_id, desc_clone),
+            "debug",
+        );
     }
 
     /// Mark a worker as completed.
@@ -94,6 +122,7 @@ impl WorkerPool {
         if let Some(w) = self.workers.write().await.get_mut(task_id) {
             w.status = WorkerStatus::Completed;
         }
+        self.emit_worker_event(format!("worker.completed:{}", task_id), "debug");
     }
 
     /// Mark a worker as completed with a result (used by sub-workers to report back).
@@ -102,13 +131,19 @@ impl WorkerPool {
             w.status = WorkerStatus::Completed;
             *w.result.write().await = Some(result_text);
         }
+        self.emit_worker_event(format!("worker.completed:{}", task_id), "debug");
     }
 
     /// Mark a worker as failed.
     pub async fn fail(&self, task_id: &str, error: String) {
+        let err_clone = error.clone();
         if let Some(w) = self.workers.write().await.get_mut(task_id) {
             w.status = WorkerStatus::Failed(error);
         }
+        self.emit_worker_event(
+            format!("worker.failed:{}:{}", task_id, err_clone),
+            "warning",
+        );
     }
 
     /// Cancel an active worker by setting its cancellation flag.
@@ -118,6 +153,8 @@ impl WorkerPool {
             if w.status == WorkerStatus::Running {
                 w.cancelled.store(true, Ordering::SeqCst);
                 w.status = WorkerStatus::Cancelled;
+                drop(workers);
+                self.emit_worker_event(format!("worker.cancelled:{}", task_id), "info");
                 return true;
             }
         }
@@ -184,6 +221,7 @@ impl WorkerPool {
             &uuid::Uuid::new_v4().to_string()[..8]
         );
 
+        let desc_clone = description.clone();
         let info = WorkerInfo {
             task_id: sub_id.clone(),
             chat_id,
@@ -197,6 +235,13 @@ impl WorkerPool {
             result: Arc::new(RwLock::new(None)),
         };
         self.workers.write().await.insert(sub_id.clone(), info);
+        self.emit_worker_event(
+            format!(
+                "worker.started:{}:sub-worker of {}:{}",
+                sub_id, parent_id, desc_clone
+            ),
+            "debug",
+        );
 
         Some(sub_id)
     }

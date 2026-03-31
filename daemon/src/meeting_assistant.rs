@@ -68,12 +68,19 @@ pub struct MeetingAssistant {
     recording_process: Option<tokio::process::Child>,
     language: String,
     event_bus: Option<broadcast::Sender<crate::events::DaemonEvent>>,
+    llm_router: Option<std::sync::Arc<tokio::sync::RwLock<crate::llm_router::LlmRouter>>>,
+    memory_plane:
+        Option<std::sync::Arc<tokio::sync::RwLock<crate::memory_plane::MemoryPlaneManager>>>,
 }
 
 impl MeetingAssistant {
     pub fn new(
         data_dir: PathBuf,
         event_bus: Option<broadcast::Sender<crate::events::DaemonEvent>>,
+        llm_router: Option<std::sync::Arc<tokio::sync::RwLock<crate::llm_router::LlmRouter>>>,
+        memory_plane: Option<
+            std::sync::Arc<tokio::sync::RwLock<crate::memory_plane::MemoryPlaneManager>>,
+        >,
     ) -> Self {
         Self {
             data_dir,
@@ -84,6 +91,8 @@ impl MeetingAssistant {
             recording_process: None,
             language: "auto".to_string(),
             event_bus,
+            llm_router,
+            memory_plane,
         }
     }
 
@@ -135,11 +144,135 @@ impl MeetingAssistant {
             self.start_recording().await?;
         } else if !detected && self.state.detected {
             // Meeting ended
-            info!("[meeting] Meeting ended — stopping recording");
+            let duration = self.state.duration_secs;
+            info!(
+                "[meeting] Meeting ended ({} min) — stopping recording",
+                duration / 60
+            );
             self.stop_recording();
             self.state.detected = false;
             self.state.recording = false;
-            // TODO: trigger transcription + summarization
+
+            // Trigger transcription + summarization pipeline
+            if let Some(ref recording_path) = self.state.recording_path {
+                let path = recording_path.clone();
+                info!("[meeting] Processing completed meeting: {}", path);
+
+                // 1. Transcribe with Whisper
+                match self.transcribe_meeting(&path).await {
+                    Ok(transcript) => {
+                        info!(
+                            "[meeting] Transcription complete ({} chars)",
+                            transcript.len()
+                        );
+
+                        // 2. Diarize (best-effort, falls back to raw transcript)
+                        let diarized = self
+                            .diarize_transcript(&path, &transcript)
+                            .await
+                            .unwrap_or_else(|e| {
+                                warn!("[meeting] Diarization error: {e}");
+                                transcript.clone()
+                            });
+
+                        // 3. Summarize with LLM (if router available)
+                        let summary = if let Some(ref router) = self.llm_router {
+                            match self.summarize_meeting(&diarized, router).await {
+                                Ok(s) => {
+                                    info!("[meeting] Summary generated ({} chars)", s.len());
+                                    Some(s)
+                                }
+                                Err(e) => {
+                                    warn!("[meeting] Summarization failed: {e}");
+                                    None
+                                }
+                            }
+                        } else {
+                            warn!("[meeting] No LLM router available, skipping summarization");
+                            None
+                        };
+
+                        // 4. Save to memory plane
+                        if let Some(ref memory) = self.memory_plane {
+                            let content = if let Some(ref s) = summary {
+                                format!(
+                                    "## Transcripcion\n\n{}\n\n## Resumen\n\n{}",
+                                    &diarized[..diarized.len().min(4000)],
+                                    s
+                                )
+                            } else {
+                                diarized.clone()
+                            };
+                            let app = self
+                                .state
+                                .app_name
+                                .clone()
+                                .unwrap_or_else(|| "unknown".into());
+                            let tags = vec![
+                                "meeting".to_string(),
+                                "transcript".to_string(),
+                                app.to_lowercase(),
+                            ];
+                            match memory
+                                .read()
+                                .await
+                                .add_entry(
+                                    "meeting",
+                                    "work",
+                                    &tags,
+                                    Some("lifeosd://meeting-assistant"),
+                                    70,
+                                    &content,
+                                )
+                                .await
+                            {
+                                Ok(entry) => {
+                                    info!("[meeting] Saved to memory plane: {}", entry.entry_id);
+                                }
+                                Err(e) => {
+                                    warn!("[meeting] Failed to save to memory: {e}");
+                                }
+                            }
+                        }
+
+                        // 5. Compress WAV to OPUS for storage efficiency
+                        let _ = Self::compress_to_opus(&path).await;
+
+                        // 6. Notify via event bus
+                        if let Some(ref tx) = self.event_bus {
+                            let msg = if let Some(ref s) = summary {
+                                let preview = &s[..s.len().min(200)];
+                                format!(
+                                    "Reunion terminada ({} min). Resumen:\n{}",
+                                    duration / 60,
+                                    preview
+                                )
+                            } else {
+                                format!(
+                                    "Reunion terminada ({} min). Transcripcion disponible.",
+                                    duration / 60
+                                )
+                            };
+                            let _ = tx.send(crate::events::DaemonEvent::Notification {
+                                priority: "info".into(),
+                                message: msg,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[meeting] Transcription failed: {e}");
+                        if let Some(ref tx) = self.event_bus {
+                            let _ = tx.send(crate::events::DaemonEvent::Notification {
+                                priority: "warning".into(),
+                                message: format!(
+                                    "Reunion terminada ({} min) pero la transcripcion fallo: {e}",
+                                    duration / 60
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
         }
 
         if self.state.detected {

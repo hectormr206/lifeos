@@ -1482,6 +1482,9 @@ pub fn create_router(state: ApiState) -> Router {
         // Battery management endpoints
         .route("/battery/status", get(get_battery_status))
         .route("/battery/threshold", post(post_battery_threshold))
+        .route("/battery/history", get(get_battery_history))
+        // Translation endpoint
+        .route("/translate", post(post_translate))
         // Skill registry endpoints
         .route("/skills", get(get_skills_list))
         .route("/skills/:name", get(get_skill_by_name))
@@ -10467,6 +10470,89 @@ async fn post_battery_threshold(
             "success": false,
             "error": format!("{}", e)
         }))),
+    }
+}
+
+/// GET /api/v1/battery/history — battery level readings.
+///
+/// Returns the current battery snapshot. Full historical tracking with a
+/// background sampler is a future improvement — for now we return a single
+/// data-point so the endpoint contract is honest.
+async fn get_battery_history(
+    State(_state): State<ApiState>,
+) -> Result<axum::Json<serde_json::Value>, (StatusCode, String)> {
+    match crate::battery_manager::read_battery_status().await {
+        Ok(status) => {
+            let now = chrono::Utc::now().to_rfc3339();
+            let entry = serde_json::json!({
+                "timestamp": now,
+                "capacity_pct": status.capacity_pct,
+                "status": status.status,
+                "health_pct": status.health_pct,
+                "power_profile": status.power_profile,
+            });
+            Ok(axum::Json(serde_json::json!({
+                "readings": [entry],
+                "note": "Historical tracking with periodic sampling is planned. Currently returns the latest snapshot."
+            })))
+        }
+        Err(e) => Ok(axum::Json(serde_json::json!({
+            "readings": [],
+            "error": format!("{}", e)
+        }))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Translation handler
+// ---------------------------------------------------------------------------
+
+/// POST /api/v1/translate — translate text between languages.
+///
+/// Request body: `{ "text": "...", "target_lang": "es", "source_lang": "en" }`
+/// `source_lang` is optional (auto-detected when omitted).
+async fn post_translate(
+    State(state): State<ApiState>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> Result<axum::Json<serde_json::Value>, (StatusCode, String)> {
+    let text = body
+        .get("text")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Missing 'text' field".into()))?;
+    let target_lang = body
+        .get("target_lang")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Missing 'target_lang' field".into(),
+            )
+        })?;
+    let source_lang = body
+        .get("source_lang")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let engine = crate::translation::TranslationEngine::new(None);
+    let req = crate::translation::TranslationRequest {
+        text: text.to_string(),
+        source_lang,
+        target_lang: target_lang.to_string(),
+    };
+
+    let router = state.llm_router.read().await;
+    match engine.translate(&req, Some(&router)).await {
+        Ok(result) => Ok(axum::Json(serde_json::json!({
+            "original": result.original,
+            "translated": result.translated,
+            "source_lang": result.source_lang,
+            "target_lang": result.target_lang,
+            "method": result.method,
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Translation failed: {}", e),
+        )),
     }
 }
 

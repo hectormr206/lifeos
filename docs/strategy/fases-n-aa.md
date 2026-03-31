@@ -64,7 +64,7 @@ LifeOS es un OS para laptops. La bateria es un organo vital — sin ella, el org
   - Enchufado → `balanced` o `performance`
   - "Axi, pon modo ahorro de energia" → switch a power-saver
 - [x] **CLI:** `life battery` subcommand para ver status, cambiar threshold, forzar carga completa
-- [x] **API endpoints:** GET /api/v1/battery/status, POST /api/v1/battery/threshold, GET /api/v1/battery/history
+- [ ] **API endpoints completos:** Hoy existen GET `/api/v1/battery/status` y POST `/api/v1/battery/threshold`, pero no aparecio GET `/api/v1/battery/history` en el API real
 
 - [x] **HITO FASE N:** System settings, COSMIC control (ventanas/workspaces/monitores), window search, coordenadas inteligentes via vision LLM, flatpak management, battery manager, 77 iconos SVG del theme LifeOS completo
 
@@ -114,10 +114,10 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [x] **Reportar discrepancias:** Si encuentra datos incorrectos o archivos corruptos, notificar via Telegram con evidencia (screenshot + descripcion)
 
 **O.5 — Auto-aprendizaje de aplicaciones (Skill Generation)**
-- [x] **Interaction recording:** Cuando Axi interactua con una app nueva, graba la secuencia: screenshot antes → accion → screenshot despues → resultado
-- [x] **Skill extraction:** Despues de completar una tarea exitosamente en una app, el LLM analiza la secuencia grabada y genera un "skill" reutilizable: pasos, coordenadas relativas, verificaciones
+- [ ] **Interaction recording end-to-end:** Existe `record_interaction()` en `skill_generator.rs`, pero no quedo demostrado que el `action_loop()` autonomo la invoque al trabajar sobre apps reales
+- [ ] **Skill extraction desde interaccion real:** Hay piezas de generacion de skills en repo, pero no quedo probado el flujo automatico que convierta una sesion autonoma de desktop en un skill reusable por app
 - [x] **Skill library:** Almacenar skills por app (LibreOffice, Firefox, GIMP, VSCode, etc.) en ~/.local/share/lifeos/skills/. Formato JSON con pasos + screenshots de referencia
-- [x] **Skill refinement:** Cada vez que ejecuta un skill, si falla, actualiza con el nuevo approach que funciono. Si tiene exito, incrementa confidence score
+- [ ] **Skill refinement autonomo:** No aparecio evidencia clara de un loop runtime que refine automaticamente skills de apps en base a ejecuciones visuales exitosas/fallidas
 - [x] **Zero-shot para apps nuevas:** `action_loop()` usa visual grounding puro para cualquier app. Skills guardados aceleran apps conocidas
 - [x] **Sharing de skills:** Formato JSON estandar en ~/.local/share/lifeos/skills/ listo para futuro marketplace
 
@@ -128,7 +128,7 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [x] **Descargar archivos:** `wait_for_download(dir, timeout)` — polling de directorio para detectar archivos nuevos (ignora .part/.crdownload)
 - [x] **Multi-tab management:** `browser_new_tab(url)`, `browser_switch_tab(index)`, `browser_close_tab()` via Ctrl+T/Tab/W con ydotool
 
-- [x] **HITO FASE O:** Workspace Axi aislado, visual grounding universal, action loop (screenshot→LLM→accion→verificacion), browser en workspace, descargas, multi-tab, terminal buffer, UNO bridge, skill extraction, kill switch. Pendiente: modelo visual grounding dedicado (UI-TARS) para mayor precision
+- [ ] **HITO FASE O:** Hay base fuerte (workspace Axi, visual grounding, action loop, browser en workspace, descargas, multi-tab, UNO bridge, kill switch), pero la parte de auto-aprendizaje y skill extraction/refinement desde uso real sigue parcial
 
 ### Fase P — Agente de Gaming Autonomo (vision a largo plazo)
 
@@ -194,9 +194,9 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 **Q.3 — MCP Servers pre-integrados**
 - [x] Conectar servers oficiales: Filesystem, Git, Memory, Fetch, Sequential Thinking — configurados en `/etc/lifeos/mcp-servers.toml` (disabled by default, activar segun necesidad)
 - [x] Conectar servers de terceros: GitHub, Brave Search, Puppeteer — configurados en `/etc/lifeos/mcp-servers.toml` con env vars para API keys
-- [x] Dashboard: seccion "Integraciones MCP" mostrando servers activos, tools disponibles, requests/dia
+- [ ] Dashboard: seccion "Integraciones MCP" mostrando servers activos, tools disponibles, requests/dia. No aparecio evidencia clara de esta vista en el dashboard actual
 
-- [x] **HITO FASE Q:** 9 tools MCP nativos, JSON-RPC 2.0 transport, sampling support, tool/resource discovery, config para 8 MCP servers (5 oficiales + 3 terceros). LifeOS es MCP client Y server
+- [ ] **HITO FASE Q:** La base MCP en repo es fuerte (client + server, JSON-RPC 2.0, sampling, discovery, config), pero la capa de pre-integraciones/dashboard sigue parcial y no debe contarse como cierre total todavia
 
 ### Fase R — Asistente de Reuniones Inteligente (mejor que Plaud AI)
 
@@ -210,40 +210,51 @@ El approach moderno para interaccion app-agnostic es: screenshot → modelo de v
 - [x] **Audio stream monitoring:** Poll `pactl list sink-inputs` cada 5-10 segundos. Detectar cuando una app de videoconferencia (zoom, firefox con meet.google.com, teams, discord) tiene un audio sink activo
 - [x] **Camera monitoring:** `fuser /dev/video0` o lsof para detectar si la webcam esta siendo usada por una app de conferencia
 - [x] **Window title detection:** `detect_meeting_by_window_title()` via `swaymsg -t get_tree` — parsea titulos de ventana recursivamente, matchea Zoom/Meet/Teams/Discord/Slack/Jitsi/WebEx con qualifier patterns
-- [x] **Señal combinada:** audio sink de app conocida + camara activa = reunion detectada con alta confianza. Solo audio = posiblemente reunion
-- [x] **Confirmacion al usuario:** Al detectar reunion, notificar via mini_widget overlay: "Detecte reunion en Zoom. Grabar? [Si/No/Siempre]"
+- [ ] **Señal combinada:** audio sink de app conocida + camara activa = reunion detectada con alta confianza. Solo audio = posiblemente reunion
+- [ ] **Confirmacion al usuario:** Al detectar reunion, notificar via mini_widget overlay: "Detecte reunion en Zoom. Grabar? [Si/No/Siempre]"
 
 **R.2 — Grabacion de audio**
-- [x] **PipeWire recording:** Usar `pw-record --target=$SINK_NUMBER` para capturar SOLO el audio de la app de conferencia (no todo el sistema). Esto captura tanto lo que dicen los demas como lo que tu dices
-- [x] **Formato:** WAV a 44.1kHz stereo, comprimir a OPUS/OGG al finalizar para almacenamiento eficiente
-- [x] **Mic separado:** Opcionalmente, grabar tambien el microfono del usuario como pista separada (para mejor diarizacion de hablantes)
-- [x] **Almacenamiento:** `~/.local/share/lifeos/meetings/YYYY-MM-DD_HH-MM_app-name.opus`. Auto-limpiar meetings > 90 dias (configurable)
+- [x] **Grabacion basica via PipeWire:** `pw-record` inicia automaticamente cuando se detecta reunion y guarda audio local
+- [ ] **Captura dirigida al sink correcto:** Usar `pw-record --target=$SINK_NUMBER` para capturar SOLO el audio de la app de conferencia (no todo el sistema)
+- [ ] **Formato final de archivo:** WAV a 44.1kHz stereo o equivalente, con compresion a OPUS/OGG al finalizar para almacenamiento eficiente
+- [ ] **Mic separado:** Opcionalmente, grabar tambien el microfono del usuario como pista separada (para mejor diarizacion de hablantes)
+- [ ] **Almacenamiento final y limpieza:** `~/.local/share/lifeos/meetings/YYYY-MM-DD_HH-MM_app-name.opus`, con auto-limpieza de meetings > 90 dias (configurable)
 - [x] **Duracion automatica:** Comenzar al detectar reunion, parar automaticamente cuando el audio sink desaparece (la reunion termino)
 
 **R.3 — Transcripcion local (Whisper)**
-- [x] **Post-meeting transcription:** Cuando la reunion termina, pasar el audio por Whisper STT local. Ya esta integrado en LifeOS
-- [x] **Speaker diarization:** `lifeos-diarize.py` + `diarize_transcript()` en meeting_assistant.rs. Analiza energia de audio para detectar cambios de hablante, etiqueta [Speaker 1]/[Speaker 2]. Integrado con Whisper timestamps cuando disponibles. Sin dependencias ML pesadas (usa analisis de energia WAV nativo)
-- [x] **Multi-idioma:** Whisper soporta 99 idiomas. Auto-detectar idioma o usar el configurado
-- [x] **Formato de salida:** Transcripcion con timestamps + etiquetas de hablante en formato SRT y TXT
+- [ ] **Post-meeting transcription:** Cuando la reunion termina, pasar el audio por Whisper STT local. La funcion existe, pero el pipeline post-meeting no esta cableado
+- [ ] **Speaker diarization:** `lifeos-diarize.py` + `diarize_transcript()` existen, pero no estan invocados automaticamente al terminar la reunion
+- [ ] **Multi-idioma:** Whisper soporta 99 idiomas, pero falta el wiring final de configuracion/ejecucion en el flujo de reuniones
+- [ ] **Formato de salida:** Transcripcion con timestamps + etiquetas de hablante en formato SRT y TXT
+
+**Evidencia host real (2026-03-31):** En `/var/lib/lifeos/meetings/` hay grabaciones `.wav`, pero no hay `.txt`, `.opus`, `.json` ni artefactos de resumen generados automaticamente.
 
 **R.4 — Resumen inteligente + Action Items**
-- [x] **Meeting summary:** Al terminar la transcripcion, enviar al LLM (local o Cerebras) para generar:
+- [ ] **Meeting summary:** Al terminar la transcripcion, enviar al LLM (local o Cerebras) para generar:
   - Resumen ejecutivo (3-5 bullet points)
   - Temas principales discutidos
   - Decisiones tomadas
   - Action items (quien, que, cuando)
   - Preguntas sin resolver
-- [x] **Templates configurables:** El usuario elige el formato de resumen (ejecutivo, detallado, solo action items, etc.)
-- [x] **Notificacion post-reunion:** Enviar resumen a Telegram automaticamente: "Tu reunion de Zoom termino (47 min). Resumen: ..."
-- [x] **Archivo en memoria:** Guardar la transcripcion y resumen en la memoria de Axi para consulta futura: "Que acordamos en la reunion del lunes?"
+- [ ] **Templates configurables:** El usuario elige el formato de resumen (ejecutivo, detallado, solo action items, etc.)
+- [ ] **Notificacion post-reunion:** Enviar resumen a Telegram automaticamente: "Tu reunion de Zoom termino (47 min). Resumen: ..."
+- [ ] **Archivo en memoria:** Guardar la transcripcion y resumen en la memoria de Axi para consulta futura: "Que acordamos en la reunion del lunes?"
 
 **R.5 — Privacidad**
-- [x] **Todo local:** Audio, transcripcion, y resumen procesados localmente. NUNCA enviar audio crudo a la nube
-- [x] **Consentimiento explicito:** El usuario debe aprobar la grabacion (notificacion al inicio). Opcion "Siempre grabar reuniones de X app"
-- [x] **Borrado seguro:** Opcion de borrar grabacion despues de generar transcripcion (solo conservar texto)
+- [ ] **Todo local:** Audio, transcripcion, y resumen procesados localmente. NUNCA enviar audio crudo a la nube
+- [ ] **Consentimiento explicito:** El usuario debe aprobar la grabacion (notificacion al inicio). Opcion "Siempre grabar reuniones de X app"
+- [ ] **Borrado seguro:** Opcion de borrar grabacion despues de generar transcripcion (solo conservar texto)
 - [x] **Indicador visible:** MeetingRecordingStarted/Stopped events emitidos via event bus broadcast — consumidos por tray icon, mini_widget, y dashboard para mostrar indicador de grabacion
 
-- [x] **HITO FASE R — COMPLETO:** Deteccion de reunion triple (PipeWire audio + window title + camara), grabacion PipeWire, transcripcion Whisper, **speaker diarization** (energy-based + timestamps), resumen LLM con action items, notificacion Telegram, indicador de grabacion via event bus
+**R.6 — Retencion, memoria y anti-basura**
+- [ ] **Politica de retencion definida:** decidir exactamente que se guarda (audio crudo, audio comprimido, transcript, resumen, action items, metadatos) y por cuanto tiempo
+- [x] **Limpieza automatica parcial:** `storage_housekeeping.rs` ya elimina meetings viejos (>30 dias) y recorta directorios gestionados a un maximo de 120 archivos cada 6 horas
+- [ ] **Limpieza automatica real del pipeline:** borrar o comprimir archivos temporales y grabaciones correctas segun el resultado final, sin perder evidencia util
+- [ ] **Memoria minima util:** conservar en memoria solo lo necesario para responder “que acordamos” sin llenar disco de audio innecesario
+- [ ] **Soporte para reuniones largas:** procesar reuniones de minutos u horas sin asumir duraciones cortas ni romper por tamano
+- [ ] **Evidencia observable:** dashboard/logs/API deben dejar claro que se grabo, que se transcribio, que se resumio y que se elimino
+
+- [ ] **HITO FASE R — REABIERTO:** La deteccion y grabacion basica existen, pero falta cablear el pipeline post-meeting completo, corregir almacenamiento/retencion y validar el flujo end-to-end en host real
 
 ---
 
@@ -377,18 +388,18 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 | **K** | Self-Improvement + Skills | H, I | Alta | **COMPLETADO** — skill authoring/testing/hot-reload, prompt self-editing, learning from failures |
 | **L** | Multimodalidad Avanzada | — | Media | **COMPLETADO** — conversacion continua, TTS emocional, desktop widget overlay, screen context. Pendiente: wake word personalizado |
 | **M** | Plataforma Completa | H, I, J | Alta | **COMPLETADO** — scaffolding, git clone, multi-file edit, test gen, deploy, monitoring, parallel tasks, code review |
-| **N** | Operador de Desktop | J | Alta | **COMPLETADO** — system settings, COSMIC control, window search, multi-monitor, smart coordinates, 77 iconos SVG |
-| **O** | Agente Agentico Autonomo | N, J | Muy Alta | **COMPLETADO** — workspace Axi, visual grounding, action loop universal, browser/download/multi-tab, app bridges |
-| **P** | Gaming Autonomo | O | Extrema | **COMPLETADO** — game state analysis, sugerencias, overlay hints, voice coaching, virtual gamepad uinput. Falta: action model |
-| **Q** | MCP Interoperabilidad | H | Media | **COMPLETADO** — 9 tools, JSON-RPC 2.0, sampling support, 8 MCP servers pre-configurados |
-| **R** | Asistente de Reuniones | L | Media | **COMPLETADO** — auto-detect triple (audio+window+camera), recording, transcribe, resumen, indicador. Pendiente: diarization |
-| **S** | Sistema Inmunologico + Salud | — | Media | **IMPLEMENTADO** — 12 health checks: CPU/GPU/SSD/battery/disk/RAM/network/SELinux/security updates |
-| **T** | Voice Pipeline Pro | — | Media | **COMPLETADO** — calibracion adaptativa, feedback auditivo (chime), near/far-field, TTS emocional, wake word auto-refinamiento |
-| **U** | Self-Improving OS | — | Alta | **COMPLETADO** — SystemTuner (sysctl optimizer), ResourcePredictor, fine-tune scheduler, metrics dashboard |
-| **V** | Knowledge Graph | — | Alta | **COMPLETADO** — entity graph SQLite, 5 ingestores cross-app, query contextual via LLM |
-| **W** | Reliability 95% | — | Media | **COMPLETADO** — ReliabilityTracker, failure patterns, MTBF, trend analysis, recovery suggestions |
-| **X** | Multilingual | — | Alta | **COMPLETADO** — TranslationEngine, document translation, real-time subtitles, voice interpreter |
-| **Y** | Security AI | — | Alta | **COMPLETADO** — 4 detectores, auto-isolation, forensic reports, monitoring loop 30s |
+| **N** | Operador de Desktop | J | Alta | **PARCIAL** — operator fuerte, pero bateria/API no estaba tan cerrada como deciamos |
+| **O** | Agente Agentico Autonomo | N, J | Muy Alta | **PARCIAL** — base autonoma visual fuerte; skill extraction/refinement desde uso real sigue incompleto |
+| **P** | Gaming Autonomo | O | Extrema | **REPO INTEGRADO** — asistencia/coaching y captura existen; falta validacion host dedicada y el action model sigue futuro |
+| **Q** | MCP Interoperabilidad | H | Media | **PARCIAL / REPO INTEGRADO** — client+server y discovery existen; dashboard/pre-integraciones siguen sin cierre total validado |
+| **R** | Asistente de Reuniones | L | Media | **REABIERTO** — detecta y graba, pero no transcribe/diariza/resume automaticamente ni cierra retencion/memoria |
+| **S** | Sistema Inmunologico + Salud | — | Media | **PARCIAL** — health monitor y dashboard existen; algunos reportes/claims de cobertura integral siguen por validar |
+| **T** | Voice Pipeline Pro | — | Media | **PARCIAL** — hay mucho trabajo en voz, pero la calibracion/robustez tipo Alexa todavia no debe darse por cerrada |
+| **U** | Self-Improving OS | — | Alta | **PARCIAL** — tuners, prediccion y scheduler existen; falta demostrar el loop autonomo completo |
+| **V** | Knowledge Graph | — | Alta | **PARCIAL** — grafo e ingestion existen; export/import y claim de memoria total no quedaron cerrados |
+| **W** | Reliability 95% | — | Media | **PARCIAL** — tracker y varias defensas existen; checkpoint/resume global y audit trail explicable siguen incompletos |
+| **X** | Multilingual | — | Alta | **PARCIAL** — modulo de traduccion existe, pero el producto OS-level no esta integrado de extremo a extremo |
+| **Y** | Security AI | — | Alta | **REPO INTEGRADO / PENDIENTE HOST** — daemon y detectores existen; falta una validacion host dedicada antes de volver a marcar cierre |
 
 **Lo que queda por hacer (requiere al usuario):**
 1. **Wake word model** — Grabar muestras de "axi" en diferentes tonos/volumenes para entrenar `axi.rpw`
@@ -430,7 +441,7 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [x] Backup health: si restic/borg configurado, verificar integridad semanal, alertar si no hay backup
 - [x] Privacy hygiene semanal: cache scan, HIBP API para emails, archivos sensibles expuestos
 - [x] Dashboard: nueva seccion "Salud del Sistema" con indicadores verdes/amarillos/rojos por area
-- [x] Telegram: reportes de salud diarios/semanales, alertas criticas inmediatas
+- [ ] Telegram: reportes de salud diarios/semanales de salud integral no quedaron demostrados end-to-end en esta auditoria. Si hay alertas puntuales, pero no el paquete completo como estaba redactado
 
 ### Fase T — Voice Pipeline Pro (escuchar como Alexa/Google)
 
@@ -545,7 +556,7 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [x] **Resource prediction:** `ResourcePredictor` — samples CPU/mem/GPU por hora+dia, predice carga, recomienda power profile y si pre-cargar modelo LLM
 - [x] **Nightly optimization daemon:** Proceso que corre entre 2-5 AM (configurable) cuando el usuario duerme. Ejecuta: cleanup, config tuning, model optimization, skill generation, security audit
 - [x] **Metrics dashboard:** `get_tuning_metrics()` — total optimizaciones, boot time saved, memory saved, skills generados, prompts mejorados. Dashboard-ready
-- [x] **HITO FASE U:** SystemTuner + ResourcePredictor + fine-tune scheduler + metrics dashboard implementados. 7 tests pasan
+- [ ] **HITO FASE U:** Hay piezas fuertes (SystemTuner, ResourcePredictor, scheduler nocturno y metricas), pero el claim de OS que ya se optimiza solo de extremo a extremo sigue parcial y necesita validacion runtime mas dura
 
 ### Fase V — Knowledge Graph Personal Local (Memoria Total)
 
@@ -562,8 +573,8 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [x] **Privacy layers:** El usuario controla que se graba. Niveles: todo, solo conversaciones con Axi, solo lo que el usuario marca explicitamente. Borrado selectivo por entidad/fecha
 - [x] **Cross-app context:** 5 ingestores (Telegram, email, calendario, git commits, archivos) extraen entidades y crean relaciones. `answer_context_question()` consulta grafo + LLM para respuestas contextuales
 - [x] **Knowledge decay:** Hechos viejos sin uso pierden relevancia gradualmente. Hechos confirmados repetidamente ganan peso. Como la memoria humana
-- [x] **Export/import:** Exportar grafo completo (JSON-LD) para migrar a otro dispositivo LifeOS. El "ADN" del organismo incluye su memoria
-- [x] **HITO FASE V:** Knowledge graph con entidades (Person/Project/File/Event/Conversation/Commit/Email/Task/Skill), relaciones pesadas, cross-app ingestion, query contextual via LLM. 19 tests pasan
+- [ ] **Export/import:** No aparecio evidencia clara de export/import JSON-LD del knowledge graph en el runtime actual
+- [ ] **HITO FASE V:** El grafo y la consulta contextual existen en repo, pero "memoria total" seguia sobredeclarando capacidades como export/import y necesita una validacion mas completa por AX
 
 ### Fase W — Reliability Engine (Boring-Reliable > Impressive-Unreliable)
 
@@ -574,15 +585,15 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 **Por que es headline:** "Este OS tiene 99.9% de uptime en sus agentes"
 
 - [x] **Atomic transactions:** Cada workflow es una transaccion. Si un paso falla, TODOS los cambios se revierten. Git worktree para codigo, snapshots para archivos, journal para configs
-- [x] **Checkpoint + resume:** Guardar estado del agente cada N pasos. Si crashea, resume desde el ultimo checkpoint sin re-ejecutar todo
+- [ ] **Checkpoint + resume:** Hay checkpoints/versionado en partes del sistema, pero no aparecio evidencia clara de resume generalizado de workflows del agente tras crash
 - [x] **Shadow mode:** Antes de ejecutar un workflow nuevo, correrlo en simulacion (dry-run) y mostrar al usuario que HARIA sin hacerlo realmente. "Axi planea: 1) crear branch, 2) editar 3 archivos, 3) correr tests. Proceder? [Si/No]"
 - [x] **Confidence scoring:** Cada paso tiene un score de confianza (0-1). Si confianza < 0.7, escalar a humano. Si > 0.9, auto-ejecutar. El umbral es configurable
 - [x] **Retry with variation:** Si un paso falla, no reintentar lo mismo. Generar un approach alternativo via LLM. "El build fallo por X, intentando approach B..."
 - [x] **Cascade failure prevention:** Si paso 3 de 8 falla, no seguir ejecutando. Evaluar si los pasos restantes dependen del fallido. Si no, continuar los independientes
-- [x] **Execution audit trail:** Log inmutable de cada accion, su resultado, y el razonamiento del LLM. Queryable via "Axi, por que hiciste X?" → muestra el chain of thought
+- [ ] **Execution audit trail:** Hay auditoria y logs, pero no quedo demostrado un flujo seguro y queryable que exponga ese "por que hiciste X" con razonamiento recuperable como estaba prometido
 - [x] **Reliability dashboard:** Tasa de exito por tipo de tarea, tiempo promedio de ejecucion, pasos que mas fallan, prompts que mas se auto-corrigieron
 - [x] **SLA mode:** Para tareas criticas, el usuario define un SLA: "esta tarea debe completarse en <30 min con >95% accuracy". Si Axi no puede garantizarlo, notifica antes de empezar
-- [x] **HITO FASE W:** `ReliabilityTracker` SQLite — success rate, MTBF, failure patterns con recovery suggestions, trend analysis (improving/stable/degrading), target 95% check, dashboard JSON. 7 tests pasan
+- [ ] **HITO FASE W:** `ReliabilityTracker` y varias piezas existen, pero la narrativa de reliability cerrada y resumable/reanudable aun esta por debajo de lo prometido
 
 ### Fase X — Intent-Based Interaction + OS-Level Translation
 
@@ -595,11 +606,11 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [x] **Intent parser:** Modulo que convierte lenguaje natural en intent + entities + constraints. "Agenda reunion con Juan para el viernes a las 3" → `{intent: "schedule_meeting", with: "Juan", date: "viernes", time: "15:00"}`
 - [x] **Intent router:** Dado un intent, determinar que skills/apps/acciones son necesarias. "Respondele a Juan" → buscar ultimo mensaje de Juan (Telegram/email) → componer respuesta → enviar
 - [x] **Multi-step intent resolution:** "Preparame para la reunion de mañana" → 1) buscar agenda, 2) buscar docs relacionados, 3) resumir conversaciones previas, 4) generar briefing, 5) enviarlo a Telegram
-- [x] **OS-level translation daemon:** `RealtimeTranslator` — captura audio via pw-record, chunks cada 5s, Whisper transcribe, traduce, emite SubtitleGenerated events via broadcast
-- [x] **Document translation:** `translate_file()` — soporta txt/md/pdf/docx, split en chunks ~1000 palabras, traduce cada uno, escribe archivo traducido
-- [x] **Live voice translation:** `interpret_voice()` — Whisper transcribe + traduce + Piper TTS sintetiza audio traducido. Modo interprete simultaneo
+- [ ] **OS-level translation daemon:** `RealtimeTranslator` existe en `translation.rs`, pero no aparecio cableado de forma visible al runtime principal como feature operativa del sistema
+- [ ] **Document translation:** `translate_file()` existe, pero no quedo demostrada una ruta de uso integrada/shippeada para el usuario final
+- [ ] **Live voice translation:** `interpret_voice()` existe en repo, pero no aparecio cableado end-to-end al producto real
 - [x] **Context-aware responses:** Cuando el usuario pregunta algo, Axi usa el contexto actual (ventana activa, archivo abierto, ultima conversacion) para dar respuesta relevante sin que el usuario explique el contexto
-- [x] **HITO FASE X:** TranslationEngine (Argos + LLM fallback), detect_language heuristico, document translation multi-formato, real-time subtitle stream, voice interpreter mode. 8 tests pasan
+- [ ] **HITO FASE X:** La base tecnica de traduccion existe en repo, pero la experiencia de producto OS-level seguia sobredeclarada y queda parcial hasta su wiring real
 
 ### Fase Y — AI Security Daemon + Self-Healing Avanzado
 
@@ -617,7 +628,7 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - [x] **Network self-healing:** Si DNS falla, switch a fallback. Si VPN se desconecta, reconectar automaticamente. Si WiFi es inestable, diagnosticar y reportar solucion
 - [x] **Predictive maintenance:** Analizar tendencias de SMART data, temperaturas, ciclos de bateria. Predecir fallos ANTES de que ocurran: "Tu SSD tiene 85% de vida usada. Al ritmo actual, necesitaras reemplazo en ~6 meses"
 - [x] **Zero-day protection:** Si se detecta un comportamiento nuevo nunca visto (nuevo proceso, nueva conexion, nuevo patron), aislarlo por defecto y preguntar al usuario. Principio de minimo privilegio AI-enforced
-- [x] **HITO FASE Y:** SecurityAiDaemon con 4 detectores (conexiones sospechosas, procesos anomalos, acceso no autorizado, integridad del sistema), respuesta automatica (isolate + block), monitoring loop cada 30s, reportes forenses completos. 18 tests pasan
+- [ ] **HITO FASE Y:** SecurityAiDaemon y sus detectores existen en repo, pero falta validacion host dedicada antes de volver a marcar este cierre como completo
 
 ### Fase Z — Ecosystem + Distribution + World Domination
 
@@ -792,10 +803,10 @@ El tema LifeOS tiene 177 iconos en 8 contextos (antes: 77 en 6). Script generado
 - [ ] **Consistencia visual:** REQUIERE HUMANO — verificar flujo completo Boot→Splash→Login→Desktop
 
 **AA.8 — Empaquetado y Pruebas — PARCIAL 2026-03-28**
-- [x] **Test automatizado de completitud:** `scripts/test-icon-completeness.sh` (por crear)
+- [x] **Test automatizado de completitud:** `scripts/test-icon-completeness.sh`
 - [ ] **Test de rendering:** REQUIERE HUMANO — screenshots en dark/light mode
 - [ ] **Test en apps reales:** REQUIERE HUMANO — abrir COSMIC Files, terminal, settings, Firefox, LibreOffice
-- [x] **Documentar el tema:** `docs/icon-theme-guide.md` (por crear)
+- [x] **Documentar el tema:** `docs/branding/icon-theme-guide.md`
 
 ---
 
@@ -803,21 +814,22 @@ El tema LifeOS tiene 177 iconos en 8 contextos (antes: 77 en 6). Script generado
 
 | Fase | Nombre | Estado | Impacto |
 |------|--------|--------|---------|
-| A-G | Base funcional | COMPLETADA 100% | Fundacion |
-| H-T | Fases de desarrollo core | IMPLEMENTADA 70% | Sistema funcional |
+| A-F | Base funcional | MAYORMENTE SHIPPED | Fundacion |
+| G | Game Guard | REABIERTO | Bug real detectado en host; fix en repo pendiente despliegue/validacion |
+| H-T | Fases de desarrollo core | MIXTO / EN AUDITORIA | Sistema funcional, pero no todo esta tan cerrado como se habia marcado |
 | **U** | Self-Improving OS (Karpathy Loop) | IMPLEMENTADA 60% | **HEADLINE** — "se optimiza solo" |
 | **V** | Knowledge Graph Personal | IMPLEMENTADA 65% | **HEADLINE** — "recuerda todo, local" |
 | **W** | Reliability Engine | IMPLEMENTADA 70% | **CRITICO** — sin esto nada funciona a escala |
 | **X** | Intent-Based Interaction + Translation | IMPLEMENTADA 40% | **HEADLINE** — "le dices que hacer y lo hace" |
 | **Y** | AI Security + Self-Healing Avanzado | IMPLEMENTADA 50% | **HEADLINE** — "nunca muestra errores" |
 | **Z** | Ecosystem + Distribution + World | IMPLEMENTADA 20% | **ESCALA** — de proyecto a plataforma global |
-| **AA** | Visual Identity Completa | COMPLETADA 95% | 657 SVGs brand-compliant, fuentes, wallpaper, theme system |
-| **AB** | Gateway WebSocket + Session Durability | COMPLETADA | WS gateway + session store + compaction LLM + channel routing |
-| **AC** | Plugin SDK + Capability Registry | COMPLETADA | skill_registry.rs 775 LOC, manifest v2, discovery, doctor, 17 tests |
-| **AD** | Anti-Breakage Engineering | COMPLETADA | 4 guardrails CI + config validator + scope-aware CI + Prometheus /metrics + audit query + live tests + 8 regression tests |
+| **AA** | Visual Identity Completa | REPO INTEGRADO / PARCIAL | Branding fuerte en repo e imagen; falta validacion humana completa en boot/rendering/flujo visual real |
+| **AB** | Gateway WebSocket + Session Durability | REABIERTA / PARCIAL | `/ws` existe, pero protocolo y session layer siguen sobredeclarados |
+| **AC** | Plugin SDK + Capability Registry | PARCIAL | registry y manifest v2 si; `life skills doctor` no |
+| **AD** | Anti-Breakage Engineering | PARCIAL | guardrails y `/metrics` si; `life audit query` y otros claims siguen pendientes |
 | **AE** | First-Boot User Creation + Welcome | COMPLETADA | Anaconda interactivo, sudoers %wheel, cosmic-initial-setup |
-| **AF** | Canales Extra (Slack, Discord, Email conv.) | COMPLETADA | slack_bridge + discord_bridge + email conversacional con threading |
-| **AG** | Mejoras Incrementales de Robustez | COMPLETADA 80% | Dedupe, cron validation, transcript export (falta pairing) |
+| **AF** | Canales Extra (Slack, Discord, Email conv.) | PARCIAL | Slack/Discord existen como modulos, pero no estan cableados al arranque real |
+| **AG** | Mejoras Incrementales de Robustez | PARCIAL | Dedupe y pairing basico existen; cron validation es baseline y transcript export no quedo comprobado |
 | **AH** | Firefox AI Local-First | PENDIENTE / EXPLORATORIA | Extension o sidebar Axi sobre modelo local, con opcion remota acotada |
 | **AI** | LibreOffice AI + UNO/MCP | PENDIENTE / EXPLORATORIA | Integracion nativa para Writer/Calc/Impress sobre modelo local y automatizacion estructurada |
 
@@ -827,4 +839,3 @@ AD (anti-breakage) → W (reliability) → AB (gateway) → U (self-improving) �
 **AD va primero porque previene regresiones al construir todo lo demas.**
 
 ---
-

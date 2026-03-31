@@ -11,8 +11,8 @@ mod system;
 mod main_tests;
 
 use commands::{
-    doctor::DoctorArgs, first_boot::FirstBootArgs, init::InitArgs, status::StatusArgs,
-    update::UpdateArgs,
+    audit::AuditArgs, doctor::DoctorArgs, first_boot::FirstBootArgs, init::InitArgs,
+    status::StatusArgs, update::UpdateArgs,
 };
 
 #[derive(Parser)]
@@ -44,6 +44,8 @@ enum Commands {
     Update(UpdateArgs),
     /// Run system health diagnostics
     Doctor(DoctorArgs),
+    /// Query audit trail and reliability metrics
+    Audit(AuditArgs),
     /// Safe mode controls
     #[clap(subcommand)]
     SafeMode(commands::safe_mode::SafeModeCommands),
@@ -207,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Status(args)) => commands::status::execute(args).await,
         Some(Commands::Update(args)) => commands::update::execute(args).await,
         Some(Commands::Doctor(args)) => commands::doctor::execute(args).await,
+        Some(Commands::Audit(args)) => commands::audit::execute(args).await,
         Some(Commands::SafeMode(cmd)) => commands::safe_mode::execute(cmd).await,
         Some(Commands::Rollback) => commands::rollback::execute().await,
         Some(Commands::Recover) => commands::recover::execute().await,

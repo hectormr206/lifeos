@@ -36,9 +36,7 @@ pub async fn execute(cmd: SafeModeCommands) -> anyhow::Result<()> {
                         let active = body
                             .get("safe_mode")
                             .and_then(|v| v.as_bool())
-                            .or_else(|| {
-                                body.get("active").and_then(|v| v.as_bool())
-                            })
+                            .or_else(|| body.get("active").and_then(|v| v.as_bool()))
                             .unwrap_or(false);
 
                         println!("{}", "LifeOS Safe Mode".bold().blue());
@@ -48,21 +46,13 @@ pub async fn execute(cmd: SafeModeCommands) -> anyhow::Result<()> {
                                 "  Status: {}",
                                 "ACTIVE - System running in safe mode".yellow().bold()
                             );
-                            if let Some(reason) =
-                                body.get("reason").and_then(|v| v.as_str())
-                            {
+                            if let Some(reason) = body.get("reason").and_then(|v| v.as_str()) {
                                 println!("  Reason: {}", reason);
                             }
                             println!();
-                            println!(
-                                "  To exit safe mode: {}",
-                                "life safe-mode exit".cyan()
-                            );
+                            println!("  To exit safe mode: {}", "life safe-mode exit".cyan());
                         } else {
-                            println!(
-                                "  Status: {}",
-                                "INACTIVE - Normal operation".green().bold()
-                            );
+                            println!("  Status: {}", "INACTIVE - Normal operation".green().bold());
                         }
                     }
                 }
@@ -106,11 +96,7 @@ pub async fn execute(cmd: SafeModeCommands) -> anyhow::Result<()> {
                 Ok(r) => {
                     let status = r.status();
                     let body = r.text().await.unwrap_or_default();
-                    println!(
-                        "  {} Daemon returned HTTP {}",
-                        "!".yellow().bold(),
-                        status
-                    );
+                    println!("  {} Daemon returned HTTP {}", "!".yellow().bold(), status);
                     if !body.is_empty() {
                         println!("    {}", body.dimmed());
                     }

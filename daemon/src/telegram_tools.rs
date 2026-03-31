@@ -26,6 +26,7 @@ pub mod inner {
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
     use crate::memory_plane::MemoryPlaneManager;
     use crate::proactive;
+    use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
     use crate::task_queue::TaskQueue;
 
     /// Maximum tool execution rounds per message to prevent infinite loops.
@@ -225,6 +226,10 @@ Herramientas:
 
 40. **send_file** — Envia un archivo al usuario via Telegram.
     args: {"path": "/home/lifeos/documento.pdf"}
+
+41. **export_conversation** — Exporta la conversacion actual como archivo de texto y lo envia al usuario.
+    args: {"format": "txt"}
+    Formatos: "txt" (por defecto), "json". Genera el archivo y lo envia automaticamente.
 
 ## Reglas
 
@@ -813,6 +818,8 @@ Herramientas:
         pub history: Arc<ConversationHistory>,
         pub cron_store: Arc<CronStore>,
         pub sdd_store: Arc<SddStore>,
+        /// Persistent session store — parallel to in-memory history for durability.
+        pub session_store: Option<Arc<SessionStore>>,
     }
 
     /// Check if the user's message contains keywords that suggest they want
@@ -954,6 +961,7 @@ Herramientas:
             "remove_provider" => execute_remove_provider(&call.args, ctx).await,
             "disable_provider" => execute_disable_provider(&call.args, ctx).await,
             "send_file" => execute_send_file(&call.args).await,
+            "export_conversation" => execute_export_conversation(&call.args, ctx).await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -991,6 +999,45 @@ Herramientas:
         let is_new_session = history.is_empty();
         if !history.is_empty() {
             messages.extend(history);
+        }
+
+        // SessionStore: enrich context with persistent transcript (parallel system).
+        // If the in-memory history is empty (daemon restarted), SessionStore provides
+        // continuity from the durable JSONL transcript on disk.
+        let session_key = SessionKey::telegram_dm(chat_id);
+        if let Some(ref store) = ctx.session_store {
+            if let Ok(_meta) = store.get_or_create(&session_key).await {
+                // If in-memory history was empty, load recent turns from SessionStore
+                if is_new_session {
+                    if let Ok(recent) = store.load_recent_turns(&session_key, 10).await {
+                        if !recent.is_empty() {
+                            // Inject compaction summary if available
+                            if let Some(summary) = store.get_compaction_summary(&session_key).await
+                            {
+                                messages.push(ChatMessage {
+                                    role: "system".into(),
+                                    content: serde_json::Value::String(format!(
+                                        "[Resumen de sesiones anteriores (persistente)]: {}",
+                                        summary
+                                    )),
+                                });
+                            }
+                            // Convert SessionStore turns to ChatMessages
+                            for turn in &recent {
+                                messages.push(ChatMessage {
+                                    role: turn.role.clone(),
+                                    content: serde_json::Value::String(turn.content.clone()),
+                                });
+                            }
+                            info!(
+                                "[session_store] Restored {} turns for chat {} from persistent store",
+                                recent.len(),
+                                chat_id
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // Proactive context recall: search memory on new sessions or when the
@@ -1084,11 +1131,61 @@ Herramientas:
                 // Save to conversation history
                 let assistant_msg = ChatMessage {
                     role: "assistant".into(),
-                    content: serde_json::Value::String(final_text),
+                    content: serde_json::Value::String(final_text.clone()),
                 };
                 ctx.history
                     .append(chat_id, &[user_msg, assistant_msg])
                     .await;
+
+                // Persist to SessionStore (parallel durable system)
+                if let Some(ref store) = ctx.session_store {
+                    let store = store.clone();
+                    let sk = session_key.clone();
+                    let user_content = user_text.to_string();
+                    let assistant_content = final_text.clone();
+                    let router = ctx.router.clone();
+                    tokio::spawn(async move {
+                        let now = chrono::Utc::now();
+                        // Save user turn
+                        if let Err(e) = store
+                            .append_turn(
+                                &sk,
+                                TranscriptTurn {
+                                    role: "user".into(),
+                                    content: user_content,
+                                    channel: "telegram".into(),
+                                    timestamp: now,
+                                    tool_name: None,
+                                    tool_result: None,
+                                },
+                            )
+                            .await
+                        {
+                            warn!("[session_store] Failed to append user turn: {}", e);
+                        }
+                        // Save assistant turn
+                        if let Err(e) = store
+                            .append_turn(
+                                &sk,
+                                TranscriptTurn {
+                                    role: "assistant".into(),
+                                    content: assistant_content,
+                                    channel: "telegram".into(),
+                                    timestamp: now,
+                                    tool_name: None,
+                                    tool_result: None,
+                                },
+                            )
+                            .await
+                        {
+                            warn!("[session_store] Failed to append assistant turn: {}", e);
+                        }
+                        // Trigger compaction if needed
+                        if let Err(e) = store.compact_session(&sk, &router).await {
+                            warn!("[session_store] Compaction failed: {}", e);
+                        }
+                    });
+                }
 
                 // Trigger LLM compaction in background if summary is long
                 let compact_ctx = ctx.clone();
@@ -3186,6 +3283,74 @@ max_context = 128000
         } else {
             Ok(format!("Archivo no encontrado: {}", expanded))
         }
+    }
+
+    async fn execute_export_conversation(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("txt");
+
+        // Collect messages from all chats in conversation history
+        let chats = ctx.history.chats.read().await;
+        if chats.is_empty() {
+            return Ok("No hay conversacion activa para exportar.".into());
+        }
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let export_dir = format!("{}/.local/share/lifeos/exports", home);
+        std::fs::create_dir_all(&export_dir)?;
+
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let extension = if format == "json" { "json" } else { "txt" };
+        let file_path = format!("{}/conversation_{}.{}", export_dir, timestamp, extension);
+
+        if format == "json" {
+            // Export as JSON array of messages per chat
+            let mut export = serde_json::Map::new();
+            for (chat_id, entry) in chats.iter() {
+                let msgs: Vec<serde_json::Value> = entry
+                    .messages
+                    .iter()
+                    .map(|m| {
+                        serde_json::json!({
+                            "role": m.role,
+                            "content": m.content,
+                        })
+                    })
+                    .collect();
+                export.insert(chat_id.to_string(), serde_json::json!(msgs));
+            }
+            std::fs::write(&file_path, serde_json::to_string_pretty(&export)?)?;
+        } else {
+            // Export as plain text
+            let mut output = String::new();
+            for (chat_id, entry) in chats.iter() {
+                output.push_str(&format!("=== Chat {} ===\n\n", chat_id));
+                if let Some(ref summary) = entry.compacted_summary {
+                    output.push_str(&format!("[Resumen]: {}\n\n", summary));
+                }
+                for msg in &entry.messages {
+                    let role_label = match msg.role.as_str() {
+                        "user" => "Usuario",
+                        "assistant" => "Axi",
+                        "system" => "Sistema",
+                        other => other,
+                    };
+                    let content = match &msg.content {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    output.push_str(&format!("{}: {}\n\n", role_label, content));
+                }
+            }
+            std::fs::write(&file_path, &output)?;
+        }
+
+        info!("[telegram_tools] Exported conversation to {}", file_path);
+
+        // Return __SEND_FILE__ marker so telegram_bridge sends it to the user
+        Ok(format!("__SEND_FILE__:{}", file_path))
     }
 
     // -----------------------------------------------------------------------
