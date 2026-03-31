@@ -90,6 +90,23 @@ clear_env_value() {
     sed -i "/^${key}=/d" "$ENV_FILE"
 }
 
+migrate_legacy_system_model_defaults() {
+    local legacy_model="qwen3-8b-q4_k_m.gguf"
+    local target_model="$DEFAULT_MODEL"
+    local config_file=""
+
+    for config_file in /etc/lifeos/lifeos.toml /etc/lifeos/lifeos.toml.default; do
+        if [ ! -f "$config_file" ]; then
+            continue
+        fi
+
+        if grep -Fq "model = \"$legacy_model\"" "$config_file"; then
+            sed -i "s/model = \"$legacy_model\"/model = \"$target_model\"/" "$config_file"
+            echo "Migrated legacy AI default in $config_file to $target_model"
+        fi
+    done
+}
+
 is_primary_model_candidate() {
     case "$1" in
         mmproj-*|*-mmproj-*|nomic-embed-*|whisper*|*embedding*)
@@ -220,6 +237,7 @@ seed_from_preload() {
     fi
 }
 
+migrate_legacy_system_model_defaults
 ensure_writable_model_dir
 if [ -z "$MODEL" ]; then
     EXISTING=$(find_existing_primary_model_not_removed)
