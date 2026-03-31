@@ -52,6 +52,12 @@ Si falla cualquiera de esas condiciones:
 - [x] `lifeosd` podia correr duplicado (user + system) en host real
 - [x] Game Guard tenia falsos positivos por GameMode y por detectar a `llama-server` como juego
 - [x] El default de modelo estaba desalineado entre plantilla de sistema, config de usuario y runtime
+- [x] Fix R: meeting pipeline wired end-to-end (transcribe → diarize → summarize → memory → notify)
+- [x] Fix AF: Slack/Discord bridges spawned in main.rs with feature gates
+- [x] Fix AB: SessionStore connected to Telegram bridge (persists across restarts)
+- [x] Fix AP: Worker lifecycle events emitted to WebSocket event bus
+- [x] Fix G: Game Guard false positive fixes verified with tests
+- [x] Fix AK: life doctor + life safe-mode CLI commands implemented
 - [ ] El roadmap ya refleja todas las demas discrepancias historicas
 
 ## AX.5 — Criterio para volver a marcar Fase R como completa

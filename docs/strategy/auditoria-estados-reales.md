@@ -28,7 +28,7 @@
 | D | Repo integrado | Multimedia Telegram y web search tienen wiring claro; no fue el foco de esta pasada |
 | E | Repo integrado | Calendario, scheduled tasks y approval flow estan cableados |
 | F | Shipped deshabilitado | WhatsApp/Matrix/Signal/Home Assistant existen, pero la imagen default no compila esas features |
-| G | Reabierto | Game Guard tuvo falsos positivos y override stale en host real |
+| G | Repo integrado | Fix en repo + tests para falsos positivos (gamemoded, llama-server), pendiente deploy host |
 | H | Repo integrado | No se hallo ruptura puntual en esta pasada, pero queda pendiente validacion host |
 | I | Repo integrado | Flujo git/autonomia presente; pendiente auditoria fina de claims mas ambiciosos |
 | J | Repo integrado | Browser/CDP existe; pendiente validacion profunda por casos reales |
@@ -36,30 +36,30 @@
 | L | Repo integrado | Voz/widget/notificaciones existen; pendiente auditoria host dedicada |
 | M | Repo integrado | Claim amplio; necesita una pasada especifica por deploy/review/paralelismo |
 | N | Parcial | Desktop operator va fuerte, pero bateria estaba sobredeclarada en API (`/battery/history` no aparecio) |
-| O | Parcial | Base autonoma de desktop existe; auto-aprendizaje y skill extraction/refinement siguen incompletos |
+| O | Parcial | Desktop operator funciona; skill learning desde uso real no esta wired |
 | P | Repo integrado | Gaming assist y captura existen en repo; falta una validacion host dedicada |
-| Q | Parcial | MCP client/server existen, pero dashboard e historia de pre-integraciones seguian inflados |
-| R | Reabierto | Detecta/graba, pero no transcribe/diariza/resume automaticamente |
-| S | Parcial | Health monitor y dashboard existen; reportes/cobertura integral siguen por validar |
-| T | Parcial | Voz mejoro mucho, pero no debe venderse como voice pipeline completamente cerrado estilo Alexa |
-| U | Parcial | Tuner/predictor/scheduler existen, pero el loop de self-improvement total sigue parcial |
-| V | Parcial | Knowledge graph real existe, pero export/import y “memoria total” seguian sobredeclarados |
-| W | Parcial | ReliabilityTracker existe; checkpoint/resume general y audit trail explicable siguen incompletos |
+| Q | Parcial | MCP client/server base funciona; dashboard integration es basica |
+| R | Repo integrado | Pipeline wired end-to-end (transcribe → diarize → summarize → memory → notify), pendiente validacion host |
+| S | Parcial | Health checks existen y dashboard muestra estado; reportes diarios/semanales por Telegram no wired |
+| T | Parcial | Voz funciona (wake word, STT, TTS), pero no es un pipeline Alexa-style completo end-to-end |
+| U | Parcial | Prompt evolution y workflow learner existen; full self-improvement loop sigue parcial |
+| V | Parcial | Knowledge graph existe y se consulta; export/import no implementados |
+| W | Parcial | ReliabilityTracker existe; checkpoint/resume y audit trail son basicos |
 | X | Parcial | Translation module existe en repo, pero no aparecio integrado al producto real end-to-end |
 | Y | Repo integrado | Security AI daemon existe y se arranca; queda pendiente una pasada host dedicada |
 | Z-AA | Pendiente AX | No eran el foco principal de esta pasada |
-| AB | Parcial | WebSocket basico existe, pero protocolo y session durability estan sobredeclarados |
+| AB | Repo integrado | SessionStore conectado a Telegram bridge, persiste across restarts; protocolo WS aun basico |
 | AC | Parcial | Registry/manifest existen; `life skills doctor` no existe como comando real |
 | AD | Parcial | Hay guardrails y `/metrics`, pero faltan claims como `life audit query` y schema/doc baseline comprobable |
 | AE | Repo integrado | ISO y first-boot avanzaron; el incidente de doble `lifeosd` obliga a seguir vigilando ownership/runtime |
-| AF | Parcial | Slack/Discord existen como modulos, pero no estan arrancados por `main.rs` |
+| AF | Repo integrado | Slack/Discord wired a startup en main.rs, feature-gated; pendiente compilar en imagen |
 | AG | Parcial | Dedupe y pairing basico si; transcript export no quedo comprobado y cron validation es limitada |
-| AK | Parcial | Watchdog, safe mode, config store y sentinel existen, pero los endpoints/CLI de health y repair estaban sobredeclarados |
+| AK | Repo integrado | `life doctor` + `life safe-mode` CLI commands implementados; sentinel y watchdog funcionales |
 | AL | Parcial | Seguridad mejoro, pero `life doctor`, ciertos eventos WS y parte del troubleshooting estaban inflados |
 | AM | Repo integrado | `time_context()` y `current_time` estan cableados; falta pasada integral de storage/cron |
 | AN | Repo integrado | Hot reload y herramientas de providers tienen evidencia fuerte en repo |
-| AO | Parcial | UX de Telegram mejoro mucho, pero webhook seguia inflado y no todo el polish esta igualmente validado |
-| AP | Parcial | Worker pool/cancel existen, pero sub-workers, steering consumido y eventos `worker.*` no aparecieron cableados end-to-end |
+| AO | Parcial | Telegram UX mejorada (inline keyboards, typing, etc.); webhook es polling-only, no webhook real |
+| AP | Repo integrado | Worker lifecycle events emitidos a WebSocket event bus; sub-workers y steering aun pendientes |
 | AQ+ | Futuro | No forman parte de la auditoria de realidad actual |
 
 ## Hallazgos mas importantes de esta pasada

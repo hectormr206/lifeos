@@ -30,29 +30,32 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 |-------|-------------|
 | A-E | Base fuerte de producto en repo; A tuvo evidencia host clara |
 | F | Parcial: varios bridges existen, pero la imagen por defecto no los shippea habilitados |
-| G | Reabierta por auditoria y bugs reales de host |
+| G | Repo integrado: fix de falsos positivos con tests, pendiente deploy host |
 | H-M | Mayormente integradas en repo, pero aun no todas estan re-validadas por AX |
 | N | Parcial: desktop operator fuerte, pero bateria/API aun tenia claims inflados |
-| O | Parcial: autonomia visual fuerte; skill extraction/refinement desde uso real sigue pendiente |
+| O | Parcial: desktop operator funciona; skill learning desde uso real no wired |
 | P | Repo integrado: gaming assist y captura existen; falta validacion host dedicada |
-| Q | Parcial: MCP base fuerte, pero dashboard/pre-integraciones aun no cierran del todo |
-| R | Reabierta: detecta y graba, pero no procesa reuniones end-to-end |
-| S-T | Parciales: salud y voz existen, pero varios claims de cierre total siguen sin evidencia suficiente |
-| U-W | Parciales: self-improvement, knowledge graph y reliability existen en repo, pero no como historia totalmente cerrada |
+| Q | Parcial: MCP client/server base funciona; dashboard integration basica |
+| R | Repo integrado: pipeline wired end-to-end, pendiente validacion host |
+| S | Parcial: health checks existen; reportes diarios/semanales por Telegram no wired |
+| T | Parcial: voz funciona (wake word, STT, TTS); no es pipeline Alexa-style completo |
+| U | Parcial: prompt evolution y workflow learner existen; full self-improvement loop parcial |
+| V | Parcial: knowledge graph existe y se consulta; export/import no implementados |
+| W | Parcial: ReliabilityTracker existe; checkpoint/resume y audit trail basicos |
 | X | Parcial: traduccion existe en repo, pero no esta integrada como experiencia completa del producto |
 | Y | Repo integrado: Security AI existe, pendiente validacion host dedicada |
-| AB | Parcial: `/ws` existe, pero protocolo y sesiones estaban sobredeclarados |
+| AB | Repo integrado: SessionStore conectado a Telegram bridge, persiste across restarts |
 | AC | Parcial: registry/manifest si; `life skills doctor` no |
 | AD | Parcial: guardrails y `/metrics` si; claims adicionales aun no todos comprobados |
 | AE | Repo integrado con incidentes de runtime que siguen bajo vigilancia |
-| AF | Parcial: Slack/Discord existen como modulos, pero no estan cableados al arranque real |
+| AF | Repo integrado: Slack/Discord wired a startup, feature-gated; pendiente compilar en imagen |
 | AG | Parcial: dedupe y pairing basico si; transcript export y parte de la narrativa de robustez menor no cerraron |
-| AK | Parcial: la base de self-healing existe, pero health/repair CLI y sentinel estaban sobredeclarados |
+| AK | Repo integrado: `life doctor` + `life safe-mode` CLI implementados, sentinel funcional |
 | AL | Parcial: seguridad si, pero doctor/eventos WS/troubleshooting aun no estaban totalmente alineados |
 | AM | Repo integrado: tiempo/timezone quedaron bien aterrizados en repo; falta validacion host fina |
 | AN | Repo integrado: providers y hot reload tienen evidencia fuerte |
-| AO | Parcial: Telegram UX mejoro, pero webhook y parte del polish seguian inflados |
-| AP | Parcial: worker pool si, pero sub-agentes/worker WS/dashboard siguen incompletos |
+| AO | Parcial: Telegram UX mejorada; webhook es polling-only, no webhook real |
+| AP | Repo integrado: worker lifecycle events emitidos a WebSocket; sub-workers pendientes |
 
 ### Fases Consecutivas Proximas (implementables sin investigacion profunda)
 
