@@ -2,29 +2,36 @@
 
 ## Overview
 
-The LifeOS icon theme contains **317 full-color + 317 symbolic SVGs** across 8 freedesktop contexts, plus 9 Axi state icons. All icons are brand-compliant, using exactly 8 colors from the official palette.
+The LifeOS icon theme contains **324 full-color + 324 symbolic SVGs** across 8 freedesktop contexts, plus 9 Axi state icons. All icons are brand-compliant.
 
-## Brand Palette (MANDATORY)
+## Icon Color Palette (MANDATORY)
 
-Only these 8 colors may be used in LifeOS icons:
+**REGLA CRITICA:** Los iconos se ven sobre un fondo oscuro (#0F0F1B). NUNCA usar colores que se confundan con el fondo.
 
-| Color | Hex | Usage |
-|-------|-----|-------|
-| **Teal Axi** | `#00D4AA` | Primary accent, active elements, positive states |
-| **Rosa Axi** | `#FF6B9D` | Destructive, error, warnings, Axi's branquias |
-| **Medianoche** | `#161830` | Surfaces, containers, icon backgrounds |
-| **Noche Profunda** | `#0F0F1B` | Darkest backgrounds (logo only) |
-| **Amarillo Alerta** | `#F0C420` | Warnings, caution states |
-| **Verde Success** | `#2ECC71` | Success, positive confirmation |
-| **Azul LifeOS** | `#3282B8` | Info, links, secondary accent |
-| **Blanco Suave** | `#E8E8E8` | Text, symbolic icons |
+| Color | Hex | Uso en iconos | NOTA |
+|-------|-----|--------------|------|
+| **Icon Body** | `#2A2A3E` | Cuerpo principal del icono (rectangulos, circulos) | **OBLIGATORIO para bodies** |
+| **Folder Body** | `#222338` | Cuerpo de carpetas (ligeramente diferente para profundidad) | Solo para places/folder* |
+| **Teal Axi** | `#00D4AA` | Acentos, elementos activos, tabs de carpetas | Acento principal |
+| **Rosa Axi** | `#FF6B9D` | Errores, destructivo, close buttons | Solo para alertas/cierre |
+| **Amarillo Alerta** | `#F0C420` | Warnings, precaucion | Solo para estados de alerta |
+| **Verde Success** | `#2ECC71` | Exito, confirmacion positiva | Solo para estados positivos |
+| **Azul LifeOS** | `#3282B8` | Info, links, acento secundario | Solo para info/links |
+| **Blanco Suave** | `#E8E8E8` | Texto dentro de iconos, symbolic variants | Para texto y lineas finas |
+| **Noche Profunda** | `#0F0F1B` | SOLO para el logo de LifeOS (gradiente) | NUNCA para iconos normales |
 
-**NEVER use:** pure white (#FFFFFF), pure black (#000000), System76 blue (#62A0EA), or any color not listed above.
+### ERRORES COMUNES (NUNCA HACER):
+
+1. **NUNCA usar `#161830` como body de iconos** — es el mismo color que el fondo del escritorio. Los iconos se vuelven INVISIBLES. Usar `#2A2A3E` en su lugar.
+2. **NUNCA usar `#0F0F1B` como body** — mismo problema, peor aun.
+3. **NUNCA agregar `width="512" height="512"` al tag `<svg>`** — COSMIC no escala correctamente. Solo usar `viewBox`.
+4. **NUNCA hacer dos iconos identicos** — cada icono debe ser visualmente distinguible. Verificar pares (reboot≠shutdown, maximize≠minimize, etc.)
 
 ## SVG Format
 
 ```xml
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- SOLO viewBox, NUNCA width/height en el tag svg -->
   <!-- icon content here -->
 </svg>
 ```

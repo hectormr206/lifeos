@@ -209,3 +209,45 @@ Todas las variantes deben seguir estos principios:
 | Logo LifeOS (SVG) | `/usr/share/icons/LifeOS/scalable/apps/lifeos.svg` |
 | Plymouth theme | `/usr/share/plymouth/themes/lifeos/` |
 | Sound theme | `/usr/share/sounds/lifeos/` |
+
+---
+
+## Reglas Criticas para Iconos (NUNCA VIOLAR)
+
+Estas reglas existen porque cometimos errores que causaron iconos invisibles en el escritorio.
+
+### 1. Color de body de iconos: SIEMPRE `#2A2A3E`
+
+El fondo del escritorio LifeOS es `#0F0F1B` (Noche Profunda). Si el body del icono usa `#161830` (Medianoche), el icono se vuelve **INVISIBLE** — se pierde completamente contra el fondo.
+
+| Correcto | Incorrecto |
+|----------|-----------|
+| `fill="#2A2A3E"` (visible) | `fill="#161830"` (invisible) |
+| `fill="#222338"` (carpetas) | `fill="#0F0F1B"` (peor) |
+
+### 2. NUNCA `width`/`height` en el tag `<svg>`
+
+COSMIC Desktop no escala correctamente los iconos con dimensiones fijas. Solo usar `viewBox`:
+
+```xml
+<!-- CORRECTO -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+
+<!-- INCORRECTO — no hacer esto -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+```
+
+### 3. Iconos de pares DEBEN ser visualmente distintos
+
+Estos pares fueron verificados. Si se modifica uno, verificar que siga siendo diferente del otro:
+
+- `system-reboot` (flecha circular) ≠ `system-shutdown` (boton de poder)
+- `window-maximize` (cuadrado) ≠ `window-minimize` (linea) ≠ `window-restore` (cuadrados superpuestos)
+- `window-close` = X rosa (#FF6B9D), NUNCA un cuadrado
+- `go-next` (flecha derecha) ≠ `go-previous` (flecha izquierda)
+- `audio-volume-high` ≠ `audio-volume-muted`
+- `battery-full` ≠ `battery-empty` ≠ `battery-charging`
+
+### 4. Guia completa de iconos
+
+Ver `docs/branding/icon-theme-guide.md` para la referencia completa de colores, formato, y proceso.
