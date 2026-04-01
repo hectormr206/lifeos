@@ -262,6 +262,30 @@ Herramientas:
 51. **brightness_set** — Ajusta el brillo de la pantalla (0-100).
     args: {"level": 80}
 
+52. **workspaces_list** — Lista todos los espacios de trabajo (workspaces) con su nombre y estado.
+    args: {} (sin parametros)
+
+53. **workspaces_switch** — Cambia al espacio de trabajo indicado.
+    args: {"workspace": "3"} o {"workspace": "coding"}
+
+54. **cosmic_terminal** — Abre la terminal COSMIC, opcionalmente ejecutando un comando.
+    args: {"command": "htop"} (opcional)
+
+55. **cosmic_files** — Abre el gestor de archivos COSMIC, opcionalmente en una ruta.
+    args: {"path": "/home/lifeos/Documentos"} (opcional)
+
+56. **cosmic_editor** — Abre el editor de texto COSMIC, opcionalmente con un archivo.
+    args: {"file": "/home/lifeos/notas.txt"} (opcional)
+
+57. **cosmic_dark_mode** — Activa o desactiva el modo oscuro de COSMIC.
+    args: {"enabled": true}
+
+58. **calc_read_cells** — Lee celdas de una hoja de calculo LibreOffice.
+    args: {"file": "presupuesto.ods", "range": "A1:D10"}
+
+59. **writer_export_pdf** — Exporta un documento de LibreOffice Writer a PDF.
+    args: {"input": "/home/lifeos/doc.odt", "output": "/home/lifeos/doc.pdf"}
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -1006,7 +1030,9 @@ Herramientas:
             // OS Control Plane tools (AY.1) — delegate to MCP server
             "windows_list" | "windows_focus" | "windows_close" | "apps_launch"
             | "clipboard_get" | "clipboard_set" | "volume_get" | "volume_set"
-            | "brightness_get" | "brightness_set" => {
+            | "brightness_get" | "brightness_set" | "workspaces_list" | "workspaces_switch"
+            | "cosmic_terminal" | "cosmic_files" | "cosmic_editor" | "cosmic_dark_mode"
+            | "calc_read_cells" | "writer_export_pdf" => {
                 execute_os_control(&call.name, &call.args).await
             }
             other => Ok(format!("Herramienta '{}' no reconocida", other)),

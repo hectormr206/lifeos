@@ -427,6 +427,199 @@ pub fn list_tools() -> Vec<McpTool> {
                 "required": ["selector", "value"]
             }),
         },
+        // ----- LibreOffice MCP tools -----
+        McpTool {
+            name: "lifeos_writer_export_pdf".into(),
+            description: "Export a LibreOffice Writer document to PDF via UNO bridge.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "input": { "type": "string", "description": "Path to the input document (odt, docx, etc.)" },
+                    "output": { "type": "string", "description": "Path for the output PDF file" }
+                },
+                "required": ["input", "output"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_calc_read_cells".into(),
+            description: "Read cells from a LibreOffice Calc spreadsheet range (e.g. A1:D10) via UNO bridge.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "Path to spreadsheet file (ods, xlsx, csv)" },
+                    "range": { "type": "string", "description": "Cell range like A1:D10" }
+                },
+                "required": ["file", "range"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_calc_verify_formula".into(),
+            description: "Verify a cell value or formula matches an expected value in a LibreOffice Calc spreadsheet.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "Path to spreadsheet file" },
+                    "cell": { "type": "string", "description": "Cell address like E5" },
+                    "expected": { "type": "string", "description": "Expected value or formula (e.g. '=SUM(A1:D1)' or '1500')" }
+                },
+                "required": ["file", "cell", "expected"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_calc_sheet_info".into(),
+            description: "Get sheet names, row/column counts, and basic info from a LibreOffice Calc spreadsheet.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "Path to spreadsheet file" }
+                },
+                "required": ["file"]
+            }),
+        },
+        // ----- COSMIC Desktop: Workspaces -----
+        McpTool {
+            name: "lifeos_workspaces_list".into(),
+            description: "List all workspaces with names, focused state, and output (COSMIC/swaymsg).".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        },
+        McpTool {
+            name: "lifeos_workspaces_switch".into(),
+            description: "Switch to a workspace by number or name.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string", "description": "Workspace number or name to switch to" }
+                },
+                "required": ["workspace"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_workspaces_create".into(),
+            description: "Create a new workspace by name (switches to it if it does not exist).".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Name for the new workspace" }
+                },
+                "required": ["name"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_workspaces_move_window_to".into(),
+            description: "Move the currently focused window to a different workspace.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string", "description": "Target workspace number or name" }
+                },
+                "required": ["workspace"]
+            }),
+        },
+        // ----- COSMIC Apps Launch -----
+        McpTool {
+            name: "lifeos_cosmic_terminal".into(),
+            description: "Launch COSMIC Terminal, optionally running a command inside it.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "description": "Optional command to run inside the terminal (e.g. htop)" }
+                },
+                "required": []
+            }),
+        },
+        McpTool {
+            name: "lifeos_cosmic_files".into(),
+            description: "Launch COSMIC Files file manager, optionally at a specific path.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Directory path to open" }
+                },
+                "required": []
+            }),
+        },
+        McpTool {
+            name: "lifeos_cosmic_editor".into(),
+            description: "Launch COSMIC Text Editor, optionally opening a specific file.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file": { "type": "string", "description": "File path to open in the editor" }
+                },
+                "required": []
+            }),
+        },
+        McpTool {
+            name: "lifeos_cosmic_settings".into(),
+            description: "Launch COSMIC Settings, optionally opening a specific page (display, sound, network, etc.).".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "page": { "type": "string", "description": "Settings page to open (e.g. display, sound, network, bluetooth)" }
+                },
+                "required": []
+            }),
+        },
+        McpTool {
+            name: "lifeos_cosmic_store".into(),
+            description: "Launch the COSMIC App Store.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        },
+        // ----- COSMIC Desktop Control -----
+        McpTool {
+            name: "lifeos_cosmic_dark_mode".into(),
+            description: "Enable or disable COSMIC dark mode by writing the theme config.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "true for dark mode, false for light mode" }
+                },
+                "required": ["enabled"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_cosmic_dock_autohide".into(),
+            description: "Enable or disable COSMIC dock auto-hide.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean", "description": "true to enable auto-hide, false to disable" }
+                },
+                "required": ["enabled"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_cosmic_panel_position".into(),
+            description: "Set the COSMIC panel position (top or bottom).".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "position": { "type": "string", "enum": ["top", "bottom"], "description": "Panel position" }
+                },
+                "required": ["position"]
+            }),
+        },
+        // ----- Screen/Display -----
+        McpTool {
+            name: "lifeos_display_resolution".into(),
+            description: "Set display resolution and refresh rate via cosmic-randr.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "output": { "type": "string", "description": "Output name (e.g. eDP-1, HDMI-A-1)" },
+                    "mode": { "type": "string", "description": "Resolution and refresh rate (e.g. 1920x1080@60)" }
+                },
+                "required": ["output", "mode"]
+            }),
+        },
     ]
 }
 
@@ -1105,7 +1298,369 @@ pub async fn call_tool(
             }
         }
 
+        // ----- LibreOffice MCP tools -----
+        "lifeos_writer_export_pdf" => {
+            let input = arguments
+                .get("input")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'input' parameter")?;
+            let output_path = arguments
+                .get("output")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'output' parameter")?;
+            let cmd_output = tokio::process::Command::new("python3")
+                .args([
+                    "/usr/local/bin/lifeos-libreoffice-verify.py",
+                    "export-pdf",
+                    input,
+                    output_path,
+                ])
+                .output()
+                .await;
+            libreoffice_result(cmd_output, "export-pdf")
+        }
+
+        "lifeos_calc_read_cells" => {
+            let file = arguments
+                .get("file")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'file' parameter")?;
+            let range = arguments
+                .get("range")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'range' parameter")?;
+            let cmd_output = tokio::process::Command::new("python3")
+                .args([
+                    "/usr/local/bin/lifeos-libreoffice-verify.py",
+                    "read-cells",
+                    file,
+                    range,
+                ])
+                .output()
+                .await;
+            libreoffice_result(cmd_output, "read-cells")
+        }
+
+        "lifeos_calc_verify_formula" => {
+            let file = arguments
+                .get("file")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'file' parameter")?;
+            let cell = arguments
+                .get("cell")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'cell' parameter")?;
+            let expected = arguments
+                .get("expected")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'expected' parameter")?;
+            let cmd_output = tokio::process::Command::new("python3")
+                .args([
+                    "/usr/local/bin/lifeos-libreoffice-verify.py",
+                    "verify-formula",
+                    file,
+                    cell,
+                    expected,
+                ])
+                .output()
+                .await;
+            libreoffice_result(cmd_output, "verify-formula")
+        }
+
+        "lifeos_calc_sheet_info" => {
+            let file = arguments
+                .get("file")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'file' parameter")?;
+            let cmd_output = tokio::process::Command::new("python3")
+                .args([
+                    "/usr/local/bin/lifeos-libreoffice-verify.py",
+                    "sheet-info",
+                    file,
+                ])
+                .output()
+                .await;
+            libreoffice_result(cmd_output, "sheet-info")
+        }
+
+        // ----- COSMIC Desktop: Workspaces -----
+        "lifeos_workspaces_list" => {
+            let output = tokio::process::Command::new("swaymsg")
+                .args(["-t", "get_workspaces", "--raw"])
+                .output()
+                .await;
+            match output {
+                Ok(o) if o.status.success() => {
+                    let raw = String::from_utf8_lossy(&o.stdout);
+                    // Parse JSON array of workspaces
+                    let parsed: serde_json::Value =
+                        serde_json::from_str(&raw).unwrap_or(serde_json::json!([]));
+                    Ok(serde_json::json!({ "workspaces": parsed }))
+                }
+                Ok(o) => Err(format!(
+                    "swaymsg failed: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                )),
+                Err(e) => Err(format!("Failed to run swaymsg: {}", e)),
+            }
+        }
+
+        "lifeos_workspaces_switch" => {
+            let workspace = arguments
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'workspace' parameter")?;
+            // Validate workspace name
+            if workspace.contains(';') || workspace.contains('&') || workspace.contains('|') {
+                return Err("Invalid workspace name".into());
+            }
+            let output = tokio::process::Command::new("swaymsg")
+                .arg(format!("workspace {}", workspace))
+                .output()
+                .await;
+            cmd_result(output, "Switch workspace")
+        }
+
+        "lifeos_workspaces_create" => {
+            let ws_name = arguments
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'name' parameter")?;
+            if ws_name.contains(';') || ws_name.contains('&') || ws_name.contains('|') {
+                return Err("Invalid workspace name".into());
+            }
+            let output = tokio::process::Command::new("swaymsg")
+                .arg(format!("workspace {}", ws_name))
+                .output()
+                .await;
+            cmd_result(output, "Create workspace")
+        }
+
+        "lifeos_workspaces_move_window_to" => {
+            let workspace = arguments
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'workspace' parameter")?;
+            if workspace.contains(';') || workspace.contains('&') || workspace.contains('|') {
+                return Err("Invalid workspace name".into());
+            }
+            let output = tokio::process::Command::new("swaymsg")
+                .arg(format!("move container to workspace {}", workspace))
+                .output()
+                .await;
+            cmd_result(output, "Move window to workspace")
+        }
+
+        // ----- COSMIC Apps Launch -----
+        "lifeos_cosmic_terminal" => {
+            let cmd_arg = arguments.get("command").and_then(|v| v.as_str());
+            let mut cmd = tokio::process::Command::new("cosmic-term");
+            if let Some(c) = cmd_arg {
+                cmd.args(["-e", c]);
+            }
+            let _child = cmd
+                .spawn()
+                .map_err(|e| format!("Failed to launch cosmic-term: {}", e))?;
+            Ok(serde_json::json!({
+                "launched": "cosmic-term",
+                "command": cmd_arg.unwrap_or("(none)")
+            }))
+        }
+
+        "lifeos_cosmic_files" => {
+            let path = arguments.get("path").and_then(|v| v.as_str());
+            let mut cmd = tokio::process::Command::new("cosmic-files");
+            if let Some(p) = path {
+                cmd.arg(p);
+            }
+            let _child = cmd
+                .spawn()
+                .map_err(|e| format!("Failed to launch cosmic-files: {}", e))?;
+            Ok(serde_json::json!({
+                "launched": "cosmic-files",
+                "path": path.unwrap_or("(home)")
+            }))
+        }
+
+        "lifeos_cosmic_editor" => {
+            let file = arguments.get("file").and_then(|v| v.as_str());
+            let mut cmd = tokio::process::Command::new("cosmic-edit");
+            if let Some(f) = file {
+                cmd.arg(f);
+            }
+            let _child = cmd
+                .spawn()
+                .map_err(|e| format!("Failed to launch cosmic-edit: {}", e))?;
+            Ok(serde_json::json!({
+                "launched": "cosmic-edit",
+                "file": file.unwrap_or("(none)")
+            }))
+        }
+
+        "lifeos_cosmic_settings" => {
+            let page = arguments.get("page").and_then(|v| v.as_str());
+            let mut cmd = tokio::process::Command::new("cosmic-settings");
+            if let Some(p) = page {
+                cmd.arg(p);
+            }
+            let _child = cmd
+                .spawn()
+                .map_err(|e| format!("Failed to launch cosmic-settings: {}", e))?;
+            Ok(serde_json::json!({
+                "launched": "cosmic-settings",
+                "page": page.unwrap_or("(main)")
+            }))
+        }
+
+        "lifeos_cosmic_store" => {
+            let _child = tokio::process::Command::new("cosmic-store")
+                .spawn()
+                .map_err(|e| format!("Failed to launch cosmic-store: {}", e))?;
+            Ok(serde_json::json!({ "launched": "cosmic-store" }))
+        }
+
+        // ----- COSMIC Desktop Control -----
+        "lifeos_cosmic_dark_mode" => {
+            let enabled = arguments
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .ok_or("Missing 'enabled' parameter (boolean)")?;
+            let config_dir = format!(
+                "{}/.config/cosmic/com.system76.CosmicTheme.Mode/v1",
+                std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into())
+            );
+            tokio::fs::create_dir_all(&config_dir)
+                .await
+                .map_err(|e| format!("Failed to create config dir: {}", e))?;
+            let config_path = format!("{}/is_dark", config_dir);
+            tokio::fs::write(&config_path, if enabled { "true" } else { "false" })
+                .await
+                .map_err(|e| format!("Failed to write dark mode config: {}", e))?;
+            Ok(serde_json::json!({
+                "dark_mode": enabled,
+                "config_path": config_path,
+                "note": "Change takes effect on next COSMIC session or theme reload"
+            }))
+        }
+
+        "lifeos_cosmic_dock_autohide" => {
+            let enabled = arguments
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .ok_or("Missing 'enabled' parameter (boolean)")?;
+            let config_dir = format!(
+                "{}/.config/cosmic/com.system76.CosmicPanel.Dock/v1",
+                std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into())
+            );
+            tokio::fs::create_dir_all(&config_dir)
+                .await
+                .map_err(|e| format!("Failed to create config dir: {}", e))?;
+            let config_path = format!("{}/autohide", config_dir);
+            tokio::fs::write(&config_path, if enabled { "true" } else { "false" })
+                .await
+                .map_err(|e| format!("Failed to write dock config: {}", e))?;
+            Ok(serde_json::json!({
+                "autohide": enabled,
+                "config_path": config_path,
+                "note": "Change takes effect on next COSMIC session or panel reload"
+            }))
+        }
+
+        "lifeos_cosmic_panel_position" => {
+            let position = arguments
+                .get("position")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'position' parameter")?;
+            let anchor = match position {
+                "top" => "Top",
+                "bottom" => "Bottom",
+                _ => {
+                    return Err(format!(
+                        "Invalid position '{}': use 'top' or 'bottom'",
+                        position
+                    ))
+                }
+            };
+            let config_dir = format!(
+                "{}/.config/cosmic/com.system76.CosmicPanel.Panel/v1",
+                std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into())
+            );
+            tokio::fs::create_dir_all(&config_dir)
+                .await
+                .map_err(|e| format!("Failed to create config dir: {}", e))?;
+            let config_path = format!("{}/anchor", config_dir);
+            tokio::fs::write(&config_path, anchor)
+                .await
+                .map_err(|e| format!("Failed to write panel config: {}", e))?;
+            Ok(serde_json::json!({
+                "position": position,
+                "anchor": anchor,
+                "config_path": config_path,
+                "note": "Change takes effect on next COSMIC session or panel reload"
+            }))
+        }
+
+        // ----- Display resolution -----
+        "lifeos_display_resolution" => {
+            let output_name = arguments
+                .get("output")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'output' parameter (e.g. eDP-1)")?;
+            let mode = arguments
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'mode' parameter (e.g. 1920x1080@60)")?;
+            // Validate inputs to prevent injection
+            if output_name.contains(';')
+                || output_name.contains('&')
+                || mode.contains(';')
+                || mode.contains('&')
+            {
+                return Err("Invalid characters in output or mode".into());
+            }
+            let output = tokio::process::Command::new("cosmic-randr")
+                .args(["mode", "--output", output_name, "--mode", mode])
+                .output()
+                .await;
+            cmd_result(output, "Set display resolution")
+        }
+
         _ => Err(format!("Unknown tool: {}", name)),
+    }
+}
+
+/// Process a LibreOffice UNO bridge command result into MCP JSON.
+fn libreoffice_result(
+    output: Result<std::process::Output, std::io::Error>,
+    label: &str,
+) -> Result<serde_json::Value, String> {
+    match output {
+        Ok(o) => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if o.status.success() {
+                // The Python script outputs JSON; parse it or return raw
+                match serde_json::from_str::<serde_json::Value>(&stdout) {
+                    Ok(parsed) => Ok(parsed),
+                    Err(_) => Ok(serde_json::json!({
+                        "output": stdout.to_string(),
+                        "command": label,
+                    })),
+                }
+            } else {
+                Err(format!(
+                    "LibreOffice {} failed (exit {}): {} {}",
+                    label,
+                    o.status.code().unwrap_or(-1),
+                    stderr.chars().take(1000).collect::<String>(),
+                    stdout.chars().take(1000).collect::<String>(),
+                ))
+            }
+        }
+        Err(e) => Err(format!(
+            "Failed to run LibreOffice bridge for {}: {}",
+            label, e
+        )),
     }
 }
 
