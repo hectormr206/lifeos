@@ -75,8 +75,8 @@ case "$profile" in
             exit 0
         fi
         install_pkgs \
-            "curl dbus libdbus-1-3" \
-            "curl dbus dbus-libs"
+            "curl dbus libdbus-1-3 libgtk-4-1 libadwaita-1-0" \
+            "curl dbus dbus-libs gtk4 libadwaita"
         ;;
     podman)
         if command -v podman >/dev/null 2>&1; then
