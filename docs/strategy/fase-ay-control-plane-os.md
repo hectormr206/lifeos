@@ -430,3 +430,82 @@ servicios D-Bus disponibles y generar MCP tools dinamicamente. Servicios priorit
 - XDG Portal API Reference: https://flatpak.github.io/xdg-desktop-portal/docs/api-reference.html
 - Portals for unsandboxed apps: https://blogs.gnome.org/ignapk/2025/06/04/using-portals-with-unsandboxed-apps/
 - Computer Use Tool (Anthropic): https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool
+
+---
+
+## AY.6 — MCP para Aplicaciones (LibreOffice, Firefox, COSMIC Apps)
+
+**Objetivo:** No solo controlar el OS, sino controlar las APLICACIONES dentro del OS de forma estructurada.
+
+### LibreOffice (via UNO bridge)
+
+Ya existe `lifeos-libreoffice-verify.py` con 5 comandos. Exponerlos como MCP tools:
+
+- [x] `lifeos_calc_read_cells` — leer celdas de un .ods/.xlsx
+- [x] `lifeos_calc_verify_formula` — verificar formula en celda
+- [x] `lifeos_calc_sheet_info` — info de hojas
+- [x] `lifeos_writer_export_pdf` — exportar documento a PDF
+- [ ] `lifeos_writer_insert_text` — insertar texto en documento abierto
+- [ ] `lifeos_writer_replace_text` — buscar y reemplazar
+- [ ] `lifeos_impress_export_pdf` — exportar presentacion a PDF
+- [ ] `lifeos_impress_slide_count` — contar slides
+
+### Firefox (via CDP y extension futura)
+
+- [x] `lifeos_browser_navigate` — abrir URL (ya implementado AY.3)
+- [x] `lifeos_browser_screenshot` — capturar pagina
+- [x] `lifeos_browser_click` — click por selector CSS
+- [x] `lifeos_browser_fill` — llenar campo de formulario
+- [x] `lifeos_browser_extract_text` — extraer texto de pagina
+- [ ] `lifeos_browser_tabs_list` — listar pestanas abiertas
+- [ ] `lifeos_browser_tab_close` — cerrar pestana
+- [ ] `lifeos_browser_bookmarks` — listar/agregar bookmarks
+- [ ] `lifeos_browser_history` — historial reciente
+
+### COSMIC Apps (via CLI y D-Bus)
+
+- [x] `lifeos_cosmic_terminal` — abrir terminal (con comando opcional)
+- [x] `lifeos_cosmic_files` — abrir explorador de archivos (con ruta opcional)
+- [x] `lifeos_cosmic_editor` — abrir editor de texto (con archivo opcional)
+- [x] `lifeos_cosmic_settings` — abrir configuracion (con pagina opcional)
+- [x] `lifeos_cosmic_store` — abrir tienda de apps
+- [ ] `lifeos_cosmic_screenshot_tool` — abrir herramienta de captura
+- [ ] `lifeos_cosmic_calculator` — abrir calculadora
+
+## AY.7 — MCP para COSMIC Desktop Control
+
+**Objetivo:** Controlar la experiencia del escritorio COSMIC de forma programatica.
+
+### Workspaces
+
+- [x] `lifeos_workspaces_list` — listar workspaces con info (focused, windows)
+- [x] `lifeos_workspaces_switch` — cambiar a workspace N o por nombre
+- [x] `lifeos_workspaces_create` — crear workspace nuevo
+- [x] `lifeos_workspaces_move_window_to` — mover ventana activa a workspace N
+
+### Tema y Apariencia
+
+- [x] `lifeos_cosmic_dark_mode` — activar/desactivar modo oscuro
+- [x] `lifeos_cosmic_dock_autohide` — activar/desactivar auto-hide del dock
+- [x] `lifeos_cosmic_panel_position` — cambiar posicion del panel (top/bottom)
+- [ ] `lifeos_cosmic_accent_color` — cambiar color de acento
+- [ ] `lifeos_cosmic_wallpaper` — cambiar wallpaper
+- [ ] `lifeos_cosmic_font` — cambiar fuente del sistema
+
+### Display
+
+- [x] `lifeos_displays_list` — listar monitores (ya existia)
+- [x] `lifeos_display_resolution` — cambiar resolucion de un monitor
+
+### Conteo actual de MCP tools
+
+| Categoria | Tools | Estado |
+|-----------|-------|--------|
+| OS Control (AY.1) | 16 | Implementados |
+| Browser (AY.3) | 5 | Implementados |
+| Layer Selection (AY.2) | 1 | Implementado |
+| LibreOffice (AY.6) | 4 | Implementados |
+| COSMIC Apps (AY.6) | 5 | Implementados |
+| Workspaces (AY.7) | 4 | Implementados |
+| COSMIC Desktop (AY.7) | 3+ | Implementados |
+| **Total** | **~40** | **De 9 a ~40** |
