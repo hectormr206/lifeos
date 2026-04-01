@@ -275,10 +275,12 @@ impl SessionStore {
         }
 
         let content = tokio::fs::read_to_string(&transcript_path).await?;
+        let cutoff = Utc::now() - chrono::Duration::hours(1);
         let mut turns: Vec<TranscriptTurn> = content
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .filter_map(|l| serde_json::from_str(l).ok())
+            .filter_map(|l| serde_json::from_str::<TranscriptTurn>(l).ok())
+            .filter(|t| t.timestamp > cutoff)
             .collect();
 
         // Return only the most recent turns
