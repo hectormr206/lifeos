@@ -693,7 +693,16 @@ pub fn persist_gpu_layers(layers: i32, _env_path: &str) -> Result<()> {
 /// Restart llama-server via systemctl. Works because polkit rule
 /// 50-lifeos-llama-server.rules allows user 'lifeos' to manage the unit.
 /// No sudo needed — systemctl talks to systemd over D-Bus, polkit authorizes.
+///
+/// Always clears the failed state first to avoid systemd rate-limiting
+/// (start-limit-hit) when Game Guard restarts the service multiple times
+/// in quick succession (CPU mode → GPU mode within seconds).
 fn restart_llama_server() {
+    // Clear any previous failure state to prevent start-limit-hit
+    let _ = Command::new("systemctl")
+        .args(["reset-failed", "llama-server.service"])
+        .output();
+
     info!("[game_guard] restarting llama-server via systemctl (polkit-authorized)");
     match Command::new("systemctl")
         .args(["restart", "llama-server.service"])
