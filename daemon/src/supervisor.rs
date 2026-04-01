@@ -281,6 +281,8 @@ pub struct Supervisor {
     /// When true, execute_task() returns a dry-run preview instead of executing.
     /// Controlled by LIFEOS_SHADOW_MODE env var.
     shadow_mode: bool,
+    /// Optional event bus for broadcasting health reports to the dashboard.
+    event_bus: std::sync::Mutex<Option<broadcast::Sender<crate::events::DaemonEvent>>>,
 }
 
 impl Supervisor {
@@ -345,7 +347,13 @@ impl Supervisor {
             metrics: std::sync::Mutex::new(AllAgentMetrics::default()),
             auto_approve_medium,
             shadow_mode,
+            event_bus: std::sync::Mutex::new(None),
         }
+    }
+
+    /// Attach an event bus for broadcasting health reports to the dashboard.
+    pub fn set_event_bus(&self, bus: broadcast::Sender<crate::events::DaemonEvent>) {
+        *self.event_bus.lock().unwrap_or_else(|e| e.into_inner()) = Some(bus);
     }
 
     /// Attach a scheduled task manager.
@@ -430,14 +438,116 @@ impl Supervisor {
         self.running.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Send a heartbeat notification with queue summary.
+    /// Send a heartbeat notification with queue summary and health metrics.
     async fn send_heartbeat(&self) {
         let summary = self.queue.summary().unwrap_or_default();
         let uptime = self.started_at.elapsed().as_secs_f64() / 3600.0;
+
+        // Gather system metrics for the health report
+        let mut health_details = serde_json::Map::new();
+
+        // CPU load average
+        if let Ok(loadavg) = tokio::fs::read_to_string("/proc/loadavg").await {
+            if let Some(avg1) = loadavg.split_whitespace().next() {
+                health_details.insert(
+                    "cpu_load_1m".into(),
+                    serde_json::Value::String(avg1.to_string()),
+                );
+            }
+        }
+
+        // RAM usage
+        if let Ok(output) = tokio::process::Command::new("free")
+            .args(["-m"])
+            .output()
+            .await
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(mem_line) = stdout.lines().nth(1) {
+                let parts: Vec<&str> = mem_line.split_whitespace().collect();
+                if parts.len() >= 7 {
+                    let total: u64 = parts[1].parse().unwrap_or(0);
+                    let available: u64 = parts[6].parse().unwrap_or(0);
+                    if total > 0 {
+                        let used_pct = ((total - available) as f64 / total as f64 * 100.0) as u32;
+                        health_details.insert(
+                            "ram_used_pct".into(),
+                            serde_json::Value::Number(used_pct.into()),
+                        );
+                        health_details.insert(
+                            "ram_available_mb".into(),
+                            serde_json::Value::Number(available.into()),
+                        );
+                    }
+                }
+            }
+        }
+
+        // Disk usage on /var
+        if let Ok(output) = tokio::process::Command::new("df")
+            .args(["--output=pcent", "/var"])
+            .output()
+            .await
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(pct_str) = stdout.lines().nth(1) {
+                if let Ok(pct) = pct_str.trim().trim_end_matches('%').parse::<u32>() {
+                    health_details.insert(
+                        "disk_used_pct".into(),
+                        serde_json::Value::Number(pct.into()),
+                    );
+                }
+            }
+        }
+
+        // Task queue stats from summary
+        health_details.insert("queue_summary".into(), summary.clone());
+
+        // Provider usage — reliability stats
+        let reliability = self.reliability_stats();
+        health_details.insert(
+            "tasks_total".into(),
+            serde_json::Value::Number(reliability.total_tasks.into()),
+        );
+        health_details.insert(
+            "success_rate".into(),
+            serde_json::json!(format!("{:.1}%", reliability.success_rate * 100.0)),
+        );
+
+        // Proactive health warnings
+        let alerts = crate::proactive::check_all(Some(&self.queue)).await;
+        if !alerts.is_empty() {
+            let warnings: Vec<serde_json::Value> = alerts
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "category": format!("{:?}", a.category),
+                        "severity": format!("{:?}", a.severity),
+                        "message": a.message,
+                    })
+                })
+                .collect();
+            health_details.insert("health_warnings".into(), serde_json::Value::Array(warnings));
+        }
+
+        health_details.insert(
+            "uptime_hours".into(),
+            serde_json::json!(format!("{:.1}", uptime)),
+        );
+
         let _ = self.notify_tx.send(SupervisorNotification::Heartbeat {
             summary,
             uptime_hours: uptime,
         });
+
+        // Also emit a DaemonEvent so the dashboard and event bus receive the health report
+        if let Some(ref bus) = *self.event_bus.lock().unwrap_or_else(|e| e.into_inner()) {
+            let report_json = serde_json::to_string(&health_details).unwrap_or_default();
+            let _ = bus.send(crate::events::DaemonEvent::Notification {
+                priority: "health_report".into(),
+                message: report_json,
+            });
+        }
     }
 
     /// Check for due scheduled tasks and enqueue them.

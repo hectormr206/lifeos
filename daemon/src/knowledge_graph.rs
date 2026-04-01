@@ -515,6 +515,50 @@ impl KnowledgeGraph {
         }
     }
 
+    // -- export / import ----------------------------------------------------
+
+    /// Serialize all entities and relations to JSON for backup or transfer.
+    pub fn export_json(&self) -> Result<String, String> {
+        let data = serde_json::json!({
+            "entities": self.entities,
+            "relations": self.relations,
+        });
+        serde_json::to_string_pretty(&data).map_err(|e| format!("Serialization error: {e}"))
+    }
+
+    /// Import entities and relations from JSON. Returns (entities_imported, relations_imported).
+    /// Merges with existing data (deduplicates entities by id).
+    pub fn import_json(&mut self, json: &str) -> Result<(usize, usize), String> {
+        #[derive(Deserialize)]
+        struct KgExport {
+            entities: Vec<Entity>,
+            relations: Vec<Relation>,
+        }
+
+        let data: KgExport =
+            serde_json::from_str(json).map_err(|e| format!("Deserialization error: {e}"))?;
+
+        let mut entities_added = 0usize;
+
+        // Merge entities: skip if an entity with the same id already exists
+        let existing_ids: std::collections::HashSet<String> =
+            self.entities.iter().map(|e| e.id.clone()).collect();
+
+        for entity in data.entities {
+            if !existing_ids.contains(&entity.id) {
+                self.entities.push(entity);
+                entities_added += 1;
+            }
+        }
+
+        // Add all imported relations (relations don't have unique IDs to dedup on)
+        let relations_added = data.relations.len();
+        self.relations.extend(data.relations);
+
+        self.save();
+        Ok((entities_added, relations_added))
+    }
+
     // -- context query ------------------------------------------------------
 
     /// Extract entity names from a question, find them in the graph, and

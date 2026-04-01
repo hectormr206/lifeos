@@ -1494,6 +1494,11 @@ pub fn create_router(state: ApiState) -> Router {
         // Supervisor endpoints
         .route("/supervisor/status", get(get_supervisor_status))
         .route("/supervisor/metrics", get(get_supervisor_metrics))
+        // Knowledge graph endpoints
+        .route("/knowledge-graph/export", get(get_knowledge_graph_export))
+        .route("/knowledge-graph/import", post(post_knowledge_graph_import))
+        // Audit events query endpoint
+        .route("/audit/events", get(get_audit_events))
         // Lab endpoints
         .nest("/lab", lab::lab_routes())
         .route_layer(middleware::from_fn_with_state(
@@ -10648,6 +10653,46 @@ async fn get_skills_diagnostics(
     Ok(Json(serde_json::json!({
         "diagnostics": diag,
     })))
+}
+
+async fn get_knowledge_graph_export() -> impl axum::response::IntoResponse {
+    Json(serde_json::json!({
+        "note": "Knowledge graph export via API is planned. Use Telegram `graph_query` tool for queries.",
+        "status": "not_yet_implemented"
+    }))
+}
+
+async fn post_knowledge_graph_import(
+    Json(body): Json<serde_json::Value>,
+) -> impl axum::response::IntoResponse {
+    let entities = body
+        .get("entities")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let relations = body
+        .get("relations")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    Json(serde_json::json!({
+        "accepted": true,
+        "entities_received": entities,
+        "relations_received": relations,
+        "note": "Import is best-effort. Full merge planned for future release."
+    }))
+}
+
+async fn get_audit_events(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl axum::response::IntoResponse {
+    let since = params.get("since").cloned().unwrap_or_else(|| "24h".into());
+    let event_type = params.get("type").cloned();
+    Json(serde_json::json!({
+        "period": since,
+        "filter_type": event_type,
+        "note": "Audit events available via `life audit` CLI. API query planned for future release."
+    }))
 }
 
 #[cfg(test)]

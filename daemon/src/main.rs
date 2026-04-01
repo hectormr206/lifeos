@@ -119,7 +119,6 @@ mod screen_capture;
 mod security_ai;
 #[allow(dead_code)]
 mod security_daemon;
-#[allow(dead_code)]
 mod self_improving;
 mod sensory_memory;
 mod sensory_pipeline;
@@ -1299,6 +1298,72 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     info!("Storage housekeeping started (every 6h, 120-file limit per dir)");
+
+    // --- Self-improvement loop (Fase U): tick every 6 hours ---
+    {
+        let si_data_dir = data_dir.clone();
+        let si_event_bus = state.event_bus.clone();
+        let _self_improving_handle = tokio::spawn(async move {
+            let mut daemon = self_improving::SelfImprovingDaemon::new(si_data_dir);
+            // Wait 10 minutes after boot before first tick
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            let mut interval = tokio::time::interval(Duration::from_secs(6 * 3600)); // 6h
+            loop {
+                interval.tick().await;
+                if safe_mode::is_safe_mode() {
+                    debug!("[self_improving] Skipping tick — safe mode active");
+                    continue;
+                }
+                // Record each self-improvement tick as a workflow action
+                let _ = daemon.record_action("self-improvement-tick", "periodic");
+
+                match daemon.tick() {
+                    Ok(()) => {
+                        // Log full status snapshot for observability
+                        let status = daemon.get_status();
+                        info!(
+                            "[self_improving] Tick OK — {} metrics, {} patterns, last_tick={}",
+                            status.prompt_metrics.len(),
+                            status.detected_patterns.len(),
+                            status.last_tick
+                        );
+
+                        // Check for prompt improvement suggestions and emit as events
+                        if let Ok(suggestions) = daemon.suggest_prompt_improvements() {
+                            for suggestion in &suggestions {
+                                info!(
+                                    "[self_improving] Prompt improvement: {} (success rate: {:.0}%)",
+                                    suggestion.action,
+                                    suggestion.success_rate * 100.0
+                                );
+                            }
+                            if !suggestions.is_empty() {
+                                let _ = si_event_bus.send(events::DaemonEvent::Notification {
+                                    priority: "info".into(),
+                                    message: format!(
+                                        "Self-improvement: {} prompt improvement(s) suggested",
+                                        suggestions.len()
+                                    ),
+                                });
+                            }
+                        }
+                        // Check for workflow skill suggestions
+                        let skills = daemon.suggest_skills();
+                        if !skills.is_empty() {
+                            info!(
+                                "[self_improving] {} workflow skill(s) detected",
+                                skills.len()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("[self_improving] Tick failed: {e}");
+                    }
+                }
+            }
+        });
+        info!("Self-improvement loop started (Fase U, every 6h)");
+    }
 
     // --- Config file watcher: auto-reload llm-providers.toml on change (polling) ---
     {

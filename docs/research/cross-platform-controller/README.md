@@ -1,281 +1,417 @@
 # Investigacion: Cross-Platform Controller
 
 > LifeOS como cerebro central que gobierna todos los dispositivos del usuario.
-> Fecha: 2026-03-30
+> Fecha de validacion web: `2026-03-31`
 
 ---
 
 ## 1. Vision
 
-LifeOS corre en una maquina Linux (desktop/mini-PC) como servidor central. Clientes ligeros en
-Windows, Mac, Android e iOS se conectan al servidor y extienden los sentidos de Axi a cada
-dispositivo. El usuario tiene UN asistente que lo sigue a todas partes.
+LifeOS corre en una maquina Linux como servidor central. Clientes ligeros en otros sistemas se conectan al servidor y extienden los sentidos de Axi a cada dispositivo. La idea no es “copiar LifeOS entero en todos lados”, sino construir un **control plane unificado** con capacidades distintas por plataforma.
 
-```
+```text
                     +-------------------+
                     |   LifeOS Server   |
-                    |  (Linux, Fedora   |
-                    |   bootc, GPU)     |
+                    |   Linux + GPU     |
+                    |  daemon + memory  |
                     +--------+----------+
                              |
-              WebSocket + Tailscale/WireGuard
+                  WebSocket + secure overlay
+                   (Tailscale / Headscale)
                              |
          +--------+----------+----------+--------+
          |        |          |          |        |
       Windows   macOS     Android     iOS    Linux
-      (Tauri)  (Tauri)   (Kotlin+   (Swift)  (nativo)
-                          Rust FFI)
+      (Tauri)  (Tauri)   (native)   (native) (native)
 ```
 
 ---
 
-## 2. Arquitectura
+## 2. Lo que cambio al validar con datos actuales
 
-### 2.1 Servidor (ya existe parcialmente)
+### 2.1 Tauri ya no debe describirse como “solo desktop”
 
-| Componente | Estado | Descripcion |
-|-----------|--------|-------------|
-| WebSocket gateway | EXISTE | `/ws` en daemon, bidireccional, JSON |
-| REST API | EXISTE | `/api/v1/*` con auth por token |
-| LLM Router | EXISTE | 13+ providers, fallback automatico |
-| Telegram bot | EXISTE | Texto, voz, archivos, comandos |
-| Event bus | EXISTE | Publicar/suscribir eventos internos |
-| Tailscale tunnel | PENDIENTE | NAT traversal para acceso remoto |
-| Client registry | PENDIENTE | Registro de dispositivos conectados |
-| Push notifications | PENDIENTE | Firebase/APNS para mobile |
+**Correccion importante:** `Tauri 2.0` ya es oficial y soporta aplicaciones cross-platform modernas, incluyendo soporte movil en el framework.
 
-### 2.2 Protocolo de Comunicacion
+**Pero** para LifeOS sigue teniendo sentido mantener esta decision:
 
-El protocolo ya esta parcialmente definido (WebSocket JSON). Se extiende asi:
+- **desktop:** `Tauri`
+- **mobile:** `nativo` (`Kotlin` / `Swift`)
+
+No porque Tauri “no pueda”, sino porque en mobile LifeOS necesita integracion profunda con:
+
+- servicios en foreground
+- notificaciones y listeners
+- accesibilidad
+- permisos sensibles
+- jobs y restricciones del SO
+- bridges con audio/camara/ubicacion
+
+Para ese nivel de integracion, hoy **nativo sigue siendo la opcion mas segura**.
+
+**Fuentes:**
+- https://tauri.app/
+- https://v2.tauri.app/blog/tauri-2-0-0-beta/
+
+### 2.2 Tailscale sigue siendo muy buena opcion, pero con datos mas precisos
+
+La version anterior estaba un poco simplificada.
+
+**Validado hoy:**
+- plan `Personal`: `3` usuarios gratis
+- limite de `100` dispositivos pooled en la tailnet personal
+
+Eso sigue siendo suficiente para un laboratorio personal o familia pequena, pero conviene documentarlo con precision.
+
+**Alternativa self-hosted real:** `Headscale`, que se define como implementacion open-source y self-hosted del control server de Tailscale, pensada para uso personal u organizaciones pequenas.
+
+**Decision recomendada:**
+- fase temprana: `Tailscale`
+- fase mas soberana o multiusuario small-scale: `Headscale`
+
+**Fuentes:**
+- https://tailscale.com/pricing/
+- https://headscale.net/latest/
+
+---
+
+## 3. Arquitectura Actualizada
+
+### 3.1 Servidor central
+
+| Componente | Estado | Nota actualizada |
+|-----------|--------|------------------|
+| WebSocket gateway | EXISTE | `/ws` ya existe, pero el protocolo sigue basico; no venderlo como control plane cerrado |
+| REST API | EXISTE | `/api/v1/*` con token |
+| LLM Router | EXISTE | multiproveedor |
+| Telegram bot | EXISTE | canal principal remoto actual |
+| Event bus | EXISTE | util para fan-out interno |
+| Device registry | PENDIENTE | sigue faltando una capa formal de dispositivos y capacidades |
+| Push relay | PENDIENTE | necesario para mobile robusto |
+| Tailscale / Headscale integration | PENDIENTE | alta prioridad real |
+
+### 3.2 Protocolo recomendado
+
+Seguir sobre WebSocket tiene sentido porque:
+
+- ya existe en el daemon
+- funciona bien para browser y desktop
+- simplifica streaming y estado
+- evita meter gRPC demasiado pronto
+
+Pero ya no conviene dejar el contrato asi de suelto:
 
 ```json
 {
   "type": "message|command|event|stream|sync",
   "device_id": "pixel7-abc123",
   "platform": "android",
-  "capabilities": ["screen_read", "notifications", "clipboard", "voice", "camera"],
-  "payload": { ... },
-  "timestamp": "2026-03-30T12:00:00Z"
+  "capabilities": ["notifications.read", "clipboard.read", "voice.in", "camera.capture"],
+  "payload": {},
+  "timestamp": "2026-03-31T12:00:00Z"
 }
 ```
 
-**Tipos de mensaje:**
-- `message`: texto/voz del usuario a Axi
-- `command`: accion que Axi quiere ejecutar en el dispositivo
-- `event`: notificacion/cambio de estado del dispositivo
-- `stream`: audio/video en tiempo real
-- `sync`: sincronizacion de estado (clipboard, archivos, contexto)
+### 3.3 Extensiones que faltan al protocolo
 
-### 2.3 NAT Traversal (Tailscale / WireGuard)
+Para que esto sea realmente util cross-platform, falta documentar y luego implementar:
 
-- **Problema:** el servidor LifeOS esta detras de NAT domestico.
-- **Solucion:** Tailscale (basado en WireGuard) crea VPN mesh sin abrir puertos.
-- **Gratis:** hasta 100 dispositivos en plan personal.
-- **Alternativa self-hosted:** Headscale (servidor Tailscale open-source).
-- **Implementacion:** daemon corre `tailscaled`, expone IP de tailnet. Clientes se unen al mismo tailnet.
-
----
-
-## 3. Clientes por Plataforma
-
-### 3.1 Linux (nativo)
-
-- **Estado:** YA EXISTE. CLI `life` + daemon `lifeosd`.
-- **Capacidades:** todas (screen read, X11/Wayland, clipboard, audio, archivos, systemd).
-- **Restricciones:** ninguna relevante.
-
-### 3.2 Windows (Tauri)
-
-- **Tecnologia:** Tauri 2.0 (Rust backend + WebView2 frontend)
-- **Por que Tauri:** binario ~5MB (vs ~150MB Electron), Rust nativo, acceso a APIs del SO
-- **Capacidades:**
-  - Clipboard: si (API de Windows)
-  - Notificaciones: si (toast notifications)
-  - Screen read: parcial (accessibility API, UI Automation)
-  - Voz: si (Windows Speech API o Whisper local)
-  - Autostart: si (registro de Windows, Task Scheduler)
-  - System tray: si (iconos en bandeja)
-- **Restricciones:**
-  - No puede controlar aplicaciones tan profundamente como en Linux (no hay equivalente a D-Bus universal)
-  - Antivirus puede bloquear acceso a pantalla/teclado
-  - UAC limita acciones administrativas
-- **Esfuerzo estimado:** 2-3 semanas para MVP
-
-### 3.3 macOS (Tauri)
-
-- **Tecnologia:** Tauri 2.0 (mismo codigo base que Windows, con adaptaciones)
-- **Capacidades:**
-  - Clipboard: si (NSPasteboard)
-  - Notificaciones: si (UserNotifications framework)
-  - Screen read: parcial (Accessibility API, requiere permiso explicito)
-  - Voz: si (Speech framework o Whisper local)
-  - Autostart: si (LaunchAgent)
-  - Menu bar app: si (icono en barra superior)
-- **Restricciones:**
-  - Gatekeeper: requiere firmar con Apple Developer ID ($99/ano) o instruir al usuario para aceptar
-  - Accessibility: el usuario debe dar permisos manualmente en System Preferences
-  - App Sandbox: limita acceso a archivos y red si se distribuye por App Store
-- **Esfuerzo estimado:** 2-3 semanas para MVP (si Windows ya existe, ~1 semana adicional)
-
-### 3.4 Android (Kotlin + Rust FFI)
-
-- **Tecnologia:** Kotlin nativo + libreria Rust via JNI/uniffi
-- **Por que no Tauri:** en mobile, Tauri es inmaduro. Kotlin nativo da acceso completo a APIs de Android.
-- **Capacidades:**
-  - Notificaciones: si (leer y crear, requiere NotificationListenerService)
-  - Clipboard: si (ClipboardManager)
-  - Voz: si (SpeechRecognizer + Whisper)
-  - Camera: si (CameraX)
-  - Ubicacion: si (FusedLocationProvider)
-  - Screen read: parcial (AccessibilityService, requiere permiso manual)
-  - Archivos: si (Storage Access Framework)
-  - Contactos/Calendario: si (ContentProvider)
-  - Sensores: si (acelerometro, giroscopio, luz, etc.)
-- **Restricciones:**
-  - Background limits: Android mata servicios en background agresivamente
-  - Solucion: foreground service con notificacion persistente
-  - Google Play: podrian rechazar por uso de AccessibilityService
-  - Solucion: distribuir via F-Droid + APK directo
-- **Esfuerzo estimado:** 4-6 semanas para MVP
-- **Nota:** Fase AT ya documenta esta app en detalle.
-
-### 3.5 iOS (Swift)
-
-- **Tecnologia:** Swift nativo + libreria Rust via C FFI (swift-bridge o cbindgen)
-- **Capacidades:**
-  - Notificaciones: crear si, leer las de otras apps NO
-  - Clipboard: si (UIPasteboard, pero solo en foreground)
-  - Voz: si (Speech framework + Whisper)
-  - Camera: si (AVFoundation)
-  - Ubicacion: si (CoreLocation)
-  - Screen read: NO (Apple no permite)
-  - Archivos: limitado (solo dentro de sandbox de la app)
-  - Contactos/Calendario: si (con permiso)
-  - Shortcuts/Siri: si (App Intents, Shortcuts framework)
-- **Restricciones SEVERAS:**
-  - No puede leer pantalla de otras apps
-  - No puede leer notificaciones de otras apps
-  - Background execution muy limitado (BGTaskScheduler, max ~30s)
-  - App Store Review: estricto, pueden rechazar por "demasiados permisos"
-  - Requiere Apple Developer Program ($99/ano)
-  - No se puede distribuir fuera del App Store (excepto EU con DMA)
-- **Esfuerzo estimado:** 6-8 semanas para MVP
-- **Estrategia:** enfocarse en lo que SI puede: voz, camara, ubicacion, Siri Shortcuts, widgets.
+- `protocol_version`
+- `session_id`
+- `device_class` (`desktop`, `phone`, `tablet`, `watch`)
+- `transport` (`lan`, `tailnet`, `relay`)
+- `permission_state`
+- `foreground_state`
+- `battery_optimization_state`
+- `push_token`
+- `last_seen_at`
 
 ---
 
-## 4. Matriz de Capacidades por Plataforma
+## 4. Transporte Seguro
+
+### 4.1 Recomendacion actual
+
+**Fase 1:** Tailscale  
+**Fase 2:** Headscale opcional  
+**Fase 3:** relay propio solo si realmente hace falta
+
+### 4.2 Por que Tailscale primero
+
+- reduce brutalmente complejidad de NAT traversal
+- acelera pruebas reales de cross-device
+- evita abrir puertos publicos
+- sirve igual para desktop y mobile
+
+### 4.3 Por que Headscale despues
+
+Headscale hoy se presenta explicitamente como:
+
+- open-source
+- self-hosted
+- alternativa al control server de Tailscale
+- orientado a personal use o small open-source orgs
+
+Eso encaja muy bien con la filosofia de LifeOS, pero no deberia ser el primer bloqueo.
+
+---
+
+## 5. Capacidad Real por Plataforma
+
+## 5.1 Linux
+
+- **Estado:** full control plane
+- **Capacidad real:** la mas completa
+- **Rol:** servidor principal y tambien cliente rico
+
+## 5.2 Windows
+
+**Stack recomendado:** `Tauri 2 + Rust backend`
+
+**Capacidades realistas:**
+- chat con Axi
+- clipboard sync
+- notificaciones
+- file handoff
+- voice in/out
+- telemetry basica
+- cierta automatizacion via APIs del sistema
+
+**Limitaciones importantes:**
+- permisos/admin/UAC
+- automation mas fragmentada que en Linux
+- screen understanding/control menos uniforme
+
+**Decision:** muy buen segundo cliente despues de Android.
+
+## 5.3 macOS
+
+**Stack recomendado:** `Tauri 2 + adaptadores nativos`
+
+**Capacidades realistas:**
+- menu bar app
+- clipboard
+- notificaciones
+- App Shortcuts / Siri / Spotlight via integracion nativa si se quiere
+- voice in/out
+- accessibility con permiso explicito
+
+**Validacion importante con fuentes actuales:**
+- Apple sigue cobrando `\$99 USD/año` por el Apple Developer Program
+- hay fee waiver para nonprofits/education/government, pero no es la ruta normal para un founder individual
+
+**Decision:** excelente companion, pero con friccion de firma/distribucion.
+
+**Fuentes:**
+- https://developer.apple.com/programs/enroll/
+- https://developer.apple.com/programs/
+
+## 5.4 Android
+
+**Stack recomendado:** `Kotlin nativo + Rust core compartido`
+
+**Por que Android sigue siendo la prioridad movil:**
+- Notification listeners reales
+- AccessibilityService existe y permite una integracion mucho mas profunda
+- foreground services y sensores dan espacio para un companion muy capaz
+
+**Validado hoy:**
+- Android sigue imponiendo restricciones fuertes a background services desde Oreo+
+- en Android 12+ hay restricciones adicionales para iniciar foreground services desde background
+- `AccessibilityService` y `NotificationListenerService` existen y permiten capacidades que iOS no ofrece
+
+**Conclusión tecnica:**
+- Android sigue siendo el mejor primer cliente mobile para LifeOS
+- pero hay que diseñarlo desde el inicio con foreground service, permisos visibles y degradacion elegante
+
+**Fuentes:**
+- https://developer.android.com/about/versions/oreo/background
+- https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start
+- https://developer.android.com/reference/android/accessibilityservice/AccessibilityService
+- https://developer.android.com/reference/android/service/notification/NotificationListenerService
+
+## 5.5 iOS
+
+**Stack recomendado:** `Swift nativo + Rust core muy acotado`
+
+**Lo que iOS si permite bien:**
+- voz
+- ubicacion
+- camara
+- contactos/calendario con permiso
+- widgets
+- App Intents / Shortcuts / Siri
+
+**Lo que sigue siendo estructuralmente limitado:**
+- background execution severamente limitada
+- no es una plataforma adecuada para leer/controlar otras apps de forma general
+- notificaciones y automatizacion profunda estan mucho mas encerradas que en Android
+
+**Actualizacion importante:**
+- no conviene vender la app iOS como “controlador profundo del telefono”
+- conviene venderla como:
+  - companion
+  - remote console
+  - capture/voice/location endpoint
+  - Shortcuts/Siri surface
+
+**Fuentes:**
+- https://developer.apple.com/documentation/swiftui/backgroundtask
+- https://developer.apple.com/documentation/AppIntents/app-intents
+- https://developer.apple.com/shortcuts/
+
+---
+
+## 6. Matriz de Capacidades Actualizada
 
 | Capacidad | Linux | Windows | macOS | Android | iOS |
 |-----------|-------|---------|-------|---------|-----|
-| Texto a Axi | FULL | FULL | FULL | FULL | FULL |
+| Chat con Axi | FULL | FULL | FULL | FULL | FULL |
 | Voz a Axi | FULL | FULL | FULL | FULL | FULL |
-| Leer pantalla | FULL | PARCIAL | PARCIAL | PARCIAL | NO |
-| Controlar apps | FULL | PARCIAL | PARCIAL | PARCIAL | NO |
-| Clipboard sync | FULL | FULL | FULL | FULL | PARCIAL |
-| Notificaciones | FULL | FULL | FULL | FULL | CREAR |
-| Archivos | FULL | FULL | FULL | FULL | SANDBOX |
+| Clipboard | FULL | FULL | FULL | FULL | PARCIAL |
+| Notificaciones entrantes | FULL | PARCIAL | PARCIAL | FULL | MUY LIMITADO |
+| Screen understanding | FULL | PARCIAL | PARCIAL | PARCIAL | NO GENERAL |
+| Control de apps | FULL | PARCIAL | PARCIAL | PARCIAL | NO GENERAL |
+| Camera capture | FULL | FULL | FULL | FULL | FULL |
 | Ubicacion | N/A | N/A | N/A | FULL | FULL |
-| Camera | FULL | FULL | FULL | FULL | FULL |
-| Background | FULL | FULL | FULL | PARCIAL | MUY LIMITADO |
-| Autostart | FULL | FULL | FULL | PARCIAL | NO |
-| System tray | FULL | FULL | FULL | NOTIF BAR | NO |
+| Background reliability | FULL | FULL | FULL | PARCIAL | BAJO |
+| System tray / menu bar | FULL | FULL | FULL | N/A | N/A |
+| Shortcuts / intents del SO | N/A | PARCIAL | PARCIAL | PARCIAL | FULL |
 
 ---
 
-## 5. Precedentes y Competencia
+## 7. Estrategia de Producto Correcta
 
-### 5.1 Apple Continuity
+La tentacion seria prometer “paridad completa” en todas las plataformas. Eso seria un error.
 
-- **Que hace:** clipboard universal, handoff de apps, AirDrop, llamadas en Mac, SMS en Mac
-- **Limitacion:** solo ecosistema Apple. Cerrado. No extensible.
-- **Leccion para LifeOS:** la experiencia cross-device es transformacional. Usuarios la aman.
+La estrategia correcta es:
 
-### 5.2 KDE Connect
+### 7.1 Linux
 
-- **Que hace:** notificaciones, clipboard, transferencia de archivos, control remoto, SMS
-- **Plataformas:** Linux, Android, Windows (parcial)
-- **Limitacion:** no tiene AI, no tiene voz, no tiene screen reading. Solo sincroniza.
-- **Leccion para LifeOS:** el protocolo KDE Connect es simple y funciona bien. Inspiracion para el nuestro.
+Servidor + cliente premium.  
+Aqui vive el control total.
 
-### 5.3 Home Assistant
+### 7.2 Android
 
-- **Que hace:** automatizacion del hogar. Servidor central + apps companion.
-- **Plataformas:** Linux (servidor), Android, iOS (apps)
-- **Limitacion:** enfocado en IoT, no en AI personal.
-- **Leccion para LifeOS:** modelo servidor+companion funciona. Su app iOS es un buen ejemplo de lo que se puede hacer dentro de las restricciones de Apple.
+Primer companion movil serio.  
+Debe ser el primer objetivo despues del transporte seguro.
 
-### 5.4 Pushbullet / Join
+### 7.3 Windows y macOS
 
-- **Que hace:** notificaciones cross-device, clipboard, links, archivos
-- **Limitacion:** servicio cloud centralizado, no AI
-- **Leccion para LifeOS:** la gente paga por sincronizar notificaciones. Hay mercado.
+Clientes companion de escritorio con:
+- chat
+- handoff
+- clipboard
+- files
+- notificaciones
+- voice
+- algunas acciones del sistema
 
-### 5.5 Beeper / Matrix
+### 7.4 iOS
 
-- **Que hace:** unifica todos los chats (WhatsApp, Telegram, Signal, etc.)
-- **Limitacion:** solo mensajeria, no asistente AI
-- **Leccion para LifeOS:** Axi podria ser la interfaz unificada de TODAS las comunicaciones.
-
----
-
-## 6. Orden de Implementacion Recomendado
-
-1. **Tailscale integration** (1 semana) — habilitar acceso remoto seguro al servidor
-2. **Client registry + protocol** (1 semana) — registro de dispositivos, heartbeat, capabilities
-3. **Android MVP** (4-6 semanas) — mercado mas grande, menos restricciones que iOS
-4. **Windows Tauri** (2-3 semanas) — segundo mercado mas grande
-5. **macOS Tauri** (1-2 semanas) — reusar codigo de Windows
-6. **iOS MVP** (6-8 semanas) — al final por restricciones severas
-
-**Total estimado:** 15-21 semanas para cubrir todas las plataformas con MVP funcional.
+Companion premium pero restringido:
+- voz
+- Siri / Shortcuts
+- widgets
+- ubicacion
+- camara
+- consola remota de Axi
 
 ---
 
-## 7. Decisiones Tecnicas Clave
+## 8. Orden de Implementacion Recomendado
 
-### Tauri vs Flutter vs React Native
+1. **Tailscale integration**
+2. **Device registry real + heartbeat + capabilities**
+3. **Android MVP**
+4. **Windows Tauri**
+5. **macOS Tauri**
+6. **Headscale opcional**
+7. **iOS companion**
 
-| Criterio | Tauri | Flutter | React Native |
-|----------|-------|---------|-------------|
-| Tamano binario | ~5MB | ~15MB | ~30MB |
-| Lenguaje backend | Rust (ya lo usamos) | Dart | JS/TS |
-| Desktop soporte | Excelente | Bueno | Limitado |
-| Mobile soporte | Inmaduro | Excelente | Excelente |
-| Acceso nativo | Via Rust plugins | Via platform channels | Via native modules |
+### Por que este orden
 
-**Decision:** Tauri para desktop (Windows/Mac), nativo para mobile (Kotlin/Swift).
-Razon: reutilizamos Rust, binarios pequenos en desktop, acceso completo a APIs en mobile.
-
-### Protocolo: WebSocket vs gRPC vs MQTT
-
-| Criterio | WebSocket | gRPC | MQTT |
-|----------|-----------|------|------|
-| Ya implementado | SI | No | No |
-| Bidireccional | SI | SI (streaming) | SI |
-| Mobile friendly | SI | Parcial | SI |
-| Browser friendly | SI | No (sin proxy) | No |
-| Overhead | Bajo | Bajo | Muy bajo |
-
-**Decision:** mantener WebSocket (ya existe). Agregar MQTT solo si se integran dispositivos IoT.
+- Tailscale desbloquea pruebas reales rapido
+- Android da el mayor salto de capacidad fuera de Linux
+- Windows/macOS amplian superficie sin la brutal limitacion de iOS
+- iOS debe entrar con framing correcto de companion, no de controlador profundo
 
 ---
 
-## 8. Riesgos y Mitigaciones
+## 9. Decision Tecnica Refinada
 
-| Riesgo | Probabilidad | Impacto | Mitigacion |
-|--------|-------------|---------|-----------|
-| Apple rechaza app iOS | Alta | Medio | Distribuir via TestFlight/AltStore. EU: sideloading legal |
-| Android mata servicio background | Alta | Medio | Foreground service + battery optimization whitelist |
-| Tailscale cambia plan gratis | Baja | Alto | Headscale self-hosted como fallback |
-| Google Play rechaza por AccessibilityService | Media | Medio | F-Droid + APK directo |
-| Mantenimiento de 5 plataformas | Alta | Alto | Maximizar codigo Rust compartido via FFI |
+### Desktop
+
+**Mantener `Tauri 2`**.
+
+Ya no por ausencia de alternativas, sino porque:
+- encaja con Rust
+- permite clientes chicos
+- sirve bien para Windows/macOS/Linux
+- evita traer un stack mas pesado sin necesidad
+
+### Mobile
+
+**Mantener nativo**.
+
+No porque Tauri mobile no exista, sino porque LifeOS necesita demasiado:
+- foreground/background nuance
+- permisos especiales
+- accesibilidad
+- listeners
+- integraciones del sistema
+
+Ese terreno sigue favoreciendo Kotlin/Swift.
 
 ---
 
-## Notas Finales
+## 10. Riesgos Reales
 
-- **Empezar con Android:** mas usuarios, menos restricciones, Fase AT ya documenta la app.
-- **iOS es el mas restrictivo:** planificar features alrededor de lo que Apple permite.
-- **El servidor LifeOS ya tiene el 70% de la infra necesaria** (WebSocket, API, LLM, event bus).
-- **Tailscale es el habilitador clave:** sin NAT traversal, el cross-platform no funciona fuera de LAN.
+### Alto riesgo
+
+- querer prometer simetria total entre Android e iOS
+- querer meter too much logic in-client en lugar de usar LifeOS server como cerebro
+- querer resolver NAT traversal por cuenta propia demasiado temprano
+
+### Riesgo medio
+
+- subestimar permisos sensibles y onboarding
+- no modelar `capabilities` por dispositivo desde el protocolo
+- depender de background continuo en iOS
+
+### Riesgo bajo
+
+- usar Tauri en desktop
+- usar Tailscale primero y Headscale despues
+
+---
+
+## 11. Conclusion
+
+La tesis cross-platform sigue siendo correcta, pero ahora mejor aterrizada:
+
+- **Tailscale primero, Headscale despues**
+- **Tauri 2 para desktop**
+- **nativo para mobile**
+- **Android primero**
+- **iOS como companion fuerte, no como controlador profundo**
+
+Eso mantiene ambicion alta sin mentirle a las restricciones reales de cada plataforma.
+
+---
+
+## 12. Fuentes Validadas
+
+- Tauri 2.0: https://tauri.app/
+- Tauri v2 mobile support context: https://v2.tauri.app/blog/tauri-2-0-0-beta/
+- Tailscale pricing: https://tailscale.com/pricing/
+- Headscale overview: https://headscale.net/latest/
+- Apple Developer Program enrollment: https://developer.apple.com/programs/enroll/
+- Apple Developer Program overview: https://developer.apple.com/programs/
+- Apple BackgroundTask docs: https://developer.apple.com/documentation/swiftui/backgroundtask
+- Apple App Intents docs: https://developer.apple.com/documentation/AppIntents/app-intents
+- Apple Shortcuts for Developers: https://developer.apple.com/shortcuts/
+- Android background limits: https://developer.android.com/about/versions/oreo/background
+- Android foreground-service restrictions: https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start
+- Android AccessibilityService: https://developer.android.com/reference/android/accessibilityservice/AccessibilityService
+- Android NotificationListenerService: https://developer.android.com/reference/android/service/notification/NotificationListenerService
