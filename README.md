@@ -1,20 +1,27 @@
 # LifeOS
 
-AI-native Linux distribution built on Fedora bootc (immutable) with COSMIC Desktop. Your personal AI assistant **Axi** lives at the OS level — voice, vision, memory, autonomous execution, and privacy by default.
+**AI-native Linux distribution built on Fedora bootc (immutable) with COSMIC Desktop.**
+
+Your personal AI assistant **Axi** lives at the OS level — local inference, encrypted memory, voice, vision, autonomous execution, and privacy by default. No cloud required.
 
 ## What Makes LifeOS Different
 
-- **IS the OS** — not an app inside an OS. Access to kernel, systemd, GPU, hardware
+- **IS the OS** — not an app inside an OS. Full access to kernel, systemd, GPU, hardware
+- **Local AI first** — Qwen3.5-4B via llama.cpp, runs on consumer GPUs (4GB+ VRAM) or CPU-only
+- **Privacy by default** — AES-GCM-SIV encrypted memory, machine-derived keys, data never leaves the device
 - **Immutable + rollback** — bootc atomic updates, if AI breaks something, rollback in seconds
-- **Privacy first** — local LLM (Qwen3.5-4B), 13+ cloud providers with sensitivity routing
-- **24/7 assistant** — Telegram, Slack, Discord, WhatsApp, Matrix, Signal, voice, desktop overlay
+- **53 MCP tools** — AI controls windows, apps, clipboard, browser, LibreOffice, COSMIC desktop, accessibility trees
+- **13+ LLM providers** — privacy-aware routing with automatic data sensitivity classification
+- **Multi-channel** — Telegram, Slack, Discord, voice, desktop overlay
+- **Self-healing** — 5-layer reliability: watchdog, sentinel, circuit breaker, safe mode, config rollback
+- **Zero-config security** — CIS Benchmark-level hardening: firewalld, auditd, DNS-over-TLS, SSH, AIDE, kernel hardening
 - **GPU Game Guard** — auto-offloads AI from GPU when gaming, restores when done
 
 ## Quick Start
 
 ```bash
-make build      # Build CLI + daemon
-make test       # Run 309 tests
+make build      # Build CLI + daemon (Rust)
+make test       # Run 341 tests
 make lint       # Clippy + fmt
 ```
 
@@ -22,16 +29,13 @@ make lint       # Clippy + fmt
 
 ```
 lifeos/
-├── cli/        # `life` command-line tool
-├── daemon/     # `lifeosd` system daemon (50+ modules, 309 tests)
-├── image/      # Containerfile + system files for bootc image
+├── cli/        # `life` command-line tool (Rust)
+├── daemon/     # `lifeosd` system daemon (100+ modules, 341 tests)
+├── image/      # Containerfile + system files for bootc OS image
 ├── scripts/    # Build, CI, icon generation, verification scripts
-├── docs/       # Organized documentation (see docs/README.md)
+├── docs/       # Strategy, architecture, operations, research
 ├── evidence/   # Phase closeout evidence (auditable history)
-├── contracts/  # JSON schemas for intents and identity
-├── CLAUDE.md   # Instructions for Claude Code
-├── GEMINI.md   # Instructions for Gemini
-└── AGENTS.md   # Quick onboarding for any AI agent
+└── contracts/  # JSON schemas for intents and identity
 ```
 
 ## Documentation
@@ -46,7 +50,23 @@ All documentation is organized in [`docs/`](docs/README.md):
 | User guides | `docs/user/` |
 | Branding & design | `docs/branding/` |
 | Privacy analysis | `docs/privacy/` |
+| Research | `docs/research/` |
+
+## Tech Stack
+
+- **Language:** Rust 2021 (daemon + CLI)
+- **OS Base:** Fedora bootc (immutable, OCI-based)
+- **Desktop:** COSMIC (System76) on Wayland
+- **AI Runtime:** llama.cpp / llama-server
+- **Database:** SQLite with WAL + sqlite-vec for embeddings
+- **API:** Axum REST + WebSocket on localhost:8081
+- **Protocols:** MCP (Model Context Protocol), AT-SPI2, D-Bus, CDP
+
+## Author
+
+Created by **Héctor Martínez Reséndiz** — [hectormr.com](https://hectormr.com)
 
 ## License
 
-Proprietary — Hector Martinez (hectormr.com)
+- **Daemon & CLI:** Apache-2.0
+- **OS Image:** GPL-3.0

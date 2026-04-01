@@ -362,6 +362,25 @@ Si se quiere convertir esta idea en plan de implementacion, el orden correcto se
 
 Este orden es importante porque evita gastar meses refinando computer use visual para problemas que deberian resolverse con herramientas estructuradas.
 
+### 3.10 Oportunidad futura desacoplada: bridge para OpenCode
+
+Hay una oportunidad interesante, pero **no deberia entrar en la ruta consecutiva
+inmediata**:
+
+- OpenCode ya se deja manipular por medios estructurados propios
+  (`opencode serve`, OpenAPI, SDK, control parcial de TUI)
+- OpenCode consume MCP como cliente, pero no aparecio evidencia oficial clara
+  de que se exponga hoy como MCP server nativo para controlarse a si mismo
+
+Por tanto, si LifeOS algun dia quiere integrarlo, la estrategia correcta seria:
+
+1. crear un **bridge/adaptador** sobre la API oficial de OpenCode
+2. exponerlo luego como MCP si aporta valor
+3. dejarlo fuera del camino critico actual del control plane del OS
+
+**Decision por ahora:** mantener esta idea como linea futura opcional, no como
+proxima fase obligatoria.
+
 ---
 
 ## 4. Transporte Seguro
