@@ -1159,7 +1159,7 @@ Herramientas:
             if let Ok(_meta) = store.get_or_create(&session_key).await {
                 // If in-memory history was empty, load recent turns from SessionStore
                 if is_new_session {
-                    if let Ok(recent) = store.load_recent_turns(&session_key, 10).await {
+                    if let Ok(recent) = store.load_recent_turns(&session_key, 50).await {
                         if !recent.is_empty() {
                             // Inject compaction summary if available
                             if let Some(summary) = store.get_compaction_summary(&session_key).await

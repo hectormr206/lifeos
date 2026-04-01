@@ -114,6 +114,20 @@ pub struct TranscriptTurn {
     pub tool_result: Option<String>,
 }
 
+impl TranscriptTurn {
+    /// Create a new transcript turn with the current timestamp.
+    pub fn new(role: &str, content: &str, channel: &str) -> Self {
+        Self {
+            role: role.to_string(),
+            content: content.to_string(),
+            channel: channel.to_string(),
+            timestamp: Utc::now(),
+            tool_name: None,
+            tool_result: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
     pub session_key: String,
@@ -275,7 +289,7 @@ impl SessionStore {
         }
 
         let content = tokio::fs::read_to_string(&transcript_path).await?;
-        let cutoff = Utc::now() - chrono::Duration::hours(1);
+        let cutoff = Utc::now() - chrono::Duration::hours(24);
         let mut turns: Vec<TranscriptTurn> = content
             .lines()
             .filter(|l| !l.trim().is_empty())

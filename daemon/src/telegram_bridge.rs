@@ -234,6 +234,7 @@ mod inner {
         .ok();
 
         // Supervisor notification listener
+        let notify_session = session_store.clone();
         tokio::spawn(async move {
             loop {
                 match notify_rx.recv().await {
@@ -255,6 +256,16 @@ mod inner {
                                 {
                                     error!("Telegram approval request failed: {}", e);
                                 }
+                                // Record approval request in session transcript
+                                if let Some(ref store) = notify_session {
+                                    let key = crate::session_store::SessionKey::telegram_dm(chat_id);
+                                    let turn = crate::session_store::TranscriptTurn::new(
+                                        "assistant",
+                                        &format!("[Sistema] Aprobacion requerida: {}", action_description),
+                                        "telegram",
+                                    );
+                                    let _ = store.append_turn(&key, &turn).await;
+                                }
                             }
                         } else {
                             let text = format_notification(&notification);
@@ -271,6 +282,16 @@ mod inner {
                                 };
                                 if let Err(e) = result {
                                     error!("Telegram notification failed: {}", e);
+                                }
+                                // Record notification in session transcript for context continuity
+                                if let Some(ref store) = notify_session {
+                                    let key = crate::session_store::SessionKey::telegram_dm(chat_id);
+                                    let turn = crate::session_store::TranscriptTurn::new(
+                                        "assistant",
+                                        &format!("[Notificacion automatica] {}", text),
+                                        "telegram",
+                                    );
+                                    let _ = store.append_turn(&key, &turn).await;
                                 }
                             }
                         }
@@ -347,6 +368,16 @@ mod inner {
                         let msg = format!("[Cron: {}]\n\n{}", job.name, response);
                         if let Err(e) = cron_bot.send_message(ChatId(job.chat_id), &msg).await {
                             error!("Cron notification failed: {}", e);
+                        }
+                        // Record cron message in session transcript for context continuity
+                        if let Some(ref store) = cron_ctx.session_store {
+                            let key = crate::session_store::SessionKey::telegram_dm(job.chat_id);
+                            let turn = crate::session_store::TranscriptTurn::new(
+                                "assistant",
+                                &msg,
+                                "telegram",
+                            );
+                            let _ = store.append_turn(&key, &turn).await;
                         }
                     }
                 }
