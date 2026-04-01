@@ -17,7 +17,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fase-as-lifeos-android.md](fase-as-lifeos-android.md) | Fase AS: LifeOS Mobile para Pixel (GrapheneOS, hibrido local+server) | ~120 |
 | [fase-at-android-app-nativa.md](fase-at-android-app-nativa.md) | Fase AT: App Android nativa con todos los sentidos de Axi (cualquier telefono) | ~420 |
 | [fase-au-seguridad-por-defecto.md](fase-au-seguridad-por-defecto.md) | Fase AU: seguro desde primer boot (firewall, sysctl, SSH, auditd, DNS, USB) | ~130 |
-| [fase-av-financiamiento.md](fase-av-financiamiento.md) | Fase AV: financiamiento y sostenibilidad (NLnet, grants, sponsors, monetizacion) | ~60 |
+| [fase-av-financiamiento.md](fase-av-financiamiento.md) | Fase AV: financiamiento y sostenibilidad (NLnet, grants, sponsors, landing publica, monetizacion) | ~60 |
 | [fase-aw-cross-platform.md](fase-aw-cross-platform.md) | Fase AW: cross-platform controller (Windows, Mac, Android, iOS clients) | ~80 |
 | [fase-ax-auditoria-de-realidad.md](fase-ax-auditoria-de-realidad.md) | Fase AX: auditoria de realidad, verificacion por evidencia y cierre de claims rotos | ~140 |
 | [fase-ay-control-plane-os.md](fase-ay-control-plane-os.md) | Fase AY: OS Control Plane — 4-layer hierarchy (MCP > adapter > accessibility > vision) | ~280 |
@@ -72,7 +72,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | Fase | Descripcion |
 |------|-------------|
 | **AR** | **Entrenamiento Local: QLoRA fine-tuning, knowledge distillation, DPO, modelos especializados** |
-| **AV** | **Financiamiento y Sostenibilidad: NLnet (URGENTE), grants, sponsors, monetizacion** |
+| **AV** | **Financiamiento y Sostenibilidad: post-NLnet, landing publica, grants, sponsors y monetizacion** |
 
 ### Vision Futura (ideas a largo plazo, no para desarrollo inmediato)
 

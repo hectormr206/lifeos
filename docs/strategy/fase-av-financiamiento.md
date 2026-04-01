@@ -1,23 +1,29 @@
 # Fase AV: Financiamiento y Sostenibilidad
 
 > Estado: INVESTIGACION
-> Prioridad: URGENTE (deadline NLnet: 1 Abril 2026)
+> Prioridad: URGENTE (post-NLnet: presencia publica + sponsors + rails de apoyo)
 > Investigacion completa: [docs/research/funding/README.md](../research/funding/README.md)
+> Research complementario: [docs/research/public-presence/README.md](../research/public-presence/README.md)
 
 ## Objetivo
 
-Obtener financiamiento para dedicar tiempo completo a LifeOS sin comprometer la naturaleza
-open-source ni la privacidad del proyecto.
+Obtener financiamiento y construir presencia publica suficiente para dedicar tiempo
+completo a LifeOS sin comprometer la naturaleza open-source ni la privacidad del proyecto.
 
 ## Items de Accion (por deadline)
 
 ### Semana 1 (antes del 1 Abril 2026)
 
-- [ ] Escribir propuesta NLnet (~2 paginas): AI local-first, privacidad, Linux inmutable
-- [ ] Enviar propuesta a NLnet (EUR 15,000-25,000)
+- [x] Escribir propuesta NLnet (~2 paginas): AI local-first, privacidad, Linux inmutable
+- [x] Enviar propuesta a NLnet (ya enviada el 1 Abril 2026, madrugada hora Mexico)
 
 ### Abril 2026
 
+- [ ] Lanzar landing publica simple para LifeOS
+- [ ] Publicarla primero en `lifeos.hectormr.com`
+- [ ] Crear repo publico separado para la web (`lifeos-site` recomendado)
+- [ ] Conectar la landing a newsletter / waitlist
+- [ ] Conectar la landing a GitHub, YouTube, Twitch y soporte
 - [ ] Configurar GitHub Sponsors (tiers: $5, $15, $50/mes)
 - [ ] Aplicar a NVIDIA Inception (creditos GPU gratis)
 - [ ] Crear perfil en Open Collective
@@ -37,6 +43,7 @@ open-source ni la privacidad del proyecto.
 ## Metricas de Exito
 
 - Al menos 1 grant aprobado en 2026
+- Landing publica operativa con CTA claros a follow / support
 - GitHub Sponsors activo con al menos 5 sponsors
 - Creditos de GPU suficientes para fine-tuning (Fase AR)
 
