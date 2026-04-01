@@ -264,7 +264,7 @@ mod inner {
                                         &format!("[Sistema] Aprobacion requerida: {}", action_description),
                                         "telegram",
                                     );
-                                    let _ = store.append_turn(&key, &turn).await;
+                                    let _ = store.append_turn(&key, turn).await;
                                 }
                             }
                         } else {
@@ -291,7 +291,7 @@ mod inner {
                                         &format!("[Notificacion automatica] {}", text),
                                         "telegram",
                                     );
-                                    let _ = store.append_turn(&key, &turn).await;
+                                    let _ = store.append_turn(&key, turn).await;
                                 }
                             }
                         }
@@ -377,7 +377,7 @@ mod inner {
                                 &msg,
                                 "telegram",
                             );
-                            let _ = store.append_turn(&key, &turn).await;
+                            let _ = store.append_turn(&key, turn).await;
                         }
                     }
                 }

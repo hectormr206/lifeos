@@ -304,6 +304,39 @@ Herramientas:
 65. **a11y_apps** — Lista todas las aplicaciones registradas en el bus AT-SPI2.
     args: {}
 
+66. **health_status** — Estado de salud del usuario: tiempo activo, breaks, sesion actual.
+    args: {}
+
+67. **calendar_today** — Eventos programados para hoy.
+    args: {}
+
+68. **calendar_add** — Agregar evento al calendario.
+    args: {"title": "Dialisis suegro", "date": "2026-04-02", "time": "10:00", "reminder_minutes": 30}
+
+69. **current_context** — En que contexto esta el usuario (work, personal, gaming, etc).
+    args: {}
+
+70. **current_mode** — Modo de experiencia activo (Simple, Pro, Builder).
+    args: {}
+
+71. **learned_patterns** — Patrones de comportamiento detectados por el sistema.
+    args: {}
+
+72. **gaming_status** — Estado actual de gaming: jugando?, que juego?, GPU status.
+    args: {}
+
+73. **meeting_recall** — Buscar transcripciones o resumenes de reuniones pasadas.
+    args: {"query": "reunion de ayer"}
+
+74. **security_status** — Estado de seguridad: amenazas recientes, alertas activas.
+    args: {}
+
+75. **activity_summary** — Resumen de actividad: apps usadas, tiempo por app.
+    args: {}
+
+76. **screenshot_recall** — Buscar capturas de pantalla recientes por descripcion.
+    args: {"query": "firefox gmail"}
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -1067,6 +1100,18 @@ Herramientas:
             | "a11y_activate" | "a11y_get_text" | "a11y_set_text" | "a11y_apps" => {
                 execute_os_control(&call.name, &call.args).await
             }
+            // --- Fase BA: Unified Memory tools ---
+            "health_status" => execute_health_status().await,
+            "calendar_today" => execute_calendar_today().await,
+            "calendar_add" => execute_calendar_add(&call.args).await,
+            "current_context" => execute_current_context().await,
+            "current_mode" => execute_current_mode().await,
+            "learned_patterns" => execute_learned_patterns().await,
+            "gaming_status" => execute_gaming_status().await,
+            "meeting_recall" => execute_memory_search(&call.args, ctx, "meeting").await,
+            "security_status" => execute_security_status().await,
+            "activity_summary" => execute_memory_search_tag(ctx, "context").await,
+            "screenshot_recall" => execute_memory_search(&call.args, ctx, "visual").await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -3563,6 +3608,197 @@ max_context = 128000
         match crate::mcp_server::call_tool(&mcp_name, args).await {
             Ok(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
             Err(e) => Ok(format!("Error: {}", e)),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Fase BA — Unified Memory: tools connecting all data sources to Axi
+    // -----------------------------------------------------------------------
+
+    /// BA.1 — Health status: active session, breaks, work time.
+    async fn execute_health_status() -> Result<String> {
+        let uptime = tokio::fs::read_to_string("/proc/uptime").await.unwrap_or_default();
+        let secs: f64 = uptime.split_whitespace().next()
+            .and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let hours = secs / 3600.0;
+        Ok(format!(
+            "Sesion activa: {:.1} horas.\nRecomendacion: {} descanso cada 2 horas.",
+            hours,
+            if hours > 2.0 { "Toma un" } else { "Aun no necesitas" }
+        ))
+    }
+
+    /// BA.2 — Calendar today: read scheduled tasks for today.
+    async fn execute_calendar_today() -> Result<String> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let cal_path = format!("{}/.local/share/lifeos/calendar.json", home);
+        match tokio::fs::read_to_string(&cal_path).await {
+            Ok(content) => {
+                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                let events: Vec<&str> = content.lines()
+                    .filter(|l| l.contains(&today))
+                    .collect();
+                if events.is_empty() {
+                    Ok("No tienes eventos programados para hoy.".into())
+                } else {
+                    Ok(format!("Eventos de hoy:\n{}", events.join("\n")))
+                }
+            }
+            Err(_) => Ok("No hay calendario configurado aun.".into()),
+        }
+    }
+
+    /// BA.2 — Calendar add event.
+    async fn execute_calendar_add(args: &serde_json::Value) -> Result<String> {
+        let title = args["title"].as_str().unwrap_or("Sin titulo");
+        let date = args["date"].as_str().unwrap_or("");
+        let time = args["time"].as_str().unwrap_or("");
+        let reminder = args["reminder_minutes"].as_u64().unwrap_or(0);
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let cal_path = format!("{}/.local/share/lifeos/calendar.json", home);
+        let entry = serde_json::json!({
+            "title": title,
+            "date": date,
+            "time": time,
+            "reminder_minutes": reminder,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+        });
+        let line = format!("{}\n", serde_json::to_string(&entry)?);
+        tokio::fs::create_dir_all(format!("{}/.local/share/lifeos", home)).await?;
+        tokio::fs::OpenOptions::new()
+            .create(true).append(true)
+            .open(&cal_path).await?
+            .write_all(line.as_bytes()).await?;
+        Ok(format!("Evento agregado: {} el {} a las {}", title, date, time))
+    }
+
+    /// BA.3 — Current context (work/personal/gaming/etc).
+    async fn execute_current_context() -> Result<String> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let ctx_path = format!("{}/.local/share/lifeos/current_context.json", home);
+        match tokio::fs::read_to_string(&ctx_path).await {
+            Ok(content) => Ok(format!("Contexto actual: {}", content.trim())),
+            Err(_) => Ok("Contexto actual: general (no se ha detectado un contexto especifico).".into()),
+        }
+    }
+
+    /// BA.3 — Current experience mode.
+    async fn execute_current_mode() -> Result<String> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let mode_path = format!("{}/.local/share/lifeos/experience_mode.json", home);
+        match tokio::fs::read_to_string(&mode_path).await {
+            Ok(content) => Ok(format!("Modo activo: {}", content.trim())),
+            Err(_) => Ok("Modo activo: Pro (default).".into()),
+        }
+    }
+
+    /// BA.4 — Learned patterns from WorkflowLearner.
+    async fn execute_learned_patterns() -> Result<String> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let actions_path = format!("{}/.local/share/lifeos/workflow_actions.json", home);
+        match tokio::fs::read_to_string(&actions_path).await {
+            Ok(content) => {
+                let count = content.lines().count();
+                Ok(format!(
+                    "Tengo {} acciones registradas en el workflow learner.\n\
+                     El sistema detecta patrones automaticamente cuando una secuencia se repite 3+ veces.",
+                    count
+                ))
+            }
+            Err(_) => Ok("Aun no he detectado patrones — necesito mas acciones registradas.".into()),
+        }
+    }
+
+    /// BA.5 — Gaming status from nvidia-smi.
+    async fn execute_gaming_status() -> Result<String> {
+        let output = tokio::process::Command::new("nvidia-smi")
+            .args(["--query-compute-apps=pid,name,used_gpu_memory", "--format=csv,noheader,nounits"])
+            .output().await;
+        match output {
+            Ok(o) => {
+                let text = String::from_utf8_lossy(&o.stdout);
+                let gpu_procs: Vec<&str> = text.lines()
+                    .filter(|l| !l.contains("llama-server"))
+                    .collect();
+                if gpu_procs.is_empty() {
+                    Ok("No hay juegos corriendo. GPU libre para IA.".into())
+                } else {
+                    Ok(format!("Procesos GPU activos (posible juego):\n{}", gpu_procs.join("\n")))
+                }
+            }
+            Err(_) => Ok("No se pudo consultar nvidia-smi.".into()),
+        }
+    }
+
+    /// BA.7 — Security status: run proactive security checks.
+    async fn execute_security_status() -> Result<String> {
+        let alerts = crate::proactive::check_all(None).await;
+        let security: Vec<&crate::proactive::ProactiveAlert> = alerts.iter()
+            .filter(|a| matches!(a.category,
+                crate::proactive::AlertCategory::SecurityUpdate |
+                crate::proactive::AlertCategory::SystemHealth
+            ))
+            .collect();
+        if security.is_empty() {
+            Ok("Sistema seguro. No hay alertas de seguridad activas.".into())
+        } else {
+            let formatted: Vec<String> = security.iter()
+                .map(|a| format!("- [{:?}] {}", a.severity, a.message))
+                .collect();
+            Ok(format!("Alertas de seguridad:\n{}", formatted.join("\n")))
+        }
+    }
+
+    /// BA.6/BA.8/BA.9 — Search memory_plane by query filtered by tag.
+    async fn execute_memory_search(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+        tag_filter: &str,
+    ) -> Result<String> {
+        let query = args.get("query").and_then(|v| v.as_str()).unwrap_or(tag_filter);
+        if let Some(memory) = &ctx.memory {
+            let mem = memory.read().await;
+            match mem.search_entries(query, 5, Some(tag_filter)).await {
+                Ok(results) => {
+                    if results.is_empty() {
+                        Ok(format!("No encontre nada sobre '{}' en mis registros de {}.", query, tag_filter))
+                    } else {
+                        let formatted: Vec<String> = results.iter().map(|r| {
+                            let snippet = if r.entry.content.len() > 400 {
+                                format!("{}...", &r.entry.content[..400])
+                            } else { r.entry.content.clone() };
+                            format!("- ({}): {}", r.entry.created_at.format("%Y-%m-%d %H:%M"), snippet)
+                        }).collect();
+                        Ok(format!("Resultados ({}):\n{}", tag_filter, formatted.join("\n")))
+                    }
+                }
+                Err(e) => Ok(format!("Error buscando: {}", e)),
+            }
+        } else {
+            Ok("Memoria no disponible.".into())
+        }
+    }
+
+    /// BA.8 — Activity summary from memory_plane context entries.
+    async fn execute_memory_search_tag(ctx: &ToolContext, tag: &str) -> Result<String> {
+        if let Some(memory) = &ctx.memory {
+            let mem = memory.read().await;
+            match mem.search_entries("app activity today", 10, Some(tag)).await {
+                Ok(results) => {
+                    if results.is_empty() {
+                        Ok("No tengo registros de actividad reciente.".into())
+                    } else {
+                        let formatted: Vec<String> = results.iter().map(|r| {
+                            format!("- ({}): {}", r.entry.created_at.format("%H:%M"), r.entry.content)
+                        }).collect();
+                        Ok(format!("Actividad reciente:\n{}", formatted.join("\n")))
+                    }
+                }
+                Err(e) => Ok(format!("Error: {}", e)),
+            }
+        } else {
+            Ok("Memoria no disponible.".into())
         }
     }
 }
