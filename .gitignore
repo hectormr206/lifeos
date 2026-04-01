@@ -40,3 +40,6 @@ build/
 *.pem
 *.key
 files/etc/lifeos/llm-providers.env
+
+# Local-only fundraising workspace
+docs/funding/
