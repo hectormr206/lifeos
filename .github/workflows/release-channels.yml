@@ -31,7 +31,7 @@ env:
 
 jobs:
   determine-channel:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     outputs:
       channel: ${{ steps.set-channel.outputs.channel }}
       tag: ${{ steps.set-channel.outputs.tag }}
@@ -80,7 +80,7 @@ jobs:
   build-and-push:
     needs: determine-channel
     if: needs.determine-channel.outputs.channel != 'skip'
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -220,7 +220,7 @@ jobs:
   generate-sbom:
     needs: [determine-channel, build-and-push]
     if: needs.determine-channel.outputs.channel != 'edge'
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     
@@ -244,7 +244,7 @@ jobs:
   update-channel-manifest:
     needs: [determine-channel, build-and-push]
     if: needs.determine-channel.outputs.channel != 'skip'
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     
@@ -299,7 +299,7 @@ jobs:
   notify-release:
     needs: [determine-channel, build-and-push]
     if: needs.determine-channel.outputs.channel == 'stable'
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     
     steps:
       - name: Create release notes

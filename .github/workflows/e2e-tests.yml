@@ -32,7 +32,7 @@ env:
 jobs:
   # Smoke test - quick validation
   smoke-test:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     
     steps:
@@ -75,7 +75,7 @@ jobs:
 
   # Bootc upgrade/rollback test - comprehensive VM test
   bootc-upgrade-rollback:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     # Run on: schedule, manual dispatch, PRs with e2e-test label, or main branch pushes
     if: |
       github.event_name == 'schedule' ||
@@ -234,7 +234,7 @@ jobs:
 
   # Integration test - daemon + CLI interaction
   integration:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     
     steps:
@@ -272,7 +272,7 @@ jobs:
 
   # Notify on E2E test failures
   notify-failure:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     needs: [bootc-upgrade-rollback]
     if: github.event_name == 'schedule' && needs.bootc-upgrade-rollback.result == 'failure'
     permissions:

@@ -16,7 +16,7 @@ jobs:
   # ============================================================================
   nightly-tests:
     name: Nightly Full Test Suite
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -69,7 +69,7 @@ jobs:
   # ============================================================================
   nightly-container:
     name: Nightly Container Build
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
