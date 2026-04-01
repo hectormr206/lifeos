@@ -2,7 +2,7 @@
 
 > Contexto: desarrollador solo en Mexico, presupuesto actual aproximado de `~$60 USD/mes`, proyecto open-source `GPL-3.0`, orientado a privacidad, software libre y AI local-first.
 > Restriccion operativa importante: el idioma de trabajo, comunicacion y creacion de contenido del founder es `espanol mexicano`.
-> Fecha de validacion web: `2026-03-31`
+> Fecha de validacion web: `2026-04-01`
 
 ---
 
@@ -592,6 +592,190 @@ Esto no es un detalle menor. Cambia bastante la estrategia.
 - https://support.google.com/youtube/answer/72857
 - https://support.google.com/youtube/answer/13429240
 - https://support.google.com/youtube/answer/7636690
+- https://support.google.com/youtube/answer/2474026
+- https://blog.youtube/news-and-events/live-updates/
+- https://blog.youtube/news-and-events/colin-samir-favorites-made-on-youtube/
+
+### 7.1.1 Twitch
+
+- **Estado actual:** sigue siendo una de las mejores plataformas para comunidad live
+- **Dato validado:** Twitch facilito el camino a `Affiliate` en 2025:
+  - `4` horas transmitidas
+  - `4` dias distintos
+  - `min 3 ACCV` en `4` dias distintos
+  - `25+` followers
+- **Dato validado:** Twitch permite simulcasting a cualquier servicio de live streaming
+- **Fit con LifeOS:** **alto**
+
+**Por que si conviene a LifeOS:**
+- excelente para build-in-public
+- muy buena cultura de chat en vivo y comunidad
+- encaja bien con demos, debug sessions y directos de desarrollo
+- complementa muy bien a YouTube
+
+**Limitacion importante:**
+- Twitch es mucho peor que YouTube como archivo evergreen
+- si no reciclas los directos a VODs, clips o resenas, pierdes mucho valor
+
+**Recomendacion:**
+- usar `Twitch` como canal de comunidad live
+- usar `YouTube` como archivo, SEO y descubrimiento mas durable
+- para LifeOS, el combo fuerte no es `YouTube o Twitch`, sino `YouTube + Twitch`
+
+**Fuentes:**
+- https://blog.twitch.tv/en/2025/07/29/monetization-for-all/
+- https://blog.twitch.tv/en/2023/10/20/everything-we-announced-at-twitchcon-las-vegas/
+
+### 7.1.2 Kick
+
+- **Estado actual:** activo
+- **Dato validado:** el programa `Affiliate` de Kick pide:
+  - al menos `5` horas en vivo
+  - al menos `75` followers
+- **Dato validado:** Kick publicita un split de `95%` para el creador sobre subs del programa Affiliate
+- **Dato validado:** el multistream en el programa `Partner` esta permitido, pero reduce el payout de partner `50%` durante el tiempo que dure el multistream
+- **Fit con LifeOS:** **medio / exploratorio**
+
+**Lectura honesta:**
+- Kick puede ser atractivo por monetizacion
+- pero no lo veo hoy como el mejor canal principal para LifeOS
+- su audiencia y posicionamiento natural no son tan claros para un proyecto OSS, Linux, privacidad y AI local-first
+
+**Recomendacion:**
+- tratar `Kick` como experimento posterior
+- no meterlo en la primera ola si todavia estas construyendo formato, narrativa y comunidad
+
+**Fuentes:**
+- https://help.kick.com/en/articles/12273402-how-to-become-a-kick-affiliate-how-kick-streaming-works
+- https://help.kick.com/en/articles/8894103-how-to-join-the-kick-partner-program
+- https://help.kick.com/en/articles/11091744-multistreaming-on-the-kick-partner-program
+
+### 7.1.3 LinkedIn Live
+
+- **Estado actual:** muy util para eventos y reputacion profesional
+- **Dato validado:** LinkedIn Live se trabaja con herramientas de broadcast de terceros
+- **Dato validado:** sus analiticas incluyen datos firmograficos muy valiosos (empresas, cargos, ubicaciones)
+- **Fit con LifeOS:** **medio-alto**
+
+**Por que si vale la pena:**
+- no tanto por fan funding
+- si por:
+  - credibilidad profesional
+  - atraer sponsors y aliados
+  - llegar a universidades, gobierno, prensa y B2B
+  - presentar LifeOS como infraestructura seria y no solo como hobby project
+
+**Lectura honesta:**
+- no es la mejor plataforma para construir una comunidad daily
+- si es muy buena para un directo mas institucional, por ejemplo mensual
+
+**Recomendacion:**
+- usar `LinkedIn Live` para:
+  - update mensual del proyecto
+  - demos mas profesionales
+  - lanzamientos
+  - charlas de privacidad, Linux y soberania digital
+
+**Fuente:**
+- https://business.linkedin.com/content/dam/me/business/en-us/marketing-solutions/products/pdfs/2790_LKIN_PMM_Live_and_Events_creative_Playbook_E3_V10.pdf
+
+### 7.1.4 TikTok Live
+
+- **Estado actual:** util para discovery, no para el stream tecnico principal
+- **Dato validado:** TikTok exige que el creador sea `18+` para poder hacer LIVE
+- **Dato importante:** la elegibilidad de LIVE y algunas funciones dependen tambien de ubicacion y validacion de edad
+- **Fit con LifeOS:** **medio-bajo** como canal principal, **medio** como canal de descubrimiento
+
+**Lectura honesta:**
+- TikTok puede servir mucho para clips, highlights y descubrimiento rapido
+- pero no lo pondria como plataforma principal para sesiones largas de desarrollo
+
+**Recomendacion:**
+- priorizar:
+  - clips verticales
+  - highlights
+  - Q&A cortos
+- no usar TikTok como columna vertebral de la estrategia de streaming largo
+
+**Fuente:**
+- https://support.tiktok.com/en/safety-hc/account-and-user-safety/age-requirements-for-tiktok-live/
+
+### 7.1.5 Owncast y PeerTube
+
+#### Owncast
+
+- **Estado actual:** muy alineado con la filosofia de LifeOS
+- **Dato validado:** Owncast es un servidor libre y open-source de live video + web chat que funciona con software de broadcast existente
+- **Dato validado:** puede alcanzar mas audiencia via Fediverse
+- **Fit con LifeOS:** **alto ideologicamente**, **medio** como motor de crecimiento
+
+**Lectura honesta:**
+- Owncast no es el mejor canal para crecer desde cero
+- pero si puede ser una pieza muy valiosa de soberania, marca y comunidad FOSS
+
+#### PeerTube
+
+- **Estado actual:** tambien muy alineado con LifeOS
+- **Dato validado:** PeerTube permite hacer stream via `OBS` u otro software `RTMP`, habilitar replay y usar live chat
+- **Dato validado:** tambien tiene discoverability federada y sincronizacion entre plataformas
+- **Fit con LifeOS:** **alto ideologicamente**, **medio** para archivo y comunidad
+
+**Recomendacion para ambos:**
+- no usarlos como unico motor de audiencia al inicio
+- si usarlos para:
+  - eventos clave
+  - lanzamientos
+  - charlas FOSS
+  - archivo soberano del proyecto
+
+**Fuentes:**
+- https://owncast.online/
+- https://joinpeertube.org/
+
+### 7.1.6 Estrategia de multistream para LifeOS
+
+La conclusion importante es esta:
+
+- **si conviene hacer multistream**
+- pero **no conviene salir a todas las plataformas desde el dia 1**
+
+**Mezcla recomendada por etapas:**
+
+#### Etapa 1
+
+- `YouTube + Twitch`
+
+Es la mezcla mas fuerte para LifeOS porque junta:
+- archivo y descubrimiento (`YouTube`)
+- comunidad live (`Twitch`)
+
+#### Etapa 2
+
+- agregar `clips` a Shorts y TikTok
+- probar `LinkedIn Live` para eventos mas profesionales
+
+#### Etapa 3
+
+- evaluar `Kick` como experimento
+- abrir `Owncast` o `PeerTube` como capa soberana del proyecto
+
+**Herramienta practica recomendada para empezar:**
+- `Restream`
+
+**Dato validado:**
+- el plan gratis permite transmitir a `2` canales a la vez
+- eso alcanza perfecto para `YouTube + Twitch`
+
+**Recomendacion brutalmente honesta:**
+- si solo vas a empezar con dos canales, deben ser:
+  1. `YouTube`
+  2. `Twitch`
+
+No `Kick`. No `TikTok Live`. No todo al mismo tiempo.
+
+**Fuentes:**
+- https://restream.io/pricing
+- https://support.restream.io/en/articles/10053865-how-to-add-and-enable-your-channels
 
 ### 7.2 X Subscriptions
 
@@ -802,6 +986,9 @@ Si la meta es complementar grants con comunidad y audiencia, la mezcla recomenda
 ### Capa 3: discovery y contenido
 
 - YouTube en espanol mexicano
+- Twitch como comunidad live
+- clips derivados para Shorts y TikTok
+- LinkedIn Live para hitos mas institucionales
 - X en espanol
 - newsletter en espanol
 
@@ -844,22 +1031,29 @@ Si la meta es complementar grants con comunidad y audiencia, la mezcla recomenda
 11. **Evaluar si tiene sentido una propuesta de OpenAI Researcher Access**
 12. **Lanzar newsletter**
 13. **Empezar YouTube tecnico de producto**
-14. **Definir posicionamiento hispanohablante**
+14. **Probar formato de directo `YouTube + Twitch`**
+   - no todos los dias
+   - 1 o 2 directos tecnicos por semana ya bastan para validar
+15. **Definir estrategia de reciclaje de contenido**
+   - stream largo -> clip -> Short -> post -> newsletter
+16. **Definir posicionamiento hispanohablante**
    - Linux + AI local + privacidad + automatizacion
    - explicado para Mexico y LatAm, no intentando sonar como creator-tech en ingles
 
 ### Cuando haya un poco mas de evidencia
 
-15. **Reevaluar FLOSS/fund**
-16. **Preparar caso para Sovereign Tech / Sovereign Tech Agency**
-17. **Abrir consultoria / setup premium en espanol**
-18. **Probar primeros patrocinadores directos**
-19. **Solo si aparece framing fuerte de safety/alignment: evaluar programa de investigadores de Anthropic**
+17. **Reevaluar FLOSS/fund**
+18. **Preparar caso para Sovereign Tech / Sovereign Tech Agency**
+19. **Abrir consultoria / setup premium en espanol**
+20. **Probar primeros patrocinadores directos**
+21. **Evaluar LinkedIn Live mensual o Owncast para eventos clave**
+22. **Solo si aparece framing fuerte de safety/alignment: evaluar programa de investigadores de Anthropic**
 
 ### Solo mas adelante
 
-20. **500 Global / VC**
-21. **cualquier ruta claramente dilutiva**
+23. **Kick como experimento**
+24. **500 Global / VC**
+25. **cualquier ruta claramente dilutiva**
 
 ---
 
@@ -878,10 +1072,15 @@ Si la meta es complementar grants con comunidad y audiencia, la mezcla recomenda
 | Microsoft Founders Hub | Creditos | ALTA | abierto a founders no VC-backed |
 | OpenAI for Startups | Programa / red | MEDIA-ALTA | util, pero no contar con credits grandes garantizados |
 | YouTube en espanol | Audiencia + fan funding | ALTA | discovery + confianza en nicho hispanohablante menos saturado |
+| Twitch en espanol | Comunidad live | ALTA | mejor segundo pilar para directos tecnicos y build-in-public |
 | Google Startups | Creditos | MEDIA | util, pero menos central hoy |
 | OpenAI Researcher Access | API credits investigacion | MEDIA-BAJA | solo si se reencuadra como investigacion seria |
+| LinkedIn Live | Reputacion / B2B | MEDIA-ALTA | bueno para sponsors, universidades, prensa y eventos profesionales |
 | Newsletter en espanol | Audiencia propia | MEDIA-ALTA | activo estrategico de largo plazo en nicho poco atendido |
+| Owncast / PeerTube | Infra soberana de medios | MEDIA | muy alineado con LifeOS, pero no el mejor motor de crecimiento inicial |
 | Consultoria / setup | Servicios | MEDIA-ALTA | ingreso temprano aunque no escale |
+| TikTok clips / LIVE | Discovery vertical | MEDIA | bueno para alcance, debil como stream tecnico principal |
+| Kick | Streaming monetizado | MEDIA | atractivo por split, pero no es la mejor prioridad temprana para LifeOS |
 | X Subscriptions | Social membership | MEDIA | util solo si sube fuerte la audiencia |
 | Anthropic Startup Program | API credits startup | BAJA hoy | orientado a VC-backed, poco fit para tu situacion actual |
 | Anthropic Researcher Access | API credits research | BAJA hoy | solo si hay propuesta fuerte de safety/alignment |
@@ -909,7 +1108,7 @@ Si haces nueve, esta es la mezcla mas potente:
 
 7. **Stripe donation link**
 8. **newsletter**
-9. **YouTube tecnico**
+9. **YouTube tecnico + Twitch selectivo**
 
 ---
 
@@ -968,6 +1167,7 @@ Eso permite que, si una fuente falla, LifeOS siga vivo.
 #### Capa 5: Crecimiento de audiencia
 
 - YouTube en espanol
+- Twitch en espanol
 - newsletter en espanol
 - X en espanol
 
@@ -1036,6 +1236,7 @@ Eso es mucho mas robusto que intentar vivir solo de donaciones desde el dia uno.
 - 5-20 sponsors de pago
 - 1-3 clientes de setup / soporte
 - 1 newsletter consistente
+- 2-4 directos en `YouTube + Twitch`
 - 4-8 piezas de contenido en YouTube o clips derivados
 
 **KPIs:**
@@ -1071,7 +1272,7 @@ Eso es mucho mas robusto que intentar vivir solo de donaciones desde el dia uno.
 - se extiende con Sponsors + servicios + creditos
 
 **Ruta B — Community + Services-led**
-- YouTube + newsletter + sponsors + setup premium
+- YouTube + Twitch + newsletter + sponsors + setup premium
 - grant como acelerador, no como base unica
 
 **Ruta C — Productized crowdfunding**
@@ -1150,6 +1351,7 @@ Para:
 - Stripe
 - Open Collective
 - YouTube
+- Twitch
 - newsletter
 
 Ko-fi, X Subscriptions y otras plataformas son secundarias.
@@ -1170,7 +1372,7 @@ Si yo tuviera que escoger la combinacion mas realista para que LifeOS te lleve a
 6. **Setup premium en espanol**
 7. **NVIDIA Inception**
 8. **Microsoft Founders Hub**
-9. **YouTube + newsletter en espanol**
+9. **YouTube + Twitch + newsletter en espanol**
 
 **Interpretacion:**
 - grant te compra tiempo
@@ -1199,6 +1401,7 @@ Si yo tuviera que escoger la combinacion mas realista para que LifeOS te lleve a
 - landing de apoyo
 - pagina de setup premium
 - primer video / primer correo de newsletter
+- primer directo `YouTube + Twitch`
 
 #### Primer trimestre
 
@@ -1228,6 +1431,7 @@ La ruta mas realista es:
 2. **base de apoyo recurrente**
 3. **servicios premium bien delimitados**
 4. **contenido en espanol que construya confianza**
+5. **directos tecnicos selectivos, no spameados**
 
 Eso no solo es mas factible. Tambien es mas sano para el proyecto.
 
@@ -1270,7 +1474,21 @@ Eso no solo es mas factible. Tambien es mas sano para el proyecto.
 - 500 Global LatAm: https://latam.500.co/latam
 - YouTube monetization overview: https://support.google.com/youtube/answer/72857
 - YouTube expanded YPP: https://support.google.com/youtube/answer/13429240
+- YouTube live streaming: https://support.google.com/youtube/answer/2474026
 - YouTube memberships: https://support.google.com/youtube/answer/7636690
+- YouTube live updates: https://blog.youtube/news-and-events/live-updates/
+- YouTube Made on YouTube 2025 live notes: https://blog.youtube/news-and-events/colin-samir-favorites-made-on-youtube/
+- Twitch monetization for all: https://blog.twitch.tv/en/2025/07/29/monetization-for-all/
+- Twitch simulcasting update: https://blog.twitch.tv/en/2023/10/20/everything-we-announced-at-twitchcon-las-vegas/
+- Kick Affiliate: https://help.kick.com/en/articles/12273402-how-to-become-a-kick-affiliate-how-kick-streaming-works
+- Kick Partner Program: https://help.kick.com/en/articles/8894103-how-to-join-the-kick-partner-program
+- Kick multistreaming: https://help.kick.com/en/articles/11091744-multistreaming-on-the-kick-partner-program
+- LinkedIn Live Events playbook: https://business.linkedin.com/content/dam/me/business/en-us/marketing-solutions/products/pdfs/2790_LKIN_PMM_Live_and_Events_creative_Playbook_E3_V10.pdf
+- TikTok LIVE age requirements: https://support.tiktok.com/en/safety-hc/account-and-user-safety/age-requirements-for-tiktok-live/
+- Owncast: https://owncast.online/
+- PeerTube: https://joinpeertube.org/
+- Restream pricing: https://restream.io/pricing
+- Restream channels and limits: https://support.restream.io/en/articles/10053865-how-to-add-and-enable-your-channels
 - X Subscriptions creator help: https://help.x.com/en/using-x/subscriptions-creator
 - X Subscriptions policy: https://help.x.com/en/rules-and-policies/subscriptions-policy.html
 - Substack pricing: https://support.substack.com/hc/en-us/articles/360037607131-How-much-does-Substack-cost

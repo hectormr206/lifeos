@@ -820,7 +820,8 @@ RUN rm -f /usr/lib/os-release && \
     "REDHAT_BUGZILLA_PRODUCT_VERSION=\"${FEDORA_MAJOR}\"" \
     'REDHAT_SUPPORT_PRODUCT="Fedora"' \
     "REDHAT_SUPPORT_PRODUCT_VERSION=\"${FEDORA_MAJOR}\"" \
-    > /usr/lib/os-release
+    > /usr/lib/os-release && \
+    ln -sf ../usr/lib/os-release /etc/os-release
 
 # LifeOS icon in hicolor theme (for COSMIC Settings > About and other apps)
 RUN mkdir -p /usr/share/icons/hicolor/scalable/apps && \
