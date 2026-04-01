@@ -924,6 +924,19 @@ Herramientas:
             "la semana pasada",
             "last week",
             "antes",
+            "cuando fue",
+            "que comimos",
+            "que hicimos",
+            "que paso",
+            "que decidimos",
+            "que me dijiste",
+            "que te dije",
+            "la ultima vez",
+            "hace cuanto",
+            "el otro dia",
+            "que guardaste",
+            "que sabes de",
+            "que recuerdas",
         ];
         keywords.iter().any(|kw| lower.contains(kw))
     }
@@ -1201,8 +1214,17 @@ Herramientas:
                 for query in &recall_queries {
                     if let Ok(results) = mem.search_entries(query, 3, None).await {
                         for r in &results {
-                            context_block
-                                .push_str(&format!("- [{}] {}\n", r.entry.kind, r.entry.entry_id));
+                            let snippet = if r.entry.content.len() > 300 {
+                                format!("{}...", &r.entry.content[..300])
+                            } else {
+                                r.entry.content.clone()
+                            };
+                            context_block.push_str(&format!(
+                                "- [{}] ({}): {}\n",
+                                r.entry.kind,
+                                r.entry.created_at.format("%Y-%m-%d %H:%M"),
+                                snippet
+                            ));
                         }
                     }
                 }
@@ -1829,7 +1851,19 @@ Herramientas:
                     } else {
                         let formatted: Vec<String> = results
                             .iter()
-                            .map(|r| format!("- [{}] {}", r.entry.kind, r.entry.entry_id))
+                            .map(|r| {
+                                let snippet = if r.entry.content.len() > 500 {
+                                    format!("{}...", &r.entry.content[..500])
+                                } else {
+                                    r.entry.content.clone()
+                                };
+                                format!(
+                                    "- [{}] ({}): {}",
+                                    r.entry.kind,
+                                    r.entry.created_at.format("%Y-%m-%d %H:%M"),
+                                    snippet
+                                )
+                            })
                             .collect();
                         Ok(format!("Recuerdos encontrados:\n{}", formatted.join("\n")))
                     }
