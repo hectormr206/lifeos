@@ -1104,15 +1104,44 @@ Herramientas:
             }
         }
 
+        // AQ.7 — Detect frustration from recent messages and achievements
+        let emotional_hint = {
+            let history_msgs = ctx.history.get(chat_id).await;
+            let recent_user: Vec<&str> = history_msgs
+                .iter()
+                .filter(|m| m.role == "user")
+                .rev()
+                .take(5)
+                .filter_map(|m| m.content.as_str())
+                .collect();
+            let frustration = crate::user_model::detect_frustration(&recent_user);
+            let hint = crate::user_model::emotional_prompt_hint(&frustration);
+            let achievement = crate::user_model::detect_achievement(user_text);
+            let mut combined = String::new();
+            if !hint.is_empty() {
+                combined.push_str(hint);
+                combined.push('\n');
+            }
+            if let Some(celebration) = achievement {
+                combined.push_str(&celebration);
+                combined.push('\n');
+            }
+            combined
+        };
+
         // Build messages starting with system prompt (fresh time context each call)
         let user_model_snapshot = if let Some(ref um) = ctx.user_model {
             Some(um.read().await.clone())
         } else {
             None
         };
+        let mut system_prompt = build_system_prompt(user_model_snapshot.as_ref());
+        if !emotional_hint.is_empty() {
+            system_prompt.push_str(&format!("\n[Estado emocional]\n{}", emotional_hint));
+        }
         let mut messages = vec![ChatMessage {
             role: "system".into(),
-            content: serde_json::Value::String(build_system_prompt(user_model_snapshot.as_ref())),
+            content: serde_json::Value::String(system_prompt),
         }];
 
         // Inject conversation history for multi-turn context

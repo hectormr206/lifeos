@@ -4,9 +4,10 @@
 //! preferred response format, and current context. Auto-updated every 30min.
 
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use log::info;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -165,6 +166,212 @@ pub fn detect_preference_feedback(text: &str) -> Option<(String, String)> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// AQ.7 — Emotional Intelligence
+// ---------------------------------------------------------------------------
+
+/// Frustration level detected from recent user messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FrustrationLevel {
+    None,
+    Mild,
+    Frustrated,
+    VeryFrustrated,
+}
+
+/// Error-like keywords (Spanish + English) that signal frustration.
+const FRUSTRATION_KEYWORDS: &[&str] = &[
+    "no funciona",
+    "error",
+    "fallo",
+    "again",
+    "otra vez",
+    "por que no",
+];
+
+/// Analyse a window of recent messages and return a frustration level.
+pub fn detect_frustration(messages: &[&str]) -> FrustrationLevel {
+    if messages.is_empty() {
+        return FrustrationLevel::None;
+    }
+
+    let mut score: u32 = 0;
+
+    // 1. Count error-like keywords across all messages.
+    for msg in messages {
+        let lower = msg.to_lowercase();
+        for kw in FRUSTRATION_KEYWORDS {
+            if lower.contains(kw) {
+                score += 1;
+            }
+        }
+    }
+
+    // 2. Short angry messages (< 10 chars with "!" or "??" or ALL CAPS).
+    for msg in messages {
+        let trimmed = msg.trim();
+        if trimmed.len() < 10 {
+            if trimmed.contains('!') || trimmed.contains("??") {
+                score += 1;
+            }
+            // All caps check (only for alphabetical content >= 2 chars).
+            let alpha: String = trimmed.chars().filter(|c| c.is_alphabetic()).collect();
+            if alpha.len() >= 2 && alpha == alpha.to_uppercase() {
+                score += 1;
+            }
+        }
+    }
+
+    // 3. Retry patterns — same message sent 2+ times.
+    let mut freq: HashMap<String, usize> = HashMap::new();
+    for msg in messages {
+        let key = msg.trim().to_lowercase();
+        *freq.entry(key).or_insert(0) += 1;
+    }
+    for count in freq.values() {
+        if *count >= 2 {
+            score += (*count as u32) - 1;
+        }
+    }
+
+    match score {
+        0 => FrustrationLevel::None,
+        1 => FrustrationLevel::Mild,
+        2..=3 => FrustrationLevel::Frustrated,
+        _ => FrustrationLevel::VeryFrustrated,
+    }
+}
+
+/// Success-signal keywords (Spanish + English).
+const ACHIEVEMENT_KEYWORDS: &[&str] = &[
+    "funciono",
+    "listo",
+    "perfecto",
+    "genial",
+    "excelente",
+    "ya quedo",
+    "done",
+    "works",
+    "fixed",
+];
+
+/// Detect an achievement / success signal and return a celebration prompt hint.
+pub fn detect_achievement(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    for kw in ACHIEVEMENT_KEYWORDS {
+        if lower.contains(kw) {
+            return Some(format!(
+                "El usuario logro algo (\"{}\" detectado). Celebra brevemente y refuerza el logro.",
+                kw
+            ));
+        }
+    }
+    None
+}
+
+/// Return a prompt hint appropriate for the given frustration level.
+pub fn emotional_prompt_hint(frustration: &FrustrationLevel) -> &str {
+    match frustration {
+        FrustrationLevel::None => "",
+        FrustrationLevel::Mild => {
+            "El usuario puede estar un poco frustrado. Se paciente y ofrece alternativas."
+        }
+        FrustrationLevel::Frustrated => {
+            "El usuario esta frustrado. Se empatico, ofrece ayuda directa, y evita explicaciones largas."
+        }
+        FrustrationLevel::VeryFrustrated => {
+            "El usuario esta muy frustrado. Responde con calma, ofrece solucion inmediata, y pregunta si quiere que investigues."
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AQ.3 — Proactive Suggestions
+// ---------------------------------------------------------------------------
+
+/// Maximum suggestions that should be shown per hour (rate-limit constant).
+pub const MAX_SUGGESTIONS_PER_HOUR: usize = 3;
+
+/// Types of proactive suggestions the system can generate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SuggestionType {
+    MorningBriefing,
+    BreakReminder,
+    TaskNudge,
+    EndOfDaySummary,
+}
+
+/// A proactive suggestion generated from the user model + context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProactiveSuggestion {
+    pub suggestion_type: SuggestionType,
+    pub message: String,
+    pub priority: u8,
+}
+
+/// Generate proactive suggestions based on the user model, current hour, and
+/// number of pending tasks. Results are capped at [`MAX_SUGGESTIONS_PER_HOUR`].
+pub fn generate_suggestions(
+    model: &UserModel,
+    hour: u8,
+    pending_tasks: usize,
+) -> Vec<ProactiveSuggestion> {
+    let mut suggestions: Vec<ProactiveSuggestion> = Vec::new();
+
+    // Morning briefing (7-9 AM) — only if we have schedule patterns for today.
+    if (7..=9).contains(&hour) {
+        let today = chrono::Local::now().weekday().num_days_from_sunday() as u8;
+        let has_schedule = model
+            .schedule_patterns
+            .iter()
+            .any(|p| p.day_of_week == today);
+        if has_schedule {
+            suggestions.push(ProactiveSuggestion {
+                suggestion_type: SuggestionType::MorningBriefing,
+                message: "Buenos dias. Tienes actividades programadas hoy. Quieres un resumen?"
+                    .into(),
+                priority: 2,
+            });
+        }
+    }
+
+    // Break reminder — every 2 hours after 10 AM (10, 12, 14, 16, 18, 20).
+    if hour > 10 && hour % 2 == 0 {
+        suggestions.push(ProactiveSuggestion {
+            suggestion_type: SuggestionType::BreakReminder,
+            message: "Llevas un rato trabajando. Considera tomar un descanso de 5 minutos.".into(),
+            priority: 1,
+        });
+    }
+
+    // Task nudge when there are pending tasks.
+    if pending_tasks > 0 {
+        suggestions.push(ProactiveSuggestion {
+            suggestion_type: SuggestionType::TaskNudge,
+            message: format!(
+                "Tienes {} tarea(s) pendiente(s). Quieres que te ayude con alguna?",
+                pending_tasks
+            ),
+            priority: 3,
+        });
+    }
+
+    // End of day summary (17-19 PM).
+    if (17..=19).contains(&hour) {
+        suggestions.push(ProactiveSuggestion {
+            suggestion_type: SuggestionType::EndOfDaySummary,
+            message: "Se acerca el final del dia. Quieres un resumen de lo que lograste hoy?"
+                .into(),
+            priority: 2,
+        });
+    }
+
+    // Rate-limit to MAX_SUGGESTIONS_PER_HOUR, keeping highest priority first.
+    suggestions.sort_by(|a, b| b.priority.cmp(&a.priority));
+    suggestions.truncate(MAX_SUGGESTIONS_PER_HOUR);
+    suggestions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +473,168 @@ mod tests {
         assert_eq!(loaded.active_projects, vec!["TestProject".to_string()]);
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // AQ.7 — Emotional Intelligence tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_frustration_none() {
+        let msgs: Vec<&str> = vec!["hola", "como estas", "todo bien"];
+        assert_eq!(detect_frustration(&msgs), FrustrationLevel::None);
+        assert_eq!(detect_frustration(&[]), FrustrationLevel::None);
+    }
+
+    #[test]
+    fn test_frustration_mild() {
+        // Single error keyword → score 1 → Mild
+        let msgs = vec!["no funciona el wifi"];
+        assert_eq!(detect_frustration(&msgs), FrustrationLevel::Mild);
+    }
+
+    #[test]
+    fn test_frustration_frustrated() {
+        // Two keywords → score 2 → Frustrated
+        let msgs = vec!["no funciona", "error de nuevo"];
+        assert_eq!(detect_frustration(&msgs), FrustrationLevel::Frustrated);
+    }
+
+    #[test]
+    fn test_frustration_very_frustrated() {
+        // Many signals: keywords + retry + short angry
+        let msgs = vec![
+            "no funciona",
+            "no funciona",
+            "error",
+            "POR QUE!",
+            "otra vez",
+        ];
+        assert_eq!(detect_frustration(&msgs), FrustrationLevel::VeryFrustrated);
+    }
+
+    #[test]
+    fn test_frustration_short_angry_message() {
+        // Short message with "!" → score 1
+        let msgs = vec!["NO!!"];
+        assert_eq!(detect_frustration(&msgs), FrustrationLevel::Frustrated);
+        // "NO!!" is < 10 chars, has "!", and is all caps → 2 points
+    }
+
+    #[test]
+    fn test_frustration_retry_pattern() {
+        // Same message 3 times → 2 extra points from retry
+        let msgs = vec!["ayuda", "ayuda", "ayuda"];
+        assert_eq!(detect_frustration(&msgs), FrustrationLevel::Frustrated);
+    }
+
+    #[test]
+    fn test_detect_achievement_found() {
+        assert!(detect_achievement("ya funciono!").is_some());
+        assert!(detect_achievement("Listo, ya quedo").is_some());
+        assert!(detect_achievement("it works now").is_some());
+        assert!(detect_achievement("fixed the bug").is_some());
+        assert!(detect_achievement("perfecto gracias").is_some());
+    }
+
+    #[test]
+    fn test_detect_achievement_none() {
+        assert!(detect_achievement("hola que tal").is_none());
+        assert!(detect_achievement("necesito ayuda").is_none());
+    }
+
+    #[test]
+    fn test_emotional_prompt_hint_all_levels() {
+        assert_eq!(emotional_prompt_hint(&FrustrationLevel::None), "");
+        assert!(emotional_prompt_hint(&FrustrationLevel::Mild).contains("paciente"));
+        assert!(emotional_prompt_hint(&FrustrationLevel::Frustrated).contains("empatico"));
+        assert!(emotional_prompt_hint(&FrustrationLevel::VeryFrustrated).contains("calma"));
+    }
+
+    // -----------------------------------------------------------------------
+    // AQ.3 — Proactive Suggestions tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_max_suggestions_constant() {
+        assert_eq!(MAX_SUGGESTIONS_PER_HOUR, 3);
+    }
+
+    #[test]
+    fn test_suggestions_task_nudge() {
+        let model = UserModel::default();
+        // At noon with 5 pending tasks → should include TaskNudge
+        let suggestions = generate_suggestions(&model, 12, 5);
+        assert!(suggestions
+            .iter()
+            .any(|s| s.suggestion_type == SuggestionType::TaskNudge));
+    }
+
+    #[test]
+    fn test_suggestions_break_reminder() {
+        let model = UserModel::default();
+        // Hour 14 (even, > 10) with no tasks → should get BreakReminder
+        let suggestions = generate_suggestions(&model, 14, 0);
+        assert!(suggestions
+            .iter()
+            .any(|s| s.suggestion_type == SuggestionType::BreakReminder));
+    }
+
+    #[test]
+    fn test_suggestions_end_of_day() {
+        let model = UserModel::default();
+        let suggestions = generate_suggestions(&model, 18, 0);
+        assert!(suggestions
+            .iter()
+            .any(|s| s.suggestion_type == SuggestionType::EndOfDaySummary));
+    }
+
+    #[test]
+    fn test_suggestions_morning_briefing_with_schedule() {
+        let today = chrono::Local::now().weekday().num_days_from_sunday() as u8;
+        let mut model = UserModel::default();
+        model.schedule_patterns.push(SchedulePattern {
+            day_of_week: today,
+            hour_range: (9, 17),
+            typical_activity: "work".into(),
+            confidence: 0.9,
+        });
+        let suggestions = generate_suggestions(&model, 8, 0);
+        assert!(suggestions
+            .iter()
+            .any(|s| s.suggestion_type == SuggestionType::MorningBriefing));
+    }
+
+    #[test]
+    fn test_suggestions_morning_no_schedule() {
+        let model = UserModel::default(); // no schedule_patterns
+        let suggestions = generate_suggestions(&model, 8, 0);
+        assert!(!suggestions
+            .iter()
+            .any(|s| s.suggestion_type == SuggestionType::MorningBriefing));
+    }
+
+    #[test]
+    fn test_suggestions_capped_at_max() {
+        let today = chrono::Local::now().weekday().num_days_from_sunday() as u8;
+        let mut model = UserModel::default();
+        model.schedule_patterns.push(SchedulePattern {
+            day_of_week: today,
+            hour_range: (9, 17),
+            typical_activity: "work".into(),
+            confidence: 0.9,
+        });
+        // hour=8 (morning briefing) + pending_tasks > 0 (task nudge)
+        // Even if more were generated, never exceed MAX_SUGGESTIONS_PER_HOUR
+        let suggestions = generate_suggestions(&model, 8, 10);
+        assert!(suggestions.len() <= MAX_SUGGESTIONS_PER_HOUR);
+    }
+
+    #[test]
+    fn test_suggestions_empty_at_odd_hour_no_tasks() {
+        let model = UserModel::default();
+        // Hour 3 AM, no tasks, no schedule → nothing
+        let suggestions = generate_suggestions(&model, 3, 0);
+        assert!(suggestions.is_empty());
     }
 }

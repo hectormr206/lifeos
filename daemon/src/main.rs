@@ -8,6 +8,7 @@
 //! - D-Bus interface for system integration
 //! - REST API for mobile companion app
 
+use chrono::Timelike;
 use log::{debug, error, info, warn};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -1021,6 +1022,27 @@ async fn main() -> anyhow::Result<()> {
                         message: alert.message.clone(),
                     });
             }
+            // AQ.3 — Proactive personalization suggestions
+            {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+                let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+                let model = crate::user_model::UserModel::load_from_dir(&data_dir).await;
+                let hour = chrono::Local::now().hour() as u8;
+                let pending = proactive_state
+                    .task_queue
+                    .list(Some(crate::task_queue::TaskStatus::Pending), 100)
+                    .unwrap_or_default()
+                    .len();
+                let suggestions = crate::user_model::generate_suggestions(&model, hour, pending);
+                for s in &suggestions {
+                    let _ = proactive_state
+                        .event_bus
+                        .send(events::DaemonEvent::Notification {
+                            priority: "info".into(),
+                            message: s.message.clone(),
+                        });
+                }
+            }
         }
     });
 
@@ -1828,6 +1850,13 @@ async fn start_api_server(state: Arc<DaemonState>) {
         game_guard: state.game_guard.clone(),
         wake_word_detector: state.wake_word_detector.clone(),
         skill_registry: skill_generator::SkillRegistry::from_defaults(),
+        user_model: {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+            let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+            Arc::new(RwLock::new(
+                user_model::UserModel::load_from_dir(&data_dir).await,
+            ))
+        },
     };
 
     // Perform initial skill registry load and start file watcher

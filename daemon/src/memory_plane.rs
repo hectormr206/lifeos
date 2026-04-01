@@ -1547,6 +1547,363 @@ impl MemoryPlaneManager {
         })
         .await?
     }
+
+    /// Delete garbage entries: very short ciphertext (proxy for <10 char plaintext)
+    /// and entries tagged/sourced as "filler".
+    pub async fn filter_garbage(&self) -> Result<usize> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let tx = db.unchecked_transaction()?;
+
+            // ciphertext_b64 < 30 chars is a proxy for plaintext < 10 chars
+            let deleted_short = tx.execute(
+                "DELETE FROM memory_entries WHERE length(ciphertext_b64) < 30",
+                [],
+            )?;
+
+            let deleted_filler = tx.execute(
+                "DELETE FROM memory_entries WHERE tags = '\"filler\"' OR tags = '[\"filler\"]' OR source = 'filler'",
+                [],
+            )?;
+
+            // Clean orphaned embeddings
+            tx.execute_batch(
+                "DELETE FROM memory_embeddings WHERE entry_id NOT IN (SELECT entry_id FROM memory_entries);",
+            )?;
+
+            tx.commit()?;
+            Ok(deleted_short + deleted_filler)
+        })
+        .await?
+    }
+
+    /// Apply exponential decay to importance of infrequently accessed entries.
+    ///
+    /// For entries with access_count < 2 and importance > 10:
+    ///   new_importance = importance * 0.85^(days_since_update / 30)
+    /// Skips entries marked as permanent (if the column exists).
+    pub async fn apply_exponential_decay(&self) -> Result<usize> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+
+            // Check if the permanent column exists
+            let has_permanent: bool = db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('memory_entries') WHERE name = 'permanent'",
+                )
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false);
+
+            let permanent_filter = if has_permanent {
+                "AND (permanent IS NULL OR permanent != 1)"
+            } else {
+                ""
+            };
+
+            let query = format!(
+                "UPDATE memory_entries SET importance = CAST(
+                    importance * power(0.85, (julianday('now') - julianday(updated_at)) / 30.0)
+                 AS INTEGER)
+                 WHERE access_count < 2
+                   AND importance > 10
+                   AND CAST(
+                       importance * power(0.85, (julianday('now') - julianday(updated_at)) / 30.0)
+                   AS INTEGER) < importance
+                   {}",
+                permanent_filter
+            );
+
+            let updated = db.execute(&query, [])?;
+            Ok(updated)
+        })
+        .await?
+    }
+
+    /// Mark a memory entry as permanent (exempt from decay and garbage collection).
+    pub async fn mark_permanent(&self, entry_id: &str) -> Result<()> {
+        let entry_id = normalize_non_empty(entry_id).context("entry_id is required")?;
+        let db_path = self.db_path.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+
+            // Ensure the permanent column exists (idempotent)
+            let has_permanent: bool = db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('memory_entries') WHERE name = 'permanent'",
+                )
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false);
+
+            if !has_permanent {
+                db.execute_batch(
+                    "ALTER TABLE memory_entries ADD COLUMN permanent INTEGER DEFAULT 0;",
+                )?;
+            }
+
+            db.execute(
+                "UPDATE memory_entries SET permanent = 1 WHERE entry_id = ?1",
+                params![entry_id],
+            )?;
+
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Deduplicate entries with very similar embeddings (cosine similarity > threshold).
+    ///
+    /// Keeps the entry with higher importance; deletes the other.
+    /// Returns the number of entries deleted.
+    pub async fn dedup_similar(&self, similarity_threshold: f64) -> Result<usize> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let distance_threshold = 1.0 - similarity_threshold;
+
+            // Find pairs that are too similar
+            let mut stmt = db.prepare(
+                "SELECT a.entry_id, b.entry_id, vec_distance_cosine(a.embedding, b.embedding) as dist
+                 FROM memory_embeddings a, memory_embeddings b
+                 WHERE a.entry_id < b.entry_id AND dist < ?1",
+            )?;
+
+            let pairs: Vec<(String, String)> = stmt
+                .query_map(params![distance_threshold], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
+            let mut deleted_ids: HashSet<String> = HashSet::new();
+            let tx = db.unchecked_transaction()?;
+
+            for (id_a, id_b) in &pairs {
+                if deleted_ids.contains(id_a) || deleted_ids.contains(id_b) {
+                    continue;
+                }
+
+                // Compare importance to decide which to keep
+                let imp_a: i32 = tx
+                    .query_row(
+                        "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                        params![id_a],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                let imp_b: i32 = tx
+                    .query_row(
+                        "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                        params![id_b],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+
+                let to_delete = if imp_a >= imp_b { id_b } else { id_a };
+
+                tx.execute(
+                    "DELETE FROM memory_entries WHERE entry_id = ?1",
+                    params![to_delete],
+                )?;
+                tx.execute(
+                    "DELETE FROM memory_embeddings WHERE entry_id = ?1",
+                    params![to_delete],
+                )?;
+
+                deleted_ids.insert(to_delete.clone());
+            }
+
+            tx.commit()?;
+            Ok(deleted_ids.len())
+        })
+        .await?
+    }
+
+    /// Return memory health statistics as a JSON object.
+    pub async fn health_stats(&self) -> Result<serde_json::Value> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+
+            let total_entries: i32 =
+                db.query_row("SELECT COUNT(*) FROM memory_entries", [], |r| r.get(0))?;
+
+            let total_procedures: i32 = db
+                .query_row("SELECT COUNT(*) FROM procedural_memory", [], |r| r.get(0))
+                .unwrap_or(0);
+
+            let total_kg_triples: i32 = db
+                .query_row("SELECT COUNT(*) FROM knowledge_graph", [], |r| r.get(0))
+                .unwrap_or(0);
+
+            let avg_importance: f64 = db
+                .query_row(
+                    "SELECT COALESCE(AVG(importance), 0.0) FROM memory_entries",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0.0);
+
+            // Entries grouped by kind
+            let mut entries_by_kind = serde_json::Map::new();
+            {
+                let mut stmt =
+                    db.prepare("SELECT kind, COUNT(*) FROM memory_entries GROUP BY kind")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?))
+                })?;
+                for row in rows.flatten() {
+                    entries_by_kind.insert(row.0, serde_json::Value::from(row.1));
+                }
+            }
+
+            let oldest_entry: Option<String> = db
+                .query_row("SELECT MIN(created_at) FROM memory_entries", [], |r| {
+                    r.get(0)
+                })
+                .unwrap_or(None);
+
+            let newest_entry: Option<String> = db
+                .query_row("SELECT MAX(created_at) FROM memory_entries", [], |r| {
+                    r.get(0)
+                })
+                .unwrap_or(None);
+
+            // Permanent count (column may not exist)
+            let permanent_count: i32 = db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('memory_entries') WHERE name = 'permanent'",
+                )
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false)
+                .then(|| {
+                    db.query_row(
+                        "SELECT COUNT(*) FROM memory_entries WHERE permanent = 1",
+                        [],
+                        |r| r.get::<_, i32>(0),
+                    )
+                    .unwrap_or(0)
+                })
+                .unwrap_or(0);
+
+            Ok(serde_json::json!({
+                "total_entries": total_entries,
+                "total_procedures": total_procedures,
+                "total_kg_triples": total_kg_triples,
+                "avg_importance": avg_importance,
+                "entries_by_kind": entries_by_kind,
+                "oldest_entry": oldest_entry,
+                "newest_entry": newest_entry,
+                "permanent_count": permanent_count,
+            }))
+        })
+        .await?
+    }
+
+    /// Export all memory data as JSON without decrypting content.
+    pub async fn export_json(&self) -> Result<serde_json::Value> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+
+            // Export memory_entries (metadata only, no decryption)
+            let mut entries = Vec::new();
+            {
+                let mut stmt = db.prepare(
+                    "SELECT entry_id, kind, scope, tags, importance, created_at, access_count
+                     FROM memory_entries ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "entry_id": row.get::<_, String>(0)?,
+                        "kind": row.get::<_, String>(1)?,
+                        "scope": row.get::<_, String>(2)?,
+                        "tags": row.get::<_, String>(3)?,
+                        "importance": row.get::<_, i32>(4)?,
+                        "created_at": row.get::<_, String>(5)?,
+                        "access_count": row.get::<_, i32>(6)?,
+                    }))
+                })?;
+                for row in rows.flatten() {
+                    entries.push(row);
+                }
+            }
+
+            // Export knowledge_graph triples
+            let mut triples = Vec::new();
+            {
+                let mut stmt = db.prepare(
+                    "SELECT subject, predicate, object, confidence, source_entry_id, created_at
+                     FROM knowledge_graph ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "subject": row.get::<_, String>(0)?,
+                        "predicate": row.get::<_, String>(1)?,
+                        "object": row.get::<_, String>(2)?,
+                        "confidence": row.get::<_, f64>(3)?,
+                        "source_entry_id": row.get::<_, Option<String>>(4)?,
+                        "created_at": row.get::<_, String>(5)?,
+                    }))
+                })?;
+                for row in rows.flatten() {
+                    triples.push(row);
+                }
+            }
+
+            // Export procedural_memory
+            let mut procedures = Vec::new();
+            {
+                let mut stmt = db.prepare(
+                    "SELECT proc_id, name, description, steps, trigger_pattern, times_used, created_at
+                     FROM procedural_memory ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "proc_id": row.get::<_, String>(0)?,
+                        "name": row.get::<_, String>(1)?,
+                        "description": row.get::<_, String>(2)?,
+                        "steps": row.get::<_, String>(3)?,
+                        "trigger_pattern": row.get::<_, Option<String>>(4)?,
+                        "times_used": row.get::<_, i32>(5)?,
+                        "created_at": row.get::<_, String>(6)?,
+                    }))
+                })?;
+                for row in rows.flatten() {
+                    procedures.push(row);
+                }
+            }
+
+            Ok(serde_json::json!({
+                "memory_entries": entries,
+                "knowledge_graph": triples,
+                "procedural_memory": procedures,
+            }))
+        })
+        .await?
+    }
+
+    /// Delete all user data (right to be forgotten).
+    pub async fn delete_all_data(&self) -> Result<()> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+
+            db.execute_batch(
+                "DELETE FROM memory_entries;
+                 DELETE FROM memory_embeddings;
+                 DELETE FROM knowledge_graph;
+                 DELETE FROM procedural_memory;
+                 DELETE FROM memory_links;
+                 VACUUM;",
+            )?;
+
+            Ok(())
+        })
+        .await?
+    }
 }
 
 fn normalize_non_empty(input: &str) -> Option<String> {
@@ -2091,6 +2448,145 @@ mod tests {
         assert_eq!(*stats.by_kind.get("task").unwrap_or(&0), 1);
         assert_eq!(*stats.by_scope.get("user").unwrap_or(&0), 2);
         assert_eq!(*stats.by_scope.get("system").unwrap_or(&0), 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn filter_garbage_removes_filler_entries() {
+        let dir = temp_dir("memory-plane-garbage");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Add a normal entry
+        mgr.add_entry(
+            "note",
+            "user",
+            &[],
+            None,
+            50,
+            "This is a perfectly valid memory entry for testing.",
+        )
+        .await
+        .unwrap();
+
+        // Add a filler-tagged entry
+        mgr.add_entry(
+            "note",
+            "user",
+            &["filler".to_string()],
+            None,
+            10,
+            "This filler entry should be deleted by garbage filter.",
+        )
+        .await
+        .unwrap();
+
+        // Add a filler-sourced entry
+        mgr.add_entry(
+            "note",
+            "user",
+            &[],
+            Some("filler"),
+            10,
+            "Another filler entry sourced as filler content here.",
+        )
+        .await
+        .unwrap();
+
+        let entries_before = mgr.list_entries(100, None, None).await.unwrap();
+        assert_eq!(entries_before.len(), 3);
+
+        let deleted = mgr.filter_garbage().await.unwrap();
+        assert!(
+            deleted >= 2,
+            "Expected at least 2 filler entries deleted, got {}",
+            deleted
+        );
+
+        let entries_after = mgr.list_entries(100, None, None).await.unwrap();
+        assert_eq!(entries_after.len(), 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn mark_permanent_sets_flag() {
+        let dir = temp_dir("memory-plane-permanent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let entry = mgr
+            .add_entry(
+                "note",
+                "user",
+                &[],
+                None,
+                80,
+                "This entry should be marked permanent.",
+            )
+            .await
+            .unwrap();
+
+        mgr.mark_permanent(&entry.entry_id).await.unwrap();
+
+        // Verify via direct DB query
+        let db_path = dir.join(DB_FILE);
+        let db = Connection::open(&db_path).unwrap();
+        let permanent: i32 = db
+            .query_row(
+                "SELECT permanent FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(permanent, 1);
+
+        // Calling mark_permanent again should be idempotent
+        mgr.mark_permanent(&entry.entry_id).await.unwrap();
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn health_stats_returns_expected_fields() {
+        let dir = temp_dir("memory-plane-health");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_entry(
+            "note",
+            "user",
+            &[],
+            None,
+            60,
+            "Health stats test entry one.",
+        )
+        .await
+        .unwrap();
+        mgr.add_entry(
+            "task",
+            "user",
+            &[],
+            None,
+            80,
+            "Health stats test entry two.",
+        )
+        .await
+        .unwrap();
+
+        let stats = mgr.health_stats().await.unwrap();
+
+        assert_eq!(stats["total_entries"].as_i64().unwrap(), 2);
+        assert_eq!(stats["total_procedures"].as_i64().unwrap(), 0);
+        assert_eq!(stats["total_kg_triples"].as_i64().unwrap(), 0);
+        assert!(stats["avg_importance"].as_f64().unwrap() > 0.0);
+        assert!(stats["entries_by_kind"].is_object());
+        assert_eq!(stats["entries_by_kind"]["note"].as_i64().unwrap(), 1);
+        assert_eq!(stats["entries_by_kind"]["task"].as_i64().unwrap(), 1);
+        assert!(stats["oldest_entry"].is_string());
+        assert!(stats["newest_entry"].is_string());
+        assert_eq!(stats["permanent_count"].as_i64().unwrap(), 0);
 
         std::fs::remove_dir_all(dir).ok();
     }

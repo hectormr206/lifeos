@@ -17,7 +17,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         Json, Response,
     },
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use log::error;
@@ -54,6 +54,7 @@ use crate::sensory_pipeline::{
 use crate::skill_generator::SkillRegistry;
 use crate::system::SystemMonitor;
 use crate::update_scheduler::UpdateScheduler;
+use crate::user_model::UserModel;
 use crate::visual_comfort::{ComfortProfile, VisualComfortManager};
 use std::path::PathBuf;
 
@@ -178,6 +179,7 @@ pub struct ApiState {
     pub game_guard: Option<Arc<RwLock<crate::game_guard::GameGuard>>>,
     pub wake_word_detector: Option<Arc<crate::wake_word::WakeWordDetector>>,
     pub skill_registry: SkillRegistry,
+    pub user_model: Arc<RwLock<UserModel>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1501,6 +1503,12 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/reliability/recent", get(get_reliability_recent))
         // Audit events query endpoint
         .route("/audit/events", get(get_audit_events))
+        // AQ.9 — Personalization API (user profile + memory management)
+        .route("/user/profile", get(get_user_profile))
+        .route("/user/preferences", patch(patch_user_preferences))
+        .route("/user/export", post(post_user_export))
+        .route("/user/forget", delete(delete_user_forget))
+        .route("/memory/health", get(get_memory_health))
         // Lab endpoints
         .nest("/lab", lab::lab_routes())
         .route_layer(middleware::from_fn_with_state(
@@ -10745,6 +10753,125 @@ async fn get_audit_events(
         "filter_type": event_type,
         "note": "Audit events available via `life audit` CLI. API query planned for future release."
     }))
+}
+
+// ==================== AQ.9 — Personalization API ====================
+
+/// GET /api/v1/user/profile — Returns the current UserModel as JSON.
+async fn get_user_profile(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let model = state.user_model.read().await;
+    Ok(Json(
+        serde_json::to_value(&*model).unwrap_or_else(|_| serde_json::json!({})),
+    ))
+}
+
+/// PATCH /api/v1/user/preferences — Apply a preference key/value pair.
+async fn patch_user_preferences(
+    State(state): State<ApiState>,
+    Json(payload): Json<PreferencePatchPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mut model = state.user_model.write().await;
+    model.apply_preference(&payload.key, &payload.value);
+
+    // Persist to disk
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+    let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+    if let Err(e) = model.save(&data_dir).await {
+        error!("[api] Failed to save user model: {}", e);
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "applied": { "key": payload.key, "value": payload.value },
+        "updated_at": model.updated_at,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct PreferencePatchPayload {
+    key: String,
+    value: String,
+}
+
+/// POST /api/v1/user/export — Export all memory plane data as JSON.
+async fn post_user_export(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let entries = mgr.list_entries(500, None, None).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )
+    })?;
+    let stats = mgr.stats().await;
+    let user_model = state.user_model.read().await;
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "export_date": chrono::Utc::now().to_rfc3339(),
+        "user_model": serde_json::to_value(&*user_model).unwrap_or_default(),
+        "memory_stats": serde_json::to_value(&stats).unwrap_or_default(),
+        "memory_entries_count": entries.len(),
+        "entries": serde_json::to_value(&entries).unwrap_or_default(),
+    })))
+}
+
+/// DELETE /api/v1/user/forget — Right to be forgotten: delete all user data.
+async fn delete_user_forget(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // 1. Reset the in-memory user model to defaults
+    {
+        let mut model = state.user_model.write().await;
+        *model = UserModel::default();
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+        if let Err(e) = model.save(&data_dir).await {
+            error!("[api] Failed to save reset user model: {}", e);
+        }
+    }
+
+    // 2. Delete all memory entries
+    let mgr = state.memory_plane_manager.read().await;
+    let entries = mgr.list_entries(500, None, None).await.unwrap_or_default();
+    let mut deleted_count = 0u64;
+    for entry in &entries {
+        if mgr.delete_entry(&entry.entry_id).await.unwrap_or(false) {
+            deleted_count += 1;
+        }
+    }
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "message": "All user data has been deleted (right to be forgotten)",
+        "user_model_reset": true,
+        "memory_entries_deleted": deleted_count,
+    })))
+}
+
+/// GET /api/v1/memory/health — Memory plane health statistics.
+async fn get_memory_health(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let stats = mgr.stats().await;
+    let consolidation = mgr
+        .consolidation_stats()
+        .await
+        .unwrap_or_else(|_| serde_json::json!({}));
+
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "memory_stats": serde_json::to_value(&stats).unwrap_or_default(),
+        "consolidation": consolidation,
+    })))
 }
 
 #[cfg(test)]
