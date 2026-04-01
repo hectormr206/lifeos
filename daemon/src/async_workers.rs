@@ -76,12 +76,9 @@ impl WorkerPool {
     }
 
     /// Emit a worker lifecycle event to the WebSocket event bus.
-    fn emit_worker_event(&self, message: String, priority: &str) {
+    fn emit_worker_event(&self, event: crate::events::DaemonEvent) {
         if let Some(ref bus) = self.event_bus {
-            let _ = bus.send(crate::events::DaemonEvent::Notification {
-                priority: priority.to_string(),
-                message,
-            });
+            let _ = bus.send(event);
         }
     }
 
@@ -111,39 +108,66 @@ impl WorkerPool {
             result: Arc::new(RwLock::new(None)),
         };
         self.workers.write().await.insert(task_id.clone(), info);
-        self.emit_worker_event(
-            format!("worker.started:{}:{}", task_id, desc_clone),
-            "debug",
-        );
+        self.emit_worker_event(crate::events::DaemonEvent::WorkerStarted {
+            id: task_id,
+            task: desc_clone,
+            started_at: Utc::now().to_rfc3339(),
+        });
     }
 
     /// Mark a worker as completed.
     pub async fn complete(&self, task_id: &str) {
-        if let Some(w) = self.workers.write().await.get_mut(task_id) {
-            w.status = WorkerStatus::Completed;
-        }
-        self.emit_worker_event(format!("worker.completed:{}", task_id), "debug");
+        let task_desc = {
+            let mut workers = self.workers.write().await;
+            if let Some(w) = workers.get_mut(task_id) {
+                w.status = WorkerStatus::Completed;
+                w.description.clone()
+            } else {
+                String::new()
+            }
+        };
+        self.emit_worker_event(crate::events::DaemonEvent::WorkerCompleted {
+            id: task_id.to_string(),
+            task: task_desc,
+            result: None,
+        });
     }
 
     /// Mark a worker as completed with a result (used by sub-workers to report back).
     pub async fn complete_with_result(&self, task_id: &str, result_text: String) {
-        if let Some(w) = self.workers.write().await.get_mut(task_id) {
-            w.status = WorkerStatus::Completed;
-            *w.result.write().await = Some(result_text);
-        }
-        self.emit_worker_event(format!("worker.completed:{}", task_id), "debug");
+        let task_desc = {
+            let mut workers = self.workers.write().await;
+            if let Some(w) = workers.get_mut(task_id) {
+                w.status = WorkerStatus::Completed;
+                *w.result.write().await = Some(result_text.clone());
+                w.description.clone()
+            } else {
+                String::new()
+            }
+        };
+        self.emit_worker_event(crate::events::DaemonEvent::WorkerCompleted {
+            id: task_id.to_string(),
+            task: task_desc,
+            result: Some(result_text),
+        });
     }
 
     /// Mark a worker as failed.
     pub async fn fail(&self, task_id: &str, error: String) {
-        let err_clone = error.clone();
-        if let Some(w) = self.workers.write().await.get_mut(task_id) {
-            w.status = WorkerStatus::Failed(error);
-        }
-        self.emit_worker_event(
-            format!("worker.failed:{}:{}", task_id, err_clone),
-            "warning",
-        );
+        let task_desc = {
+            let mut workers = self.workers.write().await;
+            if let Some(w) = workers.get_mut(task_id) {
+                w.status = WorkerStatus::Failed(error.clone());
+                w.description.clone()
+            } else {
+                String::new()
+            }
+        };
+        self.emit_worker_event(crate::events::DaemonEvent::WorkerFailed {
+            id: task_id.to_string(),
+            task: task_desc,
+            error,
+        });
     }
 
     /// Cancel an active worker by setting its cancellation flag.
@@ -153,8 +177,13 @@ impl WorkerPool {
             if w.status == WorkerStatus::Running {
                 w.cancelled.store(true, Ordering::SeqCst);
                 w.status = WorkerStatus::Cancelled;
+                let desc = w.description.clone();
                 drop(workers);
-                self.emit_worker_event(format!("worker.cancelled:{}", task_id), "info");
+                self.emit_worker_event(crate::events::DaemonEvent::WorkerFailed {
+                    id: task_id.to_string(),
+                    task: desc,
+                    error: "cancelled by user".to_string(),
+                });
                 return true;
             }
         }
@@ -235,13 +264,11 @@ impl WorkerPool {
             result: Arc::new(RwLock::new(None)),
         };
         self.workers.write().await.insert(sub_id.clone(), info);
-        self.emit_worker_event(
-            format!(
-                "worker.started:{}:sub-worker of {}:{}",
-                sub_id, parent_id, desc_clone
-            ),
-            "debug",
-        );
+        self.emit_worker_event(crate::events::DaemonEvent::WorkerStarted {
+            id: sub_id.clone(),
+            task: format!("sub-worker of {}: {}", parent_id, desc_clone),
+            started_at: Utc::now().to_rfc3339(),
+        });
 
         Some(sub_id)
     }

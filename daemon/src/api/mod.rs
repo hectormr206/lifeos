@@ -1497,6 +1497,8 @@ pub fn create_router(state: ApiState) -> Router {
         // Knowledge graph endpoints
         .route("/knowledge-graph/export", get(get_knowledge_graph_export))
         .route("/knowledge-graph/import", post(post_knowledge_graph_import))
+        // Reliability endpoints
+        .route("/reliability/recent", get(get_reliability_recent))
         // Audit events query endpoint
         .route("/audit/events", get(get_audit_events))
         // Lab endpoints
@@ -1864,7 +1866,7 @@ async fn get_safe_mode_status() -> Json<serde_json::Value> {
 }
 
 /// Exit safe mode manually and reset boot counter
-async fn post_exit_safe_mode() -> Json<serde_json::Value> {
+async fn post_exit_safe_mode(State(state): State<ApiState>) -> Json<serde_json::Value> {
     let was_active = crate::safe_mode::is_safe_mode();
     crate::safe_mode::exit_safe_mode();
     // Reset boot counter so next restart doesn't re-enter safe mode
@@ -1873,6 +1875,11 @@ async fn post_exit_safe_mode() -> Json<serde_json::Value> {
         .unwrap_or_else(|_| std::path::PathBuf::from("/var/lib/lifeos"));
     if let Err(e) = crate::safe_mode::reset_counter(&data_dir).await {
         log::warn!("Failed to reset boot counter: {}", e);
+    }
+    if was_active {
+        let _ = state
+            .event_bus
+            .send(crate::events::DaemonEvent::SafeModeExited);
     }
     Json(serde_json::json!({
         "was_active": was_active,
@@ -10656,31 +10663,76 @@ async fn get_skills_diagnostics(
 }
 
 async fn get_knowledge_graph_export() -> impl axum::response::IntoResponse {
-    Json(serde_json::json!({
-        "note": "Knowledge graph export via API is planned. Use Telegram `graph_query` tool for queries.",
-        "status": "not_yet_implemented"
-    }))
+    let data_dir = std::env::var("LIFEOS_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/var/lib/lifeos"))
+        .join("knowledge_graph");
+    let kg = crate::knowledge_graph::KnowledgeGraph::new(data_dir);
+    match kg.export_json() {
+        Ok(json_str) => {
+            // Return the raw JSON string as a JSON value so the caller gets structured data.
+            match serde_json::from_str::<serde_json::Value>(&json_str) {
+                Ok(val) => Json(val),
+                Err(_) => Json(serde_json::json!({ "raw": json_str })),
+            }
+        }
+        Err(e) => Json(serde_json::json!({ "error": e })),
+    }
 }
 
 async fn post_knowledge_graph_import(
     Json(body): Json<serde_json::Value>,
 ) -> impl axum::response::IntoResponse {
-    let entities = body
-        .get("entities")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let relations = body
-        .get("relations")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    Json(serde_json::json!({
-        "accepted": true,
-        "entities_received": entities,
-        "relations_received": relations,
-        "note": "Import is best-effort. Full merge planned for future release."
-    }))
+    let data_dir = std::env::var("LIFEOS_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/var/lib/lifeos"))
+        .join("knowledge_graph");
+    let mut kg = crate::knowledge_graph::KnowledgeGraph::new(data_dir);
+    let json_str = serde_json::to_string(&body).unwrap_or_default();
+    match kg.import_json(&json_str) {
+        Ok((entities_added, relations_added)) => Json(serde_json::json!({
+            "accepted": true,
+            "entities_imported": entities_added,
+            "relations_imported": relations_added,
+        })),
+        Err(e) => Json(serde_json::json!({
+            "accepted": false,
+            "error": e,
+        })),
+    }
+}
+
+async fn get_reliability_recent(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl axum::response::IntoResponse {
+    let limit: u32 = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50)
+        .min(200);
+
+    let db_path = std::path::PathBuf::from("/var/lib/lifeos/reliability.db");
+    match crate::reliability::ReliabilityTracker::new(db_path) {
+        Ok(tracker) => match tracker.recent_outcomes(limit) {
+            Ok(outcomes) => Json(serde_json::json!({
+                "count": outcomes.len(),
+                "limit": limit,
+                "outcomes": outcomes,
+            })),
+            Err(e) => Json(serde_json::json!({
+                "count": 0,
+                "limit": limit,
+                "outcomes": [],
+                "error": e,
+            })),
+        },
+        Err(e) => Json(serde_json::json!({
+            "count": 0,
+            "limit": limit,
+            "outcomes": [],
+            "error": format!("Cannot open reliability DB: {}", e),
+        })),
+    }
 }
 
 async fn get_audit_events(

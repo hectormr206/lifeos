@@ -814,6 +814,9 @@ async fn main() -> anyhow::Result<()> {
     // --- Safe mode notification ---
     if in_safe_mode {
         warn!("SAFE MODE ACTIVE — self-improvement and autonomous actions disabled");
+        let _ = state.event_bus.send(events::DaemonEvent::SafeModeEntered {
+            reason: "Crashes repetidos detectados al arrancar".into(),
+        });
         let _ = state.event_bus.send(events::DaemonEvent::Notification {
             priority: "warning".into(),
             message: "Axi entro en modo seguro tras crashes repetidos. Respondo mensajes pero no hare cambios autonomos. Di 'exit safe mode' cuando quieras.".into(),
@@ -1303,6 +1306,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let si_data_dir = data_dir.clone();
         let si_event_bus = state.event_bus.clone();
+        let si_circuit_breaker = state.circuit_breaker.clone();
         let _self_improving_handle = tokio::spawn(async move {
             let mut daemon = self_improving::SelfImprovingDaemon::new(si_data_dir);
             // Wait 10 minutes after boot before first tick
@@ -1312,6 +1316,10 @@ async fn main() -> anyhow::Result<()> {
                 interval.tick().await;
                 if safe_mode::is_safe_mode() {
                     debug!("[self_improving] Skipping tick — safe mode active");
+                    continue;
+                }
+                if !si_circuit_breaker.allow_modification().await {
+                    debug!("[self_improving] Skipping tick — circuit breaker open");
                     continue;
                 }
                 // Record each self-improvement tick as a workflow action
@@ -1363,6 +1371,70 @@ async fn main() -> anyhow::Result<()> {
             }
         });
         info!("Self-improvement loop started (Fase U, every 6h)");
+    }
+
+    // --- Skill learning from supervisor task completions (Fix O) ---
+    {
+        let wl_data_dir = data_dir.clone();
+        let mut wl_notify_rx = state.supervisor.subscribe();
+        let wl_event_bus = state.event_bus.clone();
+        tokio::spawn(async move {
+            let learner = self_improving::SelfImprovingDaemon::new(wl_data_dir);
+            loop {
+                match wl_notify_rx.recv().await {
+                    Ok(notification) => {
+                        match &notification {
+                            supervisor::SupervisorNotification::TaskCompleted {
+                                objective,
+                                result,
+                                ..
+                            } => {
+                                let action = format!(
+                                    "task_completed:{}",
+                                    &objective[..objective.len().min(80)]
+                                );
+                                let context =
+                                    format!("result={}", &result[..result.len().min(120)]);
+                                if let Err(e) = learner.record_action(&action, &context) {
+                                    warn!("[workflow_learner] Failed to record completion: {e}");
+                                }
+                                // Also emit typed event for dashboard (Fix AL)
+                                let _ = wl_event_bus.send(events::DaemonEvent::TaskCompleted {
+                                    task_id: String::new(),
+                                    objective: objective.clone(),
+                                    result: result.clone(),
+                                });
+                            }
+                            supervisor::SupervisorNotification::TaskFailed {
+                                objective,
+                                error,
+                                ..
+                            } => {
+                                let action = format!(
+                                    "task_failed:{}",
+                                    &objective[..objective.len().min(80)]
+                                );
+                                let context = format!("error={}", &error[..error.len().min(120)]);
+                                if let Err(e) = learner.record_action(&action, &context) {
+                                    warn!("[workflow_learner] Failed to record failure: {e}");
+                                }
+                                let _ = wl_event_bus.send(events::DaemonEvent::TaskFailed {
+                                    task_id: String::new(),
+                                    objective: objective.clone(),
+                                    error: error.clone(),
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!("[workflow_learner] Lagged {n} supervisor notifications");
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        info!("Workflow learner wired to supervisor task completions");
     }
 
     // --- Config file watcher: auto-reload llm-providers.toml on change (polling) ---
@@ -1839,6 +1911,20 @@ async fn run_health_checks(state: Arc<DaemonState>) {
 
         match state.health_monitor.check_all().await {
             Ok(report) => {
+                let status = if report.healthy {
+                    "ok"
+                } else {
+                    "issues_detected"
+                };
+                let issue_strings: Vec<String> =
+                    report.issues.iter().map(|i| format!("{:?}", i)).collect();
+
+                // Emit typed health_check event for the dashboard
+                let _ = state.event_bus.send(events::DaemonEvent::HealthCheck {
+                    status: status.to_string(),
+                    issues: issue_strings,
+                });
+
                 if !report.healthy {
                     warn!("Health check detected issues: {:?}", report.issues);
 

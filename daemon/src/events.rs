@@ -70,4 +70,47 @@ pub enum DaemonEvent {
         recording_path: Option<String>,
         duration_secs: u64,
     },
+    // -- Events consumed by the dashboard (Fix AL / AP) ----------------------
+    TaskCompleted {
+        task_id: String,
+        objective: String,
+        result: String,
+    },
+    TaskFailed {
+        task_id: String,
+        objective: String,
+        error: String,
+    },
+    SafeModeEntered {
+        reason: String,
+    },
+    SafeModeExited,
+    HealthCheck {
+        status: String,
+        issues: Vec<String>,
+    },
+    TelegramMessage {
+        text: String,
+        from: String,
+    },
+    WorkerStarted {
+        id: String,
+        task: String,
+        started_at: String,
+    },
+    WorkerProgress {
+        id: String,
+        progress: f32,
+        message: Option<String>,
+    },
+    WorkerCompleted {
+        id: String,
+        task: String,
+        result: Option<String>,
+    },
+    WorkerFailed {
+        id: String,
+        task: String,
+        error: String,
+    },
 }

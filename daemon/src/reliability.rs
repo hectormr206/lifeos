@@ -161,6 +161,49 @@ impl ReliabilityTracker {
         Ok(())
     }
 
+    /// Return the most recent `limit` task outcomes, newest first.
+    pub fn recent_outcomes(&self, limit: u32) -> Result<Vec<TaskOutcome>, String> {
+        let conn = self.db.lock().map_err(|e| format!("DB lock: {e}"))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT task_id, task_type, source, started_at, completed_at,
+                        success, error, retries, rollback_clean, steps_total, steps_completed
+                 FROM task_outcomes
+                 ORDER BY id DESC
+                 LIMIT ?1",
+            )
+            .map_err(|e| format!("Prepare error: {e}"))?;
+
+        let rows = stmt
+            .query_map(params![limit], |row| {
+                let started_str: String = row.get(3)?;
+                let completed_str: String = row.get(4)?;
+                let success_int: i32 = row.get(5)?;
+                let rollback_int: i32 = row.get(8)?;
+                Ok(TaskOutcome {
+                    task_id: row.get(0)?,
+                    task_type: row.get(1)?,
+                    source: row.get(2)?,
+                    started_at: DateTime::parse_from_rfc3339(&started_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    completed_at: DateTime::parse_from_rfc3339(&completed_str)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .unwrap_or_else(|_| Utc::now()),
+                    success: success_int != 0,
+                    error: row.get(6)?,
+                    retries: row.get(7)?,
+                    rollback_clean: rollback_int != 0,
+                    steps_total: row.get(9)?,
+                    steps_completed: row.get(10)?,
+                })
+            })
+            .map_err(|e| format!("Query error: {e}"))?;
+
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Row error: {e}"))
+    }
+
     /// Success percentage of the last `n` tasks (0.0..=1.0).
     pub fn success_rate_last_n(&self, n: u32) -> Result<f64, String> {
         let conn = self.db.lock().map_err(|e| format!("DB lock: {e}"))?;

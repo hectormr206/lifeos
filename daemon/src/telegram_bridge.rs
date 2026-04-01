@@ -162,6 +162,8 @@ mod inner {
         group_ids: Vec<i64>,
         /// Pairing store for /pair command (invite new users)
         pairing: PairingStore,
+        /// Event bus for dashboard notifications.
+        event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -177,11 +179,14 @@ mod inner {
     ) {
         info!("Starting Telegram bridge (natural language mode)...");
 
-        // Webhook transport: log if configured (full webhook requires HTTPS reverse proxy)
+        // NOTE(honesty): Webhook mode is NOT implemented. Setting LIFEOS_TELEGRAM_WEBHOOK_URL
+        // only logs the configured URL. The bot always uses long-polling via teloxide's
+        // Dispatcher. Webhook support would require an HTTPS reverse proxy (e.g. Caddy/nginx)
+        // plus `bot.set_webhook(url)` — which is not wired yet.
         if let Ok(webhook_url) = std::env::var("LIFEOS_TELEGRAM_WEBHOOK_URL") {
             if !webhook_url.is_empty() {
                 info!(
-                    "[telegram] Webhook URL configured: {} (not active yet — requires HTTPS reverse proxy. Using polling.)",
+                    "[telegram] Webhook URL configured: {} (NOT active — webhook mode is not implemented. Using long-polling.)",
                     webhook_url
                 );
             }
@@ -419,6 +424,7 @@ mod inner {
             group_policy,
             group_ids,
             pairing,
+            event_bus,
         };
 
         let message_handler =
@@ -652,6 +658,14 @@ mod inner {
         }
 
         info!("Telegram [{}]: {}", chat_id, &text[..text.len().min(100)]);
+
+        // Emit telegram_message event for dashboard feed
+        if let Some(ref bus) = ctx.event_bus {
+            let _ = bus.send(crate::events::DaemonEvent::TelegramMessage {
+                text: text[..text.len().min(200)].to_string(),
+                from: format!("{}", chat_id.0),
+            });
+        }
 
         // Legacy commands still work for backwards compatibility
         if text == "/help" || text == "/start" {
