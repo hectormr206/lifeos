@@ -20,6 +20,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fase-av-financiamiento.md](fase-av-financiamiento.md) | Fase AV: financiamiento y sostenibilidad (NLnet, grants, sponsors, monetizacion) | ~60 |
 | [fase-aw-cross-platform.md](fase-aw-cross-platform.md) | Fase AW: cross-platform controller (Windows, Mac, Android, iOS clients) | ~80 |
 | [fase-ax-auditoria-de-realidad.md](fase-ax-auditoria-de-realidad.md) | Fase AX: auditoria de realidad, verificacion por evidencia y cierre de claims rotos | ~140 |
+| [fase-ay-control-plane-os.md](fase-ay-control-plane-os.md) | Fase AY: OS Control Plane — 4-layer hierarchy (MCP > adapter > accessibility > vision) | ~280 |
 | [auditoria-estados-reales.md](auditoria-estados-reales.md) | Matriz viva de estados reales: que esta validado en host, que esta parcial y que esta solo en repo o feature-flag | ~110 |
 
 ## Estado de Fases (resumen rapido)
@@ -64,6 +65,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | **AX** | **Auditoria de realidad: seguir corrigiendo claims, fases y docs hasta que 100% vuelva a significar “funciona de verdad”** |
 | **AQ** | **Experiencias Personalizadas: User Model, adaptacion de tono, prediccion proactiva, contextos, workflows** |
 | **AU** | **Seguridad por Defecto: firewall, sysctl, SSH hardening, auditd, DNS seguro, USB guard** |
+| **AY** | **OS Control Plane: 20+ MCP tools para ventanas/apps/clipboard/sistema + politica de seleccion de capa (MCP > adapter > AT-SPI2 > vision)** |
 
 ### Fases de Investigacion (requieren mas research antes de implementar)
 
