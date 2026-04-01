@@ -1,9 +1,9 @@
 {
   "channel": "edge",
-  "version": "edge-20260401-50f88d0",
-  "tag": "edge-20260401-50f88d0",
-  "digest": "sha256:8f3f664c9de77b2a36c8cc308aadfa48b051b8e3f230b4847b1834307004bf3a",
-  "image": "ghcr.io/hectormr206/lifeos:edge-20260401-50f88d0",
-  "released_at": "2026-04-01T16:38:46Z",
-  "commit": "50f88d0650fdbf425be164f5bb438575c4bf77a0"
+  "version": "edge-20260401-35be00e",
+  "tag": "edge-20260401-35be00e",
+  "digest": "sha256:d1b223279d5ae926f776c254375b6b936de62ccbbd3b3abd7fe74c9db52fb54a",
+  "image": "ghcr.io/hectormr206/lifeos:edge-20260401-35be00e",
+  "released_at": "2026-04-01T17:53:18Z",
+  "commit": "35be00eca4feae625d06aee44490514b5b5da123"
 }
