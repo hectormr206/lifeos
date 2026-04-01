@@ -620,6 +620,78 @@ pub fn list_tools() -> Vec<McpTool> {
                 "required": ["output", "mode"]
             }),
         },
+        // ----- AT-SPI2 Accessibility Layer tools (AY.4) -----
+        McpTool {
+            name: "lifeos_a11y_tree".into(),
+            description: "Get the accessibility tree for an application (buttons, menus, text fields).".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "app": { "type": "string", "description": "Application name to inspect (e.g. 'firefox', 'nautilus')" },
+                    "depth": { "type": "integer", "description": "Max tree depth (default 3)" }
+                },
+                "required": ["app"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_a11y_find".into(),
+            description: "Find UI elements by role and/or name in an application's accessibility tree.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "app": { "type": "string", "description": "Application name" },
+                    "role": { "type": "string", "description": "Element role filter (e.g. 'push button', 'menu item', 'text')" },
+                    "name": { "type": "string", "description": "Element name filter (substring match)" }
+                },
+                "required": ["app"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_a11y_activate".into(),
+            description: "Activate (click/press) a UI element by its accessibility path.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "bus_name": { "type": "string", "description": "D-Bus bus name of the application" },
+                    "path": { "type": "string", "description": "D-Bus object path of the element" }
+                },
+                "required": ["bus_name", "path"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_a11y_get_text".into(),
+            description: "Read the text content of a UI element.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "bus_name": { "type": "string", "description": "D-Bus bus name" },
+                    "path": { "type": "string", "description": "D-Bus object path" }
+                },
+                "required": ["bus_name", "path"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_a11y_set_text".into(),
+            description: "Set the text content of an editable UI element.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "bus_name": { "type": "string", "description": "D-Bus bus name" },
+                    "path": { "type": "string", "description": "D-Bus object path" },
+                    "text": { "type": "string", "description": "Text to set" }
+                },
+                "required": ["bus_name", "path", "text"]
+            }),
+        },
+        McpTool {
+            name: "lifeos_a11y_apps".into(),
+            description: "List all applications currently registered on the AT-SPI2 accessibility bus.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        },
     ]
 }
 
@@ -1623,6 +1695,124 @@ pub async fn call_tool(
                 .output()
                 .await;
             cmd_result(output, "Set display resolution")
+        }
+
+        // ----- AT-SPI2 Accessibility Layer (AY.4) -----
+        "lifeos_a11y_tree" => {
+            let app = arguments
+                .get("app")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'app' parameter")?;
+            let depth = arguments.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as u32;
+            match crate::atspi_layer::get_tree(app, depth).await {
+                Ok(nodes) => Ok(serde_json::json!({
+                    "app": app,
+                    "depth": depth,
+                    "nodes": nodes.len(),
+                    "tree": nodes,
+                })),
+                Err(e) => Err(format!("AT-SPI2 tree failed: {}", e)),
+            }
+        }
+
+        "lifeos_a11y_find" => {
+            let app = arguments
+                .get("app")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'app' parameter")?;
+            let role = arguments.get("role").and_then(|v| v.as_str());
+            let name_filter = arguments.get("name").and_then(|v| v.as_str());
+            match crate::atspi_layer::find_elements(app, role, name_filter).await {
+                Ok(elements) => Ok(serde_json::json!({
+                    "app": app,
+                    "matches": elements.len(),
+                    "elements": elements,
+                })),
+                Err(e) => Err(format!("AT-SPI2 find failed: {}", e)),
+            }
+        }
+
+        "lifeos_a11y_activate" => {
+            let bus = arguments
+                .get("bus_name")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'bus_name' parameter")?;
+            let path = arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'path' parameter")?;
+            match crate::atspi_layer::activate_element(bus, path).await {
+                Ok(()) => Ok(serde_json::json!({
+                    "activated": true,
+                    "bus_name": bus,
+                    "path": path,
+                })),
+                Err(e) => Err(format!("AT-SPI2 activate failed: {}", e)),
+            }
+        }
+
+        "lifeos_a11y_get_text" => {
+            let bus = arguments
+                .get("bus_name")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'bus_name' parameter")?;
+            let path = arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'path' parameter")?;
+            match crate::atspi_layer::get_text(bus, path).await {
+                Ok(text) => Ok(serde_json::json!({
+                    "bus_name": bus,
+                    "path": path,
+                    "text": text,
+                    "length": text.len(),
+                })),
+                Err(e) => Err(format!("AT-SPI2 get_text failed: {}", e)),
+            }
+        }
+
+        "lifeos_a11y_set_text" => {
+            let bus = arguments
+                .get("bus_name")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'bus_name' parameter")?;
+            let path = arguments
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'path' parameter")?;
+            let text = arguments
+                .get("text")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'text' parameter")?;
+            match crate::atspi_layer::set_text(bus, path, text).await {
+                Ok(()) => Ok(serde_json::json!({
+                    "bus_name": bus,
+                    "path": path,
+                    "text_set": true,
+                    "length": text.len(),
+                })),
+                Err(e) => Err(format!("AT-SPI2 set_text failed: {}", e)),
+            }
+        }
+
+        "lifeos_a11y_apps" => {
+            let available = crate::atspi_layer::is_available().await;
+            if !available {
+                return Ok(serde_json::json!({
+                    "available": false,
+                    "count": 0,
+                    "applications": [],
+                    "note": "AT-SPI2 bus not available. Ensure at-spi2-core is running."
+                }));
+            }
+            match crate::atspi_layer::list_applications().await {
+                Ok(apps) => Ok(serde_json::json!({
+                    "available": true,
+                    "count": apps.len(),
+                    "applications": apps,
+                })),
+                Err(e) => Err(format!("AT-SPI2 list apps failed: {}", e)),
+            }
         }
 
         _ => Err(format!("Unknown tool: {}", name)),

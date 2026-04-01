@@ -6,7 +6,7 @@
 //! 3. Accessibility tree (AT-SPI2, UIAutomation)
 //! 4. Vision + input (screenshot + OCR + mouse/keyboard — last resort)
 
-use log::info;
+use log::{info, warn};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ControlLayer {
@@ -88,9 +88,12 @@ pub fn select_layer(action: &str) -> (ControlLayer, Option<String>) {
         }
     }
 
-    // 4. Default to vision+input
-    info!(
-        "[control_layers] Action '{}' → Vision+Input (fallback)",
+    // 4. Default to vision+input — Layer 4 fallback
+    // Vision modules: computer_use.rs (mouse/keyboard), screen_capture.rs (grim),
+    // sensory_pipeline.rs (OCR), browser_automation.rs (CDP visual)
+    warn!(
+        "[control_layers] Action '{}' fell through to Vision+Input (Layer 4). \
+         Consider adding an MCP tool for this action.",
         action
     );
     (ControlLayer::VisionInput, None)

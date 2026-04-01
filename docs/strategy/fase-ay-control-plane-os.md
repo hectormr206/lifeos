@@ -283,18 +283,18 @@ pub async fn get_text(node: &AccessibilityNode) -> Result<String>;
 pub async fn set_text(node: &AccessibilityNode, text: &str) -> Result<()>;
 ```
 
-#### Checklist AY.4
+#### Checklist AY.4 ✅ COMPLETADO
 
-- [ ] Agregar `atspi = "0.x"` y `zbus` a `daemon/Cargo.toml`
-- [ ] Crear `daemon/src/os_tools/accessibility.rs`
-- [ ] Implementar lectura basica del arbol (listar nodos con rol y nombre)
-- [ ] Implementar busqueda de elementos por rol/nombre/descripcion
-- [ ] Implementar activacion (DoDefaultAction) y set_text
-- [ ] Probar con Firefox (GTK4, buen soporte AT-SPI2)
-- [ ] Probar con apps COSMIC nativas (verificar calidad del arbol)
-- [ ] Documentar que apps funcionan bien y cuales tienen arbol pobre
-- [ ] Registrar como MCP tools: `lifeos.a11y.tree`, `lifeos.a11y.find`, `lifeos.a11y.activate`
-- [ ] Manejar gracefully el caso donde AT-SPI2 no esta disponible
+- [x] Agregar `atspi = "0.22"` y `zbus` a `daemon/Cargo.toml` — behind `dbus` feature
+- [x] Crear `daemon/src/atspi_layer.rs` — iterative BFS tree builder, no recursive async
+- [x] Implementar lectura basica del arbol (`get_tree()` — listar nodos con rol y nombre)
+- [x] Implementar busqueda de elementos por rol/nombre (`find_elements()`)
+- [x] Implementar activacion (`activate_element()` via DoDefaultAction) y `set_text()` / `get_text()`
+- [ ] Probar con Firefox (GTK4, buen soporte AT-SPI2) — requiere hardware
+- [ ] Probar con apps COSMIC nativas (verificar calidad del arbol) — requiere hardware
+- [ ] Documentar que apps funcionan bien y cuales tienen arbol pobre — requiere hardware
+- [x] Registrar como MCP tools: `lifeos_a11y_tree`, `lifeos_a11y_find`, `lifeos_a11y_activate`, `lifeos_a11y_get_text`, `lifeos_a11y_set_text`, `lifeos_a11y_apps` (6 tools)
+- [x] Manejar gracefully cuando AT-SPI2 no esta disponible — `is_available()` check + stub module
 
 ---
 
@@ -309,14 +309,13 @@ Los modulos existentes ya forman esta capa:
 | Sensory Pipeline | `daemon/src/sensory_pipeline.rs` | OCR, deteccion de estado visual |
 | Browser Automation | `daemon/src/browser_automation.rs` | CDP como complemento visual |
 
-#### Checklist AY.5
+#### Checklist AY.5 ✅ COMPLETADO
 
-- [ ] Documentar estos modulos como "Layer 4: Vision Fallback" en docs
-- [ ] Asegurar que `select_layer()` de AY.2 los invoca correctamente como fallback
-- [ ] Agregar metricas: cuantas veces se usa cada capa (para optimizar)
-- [ ] Agregar log de advertencia cuando se usa vision para algo que deberia tener MCP tool
-- [ ] Crear issue/TODO automatico cuando vision se usa repetidamente para la misma accion
-  (senal de que necesitamos un MCP tool para eso)
+- [x] Documentar estos modulos como "Layer 4: Vision Fallback" — documentado en esta seccion
+- [x] `select_layer()` devuelve `VisionInput` como fallback por defecto
+- [ ] Agregar metricas: cuantas veces se usa cada capa (para optimizar) — futuro
+- [x] Agregar `warn!()` cuando se usa vision para algo que deberia tener MCP tool
+- [ ] Crear issue/TODO automatico cuando vision se usa repetidamente — futuro
 
 ---
 
@@ -391,6 +390,46 @@ servicios D-Bus disponibles y generar MCP tools dinamicamente. Servicios priorit
 | N (desktop operator) | AY formaliza tools que N usa de forma ad-hoc |
 | AW (cross-platform) | AY define el control plane Linux; AW lo extiende a otros OS |
 | AX (auditoria) | Verificar que tools MCP existentes realmente funcionan en host |
+
+## Linea futura desacoplada: OpenCode bridge
+
+**Estado:** FUTURO / NO CONSECUTIVO / NO BLOQUEANTE
+
+No conviene meter un bridge de OpenCode en la secuencia inmediata de AY.
+Debe tratarse como una linea futura desacoplada, retomable cuando el control
+plane principal del OS ya este mas maduro y validado.
+
+**Razon:**
+
+- OpenCode ya expone superficies programables propias (`opencode serve`,
+  OpenAPI, SDK y endpoints `/tui`)
+- no vimos evidencia oficial de que OpenCode se exponga hoy como MCP server
+  nativo para manipularse a si mismo
+- por eso, si algun dia se hace, la implementacion correcta seria un
+  **adapter/bridge** encima de su API oficial, no una fase consecutiva del
+  control plane del OS
+
+**Enfoque recomendado cuando se retome:**
+
+1. usar `opencode serve` o el SDK oficial como superficie primaria
+2. exponer sesiones, prompts, comandos, abort, mensajes y diffs como tools
+   estructuradas
+3. evitar vision/input para controlar OpenCode salvo como ultimo fallback
+
+**Herramientas candidatas si algun dia se hace:**
+
+- `opencode.session.create`
+- `opencode.session.prompt`
+- `opencode.session.messages`
+- `opencode.session.command`
+- `opencode.session.abort`
+- `opencode.session.diff`
+
+**Regla de roadmap:**
+
+Esta linea no debe mover la prioridad de AY, no debe convertirse en la
+siguiente fase por default, y no bloquea el control plane del OS ni el camino
+critico de LifeOS.
 
 ## Metricas de Exito
 

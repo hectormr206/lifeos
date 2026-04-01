@@ -286,6 +286,24 @@ Herramientas:
 59. **writer_export_pdf** — Exporta un documento de LibreOffice Writer a PDF.
     args: {"input": "/home/lifeos/doc.odt", "output": "/home/lifeos/doc.pdf"}
 
+60. **a11y_tree** — Obtiene el arbol de accesibilidad de una aplicacion (botones, menus, campos).
+    args: {"app": "firefox", "depth": 3}
+
+61. **a11y_find** — Busca elementos UI por rol y/o nombre en el arbol de accesibilidad.
+    args: {"app": "firefox", "role": "push button", "name": "Save"}
+
+62. **a11y_activate** — Activa (click/press) un elemento UI por su path de accesibilidad.
+    args: {"bus_name": ":1.42", "path": "/org/a11y/atspi/accessible/123"}
+
+63. **a11y_get_text** — Lee el texto de un elemento UI.
+    args: {"bus_name": ":1.42", "path": "/org/a11y/atspi/accessible/123"}
+
+64. **a11y_set_text** — Escribe texto en un elemento editable.
+    args: {"bus_name": ":1.42", "path": "/org/a11y/atspi/accessible/123", "text": "Hello"}
+
+65. **a11y_apps** — Lista todas las aplicaciones registradas en el bus AT-SPI2.
+    args: {}
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -1032,7 +1050,8 @@ Herramientas:
             | "clipboard_get" | "clipboard_set" | "volume_get" | "volume_set"
             | "brightness_get" | "brightness_set" | "workspaces_list" | "workspaces_switch"
             | "cosmic_terminal" | "cosmic_files" | "cosmic_editor" | "cosmic_dark_mode"
-            | "calc_read_cells" | "writer_export_pdf" => {
+            | "calc_read_cells" | "writer_export_pdf" | "a11y_tree" | "a11y_find"
+            | "a11y_activate" | "a11y_get_text" | "a11y_set_text" | "a11y_apps" => {
                 execute_os_control(&call.name, &call.args).await
             }
             other => Ok(format!("Herramienta '{}' no reconocida", other)),

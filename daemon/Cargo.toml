@@ -35,6 +35,7 @@ tower-http = { version = "0.6", features = ["fs", "cors"], optional = true }
 async-stream = "0.3"
 sysinfo = "0.30"
 zbus = { version = "4", default-features = false, features = ["tokio"], optional = true }
+atspi = { version = "0.22", optional = true }
 async-trait = "0.1"
 futures-lite = "2.3.0"
 futures-util = "0.3"
@@ -77,7 +78,7 @@ cosmic-client-toolkit = { version = "0.2", optional = true }
 wayland-client = { version = "0.31", optional = true }
 [features]
 default = ["dbus", "http-api"]
-dbus = ["zbus"]
+dbus = ["zbus", "atspi"]
 http-api = ["axum", "tower-http"]
 ui-overlay = ["gtk4", "glib", "adw"]
 cosmic = ["cosmic-protocols", "cosmic-client-toolkit", "wayland-client"]

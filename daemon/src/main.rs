@@ -24,6 +24,7 @@ mod api;
 #[allow(dead_code)]
 mod app_contracts;
 mod async_workers;
+mod atspi_layer;
 #[allow(dead_code)]
 mod autonomous_agent;
 mod axi_tray;
