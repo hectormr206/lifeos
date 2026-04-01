@@ -232,6 +232,36 @@ Herramientas:
     args: {"format": "txt"}
     Formatos: "txt" (por defecto), "json". Genera el archivo y lo envia automaticamente.
 
+42. **windows_list** — Lista todas las ventanas abiertas (titulo, app, posicion).
+    args: {} (sin parametros)
+
+43. **windows_focus** — Enfoca una ventana por titulo o app_id.
+    args: {"title": "Firefox"} o {"app_id": "org.mozilla.firefox"}
+
+44. **windows_close** — Cierra una ventana por titulo o app_id.
+    args: {"title": "Firefox"} o {"app_id": "org.mozilla.firefox"}
+
+45. **apps_launch** — Lanza una aplicacion por nombre o archivo .desktop.
+    args: {"app": "firefox"} o {"desktop": "org.mozilla.firefox.desktop"}
+
+46. **clipboard_get** — Obtiene el contenido del portapapeles.
+    args: {} (sin parametros)
+
+47. **clipboard_set** — Copia texto al portapapeles.
+    args: {"content": "texto a copiar"}
+
+48. **volume_get** — Obtiene el volumen actual del audio.
+    args: {} (sin parametros)
+
+49. **volume_set** — Ajusta el volumen del audio (0.0 a 1.0).
+    args: {"level": 0.75}
+
+50. **brightness_get** — Obtiene el brillo actual de la pantalla.
+    args: {} (sin parametros)
+
+51. **brightness_set** — Ajusta el brillo de la pantalla (0-100).
+    args: {"level": 80}
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -973,6 +1003,12 @@ Herramientas:
             "disable_provider" => execute_disable_provider(&call.args, ctx).await,
             "send_file" => execute_send_file(&call.args).await,
             "export_conversation" => execute_export_conversation(&call.args, ctx).await,
+            // OS Control Plane tools (AY.1) — delegate to MCP server
+            "windows_list" | "windows_focus" | "windows_close" | "apps_launch"
+            | "clipboard_get" | "clipboard_set" | "volume_get" | "volume_set"
+            | "brightness_get" | "brightness_set" => {
+                execute_os_control(&call.name, &call.args).await
+            }
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -3407,6 +3443,20 @@ max_context = 128000
     }
 
     use tokio::io::AsyncWriteExt;
+
+    // -----------------------------------------------------------------------
+    // OS Control Plane — delegates to MCP server tool handlers (AY.1)
+    // -----------------------------------------------------------------------
+
+    /// Execute OS control plane tools by delegating to the MCP server's `call_tool`.
+    /// Maps short Telegram tool names to their `lifeos_*` MCP counterparts.
+    async fn execute_os_control(tool_name: &str, args: &serde_json::Value) -> Result<String> {
+        let mcp_name = format!("lifeos_{}", tool_name);
+        match crate::mcp_server::call_tool(&mcp_name, args).await {
+            Ok(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
+            Err(e) => Ok(format!("Error: {}", e)),
+        }
+    }
 }
 
 #[cfg(feature = "telegram")]

@@ -47,6 +47,7 @@ mod config_validator;
 #[allow(dead_code)]
 mod connector_registry;
 mod context_policies;
+mod control_layers;
 #[allow(dead_code)]
 mod cosmic_control;
 #[allow(dead_code)]
