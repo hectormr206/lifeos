@@ -722,16 +722,21 @@ mod inner {
                 action_description, ..
             } => {
                 format!(
-                    "⚠️ Aprobación requerida:\n{}
+                    "⚠️ Aprobación requerida:\n{}",
+                    truncate(action_description, 500)
+                )
+            }
             SupervisorNotification::TaskProgress {
                 step_index,
                 steps_total,
                 description,
                 ..
             } => {
-                format!("Paso {}/{}: {}", step_index + 1, steps_total, &description[..description.len().min(200)])
-            }",
-                    truncate(action_description, 500)
+                format!(
+                    "📈 Paso {}/{}: {}",
+                    step_index + 1,
+                    steps_total,
+                    truncate(description, 200)
                 )
             }
         }
@@ -802,6 +807,19 @@ mod inner {
                 format!(
                     "<p>⚠️ <strong>Aprobación requerida:</strong><br/>{}</p>",
                     html_escape(truncate(action_description, 500))
+                )
+            }
+            SupervisorNotification::TaskProgress {
+                description,
+                step_index,
+                steps_total,
+                ..
+            } => {
+                format!(
+                    "<p>📈 <strong>Progreso:</strong> paso {}/{}<br/>{}</p>",
+                    step_index + 1,
+                    steps_total,
+                    html_escape(truncate(description, 200))
                 )
             }
         }

@@ -575,16 +575,21 @@ mod inner {
                 action_description, ..
             } => {
                 format!(
-                    "Aprobacion requerida:\n{}
+                    "Aprobacion requerida:\n{}\n\nResponde con /do [approve|reject] para proceder.",
+                    truncate(action_description, 500)
+                )
+            }
             SupervisorNotification::TaskProgress {
                 step_index,
                 steps_total,
                 description,
                 ..
             } => {
-                format!("Paso {}/{}: {}", step_index + 1, steps_total, &description[..description.len().min(200)])
-            }\n\nResponde con /do [approve|reject] para proceder.",
-                    truncate(action_description, 500)
+                format!(
+                    "Paso {}/{}: {}",
+                    step_index + 1,
+                    steps_total,
+                    truncate(description, 200)
                 )
             }
         }
