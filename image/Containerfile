@@ -639,6 +639,8 @@ COPY image/files/etc/sysctl.d/91-lifeos-coredump.conf  /etc/sysctl.d/91-lifeos-c
 COPY image/files/etc/ssh/sshd_config.d/50-lifeos-hardening.conf /etc/ssh/sshd_config.d/50-lifeos-hardening.conf
 # Systemd coredump disable
 COPY image/files/etc/systemd/coredump.conf.d/lifeos.conf /etc/systemd/coredump.conf.d/lifeos.conf
+# Login rate limiting (pam_faillock — lock after 5 failed attempts)
+COPY image/files/etc/security/faillock.conf /etc/security/faillock.conf
 
 # xdg-desktop-portal LifeOS integration
 COPY files/usr/share/xdg-desktop-portal/portals/lifeos.portal /usr/share/xdg-desktop-portal/portals/lifeos.portal

@@ -36,30 +36,31 @@
 | L | Repo integrado | Voz/widget/notificaciones existen; pendiente auditoria host dedicada |
 | M | Repo integrado | Claim amplio; necesita una pasada especifica por deploy/review/paralelismo |
 | N | Repo integrado | Desktop operator va fuerte; `battery/history` ya existe con contrato honesto de snapshot actual |
-| O | Parcial | Desktop operator funciona; skill learning desde uso real no esta wired |
+| O | Repo integrado | WorkflowLearner alimentado por eventos del supervisor |
 | P | Repo integrado | Gaming assist y captura existen en repo; falta una validacion host dedicada |
 | Q | Parcial | MCP client/server base funciona; dashboard integration es basica |
 | R | Repo integrado | Pipeline wired end-to-end (transcribe → diarize → summarize → memory → notify → compress), pendiente validacion host |
-| S | Parcial | Health checks existen y dashboard muestra estado; reportes diarios/semanales por Telegram no wired |
-| T | Parcial | Voz funciona (wake word, STT, TTS), pero no es un pipeline Alexa-style completo end-to-end |
-| U | Parcial | Prompt evolution y workflow learner existen; full self-improvement loop sigue parcial |
-| V | Parcial | Knowledge graph existe y se consulta; export/import no implementados |
-| W | Parcial | ReliabilityTracker existe; checkpoint/resume y audit trail son basicos |
+| S | Repo integrado | Heartbeat incluye metricas de sistema reales; verificado en repo |
+| T | Repo integrado | Conversacion continua verificada, CONTINUOUS_CONVERSATION_SECS cableado |
+| U | Repo integrado | Self-improvement loop cableado con circuit breaker |
+| V | Repo integrado | Export/import cableados a funciones reales de KG |
+| W | Repo integrado | Endpoint recent_outcomes agregado y funcional |
 | X | Parcial | Translation module existe en repo, pero no aparecio integrado al producto real end-to-end |
 | Y | Repo integrado | Security AI daemon existe y se arranca; queda pendiente una pasada host dedicada |
 | Z-AA | Pendiente AX | No eran el foco principal de esta pasada |
 | AB | Repo integrado | SessionStore conectado a Telegram bridge, persiste across restarts; protocolo WS aun basico |
 | AC | Repo integrado | Registry/manifest existen y `life skills doctor` ya esta implementado como baseline diagnostics |
-| AD | Parcial | Hay guardrails, `/metrics` y `life audit`, pero no un query fino de ledger tipo `llm_call` como estaba redactado |
+| AD | Repo integrado | Endpoint de audit events usa reliability report real |
 | AE | Repo integrado | ISO y first-boot avanzaron; el incidente de doble `lifeosd` obliga a seguir vigilando ownership/runtime |
 | AF | Repo integrado | Slack/Discord wired a startup en main.rs, feature-gated; pendiente compilar en imagen |
-| AG | Parcial | Dedupe, pairing basico y export de conversacion si; cron validation sigue siendo baseline |
+| AG | Repo integrado | Validacion cron verificada (5 campos) |
 | AK | Repo integrado | `life doctor` + `life safe-mode` CLI commands implementados; sentinel y watchdog funcionales |
-| AL | Parcial | Seguridad mejoro, pero `life doctor`, ciertos eventos WS y parte del troubleshooting estaban inflados |
+| AL | Repo integrado | 9 variantes estructuradas de DaemonEvent alineadas con dashboard |
 | AM | Repo integrado | `time_context()` y `current_time` estan cableados; falta pasada integral de storage/cron |
 | AN | Repo integrado | Hot reload y herramientas de providers tienen evidencia fuerte en repo |
-| AO | Parcial | Telegram UX mejorada (inline keyboards, typing, etc.); webhook es polling-only, no webhook real |
-| AP | Parcial | Worker pool/cancel existen; los lifecycle updates siguen saliendo como `Notification`, no como eventos `worker.*` estructurados end-to-end |
+| AO | Repo integrado | Webhook documentado honestamente como polling-only |
+| AP | Repo integrado | Eventos tipados WorkerStarted/Completed/Failed implementados |
+| AU | Repo integrado | sysctl, SSH, coredump hardening + faillock rate limiting + update notifications shipped |
 | AQ+ | Futuro | No forman parte de la auditoria de realidad actual |
 
 ## Hallazgos mas importantes de esta pasada

@@ -149,6 +149,7 @@ mod translation;
 mod tuf;
 mod update_scheduler;
 mod updates;
+mod user_model;
 #[allow(dead_code)]
 mod usb_guard;
 mod visual_comfort;
@@ -192,7 +193,7 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             health_check_interval: Duration::from_secs(300), // 5 minutes
-            update_check_interval: Duration::from_secs(3600), // 1 hour
+            update_check_interval: Duration::from_secs(86400), // 24 hours
             metrics_collection_interval: Duration::from_secs(60), // 1 minute
             enable_notifications: true,
             enable_auto_updates: true,
@@ -1549,6 +1550,15 @@ async fn main() -> anyhow::Result<()> {
                 .join("knowledge_graph");
                 Arc::new(RwLock::new(knowledge_graph::KnowledgeGraph::new(data_dir)))
             };
+            // Load user model for personalization (Fase AQ)
+            let um = {
+                let home =
+                    std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+                let data_dir =
+                    std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+                let model = user_model::UserModel::load_from_dir(&data_dir).await;
+                Arc::new(RwLock::new(model))
+            };
             Some(tokio::spawn(async move {
                 telegram_bridge::run_telegram_bot(
                     tg_config,
@@ -1559,6 +1569,7 @@ async fn main() -> anyhow::Result<()> {
                     notify_rx,
                     ss,
                     eb,
+                    Some(um),
                 )
                 .await;
             }))
@@ -1888,7 +1899,7 @@ fn default_health_interval() -> u64 {
     300
 }
 fn default_update_interval() -> u64 {
-    3600
+    86400
 }
 fn default_metrics_interval() -> u64 {
     60
@@ -1962,6 +1973,9 @@ async fn run_update_checks(state: Arc<DaemonState>) {
         return;
     }
 
+    // Wait 10 minutes after boot before first check to avoid slowing startup
+    tokio::time::sleep(Duration::from_secs(600)).await;
+
     let mut interval = tokio::time::interval(state.config.update_check_interval);
 
     loop {
@@ -1978,6 +1992,7 @@ async fn run_update_checks(state: Arc<DaemonState>) {
                         result.current_version, result.new_version
                     );
 
+                    // Desktop notification via notify-rust
                     if let Err(e) = state
                         .notification_manager
                         .send_update_notification(&result.new_version)
@@ -1985,6 +2000,15 @@ async fn run_update_checks(state: Arc<DaemonState>) {
                     {
                         error!("Failed to send update notification: {}", e);
                     }
+
+                    // Broadcast on event bus so dashboard/Telegram/SSE subscribers see it
+                    let _ = state.event_bus.send(events::DaemonEvent::Notification {
+                        priority: "info".into(),
+                        message: format!(
+                            "Actualizacion de LifeOS disponible ({} -> {}). Ejecuta 'bootc upgrade' para actualizar.",
+                            result.current_version, result.new_version
+                        ),
+                    });
 
                     // Auto-update if enabled
                     if state.config.enable_auto_updates {
