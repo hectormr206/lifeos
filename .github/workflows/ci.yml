@@ -120,11 +120,11 @@ jobs:
 
       - name: Build daemon (debug)
         working-directory: ./daemon
-        run: cargo build --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked
+        run: cargo build --features "dbus,http-api,wake-word,telegram" --locked
 
       - name: Build daemon (release)
         working-directory: ./daemon
-        run: cargo build --release --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked
+        run: cargo build --release --features "dbus,http-api,wake-word,telegram" --locked
 
       - name: Run daemon tests
         working-directory: ./daemon
