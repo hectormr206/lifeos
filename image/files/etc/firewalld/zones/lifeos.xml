@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>LifeOS</short>
+  <description>LifeOS default zone. Blocks all inbound except DHCP and mDNS. SSH blocked by default (enable manually if needed). All outbound allowed.</description>
+
+  <!-- DHCP client (needed for network autoconfiguration) -->
+  <service name="dhcpv6-client"/>
+
+  <!-- mDNS / Avahi (local device discovery, printers, Chromecast) -->
+  <service name="mdns"/>
+
+  <!-- All outbound traffic allowed (default behavior) -->
+</zone>

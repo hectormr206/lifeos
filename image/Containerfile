@@ -397,6 +397,7 @@ RUN dnf -y install \
     rust cargo rustfmt clippy rust-analyzer \
     wlsunset \
     linux-firmware \
+    aide firewalld audit \
     pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
     python3-mako \
     anaconda-core anaconda-dracut \
@@ -641,6 +642,39 @@ COPY image/files/etc/ssh/sshd_config.d/50-lifeos-hardening.conf /etc/ssh/sshd_co
 COPY image/files/etc/systemd/coredump.conf.d/lifeos.conf /etc/systemd/coredump.conf.d/lifeos.conf
 # Login rate limiting (pam_faillock — lock after 5 failed attempts)
 COPY image/files/etc/security/faillock.conf /etc/security/faillock.conf
+# --- AU.1 — Firewall active by default + auditd ---
+COPY image/files/etc/firewalld/zones/lifeos.xml /etc/firewalld/zones/lifeos.xml
+RUN sed -i 's/^DefaultZone=.*/DefaultZone=lifeos/' /etc/firewalld/firewalld.conf && \
+    ln -sf /usr/lib/systemd/system/firewalld.service /usr/lib/systemd/system/multi-user.target.wants/firewalld.service
+# auditd — kernel audit framework (CIS Benchmark)
+COPY image/files/etc/audit/rules.d/50-lifeos.rules /etc/audit/rules.d/50-lifeos.rules
+RUN ln -sf /usr/lib/systemd/system/auditd.service /usr/lib/systemd/system/multi-user.target.wants/auditd.service
+# DNS-over-TLS system-wide (Quad9 + Cloudflare fallback)
+COPY image/files/etc/systemd/resolved.conf.d/50-lifeos-dot.conf /etc/systemd/resolved.conf.d/50-lifeos-dot.conf
+RUN ln -sf /usr/lib/systemd/system/systemd-resolved.service /usr/lib/systemd/system/multi-user.target.wants/systemd-resolved.service && \
+    ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf || true
+# Update notifications — daily check via bootc, notify via Axi
+COPY image/files/usr/local/bin/lifeos-update-check.sh /usr/local/bin/lifeos-update-check.sh
+RUN chmod +x /usr/local/bin/lifeos-update-check.sh
+COPY image/files/etc/systemd/system/lifeos-update-check.service /usr/lib/systemd/system/lifeos-update-check.service
+COPY image/files/etc/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/lifeos-update-check.timer
+# --- AU.3 — CIS Polish (Security by Default) ---
+# Login banner (CIS requirement)
+COPY image/files/etc/issue /etc/issue
+# Password complexity (pam_pwquality)
+COPY image/files/etc/security/pwquality.conf /etc/security/pwquality.conf
+# Kernel module blacklist (legacy filesystem attack surface)
+COPY image/files/etc/modprobe.d/lifeos-blacklist.conf /etc/modprobe.d/lifeos-blacklist.conf
+# AIDE file integrity monitoring (weekly timer)
+COPY image/files/etc/lifeos/aide.conf /etc/lifeos/aide.conf
+COPY image/files/etc/systemd/system/lifeos-aide-check.service /usr/lib/systemd/system/lifeos-aide-check.service
+COPY image/files/etc/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/lifeos-aide-check.timer
+# GRUB password protection script
+COPY image/files/usr/local/bin/lifeos-grub-password.sh /usr/local/bin/lifeos-grub-password.sh
+RUN chmod +x /usr/local/bin/lifeos-grub-password.sh
+# Service minimization: libvirtd socket-only, spice-vdagent VM-only
+COPY image/files/etc/systemd/system/libvirtd.service.d/10-lifeos-socket-only.conf /etc/systemd/system/libvirtd.service.d/10-lifeos-socket-only.conf
+COPY image/files/etc/systemd/system/spice-vdagentd.service.d/10-lifeos-vm-only.conf /etc/systemd/system/spice-vdagentd.service.d/10-lifeos-vm-only.conf
 
 # xdg-desktop-portal LifeOS integration
 COPY files/usr/share/xdg-desktop-portal/portals/lifeos.portal /usr/share/xdg-desktop-portal/portals/lifeos.portal
@@ -735,6 +769,8 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer /usr/lib/systemd/system/timers.target.wants/lifeos-maintenance-cleanup.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-aide-check.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
     ln -sf /usr/lib/systemd/system/bluetooth.service      /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \
     ln -sf /usr/lib/systemd/system/NetworkManager.service /usr/lib/systemd/system/multi-user.target.wants/NetworkManager.service && \

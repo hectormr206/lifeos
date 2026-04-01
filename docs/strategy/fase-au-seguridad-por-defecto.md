@@ -28,29 +28,29 @@
 
 ## Lo que FALTA — Lo que Ubuntu/Fedora piden hacer manual
 
-### AU.1 — Critico (maximo impacto, minimo esfuerzo)
+### AU.1 — Critico (maximo impacto, minimo esfuerzo) ✅ COMPLETADO
 
-- [ ] **Firewall activo por defecto** — `firewalld` habilitado con zona LifeOS: bloquear todo inbound excepto DHCP/mDNS, permitir todo outbound. SSH bloqueado por default (el usuario lo abre si lo necesita)
-- [ ] **Kernel hardening sysctl** — archivo `/etc/sysctl.d/90-lifeos-hardening.conf` con: ASLR, SYN flood protection, ICMP redirects bloqueados, martian logging, ptrace restriction, kernel pointer hiding, symlink/hardlink protection
-- [ ] **SSH hardened de fabrica** — `/etc/ssh/sshd_config.d/50-lifeos.conf`: PermitRootLogin no, PasswordAuthentication no, MaxAuthTries 3, X11Forwarding no (sshd no esta habilitado por default, pero si el usuario lo activa, ya esta seguro)
-- [ ] **Core dumps deshabilitados** — sysctl + systemd coredump + limits.conf. Evita que datos sensibles se escriban a disco en crashes
+- [x] **Firewall activo por defecto** — `firewalld` con zona `lifeos.xml`: bloquea todo inbound excepto DHCP/mDNS, SSH bloqueado, todo outbound permitido
+- [x] **Kernel hardening sysctl** — `/etc/sysctl.d/90-lifeos-hardening.conf`: ASLR, SYN flood, ICMP redirects, martian logging, ptrace, kernel pointer hiding, symlink/hardlink protection
+- [x] **SSH hardened de fabrica** — `/etc/ssh/sshd_config.d/50-lifeos-hardening.conf`: PermitRootLogin no, PasswordAuthentication no, MaxAuthTries 3, X11Forwarding no
+- [x] **Core dumps deshabilitados** — `91-lifeos-coredump.conf` + `systemd/coredump.conf.d/lifeos.conf`
 
-### AU.2 — Importante (hardening fuerte)
+### AU.2 — Importante (hardening fuerte) ✅ COMPLETADO
 
-- [ ] **auditd** — framework de auditoria del kernel. Reglas para: acceso a /etc/shadow, cambios en sudoers, carga de modulos, operaciones de mount. Da el "ledger inmutable" del threat model
-- [ ] **Rate limiting de login** — pam_faillock: bloqueo temporal despues de 5 intentos fallidos (15 min)
-- [ ] **DNS encriptado system-wide** — systemd-resolved con DoT a Quad9 (no solo Firefox, TODO el sistema)
-- [ ] **Notificaciones de actualizaciones** — timer diario que ejecuta `bootc upgrade --check`, notifica via Axi si hay update disponible (sin auto-aplicar)
-- [ ] **USBGuard o politica udev** — permitir dispositivos conectados al boot, alertar sobre nuevos USB HID (previene BadUSB/rubber ducky)
+- [x] **auditd** — `/etc/audit/rules.d/50-lifeos.rules`: shadow, sudoers, modulos, mount, time, network, login, lifeos config. Inmutable con `-e 2`
+- [x] **Rate limiting de login** — `faillock.conf`: 5 intentos, lockout 15 min
+- [x] **DNS encriptado system-wide** — `systemd-resolved` con DoT a Quad9 (9.9.9.9) + fallback Cloudflare (1.1.1.1). DNSSEC allow-downgrade
+- [x] **Notificaciones de actualizaciones** — `lifeos-update-check.timer` (diario) ejecuta `bootc upgrade --check`, notifica via desktop notification + Axi REST API
+- [x] **USBGuard** — `usb_guard.rs` en daemon: whitelist persistente, deteccion de BadUSB HID
 
-### AU.3 — Polish (cumplimiento CIS completo)
+### AU.3 — Polish (cumplimiento CIS completo) ✅ COMPLETADO
 
-- [ ] **Password de GRUB** — proteger edicion de parametros de boot (previene `init=/bin/bash`)
-- [ ] **Banner de login** — `/etc/issue` con aviso de uso autorizado (requisito CIS)
-- [ ] **AIDE para /etc** — monitoreo de integridad de archivos mutables. Timer semanal
-- [ ] **Complejidad de password** — pam_pwquality: minlen=12, al menos 1 mayuscula, 1 numero, 1 especial
-- [ ] **Servicios minimizados** — libvirtd solo socket-activated, spice-vdagent solo en VMs
-- [ ] **Modulos de kernel blacklisted** — cramfs, freevxfs, hfs, hfsplus, udf bloqueados (ataque por filesystem)
+- [x] **Password de GRUB** — `lifeos-grub-password.sh set/remove/status` protege edicion de boot params (previene `init=/bin/bash`)
+- [x] **Banner de login** — `/etc/issue` con aviso de uso autorizado (requisito CIS)
+- [x] **AIDE para /etc** — monitoreo de integridad con `aide.conf` + timer semanal (`lifeos-aide-check.timer`)
+- [x] **Complejidad de password** — `pwquality.conf`: minlen=12, 1 mayuscula, 1 numero, 1 especial, maxrepeat=3
+- [x] **Servicios minimizados** — libvirtd con `ConditionPathExists=/var/lib/libvirt`, spice-vdagent con `ConditionVirtualization=vm`
+- [x] **Modulos de kernel blacklisted** — cramfs, freevxfs, hfs, hfsplus, udf, jffs2 en `/etc/modprobe.d/lifeos-blacklist.conf`
 
 ---
 

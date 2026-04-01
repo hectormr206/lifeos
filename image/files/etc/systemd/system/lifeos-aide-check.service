@@ -1,0 +1,17 @@
+[Unit]
+Description=LifeOS AIDE File Integrity Check
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/bash -c 'mkdir -p /var/lib/aide'
+ExecStartPre=/bin/bash -c '[ -f /var/lib/aide/aide.db ] || aide --config=/etc/lifeos/aide.conf --init && mv /var/lib/aide/aide.db.new /var/lib/aide/aide.db'
+ExecStart=/usr/sbin/aide --config=/etc/lifeos/aide.conf --check
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/aide
