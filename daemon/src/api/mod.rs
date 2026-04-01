@@ -2706,7 +2706,7 @@ async fn get_notifications(
     let notifications = vec![Notification {
         id: "1".to_string(),
         title: "System Update Available".to_string(),
-        message: "LifeOS 0.2.0 is ready to install".to_string(),
+        message: "LifeOS is up to date".to_string(),
         notification_type: "update".to_string(),
         priority: "normal".to_string(),
         timestamp: chrono::Local::now().to_rfc3339(),
