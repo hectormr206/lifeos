@@ -28,6 +28,7 @@ pub mod inner {
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
     use crate::task_queue::TaskQueue;
+    use crate::user_model::UserModel;
 
     /// Maximum tool execution rounds per message to prevent infinite loops.
     const MAX_TOOL_ROUNDS: usize = 5;
@@ -241,12 +242,20 @@ Herramientas:
 - Si el usuario dice "y eso?", busca en memoria con recall o refierete al contexto previo.
 "#;
 
-    /// Build the full system prompt with live time context prepended.
+    /// Build the full system prompt with live time context and user model prepended.
     /// Must be called fresh for every LLM request (never cache).
-    fn build_system_prompt() -> String {
+    fn build_system_prompt(user_model: Option<&UserModel>) -> String {
+        let personalization = user_model
+            .map(|m| m.prompt_instructions())
+            .unwrap_or_default();
         format!(
-            "{}\n\n{}",
+            "{}\n\n{}{}\n",
             crate::time_context::time_context(),
+            if personalization.is_empty() {
+                String::new()
+            } else {
+                format!("{}\n", personalization)
+            },
             SYSTEM_PROMPT_BASE
         )
     }
@@ -820,6 +829,8 @@ Herramientas:
         pub sdd_store: Arc<SddStore>,
         /// Persistent session store — parallel to in-memory history for durability.
         pub session_store: Option<Arc<SessionStore>>,
+        /// User model for personalized responses (Fase AQ).
+        pub user_model: Option<Arc<RwLock<UserModel>>>,
     }
 
     /// Check if the user's message contains keywords that suggest they want
@@ -988,10 +999,39 @@ Herramientas:
         user_text: &str,
         image_b64: Option<&str>,
     ) -> (String, Option<String>) {
+        // AQ.3 — Detect implicit preference feedback and update user model
+        if let Some(ref um_arc) = ctx.user_model {
+            if let Some((key, value)) = crate::user_model::detect_preference_feedback(user_text) {
+                let mut um = um_arc.write().await;
+                um.apply_preference(&key, &value);
+                info!(
+                    "[user_model] Implicit feedback: {} = {} (from: {:?})",
+                    key,
+                    value,
+                    &user_text.chars().take(40).collect::<String>()
+                );
+                // Persist in background
+                let um_snap = um.clone();
+                tokio::spawn(async move {
+                    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+                    let data_dir =
+                        std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+                    if let Err(e) = um_snap.save(&data_dir).await {
+                        warn!("[user_model] Failed to persist after feedback: {}", e);
+                    }
+                });
+            }
+        }
+
         // Build messages starting with system prompt (fresh time context each call)
+        let user_model_snapshot = if let Some(ref um) = ctx.user_model {
+            Some(um.read().await.clone())
+        } else {
+            None
+        };
         let mut messages = vec![ChatMessage {
             role: "system".into(),
-            content: serde_json::Value::String(build_system_prompt()),
+            content: serde_json::Value::String(build_system_prompt(user_model_snapshot.as_ref())),
         }];
 
         // Inject conversation history for multi-turn context

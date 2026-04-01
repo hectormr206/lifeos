@@ -126,6 +126,242 @@ Para que esto sea realmente util cross-platform, falta documentar y luego implem
 - `push_token`
 - `last_seen_at`
 
+### 3.4 Stack de control recomendado para LifeOS
+
+Aqui esta la distincion clave que aparecio al analizar demos tipo Claude Dispatch / Cowork:
+
+- una cosa es **ver la pantalla y mover el mouse**
+- otra muy distinta es **controlar el sistema y las apps con interfaces estructuradas**
+
+LifeOS no deberia apostar todo a computer use visual. Deberia usar una jerarquia clara:
+
+1. **MCP primero**
+2. **Adapters nativos / APIs del sistema despues**
+3. **Accesibilidad / UI automation despues**
+4. **Vision + mouse + teclado como fallback final**
+
+#### Capa 1: MCP
+
+Esta es la forma ideal de control.
+
+La idea no es un “MCP magico que controla todo el OS”, sino esto:
+
+- el sistema operativo expone capacidades estructuradas via MCP
+- las apps importantes exponen capacidades propias via MCP
+- LifeOS unifica todo eso en un solo plano de control
+
+**Ejemplos de tools MCP de OS:**
+- `lifeos.window.list`
+- `lifeos.window.focus`
+- `lifeos.workspace.create`
+- `lifeos.file.search`
+- `lifeos.file.open`
+- `lifeos.system.launch_app`
+- `lifeos.notifications.list`
+- `lifeos.clipboard.read`
+- `lifeos.clipboard.write`
+
+**Ejemplos de MCP por app:**
+- `browser.open_tab`
+- `browser.capture`
+- `mail.compose`
+- `slides.export_pdf`
+- `editor.open_project`
+- `calendar.brief_next_meeting`
+
+**Ventajas:**
+- determinista
+- rapido
+- menos tokens
+- menos errores visuales
+- mejor auditabilidad
+
+#### Capa 2: adapters nativos / APIs del sistema
+
+Muchas apps y sistemas no hablaran MCP de forma nativa. Ahi entra la segunda capa:
+
+- wrappers MCP sobre APIs reales del sistema o de la app
+- bridges a CLI, D-Bus, AppleScript, UI Automation, sockets, archivos de config, WebSocket, etc.
+
+**Ejemplos:**
+- Linux:
+  - `swaymsg`
+  - `wlrctl`
+  - `AT-SPI2`
+  - `D-Bus`
+  - `xdg-desktop-portal`
+- macOS:
+  - Accessibility API
+  - AppleScript / Shortcuts / App Intents
+  - NSWorkspace / NSPasteboard / UserNotifications
+- Windows:
+  - UI Automation
+  - Win32 / PowerShell
+  - toast notifications
+  - clipboard APIs
+- Android:
+  - AccessibilityService
+  - NotificationListenerService
+  - intents
+  - foreground service + content providers
+- iOS:
+  - App Intents
+  - Shortcuts
+  - widget / notification actions
+  - APIs del sandbox propio
+
+La mejor practica para LifeOS es:
+
+- si existe API real, construir **adapter MCP** encima
+- no saltar directamente a vision si ya existe un camino estructurado
+
+#### Capa 3: accesibilidad / UI automation
+
+Esta capa sigue siendo estructurada, pero ya es mas fragil que MCP/API directa.
+
+Se usa cuando:
+- la app no tiene API util
+- pero si expone accessibility tree o automation hooks
+
+**Ejemplos:**
+- macOS Accessibility
+- Windows UI Automation
+- Android AccessibilityService
+- Linux AT-SPI2
+
+**Ventajas:**
+- mucho mejor que click ciego por coordenadas
+- permite leer roles, botones, campos, menus
+
+**Desventajas:**
+- cada plataforma es diferente
+- algunas apps exponen arboles pobres o inconsistentes
+- requiere permisos sensibles y onboarding claro
+
+#### Capa 4: vision + input
+
+Esta es la capa de ultima milla:
+
+- screenshot
+- OCR
+- grounding visual
+- mouse / teclado / scroll / drag
+
+Se usa cuando:
+- no hay MCP
+- no hay API
+- no hay automation tree util
+- o la app se comporta como canvas/video/juego/UI custom
+
+**Regla importante:** esta capa no debe ser el plan A. Debe ser el seguro universal.
+
+### 3.5 Politica de seleccion de capa
+
+Para una accion dada, LifeOS deberia seguir esta politica:
+
+1. **Existe tool MCP especifica?** Usarla.
+2. **Existe adapter nativo confiable?** Usarlo.
+3. **Existe automation/accesibilidad usable?** Usarla.
+4. **No hay nada de lo anterior?** Usar vision + input.
+
+Esto da una experiencia mucho mejor que depender siempre de capturas de pantalla.
+
+### 3.6 Ejemplos concretos de mezcla correcta
+
+#### Caso: abrir una app
+
+- Linux: `lifeos.system.launch_app`
+- macOS: adapter a `NSWorkspace`
+- Windows: adapter a shell execute / Win32
+- fallback: buscar icono visual y click
+
+#### Caso: mover una ventana
+
+- Linux: tool MCP sobre `swaymsg`
+- Windows/macOS: adapter nativo si existe
+- fallback: localizar barra de titulo y arrastrar visualmente
+
+#### Caso: exportar un PDF desde una app de presentaciones
+
+- ideal: `slides.export_pdf`
+- segunda opcion: adapter nativo de la app
+- tercera opcion: accessibility tree del menu Export
+- ultima opcion: vision + clicks
+
+#### Caso: obtener una captura del navegador
+
+- ideal: `browser.capture`
+- segunda opcion: CDP / WebDriver / extension
+- ultima opcion: screenshot de pantalla
+
+### 3.7 Que deberia construir LifeOS primero
+
+#### Nivel 1: MCP de OS
+
+Prioridad muy alta para Linux:
+
+- ventanas
+- workspaces
+- apps
+- archivos
+- clipboard
+- notificaciones
+- estado del sistema
+- browser bridge
+
+#### Nivel 2: adapters ricos por plataforma
+
+Para clientes cross-platform:
+
+- Windows: clipboard, notifications, launch app, file handoff, UI automation basica
+- macOS: menu bar, shortcuts, clipboard, notifications, accessibility control basico
+- Android: notifications, intents, accessibility hooks, camera/location/voice
+- iOS: App Intents, Shortcuts, voice, widgets, capture/companion
+
+#### Nivel 3: vision fallback realmente robusto
+
+Solo despues de lo anterior:
+
+- grounding visual
+- OCR
+- action loop
+- retries
+- approval prompts
+- trace y replay
+
+### 3.8 Principio rector para LifeOS
+
+La arquitectura correcta no es:
+
+- “hacer todo con screenshots”
+
+La arquitectura correcta es:
+
+- **MCP cuando exista**
+- **adapter cuando haya API**
+- **automation cuando haya arbol de UI**
+- **vision cuando no haya nada mas**
+
+Eso permite que LifeOS sea:
+
+- mas confiable que Claude Dispatch/Cowork en demos reales
+- mas rapido
+- mas barato
+- mas auditable
+- y mucho menos torpe al operar apps de escritorio
+
+### 3.9 Traduccion a roadmap
+
+Si se quiere convertir esta idea en plan de implementacion, el orden correcto seria:
+
+1. formalizar `device registry + capabilities`
+2. formalizar `MCP control plane` del OS LifeOS
+3. construir `adapters MCP` para browser, archivos, ventanas y apps clave
+4. agregar `automation layer` por plataforma
+5. dejar `vision/input` como capa universal de respaldo
+
+Este orden es importante porque evita gastar meses refinando computer use visual para problemas que deberian resolverse con herramientas estructuradas.
+
 ---
 
 ## 4. Transporte Seguro

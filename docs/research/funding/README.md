@@ -181,6 +181,164 @@ Esto estaba flojo en la version anterior.
 - https://cloud.google.com/startup/ai
 - https://cloud.google.com/startup/faq
 
+### 3.4 OpenAI: credits y programas utiles para LifeOS
+
+Esta parte es importante porque OpenAI si tiene hoy varias vias reales, pero no todas aplican igual para LifeOS.
+
+#### OpenAI Codex Open Source Fund
+
+- **Estado actual:** activo
+- **Dato validado:** iniciativa de `\$1M` para proyectos open source, con grants de hasta **`\$25,000 USD` en API credits**
+- **Fit con LifeOS:** **alto**
+- **Prioridad:** **muy alta**
+
+**Por que si encaja con LifeOS:**
+- LifeOS es open source real
+- puede justificar uso directo de credits para:
+  - coding workflows
+  - evaluaciones
+  - automatizacion
+  - agentes de desarrollo
+  - mejoras del stack de tooling
+
+**Lectura honesta:**
+- esto no es dinero en efectivo
+- pero si puede bajar bastante el costo de desarrollo y experimentacion
+- para LifeOS, hoy es la mejor puerta de OpenAI
+
+**Fuente:**
+- https://openai.com/form/codex-open-source-fund/
+
+#### OpenAI Researcher Access Program
+
+- **Estado actual:** activo
+- **Dato validado:** hasta **`\$1,000 USD`** en API credits por proyecto
+- **Revision:** trimestral (`marzo`, `junio`, `septiembre`, `diciembre`)
+- **Validez de credits:** `12 meses`
+- **Fit con LifeOS como producto:** **bajo**
+- **Fit si se replantea como investigacion:** **medio-bajo**
+
+**Lectura honesta:**
+- no es una via fuerte para “financiar desarrollo general”
+- si puede servir si presentas una linea concreta de investigacion, por ejemplo:
+  - agentes locales y seguridad
+  - privacidad / impacto social de AI local-first
+  - evaluacion de sistemas agenticos responsables
+
+**Recomendacion:**
+- no usarlo como apuesta principal
+- si aplicas, hacerlo como propuesta de investigacion separada, no como “quiero seguir construyendo mi producto”
+
+**Fuente:**
+- https://grants.openai.com/prog/openai_researcher_access_program/
+
+#### OpenAI for Startups
+
+- **Estado actual:** activo
+- **Fit con LifeOS:** **medio**
+
+**Lectura honesta:**
+- el programa existe y puede darte acceso a recursos, comunidad y vias de relacion con OpenAI
+- pero no aparece una promesa publica simple y universal de “credits para cualquier founder independiente”
+- la parte explicitamente ligada a API credits se ve muy clara en el programa de **VC partners**
+
+**Recomendacion:**
+- si vale la pena entrar
+- pero no debe contarse como fuente fuerte de credits para LifeOS hoy
+
+**Fuentes:**
+- https://openai.com/startups/
+- https://openai.com/form/vc-partnerships-application/
+
+#### OpenAI Cybersecurity Grant Program
+
+- **Estado actual:** activo como programa niche
+- **Dato validado:** OpenAI habla de grants de `\$10,000 USD` y de apoyo en forma de API credits, direct funding y equivalentes dentro de su programa de ciberseguridad
+- **Fit con LifeOS general:** **medio-bajo**
+- **Fit con una propuesta de seguridad de LifeOS:** **medio**
+
+**Lectura honesta:**
+- no es para el proyecto general “LifeOS” sin mas
+- si podria servir si presentas una linea especifica como:
+  - AI security daemon
+  - deteccion de amenazas locales
+  - seguridad de agentes en desktop
+
+**Fuente:**
+- https://openai.com/index/openai-cybersecurity-grant-program/
+
+### 3.5 Anthropic / Claude: credits y programas utiles para LifeOS
+
+Anthropic si tiene programas reales, pero hoy estan bastante menos abiertos para tu caso que OpenAI.
+
+#### Anthropic Startup Program
+
+- **Estado actual:** activo
+- **Beneficios validados:** API credits, priority rate limits y recursos
+- **Restriccion clave validada:** esta enfocado en startups **early-stage respaldadas por VC partners**
+- **Fit con LifeOS hoy:** **muy bajo**
+
+**Lectura honesta:**
+- si tuvieras inversionistas compatibles, si valdria mucho la pena
+- en tu situacion actual, no merece mucho tiempo
+
+**Fuentes:**
+- https://claude.com/programs/startups
+- https://www.anthropic.com/startup-program-official-terms
+
+#### Anthropic External Researcher Access Program
+
+- **Estado actual:** activo
+- **Dato validado:** normalmente asigna **`\$1,000 USD`** en API credits; en casos raros, mas
+- **Revision:** primer lunes de cada mes
+- **Enfoque:** investigacion en **AI safety y alignment**
+- **Fit con LifeOS como producto:** **bajo**
+- **Fit con una linea de investigacion en seguridad/alignment:** **medio-bajo**
+
+**Lectura honesta:**
+- no es una ruta fuerte para desarrollo general de LifeOS
+- solo vale la pena si presentas una propuesta de investigacion claramente alineada a safety/alignment
+
+**Fuente:**
+- https://support.claude.com/en/articles/9125743-what-is-the-external-researcher-access-program
+
+#### Anthropic AI for Science Program
+
+- **Estado actual:** activo
+- **Dato validado:** hasta **`\$20,000 USD`** en API credits por `6 meses`
+- **Enfoque:** investigacion cientifica / academia / nonprofits
+- **Fit con LifeOS hoy:** **muy bajo**
+
+**Lectura honesta:**
+- gran programa
+- pero no es una ruta natural para LifeOS salvo que exista una colaboracion cientifica formal muy clara
+
+**Fuente:**
+- https://support.claude.com/en/articles/11199177-anthropic-s-ai-for-science-program
+
+#### Credits gratuitos base de la API de Claude
+
+- **Dato validado:** los usuarios nuevos reciben una pequeña cantidad de credits gratis para probar la API
+- **Valor para LifeOS:** **bajo**
+
+**Lectura honesta:**
+- sirve para explorar o prototipar algo
+- no sirve como estrategia real de financiamiento
+
+**Fuente:**
+- https://platform.claude.com/docs/en/about-claude/pricing
+
+### 3.6 Recomendacion practica: OpenAI vs Claude para LifeOS
+
+Si el objetivo es conseguir **credits/tokens** hoy para ayudar a financiar el desarrollo:
+
+1. **OpenAI Codex Open Source Fund** = **si aplicar ya**
+2. **OpenAI for Startups** = **si entrar, pero sin contar con grants grandes**
+3. **OpenAI Researcher Access** = **solo si haces una propuesta de investigacion**
+4. **Anthropic Startup Program** = **no priorizar hoy**
+5. **Anthropic External Researcher Access** = **solo si hay framing fuerte de safety/alignment**
+6. **Anthropic AI for Science** = **no priorizar hoy**
+
 ---
 
 ## 4. Financiamiento Comunitario
@@ -674,29 +832,34 @@ Si la meta es complementar grants con comunidad y audiencia, la mezcla recomenda
 5. **Definir si Ko-fi entra o no**
    - si quieres memberships ligeras sin sobrecargarte, si
    - si quieres minimizar plataformas, se puede posponer
+6. **Aplicar a OpenAI Codex Open Source Fund**
+   - es la mejor ruta actual de OpenAI para un proyecto OSS como LifeOS
 
 ### Siguiente ventana: abril 2026
 
-6. **Abrir Open Collective**
-7. **Aplicar a Microsoft Founders Hub**
-8. **Aplicar a Google Start tier si sigues pre-funded**
-9. **Lanzar newsletter**
-10. **Empezar YouTube tecnico de producto**
-11. **Definir posicionamiento hispanohablante**
+7. **Abrir Open Collective**
+8. **Aplicar a Microsoft Founders Hub**
+9. **Aplicar a Google Start tier si sigues pre-funded**
+10. **Entrar a OpenAI for Startups**
+11. **Evaluar si tiene sentido una propuesta de OpenAI Researcher Access**
+12. **Lanzar newsletter**
+13. **Empezar YouTube tecnico de producto**
+14. **Definir posicionamiento hispanohablante**
    - Linux + AI local + privacidad + automatizacion
    - explicado para Mexico y LatAm, no intentando sonar como creator-tech en ingles
 
 ### Cuando haya un poco mas de evidencia
 
-12. **Reevaluar FLOSS/fund**
-13. **Preparar caso para Sovereign Tech / Sovereign Tech Agency**
-14. **Abrir consultoria / setup premium en espanol**
-15. **Probar primeros patrocinadores directos**
+15. **Reevaluar FLOSS/fund**
+16. **Preparar caso para Sovereign Tech / Sovereign Tech Agency**
+17. **Abrir consultoria / setup premium en espanol**
+18. **Probar primeros patrocinadores directos**
+19. **Solo si aparece framing fuerte de safety/alignment: evaluar programa de investigadores de Anthropic**
 
 ### Solo mas adelante
 
-16. **500 Global / VC**
-17. **cualquier ruta claramente dilutiva**
+20. **500 Global / VC**
+21. **cualquier ruta claramente dilutiva**
 
 ---
 
@@ -708,15 +871,20 @@ Si la meta es complementar grants con comunidad y audiencia, la mezcla recomenda
 | GitHub Sponsors | Comunidad | MUY ALTA | cero burocracia, valida apoyo real |
 | Stripe donation link | Donacion directa | MUY ALTA | facilisimo de desplegar, sin gatekeeper social |
 | NVIDIA Inception | Beneficios | ALTA | compute/training/hardware upside |
+| OpenAI Codex Open Source Fund | API credits OSS | ALTA | mejor puerta actual de OpenAI para LifeOS |
 | Open Collective | Comunidad/fiscal host | ALTA | transparencia + estructura |
 | Ko-fi | Comunidad/membership | ALTA | memberships ligeras y apoyo casual |
 | Servicios / setup premium en espanol | Servicios | ALTA | monetizacion temprana alineada a tu idioma real |
 | Microsoft Founders Hub | Creditos | ALTA | abierto a founders no VC-backed |
+| OpenAI for Startups | Programa / red | MEDIA-ALTA | util, pero no contar con credits grandes garantizados |
 | YouTube en espanol | Audiencia + fan funding | ALTA | discovery + confianza en nicho hispanohablante menos saturado |
 | Google Startups | Creditos | MEDIA | util, pero menos central hoy |
+| OpenAI Researcher Access | API credits investigacion | MEDIA-BAJA | solo si se reencuadra como investigacion seria |
 | Newsletter en espanol | Audiencia propia | MEDIA-ALTA | activo estrategico de largo plazo en nicho poco atendido |
 | Consultoria / setup | Servicios | MEDIA-ALTA | ingreso temprano aunque no escale |
 | X Subscriptions | Social membership | MEDIA | util solo si sube fuerte la audiencia |
+| Anthropic Startup Program | API credits startup | BAJA hoy | orientado a VC-backed, poco fit para tu situacion actual |
+| Anthropic Researcher Access | API credits research | BAJA hoy | solo si hay propuesta fuerte de safety/alignment |
 | FLOSS/fund | Grant | MEDIA | prometedor, pero menos inmediato |
 | Sovereign Tech | Grant | MEDIA | fuerte, pero mejor con mas traccion |
 | 500 Global | Equity | BAJA hoy | demasiado temprano |
@@ -735,7 +903,7 @@ Si haces seis:
 
 4. **Open Collective**
 5. **Microsoft Founders Hub**
-6. **Google Start tier**
+6. **OpenAI Codex Open Source Fund**
 
 Si haces nueve, esta es la mezcla mas potente:
 
@@ -793,6 +961,7 @@ Eso permite que, si una fuente falla, LifeOS siga vivo.
 - NVIDIA Inception
 - Microsoft Founders Hub
 - Google Start tier
+- OpenAI Codex Open Source Fund
 
 **Funcion:** bajar costos de compute, builds, demos y experimentacion.
 
@@ -845,9 +1014,10 @@ Eso es mucho mas robusto que intentar vivir solo de donaciones desde el dia uno.
 3. crear Stripe donation link
 4. abrir Open Collective
 5. aplicar a NVIDIA Inception
-6. aplicar a Microsoft Founders Hub
-7. definir oferta de setup premium en espanol
-8. publicar landing simple con:
+6. aplicar a OpenAI Codex Open Source Fund
+7. aplicar a Microsoft Founders Hub
+8. definir oferta de setup premium en espanol
+9. publicar landing simple con:
    - que es LifeOS
    - por que importa
    - como apoyarlo
@@ -996,16 +1166,17 @@ Si yo tuviera que escoger la combinacion mas realista para que LifeOS te lleve a
 2. **GitHub Sponsors**
 3. **Stripe donation link**
 4. **Open Collective**
-5. **Setup premium en espanol**
-6. **NVIDIA Inception**
-7. **Microsoft Founders Hub**
-8. **YouTube + newsletter en espanol**
+5. **OpenAI Codex Open Source Fund**
+6. **Setup premium en espanol**
+7. **NVIDIA Inception**
+8. **Microsoft Founders Hub**
+9. **YouTube + newsletter en espanol**
 
 **Interpretacion:**
 - grant te compra tiempo
 - comunidad te da validacion y base mensual
 - servicios te dan cashflow temprano
-- creditos te bajan burn
+- credits y beneficios te bajan burn
 - contenido te construye pipeline futuro
 
 ### 13.10 La secuencia mas inteligente
@@ -1015,6 +1186,7 @@ Si yo tuviera que escoger la combinacion mas realista para que LifeOS te lleve a
 - NLnet
 - GitHub Sponsors
 - Stripe
+- OpenAI Codex Open Source Fund
 
 #### Semana 2
 
@@ -1085,6 +1257,16 @@ Eso no solo es mas factible. Tambien es mas sano para el proyecto.
 - Google pre-funded tier: https://cloud.google.com/startup/pre-funded
 - Google AI tier: https://cloud.google.com/startup/ai
 - Google FAQ: https://cloud.google.com/startup/faq
+- OpenAI Codex Open Source Fund: https://openai.com/form/codex-open-source-fund/
+- OpenAI Researcher Access Program: https://grants.openai.com/prog/openai_researcher_access_program/
+- OpenAI for Startups: https://openai.com/startups/
+- OpenAI VC partnerships: https://openai.com/form/vc-partnerships-application/
+- OpenAI Cybersecurity Grant Program: https://openai.com/index/openai-cybersecurity-grant-program/
+- Anthropic Startups: https://claude.com/programs/startups
+- Anthropic Startup Program Terms: https://www.anthropic.com/startup-program-official-terms
+- Anthropic External Researcher Access Program: https://support.claude.com/en/articles/9125743-what-is-the-external-researcher-access-program
+- Anthropic AI for Science Program: https://support.claude.com/en/articles/11199177-anthropic-s-ai-for-science-program
+- Claude API pricing: https://platform.claude.com/docs/en/about-claude/pricing
 - 500 Global LatAm: https://latam.500.co/latam
 - YouTube monetization overview: https://support.google.com/youtube/answer/72857
 - YouTube expanded YPP: https://support.google.com/youtube/answer/13429240

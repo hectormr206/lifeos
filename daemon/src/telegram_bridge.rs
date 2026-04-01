@@ -24,6 +24,7 @@ mod inner {
     use crate::supervisor::SupervisorNotification;
     use crate::task_queue::TaskQueue;
     use crate::telegram_tools::{self, ConversationHistory, CronStore, SddStore, ToolContext};
+    use crate::user_model::UserModel;
 
     /// Heartbeat interval — how often Axi proactively checks system health.
     const HEARTBEAT_INTERVAL_SECS: u64 = 30 * 60; // 30 minutes
@@ -176,6 +177,7 @@ mod inner {
         mut notify_rx: tokio::sync::broadcast::Receiver<SupervisorNotification>,
         session_store: Option<Arc<crate::session_store::SessionStore>>,
         event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
+        user_model: Option<Arc<RwLock<UserModel>>>,
     ) {
         info!("Starting Telegram bridge (natural language mode)...");
 
@@ -295,6 +297,7 @@ mod inner {
             cron_store: cron_store.clone(),
             sdd_store: sdd_store.clone(),
             session_store: session_store.clone(),
+            user_model: user_model.clone(),
         };
 
         // Heartbeat — configurable HEARTBEAT.md evaluation loop
@@ -392,6 +395,7 @@ mod inner {
             cron_store,
             sdd_store,
             session_store,
+            user_model,
         };
 
         let worker_pool = Arc::new(if let Some(ref bus) = event_bus {

@@ -149,9 +149,10 @@ mod translation;
 mod tuf;
 mod update_scheduler;
 mod updates;
-mod user_model;
 #[allow(dead_code)]
 mod usb_guard;
+#[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+mod user_model;
 mod visual_comfort;
 mod wake_word;
 #[allow(dead_code)]
@@ -1552,10 +1553,8 @@ async fn main() -> anyhow::Result<()> {
             };
             // Load user model for personalization (Fase AQ)
             let um = {
-                let home =
-                    std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
-                let data_dir =
-                    std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+                let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
                 let model = user_model::UserModel::load_from_dir(&data_dir).await;
                 Arc::new(RwLock::new(model))
             };
