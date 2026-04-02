@@ -420,30 +420,30 @@ Telegram tiene evidencia especialmente fuerte en:
 - [daemon/src/telegram_tools.rs](../../daemon/src/telegram_tools.rs)
 - [docs/operations/telegram-features.md](../operations/telegram-features.md)
 
-Ademas existen modulos para:
+Ademas existen modulos para Slack, Discord, Signal, Matrix, WhatsApp y Home Assistant.
 
-- Slack
-- Discord
-- WhatsApp
-- Matrix
-- Signal
-- Home Assistant
+### Estado por canal (3 niveles: Repo / Imagen / Host)
+
+| Canal | Repo | Imagen (default) | Host validado | Notas |
+|-------|------|-------------------|---------------|-------|
+| Telegram | Si | Si (feature=telegram) | Si, uso diario | Canal principal, 84 tools |
+| Slack | Si (feature-gated) | No | No | Implementacion real, Socket Mode + REST |
+| Discord | Si (feature-gated) | No | No | Implementacion real, Gateway WS + REST |
+| Signal | Si (feature-gated) | No | No | Implementacion real, signal-cli JSON-RPC |
+| Matrix | Si (feature-gated) | No | No | Implementacion real, Client-Server API v3 |
+| WhatsApp | Si (feature-gated) | No | No | Implementacion real, Meta Cloud API v19 |
+| Home Assistant | Si (feature-gated) | No | No | Integracion basica |
 
 ### Diferencia clave
 
-No todos esos canales estan shipped en la imagen default.
-
-Telegram si es parte clara del camino real actual.  
-Los demas canales existen como base de repo o feature flags, pero no todos forman parte del producto compilado por defecto.
+Solo Telegram esta compilado en la imagen default y validado en uso diario real.
+Los demas canales tienen implementaciones reales en el repositorio (no stubs), pero estan detras de feature flags y no se incluyen en la imagen que se shippea. Ninguno ha sido validado en host.
 
 ### Lectura de madurez
 
-**Estado:** Telegram fuerte; resto mixto o gated
+**Estado:** Telegram fuerte y validado; resto implementado pero gated y sin validacion host
 
-Cuando se hable publicamente de canales, conviene seguir distinguiendo:
-
-- canal real actual: Telegram
-- canales presentes en repo pero no shipped por defecto
+Para comunicacion publica, siempre distinguir entre estos tres niveles para cada canal.
 
 ---
 
