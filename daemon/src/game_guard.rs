@@ -64,17 +64,20 @@ const NON_GAME_GPU_PROCESSES: &[&str] = &[
 /// Process names that are launchers (not games themselves)
 const LAUNCHER_PROCESSES: &[&str] = &["steam", "steamwebhelper", "lutris", "heroic", "gamemoded"];
 
-/// Process names that indicate an actual game is running
+/// Processes that MAY indicate a game but are ambiguous on their own.
+/// wineserver/wine can run for non-game Windows apps (Office, etc.).
+/// Only count as game if a high-confidence game indicator is also present
+/// (gamescope, mangohud, proton, or high VRAM usage).
+const AMBIGUOUS_GAME_PROCESSES: &[&str] = &["wine", "wine64", "wineserver"];
+
+/// Process names that ALWAYS indicate a game is running (high confidence)
 const GAME_PROCESS_NAMES: &[&str] = &[
-    // Wine / Proton layer
-    "wine",
-    "wine64",
-    "wineserver",
-    "proton",
     // Compositors used exclusively for gaming
     "gamescope",
     // Performance overlay (only injected into games)
     "mangohud",
+    // Proton (Steam Play — always means a game)
+    "proton",
     // Game engines
     "UnrealEditor",
     "UE4Game",
@@ -346,7 +349,7 @@ pub fn detect_game(vram_threshold_mb: u64) -> Option<GameInfo> {
         });
     }
 
-    // 2. Known game process names in /proc
+    // 2. Known game process names in /proc (high confidence only — excludes wine/wineserver)
     let proc_games = detect_game_processes();
     if let Some(info) = proc_games.into_iter().next() {
         return Some(info);
@@ -354,7 +357,27 @@ pub fn detect_game(vram_threshold_mb: u64) -> Option<GameInfo> {
 
     // 3. VRAM-heavy processes via nvidia-smi pmon
     let vram_games = detect_vram_heavy_processes(vram_threshold_mb);
-    vram_games.into_iter().next()
+    if let Some(info) = vram_games.into_iter().next() {
+        return Some(info);
+    }
+
+    // 4. Ambiguous processes (wine/wineserver) — only count as game if a
+    //    high-confidence indicator is ALSO present (gamescope, proton, mangohud, GameMode)
+    let has_wine = has_ambiguous_game_process();
+    if has_wine {
+        let has_strong_signal =
+            detect_gamemode_active() || proc_has_any(&["gamescope", "mangohud", "proton"]);
+        if has_strong_signal {
+            return Some(GameInfo {
+                pid: 0,
+                name: "Wine/Proton game".to_string(),
+                window_title: None,
+                detection_method: DetectionMethod::ProcessName,
+            });
+        }
+    }
+
+    None
 }
 
 /// Check whether GameMode (feralinteractive) is currently active.
@@ -425,7 +448,16 @@ pub fn detect_game_processes() -> Vec<GameInfo> {
             continue;
         }
 
-        // Match against known game process names
+        // Skip ambiguous processes (wine/wineserver) — they are NOT games by themselves.
+        // They only count if a high-confidence indicator is also present (checked later).
+        if AMBIGUOUS_GAME_PROCESSES
+            .iter()
+            .any(|a| comm.eq_ignore_ascii_case(a))
+        {
+            continue;
+        }
+
+        // Match against known game process names (high confidence only)
         if GAME_PROCESS_NAMES
             .iter()
             .any(|g| comm.eq_ignore_ascii_case(g))
@@ -441,6 +473,49 @@ pub fn detect_game_processes() -> Vec<GameInfo> {
     }
 
     results
+}
+
+/// Check if any ambiguous game process (wine/wineserver) is running.
+fn has_ambiguous_game_process() -> bool {
+    let proc_dir = match fs::read_dir("/proc") {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    for entry in proc_dir.flatten() {
+        let pid: u32 = match entry.file_name().to_string_lossy().parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if let Some(comm) = read_proc_comm(pid) {
+            if AMBIGUOUS_GAME_PROCESSES
+                .iter()
+                .any(|a| comm.eq_ignore_ascii_case(a))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if any process matching the given names exists in /proc.
+fn proc_has_any(names: &[&str]) -> bool {
+    let proc_dir = match fs::read_dir("/proc") {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    for entry in proc_dir.flatten() {
+        let pid: u32 = match entry.file_name().to_string_lossy().parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if let Some(comm) = read_proc_comm(pid) {
+            if names.iter().any(|n| comm.eq_ignore_ascii_case(n)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Use `nvidia-smi pmon -c 1 -s m` to find processes consuming significant VRAM.
