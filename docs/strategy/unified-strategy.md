@@ -22,6 +22,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fase-ax-auditoria-de-realidad.md](fase-ax-auditoria-de-realidad.md) | Fase AX: auditoria de realidad, verificacion por evidencia y cierre de claims rotos | ~140 |
 | [fase-ay-control-plane-os.md](fase-ay-control-plane-os.md) | Fase AY: OS Control Plane — 4-layer hierarchy (MCP > adapter > accessibility > vision) | ~280 |
 | [auditoria-estados-reales.md](auditoria-estados-reales.md) | Matriz viva de estados reales: que esta validado en host, que esta parcial y que esta solo en repo o feature-flag | ~110 |
+| [fase-be-actividad-real.md](fase-be-actividad-real.md) | Fase BE: Actividad Real — tracking real de usuario (idle, lock, apps, Telegram, audio, camara) con maquina de estados | ~430 |
 
 ## Estado de Fases (resumen rapido)
 
@@ -66,6 +67,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | **AQ** | **Experiencias Personalizadas: User Model, adaptacion de tono, prediccion proactiva, contextos, workflows** |
 | **AU** | **Seguridad por Defecto: firewall, sysctl, SSH hardening, auditd, DNS seguro, USB guard** |
 | **AY** | **OS Control Plane: 20+ MCP tools para ventanas/apps/clipboard/sistema + politica de seleccion de capa (MCP > adapter > AT-SPI2 > vision)** |
+| **BE** | **Actividad Real: tracking real de usuario (idle, lock, apps, Telegram, audio, camara) — Axi sabe si el usuario trabaja o descansa de verdad** |
 
 ### Fases de Investigacion (requieren mas research antes de implementar)
 
@@ -92,4 +94,4 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 - **Quieres ver la vision y reglas?** `vision-y-decisiones.md`
 - **Quieres ver los gaps de OpenClaw?** `fases-ab-aj.md` (tabla comparativa al inicio)
 
-Ultima actualizacion: 2026-03-31
+Ultima actualizacion: 2026-04-01
