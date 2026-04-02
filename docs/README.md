@@ -15,6 +15,7 @@ Start here based on what you need:
 | Folder | Purpose | Key Files |
 |--------|---------|-----------|
 | [strategy/](strategy/) | Strategic roadmap, phases, competition | unified-strategy |
+| [public/](public/) | Public-facing summaries for users and sponsors | roadmap, roadmap.es-mx |
 | [architecture/](architecture/) | Technical architecture and specs | ai-runtime, llm-providers, threat-model, update-channels |
 | [operations/](operations/) | Runbooks and operational guides | bootc-playbook, incident-response, build-iso, nvidia-secure-boot, system-admin |
 | [user/](user/) | End-user documentation | installation, user-guide, troubleshooting |
