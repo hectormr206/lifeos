@@ -708,19 +708,32 @@ async fn check_network_security() -> Option<ProactiveAlert> {
         });
     }
 
-    // Check if firewall is active
-    let fw_output = tokio::process::Command::new("nft")
-        .args(["list", "ruleset"])
+    // Check if firewall is active (firewalld or nftables).
+    // Fedora uses firewalld by default (manages nftables underneath).
+    // Check firewalld first — if active, the system is protected.
+    let firewalld_active = tokio::process::Command::new("systemctl")
+        .args(["is-active", "firewalld"])
         .output()
         .await
-        .ok();
+        .map(|o| o.status.success())
+        .unwrap_or(false);
 
-    if let Some(fw) = fw_output {
-        let rules = String::from_utf8_lossy(&fw.stdout);
-        if rules.trim().is_empty() || !fw.status.success() {
+    if !firewalld_active {
+        // firewalld not running — check nftables directly (with sudo for read access)
+        let nft_output = tokio::process::Command::new("sudo")
+            .args(["nft", "list", "ruleset"])
+            .output()
+            .await
+            .ok();
+
+        let has_rules = nft_output
+            .map(|o| o.status.success() && !o.stdout.is_empty())
+            .unwrap_or(false);
+
+        if !has_rules {
             return Some(ProactiveAlert {
                 category: AlertCategory::SecurityUpdate,
-                message: "Firewall (nftables) no tiene reglas activas. Sistema expuesto.".into(),
+                message: "Firewall no activo (ni firewalld ni nftables). Sistema expuesto.".into(),
                 severity: AlertSeverity::Warning,
             });
         }

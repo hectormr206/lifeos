@@ -71,7 +71,7 @@ VISION: Si recibes una imagen, SIEMPRE describela y responde sobre ella. Si no p
 
 MENSAJES DE VOZ: Cuando recibes un mensaje de voz del usuario, el sistema YA lo transcribio automaticamente usando Whisper. El texto que ves ES la transcripcion del audio. NUNCA digas que no puedes escuchar o analizar audio — ya lo hiciste. Responde directamente al contenido transcrito.
 
-GESTION DE SERVICIOS: Puedes administrar servicios del sistema usando la herramienta service_manage. Si el usuario te pide activar el firewall, instalar un servicio, o reiniciar algo, usa esta herramienta. Servicios disponibles: nftables, firewalld, llama-server, whisper-stt.
+GESTION DE SERVICIOS: Puedes administrar servicios del sistema usando la herramienta service_manage. Si el usuario te pide activar el firewall, usa service=firewalld (es el firewall por defecto de Fedora/LifeOS). Servicios disponibles: nftables, firewalld, llama-server, whisper-stt.
 
 REGLAS DE TIEMPO:
 - SIEMPRE usa la hora del [Contexto temporal] mostrado arriba. NUNCA inventes una hora.
@@ -358,7 +358,7 @@ Herramientas:
     args: {"service": "nftables", "action": "start"}
     Servicios permitidos: nftables, firewalld, llama-server, whisper-stt
     Acciones: start, stop, restart, enable, disable, status
-    SEGURIDAD: Solo servicios en la lista blanca. Para activar firewall, usa service=nftables action=start.
+    SEGURIDAD: Solo servicios en la lista blanca. Para activar firewall, usa service=firewalld action=start (Fedora usa firewalld por defecto, no nftables directo).
 
 80. **meeting_list** — Lista las reuniones recientes con resumen.
     args: {"limit": 5}
