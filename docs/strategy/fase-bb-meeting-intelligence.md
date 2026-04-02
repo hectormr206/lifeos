@@ -94,6 +94,63 @@ Esta fase mejora cada componente para alcanzar calidad profesional.
 | Mic USB conferencia ($50), 4-5 personas | 85-90% |
 | Ambiente ruidoso | 70-80% |
 
+## Tareas pendientes (post v0.3.2)
+
+### BB.9 — Notificacion post-reunion con resumen completo
+- Al terminar de procesar la reunion, Axi envia por Telegram:
+  - Resumen ejecutivo (3-5 bullets)
+  - Numero de participantes detectados
+  - Duracion
+  - Cantidad de action items
+  - Cantidad de screenshots capturados
+  - Mensaje: "La reunion completa esta disponible en el dashboard"
+- NO enviar transcript completo por Telegram (demasiado largo)
+- NO enviar link al dashboard (solo funciona en la laptop, no desde celular)
+
+### BB.10 — Vista detallada de reunion en dashboard
+- Al hacer clic en una reunion de la lista, abrir vista completa con:
+  - **Header**: titulo, fecha, duracion, app (Meet/Zoom/etc), participantes
+  - **Resumen ejecutivo**: generado por el LLM
+  - **Action items**: lista con quien, que, cuando, checkbox de completado
+  - **Transcript diarizado**: scroll completo con colores por speaker
+    - Cada speaker con color diferente
+    - Timestamps visibles
+    - "[Hector] 09:15 — Necesitamos revisar el presupuesto"
+    - "[Maria] 09:16 — De acuerdo, lo tengo listo para el viernes"
+  - **Screenshots**: galeria de screenshots capturados con timestamp
+    - Clic para ampliar
+    - Util para ver slides o pantalla compartida
+  - **Metadata**: hora inicio/fin, tipo (remota/presencial), audio conservado si/no
+- Boton "Exportar" para descargar todo como:
+  - Archivo markdown (.md) con transcript + resumen + action items
+  - O archivo JSON con todos los datos estructurados
+- Boton "Borrar reunion" con confirmacion
+
+### BB.11 — Historial de reuniones en dashboard
+- Lista de todas las reuniones ordenadas por fecha (mas reciente primero)
+- Filtros: por semana/mes, por app (Meet/Zoom/presencial), por participante
+- Busqueda en transcripts: "busca donde hablamos de presupuesto"
+- Estadisticas: total de reuniones del mes, horas en reuniones, participante mas frecuente
+- Paginacion (no cargar todas de golpe)
+
+### BB.12 — Archivo exportable post-reunion
+- Ademas de guardar en SQLite y MemoryPlane, generar un archivo markdown por reunion:
+  - Ruta: `/var/lib/lifeos/meetings/YYYY-MM-DD-titulo/reunion.md`
+  - Contenido: resumen + action items + transcript diarizado
+  - Los screenshots quedan en la misma carpeta
+- Esto permite que el usuario pueda abrir el archivo en cualquier editor
+  sin depender del dashboard
+- Estructura de carpeta por reunion (no archivos sueltos):
+  ```
+  /var/lib/lifeos/meetings/
+    2026-04-02-junta-equipo/
+      reunion.md          # Resumen + transcript completo
+      action-items.json   # Action items estructurados
+      screenshot-001.png  # Screenshots con timestamp
+      screenshot-002.png
+      metadata.json       # Duracion, participantes, app, etc.
+  ```
+
 ## Privacidad
 
 - Todo local, ningun audio sale de la maquina
