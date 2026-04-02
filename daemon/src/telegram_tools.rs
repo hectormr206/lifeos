@@ -3711,7 +3711,7 @@ max_context = 128000
     /// BD.9 — Unified agenda: calendar events + cron jobs in a single view.
     async fn execute_agenda(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let days = args.get("days").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
-        let days = days.max(1).min(7); // Clamp to 1-7 days
+        let days = days.clamp(1, 7);
 
         let spanish_months = [
             "enero",

@@ -142,6 +142,8 @@ impl UserModel {
     }
 
     /// Number of days since the user first started using LifeOS.
+    /// Used by prompt_instructions() and learning mode detection.
+    #[allow(dead_code)]
     pub fn days_since_first_seen(&self) -> i64 {
         self.first_seen
             .map(|fs| Utc::now().signed_duration_since(fs).num_days())
