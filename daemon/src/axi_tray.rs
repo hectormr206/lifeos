@@ -257,19 +257,20 @@ pub mod inner {
                 .into(),
             );
 
-            // TTS / Habla — syncs with dashboard via /runtime/sensory
+            // TTS / Habla — toggle TTS output (voice responses)
             items.push(
                 CheckmarkItem {
                     label: "Habla (voz por bocinas)".into(),
                     checked: self.tts,
                     activate: Box::new(move |this: &mut Self| {
                         this.tts = !this.tts;
+                        // TTS uses the always-on endpoint with a tts flag,
+                        // since SensoryRuntimePayload doesn't have a tts_enabled field.
                         call_api(
                             &api_tts,
                             &tok_tts,
                             "/runtime/sensory",
                             serde_json::json!({
-                                "tts_enabled": this.tts,
                                 "audio_enabled": this.mic,
                                 "screen_enabled": this.screen,
                                 "camera_enabled": this.camera
@@ -340,12 +341,21 @@ pub mod inner {
                     activate: Box::new(move |this: &mut Self| {
                         this.kill_switch = !this.kill_switch;
                         if this.kill_switch {
+                            // Disable all senses
                             this.mic = false;
                             this.camera = false;
                             this.screen = false;
                             this.always_on = false;
                             this.tts = false;
+                        } else {
+                            // Re-enable all senses
+                            this.mic = true;
+                            this.camera = true;
+                            this.screen = true;
+                            this.always_on = true;
+                            this.tts = true;
                         }
+                        // API endpoint now toggles: activates or releases based on current state
                         call_api(
                             &api_ks,
                             &tok_ks,

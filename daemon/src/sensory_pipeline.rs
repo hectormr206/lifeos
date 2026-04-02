@@ -820,6 +820,37 @@ impl SensoryPipelineManager {
         Ok(snapshot)
     }
 
+    /// Release the sensory kill switch — re-enable all senses.
+    pub async fn release_kill_switch(
+        &self,
+        overlay: &OverlayManager,
+    ) -> Result<SensoryPipelineState> {
+        let mut state = self.state.write().await;
+        state.kill_switch_active = false;
+        state.leds = SensorLeds {
+            mic_active: true,
+            camera_active: true,
+            screen_active: true,
+            kill_switch_active: false,
+        };
+        state.voice.active = true;
+        state.voice.always_on_active = true;
+        state.presence.camera_active = true;
+        state.vision.enabled = true;
+        state.axi_state = AxiState::Idle;
+        state.last_updated_at = Some(Utc::now());
+        let snapshot = state.clone();
+        drop(state);
+        overlay
+            .set_sensor_indicators(true, true, true, false)
+            .await?;
+        overlay
+            .set_axi_state(AxiState::Idle, Some("kill-switch-released"))
+            .await?;
+        self.save_state().await?;
+        Ok(snapshot)
+    }
+
     pub async fn interrupt_voice_session(&self, overlay: &OverlayManager) -> Result<bool> {
         let active = self.playback.lock().await.clone();
         let Some(active) = active else {

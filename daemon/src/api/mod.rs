@@ -8062,41 +8062,59 @@ async fn trigger_sensory_kill_switch(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let actor = payload.actor.as_deref();
     let runtime_mgr = state.agent_runtime_manager.read().await;
-    let runtime = runtime_mgr
-        .trigger_sensory_kill_switch(actor)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    error: "Internal Server Error".to_string(),
-                    message: e.to_string(),
-                    code: 500,
-                }),
-            )
-        })?;
+
+    // Toggle: if kill-switch is currently active, RELEASE it. Otherwise, ACTIVATE it.
+    let is_active = runtime_mgr.is_sensory_kill_switch_active().await;
+
+    let runtime = if is_active {
+        // Release — re-enable all senses
+        runtime_mgr
+            .release_sensory_kill_switch(actor)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Internal Server Error".to_string(),
+                        message: e.to_string(),
+                        code: 500,
+                    }),
+                )
+            })?
+    } else {
+        // Activate — disable all senses
+        runtime_mgr
+            .trigger_sensory_kill_switch(actor)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiError {
+                        error: "Internal Server Error".to_string(),
+                        message: e.to_string(),
+                        code: 500,
+                    }),
+                )
+            })?
+    };
     drop(runtime_mgr);
 
+    // Also toggle the sensory pipeline kill switch
     let sensory_mgr = state.sensory_pipeline_manager.read().await;
     let overlay_mgr = state.overlay_manager.read().await.clone();
-    let sensory = sensory_mgr
-        .trigger_kill_switch(&overlay_mgr)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    error: "Internal Server Error".to_string(),
-                    message: e.to_string(),
-                    code: 500,
-                }),
-            )
-        })?;
+    if !is_active {
+        // Activate kill switch on pipeline
+        let _ = sensory_mgr.trigger_kill_switch(&overlay_mgr).await;
+    } else {
+        // Release kill switch on pipeline — re-enable
+        let _ = sensory_mgr.release_kill_switch(&overlay_mgr).await;
+    }
 
     Ok(Json(serde_json::json!({
         "status": "ok",
+        "action": if is_active { "released" } else { "activated" },
+        "kill_switch_active": !is_active,
         "sensory_runtime": runtime,
-        "sensory": sensory,
     })))
 }
 

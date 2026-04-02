@@ -1309,6 +1309,51 @@ impl AgentRuntimeManager {
         Ok(snapshot)
     }
 
+    /// Check if the sensory kill switch is currently active.
+    pub async fn is_sensory_kill_switch_active(&self) -> bool {
+        self.state
+            .read()
+            .await
+            .sensory_capture_runtime
+            .kill_switch_active
+    }
+
+    /// Release the sensory kill switch — re-enable all senses.
+    pub async fn release_sensory_kill_switch(
+        &self,
+        actor: Option<&str>,
+    ) -> Result<SensoryCaptureRuntimeState> {
+        let actor = actor.unwrap_or("user://local/default");
+        let mut state = self.state.write().await;
+        state.sensory_capture_runtime.enabled = true;
+        state.sensory_capture_runtime.audio_enabled = true;
+        state.sensory_capture_runtime.screen_enabled = true;
+        state.sensory_capture_runtime.camera_enabled = true;
+        state.sensory_capture_runtime.running = true;
+        state.sensory_capture_runtime.kill_switch_active = false;
+        state.sensory_capture_runtime.updated_at = Some(Utc::now());
+
+        append_ledger(
+            &mut state,
+            "runtime",
+            "sensory_kill_switch_release",
+            "super-escape",
+            serde_json::json!({
+                "actor": actor,
+                "enabled": true,
+                "audio_enabled": true,
+                "screen_enabled": true,
+                "camera_enabled": true,
+                "kill_switch_active": false,
+            }),
+        );
+
+        let snapshot = state.sensory_capture_runtime.clone();
+        drop(state);
+        self.save_state().await?;
+        Ok(snapshot)
+    }
+
     pub async fn record_sensory_snapshot(
         &self,
         screen_path: Option<&str>,
