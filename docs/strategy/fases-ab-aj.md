@@ -731,6 +731,18 @@ Extension .oxt para Writer/Calc/Impress con resumir, reescribir, traducir, expan
 
 Servicio cloud para acceso movil 24/7. Podman rootless multi-tenant, CPU-only + Cerebras/Groq, 5 tiers ($0-$30/mes), cr-sqlite sync local-cloud. Ejecutar cuando haya 50+ usuarios interesados. Investigacion completa ya realizada (costos, arquitectura, pricing).
 
+### Modelos Remotos Gratis y Preview (Fase BF, futura)
+
+Catalogo experimental de modelos remotos nuevos, gratuitos o en preview, usando
+cuentas/cuotas del propio usuario. Referencias: OpenRouter free/preview, Qwen
+OAuth/cuotas gratis oficiales y promos temporales similares. Reglas:
+
+- local sigue siendo el default
+- remoto siempre es opt-in
+- privacidad y estabilidad se etiquetan explicitamente
+- previews no reciben memoria privada ni contexto sensible por defecto
+- no hay fallback silencioso del local a preview remoto
+
 ### Pairing System Multi-Dispositivo (futura)
 
 Codigo 8 chars con TTL 1h para vincular nuevo dispositivo/usuario. Prerequisito: soporte multi-dispositivo y cloud hosting.

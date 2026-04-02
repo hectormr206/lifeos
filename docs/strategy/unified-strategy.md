@@ -23,6 +23,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fase-ay-control-plane-os.md](fase-ay-control-plane-os.md) | Fase AY: OS Control Plane — 4-layer hierarchy (MCP > adapter > accessibility > vision) | ~280 |
 | [auditoria-estados-reales.md](auditoria-estados-reales.md) | Matriz viva de estados reales: que esta validado en host, que esta parcial y que esta solo en repo o feature-flag | ~110 |
 | [fase-be-actividad-real.md](fase-be-actividad-real.md) | Fase BE: Actividad Real — tracking real de usuario (idle, lock, apps, Telegram, audio, camara) con maquina de estados | ~430 |
+| [fase-bf-modelos-remotos-gratis.md](fase-bf-modelos-remotos-gratis.md) | Fase BF: modelos remotos gratis/preview como opcion experimental, con opt-in, etiquetas de privacidad y aislamiento de memoria | ~170 |
 
 ## Estado de Fases (resumen rapido)
 
@@ -86,6 +87,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | *AS* | *LifeOS Android: companion app + ROM para Pixel 7 Pro* |
 | *AT* | *App Android nativa: todos los sentidos de Axi en cualquier telefono* |
 | *AW* | *Cross-Platform Controller: LifeOS gobierna Windows, Mac, Android, iOS* |
+| *BF* | *Modelos remotos gratis/preview: catalogo experimental de modelos nuevos con cuenta del usuario, sin romper local-first ni privacidad por defecto* |
 
 ## Como usar esta documentacion
 
@@ -94,4 +96,4 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 - **Quieres ver la vision y reglas?** `vision-y-decisiones.md`
 - **Quieres ver los gaps de OpenClaw?** `fases-ab-aj.md` (tabla comparativa al inicio)
 
-Ultima actualizacion: 2026-04-01
+Ultima actualizacion: 2026-04-02
