@@ -96,6 +96,40 @@ Esta fase mejora cada componente para alcanzar calidad profesional.
 
 ## Tareas pendientes (post v0.3.2)
 
+### BB.13 — Fix CRITICO: Deteccion de reuniones en navegador (PRIORIDAD 1)
+
+**Problema real detectado (2026-04-02):** El usuario tuvo una reunion en Google Meet
+via ungoogled-chromium (Flatpak). Axi NO la detecto porque:
+1. Audio: pactl reporta "Chromium", no "Google Meet"
+2. Ventanas: COSMIC DE no tiene API de titulos accesible (zcosmic_toplevel pendiente)
+3. Camara: la reunion fue sin camara
+
+**Solucion:** Cruzar audio + titulo de ventana del navegador.
+
+Implementar:
+- Detectar audio activo de navegador (Chromium, Firefox, Brave, etc.) via pactl
+- Si hay audio de navegador, obtener titulo de ventana activa:
+  - COSMIC: zcosmic_toplevel_info_v1 (pendiente) o cosmic-comp D-Bus
+  - Fallback: leer /proc/{pid}/cmdline para URLs, o xdotool/wlrctl
+  - Flatpak: inspeccionar portal de ventanas
+- Si titulo contiene "Meet", "Zoom", "Teams", "Slack", "Discord", "Jitsi", "WebEx" → reunion detectada
+- Apps nativas (zoom, teams como proceso) → deteccion actual ya funciona
+
+Navegadores a cubrir:
+- Chromium / ungoogled-chromium (Flatpak y nativo)
+- Firefox (Flatpak y nativo, perfil LifeOS)
+- Brave, Edge, Chrome, Vivaldi
+
+Plataformas de videollamada a detectar en titulo:
+- Google Meet ("Google Meet" o "meet.google.com")
+- Zoom ("Zoom Meeting" o "zoom.us")
+- Microsoft Teams ("Microsoft Teams" o "teams.microsoft.com")
+- Discord ("Discord" + canal de voz)
+- Slack ("Slack" + "Huddle")
+- Jitsi ("Jitsi Meet" o "meet.jit.si")
+- WebEx ("Webex" o "webex.com")
+- Whereby, Around, Gather, etc.
+
 ### BB.9 — Notificacion post-reunion con resumen completo
 - Al terminar de procesar la reunion, Axi envia por Telegram:
   - Resumen ejecutivo (3-5 bullets)
