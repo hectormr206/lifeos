@@ -422,9 +422,11 @@ mod tests {
 
     #[test]
     fn test_prompt_instructions_with_projects() {
-        let mut model = UserModel::default();
-        model.active_projects = vec!["LifeOS".into(), "OpenClaw".into()];
-        model.current_context = "work".into();
+        let model = UserModel {
+            active_projects: vec!["LifeOS".into(), "OpenClaw".into()],
+            current_context: "work".into(),
+            ..Default::default()
+        };
         let prompt = model.prompt_instructions();
         assert!(prompt.contains("LifeOS"));
         assert!(prompt.contains("OpenClaw"));
@@ -678,25 +680,28 @@ mod tests {
 
     #[test]
     fn test_learning_mode_recent_first_seen() {
-        let mut model = UserModel::default();
-        // First seen 2 days ago → still in learning mode
-        model.first_seen = Some(Utc::now() - chrono::Duration::days(2));
+        let model = UserModel {
+            first_seen: Some(Utc::now() - chrono::Duration::days(2)),
+            ..Default::default()
+        };
         assert!(model.is_learning_mode());
     }
 
     #[test]
     fn test_learning_mode_expired() {
-        let mut model = UserModel::default();
-        // First seen 10 days ago → no longer learning mode
-        model.first_seen = Some(Utc::now() - chrono::Duration::days(10));
+        let model = UserModel {
+            first_seen: Some(Utc::now() - chrono::Duration::days(10)),
+            ..Default::default()
+        };
         assert!(!model.is_learning_mode());
     }
 
     #[test]
     fn test_learning_mode_boundary() {
-        let mut model = UserModel::default();
-        // Exactly 7 days ago → NOT learning mode (< 7 is learning)
-        model.first_seen = Some(Utc::now() - chrono::Duration::days(7));
+        let model = UserModel {
+            first_seen: Some(Utc::now() - chrono::Duration::days(7)),
+            ..Default::default()
+        };
         assert!(!model.is_learning_mode());
     }
 
@@ -708,8 +713,10 @@ mod tests {
 
     #[test]
     fn test_days_since_first_seen_some() {
-        let mut model = UserModel::default();
-        model.first_seen = Some(Utc::now() - chrono::Duration::days(5));
+        let model = UserModel {
+            first_seen: Some(Utc::now() - chrono::Duration::days(5)),
+            ..Default::default()
+        };
         assert_eq!(model.days_since_first_seen(), 5);
     }
 
@@ -723,8 +730,10 @@ mod tests {
 
     #[test]
     fn test_prompt_instructions_no_learning_mode() {
-        let mut model = UserModel::default();
-        model.first_seen = Some(Utc::now() - chrono::Duration::days(30));
+        let model = UserModel {
+            first_seen: Some(Utc::now() - chrono::Duration::days(30)),
+            ..Default::default()
+        };
         let prompt = model.prompt_instructions();
         assert!(!prompt.contains("Modo aprendizaje activo"));
     }
