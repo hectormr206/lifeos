@@ -768,3 +768,96 @@ La conclusion honesta es:
 
 > LifeOS ya tiene mucho mas que una idea. Ya es una plataforma de sistema operativo con componentes reales y densidad tecnica alta.  
 > Lo que sigue no es demostrar que existe, sino seguir cerrando, validando y simplificando todo lo que ya fue creado.
+
+---
+
+## Actualizacion post-sesion (2026-04-01 noche)
+
+Despues de la auditoria inicial, se realizo una sesion masiva de desarrollo que cerro
+multiples items identificados. Esta seccion documenta los cambios para mantener la
+auditoria alineada con la realidad.
+
+### Metricas actualizadas
+
+| Metrica | Antes (auditoria) | Ahora (post-sesion) |
+|---|---|---|
+| Tests pasando (daemon) | ~371 | **381** |
+| Tests pasando (CLI) | ~193 | **193** (sin cambio) |
+| Telegram tools | ~78 | **84** (+6: service_manage, meeting_list/search/start/stop, agenda) |
+| Docs files | 101 | **106** (+5: telegram-features, fase-bb, fase-bc, fase-bd, branding-audit) |
+| `#[allow(dead_code)]` en main.rs | 45 | **48** (+3: meeting_archive, meeting_assistant, justified by runtime dispatch) |
+
+### Items P0 cerrados o avanzados significativamente
+
+**Meetings (era P0 en la matriz):**
+- BB.1: Speaker ID conectado a diarizacion (WeSpeaker embeddings → nombres reales)
+- BB.2: Screenshots periodicos durante reuniones (grim, cada 30s)
+- BB.3: Audio dual-canal (mic + sistema via PipeWire)
+- BB.4: Meeting archive SQLite (MeetingArchive, 10 metodos, 5 tests)
+- BB.5: Dashboard de reuniones (stats, lista, action items)
+- BB.6: Auto-borrado de audio crudo post-procesamiento (privacidad)
+- BB.7: Trigger manual de reuniones via Telegram
+- BB.8: Framework de captions en tiempo real (whisper tiny, opt-in)
+- **Estado actualizado: Repo integrado + Imagen (pendiente deploy)**
+
+**Game Guard (era P0):**
+- reset-failed antes de cada restart (ya estaba)
+- Confirmado funcional en sesion anterior
+- **Estado: Repo + Host validado**
+
+### Items P1 cerrados o avanzados
+
+**Calendario (no estaba en la auditoria original):**
+- BD.1: Eventos recurrentes (daily, weekly, biweekly, monthly, weekdays, custom)
+- BD.5: Vista calendario en dashboard (mini grid mensual, eventos, quick-add)
+- BD.6: Historial de recordatorios (sent/failed, anti-duplicado, reintentos)
+- BD.7: Recordatorios inteligentes proactivos (evento en 30min, dia vacio, dia ocupado, evento atrasado)
+- BD.9: Tool #84 agenda — vista unificada calendario + cron
+- Corregido: Telegram tools #67/#68 ahora usan CalendarManager real (antes usaban JSON suelto)
+
+**Proactive alerts (mejoras):**
+- CPU thermal threshold: 80°C → 90°C (muchas laptops operan a 80-85°C normalmente)
+- Session duration: ahora usa idle detection real (D-Bus/xprintidle) en vez de uptime
+- Disco: excluye composefs `/` (siempre 100% en bootc, falso positivo)
+- Calendario: 4 alertas proactivas nuevas (evento proximo, dia vacio, dia ocupado, evento atrasado)
+
+**Telegram (mejoras significativas):**
+- Reply context: cuando el usuario responde a un mensaje, Axi recibe el texto original
+- Emoji reactions: handler completo con respuestas contextuales + feedback a MemoryPlane
+- Voz unificada: Telegram y local usan misma resolucion dinamica de modelo Piper
+- System prompt: contexto de voz (Whisper transcribe automaticamente) + servicios (service_manage)
+- LLM fix: system messages consolidados al inicio (fix para llama-server Jinja2 + imagenes)
+
+**Storage housekeeping:**
+- Agregados camera, audio, tts, sessions a directorios gestionados
+- Retencion efimera: 7 dias + 120 archivos max
+- Sessions: 30 dias + limpieza de directorios viejos
+
+**Screenshots:**
+- Enviados como documentos (no fotos) para preservar resolucion
+- Evita compresion de Telegram
+
+**Sudoers:**
+- Agregadas entradas para nftables/firewalld (start/stop/restart/enable/disable)
+- Tool #79 service_manage para control de servicios via Telegram
+
+### Nuevas fases documentadas
+
+- **Fase BB — Meeting Intelligence** (docs/strategy/fase-bb-meeting-intelligence.md)
+- **Fase BC — App Factory** (docs/strategy/fase-bc-app-factory.md) — investigacion + marco legal
+- **Fase BD — Calendario Inteligente** (docs/strategy/fase-bd-calendario-inteligente.md)
+
+### Nueva documentacion operativa
+
+- **docs/operations/telegram-features.md** — referencia completa de funcionalidades de Telegram
+
+### Lectura actualizada de madurez
+
+| Area | Auditoria original | Post-sesion |
+|---|---|---|
+| Meetings | Pipeline fuerte en repo, sensible a revalidacion | **Muy fuerte en repo: diarizacion con nombres, dual-channel, archive SQLite, dashboard, captions** |
+| Calendario | No auditado especificamente | **Fuerte: eventos recurrentes, reminders inteligentes, historial, agenda unificada** |
+| Telegram | Fuerte | **Muy fuerte: 84 tools, reactions, reply context, voz unificada, service control** |
+| Proactive alerts | Funcional pero con falsos positivos | **Corregido: thermal 90°C, idle detection, composefs excluido, alertas de calendario** |
+| Storage | Parcial (camera/audio sin gestion) | **Corregido: todos los directorios efimeros con limpieza automatica** |
+| Seguridad | Fuerte en repo + imagen | **Mas fuerte: sudoers para servicios, service_manage tool** |

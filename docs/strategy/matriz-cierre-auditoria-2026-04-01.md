@@ -81,3 +81,29 @@ Cada vez que una feature suba de nivel, documentarla con este formato:
 - **Host:** fecha de ultima validacion real
 
 Si no se puede llenar eso, la feature no deberia llamarse "cerrada".
+
+---
+
+## Actualizacion post-sesion (2026-04-01 noche)
+
+### Items cerrados o avanzados de la matriz original
+
+| Item original | Prioridad | Estado anterior | Estado actualizado |
+|---|---|---|---|
+| Meetings | P0 | Pipeline fuerte en repo, sensible a host | **Cerrado en repo**: diarizacion con nombres, screenshots, dual-channel, archive SQLite, dashboard, auto-delete, manual trigger, captions |
+| Game Guard / GPU policy | P0 | Fixes en repo, pendiente deploy | **Cerrado**: reset-failed, validado en host |
+| MCP / dashboard / WS | P1 | API amplia, e2e parcial | **Avanzado**: +3 secciones dashboard (reuniones, calendario, agenda). Meetings + Calendar ahora observables |
+| CLI doctor / health | P1 | --repair no implementado | **Sin cambio** — sigue pendiente |
+| Canales secundarios | P1 | Mixto / feature-gated | **Sin cambio** — solo Telegram es shipped |
+| Security AI / sentinel | P1 | Capas reales | **Avanzado**: service_manage tool, sudoers para firewall |
+| Follow-along y reporting | P1 | Wiring fuerte | **Avanzado**: proactive alerts corregidos (thermal, idle, composefs), alertas de calendario |
+
+### Nuevos items agregados a la matriz
+
+| Prioridad | Area | Estado | Accion |
+|---|---|---|---|
+| P0 | Calendario (BD) | Fuerte en repo: recurrentes, reminders, dashboard | Validar en host con reuniones/citas reales |
+| P1 | App Factory (BC) | Research completo, marco legal documentado | Decidir timeline de implementacion |
+| P1 | Storage housekeeping | Corregido: camera/audio/tts ahora gestionados | Validar que housekeeping corre correctamente en host |
+| P2 | Telegram reactions | Implementado + feedback a MemoryPlane | Validar en uso real |
+| P2 | Voz unificada | TTS Telegram = TTS local (misma resolucion) | Validar calidad en host |
