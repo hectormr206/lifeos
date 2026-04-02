@@ -661,10 +661,23 @@
           <div class="hero-stat"><span>Total reuniones</span><strong id="mtg-total">0</strong></div>
           <div class="hero-stat"><span>Horas totales</span><strong id="mtg-hours">0h</strong></div>
           <div class="hero-stat"><span>Duracion promedio</span><strong id="mtg-avg">0m</strong></div>
+          <div class="hero-stat"><span>Participante frecuente</span><strong id="mtg-top-participant">—</strong></div>
         </div>
       </div>
+
+      <!-- BB.11: Filter bar -->
+      <div class="meeting-filter-bar" id="meeting-filter-bar">
+        <button class="meeting-filter-btn active" data-period="week">Esta semana</button>
+        <button class="meeting-filter-btn" data-period="month">Este mes</button>
+        <button class="meeting-filter-btn" data-period="all">Todo</button>
+        <input type="text" id="meeting-search-input" class="meeting-search-input" placeholder="Buscar en reuniones..." autocomplete="off">
+      </div>
+
       <div class="meetings-list" id="meetings-list">
         <p class="task-empty">Sin datos de reuniones</p>
+      </div>
+      <div class="meetings-load-more" id="meetings-load-more" style="display:none; text-align:center; margin-top:12px;">
+        <button type="button" class="quick-action-btn" id="meetings-load-more-btn">Cargar mas</button>
       </div>
       <div class="meetings-actions">
         <h3>Action Items Pendientes</h3>
@@ -672,7 +685,103 @@
           <p class="task-empty">Sin action items pendientes</p>
         </div>
       </div>
+
+      <!-- BB.10: Meeting detail overlay -->
+      <div class="meeting-detail" id="meeting-detail" style="display:none;">
+        <div class="meeting-detail-header">
+          <button class="meeting-detail-close" id="meeting-detail-close" title="Cerrar">&times;</button>
+          <h3 id="md-title" class="meeting-detail-title">—</h3>
+          <div class="meeting-detail-meta">
+            <span id="md-date" class="meeting-detail-date">—</span>
+            <span id="md-duration" class="meeting-detail-duration">—</span>
+            <span id="md-app" class="meeting-detail-app">—</span>
+          </div>
+        </div>
+        <div class="meeting-detail-body">
+          <div class="meeting-detail-section" id="md-participants-section">
+            <h4>Participantes</h4>
+            <div id="md-participants" class="meeting-detail-participants">No detectados</div>
+          </div>
+          <div class="meeting-detail-section" id="md-summary-section">
+            <h4>Resumen</h4>
+            <div id="md-summary" class="meeting-detail-summary">—</div>
+          </div>
+          <div class="meeting-detail-section" id="md-actions-section">
+            <h4>Action Items</h4>
+            <div id="md-action-items" class="meeting-detail-action-items">Sin action items</div>
+          </div>
+          <div class="meeting-detail-section" id="md-transcript-section">
+            <h4>Transcripcion</h4>
+            <div id="md-transcript" class="meeting-detail-transcript">Sin transcripcion</div>
+          </div>
+          <div class="meeting-detail-section" id="md-screenshots-section" style="display:none;">
+            <h4>Capturas</h4>
+            <div id="md-screenshots" class="meeting-screenshots"></div>
+          </div>
+        </div>
+        <div class="meeting-detail-footer">
+          <button type="button" class="quick-action-btn" id="md-export-btn">Exportar como Markdown</button>
+        </div>
+      </div>
     </section>
+
+    <style>
+      /* BB.10 & BB.11 — Meeting detail and filters */
+      .meeting-filter-bar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+      .meeting-filter-btn {
+        padding: 4px 12px; border-radius: 4px; cursor: pointer;
+        background: var(--bg-card); color: var(--text-muted); border: 1px solid var(--border);
+        font-size: 0.85rem; transition: var(--transition);
+      }
+      .meeting-filter-btn:hover { background: var(--bg-card-hover); }
+      .meeting-filter-btn.active { background: var(--accent); color: #0F0F1B; border-color: var(--accent); font-weight: bold; }
+      .meeting-search-input {
+        flex: 1; min-width: 160px;
+        background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text);
+        padding: var(--input-padding); border-radius: var(--input-radius); font-size: var(--input-font);
+      }
+      .meeting-search-input:focus { outline: none; border-color: var(--input-focus); }
+      .meeting-detail {
+        background: var(--bg-card); border-radius: var(--radius); padding: 20px;
+        border: 1px solid var(--border); margin-top: 16px; position: relative;
+        animation: fadeInDetail 0.2s ease;
+      }
+      @keyframes fadeInDetail { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+      .meeting-detail-header { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+      .meeting-detail-close {
+        position: absolute; top: 12px; right: 16px; background: none; border: none;
+        color: var(--text-muted); font-size: 1.5rem; cursor: pointer; line-height: 1;
+      }
+      .meeting-detail-close:hover { color: var(--danger); }
+      .meeting-detail-title { font-size: 1.1rem; margin-bottom: 6px; color: var(--text); }
+      .meeting-detail-meta { display: flex; gap: 12px; font-size: 0.85rem; color: var(--text-muted); flex-wrap: wrap; }
+      .meeting-detail-meta span { white-space: nowrap; }
+      .meeting-detail-section { margin-bottom: 16px; }
+      .meeting-detail-section h4 { font-size: 0.9rem; color: var(--accent); margin-bottom: 8px; }
+      .meeting-detail-summary { font-size: 0.9rem; line-height: 1.5; color: var(--text); white-space: pre-wrap; }
+      .meeting-detail-participants { font-size: 0.9rem; color: var(--text-muted); }
+      .meeting-detail-transcript { max-height: 400px; overflow-y: auto; font-size: 0.85rem; line-height: 1.4; }
+      .transcript-line { padding: 4px 8px; border-left: 3px solid; margin: 2px 0; border-radius: 2px; }
+      .speaker-1 { border-left-color: var(--accent, #00D4AA); }
+      .speaker-2 { border-left-color: #FF6B9D; }
+      .speaker-3 { border-left-color: #3282B8; }
+      .speaker-4 { border-left-color: #F0C420; }
+      .speaker-5 { border-left-color: #9B59B6; }
+      .speaker-6 { border-left-color: #E67E22; }
+      .speaker-name { font-weight: bold; }
+      .timestamp { opacity: 0.5; font-size: 0.85em; margin-left: 4px; }
+      .meeting-detail-action-items { font-size: 0.9rem; }
+      .action-item { display: flex; gap: 8px; align-items: start; padding: 4px 0; }
+      .action-item input[type="checkbox"] { accent-color: var(--accent); margin-top: 3px; }
+      .action-item-who { font-weight: bold; color: var(--accent-2); min-width: 60px; }
+      .action-item-what { flex: 1; color: var(--text); }
+      .action-item-when { font-size: 0.8em; color: var(--text-muted); white-space: nowrap; }
+      .meeting-screenshots { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+      .meeting-screenshots img { width: 100%; border-radius: 4px; cursor: pointer; }
+      .meeting-detail-footer { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+      .meetings-list .task-item { cursor: pointer; transition: background 0.2s; }
+      .meetings-list .task-item:hover { background: var(--bg-card-hover); }
+    </style>
 
     <!-- Calendar -->
     <section class="calendar-section">

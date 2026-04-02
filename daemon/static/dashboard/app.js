@@ -2424,12 +2424,19 @@ if (doctorRunBtn) {
   });
 }
 
-// ==================== MEETINGS (BB.5) ====================
+// ==================== MEETINGS (BB.5 + BB.10 + BB.11) ====================
+
+let meetingsCache = []; // cached meeting list for client-side filtering
+let meetingsOffset = 0;
+const MEETINGS_PAGE_SIZE = 10;
+let meetingsCurrentPeriod = 'week';
+let meetingsSearchTimer = null;
+let currentMeetingDetail = null; // cached full meeting for detail view
 
 function renderMeeting(meeting) {
   const date = meeting.started_at
     ? new Date(meeting.started_at).toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
-    : '—';
+    : '\u2014';
   const dur = meeting.duration_secs || 0;
   const hours = Math.floor(dur / 3600);
   const mins = Math.floor((dur % 3600) / 60);
@@ -2437,46 +2444,167 @@ function renderMeeting(meeting) {
   const isVideo = meeting.has_video !== false;
   const appEmoji = isVideo ? '\uD83C\uDFA5' : '\uD83C\uDF99';
   const appName = meeting.app_name || 'Desconocida';
-  const participants = meeting.participants_count
-    ? `${meeting.participants_count} participante(s)`
-    : '';
+  const pList = meeting.participants || [];
+  const pCount = meeting.participants_count || pList.length || 0;
+  const participants = pCount ? `${pCount} participante(s)` : '';
   const summary = meeting.summary
     ? escapeHtml(meeting.summary.substring(0, 200)) + (meeting.summary.length > 200 ? '...' : '')
     : '';
   const screenshots = meeting.screenshot_count || 0;
+  const meetingId = escapeHtml(meeting.id || '');
 
-  return `<div class="task-item">
+  return `<div class="task-item" data-meeting-id="${meetingId}" onclick="showMeetingDetail('${meetingId}')">
     <div>
-      <div class="task-objective">${appEmoji} ${escapeHtml(appName)} — ${date}</div>
+      <div class="task-objective">${appEmoji} ${escapeHtml(appName)} \u2014 ${date}</div>
       <div class="task-meta">${durationStr}${participants ? ' \u00B7 ' + participants : ''}${screenshots ? ' \u00B7 ' + screenshots + ' capturas' : ''}</div>
       ${summary ? `<div class="task-result">${summary}</div>` : ''}
     </div>
   </div>`;
 }
 
-async function loadMeetings() {
-  const listEl = $('#meetings-list');
-  const statsEl = $('#meeting-stats');
-  const actionsEl = $('#meeting-action-items');
+function formatDateSpanish(isoStr) {
+  if (!isoStr) return '\u2014';
+  const d = new Date(isoStr);
+  return d.toLocaleDateString('es', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+}
 
-  // Fetch recent meetings
+function formatDuration(secs) {
+  if (!secs) return '0m';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function appEmoji(appName) {
+  const n = (appName || '').toLowerCase();
+  if (n.includes('zoom')) return '\uD83D\uDCF9';
+  if (n.includes('meet') || n.includes('google')) return '\uD83C\uDF0D';
+  if (n.includes('teams')) return '\uD83D\uDCBC';
+  if (n.includes('discord')) return '\uD83C\uDFAE';
+  if (n.includes('slack')) return '\uD83D\uDCAC';
+  return '\uD83C\uDFA5';
+}
+
+// BB.11: Filter meetings by period
+function filterMeetings(period) {
+  meetingsCurrentPeriod = period;
+  meetingsOffset = 0;
+  meetingsCache = [];
+
+  // Update active button
+  document.querySelectorAll('.meeting-filter-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.period === period);
+  });
+
+  loadMeetings();
+}
+
+// BB.11: Debounced search
+function searchMeetingsDebounced(query) {
+  if (meetingsSearchTimer) clearTimeout(meetingsSearchTimer);
+  meetingsSearchTimer = setTimeout(() => {
+    meetingsOffset = 0;
+    meetingsCache = [];
+    if (query && query.length >= 2) {
+      searchMeetings(query);
+    } else {
+      loadMeetings();
+    }
+  }, 300);
+}
+
+async function searchMeetings(query) {
+  const listEl = $('#meetings-list');
   try {
-    const res = await fetch(`${API}/meetings/recent?limit=10`, { headers: apiHeaders() });
+    const res = await fetch(`${API}/meetings/search?q=${encodeURIComponent(query)}&limit=${MEETINGS_PAGE_SIZE}`, { headers: apiHeaders() });
     if (res.ok) {
       const data = await res.json();
       const meetings = data.meetings || [];
+      meetingsCache = meetings;
       if (listEl) {
         if (meetings.length === 0) {
-          listEl.innerHTML = '<p class="task-empty">Sin reuniones recientes</p>';
+          listEl.innerHTML = '<p class="task-empty">Sin resultados para la busqueda</p>';
         } else {
           listEl.innerHTML = meetings.map(renderMeeting).join('');
         }
       }
-    } else if (res.status === 404) {
-      if (listEl) listEl.innerHTML = '<p class="task-empty">Sin datos de reuniones</p>';
+      const loadMoreEl = $('#meetings-load-more');
+      if (loadMoreEl) loadMoreEl.style.display = 'none';
+    } else {
+      // Fallback: filter locally from cache
+      if (meetingsCache.length > 0) {
+        const q = query.toLowerCase();
+        const filtered = meetingsCache.filter(m =>
+          (m.transcript || '').toLowerCase().includes(q) ||
+          (m.summary || '').toLowerCase().includes(q) ||
+          (m.app_name || '').toLowerCase().includes(q)
+        );
+        if (listEl) {
+          listEl.innerHTML = filtered.length === 0
+            ? '<p class="task-empty">Sin resultados para la busqueda</p>'
+            : filtered.map(renderMeeting).join('');
+        }
+      }
     }
   } catch (e) {
-    if (listEl) listEl.innerHTML = '<p class="task-empty">Sin datos de reuniones</p>';
+    if (listEl) listEl.innerHTML = '<p class="task-empty">Error al buscar reuniones</p>';
+  }
+}
+
+async function loadMeetings(append) {
+  const listEl = $('#meetings-list');
+  const actionsEl = $('#meeting-action-items');
+  const loadMoreEl = $('#meetings-load-more');
+
+  // Build query params based on period filter
+  let dateFrom = '';
+  const now = new Date();
+  if (meetingsCurrentPeriod === 'week') {
+    const weekAgo = new Date(now.getTime() - 7 * 86400000);
+    dateFrom = weekAgo.toISOString();
+  } else if (meetingsCurrentPeriod === 'month') {
+    const monthAgo = new Date(now.getTime() - 30 * 86400000);
+    dateFrom = monthAgo.toISOString();
+  }
+
+  const offset = append ? meetingsOffset : 0;
+  if (!append) meetingsOffset = 0;
+
+  // Fetch meetings
+  try {
+    let url = `${API}/meetings/recent?limit=${MEETINGS_PAGE_SIZE}&offset=${offset}`;
+    if (dateFrom) url += `&from=${encodeURIComponent(dateFrom)}`;
+    const res = await fetch(url, { headers: apiHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      const meetings = data.meetings || [];
+      if (append) {
+        meetingsCache = meetingsCache.concat(meetings);
+      } else {
+        meetingsCache = meetings;
+      }
+      if (listEl) {
+        if (meetingsCache.length === 0) {
+          listEl.innerHTML = '<p class="task-empty">Sin reuniones recientes</p>';
+        } else {
+          listEl.innerHTML = meetingsCache.map(renderMeeting).join('');
+        }
+      }
+      meetingsOffset = meetingsCache.length;
+      // Show/hide load more
+      if (loadMoreEl) {
+        loadMoreEl.style.display = meetings.length >= MEETINGS_PAGE_SIZE ? '' : 'none';
+      }
+    } else if (res.status === 404) {
+      if (listEl) listEl.innerHTML = '<p class="task-empty">Sin datos de reuniones</p>';
+      if (loadMoreEl) loadMoreEl.style.display = 'none';
+    }
+  } catch (e) {
+    if (listEl && !append) listEl.innerHTML = '<p class="task-empty">Sin datos de reuniones</p>';
+    if (loadMoreEl) loadMoreEl.style.display = 'none';
   }
 
   // Fetch meeting stats
@@ -2487,17 +2615,19 @@ async function loadMeetings() {
       const totalEl = $('#mtg-total');
       const hoursEl = $('#mtg-hours');
       const avgEl = $('#mtg-avg');
-      if (totalEl) totalEl.textContent = stats.total_meetings || 0;
+      const topEl = $('#mtg-top-participant');
+      if (totalEl) totalEl.textContent = stats.total_meetings || stats.meetings_this_month || 0;
       if (hoursEl) {
         const h = stats.total_hours || 0;
         hoursEl.textContent = h >= 1 ? `${h.toFixed(1)}h` : `${Math.round(h * 60)}m`;
       }
       if (avgEl) {
-        const avg = stats.avg_duration_minutes || 0;
+        const avg = stats.avg_duration_mins || stats.avg_duration_minutes || 0;
         avgEl.textContent = avg >= 60 ? `${Math.floor(avg / 60)}h ${Math.round(avg % 60)}m` : `${Math.round(avg)}m`;
       }
+      if (topEl) topEl.textContent = stats.top_participant || '\u2014';
     }
-  } catch (e) { /* silent — endpoint may not exist yet */ }
+  } catch (e) { /* silent */ }
 
   // Fetch action items
   try {
@@ -2510,11 +2640,11 @@ async function loadMeetings() {
           actionsEl.innerHTML = '<p class="task-empty">Sin action items pendientes</p>';
         } else {
           actionsEl.innerHTML = items.map(item => {
-            const who = item.assignee ? escapeHtml(item.assignee) : 'Sin asignar';
-            const what = escapeHtml(item.description || '');
-            const when = item.due_date ? ` \u00B7 ${escapeHtml(item.due_date)}` : '';
+            const who = item.assignee || item.who || 'Sin asignar';
+            const what = item.description || item.what || '';
+            const when = (item.due_date || item.when) ? ` \u00B7 ${escapeHtml(item.due_date || item.when)}` : '';
             const done = item.completed ? '\u2705' : '\u23F3';
-            return `<div class="task-item"><div><div class="task-objective">${done} ${what}</div><div class="task-meta">${who}${when}</div></div></div>`;
+            return `<div class="task-item"><div><div class="task-objective">${done} ${escapeHtml(what)}</div><div class="task-meta">${escapeHtml(who)}${when}</div></div></div>`;
           }).join('');
         }
       }
@@ -2524,6 +2654,277 @@ async function loadMeetings() {
   } catch (e) {
     if (actionsEl) actionsEl.innerHTML = '<p class="task-empty">Sin action items pendientes</p>';
   }
+}
+
+// BB.11: Filter bar event listeners
+document.querySelectorAll('.meeting-filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => filterMeetings(btn.dataset.period));
+});
+
+const meetingSearchInput = $('#meeting-search-input');
+if (meetingSearchInput) {
+  meetingSearchInput.addEventListener('input', (e) => {
+    searchMeetingsDebounced(e.target.value.trim());
+  });
+}
+
+const meetingsLoadMoreBtn = $('#meetings-load-more-btn');
+if (meetingsLoadMoreBtn) {
+  meetingsLoadMoreBtn.addEventListener('click', () => loadMeetings(true));
+}
+
+// ==================== BB.10: MEETING DETAIL VIEW ====================
+
+window.showMeetingDetail = async function(meetingId) {
+  if (!meetingId) return;
+  const detailEl = $('#meeting-detail');
+  const listEl = $('#meetings-list');
+  if (!detailEl) return;
+
+  // Try to find meeting in cache first
+  let meeting = meetingsCache.find(m => m.id === meetingId);
+
+  // Fetch full meeting data (cache may only have summary fields)
+  try {
+    const res = await fetch(`${API}/meetings/${encodeURIComponent(meetingId)}`, { headers: apiHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      meeting = data.meeting || data;
+    } else if (!meeting) {
+      addFeedItem('&#10060;', 'Error al cargar detalle de reunion');
+      return;
+    }
+  } catch (e) {
+    if (!meeting) {
+      addFeedItem('&#10060;', 'Error al cargar detalle de reunion');
+      return;
+    }
+  }
+
+  currentMeetingDetail = meeting;
+
+  // Populate header
+  const titleEl = $('#md-title');
+  const dateEl = $('#md-date');
+  const durEl = $('#md-duration');
+  const appEl = $('#md-app');
+  if (titleEl) titleEl.textContent = meeting.summary
+    ? meeting.summary.substring(0, 80)
+    : (meeting.app_name || 'Reunion');
+  if (dateEl) dateEl.textContent = formatDateSpanish(meeting.started_at);
+  if (durEl) durEl.textContent = formatDuration(meeting.duration_secs);
+  if (appEl) appEl.textContent = `${appEmoji(meeting.app_name)} ${meeting.app_name || 'Desconocida'}`;
+
+  // Participants
+  const partEl = $('#md-participants');
+  const partSection = $('#md-participants-section');
+  const participants = meeting.participants || [];
+  if (partEl) {
+    if (participants.length > 0) {
+      partEl.textContent = participants.join(', ');
+      if (partSection) partSection.style.display = '';
+    } else {
+      partEl.textContent = 'No detectados';
+      if (partSection) partSection.style.display = '';
+    }
+  }
+
+  // Summary
+  const summaryEl = $('#md-summary');
+  if (summaryEl) summaryEl.textContent = meeting.summary || 'Sin resumen disponible';
+
+  // Action items
+  const actionsEl = $('#md-action-items');
+  const actionsSection = $('#md-actions-section');
+  const actionItems = meeting.action_items || [];
+  if (actionsEl) {
+    if (actionItems.length > 0) {
+      actionsEl.innerHTML = renderActionItems(actionItems);
+      if (actionsSection) actionsSection.style.display = '';
+    } else {
+      actionsEl.innerHTML = '<span style="color:var(--text-muted)">Sin action items</span>';
+      if (actionsSection) actionsSection.style.display = '';
+    }
+  }
+
+  // Transcript
+  const transcriptEl = $('#md-transcript');
+  const transcriptSection = $('#md-transcript-section');
+  const diarized = meeting.diarized_transcript || '';
+  const plainTranscript = meeting.transcript || '';
+  if (transcriptEl) {
+    if (diarized) {
+      transcriptEl.innerHTML = renderTranscript(diarized);
+      if (transcriptSection) transcriptSection.style.display = '';
+    } else if (plainTranscript) {
+      transcriptEl.innerHTML = `<div class="transcript-line speaker-1"><span class="speaker-name">[Transcripcion]</span> ${escapeHtml(plainTranscript)}</div>`;
+      if (transcriptSection) transcriptSection.style.display = '';
+    } else {
+      transcriptEl.innerHTML = '<span style="color:var(--text-muted)">Sin transcripcion disponible</span>';
+      if (transcriptSection) transcriptSection.style.display = '';
+    }
+  }
+
+  // Screenshots
+  const screenshotsEl = $('#md-screenshots');
+  const screenshotsSection = $('#md-screenshots-section');
+  const paths = meeting.screenshot_paths || [];
+  if (screenshotsEl && screenshotsSection) {
+    if (paths.length > 0) {
+      screenshotsEl.innerHTML = paths.map(p =>
+        `<img src="${escapeHtml(p)}" alt="Captura" loading="lazy" onerror="this.style.display='none'">`
+      ).join('');
+      screenshotsSection.style.display = '';
+    } else {
+      screenshotsSection.style.display = 'none';
+    }
+  }
+
+  // Show detail, hide list
+  detailEl.style.display = '';
+  if (listEl) listEl.style.display = 'none';
+  const filterBar = $('#meeting-filter-bar');
+  if (filterBar) filterBar.style.display = 'none';
+  const loadMore = $('#meetings-load-more');
+  if (loadMore) loadMore.style.display = 'none';
+};
+
+function renderTranscript(text) {
+  if (!text) return '';
+  const lines = text.split('\n').filter(l => l.trim());
+  const speakerMap = {};
+  let speakerCount = 0;
+
+  return lines.map(line => {
+    // Try to parse diarized format: "[Speaker Name] HH:MM — text" or "Speaker Name: text"
+    let speaker = '';
+    let timestamp = '';
+    let content = line;
+
+    // Pattern: [Name] HH:MM — text
+    const m1 = line.match(/^\[([^\]]+)\]\s*(\d{1,2}:\d{2})?\s*[\u2014\-]?\s*(.*)/);
+    if (m1) {
+      speaker = m1[1];
+      timestamp = m1[2] || '';
+      content = m1[3] || '';
+    } else {
+      // Pattern: Name: text
+      const m2 = line.match(/^([A-Za-z\u00C0-\u024F\s]+?):\s*(.*)/);
+      if (m2 && m2[1].length < 30) {
+        speaker = m2[1].trim();
+        content = m2[2] || '';
+      }
+    }
+
+    if (speaker && !speakerMap[speaker]) {
+      speakerCount++;
+      speakerMap[speaker] = speakerCount;
+    }
+    const speakerIdx = speakerMap[speaker] || 1;
+    const cls = `speaker-${Math.min(speakerIdx, 6)}`;
+
+    if (speaker) {
+      return `<div class="transcript-line ${cls}"><span class="speaker-name">[${escapeHtml(speaker)}]</span>${timestamp ? ` <span class="timestamp">${escapeHtml(timestamp)}</span>` : ''} \u2014 ${escapeHtml(content)}</div>`;
+    } else {
+      return `<div class="transcript-line speaker-1">${escapeHtml(content)}</div>`;
+    }
+  }).join('');
+}
+
+function renderActionItems(items) {
+  if (!items || items.length === 0) return '';
+  return items.map((item, idx) => {
+    const checked = item.completed ? 'checked' : '';
+    const who = item.who || item.assignee || 'Sin asignar';
+    const what = item.what || item.description || '';
+    const when = item.when || item.due_date || '';
+    return `<div class="action-item">
+      <input type="checkbox" ${checked} disabled>
+      <span class="action-item-who">${escapeHtml(who)}</span>
+      <span class="action-item-what">${escapeHtml(what)}</span>
+      ${when ? `<span class="action-item-when">${escapeHtml(when)}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function exportMeetingMarkdown(meeting) {
+  if (!meeting) return;
+  const lines = [];
+  lines.push(`# ${meeting.summary || meeting.app_name || 'Reunion'}`);
+  lines.push('');
+  lines.push(`**Fecha:** ${formatDateSpanish(meeting.started_at)}`);
+  lines.push(`**Duracion:** ${formatDuration(meeting.duration_secs)}`);
+  lines.push(`**App:** ${meeting.app_name || 'Desconocida'}`);
+  const parts = meeting.participants || [];
+  lines.push(`**Participantes:** ${parts.length > 0 ? parts.join(', ') : 'No detectados'}`);
+  lines.push('');
+
+  if (meeting.summary) {
+    lines.push('## Resumen');
+    lines.push('');
+    lines.push(meeting.summary);
+    lines.push('');
+  }
+
+  const items = meeting.action_items || [];
+  if (items.length > 0) {
+    lines.push('## Action Items');
+    lines.push('');
+    items.forEach(item => {
+      const check = item.completed ? 'x' : ' ';
+      const who = item.who || item.assignee || '';
+      const what = item.what || item.description || '';
+      const when = item.when || item.due_date || '';
+      lines.push(`- [${check}] **${who}**: ${what}${when ? ` (${when})` : ''}`);
+    });
+    lines.push('');
+  }
+
+  const transcript = meeting.diarized_transcript || meeting.transcript || '';
+  if (transcript) {
+    lines.push('## Transcripcion');
+    lines.push('');
+    lines.push(transcript);
+    lines.push('');
+  }
+
+  const md = lines.join('\n');
+  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const dateSlug = meeting.started_at ? meeting.started_at.substring(0, 10) : 'reunion';
+  a.href = url;
+  a.download = `reunion-${dateSlug}-${(meeting.id || '').substring(0, 8)}.md`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function closeMeetingDetail() {
+  const detailEl = $('#meeting-detail');
+  const listEl = $('#meetings-list');
+  const filterBar = $('#meeting-filter-bar');
+  const loadMore = $('#meetings-load-more');
+  if (detailEl) detailEl.style.display = 'none';
+  if (listEl) listEl.style.display = '';
+  if (filterBar) filterBar.style.display = '';
+  // Restore load more only if there were enough items
+  if (loadMore && meetingsCache.length >= MEETINGS_PAGE_SIZE) loadMore.style.display = '';
+  currentMeetingDetail = null;
+}
+
+// Detail panel event listeners
+const meetingDetailClose = $('#meeting-detail-close');
+if (meetingDetailClose) {
+  meetingDetailClose.addEventListener('click', closeMeetingDetail);
+}
+
+const mdExportBtn = $('#md-export-btn');
+if (mdExportBtn) {
+  mdExportBtn.addEventListener('click', () => {
+    if (currentMeetingDetail) exportMeetingMarkdown(currentMeetingDetail);
+  });
 }
 
 // ==================== CONVERSATION HISTORY ====================

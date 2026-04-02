@@ -65,6 +65,20 @@ pub struct MeetingState {
     pub system_recording_path: Option<String>,
 }
 
+/// Data bundle for meeting file export (BB.12), avoids too-many-arguments.
+struct MeetingExportData<'a> {
+    title: &'a str,
+    started_at: &'a str,
+    ended_at: &'a str,
+    duration_secs: u64,
+    app_name: &'a str,
+    participants: &'a [String],
+    summary: Option<&'a str>,
+    diarized_transcript: &'a str,
+    action_items: &'a [crate::meeting_archive::ActionItem],
+    screenshot_paths: &'a [String],
+}
+
 /// Window title patterns that indicate an active meeting.
 /// Each entry is (app name, list of title substrings to match).
 const MEETING_WINDOW_PATTERNS: &[(&str, &[&str])] = &[
@@ -345,6 +359,32 @@ impl MeetingAssistant {
                             }
                         }
 
+                        // 4c. Export meeting files to structured folder (BB.12)
+                        let action_items_vec =
+                            extract_action_items(summary.as_deref().unwrap_or(""));
+                        {
+                            let meeting_title = self
+                                .state
+                                .app_name
+                                .clone()
+                                .unwrap_or_else(|| "reunion".into());
+                            let started = self.state.started_at.clone().unwrap_or_default();
+                            let ended = chrono::Utc::now().to_rfc3339();
+                            let export_data = MeetingExportData {
+                                title: &meeting_title,
+                                started_at: &started,
+                                ended_at: &ended,
+                                duration_secs: duration,
+                                app_name: &meeting_title,
+                                participants: &[],
+                                summary: summary.as_deref(),
+                                diarized_transcript: &diarized,
+                                action_items: &action_items_vec,
+                                screenshot_paths: &self.state.screenshot_paths,
+                            };
+                            self.export_meeting_files(&export_data).await;
+                        }
+
                         // 5. Compress WAV to OPUS for storage efficiency
                         let opus_result = Self::compress_to_opus(&path).await;
 
@@ -356,26 +396,14 @@ impl MeetingAssistant {
                             info!("[meeting] Keeping raw audio — summarization did not succeed");
                         }
 
-                        // 7. Notify via event bus
-                        if let Some(ref tx) = self.event_bus {
-                            let msg = if let Some(ref s) = summary {
-                                let preview = &s[..s.len().min(200)];
-                                format!(
-                                    "Reunion terminada ({} min). Resumen:\n{}",
-                                    duration / 60,
-                                    preview
-                                )
-                            } else {
-                                format!(
-                                    "Reunion terminada ({} min). Transcripcion disponible.",
-                                    duration / 60
-                                )
-                            };
-                            let _ = tx.send(crate::events::DaemonEvent::Notification {
-                                priority: "info".into(),
-                                message: msg,
-                            });
-                        }
+                        // 7. Send structured post-meeting notification (BB.9)
+                        self.send_post_meeting_notification(
+                            duration,
+                            screenshot_count,
+                            summary.as_deref(),
+                            &action_items_vec,
+                            0, // participant count not yet resolved
+                        );
                     }
                     Err(e) => {
                         warn!("[meeting] Transcription failed: {e}");
@@ -1100,6 +1128,31 @@ impl MeetingAssistant {
                         }
                     }
 
+                    // Export meeting files to structured folder (BB.12)
+                    let action_items_vec = extract_action_items(summary.as_deref().unwrap_or(""));
+                    {
+                        let meeting_title = self
+                            .state
+                            .app_name
+                            .clone()
+                            .unwrap_or_else(|| "reunion-manual".into());
+                        let started = self.state.started_at.clone().unwrap_or_default();
+                        let ended = chrono::Utc::now().to_rfc3339();
+                        let export_data = MeetingExportData {
+                            title: &meeting_title,
+                            started_at: &started,
+                            ended_at: &ended,
+                            duration_secs: duration,
+                            app_name: &meeting_title,
+                            participants: &[],
+                            summary: summary.as_deref(),
+                            diarized_transcript: &diarized,
+                            action_items: &action_items_vec,
+                            screenshot_paths: &self.state.screenshot_paths,
+                        };
+                        self.export_meeting_files(&export_data).await;
+                    }
+
                     let opus_result = Self::compress_to_opus(recording_path).await;
 
                     // Auto-delete if summarization succeeded
@@ -1108,26 +1161,14 @@ impl MeetingAssistant {
                             .await;
                     }
 
-                    // Notify via event bus
-                    if let Some(ref tx) = self.event_bus {
-                        let msg = if let Some(ref s) = summary {
-                            let preview = &s[..s.len().min(200)];
-                            format!(
-                                "Reunion manual terminada ({} min). Resumen:\n{}",
-                                duration / 60,
-                                preview
-                            )
-                        } else {
-                            format!(
-                                "Reunion manual terminada ({} min). Transcripcion disponible.",
-                                duration / 60
-                            )
-                        };
-                        let _ = tx.send(crate::events::DaemonEvent::Notification {
-                            priority: "info".into(),
-                            message: msg,
-                        });
-                    }
+                    // Send structured post-meeting notification (BB.9)
+                    self.send_post_meeting_notification(
+                        duration,
+                        screenshot_count,
+                        summary.as_deref(),
+                        &action_items_vec,
+                        0,
+                    );
                 }
                 Err(e) => {
                     warn!("[meeting] Transcription failed: {e}");
@@ -1378,6 +1419,263 @@ impl MeetingAssistant {
             }
             Err(_) => Vec::new(),
         }
+    }
+
+    // ------------------------------------------------------------------
+    // BB.9 — Structured post-meeting Telegram notification
+    // ------------------------------------------------------------------
+
+    /// Build and send a structured Telegram notification after meeting processing.
+    fn send_post_meeting_notification(
+        &self,
+        duration_secs: u64,
+        screenshot_count: usize,
+        summary: Option<&str>,
+        action_items: &[crate::meeting_archive::ActionItem],
+        participant_count: usize,
+    ) {
+        let Some(ref tx) = self.event_bus else {
+            return;
+        };
+
+        let app_name = self
+            .state
+            .app_name
+            .clone()
+            .unwrap_or_else(|| "Desconocida".into());
+
+        let hours = duration_secs / 3600;
+        let minutes = (duration_secs % 3600) / 60;
+
+        let summary_block = match summary {
+            Some(s) if !s.is_empty() => {
+                let preview = if s.len() > 500 { &s[..500] } else { s };
+                format!("\nResumen:\n{}\n", preview)
+            }
+            _ => "\nResumen: No disponible\n".to_string(),
+        };
+
+        let action_count = action_items.len();
+        let action_list = if action_items.is_empty() {
+            String::new()
+        } else {
+            let items: Vec<String> = action_items
+                .iter()
+                .take(5)
+                .map(|item| {
+                    let when_str = item
+                        .when
+                        .as_deref()
+                        .map(|w| format!(" ({})", w))
+                        .unwrap_or_default();
+                    format!("- {}: {}{}", item.who, item.what, when_str)
+                })
+                .collect();
+            format!("\n{}", items.join("\n"))
+        };
+
+        let msg = format!(
+            "Reunion finalizada: {app_name}\n\n\
+             Duracion: {hours}h {minutes}m\n\
+             Participantes: {participant_count} detectados\n\
+             Screenshots: {screenshot_count} capturados\n\
+             {summary_block}\n\
+             Action items: {action_count}{action_list}\n\n\
+             La reunion completa esta disponible en el dashboard."
+        );
+
+        let _ = tx.send(crate::events::DaemonEvent::Notification {
+            priority: "info".into(),
+            message: msg,
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // BB.12 — Exportable markdown file per meeting
+    // ------------------------------------------------------------------
+
+    /// Export meeting files to a structured folder for each meeting.
+    ///
+    /// Creates:
+    ///   /var/lib/lifeos/meetings/YYYY-MM-DD-{title_slug}/
+    ///     reunion.md          — Full markdown with summary + transcript
+    ///     action-items.json   — Structured action items
+    ///     metadata.json       — Duration, participants, app, timestamps
+    async fn export_meeting_files(&self, export: &MeetingExportData<'_>) {
+        let date_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let slug = slugify(export.title);
+        let folder_name = format!("{}-{}", date_prefix, slug);
+        let export_dir = PathBuf::from("/var/lib/lifeos/meetings").join(&folder_name);
+
+        if let Err(e) = tokio::fs::create_dir_all(&export_dir).await {
+            warn!(
+                "[meeting] BB.12: Failed to create export dir {}: {e}",
+                export_dir.display()
+            );
+            return;
+        }
+
+        // --- reunion.md ---
+        let hours = export.duration_secs / 3600;
+        let minutes = (export.duration_secs % 3600) / 60;
+        let duration_str = format!("{}h {}m", hours, minutes);
+        let participants_str = if export.participants.is_empty() {
+            "No identificados".to_string()
+        } else {
+            export.participants.join(", ")
+        };
+
+        let summary_section = export.summary.unwrap_or("No disponible");
+        let title = export.title;
+        let app_name = export.app_name;
+        let diarized_transcript = export.diarized_transcript;
+
+        let action_items_md: String = if export.action_items.is_empty() {
+            "Ninguno".to_string()
+        } else {
+            export
+                .action_items
+                .iter()
+                .map(|item| {
+                    let when_str = item
+                        .when
+                        .as_deref()
+                        .map(|w| format!(" ({})", w))
+                        .unwrap_or_default();
+                    format!("- [ ] {}: {}{}", item.who, item.what, when_str)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        let markdown = format!(
+            "# Reunion: {title}\n\n\
+             **Fecha:** {date_prefix}\n\
+             **Duracion:** {duration_str}\n\
+             **App:** {app_name}\n\
+             **Participantes:** {participants_str}\n\n\
+             ## Resumen\n\n\
+             {summary_section}\n\n\
+             ## Action Items\n\n\
+             {action_items_md}\n\n\
+             ## Transcript\n\n\
+             {diarized_transcript}\n"
+        );
+
+        let md_path = export_dir.join("reunion.md");
+        if let Err(e) = tokio::fs::write(&md_path, &markdown).await {
+            warn!("[meeting] BB.12: Failed to write reunion.md: {e}");
+        }
+
+        // --- metadata.json ---
+        let metadata = serde_json::json!({
+            "title": export.title,
+            "date": date_prefix,
+            "started_at": export.started_at,
+            "ended_at": export.ended_at,
+            "duration_secs": export.duration_secs,
+            "duration_human": duration_str,
+            "app_name": export.app_name,
+            "participants": export.participants,
+            "screenshot_count": export.screenshot_paths.len(),
+            "screenshot_paths": export.screenshot_paths,
+            "action_item_count": export.action_items.len(),
+            "export_folder": export_dir.to_string_lossy(),
+        });
+
+        let meta_path = export_dir.join("metadata.json");
+        match serde_json::to_string_pretty(&metadata) {
+            Ok(json_str) => {
+                if let Err(e) = tokio::fs::write(&meta_path, &json_str).await {
+                    warn!("[meeting] BB.12: Failed to write metadata.json: {e}");
+                }
+            }
+            Err(e) => warn!("[meeting] BB.12: Failed to serialize metadata: {e}"),
+        }
+
+        // --- action-items.json ---
+        let ai_path = export_dir.join("action-items.json");
+        match serde_json::to_string_pretty(&export.action_items) {
+            Ok(json_str) => {
+                if let Err(e) = tokio::fs::write(&ai_path, &json_str).await {
+                    warn!("[meeting] BB.12: Failed to write action-items.json: {e}");
+                }
+            }
+            Err(e) => warn!("[meeting] BB.12: Failed to serialize action items: {e}"),
+        }
+
+        // --- Move existing screenshots into the meeting folder ---
+        for src_path_str in export.screenshot_paths {
+            let src = PathBuf::from(src_path_str);
+            if let Some(filename) = src.file_name() {
+                let dest = export_dir.join(filename);
+                match tokio::fs::rename(&src, &dest).await {
+                    Ok(()) => {
+                        info!(
+                            "[meeting] BB.12: Moved screenshot {} to {}",
+                            src.display(),
+                            dest.display()
+                        );
+                    }
+                    Err(e) => {
+                        // rename may fail across filesystems; try copy+delete
+                        if let Ok(()) = tokio::fs::copy(&src, &dest).await.map(|_| ()) {
+                            let _ = tokio::fs::remove_file(&src).await;
+                            info!(
+                                "[meeting] BB.12: Copied screenshot {} to {}",
+                                src.display(),
+                                dest.display()
+                            );
+                        } else {
+                            warn!(
+                                "[meeting] BB.12: Failed to move screenshot {}: {e}",
+                                src.display()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        info!(
+            "[meeting] BB.12: Meeting files exported to {}",
+            export_dir.display()
+        );
+    }
+}
+
+// ── BB.12 helper — slugify title for folder names ──────────────────────────
+
+/// Convert a string to a URL/filesystem-friendly slug.
+/// Lowercase, replace non-alphanumeric chars with hyphens, collapse and trim hyphens.
+fn slugify(s: &str) -> String {
+    let slug: String = s
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    // Collapse consecutive hyphens and trim leading/trailing hyphens
+    let mut result = String::with_capacity(slug.len());
+    let mut last_was_hyphen = true; // true to trim leading hyphens
+    for c in slug.chars() {
+        if c == '-' {
+            if !last_was_hyphen {
+                result.push('-');
+            }
+            last_was_hyphen = true;
+        } else {
+            result.push(c);
+            last_was_hyphen = false;
+        }
+    }
+    // Trim trailing hyphen
+    while result.ends_with('-') {
+        result.pop();
+    }
+    if result.is_empty() {
+        "reunion".to_string()
+    } else {
+        result
     }
 }
 
