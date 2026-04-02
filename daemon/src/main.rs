@@ -260,10 +260,8 @@ fn generate_bootstrap_token() -> std::io::Result<String> {
         if std::fs::create_dir_all(&candidate).is_ok()
             && std::fs::write(&candidate_path, &token).is_ok()
         {
-            let _ = std::fs::set_permissions(
-                &candidate_path,
-                std::fs::Permissions::from_mode(0o600),
-            );
+            let _ =
+                std::fs::set_permissions(&candidate_path, std::fs::Permissions::from_mode(0o600));
             log::debug!("Bootstrap token mirrored to {}", candidate_path.display());
         }
     }
