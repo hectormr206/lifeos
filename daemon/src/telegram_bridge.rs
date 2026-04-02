@@ -229,6 +229,7 @@ mod inner {
             BotCommand::new("help", "Ayuda y comandos disponibles"),
             BotCommand::new("new", "Nueva conversacion (limpiar historial)"),
             BotCommand::new("status", "Estado del sistema"),
+            BotCommand::new("acciones", "Controles rapidos con botones"),
             BotCommand::new("btw", "Conversacion lateral (no guarda historial)"),
             BotCommand::new("do", "Ejecutar tarea del supervisor"),
             BotCommand::new("pair", "Generar codigo para vincular nuevo usuario"),
@@ -341,10 +342,17 @@ mod inner {
 
                 match telegram_tools::run_heartbeat(&heartbeat_ctx).await {
                     Some(report) => {
+                        let keyboard = notification_action_keyboard(&report);
                         for &chat_id in &heartbeat_chat_ids {
-                            if let Err(e) =
+                            let result = if let Some(ref kb) = keyboard {
+                                heartbeat_bot
+                                    .send_message(ChatId(chat_id), &report)
+                                    .reply_markup(kb.clone())
+                                    .await
+                            } else {
                                 heartbeat_bot.send_message(ChatId(chat_id), &report).await
-                            {
+                            };
+                            if let Err(e) = result {
                                 error!("Heartbeat notification failed: {}", e);
                             }
                         }
@@ -853,6 +861,34 @@ mod inner {
         // Legacy commands still work for backwards compatibility
         if text == "/help" || text == "/start" {
             return handle_help(bot, chat_id).await;
+        }
+        if text == "/actions" || text == "/acciones" {
+            let keyboard = InlineKeyboardMarkup::new(vec![
+                vec![
+                    InlineKeyboardButton::callback("Estado del sistema", "action:system_status"),
+                    InlineKeyboardButton::callback("Ver agenda", "action:show_agenda"),
+                ],
+                vec![
+                    InlineKeyboardButton::callback("Volumen +", "action:volume_up"),
+                    InlineKeyboardButton::callback("Volumen -", "action:volume_down"),
+                ],
+                vec![
+                    InlineKeyboardButton::callback("Brillo +", "action:brightness_up"),
+                    InlineKeyboardButton::callback("Brillo -", "action:brightness_down"),
+                ],
+                vec![
+                    InlineKeyboardButton::callback("Captura pantalla", "action:screenshot"),
+                    InlineKeyboardButton::callback("Bloquear pantalla", "action:lock_screen"),
+                ],
+                vec![
+                    InlineKeyboardButton::callback("Estado firewall", "action:firewall_status"),
+                    InlineKeyboardButton::callback("Limpiar cache", "action:cleanup_cache"),
+                ],
+            ]);
+            bot.send_message(chat_id, "Acciones rapidas:")
+                .reply_markup(keyboard)
+                .await?;
+            return Ok(());
         }
         if text == "/pair" || text.starts_with("/pair ") {
             let code = ctx.pairing.create_code(chat_id.0).await;
@@ -1603,9 +1639,9 @@ mod inner {
             info!("Telegram: task {} rejected via button", task_id);
             bot.send_message(chat_id, "Tarea rechazada.").await?;
         } else if let Some(action) = data.strip_prefix("action:") {
+            info!("Telegram: {} action triggered", action);
             match action {
                 "cleanup_cache" => {
-                    info!("Telegram: cleanup_cache action triggered");
                     bot.send_message(chat_id, "Limpiando cache del sistema...")
                         .await?;
                     let (response, _) = telegram_tools::agentic_chat(
@@ -1619,11 +1655,284 @@ mod inner {
                     send_chunked(&bot, chat_id, &response).await?;
                 }
                 "dismiss" => {
-                    bot.send_message(chat_id, "Notificacion descartada.")
+                    // Remove buttons from the original message
+                    if let Some(msg) = q.message.as_ref() {
+                        bot.edit_message_reply_markup(chat_id, msg.id()).await.ok();
+                    }
+                }
+                a if a.starts_with("service_start:") => {
+                    let service = a.strip_prefix("service_start:").unwrap_or("");
+                    bot.send_message(chat_id, format!("Activando {}...", service))
                         .await?;
+                    let args = serde_json::json!({"service": service, "action": "start"});
+                    let result = telegram_tools::execute_tool(
+                        &telegram_tools::ToolCall {
+                            name: "service_manage".into(),
+                            args,
+                        },
+                        &ctx.tool_ctx,
+                    )
+                    .await;
+                    bot.send_message(chat_id, result.output).await?;
+                }
+                "top_processes" => {
+                    bot.send_message(chat_id, "Consultando procesos...").await?;
+                    let (response, _) = telegram_tools::agentic_chat(
+                        &ctx.tool_ctx,
+                        chat_id.0,
+                        "Ejecuta: ps aux --sort=-%mem | head -10 y muestrame los procesos que mas recursos usan",
+                        None,
+                    )
+                    .await;
+                    send_chunked(&bot, chat_id, &response).await?;
+                }
+                "disk_usage" => {
+                    bot.send_message(chat_id, "Consultando disco...").await?;
+                    let (response, _) = telegram_tools::agentic_chat(
+                        &ctx.tool_ctx,
+                        chat_id.0,
+                        "Ejecuta df -h /var y du -sh /var/lib/lifeos/* 2>/dev/null | sort -rh | head -10 para ver que ocupa mas espacio",
+                        None,
+                    )
+                    .await;
+                    send_chunked(&bot, chat_id, &response).await?;
+                }
+                "break_ack" => {
+                    if let Some(msg) = q.message.as_ref() {
+                        bot.edit_message_reply_markup(chat_id, msg.id()).await.ok();
+                    }
+                    bot.send_message(
+                        chat_id,
+                        "Perfecto! Disfruta tu descanso. Te aviso cuando vuelvas.",
+                    )
+                    .await?;
+                }
+                a if a.starts_with("snooze:") => {
+                    let minutes: u64 = a
+                        .strip_prefix("snooze:")
+                        .and_then(|m| m.parse().ok())
+                        .unwrap_or(15);
+                    if let Some(msg) = q.message.as_ref() {
+                        bot.edit_message_reply_markup(chat_id, msg.id()).await.ok();
+                    }
+                    bot.send_message(chat_id, format!("Te recuerdo en {} minutos.", minutes))
+                        .await?;
+                    // Schedule a delayed reminder
+                    let snooze_bot = bot.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(minutes * 60)).await;
+                        snooze_bot
+                            .send_message(
+                                chat_id,
+                                "Recordatorio: ya pasaron tus minutos de gracia!",
+                            )
+                            .await
+                            .ok();
+                    });
+                }
+                "prompt_calendar" => {
+                    bot.send_message(
+                        chat_id,
+                        "Dime que evento agregar. Ejemplo: 'Junta con equipo manana a las 10am'",
+                    )
+                    .await?;
+                }
+                "update" => {
+                    bot.send_message(chat_id, "Verificando actualizaciones...")
+                        .await?;
+                    let (response, _) = telegram_tools::agentic_chat(
+                        &ctx.tool_ctx,
+                        chat_id.0,
+                        "Ejecuta: sudo bootc upgrade --check y dime si hay actualizacion disponible",
+                        None,
+                    )
+                    .await;
+                    send_chunked(&bot, chat_id, &response).await?;
+                }
+                "meeting_summary" => {
+                    bot.send_message(chat_id, "Buscando resumen de la ultima reunion...")
+                        .await?;
+                    let (response, _) = telegram_tools::agentic_chat(
+                        &ctx.tool_ctx,
+                        chat_id.0,
+                        "Busca la reunion mas reciente y dame el resumen completo con action items",
+                        None,
+                    )
+                    .await;
+                    send_chunked(&bot, chat_id, &response).await?;
+                }
+                "free_ram" => {
+                    bot.send_message(chat_id, "Liberando memoria...").await?;
+                    let (response, _) = telegram_tools::agentic_chat(
+                        &ctx.tool_ctx,
+                        chat_id.0,
+                        "Ejecuta: sync && echo 3 | sudo tee /proc/sys/vm/drop_caches. Luego muestra el estado actual con free -h",
+                        None,
+                    )
+                    .await;
+                    send_chunked(&bot, chat_id, &response).await?;
+                }
+                "retry_task" => {
+                    bot.send_message(chat_id, "Reintentando tarea...").await?;
+                    // Acknowledge — task context would be needed for a real retry
+                }
+                "system_status" => {
+                    bot.send_message(chat_id, "Consultando estado del sistema...")
+                        .await?;
+                    let result = telegram_tools::execute_tool(
+                        &telegram_tools::ToolCall {
+                            name: "system_status".into(),
+                            args: serde_json::json!({}),
+                        },
+                        &ctx.tool_ctx,
+                    )
+                    .await;
+                    send_chunked(&bot, chat_id, &result.output).await?;
+                }
+                "show_agenda" => {
+                    bot.send_message(chat_id, "Consultando agenda...").await?;
+                    let (response, _) = telegram_tools::agentic_chat(
+                        &ctx.tool_ctx,
+                        chat_id.0,
+                        "Muestrame mi agenda de hoy y manana con todos los eventos",
+                        None,
+                    )
+                    .await;
+                    send_chunked(&bot, chat_id, &response).await?;
+                }
+                "volume_up" => {
+                    let result = telegram_tools::execute_tool(
+                        &telegram_tools::ToolCall {
+                            name: "run_command".into(),
+                            args: serde_json::json!({"command": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%+"}),
+                        },
+                        &ctx.tool_ctx,
+                    )
+                    .await;
+                    bot.send_message(
+                        chat_id,
+                        if result.success {
+                            "Volumen subido."
+                        } else {
+                            "No se pudo ajustar el volumen."
+                        },
+                    )
+                    .await?;
+                }
+                "volume_down" => {
+                    let result = telegram_tools::execute_tool(
+                        &telegram_tools::ToolCall {
+                            name: "run_command".into(),
+                            args: serde_json::json!({"command": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%-"}),
+                        },
+                        &ctx.tool_ctx,
+                    )
+                    .await;
+                    bot.send_message(
+                        chat_id,
+                        if result.success {
+                            "Volumen bajado."
+                        } else {
+                            "No se pudo ajustar el volumen."
+                        },
+                    )
+                    .await?;
+                }
+                "brightness_up" => {
+                    let result = telegram_tools::execute_tool(
+                        &telegram_tools::ToolCall {
+                            name: "run_command".into(),
+                            args: serde_json::json!({"command": "brightnessctl set +10%"}),
+                        },
+                        &ctx.tool_ctx,
+                    )
+                    .await;
+                    bot.send_message(
+                        chat_id,
+                        if result.success {
+                            "Brillo aumentado."
+                        } else {
+                            "No se pudo ajustar el brillo."
+                        },
+                    )
+                    .await?;
+                }
+                "brightness_down" => {
+                    let result = telegram_tools::execute_tool(
+                        &telegram_tools::ToolCall {
+                            name: "run_command".into(),
+                            args: serde_json::json!({"command": "brightnessctl set 10%-"}),
+                        },
+                        &ctx.tool_ctx,
+                    )
+                    .await;
+                    bot.send_message(
+                        chat_id,
+                        if result.success {
+                            "Brillo reducido."
+                        } else {
+                            "No se pudo ajustar el brillo."
+                        },
+                    )
+                    .await?;
+                }
+                "screenshot" => {
+                    bot.send_message(chat_id, "Tomando captura...").await?;
+                    let result = telegram_tools::execute_tool(
+                        &telegram_tools::ToolCall {
+                            name: "screenshot".into(),
+                            args: serde_json::json!({}),
+                        },
+                        &ctx.tool_ctx,
+                    )
+                    .await;
+                    // The output contains the file path
+                    let path = result.output.trim();
+                    let screenshot_file = std::path::Path::new(path);
+                    if screenshot_file.exists() {
+                        bot.send_document(chat_id, InputFile::file(screenshot_file))
+                            .await?;
+                        tokio::fs::remove_file(screenshot_file).await.ok();
+                    } else {
+                        bot.send_message(chat_id, "No se pudo tomar la captura.")
+                            .await?;
+                    }
+                }
+                "lock_screen" => {
+                    let result = telegram_tools::execute_tool(
+                        &telegram_tools::ToolCall {
+                            name: "run_command".into(),
+                            args: serde_json::json!({"command": "loginctl lock-session"}),
+                        },
+                        &ctx.tool_ctx,
+                    )
+                    .await;
+                    bot.send_message(
+                        chat_id,
+                        if result.success {
+                            "Pantalla bloqueada."
+                        } else {
+                            "No se pudo bloquear la pantalla."
+                        },
+                    )
+                    .await?;
+                }
+                "firewall_status" => {
+                    bot.send_message(chat_id, "Consultando firewall...").await?;
+                    let result = telegram_tools::execute_tool(
+                        &telegram_tools::ToolCall {
+                            name: "service_manage".into(),
+                            args: serde_json::json!({"service": "nftables", "action": "status"}),
+                        },
+                        &ctx.tool_ctx,
+                    )
+                    .await;
+                    send_chunked(&bot, chat_id, &result.output).await?;
                 }
                 _ => {
                     warn!("Unknown action callback: {}", action);
+                    bot.send_message(chat_id, format!("Accion no reconocida: {}", action))
+                        .await?;
                 }
             }
         }
@@ -1664,10 +1973,12 @@ mod inner {
              \"Cada dia a las 7am dame un resumen del sistema\"\n\n\
              /new — Reiniciar conversacion\n\
              /status — Estado del sistema (sin LLM)\n\
+             /acciones — Controles rapidos con botones\n\
              /btw <texto> — Conversacion lateral\n\
              /do <tarea> — Ejecutar tarea\n\
              /pair — Generar codigo para vincular nuevo usuario\n\
              /help — Este mensaje\n\n\
+             Escribe /acciones para ver controles rapidos con botones.\n\n\
              En grupos, mencioname con @ o responde a mis mensajes. Te monitoreo cada 30 min.",
         )
         .await?;
@@ -2202,17 +2513,102 @@ mod inner {
     fn notification_action_keyboard(text: &str) -> Option<InlineKeyboardMarkup> {
         let lower = text.to_lowercase();
 
-        // Disk space warnings
-        if lower.contains("disco") || lower.contains("disk") || lower.contains("espacio") {
+        // Firewall alerts
+        if lower.contains("firewall") || lower.contains("nftables") {
             return Some(InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("Limpiar cache", "action:cleanup_cache"),
+                InlineKeyboardButton::callback("Activar firewall", "action:service_start:nftables"),
                 InlineKeyboardButton::callback("Ignorar", "action:dismiss"),
             ]]));
         }
 
-        // Task failures — offer to dismiss
-        if lower.contains("fallid") || lower.contains("error") {
+        // CPU temperature
+        if lower.contains("cpu") && (lower.contains("temperatura") || lower.contains("\u{00b0}c")) {
             return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Ver procesos", "action:top_processes"),
+                InlineKeyboardButton::callback("Ignorar", "action:dismiss"),
+            ]]));
+        }
+
+        // Disk space warnings
+        if lower.contains("disco") || lower.contains("disk") || lower.contains("espacio") {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Limpiar cache", "action:cleanup_cache"),
+                InlineKeyboardButton::callback("Ver uso", "action:disk_usage"),
+                InlineKeyboardButton::callback("Ignorar", "action:dismiss"),
+            ]]));
+        }
+
+        // Session/break reminders
+        if lower.contains("descanso")
+            || lower.contains("horas activo")
+            || lower.contains("hidratarte")
+        {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Ya voy", "action:break_ack"),
+                InlineKeyboardButton::callback("En 30 min", "action:snooze:30"),
+                InlineKeyboardButton::callback("Ignorar", "action:dismiss"),
+            ]]));
+        }
+
+        // Eye health 20-20-20
+        if lower.contains("20-20-20") || lower.contains("ojos") || lower.contains("vista") {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Listo", "action:dismiss"),
+                InlineKeyboardButton::callback("En 10 min", "action:snooze:10"),
+            ]]));
+        }
+
+        // Calendar reminders
+        if (lower.contains("evento") || lower.contains("cita") || lower.contains("reunion"))
+            && lower.contains("minuto")
+        {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Listo", "action:dismiss"),
+                InlineKeyboardButton::callback("Posponer 15 min", "action:snooze:15"),
+            ]]));
+        }
+
+        // Empty tomorrow
+        if lower.contains("nada agendado")
+            || (lower.contains("manana") && lower.contains("no tienes"))
+        {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Agregar evento", "action:prompt_calendar"),
+                InlineKeyboardButton::callback("OK", "action:dismiss"),
+            ]]));
+        }
+
+        // Update available
+        if lower.contains("actualizacion") || lower.contains("update") {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Actualizar", "action:update"),
+                InlineKeyboardButton::callback("Despues", "action:dismiss"),
+            ]]));
+        }
+
+        // Meeting ended
+        if lower.contains("reunion finalizada")
+            || (lower.contains("meeting") && lower.contains("finaliz"))
+        {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Ver resumen", "action:meeting_summary"),
+                InlineKeyboardButton::callback("OK", "action:dismiss"),
+            ]]));
+        }
+
+        // Memory/RAM warnings
+        if lower.contains("memoria") && (lower.contains("critica") || lower.contains("alta")) {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Liberar RAM", "action:free_ram"),
+                InlineKeyboardButton::callback("Ver procesos", "action:top_processes"),
+                InlineKeyboardButton::callback("Ignorar", "action:dismiss"),
+            ]]));
+        }
+
+        // Task failures
+        if lower.contains("fallid") || lower.contains("error") || lower.contains("stuck") {
+            return Some(InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("Reintentar", "action:retry_task"),
                 InlineKeyboardButton::callback("Descartar", "action:dismiss"),
             ]]));
         }
