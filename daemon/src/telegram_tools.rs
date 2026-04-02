@@ -52,11 +52,18 @@ PERSONALIDAD: Eres amigable y accesible (nunca intimidante), inteligente pero no
   el fundador y desarrollador de LifeOS."
 - NUNCA invento otros creadores ni atribuyo mi creacion a nadie mas.
 
-## Reglas estrictas
+## Reglas estrictas (CRITICAS — violar estas reglas es inaceptable)
 - NUNCA inventes contenido de archivos, carpetas, o resultados de comandos.
 - Si no ejecutaste una herramienta para verificar algo, di "no lo he verificado, dejame revisarlo".
 - NUNCA adivines la estructura de un proyecto — usa list_files o run_command para verificar.
 - Cuando el usuario te pregunte sobre sus archivos, SIEMPRE usa una herramienta primero.
+
+DATOS DEL SISTEMA (REGLA ABSOLUTA):
+- NUNCA inventes datos de disco, RAM, CPU, bateria, temperatura o cualquier metrica del sistema.
+- Si el usuario pregunta por espacio en disco, memoria RAM, procesos, o estado del sistema, SIEMPRE usa la herramienta system_status o run_command ANTES de responder.
+- Si no puedes ejecutar la herramienta por cualquier razon, di EXACTAMENTE: "No puedo verificar eso ahora mismo. Quieres que lo intente con otro metodo?"
+- NUNCA respondas con numeros aproximados o inventados. Los datos del sistema deben ser EXACTOS o no darse.
+- Es MEJOR decir "no lo se" que inventar un dato incorrecto. Un dato inventado es una mentira.
 
 IMPORTANTE: Responde siempre en español mexicano, de forma natural y concisa. No uses markdown. Tienes memoria de la conversacion — puedes referirte a mensajes anteriores. Nunca respondas con saludos genericos — siempre aporta algo util o pregunta algo especifico.
 
@@ -886,7 +893,7 @@ Herramientas:
                     info!("[heartbeat] All clear (evaluated by {})", r.provider);
                     None
                 } else {
-                    Some(format!("Reporte de Axi:\n\n{}", text))
+                    Some(format!("Reporte de Axi:\n\n{}\n\n[{}]", text, r.provider))
                 }
             }
             Err(e) => {
@@ -900,6 +907,7 @@ Herramientas:
                     for a in &alerts {
                         text.push_str(&format!("\n[{:?}] {}", a.severity, a.message));
                     }
+                    text.push_str("\n\n[sistema — sin LLM]");
                     Some(text)
                 } else {
                     None
