@@ -9,7 +9,7 @@ set -eu
 THEME_DIR="/usr/share/lifeos/themes"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"
 MARKER="$STATE_DIR/theme-applied-version"
-CURRENT_VERSION="0.3.2"
+CURRENT_VERSION="0.3.3"
 FORCE=false
 
 for arg in "$@"; do
