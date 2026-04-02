@@ -249,6 +249,25 @@ fn generate_bootstrap_token() -> std::io::Result<String> {
     perms.set_mode(0o600); // Only owner can read/write
     std::fs::set_permissions(&path, perms)?;
 
+    // Also write to ALL candidate directories so the CLI can always find
+    // the token regardless of which path it searches first.
+    // This is critical after bootc updates where /run (tmpfs) is cleared.
+    for candidate in bootstrap_runtime_dir_candidates() {
+        let candidate_path = candidate.join("bootstrap.token");
+        if candidate_path == path {
+            continue; // Already written above
+        }
+        if std::fs::create_dir_all(&candidate).is_ok()
+            && std::fs::write(&candidate_path, &token).is_ok()
+        {
+            let _ = std::fs::set_permissions(
+                &candidate_path,
+                std::fs::Permissions::from_mode(0o600),
+            );
+            log::debug!("Bootstrap token mirrored to {}", candidate_path.display());
+        }
+    }
+
     log::info!("Bootstrap token generated at {}", path.display());
     Ok(token)
 }
