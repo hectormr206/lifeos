@@ -1674,6 +1674,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let ma = meeting_archive.clone();
             let mast = shared_meeting_assistant.clone();
+            let cal = state.calendar.clone();
             Some(tokio::spawn(async move {
                 telegram_bridge::run_telegram_bot(
                     tg_config,
@@ -1687,7 +1688,7 @@ async fn main() -> anyhow::Result<()> {
                     Some(um),
                     Some(ma),
                     Some(mast),
-                    Some(state.calendar.clone()),
+                    Some(cal),
                 )
                 .await;
             }))

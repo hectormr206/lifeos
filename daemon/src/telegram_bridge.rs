@@ -545,12 +545,16 @@ mod inner {
                 // Save as positive feedback in memory
                 if let Some(ref memory) = ctx.tool_ctx.memory {
                     let mem = memory.read().await;
+                    let tags: Vec<String> =
+                        vec!["reaction".into(), "positive".into()];
                     let _ = mem
                         .add_entry(
-                            "El usuario reacciono positivamente a mi respuesta",
                             "feedback",
-                            &["reaction", "positive"],
+                            "telegram",
+                            &tags,
+                            Some("reaction"),
                             50,
+                            "El usuario reacciono positivamente a mi respuesta",
                         )
                         .await;
                 }
@@ -568,12 +572,16 @@ mod inner {
             "👎" | "😢" | "💔" => {
                 if let Some(ref memory) = ctx.tool_ctx.memory {
                     let mem = memory.read().await;
+                    let tags: Vec<String> =
+                        vec!["reaction".into(), "negative".into()];
                     let _ = mem
                         .add_entry(
-                            "El usuario reacciono negativamente — ajustar enfoque",
                             "feedback",
-                            &["reaction", "negative"],
+                            "telegram",
+                            &tags,
+                            Some("reaction"),
                             60,
+                            "El usuario reacciono negativamente — ajustar enfoque",
                         )
                         .await;
                 }
