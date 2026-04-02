@@ -1790,6 +1790,7 @@ async fn detect_meeting_audio() -> Option<String> {
 
     let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
 
+    // Strategy A: Direct match — native conferencing apps (Zoom, Teams desktop, etc.)
     for (app_name, patterns) in CONFERENCING_APPS {
         for pattern in *patterns {
             if text.contains(&pattern.to_lowercase()) {
@@ -1798,23 +1799,123 @@ async fn detect_meeting_audio() -> Option<String> {
         }
     }
 
-    // Also check for generic browser audio that might be a web-based meeting
-    if (text.contains("firefox") || text.contains("chromium") || text.contains("chrome"))
-        && detect_camera_in_use().await
-    {
-        // Browser + camera = likely a web meeting
-        return Some("Web Meeting".into());
+    // Strategy B: Browser audio detected — cross-reference with window titles.
+    // When using Meet/Zoom/Teams in a browser, pactl only shows "Chromium" or "Firefox",
+    // not the actual conferencing service. We need to check window titles to know
+    // which service is running inside the browser.
+    let browser_audio = text.contains("firefox")
+        || text.contains("chromium")
+        || text.contains("chrome")
+        || text.contains("brave")
+        || text.contains("edge")
+        || text.contains("vivaldi")
+        || text.contains("ungoogled");
+
+    if browser_audio {
+        // Check window titles for meeting patterns
+        if let Some(app) = detect_browser_meeting_by_title().await {
+            return Some(app);
+        }
+        // Fallback: browser + camera = likely a web meeting even without title match
+        if detect_camera_in_use().await {
+            return Some("Web Meeting".into());
+        }
     }
 
     None
 }
 
-/// Detect an active meeting by scanning compositor window titles via swaymsg.
-///
-/// Runs `swaymsg -t get_tree` (works on sway / COSMIC compositor) and walks the
-/// JSON tree looking for window titles that match known conferencing patterns.
-/// Returns the app name if a meeting window is found.
-pub async fn detect_meeting_by_window_title() -> Option<String> {
+/// Detect a meeting running inside a browser by checking window titles.
+/// Works on both COSMIC DE and Sway compositors.
+/// Returns the conferencing app name if a meeting title is found.
+async fn detect_browser_meeting_by_title() -> Option<String> {
+    let titles = collect_all_window_titles().await;
+
+    // Meeting patterns to search in window titles
+    const BROWSER_MEETING_PATTERNS: &[(&str, &[&str])] = &[
+        ("Google Meet", &["google meet", "meet.google.com"]),
+        ("Zoom", &["zoom meeting", "zoom.us"]),
+        (
+            "Microsoft Teams",
+            &["microsoft teams", "teams.microsoft.com", "teams.live.com"],
+        ),
+        ("Discord", &["discord"]),
+        ("Slack", &["slack"]),
+        ("Jitsi", &["jitsi meet", "meet.jit.si"]),
+        ("WebEx", &["webex", "webex.com"]),
+        ("Whereby", &["whereby.com"]),
+        ("Around", &["around.co"]),
+        ("Gather", &["gather.town"]),
+    ];
+
+    for title in &titles {
+        let title_lower = title.to_lowercase();
+        for (app_name, patterns) in BROWSER_MEETING_PATTERNS {
+            if patterns
+                .iter()
+                .any(|p| title_lower.contains(&p.to_lowercase()))
+            {
+                // Discord needs "Voice" or "Stage" qualifier
+                if *app_name == "Discord"
+                    && !title_lower.contains("voice")
+                    && !title_lower.contains("stage")
+                {
+                    continue;
+                }
+                // Slack needs "Huddle" qualifier
+                if *app_name == "Slack" && !title_lower.contains("huddle") {
+                    continue;
+                }
+                info!(
+                    "[meeting] Browser meeting detected: {} (title: {})",
+                    app_name,
+                    &title[..title.len().min(60)]
+                );
+                return Some(app_name.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Collect all window titles from the compositor using multiple methods.
+/// Tries COSMIC D-Bus, swaymsg, and xdotool as fallbacks.
+async fn collect_all_window_titles() -> Vec<String> {
+    // Method 1: swaymsg (works on Sway and some COSMIC versions)
+    if let Some(titles) = collect_titles_swaymsg().await {
+        if !titles.is_empty() {
+            return titles;
+        }
+    }
+
+    // Method 2: COSMIC toplevel via cosmic-randr or D-Bus
+    // (zcosmic_toplevel_info_v1 is not yet accessible via CLI,
+    // but we can try cosmic-comp D-Bus if available)
+    if let Some(titles) = collect_titles_cosmic_dbus().await {
+        if !titles.is_empty() {
+            return titles;
+        }
+    }
+
+    // Method 3: wlrctl (works on wlroots-based compositors)
+    if let Some(titles) = collect_titles_wlrctl().await {
+        if !titles.is_empty() {
+            return titles;
+        }
+    }
+
+    // Method 4: Read /proc for browser command lines containing meeting URLs
+    if let Some(titles) = collect_titles_from_proc().await {
+        if !titles.is_empty() {
+            return titles;
+        }
+    }
+
+    Vec::new()
+}
+
+async fn collect_titles_swaymsg() -> Option<Vec<String>> {
     let output = Command::new("swaymsg")
         .args(["-t", "get_tree"])
         .output()
@@ -1826,12 +1927,109 @@ pub async fn detect_meeting_by_window_title() -> Option<String> {
     }
 
     let tree: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-
-    // Collect all window titles from the tree
-    let mut titles: Vec<String> = Vec::new();
+    let mut titles = Vec::new();
     collect_window_titles(&tree, &mut titles);
+    Some(titles)
+}
 
-    // Match titles against meeting patterns
+async fn collect_titles_cosmic_dbus() -> Option<Vec<String>> {
+    // Try to get window list via D-Bus (COSMIC exposes this on some versions)
+    let output = Command::new("busctl")
+        .args([
+            "--user",
+            "call",
+            "com.system76.CosmicComp",
+            "/com/system76/CosmicComp",
+            "com.system76.CosmicComp",
+            "ToplevelList",
+        ])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    // Parse D-Bus response — format varies, extract title strings
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let titles: Vec<String> = stdout
+        .split('"')
+        .filter(|s| s.len() > 3 && !s.trim().is_empty())
+        .map(|s| s.to_string())
+        .collect();
+
+    if titles.is_empty() {
+        None
+    } else {
+        Some(titles)
+    }
+}
+
+async fn collect_titles_wlrctl() -> Option<Vec<String>> {
+    let output = Command::new("wlrctl")
+        .args(["toplevel", "list"])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let titles: Vec<String> = stdout.lines().map(|l| l.trim().to_string()).collect();
+
+    if titles.is_empty() {
+        None
+    } else {
+        Some(titles)
+    }
+}
+
+/// Last resort: scan /proc for browser processes with meeting URLs in command line.
+/// This works even when compositor APIs are unavailable (e.g., Flatpak browsers).
+async fn collect_titles_from_proc() -> Option<Vec<String>> {
+    let output = Command::new("sh")
+        .args([
+            "-c",
+            "grep -rl 'meet.google.com\\|zoom.us\\|teams.microsoft.com\\|teams.live.com\\|meet.jit.si\\|webex.com' /proc/*/cmdline 2>/dev/null | head -5",
+        ])
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+
+    // If we found any match in /proc cmdlines, extract the URL pattern
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut titles = Vec::new();
+    for line in stdout.lines() {
+        // Read the actual cmdline to extract the URL
+        let pid_cmdline = line.trim();
+        if let Ok(cmdline) = tokio::fs::read_to_string(pid_cmdline).await {
+            // cmdline uses null bytes as separators
+            let clean = cmdline.replace('\0', " ");
+            titles.push(clean);
+        }
+    }
+
+    if titles.is_empty() {
+        None
+    } else {
+        Some(titles)
+    }
+}
+
+/// Detect an active meeting by scanning compositor window titles.
+///
+/// Uses multiple methods: swaymsg, COSMIC D-Bus, wlrctl, /proc fallback.
+/// Returns the app name if a meeting window is found.
+pub async fn detect_meeting_by_window_title() -> Option<String> {
+    let titles = collect_all_window_titles().await;
+
     for title in &titles {
         let title_lower = title.to_lowercase();
 
@@ -1855,7 +2053,6 @@ pub async fn detect_meeting_by_window_title() -> Option<String> {
                 {
                     return Some(app_name.to_string());
                 }
-                // Pattern matched but qualifier did not — skip this app
                 continue;
             }
 
