@@ -1,51 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3840 2160">
   <title>LifeOS Dark Wallpaper</title>
-  <desc>LifeOS dark variant wallpaper for dark mode</desc>
-  
-  <!-- Background gradient - Darker variant -->
+  <desc>Dark atmospheric LifeOS wallpaper with a subtle axolotl silhouette.</desc>
   <defs>
-    <linearGradient id="bg-gradient-dark" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0d0d1a;stop-opacity:1" />
-      <stop offset="50%" style="stop-color:#1a1a2e;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#0f4c75;stop-opacity:0.8" />
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#060810"/>
+      <stop offset="55%" stop-color="#0F0F1B"/>
+      <stop offset="100%" stop-color="#15192B"/>
     </linearGradient>
-    
-    <!-- Accent glow -->
-    <radialGradient id="accent-glow-dark" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" style="stop-color:#3282b8;stop-opacity:0.15" />
-      <stop offset="100%" style="stop-color:#3282b8;stop-opacity:0" />
+    <radialGradient id="glow" cx="72%" cy="40%" r="30%">
+      <stop offset="0%" stop-color="#00D4AA" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#00D4AA" stop-opacity="0"/>
     </radialGradient>
-    
-    <!-- Stars pattern -->
-    <pattern id="stars" width="100" height="100" patternUnits="userSpaceOnUse">
-      <circle cx="25" cy="25" r="1" fill="#ffffff" opacity="0.3"/>
-      <circle cx="75" cy="75" r="0.5" fill="#ffffff" opacity="0.2"/>
-      <circle cx="50" cy="10" r="0.8" fill="#ffffff" opacity="0.25"/>
-    </pattern>
+    <radialGradient id="pink" cx="67%" cy="52%" r="16%">
+      <stop offset="0%" stop-color="#FF6B9D" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#FF6B9D" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  
-  <!-- Main background -->
-  <rect width="1920" height="1080" fill="url(#bg-gradient-dark)"/>
-  
-  <!-- Stars overlay -->
-  <rect width="1920" height="1080" fill="url(#stars)"/>
-  
-  <!-- Accent glow -->
-  <ellipse cx="960" cy="540" rx="800" ry="500" fill="url(#accent-glow-dark)"/>
-  
-  <!-- Decorative elements -->
-  <circle cx="100" cy="100" r="200" fill="#0f4c75" opacity="0.05"/>
-  <circle cx="1820" cy="980" r="300" fill="#3282b8" opacity="0.05"/>
-  
-  <!-- Abstract wave pattern -->
-  <path d="M0,800 Q480,700 960,800 T1920,750 L1920,1080 L0,1080 Z" fill="#0f4c75" opacity="0.1"/>
-  <path d="M0,850 Q480,750 960,850 T1920,800 L1920,1080 L0,1080 Z" fill="#3282b8" opacity="0.05"/>
-  
-  <!-- LifeOS logo mark (abstract) -->
-  <g transform="translate(960, 540)" opacity="0.05">
-    <circle cx="0" cy="0" r="200" fill="none" stroke="#ffffff" stroke-width="2"/>
-    <circle cx="0" cy="0" r="130" fill="none" stroke="#ffffff" stroke-width="1.5"/>
-    <circle cx="0" cy="0" r="60" fill="#3282b8"/>
+  <rect width="3840" height="2160" fill="url(#bg)"/>
+  <rect width="3840" height="2160" fill="url(#glow)"/>
+  <rect width="3840" height="2160" fill="url(#pink)"/>
+  <ellipse cx="2700" cy="1580" rx="1480" ry="460" fill="#00D4AA" opacity="0.04"/>
+  <g opacity="0.18" fill="#102127">
+    <ellipse cx="2960" cy="1360" rx="430" ry="255"/>
+    <ellipse cx="2580" cy="1180" rx="240" ry="185"/>
+    <path d="M3270 1310 C3470 1325 3650 1455 3710 1635 C3530 1605 3375 1545 3260 1450 C3180 1385 3175 1318 3270 1310 Z"/>
+  </g>
+  <g opacity="0.42" fill="#FF6B9D">
+    <path d="M2455 1065 C2310 1000 2240 890 2235 760 C2350 790 2455 845 2515 935 Z"/>
+    <path d="M2710 1060 C2845 995 2930 890 2950 760 C2835 790 2735 845 2665 934 Z"/>
   </g>
 </svg>

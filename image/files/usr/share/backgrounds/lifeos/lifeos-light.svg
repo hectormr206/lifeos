@@ -1,50 +1,44 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3840 2160">
   <title>LifeOS Light Wallpaper</title>
-  <desc>LifeOS light variant wallpaper for light mode</desc>
-  
-  <!-- Background gradient - Light variant -->
+  <desc>Light variant of the LifeOS axolotl wallpaper with soft aquatic tones.</desc>
   <defs>
-    <linearGradient id="bg-gradient-light" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#f8f9fa;stop-opacity:1" />
-      <stop offset="50%" style="stop-color:#ffffff;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#e8f4f8;stop-opacity:1" />
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F6FBFA"/>
+      <stop offset="100%" stop-color="#E7F2F0"/>
     </linearGradient>
-    
-    <!-- Accent glow -->
-    <radialGradient id="accent-glow-light" cx="75%" cy="35%" r="40%">
-      <stop offset="0%" style="stop-color:#3282b8;stop-opacity:0.08" />
-      <stop offset="100%" style="stop-color:#3282b8;stop-opacity:0" />
+    <radialGradient id="tealGlow" cx="72%" cy="36%" r="30%">
+      <stop offset="0%" stop-color="#00D4AA" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#00D4AA" stop-opacity="0"/>
     </radialGradient>
-    
-    <!-- Subtle pattern -->
-    <pattern id="dots" width="30" height="30" patternUnits="userSpaceOnUse">
-      <circle cx="15" cy="15" r="1" fill="#0f4c75" opacity="0.05"/>
-    </pattern>
+    <radialGradient id="pinkGlow" cx="66%" cy="46%" r="18%">
+      <stop offset="0%" stop-color="#FF6B9D" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#FF6B9D" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="bodyFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#64EED0"/>
+      <stop offset="70%" stop-color="#00D4AA"/>
+      <stop offset="100%" stop-color="#00B497"/>
+    </linearGradient>
   </defs>
-  
-  <!-- Main background -->
-  <rect width="1920" height="1080" fill="url(#bg-gradient-light)"/>
-  
-  <!-- Dots overlay -->
-  <rect width="1920" height="1080" fill="url(#dots)"/>
-  
-  <!-- Accent glow -->
-  <ellipse cx="1440" cy="378" rx="600" ry="400" fill="url(#accent-glow-light)"/>
-  
-  <!-- Decorative circles -->
-  <circle cx="150" cy="150" r="80" fill="#3282b8" opacity="0.05"/>
-  <circle cx="1750" cy="900" r="120" fill="#0f4c75" opacity="0.08"/>
-  <circle cx="960" cy="540" r="300" fill="none" stroke="#3282b8" stroke-width="1" opacity="0.1"/>
-  
-  <!-- Abstract wave pattern -->
-  <path d="M0,700 Q480,600 960,700 T1920,650 L1920,1080 L0,1080 Z" fill="#0f4c75" opacity="0.03"/>
-  <path d="M0,750 Q480,650 960,750 T1920,700 L1920,1080 L0,1080 Z" fill="#3282b8" opacity="0.02"/>
-  
-  <!-- LifeOS logo mark (abstract) -->
-  <g transform="translate(960, 540)" opacity="0.04">
-    <circle cx="0" cy="0" r="150" fill="none" stroke="#0f4c75" stroke-width="3"/>
-    <circle cx="0" cy="0" r="100" fill="none" stroke="#0f4c75" stroke-width="2"/>
-    <circle cx="0" cy="0" r="50" fill="#3282b8"/>
+  <rect width="3840" height="2160" fill="url(#bg)"/>
+  <rect width="3840" height="2160" fill="url(#tealGlow)"/>
+  <rect width="3840" height="2160" fill="url(#pinkGlow)"/>
+  <ellipse cx="2700" cy="1700" rx="1550" ry="420" fill="#00D4AA" opacity="0.05"/>
+  <g opacity="0.16" fill="#8BC6BC">
+    <path d="M0 2160 L0 1840 C110 1800 160 1690 220 1540 C290 1730 340 1840 455 2160 Z"/>
+    <path d="M3080 2160 L3080 1820 C3170 1790 3225 1660 3285 1500 C3345 1710 3400 1830 3510 2160 Z"/>
+  </g>
+  <g opacity="0.84">
+    <path d="M3270 1310 C3470 1325 3650 1455 3710 1635 C3530 1605 3375 1545 3260 1450 C3180 1385 3175 1318 3270 1310 Z" fill="url(#bodyFill)"/>
+    <ellipse cx="2980" cy="1365" rx="455" ry="270" fill="url(#bodyFill)"/>
+    <ellipse cx="2580" cy="1180" rx="255" ry="195" fill="url(#bodyFill)"/>
+    <ellipse cx="2995" cy="1380" rx="300" ry="165" fill="#FFFFFF" opacity="0.24"/>
+    <g fill="#FF6B9D" opacity="0.72">
+      <path d="M2455 1065 C2310 1000 2240 890 2235 760 C2350 790 2455 845 2515 935 Z"/>
+      <path d="M2400 1130 C2245 1110 2120 1010 2065 875 C2205 880 2335 940 2430 1035 Z"/>
+      <path d="M2710 1060 C2845 995 2930 890 2950 760 C2835 790 2735 845 2665 934 Z"/>
+      <path d="M2765 1128 C2925 1110 3055 1010 3110 875 C2965 880 2835 938 2738 1035 Z"/>
+    </g>
   </g>
 </svg>

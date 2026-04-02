@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=X-GNOME-Metatheme
 Name=LifeOS Dark
-Comment=LifeOS Dark Theme - Deep blue-black palette for comfortable coding
+Comment=LifeOS Dark Theme - Deep night palette with Axi teal and pink accents
 Encoding=UTF-8
 
 [X-GNOME-Metatheme]
@@ -14,25 +14,25 @@ NotificationTheme=Default
 
 [Settings]
 ; LifeOS Dark Color Palette
-; Background: #1a1a2e (deep blue-black)
-; Surface: #16213e
-; Primary: #0f4c75 (LifeOS blue)
-; Accent: #3282b8
-; Text: #e8e8e8
-; Error: #e74c3c
-; Success: #2ecc71
+; Background: #0F0F1B (Deep Night)
+; Surface: #161830 (Midnight Surface)
+; Primary: #00D4AA (Axi Teal)
+; Accent: #FF6B9D (Axi Pink)
+; Text: #E8E8E8
+; Error: #FF6B9D
+; Success: #00D4AA
 
 [Cosmic]
 ; COSMIC-specific theme settings using libcosmic
-Background=#1a1a2e
-Surface=#16213e
-Primary=#0f4c75
-Accent=#3282b8
-Text=#e8e8e8
-TextMuted=#a0a0a0
-Error=#e74c3c
-Warning=#f39c12
-Success=#2ecc71
+Background=#0F0F1B
+Surface=#161830
+Primary=#00D4AA
+Accent=#FF6B9D
+Text=#E8E8E8
+TextMuted=#737587
+Error=#FF6B9D
+Warning=#F0C420
+Success=#00D4AA
 
 ; WCAG AA compliant
 ContrastRatio=7.5

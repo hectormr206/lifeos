@@ -62,6 +62,10 @@ IMPORTANTE: Responde siempre en español mexicano, de forma natural y concisa. N
 
 VISION: Si recibes una imagen, SIEMPRE describela y responde sobre ella. Si no puedes ver la imagen (el modelo no soporta vision), dile al usuario: "No puedo ver imagenes en este momento, ¿me la describes?"
 
+MENSAJES DE VOZ: Cuando recibes un mensaje de voz del usuario, el sistema YA lo transcribio automaticamente usando Whisper. El texto que ves ES la transcripcion del audio. NUNCA digas que no puedes escuchar o analizar audio — ya lo hiciste. Responde directamente al contenido transcrito.
+
+GESTION DE SERVICIOS: Puedes administrar servicios del sistema usando la herramienta service_manage. Si el usuario te pide activar el firewall, instalar un servicio, o reiniciar algo, usa esta herramienta. Servicios disponibles: nftables, firewalld, llama-server, whisper-stt.
+
 REGLAS DE TIEMPO:
 - SIEMPRE usa la hora del [Contexto temporal] mostrado arriba. NUNCA inventes una hora.
 - Cuando el usuario diga "manana", "en 2 horas", "el lunes", calcula la fecha/hora EXACTA.
@@ -336,6 +340,33 @@ Herramientas:
 
 76. **screenshot_recall** — Buscar capturas de pantalla recientes por descripcion.
     args: {"query": "firefox gmail"}
+
+77. **memory_cleanup** — Muestra estadisticas de memoria y ejecuta limpieza (garbage filter + decay + dedup).
+    args: {}
+
+78. **memory_protect** — Marca una memoria como permanente (nunca se borra ni decae).
+    args: {"query": "nombre de mi suegro"}
+
+79. **service_manage** — Gestiona servicios del sistema (firewall, llama-server, whisper, etc).
+    args: {"service": "nftables", "action": "start"}
+    Servicios permitidos: nftables, firewalld, llama-server, whisper-stt
+    Acciones: start, stop, restart, enable, disable, status
+    SEGURIDAD: Solo servicios en la lista blanca. Para activar firewall, usa service=nftables action=start.
+
+80. **meeting_list** — Lista las reuniones recientes con resumen.
+    args: {"limit": 5}
+
+81. **meeting_search** — Busca en las transcripciones de reuniones.
+    args: {"query": "presupuesto Q2"}
+
+82. **meeting_start** — Inicia grabacion manual de reunion (presencial o manual).
+    args: {"description": "Junta con equipo de desarrollo"}
+
+83. **meeting_stop** — Detiene la grabacion manual de reunion.
+    args: {}
+
+84. **agenda** — Muestra tu agenda completa: eventos del calendario, cron jobs y tareas programadas.
+    args: {"days": 1}
 
 ## Reglas
 
@@ -791,7 +822,7 @@ Herramientas:
     /// Run a heartbeat cycle: evaluate checklist with LLM + system data.
     pub async fn run_heartbeat(ctx: &ToolContext) -> Option<String> {
         let checklist = load_heartbeat_checklist().await;
-        let alerts = proactive::check_all(None).await;
+        let alerts = proactive::check_all(None, None).await;
 
         let mut system_data = String::from("Estado actual del sistema:\n");
         if alerts.is_empty() {
@@ -806,13 +837,14 @@ Herramientas:
         }
 
         // Add basic metrics
+        // Check /var only (not / which is composefs overlay, always 100% by design on bootc)
         if let Ok(o) = tokio::process::Command::new("df")
-            .args(["-h", "/", "/var"])
+            .args(["-h", "/var"])
             .output()
             .await
         {
             system_data.push_str(&format!(
-                "\nDisco:\n{}\n",
+                "\nDisco (/var — particion principal):\n{}\n",
                 String::from_utf8_lossy(&o.stdout)
             ));
         }
@@ -936,6 +968,12 @@ Herramientas:
         pub session_store: Option<Arc<SessionStore>>,
         /// User model for personalized responses (Fase AQ).
         pub user_model: Option<Arc<RwLock<UserModel>>>,
+        /// Meeting archive for structured meeting storage and search.
+        pub meeting_archive: Option<Arc<crate::meeting_archive::MeetingArchive>>,
+        /// Meeting assistant for manual meeting start/stop.
+        pub meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
+        /// Calendar manager for event scheduling and reminders.
+        pub calendar: Option<Arc<crate::calendar::CalendarManager>>,
     }
 
     /// Check if the user's message contains keywords that suggest they want
@@ -1102,8 +1140,8 @@ Herramientas:
             }
             // --- Fase BA: Unified Memory tools ---
             "health_status" => execute_health_status().await,
-            "calendar_today" => execute_calendar_today().await,
-            "calendar_add" => execute_calendar_add(&call.args).await,
+            "calendar_today" => execute_calendar_today(ctx).await,
+            "calendar_add" => execute_calendar_add(&call.args, ctx).await,
             "current_context" => execute_current_context().await,
             "current_mode" => execute_current_mode().await,
             "learned_patterns" => execute_learned_patterns().await,
@@ -1112,6 +1150,14 @@ Herramientas:
             "security_status" => execute_security_status().await,
             "activity_summary" => execute_memory_search_tag(ctx, "context").await,
             "screenshot_recall" => execute_memory_search(&call.args, ctx, "visual").await,
+            "memory_cleanup" => execute_memory_cleanup(ctx).await,
+            "memory_protect" => execute_memory_protect(&call.args, ctx).await,
+            "service_manage" => execute_service_manage(&call.args).await,
+            "meeting_list" => execute_meeting_list(&call.args, ctx).await,
+            "meeting_search" => execute_meeting_search(&call.args, ctx).await,
+            "meeting_start" => execute_meeting_start(&call.args, ctx).await,
+            "meeting_stop" => execute_meeting_stop(ctx).await,
+            "agenda" => execute_agenda(&call.args, ctx).await,
             other => Ok(format!("Herramienta '{}' no reconocida", other)),
         };
 
@@ -1187,7 +1233,10 @@ Herramientas:
             combined
         };
 
-        // Build messages starting with system prompt (fresh time context each call)
+        // Build messages starting with system prompt (fresh time context each call).
+        // IMPORTANT: All system-level context MUST go into a single system message
+        // at the beginning. LLM chat templates (Jinja2) reject system messages
+        // after user/assistant messages.
         let user_model_snapshot = if let Some(ref um) = ctx.user_model {
             Some(um.read().await.clone())
         } else {
@@ -1197,42 +1246,29 @@ Herramientas:
         if !emotional_hint.is_empty() {
             system_prompt.push_str(&format!("\n[Estado emocional]\n{}", emotional_hint));
         }
-        let mut messages = vec![ChatMessage {
-            role: "system".into(),
-            content: serde_json::Value::String(system_prompt),
-        }];
 
         // Inject conversation history for multi-turn context
         let history = ctx.history.get(chat_id).await;
         let is_new_session = history.is_empty();
-        if !history.is_empty() {
-            messages.extend(history);
-        }
 
-        // SessionStore: enrich context with persistent transcript (parallel system).
-        // If the in-memory history is empty (daemon restarted), SessionStore provides
-        // continuity from the durable JSONL transcript on disk.
+        // Collect session store turns (for restoring context after restart)
         let session_key = SessionKey::telegram_dm(chat_id);
+        let mut restored_turns: Vec<ChatMessage> = Vec::new();
         if let Some(ref store) = ctx.session_store {
             if let Ok(_meta) = store.get_or_create(&session_key).await {
-                // If in-memory history was empty, load recent turns from SessionStore
                 if is_new_session {
                     if let Ok(recent) = store.load_recent_turns(&session_key, 50).await {
                         if !recent.is_empty() {
-                            // Inject compaction summary if available
+                            // Append compaction summary to system prompt (not as separate message)
                             if let Some(summary) = store.get_compaction_summary(&session_key).await
                             {
-                                messages.push(ChatMessage {
-                                    role: "system".into(),
-                                    content: serde_json::Value::String(format!(
-                                        "[Resumen de sesiones anteriores (persistente)]: {}",
-                                        summary
-                                    )),
-                                });
+                                system_prompt.push_str(&format!(
+                                    "\n\n[Resumen de sesiones anteriores (persistente)]: {}",
+                                    summary
+                                ));
                             }
-                            // Convert SessionStore turns to ChatMessages
                             for turn in &recent {
-                                messages.push(ChatMessage {
+                                restored_turns.push(ChatMessage {
                                     role: turn.role.clone(),
                                     content: serde_json::Value::String(turn.content.clone()),
                                 });
@@ -1248,12 +1284,10 @@ Herramientas:
             }
         }
 
-        // Proactive context recall: search memory on new sessions or when the
-        // user's message contains memory-related keywords (e.g. "recuerdas", "dijiste")
+        // Proactive context recall: append to system prompt (not as separate message)
         if is_new_session || needs_memory_recall(user_text) {
             if let Some(memory) = &ctx.memory {
                 let mem = memory.read().await;
-                // Search for recent and relevant memories
                 let recall_queries = [user_text, "session_summary"];
                 let mut context_block = String::new();
                 for query in &recall_queries {
@@ -1274,15 +1308,24 @@ Herramientas:
                     }
                 }
                 if !context_block.is_empty() {
-                    messages.push(ChatMessage {
-                        role: "system".into(),
-                        content: serde_json::Value::String(format!(
-                            "Contexto recuperado de tu memoria persistente (sesiones anteriores):\n{}",
-                            context_block
-                        )),
-                    });
+                    system_prompt.push_str(&format!(
+                        "\n\n[Contexto recuperado de tu memoria persistente]:\n{}",
+                        context_block
+                    ));
                 }
             }
+        }
+
+        // Now build the final messages array: single system message first, then history
+        let mut messages = vec![ChatMessage {
+            role: "system".into(),
+            content: serde_json::Value::String(system_prompt),
+        }];
+
+        if !history.is_empty() {
+            messages.extend(history);
+        } else if !restored_turns.is_empty() {
+            messages.extend(restored_turns);
         }
 
         // Build user message (text or multimodal)
@@ -1741,7 +1784,7 @@ Herramientas:
     }
 
     async fn execute_system_status() -> Result<String> {
-        let alerts = proactive::check_all(None).await;
+        let alerts = proactive::check_all(None, None).await;
 
         let disk = tokio::process::Command::new("df")
             .args(["-h", "/", "/var"])
@@ -3617,60 +3660,228 @@ max_context = 128000
 
     /// BA.1 — Health status: active session, breaks, work time.
     async fn execute_health_status() -> Result<String> {
-        let uptime = tokio::fs::read_to_string("/proc/uptime").await.unwrap_or_default();
-        let secs: f64 = uptime.split_whitespace().next()
-            .and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let uptime = tokio::fs::read_to_string("/proc/uptime")
+            .await
+            .unwrap_or_default();
+        let secs: f64 = uptime
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
         let hours = secs / 3600.0;
         Ok(format!(
             "Sesion activa: {:.1} horas.\nRecomendacion: {} descanso cada 2 horas.",
             hours,
-            if hours > 2.0 { "Toma un" } else { "Aun no necesitas" }
+            if hours > 2.0 {
+                "Toma un"
+            } else {
+                "Aun no necesitas"
+            }
         ))
     }
 
-    /// BA.2 — Calendar today: read scheduled tasks for today.
-    async fn execute_calendar_today() -> Result<String> {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
-        let cal_path = format!("{}/.local/share/lifeos/calendar.json", home);
-        match tokio::fs::read_to_string(&cal_path).await {
-            Ok(content) => {
-                let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-                let events: Vec<&str> = content.lines()
-                    .filter(|l| l.contains(&today))
-                    .collect();
-                if events.is_empty() {
-                    Ok("No tienes eventos programados para hoy.".into())
-                } else {
-                    Ok(format!("Eventos de hoy:\n{}", events.join("\n")))
+    /// BA.2 — Calendar today: read today's events from CalendarManager (SQLite).
+    async fn execute_calendar_today(ctx: &ToolContext) -> Result<String> {
+        if let Some(ref cal) = ctx.calendar {
+            match cal.today() {
+                Ok(events) => {
+                    if events.is_empty() {
+                        Ok("No tienes eventos programados para hoy.".into())
+                    } else {
+                        let formatted: Vec<String> = events
+                            .iter()
+                            .map(|e| {
+                                let reminder_note = e
+                                    .reminder_minutes
+                                    .map(|m| format!(" (recordatorio {}min antes)", m))
+                                    .unwrap_or_default();
+                                format!("- {} — {}{}", e.start_time, e.title, reminder_note)
+                            })
+                            .collect();
+                        Ok(format!("Eventos de hoy:\n{}", formatted.join("\n")))
+                    }
                 }
+                Err(e) => Ok(format!("Error leyendo calendario: {}", e)),
             }
-            Err(_) => Ok("No hay calendario configurado aun.".into()),
+        } else {
+            Ok("Calendario no disponible.".into())
         }
     }
 
-    /// BA.2 — Calendar add event.
-    async fn execute_calendar_add(args: &serde_json::Value) -> Result<String> {
+    /// BD.9 — Unified agenda: calendar events + cron jobs in a single view.
+    async fn execute_agenda(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let days = args.get("days").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
+        let days = days.max(1).min(7); // Clamp to 1-7 days
+
+        let spanish_months = [
+            "enero",
+            "febrero",
+            "marzo",
+            "abril",
+            "mayo",
+            "junio",
+            "julio",
+            "agosto",
+            "septiembre",
+            "octubre",
+            "noviembre",
+            "diciembre",
+        ];
+
+        let now = chrono::Local::now();
+        let mut output = String::new();
+
+        for day_offset in 0..days {
+            let target_date = now + chrono::Duration::days(day_offset as i64);
+            let day_num = target_date.format("%d").to_string();
+            // Remove leading zero for natural Spanish formatting
+            let day_num = day_num.trim_start_matches('0');
+            let month_idx = target_date
+                .format("%m")
+                .to_string()
+                .parse::<usize>()
+                .unwrap_or(1)
+                - 1;
+            let month_name = spanish_months.get(month_idx).unwrap_or(&"???");
+            let year = target_date.format("%Y");
+
+            let label = if day_offset == 0 {
+                "hoy".to_string()
+            } else if day_offset == 1 {
+                "manana".to_string()
+            } else {
+                target_date.format("%A").to_string()
+            };
+
+            output.push_str(&format!(
+                "\u{1F4C5} Agenda de {} ({} de {} {}):\n\n",
+                label, day_num, month_name, year
+            ));
+
+            // Calendar events for this specific day
+            let target_date_str = target_date.format("%Y-%m-%d").to_string();
+            let mut day_events = Vec::new();
+
+            if let Some(ref cal) = ctx.calendar {
+                // For day 0, use today(); for other days, use upcoming() and filter
+                let events = if day_offset == 0 {
+                    cal.today().unwrap_or_default()
+                } else {
+                    cal.upcoming(days)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|e| {
+                            chrono::DateTime::parse_from_rfc3339(&e.start_time)
+                                .map(|dt| {
+                                    dt.with_timezone(&chrono::Local)
+                                        .format("%Y-%m-%d")
+                                        .to_string()
+                                        == target_date_str
+                                })
+                                .unwrap_or(false)
+                        })
+                        .collect::<Vec<_>>()
+                };
+
+                for event in &events {
+                    let time_str = chrono::DateTime::parse_from_rfc3339(&event.start_time)
+                        .map(|dt| dt.with_timezone(&chrono::Local).format("%H:%M").to_string())
+                        .unwrap_or_else(|_| "??:??".into());
+                    let reminder_note = event
+                        .reminder_minutes
+                        .map(|m| format!(" (recordatorio {}min antes)", m))
+                        .unwrap_or_default();
+                    day_events.push(format!("  - {} {}{}", time_str, event.title, reminder_note));
+                }
+            }
+
+            if day_events.is_empty() {
+                output.push_str("Eventos:\n  Sin eventos.\n\n");
+            } else {
+                output.push_str("Eventos:\n");
+                for line in &day_events {
+                    output.push_str(line);
+                    output.push('\n');
+                }
+                output.push('\n');
+            }
+
+            // Cron jobs (show on every day since they are recurring)
+            if day_offset == 0 {
+                let cron_jobs = ctx.cron_store.list().await;
+                if cron_jobs.is_empty() {
+                    output.push_str("Tareas programadas:\n  Sin tareas cron.\n\n");
+                } else {
+                    output.push_str("Tareas programadas:\n");
+                    for job in &cron_jobs {
+                        output.push_str(&format!("  - {} (cron: {})\n", job.name, job.cron_expr));
+                    }
+                    output.push('\n');
+                }
+            }
+        }
+
+        // If looking at just today, also hint about tomorrow
+        if days == 1 {
+            if let Some(ref cal) = ctx.calendar {
+                let tomorrow_str = (now + chrono::Duration::days(1))
+                    .format("%Y-%m-%d")
+                    .to_string();
+                let tomorrow_events: Vec<_> = cal
+                    .upcoming(2)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|e| {
+                        chrono::DateTime::parse_from_rfc3339(&e.start_time)
+                            .map(|dt| {
+                                dt.with_timezone(&chrono::Local)
+                                    .format("%Y-%m-%d")
+                                    .to_string()
+                                    == tomorrow_str
+                            })
+                            .unwrap_or(false)
+                    })
+                    .collect();
+
+                if tomorrow_events.is_empty() {
+                    output.push_str("Sin eventos para manana.");
+                } else {
+                    output.push_str(&format!("{} evento(s) para manana.", tomorrow_events.len()));
+                }
+            }
+        }
+
+        Ok(output)
+    }
+
+    /// BA.2 — Calendar add event via CalendarManager (SQLite + reminders).
+    async fn execute_calendar_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let title = args["title"].as_str().unwrap_or("Sin titulo");
         let date = args["date"].as_str().unwrap_or("");
-        let time = args["time"].as_str().unwrap_or("");
-        let reminder = args["reminder_minutes"].as_u64().unwrap_or(0);
+        let time = args["time"].as_str().unwrap_or("00:00");
+        let reminder = args["reminder_minutes"].as_i64().unwrap_or(15) as i32;
 
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
-        let cal_path = format!("{}/.local/share/lifeos/calendar.json", home);
-        let entry = serde_json::json!({
-            "title": title,
-            "date": date,
-            "time": time,
-            "reminder_minutes": reminder,
-            "created_at": chrono::Utc::now().to_rfc3339(),
-        });
-        let line = format!("{}\n", serde_json::to_string(&entry)?);
-        tokio::fs::create_dir_all(format!("{}/.local/share/lifeos", home)).await?;
-        tokio::fs::OpenOptions::new()
-            .create(true).append(true)
-            .open(&cal_path).await?
-            .write_all(line.as_bytes()).await?;
-        Ok(format!("Evento agregado: {} el {} a las {}", title, date, time))
+        if date.is_empty() {
+            return Ok(
+                "Necesito al menos la fecha. Ejemplo: {\"title\": \"Cita medico\", \"date\": \"2026-04-05\", \"time\": \"10:00\", \"reminder_minutes\": 30}"
+                    .into(),
+            );
+        }
+
+        // Build start_time string for CalendarManager: "YYYY-MM-DD HH:MM"
+        let start_time = format!("{} {}", date, time);
+
+        if let Some(ref cal) = ctx.calendar {
+            match cal.add_event(title, &start_time, None, "", Some(reminder), None, None) {
+                Ok(event) => Ok(format!(
+                    "Evento creado: {} el {} a las {}\nRecordatorio: {} minutos antes\nID: {}",
+                    title, date, time, reminder, event.id
+                )),
+                Err(e) => Ok(format!("Error creando evento: {}", e)),
+            }
+        } else {
+            Ok("Calendario no disponible.".into())
+        }
     }
 
     /// BA.3 — Current context (work/personal/gaming/etc).
@@ -3679,7 +3890,9 @@ max_context = 128000
         let ctx_path = format!("{}/.local/share/lifeos/current_context.json", home);
         match tokio::fs::read_to_string(&ctx_path).await {
             Ok(content) => Ok(format!("Contexto actual: {}", content.trim())),
-            Err(_) => Ok("Contexto actual: general (no se ha detectado un contexto especifico).".into()),
+            Err(_) => {
+                Ok("Contexto actual: general (no se ha detectado un contexto especifico).".into())
+            }
         }
     }
 
@@ -3706,25 +3919,35 @@ max_context = 128000
                     count
                 ))
             }
-            Err(_) => Ok("Aun no he detectado patrones — necesito mas acciones registradas.".into()),
+            Err(_) => {
+                Ok("Aun no he detectado patrones — necesito mas acciones registradas.".into())
+            }
         }
     }
 
     /// BA.5 — Gaming status from nvidia-smi.
     async fn execute_gaming_status() -> Result<String> {
         let output = tokio::process::Command::new("nvidia-smi")
-            .args(["--query-compute-apps=pid,name,used_gpu_memory", "--format=csv,noheader,nounits"])
-            .output().await;
+            .args([
+                "--query-compute-apps=pid,name,used_gpu_memory",
+                "--format=csv,noheader,nounits",
+            ])
+            .output()
+            .await;
         match output {
             Ok(o) => {
                 let text = String::from_utf8_lossy(&o.stdout);
-                let gpu_procs: Vec<&str> = text.lines()
+                let gpu_procs: Vec<&str> = text
+                    .lines()
                     .filter(|l| !l.contains("llama-server"))
                     .collect();
                 if gpu_procs.is_empty() {
                     Ok("No hay juegos corriendo. GPU libre para IA.".into())
                 } else {
-                    Ok(format!("Procesos GPU activos (posible juego):\n{}", gpu_procs.join("\n")))
+                    Ok(format!(
+                        "Procesos GPU activos (posible juego):\n{}",
+                        gpu_procs.join("\n")
+                    ))
                 }
             }
             Err(_) => Ok("No se pudo consultar nvidia-smi.".into()),
@@ -3733,17 +3956,22 @@ max_context = 128000
 
     /// BA.7 — Security status: run proactive security checks.
     async fn execute_security_status() -> Result<String> {
-        let alerts = crate::proactive::check_all(None).await;
-        let security: Vec<&crate::proactive::ProactiveAlert> = alerts.iter()
-            .filter(|a| matches!(a.category,
-                crate::proactive::AlertCategory::SecurityUpdate |
-                crate::proactive::AlertCategory::SystemHealth
-            ))
+        let alerts = crate::proactive::check_all(None, None).await;
+        let security: Vec<&crate::proactive::ProactiveAlert> = alerts
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.category,
+                    crate::proactive::AlertCategory::SecurityUpdate
+                        | crate::proactive::AlertCategory::SystemHealth
+                )
+            })
             .collect();
         if security.is_empty() {
             Ok("Sistema seguro. No hay alertas de seguridad activas.".into())
         } else {
-            let formatted: Vec<String> = security.iter()
+            let formatted: Vec<String> = security
+                .iter()
                 .map(|a| format!("- [{:?}] {}", a.severity, a.message))
                 .collect();
             Ok(format!("Alertas de seguridad:\n{}", formatted.join("\n")))
@@ -3756,21 +3984,40 @@ max_context = 128000
         ctx: &ToolContext,
         tag_filter: &str,
     ) -> Result<String> {
-        let query = args.get("query").and_then(|v| v.as_str()).unwrap_or(tag_filter);
+        let query = args
+            .get("query")
+            .and_then(|v| v.as_str())
+            .unwrap_or(tag_filter);
         if let Some(memory) = &ctx.memory {
             let mem = memory.read().await;
             match mem.search_entries(query, 5, Some(tag_filter)).await {
                 Ok(results) => {
                     if results.is_empty() {
-                        Ok(format!("No encontre nada sobre '{}' en mis registros de {}.", query, tag_filter))
+                        Ok(format!(
+                            "No encontre nada sobre '{}' en mis registros de {}.",
+                            query, tag_filter
+                        ))
                     } else {
-                        let formatted: Vec<String> = results.iter().map(|r| {
-                            let snippet = if r.entry.content.len() > 400 {
-                                format!("{}...", &r.entry.content[..400])
-                            } else { r.entry.content.clone() };
-                            format!("- ({}): {}", r.entry.created_at.format("%Y-%m-%d %H:%M"), snippet)
-                        }).collect();
-                        Ok(format!("Resultados ({}):\n{}", tag_filter, formatted.join("\n")))
+                        let formatted: Vec<String> = results
+                            .iter()
+                            .map(|r| {
+                                let snippet = if r.entry.content.len() > 400 {
+                                    format!("{}...", &r.entry.content[..400])
+                                } else {
+                                    r.entry.content.clone()
+                                };
+                                format!(
+                                    "- ({}): {}",
+                                    r.entry.created_at.format("%Y-%m-%d %H:%M"),
+                                    snippet
+                                )
+                            })
+                            .collect();
+                        Ok(format!(
+                            "Resultados ({}):\n{}",
+                            tag_filter,
+                            formatted.join("\n")
+                        ))
                     }
                 }
                 Err(e) => Ok(format!("Error buscando: {}", e)),
@@ -3784,14 +4031,24 @@ max_context = 128000
     async fn execute_memory_search_tag(ctx: &ToolContext, tag: &str) -> Result<String> {
         if let Some(memory) = &ctx.memory {
             let mem = memory.read().await;
-            match mem.search_entries("app activity today", 10, Some(tag)).await {
+            match mem
+                .search_entries("app activity today", 10, Some(tag))
+                .await
+            {
                 Ok(results) => {
                     if results.is_empty() {
                         Ok("No tengo registros de actividad reciente.".into())
                     } else {
-                        let formatted: Vec<String> = results.iter().map(|r| {
-                            format!("- ({}): {}", r.entry.created_at.format("%H:%M"), r.entry.content)
-                        }).collect();
+                        let formatted: Vec<String> = results
+                            .iter()
+                            .map(|r| {
+                                format!(
+                                    "- ({}): {}",
+                                    r.entry.created_at.format("%H:%M"),
+                                    r.entry.content
+                                )
+                            })
+                            .collect();
                         Ok(format!("Actividad reciente:\n{}", formatted.join("\n")))
                     }
                 }
@@ -3800,6 +4057,261 @@ max_context = 128000
         } else {
             Ok("Memoria no disponible.".into())
         }
+    }
+
+    /// Memory cleanup: run garbage filter + decay + dedup and report stats.
+    async fn execute_memory_cleanup(ctx: &ToolContext) -> Result<String> {
+        if let Some(memory) = &ctx.memory {
+            let mem = memory.read().await;
+            let garbage = mem.filter_garbage().await.unwrap_or(0);
+            let decayed = mem.apply_exponential_decay().await.unwrap_or(0);
+            let deduped = mem.dedup_similar(0.90).await.unwrap_or(0);
+            let stats = mem
+                .health_stats()
+                .await
+                .unwrap_or_else(|_| serde_json::json!({}));
+            Ok(format!(
+                "Limpieza completada:\n\
+                 - Basura eliminada: {}\n\
+                 - Entradas con decay aplicado: {}\n\
+                 - Duplicados fusionados: {}\n\n\
+                 Estado actual:\n{}",
+                garbage,
+                decayed,
+                deduped,
+                serde_json::to_string_pretty(&stats).unwrap_or_default()
+            ))
+        } else {
+            Ok("Memoria no disponible.".into())
+        }
+    }
+
+    /// Memory protect: find a memory by query and mark it permanent.
+    async fn execute_memory_protect(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let query = args["query"].as_str().unwrap_or("");
+        if query.is_empty() {
+            return Ok("Necesito un query para buscar la memoria a proteger. Ejemplo: {\"query\": \"nombre suegro\"}".into());
+        }
+        if let Some(memory) = &ctx.memory {
+            let mem = memory.read().await;
+            match mem.search_entries(query, 1, None).await {
+                Ok(results) => {
+                    if let Some(r) = results.first() {
+                        mem.mark_permanent(&r.entry.entry_id).await?;
+                        let snippet = if r.entry.content.len() > 100 {
+                            format!("{}...", &r.entry.content[..100])
+                        } else {
+                            r.entry.content.clone()
+                        };
+                        Ok(format!(
+                            "Memoria protegida permanentemente:\n- [{}] {}\nEsta memoria nunca se borrara ni decaera.",
+                            r.entry.kind, snippet
+                        ))
+                    } else {
+                        Ok(format!(
+                            "No encontre ninguna memoria que coincida con '{}'.",
+                            query
+                        ))
+                    }
+                }
+                Err(e) => Ok(format!("Error buscando: {}", e)),
+            }
+        } else {
+            Ok("Memoria no disponible.".into())
+        }
+    }
+
+    /// Tool #79 — Manage whitelisted system services (firewall, LLM, STT).
+    /// Only allows specific services and actions for security.
+    async fn execute_service_manage(args: &serde_json::Value) -> Result<String> {
+        let service = args["service"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'service'"))?;
+        let action = args["action"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'action'"))?;
+
+        // Whitelist of allowed services
+        let allowed_services = ["nftables", "firewalld", "llama-server", "whisper-stt"];
+
+        // Normalize service name to systemd unit
+        let unit = if service.ends_with(".service") {
+            service.to_string()
+        } else {
+            format!("{}.service", service)
+        };
+
+        let base_name = unit.trim_end_matches(".service");
+        if !allowed_services.contains(&base_name) {
+            return Ok(format!(
+                "Servicio '{}' no esta en la lista permitida. Servicios disponibles: {}",
+                service,
+                allowed_services.join(", ")
+            ));
+        }
+
+        let allowed_actions = [
+            "start",
+            "stop",
+            "restart",
+            "enable",
+            "disable",
+            "status",
+            "is-active",
+        ];
+        if !allowed_actions.contains(&action) {
+            return Ok(format!(
+                "Accion '{}' no permitida. Acciones disponibles: {}",
+                action,
+                allowed_actions.join(", ")
+            ));
+        }
+
+        // status/is-active don't need sudo
+        let output = if action == "status" || action == "is-active" {
+            tokio::process::Command::new("systemctl")
+                .args([action, &unit])
+                .output()
+                .await?
+        } else {
+            // start/stop/restart/enable/disable need sudo
+            tokio::process::Command::new("sudo")
+                .args(["systemctl", action, &unit])
+                .output()
+                .await?
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let exit = output.status.code().unwrap_or(-1);
+
+        if output.status.success() {
+            if action == "status" {
+                Ok(format!("Estado de {}:\n{}", service, stdout))
+            } else {
+                Ok(format!(
+                    "Servicio {} — accion '{}' ejecutada correctamente.\n{}",
+                    service, action, stdout
+                ))
+            }
+        } else {
+            Ok(format!(
+                "Error al ejecutar '{}' en {}: exit={}\n{}{}",
+                action, service, exit, stdout, stderr
+            ))
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Meeting management tools
+    // -----------------------------------------------------------------------
+
+    async fn execute_meeting_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let archive = ctx
+            .meeting_archive
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Meeting archive no disponible"))?;
+
+        let limit = args["limit"].as_u64().unwrap_or(5) as usize;
+        let meetings = archive.list_meetings(limit, 0).await?;
+
+        if meetings.is_empty() {
+            return Ok("No hay reuniones registradas.".to_string());
+        }
+
+        let mut output = format!("Ultimas {} reuniones:\n\n", meetings.len());
+        for m in &meetings {
+            let duration_min = m.duration_secs / 60;
+            let summary_preview = if m.summary.len() > 120 {
+                format!("{}...", &m.summary[..120])
+            } else if m.summary.is_empty() {
+                "(sin resumen)".to_string()
+            } else {
+                m.summary.clone()
+            };
+            output.push_str(&format!(
+                "- {} | {} | {}min | {}\n",
+                &m.started_at[..10.min(m.started_at.len())],
+                m.app_name,
+                duration_min,
+                summary_preview,
+            ));
+        }
+        Ok(output)
+    }
+
+    async fn execute_meeting_search(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let archive = ctx
+            .meeting_archive
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Meeting archive no disponible"))?;
+
+        let query = args["query"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'query'"))?;
+
+        let limit = args["limit"].as_u64().unwrap_or(5) as usize;
+        let meetings = archive.search_meetings(query, limit).await?;
+
+        if meetings.is_empty() {
+            return Ok(format!(
+                "No se encontraron reuniones con '{}' en transcripcion o resumen.",
+                query
+            ));
+        }
+
+        let mut output = format!(
+            "Encontradas {} reuniones para '{}':\n\n",
+            meetings.len(),
+            query
+        );
+        for m in &meetings {
+            let duration_min = m.duration_secs / 60;
+            let summary_preview = if m.summary.len() > 200 {
+                format!("{}...", &m.summary[..200])
+            } else if m.summary.is_empty() {
+                "(sin resumen)".to_string()
+            } else {
+                m.summary.clone()
+            };
+            output.push_str(&format!(
+                "## {} | {} | {}min\n{}\n\n",
+                &m.started_at[..10.min(m.started_at.len())],
+                m.app_name,
+                duration_min,
+                summary_preview,
+            ));
+        }
+        Ok(output)
+    }
+
+    async fn execute_meeting_start(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let assistant = ctx
+            .meeting_assistant
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Meeting assistant no disponible"))?;
+
+        let description = args["description"].as_str().unwrap_or("Reunion manual");
+
+        let mut ma = assistant.write().await;
+        ma.start_manual_meeting(description).await?;
+
+        Ok(format!(
+            "Grabacion de reunion iniciada: {}. Usa meeting_stop para detenerla.",
+            description
+        ))
+    }
+
+    async fn execute_meeting_stop(ctx: &ToolContext) -> Result<String> {
+        let assistant = ctx
+            .meeting_assistant
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Meeting assistant no disponible"))?;
+
+        let mut ma = assistant.write().await;
+        ma.stop_manual_meeting().await?;
+
+        Ok("Reunion detenida. Procesando transcripcion y resumen...".to_string())
     }
 }
 

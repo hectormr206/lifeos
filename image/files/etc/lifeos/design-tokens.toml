@@ -1,14 +1,14 @@
 # LifeOS Design Tokens
-# Version: 1.0.0
-# Last Updated: 2026-03-05
+# Version: 2.0.0
+# Last Updated: 2026-04-01
 # 
 # This file defines the canonical design tokens for LifeOS.
 # Changes to this file should be reflected in:
-#   - docs/design-tokens.md (documentation)
+#   - docs/branding/design-tokens.md (documentation)
 #   - image/files/etc/lifeos/design-tokens.json (tooling version)
 
 [meta]
-version = "1.0.0"
+version = "2.0.0"
 name = "LifeOS Design Tokens"
 description = "Canonical design tokens for LifeOS visual identity"
 
@@ -17,24 +17,24 @@ description = "Canonical design tokens for LifeOS visual identity"
 # =============================================================================
 
 [colors.brand]
-primary = "#0f4c75"      # LifeOS Blue - Primary actions, links, focus rings
-accent = "#3282b8"       # Lighter Blue - Accents, highlights, secondary actions
-surface = "#16213e"      # Surface color - Cards, panels, elevated surfaces
-background = "#1a1a2e"   # Background - Main background
+primary = "#00D4AA"      # Axi Teal - Primary actions, focus rings, confirmations
+accent = "#FF6B9D"       # Axi Pink - Secondary accent, destructive emphasis
+surface = "#161830"      # Midnight Surface - Cards, panels, elevated surfaces
+background = "#0F0F1B"   # Deep Night - Main background
 
 [colors.dark]
-text = "#e8e8e8"         # Primary text
-text_muted = "#a0a0a0"   # Secondary text, placeholders
-error = "#e74c3c"        # Error states, destructive actions
-warning = "#f39c12"      # Warning states
-success = "#2ecc71"      # Success states, confirmations
+text = "#E8E8E8"         # Primary text
+text_muted = "#737587"   # Secondary text, placeholders
+error = "#FF6B9D"        # Error states, destructive actions
+warning = "#F0C420"      # Warning states
+success = "#00D4AA"      # Success states, confirmations
 
 [colors.light]
-text = "#1a1a2e"         # Primary text
-text_muted = "#6b6b7b"   # Secondary text, placeholders
-error = "#c0392b"        # Error states, destructive actions
-warning = "#d68910"      # Warning states
-success = "#27ae60"      # Success states, confirmations
+text = "#161830"         # Primary text
+text_muted = "#5E6078"   # Secondary text, placeholders
+error = "#FF6B9D"        # Error states, destructive actions
+warning = "#E6B323"      # Warning states
+success = "#00B89A"      # Success states, confirmations
 
 [colors.high_contrast]
 primary = "#00ff00"      # Green for maximum visibility
@@ -51,7 +51,7 @@ success = "#00ff00"      # Success - bright green
 hover = "rgba(255, 255, 255, 0.08)"      # Hover overlay
 active = "rgba(255, 255, 255, 0.12)"     # Active/pressed state
 disabled = "rgba(255, 255, 255, 0.38)"   # Disabled elements
-focus = "#0f4c75"                         # Focus ring color (same as primary)
+focus = "#00D4AA"                         # Focus ring color (same as primary)
 
 # =============================================================================
 # TYPOGRAPHY

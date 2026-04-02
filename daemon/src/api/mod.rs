@@ -9640,7 +9640,7 @@ async fn get_health_reminders(
 async fn get_proactive_alerts(
     State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let alerts = crate::proactive::check_all(Some(&state.task_queue)).await;
+    let alerts = crate::proactive::check_all(Some(&state.task_queue), None).await;
     Ok(Json(serde_json::json!({ "alerts": alerts })))
 }
 
@@ -9770,11 +9770,18 @@ async fn post_calendar_event(
         .get("reminder_minutes")
         .and_then(|r| r.as_i64())
         .map(|r| r as i32);
+    let recurrence = body.get("recurrence").and_then(|r| r.as_str());
+    let location = body.get("location").and_then(|l| l.as_str());
 
-    match state
-        .calendar
-        .add_event(title, start_time, end_time, description, reminder_minutes)
-    {
+    match state.calendar.add_event(
+        title,
+        start_time,
+        end_time,
+        description,
+        reminder_minutes,
+        recurrence,
+        location,
+    ) {
         Ok(event) => Ok(Json(serde_json::to_value(event).unwrap_or_default())),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,

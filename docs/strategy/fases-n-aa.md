@@ -691,7 +691,7 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 - ~~Tema de iconos incompleto~~ RESUELTO: **317 SVGs** en 8 contextos, 100% brand-compliant (solo 8 colores de la paleta oficial). Cobertura completa del freedesktop spec para uso diario
 - Colores de iconos (#161830 fondo oscuro + #00D4AA teal) no se ven bien en modo light
 - Fuentes Inter + JetBrains Mono se configuran en lifeos-apply-theme.sh pero NO se estan aplicando (COSMIC sigue usando Open Sans / Noto Sans Mono)
-- Wallpaper del desktop no se cambio (sigue la nebulosa de Orion default de COSMIC, no lifeos-axi-night.png)
+- Wallpaper del desktop no se cambio (sigue el fondo default de COSMIC, no el canonico de LifeOS)
 - Wallpaper del login/greeter no se aplico (config existe en var/lib/cosmic-greeter pero no toma efecto)
 - Iconos del dock (barra inferior) siguen siendo los iconos COSMIC default, no los del tema LifeOS
 - ~~Faltan contextos enteros: Devices, Emblems~~ RESUELTO: 22 iconos Devices + 13 iconos Emblems generados (2026-03-28). Falta: Emotes
@@ -703,9 +703,9 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 **AA.1 — Fix Urgente: Fuentes, Wallpaper y Greeter — COMPLETADO 2026-03-28**
 - [x] **Diagnosticar por que las fuentes no se aplican:** El skeleton no incluia configs de font — solo el script runtime las escribia. Agregados archivos a `etc/skel/.config/cosmic/com.system76.CosmicTk/v1/` (font_family, monospace_family, icon_theme) + `com.system76.CosmicSettings.FontConfig/v1/` + `com.system76.CosmicComp/v1/`
 - [x] **Verificar que Inter y JetBrains Mono estan instaladas:** Confirmado en Containerfile linea 389: `rsms-inter-fonts jetbrains-mono-fonts`
-- [x] **Fix wallpaper desktop:** Skeleton ya tenia config correcta (`lifeos-axi-night.png`). Script tambien lo configura como respaldo
-- [x] **Fix wallpaper login/greeter:** Config existe en `var/lib/cosmic-greeter/.config/cosmic/` apuntando a `lifeos-lock.png`. Containerfile lo copia en linea 647
-- [x] **Fix lifeos-apply-theme.sh:** Reescrito v0.3.1: retry 15s en vez de sleep 3, escribe fuentes a 3 rutas COSMIC (CosmicTk + FontConfig + CosmicComp), logs mejorados
+- [x] **Fix wallpaper desktop:** Skeleton y script ahora apuntan al wallpaper canonico de LifeOS
+- [x] **Fix wallpaper login/greeter:** Config existe en `var/lib/cosmic-greeter/.config/cosmic/` apuntando a `lifeos-lock.svg`. Containerfile lo copia
+- [x] **Fix lifeos-apply-theme.sh:** Reescrito y actualizado para re-aplicar la identidad visual vigente, usar el wallpaper canonico y priorizar SVGs
 
 **AA.2 — Iconos del Dock y Panel — COMPLETADO 2026-03-28**
 - [x] **Auditar los .desktop files del dock:** Auditado. Apps COSMIC (Files, Edit, Term, Settings), Firefox, Discord, Steam, VS Code, Spotify, Telegram, Thunderbird ya tienen iconos en el tema

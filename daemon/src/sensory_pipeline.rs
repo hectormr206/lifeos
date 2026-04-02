@@ -3759,11 +3759,11 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
     Ok(audio_path.to_string_lossy().to_string())
 }
 
-async fn resolve_tts_model(override_model: Option<&str>) -> Option<String> {
+pub async fn resolve_tts_model(override_model: Option<&str>) -> Option<String> {
     resolve_tts_models(override_model).await.into_iter().next()
 }
 
-async fn resolve_tts_models(override_model: Option<&str>) -> Vec<String> {
+pub async fn resolve_tts_models(override_model: Option<&str>) -> Vec<String> {
     let mut models = Vec::new();
 
     if let Some(model) = override_model.and_then(resolve_existing_tts_model) {
@@ -3793,7 +3793,7 @@ async fn resolve_tts_models(override_model: Option<&str>) -> Vec<String> {
     models
 }
 
-fn resolve_existing_tts_model(candidate: &str) -> Option<String> {
+pub fn resolve_existing_tts_model(candidate: &str) -> Option<String> {
     let candidate = candidate.trim();
     if candidate.is_empty() {
         return None;
@@ -3816,7 +3816,7 @@ fn resolve_existing_tts_model(candidate: &str) -> Option<String> {
     .find(|path| tts_model_is_ready(path))
 }
 
-fn tts_model_is_ready(candidate: &str) -> bool {
+pub fn tts_model_is_ready(candidate: &str) -> bool {
     let candidate = candidate.trim();
     if candidate.is_empty() {
         return false;
@@ -4662,7 +4662,7 @@ fn tokens_per_second(tokens_used: Option<u32>, duration_ms: u64) -> Option<f32> 
     Some(tokens as f32 / (duration_ms as f32 / 1000.0))
 }
 
-async fn resolve_binary(env_var: &str, candidates: &[&str]) -> Option<String> {
+pub async fn resolve_binary(env_var: &str, candidates: &[&str]) -> Option<String> {
     if let Ok(path) = std::env::var(env_var) {
         let path = path.trim().to_string();
         if !path.is_empty() && Path::new(&path).exists() {

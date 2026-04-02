@@ -9,7 +9,7 @@ set -eu
 THEME_DIR="/usr/share/lifeos/themes"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"
 MARKER="$STATE_DIR/theme-applied-version"
-CURRENT_VERSION="0.3.1"
+CURRENT_VERSION="0.3.2"
 FORCE=false
 
 for arg in "$@"; do
@@ -81,8 +81,8 @@ COMP="$HOME/.config/cosmic/com.system76.CosmicComp/v1"
 mkdir -p "$COMP"
 echo "true" > "$COMP/active_hint"
 
-# ── 5. Wallpaper (prefer PNG over SVG) ──
-WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-axi-night.png"
+# ── 5. Wallpaper (prefer canonical SVG so branding stays current) ──
+WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-default.svg"
 [ ! -f "$WALLPAPER" ] && WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-axi-night.svg"
 if [ -f "$WALLPAPER" ]; then
     BG_DIR="$HOME/.config/cosmic/com.system76.CosmicBackground/v1"

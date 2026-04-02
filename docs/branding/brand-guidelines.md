@@ -80,6 +80,10 @@ Todo elemento visual de LifeOS debe seguir estas reglas.
 
 ## 3. Axi — El Ajolote Tecnologico
 
+Documento complementario:
+
+- Ver `docs/branding/axi-visual-system.md` para la estrategia oficial de Axi como simbolo central, wallpapers canonicos y coleccion regional.
+
 ### Personalidad
 - **Amigable** — no intimidante, accesible para todos
 - **Inteligente** — sutil, no pretencioso
@@ -153,12 +157,18 @@ Todas las variantes deben seguir estos principios:
 - **Sin texto** — el wallpaper no debe tener texto visible
 
 ### Variantes requeridas
-1. **Default (Axi Night):** Cielo nocturno con nebulosas teal, estrellas, orbe sutil
+1. **Default (Axi Xochimilco / canonico):** Ajolote reconocible, elegante y dark-first, con atmosfera acuática y lenguaje visual LifeOS
 2. **Minimal:** Casi negro con un unico glow teal sutil
 3. **Nature:** Aurora boreal abstracta con paleta LifeOS
 4. **Light:** Fondo claro con acentos teal y rosa suaves
 5. **Lock Screen:** Orbe teal central con anillos, elegante
 6. **Greeter:** Similar a lock screen pero mas oscuro
+
+Regla adicional:
+
+- los wallpapers oficiales deben seguir `docs/branding/axi-visual-system.md`
+- el wallpaper default debe reforzar que el ajolote es el motivo central de LifeOS
+- las variantes regionales deben empezar por estados; las ciudades quedan para ediciones especiales
 
 ---
 

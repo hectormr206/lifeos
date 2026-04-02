@@ -1904,6 +1904,113 @@ impl MemoryPlaneManager {
         })
         .await?
     }
+
+    /// Boost importance for well-connected memories (3+ knowledge graph relations).
+    pub async fn apply_connection_bonus(&self) -> Result<usize> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            // Count relations per entry in knowledge_graph
+            // For entries with 3+ relations, set minimum importance to 30
+            let updated = db.execute(
+                "UPDATE memory_entries SET importance = MAX(importance, 30)
+                 WHERE entry_id IN (
+                     SELECT source_entry_id FROM knowledge_graph
+                     GROUP BY source_entry_id
+                     HAVING COUNT(*) >= 3
+                 )",
+                [],
+            )?;
+            Ok(updated)
+        })
+        .await?
+    }
+
+    /// Archive old low-importance entries (older than 6 months, importance < 30).
+    pub async fn archive_old_entries(&self) -> Result<usize> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+
+            // Create archive table if not exists
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS memory_archive (
+                    entry_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    importance INTEGER NOT NULL,
+                    archived_at TEXT NOT NULL
+                )",
+                [],
+            )?;
+
+            // Move entries older than 6 months with importance < 30
+            let now_str = chrono::Utc::now().to_rfc3339();
+            let cutoff = (chrono::Utc::now() - chrono::Duration::days(180)).to_rfc3339();
+
+            // Check if the permanent column exists to avoid referencing it when absent
+            let has_permanent: bool = db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('memory_entries') WHERE name = 'permanent'",
+                )
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false);
+
+            let permanent_filter = if has_permanent {
+                "AND (permanent IS NULL OR permanent != 1)"
+            } else {
+                ""
+            };
+
+            let insert_sql = format!(
+                "INSERT OR IGNORE INTO memory_archive
+                     (entry_id, created_at, kind, scope, tags, importance, archived_at)
+                 SELECT entry_id, created_at, kind, scope, tags, importance, ?1
+                 FROM memory_entries
+                 WHERE updated_at < ?2 AND importance < 30 {}",
+                permanent_filter
+            );
+
+            let moved = db.execute(&insert_sql, rusqlite::params![now_str, cutoff])?;
+
+            if moved > 0 {
+                db.execute(
+                    "DELETE FROM memory_entries WHERE entry_id IN \
+                     (SELECT entry_id FROM memory_archive WHERE archived_at = ?1)",
+                    rusqlite::params![now_str],
+                )?;
+            }
+
+            Ok(moved)
+        })
+        .await?
+    }
+
+    /// Find tag clusters with 10+ entries older than 30 days (candidates for summarization).
+    pub async fn get_cluster_candidates(&self) -> Result<Vec<(String, usize)>> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+
+            let mut stmt = db.prepare(
+                "SELECT tags, COUNT(*) as cnt FROM memory_entries
+                 WHERE updated_at < ?1
+                 GROUP BY tags HAVING cnt >= 10
+                 ORDER BY cnt DESC LIMIT 10",
+            )?;
+
+            let rows = stmt.query_map(rusqlite::params![cutoff], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
+            })?;
+
+            let results: Vec<_> = rows.flatten().collect();
+            Ok(results)
+        })
+        .await?
+    }
 }
 
 fn normalize_non_empty(input: &str) -> Option<String> {
@@ -2587,6 +2694,105 @@ mod tests {
         assert!(stats["oldest_entry"].is_string());
         assert!(stats["newest_entry"].is_string());
         assert_eq!(stats["permanent_count"].as_i64().unwrap(), 0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn apply_connection_bonus_boosts_connected_entries() {
+        let dir = temp_dir("memory-plane-conn-bonus");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Add an entry with low importance
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 10, "Connected entry.")
+            .await
+            .unwrap();
+
+        // Manually insert 3+ knowledge_graph rows referencing this entry
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        for i in 0..3 {
+            db.execute(
+                "INSERT INTO knowledge_graph (subject, predicate, object, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                rusqlite::params![
+                    format!("subj_{}", i),
+                    "related_to",
+                    "some_object",
+                    entry.entry_id,
+                    chrono::Utc::now().to_rfc3339(),
+                ],
+            )
+            .unwrap();
+        }
+        drop(db);
+
+        let updated = mgr.apply_connection_bonus().await.unwrap();
+        assert!(updated > 0, "Should have boosted at least one entry");
+
+        // Verify importance was raised
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                rusqlite::params![entry.entry_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            importance >= 30,
+            "Importance should be at least 30, got {}",
+            importance
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn archive_old_entries_moves_low_importance() {
+        let dir = temp_dir("memory-plane-archive");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Add an entry with low importance
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 5, "Old low-importance entry.")
+            .await
+            .unwrap();
+
+        // Backdate the entry to 7 months ago so it qualifies for archival
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let old_date = (chrono::Utc::now() - chrono::Duration::days(220)).to_rfc3339();
+        db.execute(
+            "UPDATE memory_entries SET updated_at = ?1 WHERE entry_id = ?2",
+            rusqlite::params![old_date, entry.entry_id],
+        )
+        .unwrap();
+        drop(db);
+
+        let moved = mgr.archive_old_entries().await.unwrap();
+        assert_eq!(moved, 1, "Should have archived 1 entry");
+
+        // Verify it was moved to archive and removed from main table
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let main_count: i32 = db
+            .query_row(
+                "SELECT COUNT(*) FROM memory_entries WHERE entry_id = ?1",
+                rusqlite::params![entry.entry_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(main_count, 0, "Entry should be removed from main table");
+
+        let archive_count: i32 = db
+            .query_row(
+                "SELECT COUNT(*) FROM memory_archive WHERE entry_id = ?1",
+                rusqlite::params![entry.entry_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(archive_count, 1, "Entry should exist in archive table");
 
         std::fs::remove_dir_all(dir).ok();
     }

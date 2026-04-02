@@ -1,29 +1,29 @@
 {
   "meta": {
-    "version": "1.0.0",
+    "version": "2.0.0",
     "name": "LifeOS Design Tokens",
     "description": "Canonical design tokens for LifeOS visual identity"
   },
   "colors": {
     "brand": {
-      "primary": "#0f4c75",
-      "accent": "#3282b8",
-      "surface": "#16213e",
-      "background": "#1a1a2e"
+      "primary": "#00D4AA",
+      "accent": "#FF6B9D",
+      "surface": "#161830",
+      "background": "#0F0F1B"
     },
     "dark": {
-      "text": "#e8e8e8",
-      "text_muted": "#a0a0a0",
-      "error": "#e74c3c",
-      "warning": "#f39c12",
-      "success": "#2ecc71"
+      "text": "#E8E8E8",
+      "text_muted": "#737587",
+      "error": "#FF6B9D",
+      "warning": "#F0C420",
+      "success": "#00D4AA"
     },
     "light": {
-      "text": "#1a1a2e",
-      "text_muted": "#6b6b7b",
-      "error": "#c0392b",
-      "warning": "#d68910",
-      "success": "#27ae60"
+      "text": "#161830",
+      "text_muted": "#5E6078",
+      "error": "#FF6B9D",
+      "warning": "#E6B323",
+      "success": "#00B89A"
     },
     "high_contrast": {
       "primary": "#00ff00",
@@ -40,7 +40,7 @@
       "hover": "rgba(255, 255, 255, 0.08)",
       "active": "rgba(255, 255, 255, 0.12)",
       "disabled": "rgba(255, 255, 255, 0.38)",
-      "focus": "#0f4c75"
+      "focus": "#00D4AA"
     }
   },
   "typography": {

@@ -652,8 +652,9 @@ Este archivo (`LIFEOS_UNIFIED_STRATEGY.md`) es ahora la **fuente de verdad estra
 | `docs/INSTALLATION.md` | Guia de instalacion | Para futuros usuarios |
 | `docs/user-guide.md` o `USER_GUIDE.md` | Guia de usuario | Conservar uno, eliminar duplicado |
 | `docs/SYSTEM_ADMIN.md` | Guia de administracion | Para futuros usuarios |
-| `docs/axi-brand-guidelines.md` | Identidad visual de Axi | Para cuando hagamos publico |
-| `docs/design-tokens.md` | Tokens de diseño visual | Para cuando hagamos publico |
+| `docs/branding/brand-guidelines.md` | Identidad visual oficial de LifeOS y Axi | Para cuando hagamos publico |
+| `docs/branding/axi-visual-system.md` | Sistema visual de Axi y estrategia de wallpapers | Para cuando hagamos publico |
+| `docs/branding/design-tokens.md` | Tokens de diseño visual | Para cuando hagamos publico |
 | `docs/contributor-guide.md` | Guia para contribuidores | Para cuando sea open source |
 | `docs/Reconstruir imagen y generar ISO.md` | Workflow de ISO | Referencia operativa |
 | `evidence/` (toda la carpeta) | Evidencia de fases cerradas | Historial auditable, no tocar |
@@ -728,8 +729,10 @@ lifeos/
 │   ├── INSTALLATION.md                # Para usuarios
 │   ├── user-guide.md                  # Para usuarios
 │   ├── SYSTEM_ADMIN.md                # Para admins
-│   ├── axi-brand-guidelines.md        # Branding (para lanzamiento)
-│   ├── design-tokens.md               # Visual (para lanzamiento)
+│   ├── branding/
+│   │   ├── brand-guidelines.md        # Branding oficial (para lanzamiento)
+│   │   ├── axi-visual-system.md       # Axi + wallpapers + sistema visual
+│   │   └── design-tokens.md           # Visual (para lanzamiento)
 │   ├── contributor-guide.md           # Para contribuidores
 │   ├── Reconstruir imagen y generar ISO.md
 │   └── archive/                       # Referencia no urgente

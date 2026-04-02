@@ -19,7 +19,7 @@ Start here based on what you need:
 | [architecture/](architecture/) | Technical architecture and specs | ai-runtime, llm-providers, threat-model, update-channels |
 | [operations/](operations/) | Runbooks and operational guides | bootc-playbook, incident-response, build-iso, nvidia-secure-boot, system-admin |
 | [user/](user/) | End-user documentation | installation, user-guide, troubleshooting |
-| [branding/](branding/) | Visual identity and design | brand-guidelines, design-tokens, icon-theme-guide |
+| [branding/](branding/) | Visual identity and design | brand-guidelines, axi-visual-system, design-tokens, icon-theme-guide |
 | [privacy/](privacy/) | Privacy analysis per LLM provider | claude, gemini, openai, grok, kimi, qwen, zai + routing policy |
 | [contributor/](contributor/) | For contributors and developers | contributor-guide, testing-conventions |
 | [research/](research/) | Research and reverse engineering | openclaw/ + nemoclaw/ + subscription-cli-backends/ + funding/ + public-presence/ |

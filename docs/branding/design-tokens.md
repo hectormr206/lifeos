@@ -1,7 +1,7 @@
 # LifeOS Design Tokens
 
-**Version:** 1.0.0  
-**Last Updated:** 2026-03-05  
+**Version:** 2.0.0  
+**Last Updated:** 2026-04-01  
 **Status:** Official
 
 ## Overview
@@ -27,20 +27,20 @@ Todos los tokens siguen el patrón: `--lifeos-{category}-{variant}-{state}`
 
 | Token | Value | Usage |
 |-------|-------|-------|
-| `--lifeos-primary` | `#0f4c75` | Primary actions, links, focus rings |
-| `--lifeos-accent` | `#3282b8` | Accents, highlights, secondary actions |
-| `--lifeos-surface` | `#16213e` | Cards, panels, elevated surfaces |
-| `--lifeos-background` | `#1a1a2e` | Main background |
+| `--lifeos-primary` | `#00D4AA` | Primary action color. Main accent across LifeOS |
+| `--lifeos-accent` | `#FF6B9D` | Secondary accent. Used sparingly for emphasis and destructive/urgent cues |
+| `--lifeos-surface` | `#161830` | Cards, panels, elevated surfaces |
+| `--lifeos-background` | `#0F0F1B` | Main dark background |
 
 ### Semantic Colors
 
 | Token | Dark Theme | Light Theme | Usage |
 |-------|------------|-------------|-------|
-| `--lifeos-text` | `#e8e8e8` | `#1a1a2e` | Primary text |
-| `--lifeos-text-muted` | `#a0a0a0` | `#6b6b7b` | Secondary text, placeholders |
-| `--lifeos-error` | `#e74c3c` | `#c0392b` | Error states, destructive actions |
-| `--lifeos-warning` | `#f39c12` | `#d68910` | Warning states |
-| `--lifeos-success` | `#2ecc71` | `#27ae60` | Success states, confirmations |
+| `--lifeos-text` | `#E8E8E8` | `#161830` | Primary text |
+| `--lifeos-text-muted` | `#737587` | `#5E6078` | Secondary text, placeholders |
+| `--lifeos-error` | `#FF6B9D` | `#FF6B9D` | Error states, destructive actions |
+| `--lifeos-warning` | `#F0C420` | `#E6B323` | Warning states |
+| `--lifeos-success` | `#00D4AA` | `#00B89A` | Success states, confirmations |
 
 ### State Colors
 
@@ -49,7 +49,7 @@ Todos los tokens siguen el patrón: `--lifeos-{category}-{variant}-{state}`
 | `--lifeos-hover` | `rgba(255, 255, 255, 0.08)` | Hover overlay |
 | `--lifeos-active` | `rgba(255, 255, 255, 0.12)` | Active/pressed state |
 | `--lifeos-disabled` | `rgba(255, 255, 255, 0.38)` | Disabled elements |
-| `--lifeos-focus` | `--lifeos-primary` | Focus ring color |
+| `--lifeos-focus` | `#00D4AA` | Focus ring color |
 
 ### High Contrast Theme
 
@@ -205,7 +205,16 @@ Todos los tokens siguen el patrón: `--lifeos-{category}-{variant}-{state}`
 
 ## WCAG Compliance
 
-All color combinations in LifeOS themes are tested for WCAG 2.1 compliance:
+Core color combinations in LifeOS themes are designed to meet WCAG 2.1 guidance, with special care for:
+
+- dark surfaces with soft white text
+- teal focus states on dark backgrounds
+- restrained pink usage for error/destructive emphasis
+
+Important:
+
+- `#00D4AA` should not automatically be paired with pure white text in all contexts
+- for filled primary surfaces, dark text is usually safer and more legible
 
 | Theme | Contrast Ratio | Level |
 |-------|----------------|-------|
@@ -234,8 +243,8 @@ All color combinations in LifeOS themes are tested for WCAG 2.1 compliance:
 ### In GTK CSS
 
 ```css
-@define-color lifeos_primary #0f4c75;
-@define-color lifeos_accent #3282b8;
+@define-color lifeos_primary #00D4AA;
+@define-color lifeos_accent #FF6B9D;
 
 button {
   background-color: @lifeos_primary;
@@ -247,8 +256,8 @@ button {
 
 ```toml
 [colors]
-primary = "#0f4c75"
-accent = "#3282b8"
+primary = "#00D4AA"
+accent = "#FF6B9D"
 
 [typography]
 font_family = "Inter"
@@ -258,8 +267,8 @@ base_size = 16
 ### In Rust Code
 
 ```rust
-const LIFEOS_PRIMARY: &str = "#0f4c75";
-const LIFEOS_ACCENT: &str = "#3282b8";
+const LIFEOS_PRIMARY: &str = "#00D4AA";
+const LIFEOS_ACCENT: &str = "#FF6B9D";
 ```
 
 ---

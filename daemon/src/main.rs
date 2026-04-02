@@ -91,7 +91,9 @@ mod llm_router;
 mod matrix_bridge;
 #[allow(dead_code)]
 mod mcp_server;
-#[allow(dead_code)]
+#[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
+mod meeting_archive;
+#[allow(dead_code)] // Used via Telegram tools + event bus + main loop
 mod meeting_assistant;
 mod memory_plane;
 #[allow(dead_code)]
@@ -1007,7 +1009,11 @@ async fn main() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(300));
         loop {
             interval.tick().await;
-            let alerts = proactive::check_all(Some(&proactive_state.task_queue)).await;
+            let alerts = proactive::check_all(
+                Some(&proactive_state.task_queue),
+                Some(&proactive_state.calendar),
+            )
+            .await;
             for alert in &alerts {
                 warn!("Proactive alert [{:?}]: {}", alert.severity, alert.message);
                 // Send as notification via event bus
@@ -1108,21 +1114,30 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Meeting archive — structured SQLite storage for meeting records
+    let meeting_archive = std::sync::Arc::new(meeting_archive::MeetingArchive::new(&data_dir));
+
     // Meeting assistant — check for active meetings every 15s
     let meeting_data_dir = data_dir.clone();
     let meeting_event_bus = state.event_bus.clone();
     let meeting_router = state.llm_router.clone();
     let meeting_memory = state.memory_plane_manager.clone();
-    let _meeting_handle = tokio::spawn(async move {
+    let shared_meeting_assistant = {
         let mut assistant = meeting_assistant::MeetingAssistant::new(
             meeting_data_dir,
             Some(meeting_event_bus.clone()),
             Some(meeting_router),
             Some(meeting_memory),
         );
+        assistant.set_archive(meeting_archive.clone());
+        std::sync::Arc::new(tokio::sync::RwLock::new(assistant))
+    };
+    let meeting_loop_assistant = shared_meeting_assistant.clone();
+    let _meeting_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(15));
         loop {
             interval.tick().await;
+            let mut assistant = meeting_loop_assistant.write().await;
             if !assistant.is_enabled() {
                 continue;
             }
@@ -1424,6 +1439,16 @@ async fn main() -> anyhow::Result<()> {
                                 if let Err(e) = learner.record_action(&action, &context) {
                                     warn!("[workflow_learner] Failed to record completion: {e}");
                                 }
+                                // AQ.6 — Check if this action triggers a learned procedure
+                                if let Some((proc_name, steps)) =
+                                    learner.check_auto_trigger(&action, &context)
+                                {
+                                    info!(
+                                        "[workflow_learner] Auto-trigger matched '{}': {} steps",
+                                        proc_name,
+                                        steps.len()
+                                    );
+                                }
                                 // Also emit typed event for dashboard (Fix AL)
                                 let _ = wl_event_bus.send(events::DaemonEvent::TaskCompleted {
                                     task_id: String::new(),
@@ -1521,6 +1546,71 @@ async fn main() -> anyhow::Result<()> {
         info!("Config file watcher started (polls every 30s)");
     }
 
+    // --- AQ.1: Auto-update UserModel every 30 min ---
+    {
+        tokio::spawn(async move {
+            // Wait 5 minutes after boot before first refresh
+            tokio::time::sleep(Duration::from_secs(5 * 60)).await;
+            loop {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+                let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+                let mut model = crate::user_model::UserModel::load_from_dir(&data_dir).await;
+                model.updated_at = Some(chrono::Utc::now());
+                model.save(&data_dir).await.ok();
+                info!("[user_model] Periodic refresh completed");
+                tokio::time::sleep(Duration::from_secs(30 * 60)).await;
+            }
+        });
+        info!("UserModel periodic refresh scheduled (every 30min, starts after 5min)");
+    }
+
+    // --- AQ.5: Night Shift via wlsunset ---
+    {
+        tokio::spawn(async move {
+            // Wait 2 minutes after boot
+            tokio::time::sleep(Duration::from_secs(2 * 60)).await;
+            loop {
+                let hour = chrono::Local::now().hour();
+                if !(6..20).contains(&hour) {
+                    // Night time — start wlsunset if not already running
+                    let already_running = tokio::process::Command::new("pgrep")
+                        .arg("wlsunset")
+                        .output()
+                        .await
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
+                    if !already_running {
+                        match tokio::process::Command::new("wlsunset")
+                            .args(["-t", "3500", "-T", "6500"])
+                            .spawn()
+                        {
+                            Ok(_) => info!("[night_shift] Started wlsunset (hour={})", hour),
+                            Err(e) => warn!("[night_shift] Failed to start wlsunset: {e}"),
+                        }
+                    } else {
+                        debug!("[night_shift] wlsunset already running (hour={})", hour);
+                    }
+                } else {
+                    // Daytime — kill wlsunset if running
+                    match tokio::process::Command::new("pkill")
+                        .args(["wlsunset"])
+                        .output()
+                        .await
+                    {
+                        Ok(o) if o.status.success() => {
+                            info!("[night_shift] Stopped wlsunset (hour={})", hour);
+                        }
+                        _ => {
+                            debug!("[night_shift] wlsunset not running (hour={})", hour);
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(30 * 60)).await;
+            }
+        });
+        info!("Night shift (wlsunset) scheduler started (every 30min, starts after 2min)");
+    }
+
     // Start supervisor loop with self-healing (restarts on panic)
     let supervisor_state = state.clone();
     let supervisor_handle = tokio::spawn(async move {
@@ -1582,6 +1672,8 @@ async fn main() -> anyhow::Result<()> {
                 let model = user_model::UserModel::load_from_dir(&data_dir).await;
                 Arc::new(RwLock::new(model))
             };
+            let ma = meeting_archive.clone();
+            let mast = shared_meeting_assistant.clone();
             Some(tokio::spawn(async move {
                 telegram_bridge::run_telegram_bot(
                     tg_config,
@@ -1593,6 +1685,9 @@ async fn main() -> anyhow::Result<()> {
                     ss,
                     eb,
                     Some(um),
+                    Some(ma),
+                    Some(mast),
+                    Some(state.calendar.clone()),
                 )
                 .await;
             }))

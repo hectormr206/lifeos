@@ -4,13 +4,13 @@
 set -euo pipefail
 
 ICON_DIR="image/files/usr/share/icons/LifeOS/scalable"
-DARK="#161830"
+DARK="#2A2A3E"
 TEAL="#00D4AA"
 
 svg() {
     local dir="$1" name="$2" body="$3"
     local path="$ICON_DIR/$dir/$name.svg"
-    [ -f "$path" ] && return 0  # skip existing
+    # [ -f "$path" ] && return 0  # skip existing
     mkdir -p "$ICON_DIR/$dir"
     cat > "$path" << EOF
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
@@ -124,13 +124,16 @@ svg actions system-shutdown \
 
 # Window
 svg actions window-new \
-  "<rect x=\"80\" y=\"80\" width=\"352\" height=\"352\" rx=\"24\" fill=\"$DARK\"/><rect x=\"80\" y=\"80\" width=\"352\" height=\"56\" rx=\"24\" fill=\"$TEAL\"/><rect x=\"224\" y=\"200\" width=\"64\" height=\"192\" rx=\"8\" fill=\"$TEAL\" opacity=\"0.5\"/><rect x=\"144\" y=\"264\" width=\"224\" height=\"64\" rx=\"8\" fill=\"$TEAL\" opacity=\"0.5\"/>"
+  "<circle cx=\"256\" cy=\"256\" r=\"200\" fill=\"$DARK\"/><rect x=\"144\" y=\"144\" width=\"224\" height=\"160\" rx=\"12\" fill=\"none\" stroke=\"$TEAL\" stroke-width=\"32\"/><rect x=\"144\" y=\"144\" width=\"224\" height=\"48\" rx=\"12\" fill=\"$TEAL\"/>"
+
+svg actions window-close \
+  "<circle cx=\"256\" cy=\"256\" r=\"200\" fill=\"$DARK\"/><line x1=\"176\" y1=\"176\" x2=\"336\" y2=\"336\" stroke=\"#FF6B9D\" stroke-width=\"40\" stroke-linecap=\"round\"/><line x1=\"336\" y1=\"176\" x2=\"176\" y2=\"336\" stroke=\"#FF6B9D\" stroke-width=\"40\" stroke-linecap=\"round\"/>"
 
 svg actions window-maximize \
-  "<rect x=\"80\" y=\"80\" width=\"352\" height=\"352\" rx=\"24\" fill=\"$DARK\" stroke=\"$TEAL\" stroke-width=\"16\"/><rect x=\"80\" y=\"80\" width=\"352\" height=\"56\" rx=\"24\" fill=\"$TEAL\"/>"
+  "<circle cx=\"256\" cy=\"256\" r=\"200\" fill=\"$DARK\"/><rect x=\"160\" y=\"160\" width=\"192\" height=\"192\" rx=\"12\" stroke=\"$TEAL\" stroke-width=\"40\" fill=\"none\"/>"
 
 svg actions window-minimize \
-  "<rect x=\"80\" y=\"360\" width=\"352\" height=\"32\" rx=\"12\" fill=\"$TEAL\"/>"
+  "<circle cx=\"256\" cy=\"256\" r=\"200\" fill=\"$DARK\"/><line x1=\"160\" y1=\"256\" x2=\"352\" y2=\"256\" stroke=\"$TEAL\" stroke-width=\"40\" stroke-linecap=\"round\"/>"
 
 # Mail
 svg actions mail-message-new \
@@ -354,6 +357,17 @@ svg places network-server \
 
 svg places start-here \
   "<circle cx=\"256\" cy=\"256\" r=\"200\" fill=\"$DARK\"/><circle cx=\"256\" cy=\"256\" r=\"32\" fill=\"$TEAL\"/><circle cx=\"256\" cy=\"256\" r=\"100\" fill=\"none\" stroke=\"$TEAL\" stroke-width=\"12\"/><circle cx=\"256\" cy=\"256\" r=\"168\" fill=\"none\" stroke=\"$TEAL\" stroke-width=\"8\" opacity=\"0.4\"/>"
+
+# Mimetypes genéricos críticos para previsualización
+echo "[mimetypes — generics]"
+svg mimetypes image-x-generic \
+  "<rect x=\"96\" y=\"64\" width=\"320\" height=\"384\" rx=\"24\" fill=\"$DARK\"/><circle cx=\"192\" cy=\"176\" r=\"48\" fill=\"$TEAL\" opacity=\"0.6\"/><path d=\"M96 360 L208 240 L304 320 L352 270 L416 380\" fill=\"none\" stroke=\"$TEAL\" stroke-width=\"16\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>"
+
+svg mimetypes video-x-generic \
+  "<rect x=\"96\" y=\"64\" width=\"320\" height=\"384\" rx=\"24\" fill=\"$DARK\"/><path d=\"M208 176 L340 256 L208 336 Z\" fill=\"$TEAL\"/>"
+
+svg mimetypes audio-x-generic \
+  "<rect x=\"96\" y=\"64\" width=\"320\" height=\"384\" rx=\"24\" fill=\"$DARK\"/><circle cx=\"256\" cy=\"280\" r=\"80\" fill=\"$TEAL\" opacity=\"0.3\"/><rect x=\"244\" y=\"140\" width=\"24\" height=\"220\" rx=\"4\" fill=\"$TEAL\"/>"
 
 # ─────────────────────────────────────────────────────────
 # Update index.theme with new contexts

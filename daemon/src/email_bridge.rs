@@ -416,6 +416,9 @@ pub async fn run_conversational_email_loop(
         sdd_store: Arc::new(SddStore::new()),
         session_store: None,
         user_model: None,
+        meeting_archive: None,
+        meeting_assistant: None,
+        calendar: None,
     };
 
     // Use a fixed "chat_id" for the email channel so conversation history

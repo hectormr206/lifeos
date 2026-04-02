@@ -1,17 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3840 2160" width="3840" height="2160">
-  <title>LifeOS Minimal - Clean Dark Wallpaper</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3840 2160">
+  <title>LifeOS Minimal Wallpaper</title>
+  <desc>Minimal LifeOS wallpaper with a restrained axolotl silhouette and teal focus.</desc>
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0d0d1a;stop-opacity:1"/>
-      <stop offset="100%" style="stop-color:#1a1a2e;stop-opacity:1"/>
+      <stop offset="0%" stop-color="#0B0C16"/>
+      <stop offset="100%" stop-color="#121423"/>
     </linearGradient>
-    <!-- Single subtle teal accent -->
-    <radialGradient id="accent" cx="50%" cy="50%" r="40%">
-      <stop offset="0%" style="stop-color:#00D4AA;stop-opacity:0.05"/>
-      <stop offset="100%" style="stop-color:#00D4AA;stop-opacity:0"/>
+    <radialGradient id="accent" cx="66%" cy="44%" r="26%">
+      <stop offset="0%" stop-color="#00D4AA" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#00D4AA" stop-opacity="0"/>
     </radialGradient>
   </defs>
   <rect width="3840" height="2160" fill="url(#bg)"/>
-  <ellipse cx="1920" cy="1080" rx="1600" ry="900" fill="url(#accent)"/>
+  <rect width="3840" height="2160" fill="url(#accent)"/>
+  <g transform="translate(2420 1180)" opacity="0.32" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="360" cy="180" rx="430" ry="235" stroke="#00D4AA" stroke-width="10"/>
+    <ellipse cx="0" cy="0" rx="230" ry="175" stroke="#00D4AA" stroke-width="10"/>
+    <path d="M670 130 C860 145 1000 250 1060 395" stroke="#00D4AA" stroke-width="10"/>
+    <path d="M-120 -120 C-250 -170 -320 -255 -330 -390" stroke="#FF6B9D" stroke-width="10"/>
+    <path d="M150 -125 C280 -175 355 -260 370 -392" stroke="#FF6B9D" stroke-width="10"/>
+  </g>
 </svg>

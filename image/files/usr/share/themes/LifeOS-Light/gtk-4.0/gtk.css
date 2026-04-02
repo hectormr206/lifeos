@@ -9,15 +9,15 @@
  * COLOR DEFINITIONS (@define-color for GTK4 compatibility)
  * ============================================================================= */
 
-@define-color lifeos_primary #0f4c75;
-@define-color lifeos_accent #3282b8;
+@define-color lifeos_primary #00D4AA;
+@define-color lifeos_accent #FF6B9D;
 @define-color lifeos_surface #ffffff;
-@define-color lifeos_background #f8f9fa;
-@define-color lifeos_text #1a1a2e;
-@define-color lifeos_text_muted #6b6b7b;
-@define-color lifeos_error #c0392b;
-@define-color lifeos_warning #d68910;
-@define-color lifeos_success #27ae60;
+@define-color lifeos_background #F5F8F7;
+@define-color lifeos_text #161830;
+@define-color lifeos_text_muted #5E6078;
+@define-color lifeos_error #FF6B9D;
+@define-color lifeos_warning #E6B323;
+@define-color lifeos_success #00B89A;
 @define-color lifeos_hover rgba(0, 0, 0, 0.05);
 @define-color lifeos_active rgba(0, 0, 0, 0.08);
 @define-color lifeos_disabled rgba(0, 0, 0, 0.12);
@@ -62,7 +62,7 @@ button:disabled {
 button.suggested-action,
 button.primary {
   background-color: @lifeos_primary;
-  color: #ffffff;
+  color: @lifeos_text;
 }
 
 button.suggested-action:hover,
@@ -78,7 +78,7 @@ button.primary:active {
 /* Destructive button variant */
 button.destructive-action {
   background-color: @lifeos_error;
-  color: #ffffff;
+  color: @lifeos_text;
 }
 
 button.destructive-action:hover {

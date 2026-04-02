@@ -653,6 +653,178 @@
       </div>
     </section>
 
+    <!-- Reuniones Recientes -->
+    <section class="meetings-section">
+      <h2>Reuniones Recientes</h2>
+      <div class="meetings-stats" id="meeting-stats">
+        <div class="hero-stats">
+          <div class="hero-stat"><span>Total reuniones</span><strong id="mtg-total">0</strong></div>
+          <div class="hero-stat"><span>Horas totales</span><strong id="mtg-hours">0h</strong></div>
+          <div class="hero-stat"><span>Duracion promedio</span><strong id="mtg-avg">0m</strong></div>
+        </div>
+      </div>
+      <div class="meetings-list" id="meetings-list">
+        <p class="task-empty">Sin datos de reuniones</p>
+      </div>
+      <div class="meetings-actions">
+        <h3>Action Items Pendientes</h3>
+        <div class="action-items-list" id="meeting-action-items">
+          <p class="task-empty">Sin action items pendientes</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Calendar -->
+    <section class="calendar-section">
+      <h2>&#128197; Calendario</h2>
+      <div class="calendar-container">
+        <div class="calendar-mini">
+          <div class="calendar-header-row">
+            <span id="calendar-month-label" class="calendar-month-label"></span>
+          </div>
+          <div class="calendar-grid" id="calendar-grid">
+            <span class="calendar-day-header">L</span>
+            <span class="calendar-day-header">M</span>
+            <span class="calendar-day-header">M</span>
+            <span class="calendar-day-header">J</span>
+            <span class="calendar-day-header">V</span>
+            <span class="calendar-day-header">S</span>
+            <span class="calendar-day-header">D</span>
+          </div>
+        </div>
+        <div class="calendar-events">
+          <h3>Eventos de hoy</h3>
+          <div class="calendar-today-events" id="calendar-today-events">
+            <p class="task-empty">Sin eventos hoy</p>
+          </div>
+          <h3 style="margin-top:16px;">Proximos eventos</h3>
+          <div class="calendar-upcoming-events" id="calendar-upcoming-events">
+            <p class="task-empty">Sin eventos proximos</p>
+          </div>
+        </div>
+        <div class="calendar-add">
+          <h3>Agregar evento</h3>
+          <form id="calendar-add-form" class="calendar-add-form">
+            <input type="text" id="cal-event-title" placeholder="Titulo del evento..." required>
+            <input type="datetime-local" id="cal-event-date" required>
+            <button type="submit" class="quick-action-btn">Agregar</button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <style>
+      .calendar-section { margin-top: 24px; }
+      .calendar-container {
+        display: grid;
+        grid-template-columns: 280px 1fr;
+        gap: 24px;
+      }
+      @media (max-width: 700px) {
+        .calendar-container { grid-template-columns: 1fr; }
+      }
+      .calendar-mini {
+        background: var(--lifeos-surface, #1A1A2E);
+        border-radius: 12px;
+        padding: 16px;
+      }
+      .calendar-header-row {
+        text-align: center;
+        margin-bottom: 12px;
+      }
+      .calendar-month-label {
+        font-weight: bold;
+        font-size: 1rem;
+        color: var(--lifeos-primary, #00D4AA);
+      }
+      .calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 2px;
+        text-align: center;
+        font-size: 0.85rem;
+      }
+      .calendar-day-header {
+        font-weight: bold;
+        font-size: 0.75rem;
+        opacity: 0.6;
+        padding: 4px;
+      }
+      .calendar-day {
+        padding: 4px;
+        border-radius: 4px;
+        position: relative;
+        cursor: default;
+      }
+      .calendar-today {
+        background: var(--lifeos-primary, #00D4AA);
+        color: #0F0F1B;
+        font-weight: bold;
+        border-radius: 50%;
+      }
+      .calendar-has-event::after {
+        content: '';
+        display: block;
+        width: 4px;
+        height: 4px;
+        background: var(--lifeos-primary, #00D4AA);
+        border-radius: 50%;
+        margin: 2px auto 0;
+      }
+      .calendar-other-month {
+        opacity: 0.3;
+      }
+      .calendar-events h3 {
+        font-size: 0.95rem;
+        margin-bottom: 8px;
+      }
+      .calendar-event-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.06);
+        font-size: 0.9rem;
+      }
+      .calendar-event-time {
+        color: var(--lifeos-primary, #00D4AA);
+        font-weight: bold;
+        min-width: 50px;
+      }
+      .calendar-event-title {
+        flex: 1;
+      }
+      .calendar-event-badge {
+        font-size: 0.7rem;
+        background: var(--lifeos-primary, #00D4AA);
+        color: #0F0F1B;
+        padding: 2px 6px;
+        border-radius: 8px;
+        font-weight: bold;
+      }
+      .calendar-add-form {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .calendar-add-form input[type="text"] {
+        flex: 1;
+        min-width: 150px;
+      }
+      .calendar-add-form input[type="datetime-local"] {
+        min-width: 180px;
+      }
+      .calendar-add {
+        grid-column: 1 / -1;
+        margin-top: 8px;
+      }
+      .calendar-add h3 {
+        font-size: 0.95rem;
+        margin-bottom: 8px;
+      }
+    </style>
+
     <!-- Activity Feed -->
     <section class="feed-section">
       <h2>Actividad <span id="feed-count" class="feed-count">0</span></h2>

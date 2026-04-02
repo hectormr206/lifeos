@@ -25,32 +25,32 @@ reduce_motion = false
 
 [colors]
 # LifeOS brand colors for reference
-# Primary: #0f4c75 (LifeOS Blue)
-# Accent: #3282b8 (Lighter Blue)
+# Primary: #00D4AA (Axi Teal)
+# Accent: #FF6B9D (Axi Pink)
 
 [dark]
 name = "LifeOS Dark"
-background = "#1a1a2e"
-surface = "#16213e"
-primary = "#0f4c75"
-accent = "#3282b8"
-text = "#e8e8e8"
-text_muted = "#a0a0a0"
-error = "#e74c3c"
-warning = "#f39c12"
-success = "#2ecc71"
+background = "#0F0F1B"
+surface = "#161830"
+primary = "#00D4AA"
+accent = "#FF6B9D"
+text = "#E8E8E8"
+text_muted = "#737587"
+error = "#FF6B9D"
+warning = "#F0C420"
+success = "#00D4AA"
 
 [light]
 name = "LifeOS Light"
-background = "#f8f9fa"
+background = "#F5F8F7"
 surface = "#ffffff"
-primary = "#0f4c75"
-accent = "#3282b8"
-text = "#1a1a2e"
-text_muted = "#6b6b7b"
-error = "#c0392b"
-warning = "#d68910"
-success = "#27ae60"
+primary = "#00D4AA"
+accent = "#FF6B9D"
+text = "#161830"
+text_muted = "#5E6078"
+error = "#FF6B9D"
+warning = "#E6B323"
+success = "#00B89A"
 
 [high_contrast]
 name = "LifeOS High Contrast"

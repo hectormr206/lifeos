@@ -47,6 +47,18 @@
 # proactive.rs — firewall status check
 %wheel ALL=(root) NOPASSWD: /usr/sbin/nft list ruleset
 
+# === NETWORK SECURITY (service management — telegram_tools.rs service_manage) ===
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl start nftables.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl stop nftables.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl restart nftables.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl enable nftables.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl disable nftables.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl start firewalld.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl stop firewalld.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl restart firewalld.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl enable firewalld.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl disable firewalld.service
+
 # === NETWORK SECURITY (blocking — security_ai.rs) ===
 %wheel ALL=(root) NOPASSWD: /usr/sbin/nft add rule inet filter input ip saddr * drop
 %wheel ALL=(root) NOPASSWD: /usr/sbin/iptables -A INPUT -s * -j DROP

@@ -703,7 +703,7 @@ pub async fn call_tool(
 ) -> Result<serde_json::Value, String> {
     match name {
         "lifeos_status" => {
-            let alerts = crate::proactive::check_all(None).await;
+            let alerts = crate::proactive::check_all(None, None).await;
             Ok(serde_json::json!({
                 "status": "running",
                 "alerts": alerts.len(),
@@ -765,7 +765,7 @@ pub async fn call_tool(
             }))
         }
         "lifeos_system_health" => {
-            let alerts = crate::proactive::check_all(None).await;
+            let alerts = crate::proactive::check_all(None, None).await;
             Ok(serde_json::json!({
                 "health_checks": alerts.len(),
                 "alerts": alerts.iter().map(|a| {

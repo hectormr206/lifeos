@@ -178,6 +178,9 @@ mod inner {
         session_store: Option<Arc<crate::session_store::SessionStore>>,
         event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
         user_model: Option<Arc<RwLock<UserModel>>>,
+        meeting_archive: Option<Arc<crate::meeting_archive::MeetingArchive>>,
+        meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
+        calendar: Option<Arc<crate::calendar::CalendarManager>>,
     ) {
         info!("Starting Telegram bridge (natural language mode)...");
 
@@ -258,10 +261,14 @@ mod inner {
                                 }
                                 // Record approval request in session transcript
                                 if let Some(ref store) = notify_session {
-                                    let key = crate::session_store::SessionKey::telegram_dm(chat_id);
+                                    let key =
+                                        crate::session_store::SessionKey::telegram_dm(chat_id);
                                     let turn = crate::session_store::TranscriptTurn::new(
                                         "assistant",
-                                        &format!("[Sistema] Aprobacion requerida: {}", action_description),
+                                        &format!(
+                                            "[Sistema] Aprobacion requerida: {}",
+                                            action_description
+                                        ),
                                         "telegram",
                                     );
                                     let _ = store.append_turn(&key, turn).await;
@@ -285,7 +292,8 @@ mod inner {
                                 }
                                 // Record notification in session transcript for context continuity
                                 if let Some(ref store) = notify_session {
-                                    let key = crate::session_store::SessionKey::telegram_dm(chat_id);
+                                    let key =
+                                        crate::session_store::SessionKey::telegram_dm(chat_id);
                                     let turn = crate::session_store::TranscriptTurn::new(
                                         "assistant",
                                         &format!("[Notificacion automatica] {}", text),
@@ -319,6 +327,9 @@ mod inner {
             sdd_store: sdd_store.clone(),
             session_store: session_store.clone(),
             user_model: user_model.clone(),
+            meeting_archive: meeting_archive.clone(),
+            meeting_assistant: meeting_assistant.clone(),
+            calendar: calendar.clone(),
         };
 
         // Heartbeat — configurable HEARTBEAT.md evaluation loop
@@ -427,6 +438,9 @@ mod inner {
             sdd_store,
             session_store,
             user_model,
+            meeting_archive,
+            meeting_assistant,
+            calendar,
         };
 
         let worker_pool = Arc::new(if let Some(ref bus) = event_bus {
@@ -474,9 +488,16 @@ mod inner {
                 },
             );
 
+        let reaction_handler = Update::filter_message_reaction_updated().endpoint(
+            |bot: Bot, reaction: teloxide::types::MessageReactionUpdated, ctx: BotCtx| async move {
+                handle_reaction(bot, reaction, ctx).await
+            },
+        );
+
         let handler = dptree::entry()
             .branch(message_handler)
-            .branch(callback_handler);
+            .branch(callback_handler)
+            .branch(reaction_handler);
 
         Dispatcher::builder(bot, handler)
             .dependencies(dptree::deps![ctx])
@@ -484,6 +505,105 @@ mod inner {
             .build()
             .dispatch()
             .await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Emoji reaction handler — Axi responds to emoji reactions
+    // -----------------------------------------------------------------------
+
+    async fn handle_reaction(
+        bot: Bot,
+        reaction: teloxide::types::MessageReactionUpdated,
+        ctx: BotCtx,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use teloxide::types::ReactionType;
+
+        let chat_id = reaction.chat.id;
+
+        // Only process new reactions (not removals)
+        if reaction.new_reaction.is_empty() {
+            return Ok(());
+        }
+
+        let emoji = match reaction.new_reaction.first() {
+            Some(ReactionType::Emoji { emoji }) => emoji.clone(),
+            _ => return Ok(()),
+        };
+
+        info!(
+            "Telegram [{}]: reaction {} on message {}",
+            chat_id, emoji, reaction.message_id.0
+        );
+
+        // Respond based on emoji type — Axi has personality!
+        let response = match emoji.as_str() {
+            // Positive reactions — Axi feels appreciated
+            "❤" | "❤\u{200d}🔥" | "😍" | "🥰" | "💘" => {
+                Some("Aww, gracias! Me alegra que te haya servido. Si necesitas algo mas, aqui estoy. 🩵".to_string())
+            }
+            "👍" | "👌" | "💯" | "🏆" => {
+                // Save as positive feedback in memory
+                if let Some(ref memory) = ctx.tool_ctx.memory {
+                    let mem = memory.read().await;
+                    let _ = mem
+                        .add_entry(
+                            "El usuario reacciono positivamente a mi respuesta",
+                            "feedback",
+                            &["reaction", "positive"],
+                            50,
+                        )
+                        .await;
+                }
+                Some("Perfecto, anotado! Seguire por esa linea.".to_string())
+            }
+            // Celebratory — Axi celebrates too
+            "🎉" | "🤩" | "🔥" | "⚡" => {
+                Some("Eso! A seguir con todo!".to_string())
+            }
+            // Thinking/confused — Axi offers to explain
+            "🤔" | "🤨" | "😐" => {
+                Some("Hmm, veo que no quedo claro. Quieres que te lo explique de otra forma?".to_string())
+            }
+            // Negative — Axi learns and adapts
+            "👎" | "😢" | "💔" => {
+                if let Some(ref memory) = ctx.tool_ctx.memory {
+                    let mem = memory.read().await;
+                    let _ = mem
+                        .add_entry(
+                            "El usuario reacciono negativamente — ajustar enfoque",
+                            "feedback",
+                            &["reaction", "negative"],
+                            60,
+                        )
+                        .await;
+                }
+                Some("Entendido, no fue lo que esperabas. Dime como puedo mejorar y lo corrijo.".to_string())
+            }
+            // Laughter — Axi is glad to amuse
+            "😁" | "🤣" | "😂" => {
+                Some("Jaja me da gusto que te haya sacado una sonrisa!".to_string())
+            }
+            // Praying/thanks — Axi is humble
+            "🙏" | "🤗" | "🫡" => {
+                Some("Para eso estoy! Siempre listo para ayudarte.".to_string())
+            }
+            // Surprise/shock — Axi is curious
+            "🤯" | "😱" | "😨" => {
+                Some("Impresionante verdad? Si tienes preguntas, dime!".to_string())
+            }
+            // Sleepy — Axi notices
+            "😴" | "🥱" => {
+                Some("Te noto cansado. Tal vez es buen momento para un descanso?".to_string())
+            }
+            // Other emojis — generic acknowledgment
+            _ => None,
+        };
+
+        if let Some(text) = response {
+            bot.send_message(chat_id, text).await?;
+        }
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -686,6 +806,26 @@ mod inner {
                     .await?;
                 return Ok(());
             }
+        };
+
+        // Extract reply context: when user replies to a specific Axi message,
+        // prepend the original message so Axi knows what the user is referring to.
+        let text = if let Some(reply) = msg.reply_to_message() {
+            if let Some(reply_text) = reply.text() {
+                let reply_preview = if reply_text.len() > 300 {
+                    format!("{}...", &reply_text[..300])
+                } else {
+                    reply_text.to_string()
+                };
+                format!(
+                    "[Respondiendo a tu mensaje: \"{}\"]\n\n{}",
+                    reply_preview, text
+                )
+            } else {
+                text
+            }
+        } else {
+            text
         };
 
         if text.is_empty() {
@@ -1137,7 +1277,7 @@ mod inner {
                 let screenshot_file = std::path::Path::new(path);
                 if screenshot_file.exists() {
                     worker_bot
-                        .send_photo(chat_id, InputFile::file(screenshot_file))
+                        .send_document(chat_id, InputFile::file(screenshot_file))
                         .await
                         .ok();
                     tokio::fs::remove_file(screenshot_file).await.ok();
@@ -1235,7 +1375,7 @@ mod inner {
                 let screenshot_file = std::path::Path::new(path);
                 if screenshot_file.exists() {
                     worker_bot
-                        .send_photo(chat_id, InputFile::file(screenshot_file))
+                        .send_document(chat_id, InputFile::file(screenshot_file))
                         .await
                         .ok();
                     tokio::fs::remove_file(screenshot_file).await.ok();
@@ -1347,7 +1487,7 @@ mod inner {
                     let screenshot_file = std::path::Path::new(path);
                     if screenshot_file.exists() {
                         worker_bot
-                            .send_photo(chat_id, InputFile::file(screenshot_file))
+                            .send_document(chat_id, InputFile::file(screenshot_file))
                             .await
                             .ok();
                         tokio::fs::remove_file(screenshot_file).await.ok();
@@ -1688,7 +1828,7 @@ mod inner {
         if let Some(path) = screenshot_path {
             let screenshot_file = std::path::Path::new(path);
             if screenshot_file.exists() {
-                bot.send_photo(chat_id, InputFile::file(screenshot_file))
+                bot.send_document(chat_id, InputFile::file(screenshot_file))
                     .await
                     .ok();
                 tokio::fs::remove_file(screenshot_file).await.ok();
@@ -1861,7 +2001,10 @@ mod inner {
     }
 
     /// Convert text to voice using Piper TTS. Returns path to OGG file or None.
+    /// Uses the same dynamic model resolution as sensory_pipeline for voice consistency.
     async fn text_to_voice(text: &str) -> Option<PathBuf> {
+        use crate::sensory_pipeline::{resolve_binary, resolve_tts_model};
+
         let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
         tokio::fs::create_dir_all(&tmp_dir).await.ok();
         let wav_path = tmp_dir.join(format!("tts-{}.wav", chrono::Utc::now().timestamp()));
@@ -1874,10 +2017,17 @@ mod inner {
             text
         };
 
-        let piper = tokio::process::Command::new("/opt/lifeos/piper-tts/piper")
+        // Resolve piper binary dynamically (same as sensory_pipeline)
+        let piper_bin =
+            resolve_binary("LIFEOS_TTS_BIN", &["lifeos-piper", "piper", "espeak-ng"]).await?;
+
+        // Resolve voice model dynamically (same as sensory_pipeline)
+        let model_path = resolve_tts_model(None).await?;
+
+        let piper = tokio::process::Command::new(&piper_bin)
             .args([
                 "--model",
-                "/opt/lifeos/piper-tts/es_MX-claude-high.onnx",
+                &model_path,
                 "--output_file",
                 &wav_path.to_string_lossy(),
             ])
@@ -1925,6 +2075,8 @@ mod inner {
     /// Fallback TTS using espeak-ng when Piper is unavailable.
     /// Returns path to OGG file or None.
     async fn text_to_voice_espeak(text: &str) -> Option<PathBuf> {
+        use crate::sensory_pipeline::resolve_binary;
+
         let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
         tokio::fs::create_dir_all(&tmp_dir).await.ok();
         let wav_path = tmp_dir.join(format!("tts-espeak-{}.wav", chrono::Utc::now().timestamp()));
@@ -1936,7 +2088,12 @@ mod inner {
             text
         };
 
-        let espeak = tokio::process::Command::new("espeak-ng")
+        // Resolve espeak binary dynamically
+        let espeak_bin = resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"])
+            .await
+            .unwrap_or_else(|| "espeak-ng".into());
+
+        let espeak = tokio::process::Command::new(&espeak_bin)
             .args([
                 "-v",
                 "es",

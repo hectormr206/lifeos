@@ -1250,9 +1250,9 @@ Implementacion concreta:
 
 **Sistema de diseno y marca (Axi + LifeOS):**
 
-- [x] Definir design tokens oficiales (color, tipografia, espaciado, radio, sombras, motion) versionados. _Implementado: `docs/design-tokens.md` + `image/files/etc/lifeos/design-tokens.{toml,json}` con versionado 1.0.0._
+- [x] Definir design tokens oficiales (color, tipografia, espaciado, radio, sombras, motion) versionados. _Implementado: `docs/branding/design-tokens.md` + `image/files/etc/lifeos/design-tokens.{toml,json}`._
 - [x] Unificar paletas entre temas COSMIC, `life theme` y guias de marca/documentacion. _Implementado: GTK4 CSS themes (LifeOS-Dark/Light/HighContrast) derivados de tokens._
-- [x] Consolidar lineamientos de Axi por canal (CLI, applets, onboarding, errores, notificaciones) con variantes 22x22/64x64/512x512/SVG. _Implementado: `docs/axi-brand-guidelines.md` v1.1.0 + 9 SVGs + CLI easter eggs `life --axi` / `life --axi-facts`._
+- [x] Consolidar lineamientos de Axi por canal (CLI, applets, onboarding, errores, notificaciones) con variantes 22x22/64x64/512x512/SVG. _Implementado: `docs/branding/brand-guidelines.md` + `docs/branding/axi-visual-system.md` + 9 SVGs + CLI easter eggs `life --axi` / `life --axi-facts`._
 - [x] Corregir inconsistencias de marca y accesibilidad en assets/documentos existentes. _Implementado: paleta sincronizada con spec 3.3, proporciones documentadas, WCAG 2.2 AA checklist._
 
 **UX visual diaria (fatiga baja, sesiones largas):**
@@ -1857,21 +1857,21 @@ LifeOS ya tiene captura sensorial (vision, audio, presencia) pero NO persiste lo
 **Bloque 1 — Boot y Login (primera impresion):**
 
 - [x] **Plymouth boot splash:** Theme custom con logo Axi animado (pulso teal, 5 dots de progreso, fade out). Incluye: logo.svg, brand.svg, dot-on/off.svg, script con animacion. SVGs se convierten a PNG en build. Se instala como default theme. _Implementado en `/usr/share/plymouth/themes/lifeos/`._
-- [x] **COSMIC Greeter branding:** Fondo de pantalla "Axi Night" + accent teal + dark mode configurados en `/var/lib/cosmic-greeter/.config/cosmic/`. _Implementado._
+- [x] **COSMIC Greeter branding:** Fondo de pantalla lock de LifeOS + accent teal + dark mode configurados en `/var/lib/cosmic-greeter/.config/cosmic/`. _Implementado._
 - [x] **Shutdown/reboot splash:** Plymouth detecta modo via `GetMode()`. En shutdown/suspend muestra "Hasta pronto" en teal con fade-out lento del logo. _Implementado en lifeos.script._
 - [x] **Update splash:** En modo "updates", Plymouth muestra "Actualizando LifeOS..." con dots de progreso y pulso del logo. _Implementado en lifeos.script._
 
 **Bloque 2 — Desktop (uso diario):**
 
 - [x] **COSMIC accent color por defecto:** Teal Axi (#00D4AA) = `(0.0, 0.831, 0.667, 1.0)` configurado en `/etc/skel/.config/cosmic/CosmicTheme.Dark.Builder/v1/accent` y Light.Builder. Se aplica a botones, selecciones, focus rings, toggles. _Implementado._
-- [x] **Wallpapers premium (4K):** 6 variantes SVG:
-  - lifeos-default.svg: gradiente clasico con grid y orbe central
-  - lifeos-dark.svg: gradiente oscuro con acentos teal
-  - lifeos-light.svg: gradiente claro
-  - lifeos-axi-night.svg (NUEVO): nebulosas teal/rosa, estrellas, grid sutil, orbe Axi
-  - lifeos-minimal.svg (NUEVO): ultra-limpio, gradiente oscuro con accent teal
-  - lifeos-lock.svg: para lockscreen
-  _Implementado. Default wallpaper configurado a axi-night._
+- [x] **Wallpapers premium (4K):** 6 variantes SVG dentro de una misma familia visual:
+  - lifeos-default.svg: canonico `Axi Xochimilco`
+  - lifeos-dark.svg: variante oscura y mas sobria
+  - lifeos-light.svg: variante clara
+  - lifeos-axi-night.svg: variante nocturna de Axi
+  - lifeos-minimal.svg: silueta minimal del ajolote
+  - lifeos-lock.svg: close-up contemplativo para lockscreen
+  _Implementado. Default wallpaper configurado al canonico._
 - [x] **COSMIC panel layout default:** Panel superior + dock inferior con auto-hide (wait 1s, transition 200ms). Configurado en `/etc/skel/.config/cosmic/CosmicPanel*/`. _Implementado._
 - [x] **Dark mode por defecto:** `is_dark = true` en CosmicTheme.Mode. _Implementado._
 - [x] **Cursor theme:** COSMIC cursor nativo (cosmic-icons) — ya es moderno y consistente. No requiere cursor de terceros.
@@ -1891,9 +1891,9 @@ LifeOS ya tiene captura sensorial (vision, audio, presencia) pero NO persiste lo
 
 **Bloque 5 — GRUB Boot Menu + Brand Guide + Assets reales (CUMPLIDO EN REPO 2026-03-26):**
 
-- [x] **GRUB boot menu theme:** Fondo con orbe teal (wallpaper lock screen), menu centrado con texto teal (#00D4AA), fuente Inter convertida a PFF2, footer "hectormr.com", barra de progreso teal. Instalacion segura via `/boot/grub2/themes/lifeos/` + `user.cfg` (sin grub2-mkconfig). _Implementado en `lifeos-grub-theme.sh`._
-- [x] **Brand Guide v2.0:** Documento completo de identidad visual: paleta unificada (Teal Axi como accent principal), tipografia (Inter + JetBrains Mono), reglas DO/DON'T, specs de wallpapers/iconos/personaje. _Implementado en `axi-brand-guidelines.md`._
-- [x] **5 wallpapers reales (PNG, AI-generated):** Axi Night (nebula teal + anillos), Minimal (orbe teal), Aurora (boreal teal/rosa), Light (fondo claro), Lock (orbe con bokeh). _Generados via Gemini, integrados en `/usr/share/backgrounds/lifeos/`._
+- [x] **GRUB boot menu theme:** Fondo de marca LifeOS con acento teal, menu centrado con texto teal (#00D4AA), fuente Inter convertida a PFF2, footer "hectormr.com", barra de progreso teal. Instalacion segura via `/boot/grub2/themes/lifeos/` + `user.cfg` (sin grub2-mkconfig). _Implementado en `lifeos-grub-theme.sh`._
+- [x] **Brand Guide v2.0:** Documento completo de identidad visual: paleta unificada (Teal Axi como accent principal), tipografia (Inter + JetBrains Mono), reglas DO/DON'T, specs de wallpapers/iconos/personaje. _Implementado en `docs/branding/brand-guidelines.md` y complementado en `docs/branding/axi-visual-system.md`._
+- [x] **Set inicial de wallpapers LifeOS:** familia visual unificada para default, dark, light, minimal y lockscreen. _Integrados en `/usr/share/backgrounds/lifeos/`._
 - [x] **6 iconos custom (PNG 512x512):** Axi mascota, folder teal, terminal teal, document teal, browser teal, settings teal. Todos flat design con paleta del Brand Guide. _Generados via Gemini, integrados en `/usr/share/icons/LifeOS/512x512/`._
 - [x] **Icon theme LifeOS:** index.theme actualizado con herencia Cosmic > Adwaita > hicolor, directorios 512x512 para PNGs. Se aplica automaticamente via lifeos-apply-theme.sh. _Implementado._
 - [x] **COSMIC Flatpak repo:** Agregado repo `cosmic` (flatpak.pop-os.org) para que "Subprogramas" en COSMIC Store muestre applets. _Implementado en Containerfile + first-boot._

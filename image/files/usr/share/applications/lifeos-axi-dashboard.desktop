@@ -4,6 +4,6 @@ Comment=Open the live Axi dashboard for LifeOS
 Exec=/usr/local/bin/lifeos-open-axi-dashboard.sh
 Type=Application
 Terminal=false
-Icon=lifeos
+Icon=axi
 Categories=System;Utility;
 StartupNotify=true

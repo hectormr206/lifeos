@@ -310,6 +310,12 @@ impl WorkflowLearner {
     /// repeat at least `MIN_PATTERN_REPEATS` times.
     pub fn detect_patterns(&self) -> Vec<DetectedPattern> {
         let actions = self.load_actions();
+        self.detect_patterns_from(&actions)
+    }
+
+    /// Same logic as [`detect_patterns`] but takes actions as parameter so
+    /// callers that already have the action list can avoid re-loading it.
+    fn detect_patterns_from(&self, actions: &[RecordedAction]) -> Vec<DetectedPattern> {
         let action_names: Vec<&str> = actions.iter().map(|a| a.action.as_str()).collect();
 
         let mut pattern_counts: HashMap<Vec<String>, usize> = HashMap::new();
@@ -343,6 +349,35 @@ impl WorkflowLearner {
             patterns.len()
         );
         patterns
+    }
+
+    /// Check if any learned pattern matches the current action context.
+    /// Returns the matching procedure name and steps if found.
+    pub fn check_auto_trigger(
+        &self,
+        current_action: &str,
+        _current_context: &str,
+    ) -> Option<(String, Vec<String>)> {
+        let actions = self.load_actions();
+        let patterns = self.detect_patterns_from(&actions);
+
+        for pattern in &patterns {
+            // Check if current action matches the start of a known pattern
+            if pattern.sequence.first().map(|s| s.as_str()) == Some(current_action) {
+                // Found a match — return the full sequence as suggested steps
+                let name = format!(
+                    "auto_{}",
+                    pattern
+                        .sequence
+                        .join("_")
+                        .chars()
+                        .take(30)
+                        .collect::<String>()
+                );
+                return Some((name, pattern.sequence.clone()));
+            }
+        }
+        None
     }
 
     /// Turn detected patterns into actionable skill suggestions.
@@ -648,6 +683,16 @@ impl SelfImprovingDaemon {
     /// Get detected workflow patterns turned into skill suggestions.
     pub fn suggest_skills(&self) -> Vec<SkillSuggestion> {
         self.workflow_learner.suggest_skills()
+    }
+
+    /// Check if current action triggers a learned procedure (AQ.6).
+    pub fn check_auto_trigger(
+        &self,
+        current_action: &str,
+        current_context: &str,
+    ) -> Option<(String, Vec<String>)> {
+        self.workflow_learner
+            .check_auto_trigger(current_action, current_context)
     }
 }
 

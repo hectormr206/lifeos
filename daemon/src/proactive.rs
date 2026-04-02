@@ -30,6 +30,7 @@ pub enum AlertCategory {
     ThermalGpu,
     SsdHealth,
     BatteryHealth,
+    CalendarContext,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +44,7 @@ pub enum AlertSeverity {
 /// Run all proactive checks and return any alerts.
 pub async fn check_all(
     task_queue: Option<&Arc<crate::task_queue::TaskQueue>>,
+    calendar: Option<&Arc<crate::calendar::CalendarManager>>,
 ) -> Vec<ProactiveAlert> {
     let mut alerts = Vec::new();
 
@@ -94,6 +96,10 @@ pub async fn check_all(
         if let Some(alert) = check_stuck_tasks(tq).await {
             alerts.push(alert);
         }
+    }
+
+    if let Some(cal) = calendar {
+        alerts.extend(check_calendar_context(cal).await);
     }
 
     if !alerts.is_empty() {
@@ -181,33 +187,91 @@ async fn check_memory() -> Option<ProactiveAlert> {
 }
 
 async fn check_session_duration() -> Option<ProactiveAlert> {
-    // Check uptime to see if user has been active for too long
-    let output = tokio::process::Command::new("uptime")
-        .args(["-p"])
+    // Check ACTUAL user activity via idle time, not just system uptime.
+    // Uses xprintidle (X11) or the GNOME/COSMIC idle API to determine
+    // how long the user has been ACTIVELY using the computer.
+    // If idle > 15 min, the user is not really "active".
+
+    // First, check if user is actually present (not idle)
+    let idle_ms = get_user_idle_ms().await;
+    if idle_ms > 15 * 60 * 1000 {
+        // User has been idle for >15 min — don't count this as active time
+        return None;
+    }
+
+    // Use loginctl to get actual session duration (not system uptime)
+    let output = tokio::process::Command::new("loginctl")
+        .args(["show-session", "auto", "--property=Timestamp"])
         .output()
         .await
         .ok()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Simple heuristic: if uptime contains "hours" and the number is > 4
-    if stdout.contains("hours") || stdout.contains("hour") {
-        let hours: u32 = stdout
-            .split_whitespace()
-            .find_map(|w| w.parse().ok())
-            .unwrap_or(0);
+    // Parse "Timestamp=<datetime>"
+    let session_start = stdout.trim().strip_prefix("Timestamp=")?;
+    let start_dt =
+        chrono::DateTime::parse_from_str(session_start.trim(), "%a %Y-%m-%d %H:%M:%S %Z")
+            .ok()
+            .or_else(|| {
+                // Fallback: try RFC3339 or other formats
+                chrono::DateTime::parse_from_rfc3339(session_start.trim()).ok()
+            })?;
 
-        if hours >= 6 {
-            return Some(ProactiveAlert {
-                category: AlertCategory::LongSession,
-                message: format!(
-                    "Llevas {} horas activo. Recuerda tomar un descanso, hidratarte y estirar.",
-                    hours
-                ),
-                severity: AlertSeverity::Info,
-            });
+    let hours = (chrono::Utc::now()
+        .signed_duration_since(start_dt)
+        .num_minutes() as f64
+        / 60.0) as u32;
+
+    if hours >= 6 {
+        Some(ProactiveAlert {
+            category: AlertCategory::LongSession,
+            message: format!(
+                "Llevas {} horas de sesion activa. Recuerda tomar un descanso, hidratarte y estirar.",
+                hours
+            ),
+            severity: AlertSeverity::Info,
+        })
+    } else {
+        None
+    }
+}
+
+/// Get user idle time in milliseconds via multiple detection methods.
+async fn get_user_idle_ms() -> u64 {
+    // Method 1: GNOME/COSMIC idle via D-Bus (Wayland-compatible)
+    if let Ok(output) = tokio::process::Command::new("dbus-send")
+        .args([
+            "--print-reply",
+            "--dest=org.gnome.Mutter.IdleMonitor",
+            "/org/gnome/Mutter/IdleMonitor/Core",
+            "org.gnome.Mutter.IdleMonitor.GetIdletime",
+        ])
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Parse "uint64 <ms>" from dbus response
+            if let Some(ms_str) = stdout.split_whitespace().last() {
+                if let Ok(ms) = ms_str.parse::<u64>() {
+                    return ms;
+                }
+            }
         }
     }
-    None
+
+    // Method 2: xprintidle (X11 fallback)
+    if let Ok(output) = tokio::process::Command::new("xprintidle").output().await {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Ok(ms) = stdout.trim().parse::<u64>() {
+                return ms;
+            }
+        }
+    }
+
+    // If we can't detect idle time, assume user is active (0 idle)
+    0
 }
 
 async fn check_stuck_tasks(
@@ -247,6 +311,96 @@ async fn check_stuck_tasks(
     } else {
         None
     }
+}
+
+// ---------------------------------------------------------------------------
+// Calendar context checks (BD.7 — Smart Reminders)
+// ---------------------------------------------------------------------------
+
+async fn check_calendar_context(
+    calendar: &Arc<crate::calendar::CalendarManager>,
+) -> Vec<ProactiveAlert> {
+    let mut alerts = Vec::new();
+    let now = chrono::Utc::now();
+
+    // (a) Upcoming event warning — event in the next 30 minutes
+    if let Ok(upcoming) = calendar.upcoming(1) {
+        for event in &upcoming {
+            if let Ok(start) = chrono::DateTime::parse_from_rfc3339(&event.start_time) {
+                let until = start.signed_duration_since(now);
+                let mins = until.num_minutes();
+                if (0..=30).contains(&mins) {
+                    alerts.push(ProactiveAlert {
+                        category: AlertCategory::CalendarContext,
+                        message: format!(
+                            "Tu evento '{}' empieza en {} minutos.",
+                            event.title, mins
+                        ),
+                        severity: AlertSeverity::Info,
+                    });
+                }
+            }
+        }
+    }
+
+    // (b) Empty tomorrow — no events scheduled
+    // Query events for the next 2 days and filter to only those starting tomorrow
+    if let Ok(upcoming_2d) = calendar.upcoming(2) {
+        let tomorrow = (chrono::Local::now() + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        let has_tomorrow_events = upcoming_2d.iter().any(|e| {
+            chrono::DateTime::parse_from_rfc3339(&e.start_time)
+                .map(|dt| {
+                    dt.with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d")
+                        .to_string()
+                        == tomorrow
+                })
+                .unwrap_or(false)
+        });
+        if !has_tomorrow_events {
+            alerts.push(ProactiveAlert {
+                category: AlertCategory::CalendarContext,
+                message: "No tienes nada agendado para manana.".into(),
+                severity: AlertSeverity::Info,
+            });
+        }
+    }
+
+    // (c) Busy day warning — 5+ events today
+    if let Ok(today_events) = calendar.today() {
+        let count = today_events.len();
+        if count >= 5 {
+            alerts.push(ProactiveAlert {
+                category: AlertCategory::CalendarContext,
+                message: format!("Dia ocupado — tienes {} eventos hoy.", count),
+                severity: AlertSeverity::Warning,
+            });
+        }
+
+        // (d) Late event — started >10 min ago with no end_time
+        for event in &today_events {
+            if event.end_time.is_none() {
+                if let Ok(start) = chrono::DateTime::parse_from_rfc3339(&event.start_time) {
+                    let elapsed = now.signed_duration_since(start);
+                    let mins = elapsed.num_minutes();
+                    if mins > 10 {
+                        alerts.push(ProactiveAlert {
+                            category: AlertCategory::CalendarContext,
+                            message: format!(
+                                "Tu evento '{}' empezo hace {} minutos. Todo bien?",
+                                event.title, mins
+                            ),
+                            severity: AlertSeverity::Info,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    alerts
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +456,9 @@ async fn check_cpu_thermal() -> Option<ProactiveAlert> {
             ),
             severity: AlertSeverity::Critical,
         })
-    } else if temp_c >= 80 {
+    } else if temp_c >= 90 {
+        // Threshold raised to 90°C — many laptops idle at 80-85°C under load.
+        // 80°C was causing constant alerts on normal hardware.
         Some(ProactiveAlert {
             category: AlertCategory::ThermalCpu,
             message: format!(

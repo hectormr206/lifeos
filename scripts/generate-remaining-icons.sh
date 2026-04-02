@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ICON_DIR="image/files/usr/share/icons/LifeOS/scalable"
-D="#161830"   # dark
+D="#2A2A3E"   # dark
 T="#00D4AA"   # teal
 R="#CC3333"   # red/error
 Y="#FFB800"   # yellow/warning
@@ -15,7 +15,7 @@ COUNT=0
 svg() {
     local dir="$1" name="$2" body="$3"
     local path="$ICON_DIR/$dir/$name.svg"
-    [ -f "$path" ] && return 0
+    # [ -f "$path" ] && return 0
     mkdir -p "$ICON_DIR/$dir"
     printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">\n  %s\n</svg>\n' "$body" > "$path"
     echo "  + $dir/$name"
@@ -57,7 +57,7 @@ svg actions system-suspend \
   "<circle cx=\"256\" cy=\"256\" r=\"200\" fill=\"$D\"/><circle cx=\"256\" cy=\"200\" r=\"60\" fill=\"$T\" opacity=\"0.8\"/><path d=\"M208 320 L220 280 L292 280 L304 320\" fill=\"$T\" opacity=\"0.4\"/><rect x=\"172\" y=\"340\" width=\"168\" height=\"20\" rx=\"10\" fill=\"$T\" opacity=\"0.3\"/>"
 
 svg actions window-restore \
-  "<rect x=\"120\" y=\"120\" width=\"280\" height=\"280\" rx=\"20\" fill=\"$D\" stroke=\"$T\" stroke-width=\"12\"/><rect x=\"120\" y=\"120\" width=\"280\" height=\"44\" rx=\"20\" fill=\"$T\"/><rect x=\"80\" y=\"80\" width=\"240\" height=\"240\" rx=\"16\" fill=\"none\" stroke=\"$T\" stroke-width=\"8\" opacity=\"0.4\"/>"
+  "<circle cx=\"256\" cy=\"256\" r=\"200\" fill=\"$D\"/><rect x=\"160\" y=\"208\" width=\"144\" height=\"144\" rx=\"12\" stroke=\"$T\" stroke-width=\"24\" fill=\"none\"/><rect x=\"208\" y=\"160\" width=\"144\" height=\"144\" rx=\"12\" stroke=\"$T\" stroke-width=\"24\" fill=\"none\" opacity=\"0.6\"/>"
 
 svg actions insert-image \
   "<rect x=\"80\" y=\"112\" width=\"352\" height=\"288\" rx=\"16\" fill=\"$D\"/><circle cx=\"192\" cy=\"208\" r=\"36\" fill=\"$T\" opacity=\"0.6\"/><path d=\"M96 352 L208 256 L304 336 L352 288 L416 368\" fill=\"none\" stroke=\"$T\" stroke-width=\"16\"/>"

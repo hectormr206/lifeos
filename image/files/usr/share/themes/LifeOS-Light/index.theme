@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=X-GNOME-Metatheme
 Name=LifeOS Light
-Comment=LifeOS Light Theme - Clean and bright for daytime use
+Comment=LifeOS Light Theme - Soft bright surfaces with LifeOS accents
 Encoding=UTF-8
 
 [X-GNOME-Metatheme]
@@ -14,25 +14,25 @@ NotificationTheme=Default
 
 [Settings]
 ; LifeOS Light Color Palette
-; Background: #f8f9fa
+; Background: #F5F8F7
 ; Surface: #ffffff
-; Primary: #0f4c75
-; Accent: #3282b8
-; Text: #1a1a2e
-; Error: #c0392b
-; Success: #27ae60
+; Primary: #00D4AA
+; Accent: #FF6B9D
+; Text: #161830
+; Error: #FF6B9D
+; Success: #00B89A
 
 [Cosmic]
 ; COSMIC-specific theme settings using libcosmic
-Background=#f8f9fa
+Background=#F5F8F7
 Surface=#ffffff
-Primary=#0f4c75
-Accent=#3282b8
-Text=#1a1a2e
-TextMuted=#6b6b7b
-Error=#c0392b
-Warning=#d68910
-Success=#27ae60
+Primary=#00D4AA
+Accent=#FF6B9D
+Text=#161830
+TextMuted=#5E6078
+Error=#FF6B9D
+Warning=#E6B323
+Success=#00B89A
 
 ; WCAG AA compliant
 ContrastRatio=8.2

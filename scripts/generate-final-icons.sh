@@ -4,7 +4,7 @@ set -euo pipefail
 
 ICON_DIR="image/files/usr/share/icons/LifeOS/scalable"
 # LifeOS Brand Palette (official)
-D="#161830"       # Medianoche (surfaces/containers)
+D="#2A2A3E"       # Icon Body Body (OBLIGATORIO para visibilidad sobre fondo #161830)
 BG="#0F0F1B"      # Noche Profunda (darkest bg)
 T="#00D4AA"       # Teal Axi (primary accent)
 R="#FF6B9D"       # Rosa Axi (destructive/error)
@@ -18,7 +18,7 @@ COUNT=0
 svg() {
     local dir="$1" name="$2" body="$3"
     local path="$ICON_DIR/$dir/$name.svg"
-    [ -f "$path" ] && return 0
+    # [ -f "$path" ] && return 0
     mkdir -p "$ICON_DIR/$dir"
     printf '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">\n  %s\n</svg>\n' "$body" > "$path"
     echo "  + $dir/$name"

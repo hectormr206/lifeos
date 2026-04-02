@@ -1,65 +1,61 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">
   <title>LifeOS Lock Screen Wallpaper</title>
-  <desc>LifeOS lock screen wallpaper with privacy-focused minimal design</desc>
-  
-  <!-- Background gradient -->
+  <desc>Lock screen wallpaper with a centered close-up of Axi in a calm nocturnal aquatic scene.</desc>
   <defs>
-    <linearGradient id="bg-gradient-lock" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#0a0a14;stop-opacity:1" />
-      <stop offset="50%" style="stop-color:#0f0f1e;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#0d2d47;stop-opacity:1" />
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#080A12"/>
+      <stop offset="60%" stop-color="#0F0F1B"/>
+      <stop offset="100%" stop-color="#161830"/>
     </linearGradient>
-    
-    <!-- Subtle glow for lock indicator area -->
-    <radialGradient id="lock-glow" cx="50%" cy="40%" r="30%">
-      <stop offset="0%" style="stop-color:#3282b8;stop-opacity:0.1" />
-      <stop offset="100%" style="stop-color:#3282b8;stop-opacity:0" />
+    <radialGradient id="tealGlow" cx="50%" cy="40%" r="30%">
+      <stop offset="0%" stop-color="#00D4AA" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#00D4AA" stop-opacity="0"/>
     </radialGradient>
-    
-    <!-- Noise texture -->
-    <filter id="noise">
-      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="4" result="noise"/>
-      <feColorMatrix type="saturate" values="0"/>
-      <feBlend in="SourceGraphic" in2="noise" mode="multiply" result="blend"/>
-    </filter>
+    <radialGradient id="pinkGlow" cx="50%" cy="44%" r="18%">
+      <stop offset="0%" stop-color="#FF6B9D" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#FF6B9D" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="headFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#41EFC9"/>
+      <stop offset="75%" stop-color="#00D4AA"/>
+      <stop offset="100%" stop-color="#009C80"/>
+    </linearGradient>
+    <linearGradient id="gillFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFC7DB"/>
+      <stop offset="100%" stop-color="#FF6B9D"/>
+    </linearGradient>
   </defs>
-  
-  <!-- Main background -->
-  <rect width="1920" height="1080" fill="url(#bg-gradient-lock)"/>
-  
-  <!-- Subtle noise texture overlay -->
-  <rect width="1920" height="1080" fill="#ffffff" opacity="0.01" filter="url(#noise)"/>
-  
-  <!-- Lock glow area -->
-  <ellipse cx="960" cy="432" rx="400" ry="250" fill="url(#lock-glow)"/>
-  
-  <!-- Decorative geometric elements -->
-  <g opacity="0.05">
-    <!-- Corner accents -->
-    <path d="M0,0 L200,0 L0,200 Z" fill="#3282b8"/>
-    <path d="M1920,1080 L1720,1080 L1920,880 Z" fill="#3282b8"/>
-    
-    <!-- Subtle lines -->
-    <line x1="0" y1="200" x2="200" y2="0" stroke="#ffffff" stroke-width="1"/>
-    <line x1="1720" y1="1080" x2="1920" y2="880" stroke="#ffffff" stroke-width="1"/>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <rect width="1920" height="1080" fill="url(#tealGlow)"/>
+  <rect width="1920" height="1080" fill="url(#pinkGlow)"/>
+
+  <ellipse cx="960" cy="760" rx="540" ry="150" fill="#00D4AA" opacity="0.05"/>
+  <g opacity="0.16" fill="#0C1218">
+    <path d="M0 1080 L0 930 C80 920 120 850 170 720 C230 860 270 950 350 1080 Z"/>
+    <path d="M1570 1080 L1570 930 C1650 920 1700 850 1750 720 C1810 860 1850 950 1920 1080 Z"/>
   </g>
-  
-  <!-- Abstract lock icon area (centered, subtle) -->
-  <g transform="translate(960, 400)" opacity="0.08">
-    <!-- Lock body -->
-    <rect x="-60" y="0" width="120" height="100" rx="15" fill="none" stroke="#ffffff" stroke-width="3"/>
-    <!-- Lock shackle -->
-    <path d="M-35,0 L-35,-30 A35,35 0 0,1 35,-30 L35,0" fill="none" stroke="#ffffff" stroke-width="3"/>
+
+  <g transform="translate(960 420)">
+    <g fill="url(#gillFill)" opacity="0.96">
+      <path d="M-250 -40 C-355 -80 -410 -150 -425 -250 C-340 -235 -260 -195 -205 -120 Z"/>
+      <path d="M-260 40 C-375 35 -460 -20 -510 -105 C-410 -112 -315 -85 -220 -18 Z"/>
+      <path d="M250 -40 C355 -80 410 -150 425 -250 C340 -235 260 -195 205 -120 Z"/>
+      <path d="M260 40 C375 35 460 -20 510 -105 C410 -112 315 -85 220 -18 Z"/>
+    </g>
+    <ellipse cx="0" cy="0" rx="270" ry="190" fill="url(#headFill)"/>
+    <ellipse cx="-95" cy="-24" rx="38" ry="46" fill="#E8E8E8"/>
+    <ellipse cx="105" cy="-16" rx="34" ry="42" fill="#E8E8E8" opacity="0.94"/>
+    <ellipse cx="-84" cy="-16" rx="18" ry="24" fill="#0F0F1B"/>
+    <ellipse cx="114" cy="-8" rx="16" ry="22" fill="#0F0F1B" opacity="0.92"/>
+    <circle cx="-78" cy="-28" r="5" fill="#FFFFFF"/>
+    <circle cx="120" cy="-18" r="4" fill="#FFFFFF" opacity="0.92"/>
+    <path d="M-70 102 C-25 126 28 126 76 100" fill="none" stroke="#0F0F1B" stroke-width="8" stroke-linecap="round" opacity="0.48"/>
   </g>
-  
-  <!-- Time area indicator (subtle line) -->
-  <line x1="760" y1="540" x2="1160" y2="540" stroke="#ffffff" stroke-width="1" opacity="0.1"/>
-  
-  <!-- Bottom privacy indicator -->
-  <g transform="translate(960, 950)" opacity="0.15">
-    <circle cx="-20" cy="0" r="4" fill="#3282b8"/>
-    <circle cx="0" cy="0" r="4" fill="#3282b8"/>
-    <circle cx="20" cy="0" r="4" fill="#3282b8"/>
+
+  <g opacity="0.12" fill="none" stroke="#E8E8E8">
+    <ellipse cx="960" cy="690" rx="310" ry="54" stroke-width="2"/>
+    <ellipse cx="960" cy="730" rx="380" ry="70" stroke-width="1.5"/>
   </g>
 </svg>

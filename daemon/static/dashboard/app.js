@@ -2046,6 +2046,7 @@ setInterval(() => {
   checkSafeMode();
   refreshDoctor();
   refreshConversations();
+  loadCalendar();
 }, 30000);
 
 // --- System Health ---
@@ -2423,6 +2424,108 @@ if (doctorRunBtn) {
   });
 }
 
+// ==================== MEETINGS (BB.5) ====================
+
+function renderMeeting(meeting) {
+  const date = meeting.started_at
+    ? new Date(meeting.started_at).toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    : '—';
+  const dur = meeting.duration_secs || 0;
+  const hours = Math.floor(dur / 3600);
+  const mins = Math.floor((dur % 3600) / 60);
+  const durationStr = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+  const isVideo = meeting.has_video !== false;
+  const appEmoji = isVideo ? '\uD83C\uDFA5' : '\uD83C\uDF99';
+  const appName = meeting.app_name || 'Desconocida';
+  const participants = meeting.participants_count
+    ? `${meeting.participants_count} participante(s)`
+    : '';
+  const summary = meeting.summary
+    ? escapeHtml(meeting.summary.substring(0, 200)) + (meeting.summary.length > 200 ? '...' : '')
+    : '';
+  const screenshots = meeting.screenshot_count || 0;
+
+  return `<div class="task-item">
+    <div>
+      <div class="task-objective">${appEmoji} ${escapeHtml(appName)} — ${date}</div>
+      <div class="task-meta">${durationStr}${participants ? ' \u00B7 ' + participants : ''}${screenshots ? ' \u00B7 ' + screenshots + ' capturas' : ''}</div>
+      ${summary ? `<div class="task-result">${summary}</div>` : ''}
+    </div>
+  </div>`;
+}
+
+async function loadMeetings() {
+  const listEl = $('#meetings-list');
+  const statsEl = $('#meeting-stats');
+  const actionsEl = $('#meeting-action-items');
+
+  // Fetch recent meetings
+  try {
+    const res = await fetch(`${API}/meetings/recent?limit=10`, { headers: apiHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      const meetings = data.meetings || [];
+      if (listEl) {
+        if (meetings.length === 0) {
+          listEl.innerHTML = '<p class="task-empty">Sin reuniones recientes</p>';
+        } else {
+          listEl.innerHTML = meetings.map(renderMeeting).join('');
+        }
+      }
+    } else if (res.status === 404) {
+      if (listEl) listEl.innerHTML = '<p class="task-empty">Sin datos de reuniones</p>';
+    }
+  } catch (e) {
+    if (listEl) listEl.innerHTML = '<p class="task-empty">Sin datos de reuniones</p>';
+  }
+
+  // Fetch meeting stats
+  try {
+    const res = await fetch(`${API}/meetings/stats`, { headers: apiHeaders() });
+    if (res.ok) {
+      const stats = await res.json();
+      const totalEl = $('#mtg-total');
+      const hoursEl = $('#mtg-hours');
+      const avgEl = $('#mtg-avg');
+      if (totalEl) totalEl.textContent = stats.total_meetings || 0;
+      if (hoursEl) {
+        const h = stats.total_hours || 0;
+        hoursEl.textContent = h >= 1 ? `${h.toFixed(1)}h` : `${Math.round(h * 60)}m`;
+      }
+      if (avgEl) {
+        const avg = stats.avg_duration_minutes || 0;
+        avgEl.textContent = avg >= 60 ? `${Math.floor(avg / 60)}h ${Math.round(avg % 60)}m` : `${Math.round(avg)}m`;
+      }
+    }
+  } catch (e) { /* silent — endpoint may not exist yet */ }
+
+  // Fetch action items
+  try {
+    const res = await fetch(`${API}/meetings/action-items`, { headers: apiHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      const items = data.action_items || [];
+      if (actionsEl) {
+        if (items.length === 0) {
+          actionsEl.innerHTML = '<p class="task-empty">Sin action items pendientes</p>';
+        } else {
+          actionsEl.innerHTML = items.map(item => {
+            const who = item.assignee ? escapeHtml(item.assignee) : 'Sin asignar';
+            const what = escapeHtml(item.description || '');
+            const when = item.due_date ? ` \u00B7 ${escapeHtml(item.due_date)}` : '';
+            const done = item.completed ? '\u2705' : '\u23F3';
+            return `<div class="task-item"><div><div class="task-objective">${done} ${what}</div><div class="task-meta">${who}${when}</div></div></div>`;
+          }).join('');
+        }
+      }
+    } else if (res.status === 404) {
+      if (actionsEl) actionsEl.innerHTML = '<p class="task-empty">Sin action items pendientes</p>';
+    }
+  } catch (e) {
+    if (actionsEl) actionsEl.innerHTML = '<p class="task-empty">Sin action items pendientes</p>';
+  }
+}
+
 // ==================== CONVERSATION HISTORY ====================
 const conversationList = $('#conversation-list');
 
@@ -2504,7 +2607,7 @@ function initTabs() {
 
   const tabs = [
     { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['safe-mode-banner', 'hero-panel', 'orb-section', 'controls-section', 'status-section', 'chat-section'] },
-    { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'workers-section', 'metrics-section', 'sched-section', 'conversations-section', 'feed-section'] },
+    { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'workers-section', 'metrics-section', 'sched-section', 'meetings-section', 'conversations-section', 'feed-section'] },
     { id: 'tab-memory', icon: '&#128450;', label: 'Memoria', keywords: ['memory-section'] },
     { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'doctor-section', 'health-section', 'battery-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'services-section', 'settings-section'] }
   ];
@@ -2546,6 +2649,184 @@ function initTabs() {
   main.appendChild(tabContents);
 }
 
+// --- Calendar ---
+const calendarGrid = $('#calendar-grid');
+const calendarTodayEvents = $('#calendar-today-events');
+const calendarUpcomingEvents = $('#calendar-upcoming-events');
+const calendarMonthLabel = $('#calendar-month-label');
+const calendarAddForm = $('#calendar-add-form');
+
+function renderCalendarEvent(event) {
+  const item = document.createElement('div');
+  item.className = 'calendar-event-item';
+  const time = document.createElement('span');
+  time.className = 'calendar-event-time';
+  if (event.start_time) {
+    const d = new Date(event.start_time);
+    time.textContent = d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+  } else {
+    time.textContent = '--:--';
+  }
+  const title = document.createElement('span');
+  title.className = 'calendar-event-title';
+  title.textContent = event.title || 'Sin titulo';
+  item.append(time, title);
+  if (event.reminder_minutes != null) {
+    const badge = document.createElement('span');
+    badge.className = 'calendar-event-badge';
+    badge.textContent = `${event.reminder_minutes}m`;
+    item.append(badge);
+  }
+  return item;
+}
+
+function renderCalendarGrid(events) {
+  if (!calendarGrid) return;
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const todayDate = now.getDate();
+
+  const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  if (calendarMonthLabel) calendarMonthLabel.textContent = `${monthNames[month]} ${year}`;
+
+  // Collect days with events
+  const eventDays = new Set();
+  (events || []).forEach(ev => {
+    if (ev.start_time) {
+      const d = new Date(ev.start_time);
+      if (d.getMonth() === month && d.getFullYear() === year) {
+        eventDays.add(d.getDate());
+      }
+    }
+  });
+
+  // Remove old day cells (keep headers)
+  const headers = calendarGrid.querySelectorAll('.calendar-day-header');
+  calendarGrid.innerHTML = '';
+  headers.forEach(h => calendarGrid.appendChild(h));
+
+  const firstDay = new Date(year, month, 1);
+  // Monday = 0 ... Sunday = 6
+  let startOffset = (firstDay.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const prevMonthDays = new Date(year, month, 0).getDate();
+
+  // Previous month filler
+  for (let i = startOffset - 1; i >= 0; i--) {
+    const cell = document.createElement('span');
+    cell.className = 'calendar-day calendar-other-month';
+    cell.textContent = prevMonthDays - i;
+    calendarGrid.appendChild(cell);
+  }
+
+  // Current month days
+  for (let d = 1; d <= daysInMonth; d++) {
+    const cell = document.createElement('span');
+    let cls = 'calendar-day';
+    if (d === todayDate) cls += ' calendar-today';
+    if (eventDays.has(d)) cls += ' calendar-has-event';
+    cell.className = cls;
+    cell.textContent = d;
+    calendarGrid.appendChild(cell);
+  }
+
+  // Next month filler
+  const totalCells = startOffset + daysInMonth;
+  const remainder = totalCells % 7;
+  if (remainder > 0) {
+    for (let i = 1; i <= 7 - remainder; i++) {
+      const cell = document.createElement('span');
+      cell.className = 'calendar-day calendar-other-month';
+      cell.textContent = i;
+      calendarGrid.appendChild(cell);
+    }
+  }
+}
+
+async function loadCalendar() {
+  let todayEvents = [];
+  let upcomingEvents = [];
+
+  try {
+    const res = await fetch(`${API}/calendar/today`, { headers: apiHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      todayEvents = data.events || data || [];
+    }
+  } catch (e) { /* silent */ }
+
+  try {
+    const res = await fetch(`${API}/calendar/upcoming?days=7`, { headers: apiHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      upcomingEvents = data.events || data || [];
+    }
+  } catch (e) { /* silent */ }
+
+  // Render today events
+  if (calendarTodayEvents) {
+    if (Array.isArray(todayEvents) && todayEvents.length > 0) {
+      calendarTodayEvents.innerHTML = '';
+      todayEvents.forEach(ev => calendarTodayEvents.appendChild(renderCalendarEvent(ev)));
+    } else {
+      calendarTodayEvents.innerHTML = '<p class="task-empty">Sin eventos hoy</p>';
+    }
+  }
+
+  // Render upcoming events
+  if (calendarUpcomingEvents) {
+    if (Array.isArray(upcomingEvents) && upcomingEvents.length > 0) {
+      calendarUpcomingEvents.innerHTML = '';
+      upcomingEvents.forEach(ev => calendarUpcomingEvents.appendChild(renderCalendarEvent(ev)));
+    } else {
+      calendarUpcomingEvents.innerHTML = '<p class="task-empty">Sin eventos proximos</p>';
+    }
+  }
+
+  // Render calendar grid with all events merged
+  const allEvents = [...todayEvents, ...upcomingEvents];
+  renderCalendarGrid(allEvents);
+}
+
+async function addCalendarEvent(e) {
+  e.preventDefault();
+  const titleInput = $('#cal-event-title');
+  const dateInput = $('#cal-event-date');
+  if (!titleInput || !dateInput) return;
+  const title = titleInput.value.trim();
+  const startTime = dateInput.value;
+  if (!title || !startTime) return;
+
+  try {
+    const res = await fetch(`${API}/calendar/events`, {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({
+        title,
+        start_time: new Date(startTime).toISOString(),
+        reminder_minutes: 15,
+      }),
+    });
+    if (res.ok) {
+      titleInput.value = '';
+      dateInput.value = '';
+      await loadCalendar();
+      addFeedItem('&#128197;', `Evento agregado: ${title}`);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      console.warn('Failed to add calendar event:', err.message || res.statusText);
+    }
+  } catch (e) {
+    console.warn('Calendar add event failed:', e);
+  }
+}
+
+if (calendarAddForm) {
+  calendarAddForm.addEventListener('submit', addCalendarEvent);
+}
+
 // --- Boot ---
 (async () => {
   initTabs();
@@ -2569,5 +2850,7 @@ function initTabs() {
   refreshGameGuard();
   refreshWorkers();
   refreshSystemHealth();
+  loadMeetings();
+  loadCalendar();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();

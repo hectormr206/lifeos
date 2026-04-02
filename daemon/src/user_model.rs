@@ -21,6 +21,8 @@ pub struct UserModel {
     /// Language: "es", "en"
     pub language: String,
     pub updated_at: Option<DateTime<Utc>>,
+    /// When the user first started using LifeOS (set on first boot)
+    pub first_seen: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,7 +122,30 @@ impl UserModel {
             instructions.push_str(&format!("Contexto actual: {}\n", self.current_context));
         }
 
+        if self.is_learning_mode() {
+            instructions.push_str(
+                "\n[Modo aprendizaje activo — primera semana]\n\
+                 Observa mas, sugiere menos. Aprende las preferencias del usuario.\n\
+                 No hagas sugerencias proactivas agresivas. Pregunta antes de asumir.\n",
+            );
+        }
+
         instructions
+    }
+
+    /// Returns `true` during the first 7 days after first_seen (learning mode).
+    /// Axi observes more and suggests less during this period.
+    pub fn is_learning_mode(&self) -> bool {
+        self.first_seen
+            .map(|fs| Utc::now().signed_duration_since(fs).num_days() < 7)
+            .unwrap_or(true) // If no first_seen, assume learning mode
+    }
+
+    /// Number of days since the user first started using LifeOS.
+    pub fn days_since_first_seen(&self) -> i64 {
+        self.first_seen
+            .map(|fs| Utc::now().signed_duration_since(fs).num_days())
+            .unwrap_or(0)
     }
 
     /// Apply a preference change detected from implicit feedback.
@@ -636,5 +661,69 @@ mod tests {
         // Hour 3 AM, no tasks, no schedule → nothing
         let suggestions = generate_suggestions(&model, 3, 0);
         assert!(suggestions.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // AQ.10 — Learning mode + first_seen tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_learning_mode_no_first_seen() {
+        let model = UserModel::default();
+        // No first_seen → assume learning mode
+        assert!(model.is_learning_mode());
+    }
+
+    #[test]
+    fn test_learning_mode_recent_first_seen() {
+        let mut model = UserModel::default();
+        // First seen 2 days ago → still in learning mode
+        model.first_seen = Some(Utc::now() - chrono::Duration::days(2));
+        assert!(model.is_learning_mode());
+    }
+
+    #[test]
+    fn test_learning_mode_expired() {
+        let mut model = UserModel::default();
+        // First seen 10 days ago → no longer learning mode
+        model.first_seen = Some(Utc::now() - chrono::Duration::days(10));
+        assert!(!model.is_learning_mode());
+    }
+
+    #[test]
+    fn test_learning_mode_boundary() {
+        let mut model = UserModel::default();
+        // Exactly 7 days ago → NOT learning mode (< 7 is learning)
+        model.first_seen = Some(Utc::now() - chrono::Duration::days(7));
+        assert!(!model.is_learning_mode());
+    }
+
+    #[test]
+    fn test_days_since_first_seen_no_first_seen() {
+        let model = UserModel::default();
+        assert_eq!(model.days_since_first_seen(), 0);
+    }
+
+    #[test]
+    fn test_days_since_first_seen_some() {
+        let mut model = UserModel::default();
+        model.first_seen = Some(Utc::now() - chrono::Duration::days(5));
+        assert_eq!(model.days_since_first_seen(), 5);
+    }
+
+    #[test]
+    fn test_prompt_instructions_learning_mode() {
+        let model = UserModel::default(); // no first_seen → learning mode
+        let prompt = model.prompt_instructions();
+        assert!(prompt.contains("Modo aprendizaje activo"));
+        assert!(prompt.contains("Observa mas, sugiere menos"));
+    }
+
+    #[test]
+    fn test_prompt_instructions_no_learning_mode() {
+        let mut model = UserModel::default();
+        model.first_seen = Some(Utc::now() - chrono::Duration::days(30));
+        let prompt = model.prompt_instructions();
+        assert!(!prompt.contains("Modo aprendizaje activo"));
     }
 }

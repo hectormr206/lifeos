@@ -31,32 +31,58 @@ cat << 'EOF' > "$WALLPAPER_DIR/lifeos-minimal-wallpaper.svg"
 </svg>
 EOF
 
-# Wallpaper: Axi Night (4K)
+# Wallpaper: Axi Xochimilco canonico (4K)
 cat << 'EOF' > "$WALLPAPER_DIR/lifeos-axi-night-wallpaper.svg"
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3840 2160" width="3840" height="2160">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3840 2160">
   <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0F0F1B" />
+    <linearGradient id="sky" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070A12" />
+      <stop offset="45%" stop-color="#0F0F1B" />
       <stop offset="100%" stop-color="#161830" />
     </linearGradient>
-    <radialGradient id="tealGlow" cx="20%" cy="30%" r="50%">
-      <stop offset="0%" stop-color="#00D4AA" stop-opacity="0.2" />
-      <stop offset="100%" stop-color="#0F0F1B" stop-opacity="0" />
+    <radialGradient id="tealGlow" cx="74%" cy="34%" r="34%">
+      <stop offset="0%" stop-color="#00D4AA" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#00D4AA" stop-opacity="0" />
     </radialGradient>
-    <radialGradient id="pinkGlow" cx="80%" cy="70%" r="50%">
-      <stop offset="0%" stop-color="#FF6B9D" stop-opacity="0.1" />
-      <stop offset="100%" stop-color="#0F0F1B" stop-opacity="0" />
+    <radialGradient id="pinkGlow" cx="68%" cy="46%" r="18%">
+      <stop offset="0%" stop-color="#FF6B9D" stop-opacity="0.16" />
+      <stop offset="100%" stop-color="#FF6B9D" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="water" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#00D4AA" stop-opacity="0.02" />
+      <stop offset="100%" stop-color="#00D4AA" stop-opacity="0.16" />
+    </linearGradient>
+    <linearGradient id="bodyFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3EF0C8" />
+      <stop offset="65%" stop-color="#00D4AA" />
+      <stop offset="100%" stop-color="#009E82" />
+    </linearGradient>
+    <linearGradient id="gillFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFC0D7" />
+      <stop offset="65%" stop-color="#FF6B9D" />
+      <stop offset="100%" stop-color="#E65086" />
     </radialGradient>
   </defs>
-  <rect width="3840" height="2160" fill="url(#bg)" />
+  <rect width="3840" height="2160" fill="url(#sky)" />
   <rect width="3840" height="2160" fill="url(#tealGlow)" />
   <rect width="3840" height="2160" fill="url(#pinkGlow)" />
-  <circle cx="1500" cy="800" r="2" fill="#E8E8E8" opacity="0.6"/>
-  <circle cx="2800" cy="400" r="3" fill="#E8E8E8" opacity="0.8"/>
-  <circle cx="800" cy="1600" r="1.5" fill="#E8E8E8" opacity="0.5"/>
-  <circle cx="3200" cy="1800" r="2" fill="#00D4AA" opacity="0.7"/>
-  <circle cx="1920" cy="1080" r="150" fill="none" stroke="#00D4AA" stroke-width="2" opacity="0.3"/>
-  <circle cx="1920" cy="1080" r="100" fill="none" stroke="#FF6B9D" stroke-width="1" opacity="0.2"/>
+  <ellipse cx="2640" cy="1660" rx="1700" ry="560" fill="url(#water)" />
+  <g opacity="0.16" fill="#0C131A">
+    <path d="M0 2160 L0 1800 C140 1780 180 1680 250 1500 C320 1710 360 1810 480 2160 Z"/>
+    <path d="M540 2160 L540 1770 C620 1740 670 1600 720 1450 C770 1660 820 1810 940 2160 Z"/>
+    <path d="M3090 2160 L3090 1760 C3180 1730 3220 1610 3270 1420 C3330 1610 3380 1760 3480 2160 Z"/>
+  </g>
+  <g>
+    <path d="M3270 1310 C3470 1325 3650 1455 3710 1635 C3530 1605 3375 1545 3260 1450 C3180 1385 3175 1318 3270 1310 Z" fill="url(#bodyFill)"/>
+    <ellipse cx="2980" cy="1365" rx="455" ry="270" fill="url(#bodyFill)"/>
+    <ellipse cx="2580" cy="1180" rx="255" ry="195" fill="url(#bodyFill)"/>
+    <g>
+      <path d="M2455 1065 C2310 1000 2240 890 2235 760 C2350 790 2455 845 2515 935 Z" fill="url(#gillFill)"/>
+      <path d="M2400 1130 C2245 1110 2120 1010 2065 875 C2205 880 2335 940 2430 1035 Z" fill="url(#gillFill)" opacity="0.96"/>
+      <path d="M2710 1060 C2845 995 2930 890 2950 760 C2835 790 2735 845 2665 934 Z" fill="url(#gillFill)"/>
+      <path d="M2765 1128 C2925 1110 3055 1010 3110 875 C2965 880 2835 938 2738 1035 Z" fill="url(#gillFill)" opacity="0.96"/>
+    </g>
+  </g>
 </svg>
 EOF
 

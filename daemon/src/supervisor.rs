@@ -515,7 +515,7 @@ impl Supervisor {
         );
 
         // Proactive health warnings
-        let alerts = crate::proactive::check_all(Some(&self.queue)).await;
+        let alerts = crate::proactive::check_all(Some(&self.queue), None).await;
         if !alerts.is_empty() {
             let warnings: Vec<serde_json::Value> = alerts
                 .iter()
