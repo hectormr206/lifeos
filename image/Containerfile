@@ -800,13 +800,13 @@ RUN mkdir -p /etc/systemd/system && \
 RUN rm -f /usr/lib/os-release && \
     printf '%s\n' \
     'NAME="LifeOS"' \
-    'VERSION="0.3.4 Axolotl"' \
+    'VERSION="0.3.5 Axolotl"' \
     'ID=fedora' \
     'VARIANT_ID=lifeos' \
     'VARIANT="LifeOS"' \
     "VERSION_ID=\"${FEDORA_MAJOR}\"" \
     "PLATFORM_ID=\"platform:f${FEDORA_MAJOR}\"" \
-    "PRETTY_NAME=\"LifeOS 0.3.4 Axolotl - by Hector Martinez (hectormr.com) (Fedora ${FEDORA_MAJOR})\"" \
+    "PRETTY_NAME=\"LifeOS 0.3.5 Axolotl - by Hector Martinez (hectormr.com) (Fedora ${FEDORA_MAJOR})\"" \
     'ANSI_COLOR="0;36"' \
     'LOGO="lifeos"' \
     'VENDOR_NAME="Hector Martinez Resediz"' \

@@ -2753,7 +2753,7 @@ dependencies = [
 
 [[package]]
 name = "life"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2790,7 +2790,7 @@ dependencies = [
 
 [[package]]
 name = "lifeosd"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "aes-gcm-siv",
  "anyhow",
