@@ -111,10 +111,10 @@ MODE_DIR="$HOME/.config/cosmic/com.system76.CosmicTheme.Mode/v1"
 mkdir -p "$MODE_DIR"
 echo "true" > "$MODE_DIR/is_dark"
 
-# ── 8. Icon theme: LifeOS (falls back to Adwaita → hicolor) ──
+# ── 8. Icon theme: Pop (LifeOS theme WIP, use Pop as polished default) ──
 TK_DIR="$HOME/.config/cosmic/com.system76.CosmicTk/v1"
 mkdir -p "$TK_DIR"
-echo '"LifeOS"' > "$TK_DIR/icon_theme"
+echo '"Pop"' > "$TK_DIR/icon_theme"
 
 echo "[lifeos-theme] LifeOS identity applied successfully (v${CURRENT_VERSION})"
 
