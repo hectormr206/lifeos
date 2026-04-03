@@ -156,16 +156,13 @@ jobs:
           export REGISTRY_AUTH_FILE="${AUTH_FILE}"
           echo "DOCKER_CONFIG=${HOME}/.docker" >> "${GITHUB_ENV}"
 
-          # Pull the previous edge image as cache source so unchanged layers
-          # (base OS, packages, models) are reused. Only changed layers (binaries,
-          # configs) are rebuilt. This reduces client update download from ~4.7GB
-          # to ~200-500MB for code-only changes.
-          podman pull "${IMAGE_BASE}:${TAG_CHANNEL}" 2>/dev/null || true
+          # NOTE: podman does not support --cache-from with tagged images.
+          # Layer caching optimization deferred to future migration to
+          # buildah/docker buildx with registry cache backend.
 
           podman build \
             -f image/Containerfile \
             -t "${LOCAL_IMAGE}" \
-            --cache-from="${IMAGE_BASE}:${TAG_CHANNEL}" \
             --label org.opencontainers.image.source="https://github.com/${{ github.repository }}" \
             --label org.opencontainers.image.revision="${{ github.sha }}" \
             --label org.opencontainers.image.created="${{ steps.meta-build.outputs.build_date }}" \
