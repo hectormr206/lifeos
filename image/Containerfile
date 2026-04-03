@@ -742,8 +742,7 @@ RUN printf '%s\n' \
     'Environment=LIFEOS_WESPEAKER_MODEL=/usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx' \
     'EnvironmentFile=-/etc/lifeos/llm-providers.env' \
     'EnvironmentFile=-%h/.config/lifeos/llm-providers.env' \
-    'RuntimeDirectory=lifeos' \
-    'RuntimeDirectoryMode=0700' \
+    'ExecStartPre=/bin/mkdir -p %t/lifeos' \
     'ExecStart=/usr/bin/lifeosd' \
     'Restart=on-failure' \
     'RestartSec=5' \
