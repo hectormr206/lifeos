@@ -27,7 +27,7 @@ ExecStart=/usr/sbin/llama-server \
     --n-predict 2048 \
     --reasoning-budget 0 \
     --jinja
-Restart=on-failure
+Restart=always
 RestartSec=10
 TimeoutStartSec=120
 StartLimitInterval=300
