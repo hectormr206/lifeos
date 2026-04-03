@@ -1,6 +1,6 @@
 [package]
 name = "life"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2021"
 description = "LifeOS system CLI"
 authors = ["Héctor Martínez <hector@hectormr.com>"]
