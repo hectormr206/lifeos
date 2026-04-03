@@ -2540,8 +2540,28 @@ impl SensoryPipelineManager {
         let raw = tokio::fs::read_to_string(&path)
             .await
             .context("Failed to read sensory pipeline state")?;
-        let state: SensoryPipelineState =
+        let mut state: SensoryPipelineState =
             serde_json::from_str(&raw).context("Failed to parse sensory pipeline state")?;
+
+        // Always release kill switch on daemon startup.
+        // The kill switch is a session-level safety mechanism — it should NOT
+        // persist across daemon restarts. A stale kill_switch_active=true from
+        // a previous session would permanently disable all senses.
+        if state.kill_switch_active {
+            log::info!(
+                "[sensory] Releasing stale kill switch from previous session (was persisted as active)"
+            );
+            state.kill_switch_active = false;
+            state.leds.kill_switch_active = false;
+            state.leds.mic_active = true;
+            state.leds.camera_active = true;
+            state.leds.screen_active = true;
+            state.voice.active = true;
+            state.voice.always_on_active = true;
+            state.presence.camera_active = true;
+            state.vision.enabled = true;
+        }
+
         *self.state.write().await = state;
         Ok(())
     }

@@ -1943,8 +1943,21 @@ impl AgentRuntimeManager {
         let raw = tokio::fs::read_to_string(&path)
             .await
             .with_context(|| format!("Failed to read {}", path.display()))?;
-        let parsed: AgentRuntimeState = serde_json::from_str(&raw)
+        let mut parsed: AgentRuntimeState = serde_json::from_str(&raw)
             .with_context(|| format!("Failed to parse {}", path.display()))?;
+
+        // Always release kill switch on daemon startup — it is a session-level
+        // safety mechanism that must not persist across restarts.
+        if parsed.sensory_capture_runtime.kill_switch_active {
+            log::info!("[agent_runtime] Releasing stale sensory kill switch from previous session");
+            parsed.sensory_capture_runtime.kill_switch_active = false;
+            parsed.sensory_capture_runtime.enabled = true;
+            parsed.sensory_capture_runtime.audio_enabled = true;
+            parsed.sensory_capture_runtime.screen_enabled = true;
+            parsed.sensory_capture_runtime.camera_enabled = true;
+            parsed.sensory_capture_runtime.running = true;
+        }
+
         *self.state.write().await = parsed;
         Ok(())
     }
