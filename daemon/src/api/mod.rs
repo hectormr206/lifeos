@@ -7677,12 +7677,20 @@ async fn set_sensory_runtime(
     State(state): State<ApiState>,
     Json(payload): Json<SensoryRuntimePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    let enabled = payload.enabled.unwrap_or(true);
-    let audio_enabled = payload.audio_enabled.unwrap_or(enabled);
-    let screen_enabled = payload.screen_enabled.unwrap_or(enabled);
-    let camera_enabled = payload.camera_enabled.unwrap_or(enabled);
+    // Read current state to preserve values for fields not included in the payload.
+    // This allows toggling a single sense without affecting the others.
+    let current = {
+        let mgr = state.agent_runtime_manager.read().await;
+        mgr.sensory_capture_runtime().await
+    };
+
+    let enabled = payload.enabled.unwrap_or(current.enabled);
+    let audio_enabled = payload.audio_enabled.unwrap_or(current.audio_enabled);
+    let screen_enabled = payload.screen_enabled.unwrap_or(current.screen_enabled);
+    let camera_enabled = payload.camera_enabled.unwrap_or(current.camera_enabled);
     let capture_interval_seconds = payload
         .capture_interval_seconds
+        .or(Some(current.capture_interval_seconds))
         .map(|value| value.clamp(5, 30));
 
     if enabled && (audio_enabled || screen_enabled || camera_enabled) {

@@ -234,7 +234,7 @@ pub mod inner {
                 .into(),
             );
 
-            // Mic toggle — syncs with dashboard via /runtime/sensory
+            // Mic toggle — only send the changed field
             items.push(
                 CheckmarkItem {
                     label: "Microfono".into(),
@@ -246,9 +246,7 @@ pub mod inner {
                             &tok_mic,
                             "/runtime/sensory",
                             serde_json::json!({
-                                "audio_enabled": this.mic,
-                                "screen_enabled": this.screen,
-                                "camera_enabled": this.camera
+                                "audio_enabled": this.mic
                             }),
                         );
                     }),
@@ -257,24 +255,20 @@ pub mod inner {
                 .into(),
             );
 
-            // TTS / Habla — toggle TTS output (voice responses)
+            // TTS / Habla — toggle TTS output
             items.push(
                 CheckmarkItem {
                     label: "Habla (voz por bocinas)".into(),
                     checked: self.tts,
                     activate: Box::new(move |this: &mut Self| {
                         this.tts = !this.tts;
-                        // TTS uses the always-on endpoint with a tts flag,
-                        // since SensoryRuntimePayload doesn't have a tts_enabled field.
+                        // TTS doesn't have its own API field yet — toggle is local-only for now.
+                        // When a TTS-specific endpoint is added, wire it here.
                         call_api(
                             &api_tts,
                             &tok_tts,
                             "/runtime/sensory",
-                            serde_json::json!({
-                                "audio_enabled": this.mic,
-                                "screen_enabled": this.screen,
-                                "camera_enabled": this.camera
-                            }),
+                            serde_json::json!({}),
                         );
                     }),
                     ..Default::default()
@@ -294,8 +288,6 @@ pub mod inner {
                             &tok_cam,
                             "/runtime/sensory",
                             serde_json::json!({
-                                "audio_enabled": this.mic,
-                                "screen_enabled": this.screen,
                                 "camera_enabled": this.camera
                             }),
                         );
@@ -305,7 +297,7 @@ pub mod inner {
                 .into(),
             );
 
-            // Screen capture toggle — syncs with dashboard via /runtime/sensory
+            // Screen capture toggle — only send the changed field
             items.push(
                 CheckmarkItem {
                     label: "Captura de pantalla".into(),
@@ -317,9 +309,7 @@ pub mod inner {
                             &tok_scr,
                             "/runtime/sensory",
                             serde_json::json!({
-                                "audio_enabled": this.mic,
-                                "screen_enabled": this.screen,
-                                "camera_enabled": this.camera
+                                "screen_enabled": this.screen
                             }),
                         );
                     }),
