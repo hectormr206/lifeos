@@ -249,13 +249,32 @@ fn generate_bootstrap_token() -> std::io::Result<String> {
     perms.set_mode(0o600); // Only owner can read/write
     std::fs::set_permissions(&path, perms)?;
 
-    // Also write to ALL candidate directories so the CLI can always find
-    // the token regardless of which path it searches first.
-    // This is critical after bootc updates where /run (tmpfs) is cleared.
+    // Also write to persistent candidate directories so the CLI can find
+    // the token after a reboot (when /run tmpfs is cleared).
+    // SAFETY: only write to directories owned by the current user to avoid
+    // permission conflicts (e.g. sentinel running as root creating dirs
+    // that lifeosd as user can't later modify).
+    let my_uid = unsafe { libc::getuid() };
     for candidate in bootstrap_runtime_dir_candidates() {
         let candidate_path = candidate.join("bootstrap.token");
         if candidate_path == path {
             continue; // Already written above
+        }
+        // Only mirror to dirs we own or can safely create
+        let owned = candidate
+            .metadata()
+            .map(|m| {
+                use std::os::unix::fs::MetadataExt;
+                m.uid() == my_uid
+            })
+            .unwrap_or(true); // If dir doesn't exist yet, we'll create it as ourselves
+        if !owned {
+            log::debug!(
+                "Skipping bootstrap mirror to {} (not owned by uid {})",
+                candidate.display(),
+                my_uid
+            );
+            continue;
         }
         if std::fs::create_dir_all(&candidate).is_ok()
             && std::fs::write(&candidate_path, &token).is_ok()
