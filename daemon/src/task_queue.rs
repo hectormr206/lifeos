@@ -324,6 +324,41 @@ impl TaskQueue {
         Ok(())
     }
 
+    /// Mark every task currently in `Running` state whose `updated_at` is
+    /// older than `stale_after_secs` as `failed` with a "stuck" reason.
+    ///
+    /// This is the operation that powers `life doctor --repair` /
+    /// `/api/v1/tasks/clear-stuck`: a task that has been Running for hours
+    /// without progress is almost certainly orphaned (worker crashed,
+    /// daemon restarted mid-flight, etc.). Marking it failed lets the
+    /// queue make progress instead of blocking on a phantom.
+    ///
+    /// Returns the number of tasks transitioned.
+    pub fn clear_stuck(&self, stale_after_secs: i64) -> Result<usize> {
+        let now = Local::now();
+        let cutoff = (now - chrono::Duration::seconds(stale_after_secs)).to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let db = self
+            .db
+            .lock()
+            .map_err(|e| anyhow::anyhow!("DB lock: {}", e))?;
+        let count = db.execute(
+            "UPDATE tasks
+             SET status = 'failed',
+                 error = COALESCE(error, '') || '[clear_stuck: marked failed by doctor --repair]',
+                 updated_at = ?1
+             WHERE status = 'running' AND updated_at < ?2",
+            params![now_rfc, cutoff],
+        )?;
+        if count > 0 {
+            warn!(
+                "clear_stuck: marked {} stale running task(s) as failed",
+                count
+            );
+        }
+        Ok(count)
+    }
+
     /// Cancel a task.
     pub fn cancel(&self, task_id: &str) -> Result<()> {
         let now = Local::now().to_rfc3339();

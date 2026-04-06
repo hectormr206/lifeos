@@ -366,47 +366,76 @@ impl AiManager {
         })
     }
 
-    /// Generate embeddings using llama-server's OpenAI-compatible API
-    /// Falls back to hash-based embeddings if llama-server is unavailable
+    /// Generate embeddings.
+    ///
+    /// Resolution order (best → worst quality):
+    /// 1. **Dedicated nomic-embed-text server on `127.0.0.1:8083`** — started
+    ///    by `llama-embeddings.service`. Returns 768-dim semantic
+    ///    embeddings. This is the path the dashboard, MemoryPlane and
+    ///    Telegram `recall` use in production.
+    /// 2. **Hash-based fallback** — deterministic trigram hashing into a
+    ///    768-dim sparse vector. Lossy and *not* semantic, but stable
+    ///    enough for keyword-overlap recall when the embeddings server is
+    ///    not available (offline boot, model still downloading, etc.).
+    ///
+    /// We do **not** call the chat-model server on `:8082` here even though
+    /// it can technically serve `/v1/embeddings`: its embeddings have a
+    /// different dimension than the SQLite schema's `FLOAT[768]`, so any
+    /// mixing would silently corrupt the vec0 index.
     pub async fn embed(&self, text: &str) -> anyhow::Result<EmbeddingResponse> {
         const EMBEDDING_DIM: usize = 768;
+        const EMBED_URL: &str = "http://127.0.0.1:8083/v1/embeddings";
 
-        if self.is_running().await {
-            let payload = serde_json::json!({
-                "model": "nomic-embed-text-v1.5.f16.gguf",
-                "input": text
-            });
+        // -- 1. Dedicated semantic embeddings server (nomic-embed-text) --
+        let payload = serde_json::json!({
+            "model": "lifeos-embeddings",
+            "input": text,
+        });
 
-            match reqwest::Client::new()
-                .post("http://127.0.0.1:8082/v1/embeddings")
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(30))
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => {
-                    if let Ok(body) = response.json::<serde_json::Value>().await {
-                        if let Some(embedding) = body["data"][0]["embedding"].as_array() {
-                            let vec: Vec<f32> = embedding
-                                .iter()
-                                .filter_map(|v| v.as_f64().map(|f| f as f32))
-                                .collect();
-
-                            if vec.len() == EMBEDDING_DIM {
-                                return Ok(EmbeddingResponse {
-                                    embedding: vec,
-                                    model: "nomic-embed-text".to_string(),
-                                    dimensions: EMBEDDING_DIM,
-                                });
-                            }
+        match reqwest::Client::new()
+            .post(EMBED_URL)
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                if let Ok(body) = response.json::<serde_json::Value>().await {
+                    if let Some(embedding) = body["data"][0]["embedding"].as_array() {
+                        let vec: Vec<f32> = embedding
+                            .iter()
+                            .filter_map(|v| v.as_f64().map(|f| f as f32))
+                            .collect();
+                        if vec.len() == EMBEDDING_DIM {
+                            return Ok(EmbeddingResponse {
+                                embedding: vec,
+                                model: "nomic-embed-text-v1.5".to_string(),
+                                dimensions: EMBEDDING_DIM,
+                            });
+                        } else if !vec.is_empty() {
+                            // Wrong dimension — log once and fall through to
+                            // the hash fallback so we never poison the index.
+                            log::warn!(
+                                "embeddings server returned {} dims, expected {}; falling back",
+                                vec.len(),
+                                EMBEDDING_DIM
+                            );
                         }
                     }
                 }
-                _ => {}
+            }
+            Ok(response) => {
+                log::debug!(
+                    "embeddings server returned {} — falling back to hash",
+                    response.status()
+                );
+            }
+            Err(e) => {
+                log::debug!("embeddings server unreachable ({e}) — falling back to hash");
             }
         }
 
-        log::warn!("llama-server embeddings unavailable, using hash-based fallback");
+        // -- 2. Hash-based fallback --
         let hash_embedding = self.hash_based_embedding(text);
         let mut padded = vec![0.0f32; EMBEDDING_DIM];
         for (i, &v) in hash_embedding.iter().enumerate() {

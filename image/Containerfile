@@ -584,6 +584,7 @@ RUN find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' !
 # Scripts de LifeOS
 COPY image/files/usr/local/bin/lifeos-first-boot.sh       /usr/local/bin/lifeos-first-boot.sh
 COPY image/files/usr/local/bin/lifeos-ai-setup.sh          /usr/local/bin/lifeos-ai-setup.sh
+COPY image/files/usr/local/bin/lifeos-embeddings-setup.sh  /usr/local/bin/lifeos-embeddings-setup.sh
 COPY image/files/usr/local/bin/lifeos-stt-setup.sh         /usr/local/bin/lifeos-stt-setup.sh
 COPY image/files/usr/local/bin/llama-server-health-check.sh /usr/local/bin/llama-server-health-check.sh
 COPY image/files/usr/local/bin/lifeos-btrfs-snapshot.sh    /usr/local/bin/lifeos-btrfs-snapshot.sh
@@ -600,6 +601,7 @@ COPY image/files/usr/local/bin/lifeos-diarize.py               /usr/local/bin/li
 COPY image/files/usr/local/bin/lifeos-sentinel.sh              /usr/local/bin/lifeos-sentinel.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
+             /usr/local/bin/lifeos-embeddings-setup.sh \
              /usr/local/bin/lifeos-stt-setup.sh \
              /usr/local/bin/llama-server-health-check.sh \
              /usr/local/bin/lifeos-btrfs-snapshot.sh \
@@ -711,6 +713,7 @@ RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/di
 COPY image/files/etc/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/lifeos-first-boot.service
 COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
 COPY image/files/etc/systemd/system/llama-server.service.d/10-fast-kill.conf /etc/systemd/system/llama-server.service.d/10-fast-kill.conf
+COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/system/llama-embeddings.service
 COPY image/files/etc/systemd/system/whisper-stt.service       /usr/lib/systemd/system/whisper-stt.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.service /usr/lib/systemd/system/lifeos-btrfs-snapshot.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.timer   /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer
@@ -766,6 +769,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
     ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
+    ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer /usr/lib/systemd/system/timers.target.wants/lifeos-maintenance-cleanup.timer && \

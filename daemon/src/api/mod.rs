@@ -174,6 +174,7 @@ pub struct ApiState {
     pub scheduled_tasks: Arc<crate::scheduled_tasks::ScheduledTaskManager>,
     pub health_tracker: Arc<tokio::sync::Mutex<crate::health_tracking::HealthTracker>>,
     pub calendar: Arc<crate::calendar::CalendarManager>,
+    pub meeting_archive: Arc<crate::meeting_archive::MeetingArchive>,
     pub event_bus: tokio::sync::broadcast::Sender<crate::events::DaemonEvent>,
     pub config: ApiConfig,
     pub game_guard: Option<Arc<RwLock<crate::game_guard::GameGuard>>>,
@@ -1219,6 +1220,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/ai/status", get(get_ai_status))
         .route("/ai/models", get(get_ai_models))
         .route("/ai/chat", post(post_ai_chat))
+        .route("/ai/reset", post(post_ai_reset))
         .route("/vision/ocr", post(post_vision_ocr))
         .route("/audio/stt/status", get(get_stt_status))
         .route("/audio/stt/start", post(start_stt_service))
@@ -1438,6 +1440,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/tasks", get(get_tasks))
         .route("/tasks", post(post_task))
         .route("/tasks/summary", get(get_tasks_summary))
+        .route("/tasks/clear-stuck", post(post_tasks_clear_stuck))
         .route("/tasks/:id", get(get_task_by_id))
         .route("/tasks/:id/cancel", post(cancel_task))
         // Scheduled tasks endpoints
@@ -1461,6 +1464,12 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/calendar/events", post(post_calendar_event))
         .route("/calendar/events/:id", delete(delete_calendar_event))
         .route("/calendar/reminders", get(get_calendar_reminders))
+        // Meetings endpoints (BB.10/11 dashboard)
+        .route("/meetings/recent", get(get_meetings_recent))
+        .route("/meetings/search", get(get_meetings_search))
+        .route("/meetings/stats", get(get_meetings_stats))
+        .route("/meetings/action-items", get(get_meetings_action_items))
+        .route("/meetings/:id", get(get_meeting_by_id))
         // File management endpoints
         .route("/files/search", get(get_file_search))
         .route("/files/content-search", get(get_file_content_search))
@@ -1893,6 +1902,60 @@ async fn post_exit_safe_mode(State(state): State<ApiState>) -> Json<serde_json::
         "was_active": was_active,
         "active": crate::safe_mode::is_safe_mode(),
     }))
+}
+
+/// Reload the LLM router from on-disk provider config.
+///
+/// Powers `life doctor --repair` step 5: when the daemon is unhealthy after
+/// a restart, the most common root cause is a stale or corrupted provider
+/// configuration. Reloading rebuilds the router from
+/// `/etc/lifeos/llm-providers.env` (and the per-user override) without
+/// restarting the daemon.
+async fn post_ai_reset(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mut router = state.llm_router.write().await;
+    match router.reload_providers() {
+        Ok(count) => Ok(Json(serde_json::json!({
+            "reloaded": true,
+            "providers_loaded": count,
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "ai_reset_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+/// Mark stale `running` tasks as `failed` so the queue can make progress.
+///
+/// Powers `life doctor --repair`. The default cutoff is 30 minutes — any
+/// task that has been in `running` state without an update for longer than
+/// that is treated as orphaned (worker crashed, daemon restarted mid-task).
+async fn post_tasks_clear_stuck(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // 30 minutes default — generous enough for slow LLM tool runs but tight
+    // enough that an orphaned task doesn't block the queue all day.
+    const STALE_AFTER_SECS: i64 = 30 * 60;
+    match state.task_queue.clear_stuck(STALE_AFTER_SECS) {
+        Ok(cleared) => Ok(Json(serde_json::json!({
+            "cleared": cleared,
+            "stale_after_secs": STALE_AFTER_SECS,
+        }))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "task_queue_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
 }
 
 /// Get AI service status
@@ -9846,6 +9909,254 @@ async fn get_calendar_reminders(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
                 error: "calendar_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+// ==================== MEETINGS ENDPOINTS (BB.10/11) ====================
+
+/// Serializable view of a meeting record for the dashboard.
+///
+/// Mirrors the dashboard's expectations: a flat shape with `id`, timing,
+/// participants, summary, action items, and a transcript preview. The
+/// recent/list endpoints intentionally truncate `transcript` to keep payloads
+/// small; `/meetings/:id` returns the full record.
+fn meeting_to_summary_json(m: &crate::meeting_archive::MeetingRecord) -> serde_json::Value {
+    // Truncate transcript for list views to keep payloads light.
+    let transcript_preview = if m.transcript.len() > 400 {
+        format!("{}…", &m.transcript[..400])
+    } else {
+        m.transcript.clone()
+    };
+    serde_json::json!({
+        "id": m.id,
+        "started_at": m.started_at,
+        "ended_at": m.ended_at,
+        "duration_secs": m.duration_secs,
+        "duration_mins": (m.duration_secs as f64 / 60.0).round() as u64,
+        "app_name": m.app_name,
+        "meeting_type": m.meeting_type,
+        "participants": m.participants,
+        "summary": m.summary,
+        "transcript_preview": transcript_preview,
+        "action_items_count": m.action_items.len(),
+        "screenshot_count": m.screenshot_count,
+        "language": m.language,
+        "tags": m.tags,
+    })
+}
+
+#[derive(serde::Deserialize)]
+struct MeetingsRecentParams {
+    limit: Option<usize>,
+    offset: Option<usize>,
+    /// Optional ISO-8601 cutoff: only meetings started on/after this instant.
+    from: Option<String>,
+}
+
+async fn get_meetings_recent(
+    State(state): State<ApiState>,
+    Query(params): Query<MeetingsRecentParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let limit = params.limit.unwrap_or(20).min(200);
+    let offset = params.offset.unwrap_or(0);
+    // Fetch a slightly larger window when a `from` filter is in play, so the
+    // post-filter result still respects `limit` reasonably well.
+    let raw_limit = if params.from.is_some() {
+        (limit * 4).min(500)
+    } else {
+        limit
+    };
+    match state.meeting_archive.list_meetings(raw_limit, offset).await {
+        Ok(records) => {
+            let filtered: Vec<_> = if let Some(from) = params.from.as_deref() {
+                records
+                    .into_iter()
+                    .filter(|m| m.started_at.as_str() >= from)
+                    .take(limit)
+                    .collect()
+            } else {
+                records.into_iter().take(limit).collect()
+            };
+            let meetings: Vec<serde_json::Value> =
+                filtered.iter().map(meeting_to_summary_json).collect();
+            Ok(Json(serde_json::json!({
+                "meetings": meetings,
+                "count": meetings.len(),
+                "offset": offset,
+                "limit": limit,
+            })))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "meeting_archive_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct MeetingsSearchParams {
+    q: String,
+    limit: Option<usize>,
+}
+
+async fn get_meetings_search(
+    State(state): State<ApiState>,
+    Query(params): Query<MeetingsSearchParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let limit = params.limit.unwrap_or(20).min(200);
+    let query = params.q.trim();
+    if query.is_empty() {
+        return Ok(Json(
+            serde_json::json!({ "meetings": [], "count": 0, "query": "" }),
+        ));
+    }
+    match state.meeting_archive.search_meetings(query, limit).await {
+        Ok(records) => {
+            let meetings: Vec<serde_json::Value> =
+                records.iter().map(meeting_to_summary_json).collect();
+            Ok(Json(serde_json::json!({
+                "meetings": meetings,
+                "count": meetings.len(),
+                "query": query,
+            })))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "meeting_archive_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_meetings_stats(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let stats = match state.meeting_archive.stats().await {
+        Ok(s) => s,
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "meeting_archive_error".into(),
+                    message: format!("{}", e),
+                    code: 500,
+                }),
+            ));
+        }
+    };
+
+    // Compute the most frequent participant from the recent window so the
+    // dashboard's "Top participant" tile has something to show without adding
+    // a dedicated SQL query.
+    let mut top_participant: Option<String> = None;
+    if let Ok(recent) = state.meeting_archive.list_meetings(200, 0).await {
+        use std::collections::HashMap;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for m in &recent {
+            for p in &m.participants {
+                let key = p.trim();
+                if !key.is_empty() {
+                    *counts.entry(key.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+        top_participant = counts
+            .into_iter()
+            .max_by_key(|(_, c)| *c)
+            .map(|(name, _)| name);
+    }
+
+    Ok(Json(serde_json::json!({
+        "total_meetings": stats.total_meetings,
+        "total_hours": stats.total_hours,
+        "avg_duration_mins": stats.avg_duration_mins,
+        "meetings_this_week": stats.meetings_this_week,
+        "meetings_this_month": stats.meetings_this_month,
+        "top_participant": top_participant,
+    })))
+}
+
+async fn get_meetings_action_items(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.meeting_archive.get_action_items_pending().await {
+        Ok(items) => {
+            let action_items: Vec<serde_json::Value> = items
+                .into_iter()
+                .map(|(meeting_id, item)| {
+                    serde_json::json!({
+                        "meeting_id": meeting_id,
+                        "who": item.who,
+                        "what": item.what,
+                        "when": item.when,
+                        "completed": item.completed,
+                    })
+                })
+                .collect();
+            Ok(Json(serde_json::json!({
+                "action_items": action_items,
+                "count": action_items.len(),
+            })))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "meeting_archive_error".into(),
+                message: format!("{}", e),
+                code: 500,
+            }),
+        )),
+    }
+}
+
+async fn get_meeting_by_id(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    match state.meeting_archive.get_meeting(&id).await {
+        Ok(Some(m)) => Ok(Json(serde_json::json!({
+            "id": m.id,
+            "started_at": m.started_at,
+            "ended_at": m.ended_at,
+            "duration_secs": m.duration_secs,
+            "duration_mins": (m.duration_secs as f64 / 60.0).round() as u64,
+            "app_name": m.app_name,
+            "meeting_type": m.meeting_type,
+            "participants": m.participants,
+            "transcript": m.transcript,
+            "diarized_transcript": m.diarized_transcript,
+            "summary": m.summary,
+            "action_items": m.action_items,
+            "screenshot_count": m.screenshot_count,
+            "screenshot_paths": m.screenshot_paths,
+            "audio_path": m.audio_path,
+            "audio_deleted": m.audio_deleted,
+            "language": m.language,
+            "tags": m.tags,
+        }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "not_found".into(),
+                message: format!("meeting {} not found", id),
+                code: 404,
+            }),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "meeting_archive_error".into(),
                 message: format!("{}", e),
                 code: 500,
             }),

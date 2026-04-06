@@ -466,6 +466,7 @@ pub struct DaemonState {
     pub scheduled_tasks: Arc<scheduled_tasks::ScheduledTaskManager>,
     pub health_tracker: Arc<tokio::sync::Mutex<health_tracking::HealthTracker>>,
     pub calendar: Arc<calendar::CalendarManager>,
+    pub meeting_archive: Arc<meeting_archive::MeetingArchive>,
     pub bootstrap_token: Option<String>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
@@ -693,6 +694,7 @@ async fn main() -> anyhow::Result<()> {
                 calendar::CalendarManager::new(&std::env::temp_dir()).unwrap()
             }),
         ),
+        meeting_archive: Arc::new(meeting_archive::MeetingArchive::new(&data_dir)),
         bootstrap_token,
         last_health_check: RwLock::new(None),
         last_update_check: RwLock::new(None),
@@ -1086,8 +1088,10 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Meeting archive — structured SQLite storage for meeting records
-    let meeting_archive = std::sync::Arc::new(meeting_archive::MeetingArchive::new(&data_dir));
+    // Meeting archive — structured SQLite storage for meeting records.
+    // Constructed inside DaemonState above so the API server (which receives
+    // an Arc<DaemonState>) can expose it via /meetings/* endpoints.
+    let meeting_archive = state.meeting_archive.clone();
 
     // Meeting assistant — check for active meetings every 15s
     let meeting_data_dir = data_dir.clone();
@@ -1824,6 +1828,7 @@ async fn start_api_server(state: Arc<DaemonState>) {
         scheduled_tasks: state.scheduled_tasks.clone(),
         health_tracker: state.health_tracker.clone(),
         calendar: state.calendar.clone(),
+        meeting_archive: state.meeting_archive.clone(),
         event_bus: state.event_bus.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,
