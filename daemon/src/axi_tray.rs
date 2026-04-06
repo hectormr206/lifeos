@@ -196,10 +196,43 @@ pub mod inner {
                     activate: Box::new(move |_| {
                         let url = dashboard.clone();
                         std::thread::spawn(move || {
-                            std::process::Command::new("xdg-open")
-                                .arg(&url)
-                                .spawn()
-                                .ok();
+                            // Try multiple browser openers in order.
+                            // xdg-open often fails silently in COSMIC DE without
+                            // proper portal configuration, so we try direct browsers
+                            // as fallback.
+                            let openers: &[(&str, &[&str])] = &[
+                                ("xdg-open", &[]),
+                                ("gio", &["open"]),
+                                ("firefox", &["--new-tab"]),
+                                ("flatpak", &["run", "org.mozilla.firefox", "--new-tab"]),
+                                ("chromium", &["--new-tab"]),
+                                ("flatpak", &["run", "org.chromium.Chromium", "--new-tab"]),
+                                (
+                                    "flatpak",
+                                    &[
+                                        "run",
+                                        "io.github.ungoogled_software.ungoogled_chromium",
+                                        "--new-tab",
+                                    ],
+                                ),
+                            ];
+                            for (cmd, args) in openers {
+                                let mut command = std::process::Command::new(cmd);
+                                command.args(*args).arg(&url);
+                                if let Ok(mut child) = command.spawn() {
+                                    // Give the command a moment to fail fast
+                                    std::thread::sleep(std::time::Duration::from_millis(300));
+                                    match child.try_wait() {
+                                        Ok(Some(status)) if status.success() => return,
+                                        Ok(Some(_)) => continue, // Failed, try next
+                                        Ok(None) => return,      // Still running = success
+                                        Err(_) => continue,
+                                    }
+                                }
+                            }
+                            log::warn!(
+                                "[tray] Failed to open dashboard — no browser opener worked"
+                            );
                         });
                     }),
                     ..Default::default()
