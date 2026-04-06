@@ -12,6 +12,25 @@ Environment=VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
 Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
 ExecStartPre=/usr/local/bin/lifeos-ai-setup.sh
 ExecStartPre=/bin/sh -c 'for i in $(seq 1 15); do if /usr/sbin/llama-server --list-devices 2>&1 | grep -q "NVIDIA GeForce"; then exit 0; fi; sleep 2; done; exit 0'
+#
+# Flag groups (in order):
+#   1. Model + I/O — paths, host, port, alias.
+#   2. Capacity   — context, threads, GPU layers, parallel slots, batch sizes.
+#   3. Performance — flash attention + KV-cache quantisation. flash-attn cuts
+#      attention memory and speeds up prefill/decode on CUDA, Vulkan, Metal,
+#      and recent CPU builds; if a build does not support it llama-server
+#      logs a warning and falls back. q8_0 KV cache halves the per-token
+#      memory cost for the same context size at ~no quality loss.
+#   4. Multi-GPU — `-sm none -mg 0` disables tensor splitting and pins to
+#      device 0. Single-GPU and CPU-only systems are unaffected.
+#   5. Generation defaults — Qwen3.5 official sampling recipe from Unsloth
+#      (https://docs.unsloth.ai/basics/qwen3.5). These are server-level
+#      defaults; clients can still override them per-request.
+#   6. Reasoning — Qwen3.5 dense models ship reasoning ON by default. We
+#      disable it system-wide because LifeOS streams responses to Telegram /
+#      voice / dashboard where the <think>…</think> chatter hurts UX. Pass
+#      `reasoning_budget` per-request if you need it back.
+#   7. Templates — `--jinja` enables the model's bundled chat template.
 ExecStart=/usr/sbin/llama-server \
     --model /var/lib/lifeos/models/${LIFEOS_AI_MODEL} \
     --mmproj /var/lib/lifeos/models/${LIFEOS_AI_MMPROJ} \
@@ -25,6 +44,17 @@ ExecStart=/usr/sbin/llama-server \
     --batch-size 512 \
     --ubatch-size 128 \
     --n-predict 2048 \
+    --flash-attn \
+    --cache-type-k q8_0 \
+    --cache-type-v q8_0 \
+    -sm none \
+    -mg 0 \
+    --temp 0.6 \
+    --top-p 0.95 \
+    --top-k 20 \
+    --min-p 0.0 \
+    --presence-penalty 0.0 \
+    --repeat-penalty 1.0 \
     --reasoning-budget 0 \
     --jinja
 Restart=always
