@@ -377,7 +377,355 @@ del sistema:
 Estas piezas son una buena practica anyway, y cuando BH se desbloquee, ya
 estarian listas como ingredientes.
 
-## 8. Notas finales
+## 8. Federacion de compatibilidad — extension multi-nodo
+
+Las primeras 7 secciones de este documento describen BH como problema
+single-machine: una sola laptop que se construye y se repara a si misma.
+Pero la vision real de LifeOS es **federada**: cada instalacion consentida
+contribuye a la matriz de compatibilidad global. Esta seccion documenta
+esa extension.
+
+### 8.1 Por que la federacion es necesaria, no opcional
+
+LifeOS lo desarrolla **una persona + LLMs**. Hector tiene su laptop con su
+combinacion especifica de hardware (CPU Intel/AMD, GPU NVIDIA o no, audio
+PipeWire con su tarjeta especifica, microfono X, camara Y, sensores Z).
+LifeOS funciona al 100% en esa laptop porque ahi se desarrolla.
+
+Cualquier otro usuario que instale LifeOS tendra una combinacion que el
+desarrollador principal **nunca** podra testear. Las posibles fallas de
+compatibilidad son combinatoriamente intratables para un solo developer:
+
+- 5 fabricantes de CPU × 8 GPUs × 12 chipsets de audio × 20 sensores × 3
+  estados de SecureBoot × N kernels × ... = millones de combinaciones.
+- Cada combinacion fallida significa un usuario que prueba LifeOS y dice
+  "no me funciona, abandono el proyecto".
+
+La federacion convierte ese problema en una ventaja: cada instalacion
+consentida es un nodo de testing real, con hardware real, y con un LLM
+real (el del propio usuario) capaz de proponer fixes. La matriz de
+compatibilidad crece organicamente al ritmo de la comunidad, no del
+mantenedor unico.
+
+Esta es la diferencia entre "open source de fachada" (publicas el codigo y
+esperas PRs) y **"open source de verdad"** (la herramienta facilita que
+los usuarios contribuyan sin ser developers).
+
+### 8.2 Arquitectura federada — quien hace que
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Nodo upstream (github.com/hectormr206/lifeos + servicio ligero) │
+│  ───────────────────────────────────────────────────────────     │
+│  - Recibe fixes propuestos via PR/issue                          │
+│  - Mantiene el "compatibility registry" (lista de fixes          │
+│    aceptados, indexados por hardware fingerprint)                │
+│  - Hector / maintainers revisan y mergean (gate humano)          │
+│  - Publica el registry como JSON firmado en el repo              │
+└──────────────────────────────────────────────────────────────────┘
+                            ▲                      │
+              fix submission│                      │ registry pull
+              (con consent) │                      │ (publico, anonimo)
+                            │                      ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  Nodo cliente (cada laptop / VPS / RPi con LifeOS instalado)     │
+│  ───────────────────────────────────────────────────────────     │
+│  1. Compatibility check suite (BH.9) corre periodicamente        │
+│  2. Para cada check fallido:                                     │
+│     a. Lookup en registry upstream (BH.11)                       │
+│     b. Si existe fix → ofrecer aplicar (con permiso)             │
+│     c. Si NO existe fix → ofrecer generar uno local (BH.12)      │
+│  3. Generar fix con LLM local del usuario, validar con BH.1-BH.5 │
+│  4. Si funciona N dias en uso real → ofrecer submit (BH.13)      │
+│  5. Submit pasa por preview explicito antes de salir             │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Tres componentes nuevos** sobre BH single-machine:
+
+1. **Compatibility check suite** (BH.9) — bateria de tests por subsistema.
+2. **Registry upstream** — servicio ligero (idealmente: solo el repo
+   GitHub + un JSON firmado en una rama dedicada, sin servidor adicional
+   en V1) que indexa fixes aceptados por hardware fingerprint.
+3. **Federation client** dentro del daemon — la pieza local que consulta
+   el registry, ofrece fixes, y envia submissions con permiso.
+
+Notar que el registry upstream **no es un servidor de telemetria**. Es un
+indice publico de fixes humanos-validados. La pull es anonima (cualquiera
+puede leer el JSON sin identificarse), y la push es opt-in con preview
+explicito de cada envio.
+
+### 8.3 Modelo de privacidad — que sale del dispositivo y que NO
+
+**Por defecto: NADA sale del dispositivo.** La compatibility check suite
+de BH.9 corre 100% local y solo le muestra al usuario que esta roto. El
+usuario tiene que elegir conscientemente compartir algo.
+
+Cuando el usuario activa el modo "contribuidor de compatibilidad", la
+unica metadata que LifeOS **propone** subir (con preview, con aprobacion
+por envio) es:
+
+| Dato | Que es | Por que es necesario |
+|---|---|---|
+| Hardware fingerprint anonimizado | Hash de `lspci`+`lscpu`+`lsusb` salida normalizada, sin identificadores unicos del dispositivo | Para indexar el fix a "este combo de hardware tiene este problema" |
+| LifeOS version + bootc commit | String publica del release | Para saber contra que version testear el fix |
+| Lista de checks fallidos | Resultados del BH.9 (`{check, status, exit_code, stderr_first_3_lines}`) | Para reproducir el fallo upstream |
+| Fix propuesto | El diff o la receta declarativa generada por el LLM local | Es lo que se va a mergear |
+| Identificador del contribuidor | Email o pseudonimo elegido por el usuario al inscribirse | Para credito y para poder rechazar fixes maliciosos |
+
+**Lo que NUNCA sale**, jamas, ni con permiso, ni en preview, ni en logs:
+
+- Contenido de archivos del usuario
+- Conversaciones con Axi, memorias de `memory_plane`, knowledge_graph
+- Capturas de pantalla, audio, video
+- Direcciones MAC, serial numbers, hostnames, IPs
+- Tokens de API, claves SSH, certificados
+- Listado de paquetes instalados fuera de los relevantes al fix
+- Cualquier path bajo `/home`
+
+La regla es: **datos del sistema necesarios para reproducir el fallo**, y
+nada mas. Si una pieza de informacion no es estrictamente necesaria para
+que upstream entienda y valide el fix, no se envia.
+
+El preview que el usuario ve antes de cada submission muestra **el JSON
+completo y exacto** que se va a enviar, sin opciones ocultas.
+
+### 8.4 Modos de fallo unicos de la federacion
+
+#### 8.4.1 Submission spam / poisoning
+
+**Sintoma:** Un actor malicioso se inscribe como contribuidor y empieza a
+enviar fixes maliciosos disfrazados de fixes de compatibilidad.
+
+**Mitigaciones:**
+
+1. **Gate humano upstream:** ningun fix se mergea automaticamente.
+   Hector o maintainers revisan cada PR. El registry solo se actualiza
+   tras merge.
+2. **Reputation system simple:** cada contribuidor empieza en `untrusted`.
+   Despues de 5 fixes mergeados sin issues, sube a `trusted`. Despues de
+   un fix reportado como malicioso, baja a `banned`.
+3. **Diff size limits:** un fix de compatibilidad legitimo es pequeño
+   (allowlist + drop-in systemd + sysctl). Cualquier PR que toque mas de
+   N lineas o salga del formato declarativo restringido se cierra
+   automaticamente.
+4. **Static analysis:** todos los fixes pasan por linters automaticos
+   antes de llegar al review humano (no comandos arbitrarios, no rutas
+   absolutas fuera de allowlist, no `curl | sh`, no escritura en `/home`,
+   etc.).
+
+#### 8.4.2 Fix que funciona en una maquina y rompe en otra
+
+**Sintoma:** El usuario A genera un fix para su NVIDIA RTX 3070 que
+incluye un flag especifico. El fix se mergea. El usuario B con una RTX
+3060 lo recibe via registry y le rompe el driver.
+
+**Mitigaciones:**
+
+1. **Hardware fingerprint matching estricto:** un fix se ofrece solo a
+   nodos cuyo fingerprint **coincide** en las dimensiones relevantes
+   (modelo de GPU, version de driver, etc.). Si el fingerprint no
+   coincide al 100%, el fix no aparece en el registry para ese nodo.
+2. **Cada fix recibido pasa por BH.1-BH.5 local antes de aplicarse:** el
+   nodo B no aplica el fix de A directamente — lo mete en su sandbox,
+   corre sus propios smoke tests, y solo promueve si pasan.
+3. **Reporte de regresion automatico:** si un fix se aplico y luego los
+   smoke tests del nodo empiezan a fallar, el daemon revierte
+   automaticamente y reporta upstream "este fix me rompio". Upstream
+   marca el fix como `regression-suspected` y lo retira del registry
+   hasta nueva validacion.
+
+#### 8.4.3 Privacidad accidental
+
+**Sintoma:** Un usuario submitea un fix y, sin querer, incluye una ruta
+absoluta con su username, o un hostname, o un fragmento de archivo.
+
+**Mitigaciones:**
+
+1. **Sanitizer determinista** que se ejecuta sobre cada submission antes
+   del preview: scrub de `/home/<user>` → `/home/$USER`, scrub de
+   hostnames, scrub de IPs, scrub de MACs, scrub de tokens conocidos.
+2. **Preview destacado** que pinta en rojo cualquier string que parezca
+   un email, un IP, una ruta absoluta de home, o cualquier secret
+   pattern. El usuario lo ve antes de aprobar.
+3. **Audit retroactivo:** si despues del merge upstream descubre que
+   algo se filtro, hay un proceso de purge: borrar el commit del
+   historico, contactar al contribuidor, mejorar el sanitizer.
+4. **Caso "no submit":** el usuario siempre puede aplicar el fix solo en
+   su maquina sin compartir, indefinidamente. La federacion es opt-in
+   por **fix**, no por instalacion.
+
+#### 8.4.4 Cuello de botella en el review humano
+
+**Sintoma:** 1000 nodos generan 200 submissions por dia. Hector no puede
+revisar 200 PRs diarios. El registry se queda atras y los usuarios
+nuevos no reciben fixes.
+
+**Mitigaciones:**
+
+1. **Auto-approval condicional:** fixes que (a) estan en formato
+   declarativo restringido, (b) tocan solo paquetes en la allowlist, (c)
+   pasan todos los linters, y (d) vienen de contribuidores `trusted` con
+   N+ fixes mergeados, pueden auto-mergearse al registry sin review
+   humano. Esto reduce la carga al ~10% real de los PRs.
+2. **Maintainers community:** despues del primer año de federacion, el
+   sistema de reputacion permite que contribuidores `trusted` sean
+   promovidos a `reviewer`, con permiso de aprobar PRs de otros.
+3. **Triaje por urgencia:** el daemon upstream prioriza por "cuantos
+   nodos tienen este check fallando". Un fix que afecta 50 nodos sube al
+   tope de la cola. Un fix que afecta 1 nodo puede esperar.
+4. **CLA + license clarity desde dia 1:** un Contributor License
+   Agreement claro evita bloqueos legales que, si llegan tarde, pueden
+   forzar a deshacer fixes ya integrados.
+
+#### 8.4.5 Fragmentacion de la base instalada
+
+**Sintoma:** Cada nodo evoluciona en una direccion distinta y termina
+con una variante incompatible con los demas. Ya no hay "un LifeOS",
+hay 10000 LifeOSes incompatibles.
+
+**Mitigaciones:**
+
+1. **Capa base inmutable garantizada:** la imagen base bootc oficial
+   sigue siendo la fuente de verdad. Los fixes federados son **drop-ins
+   aditivos** sobre esa base, no rewrites de la base.
+2. **GC periodico:** cada N dias el sistema regenera la imagen base
+   desde el ultimo release oficial y solo re-aplica los fixes locales
+   que siguen siendo necesarios contra esa base. Los fixes que ya estan
+   en upstream se descartan localmente porque ya forman parte de la
+   base.
+3. **Compatibility manifest:** el registry contiene un manifest semver
+   de "este fix es compatible con LifeOS >= X.Y.Z". Fixes viejos se
+   marcan obsoletos y se purgan.
+
+### 8.5 Prior art especifico de federacion
+
+| Proyecto | Que hace | Que aprende LifeOS |
+|---|---|---|
+| **Mozilla telemetry / Firefox Health Report** | Telemetria opt-in con dashboards publicos. Sanitiza datos antes de enviar. | Modelo de "preview lo que se envia" + sanitizers automaticos. Falla en hacerlo *opt-in real*: Firefox lo dejo opt-out por mucho tiempo, lo que erosiono confianza. |
+| **Linux Hardware Database (linux-hardware.org)** | Usuarios envian salida de `hw-probe`, base de datos publica de compatibilidad por modelo. | Exactamente el caso de uso que necesitamos: hardware fingerprints + compatibility info pública. Pero solo *reporta* problemas, no los *resuelve*. LifeOS lo extiende con resolucion. |
+| **Phoronix Test Suite + OpenBenchmarking** | Benchmarks reproducibles que se pueden compartir. Identificador anonimo opcional. | El modelo de "test suite local + opcion de compartir resultados" es muy parecido a BH.9 + BH.13. |
+| **Debian popcon (popularity-contest)** | Opt-in: que paquetes tienen los usuarios. | Aprendizaje: opt-in real funciona — popcon tiene millones de usuarios voluntarios. La clave es ser radicalmente transparente sobre que se envia. |
+| **Ubuntu whoopsie / apport** | Crash reports con preview detallado. | Modelo de "ventana antes de enviar con todo el contenido visible". Ubuntu lo hizo razonablemente bien, aunque tuvo polemicas iniciales por defecto activado. |
+| **NixOS Hydra** | Build farm que valida configs antes de promoverlas a un canal. | Modelo de "validacion centralizada antes de publicar en el canal estable". |
+| **Homebrew bottles + analytics opt-in** | Binarios precompilados + telemetria opt-in con preview. | Modelo de auto-approval para fixes triviales y review humano para fixes complejos. |
+| **F-Droid build farm** | Reproducible builds + auditoria humana de cada PR de app. | Gate humano funciona si esta bien escalado y la comunidad confia en los maintainers. |
+
+**Conclusion del prior art:** la federacion opt-in funciona en producto
+real (Debian popcon, linux-hardware.org, Phoronix). El patron clave es:
+
+1. Opt-in explicito desde el principio, jamas opt-out.
+2. Preview total de cada envio.
+3. Sanitizer determinista antes del preview.
+4. Gate humano para casos no-triviales.
+5. Reputation system simple.
+6. Hardware fingerprint matching estricto.
+
+Ningun proyecto previo combina los seis ingredientes con un patch engine
+que ademas **resuelve** los problemas reportados. LifeOS seria el primero.
+
+### 8.6 Plan de validacion incremental — extension federada
+
+Estos hitos NO se empiezan hasta que BH.1-BH.8 (single-machine) hayan
+completado validacion. Cada uno tiene sus propios criterios go/no-go.
+
+#### 8.6.1 BH.9 — Compatibility check suite (mes 5 del programa)
+
+**Objetivo:** Una bateria de checks por subsistema que reporta `pass /
+fail / skip` y un `detail` legible. Corre 100% local. No envia nada.
+
+**Tests obligatorios:** todos los smoke tests de BH.2 + checks especificos
+para audio (PipeWire), red (NetworkManager), GPU (vendor + driver +
+n-layers operacionales), wake word, llama-server con un prompt fijo,
+dashboard, sensores, camera (solo deteccion, no captura).
+
+**Criterio go/no-go:** si la suite corre en menos de 90s, no genera
+falsos positivos en una maquina sana, y reporta correctamente fallos
+inducidos artificialmente, BH.9 esta listo.
+
+#### 8.6.2 BH.10 — Registry stub (mes 6)
+
+**Objetivo:** Un JSON firmado en el repo upstream con la estructura del
+registry, vacio al principio. El daemon sabe leerlo (pull anonimo).
+Ningun submission todavia.
+
+**Criterio go/no-go:** el daemon hace pull, parsea el JSON, ofrece "no
+fixes disponibles para tu hardware" como output esperado.
+
+#### 8.6.3 BH.11 — Lookup integration (mes 7)
+
+**Objetivo:** Cuando BH.9 reporta un check fallido, el daemon consulta
+BH.10. Si no hay fix → reporta solo. Si hay fix → muestra preview al
+usuario sin aplicar.
+
+**Criterio go/no-go:** se introducen 5 fixes manuales en el registry, se
+verifica que el daemon los detecta y ofrece correctamente.
+
+#### 8.6.4 BH.12 — Local fix-with-permission (mes 8)
+
+**Objetivo:** Para checks fallidos sin fix upstream, el daemon usa el
+patch engine BH.3 (con LLM local) para generar un fix candidato. Lo
+aplica al sandbox. Si los smoke tests pasan, lo muestra al usuario para
+aprobar / aplicar / descartar.
+
+**Criterio go/no-go:** 30 dias de uso real con N usuarios voluntarios
+internos, 0 bricks, mas del 50% de los fixes generados pasan los smoke
+tests.
+
+#### 8.6.5 BH.13 — Submission flow con preview (mes 9)
+
+**Objetivo:** Despues de BH.12, si el fix funciono N dias en uso real, el
+daemon ofrece submission. Sanitizer + preview + aprobacion explicita.
+Salida: PR/issue al repo upstream. **No auto-merge**.
+
+**Criterio go/no-go:** 100% de los submissions test pasan el sanitizer
+sin filtrar PII en preview manual. Hector valida que los PRs llegan en
+formato correcto y son revisables.
+
+### 8.7 Criterios de no-go especificos de la federacion
+
+Adicionales a los del modelo single-machine:
+
+1. **Si el sanitizer deja escapar PII en mas del 0.1% de las
+   submissions** durante el dogfooding interno, paramos hasta que sea
+   imposible.
+2. **Si el reputation system no escala mentalmente para Hector** (ej.
+   pasa mas de 1h al dia revisando PRs en el primer mes), paramos y
+   diseñamos auto-approval mas agresivo antes de seguir.
+3. **Si encontramos que los hardware fingerprints generan falsos
+   matches en mas del 5%** (un fix se ofrece a hardware donde no aplica),
+   paramos y refinamos el fingerprinting.
+4. **Si la comunidad reacciona negativamente** ("esto es vigilancia
+   disfrazada", "no confio en que el preview muestre todo"), paramos y
+   reescribimos el modelo de privacidad antes de seguir tecnicamente.
+5. **Si el costo legal de un CLA + revision se vuelve prohibitivo** para
+   un mantenedor unico, paramos hasta tener community maintainers.
+
+### 8.8 Por que esto sigue siendo "open source de verdad"
+
+Algunas verificaciones rapidas para que no se nos pierda el norte:
+
+- ¿El usuario puede correr LifeOS sin participar en la federacion?
+  **Si.** Modo `observe` + federation off es perfectamente valido.
+- ¿El usuario puede inspeccionar todo el codigo de la federacion?
+  **Si.** Es parte del repo opensource. Los sanitizers, los preview
+  generators, los smoke tests, todo.
+- ¿El usuario puede correr su propio registry upstream y apuntar su
+  daemon a el? **Si.** El URL del registry es configurable. Esto
+  permite forks y federaciones privadas (empresas, comunidades
+  cerradas).
+- ¿El usuario puede dar de baja todo en un click? **Si.** Kill switch
+  unidireccional desde el dashboard.
+- ¿LifeOS lucra con los datos? **No.** El registry es publico, los
+  fixes son opensource, los contribuidores no se monetizan.
+- ¿La federacion convierte a LifeOS en SaaS? **No.** Sigue siendo un
+  OS local-first. La federacion es solo un canal opcional de
+  contribucion comunitaria.
+
+Si en algun momento alguna de estas respuestas cambia, hay que parar y
+reevaluar — porque entonces ya no es lo que prometimos.
+
+## 9. Notas finales
 
 - Este documento se actualiza cada vez que aprendemos algo nuevo del prior
   art o de un experimento.

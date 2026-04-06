@@ -88,7 +88,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | *AT* | *App Android nativa: todos los sentidos de Axi en cualquier telefono* |
 | *AW* | *Cross-Platform Controller: LifeOS gobierna Windows, Mac, Android, iOS* |
 | *BF* | *Modelos remotos gratis/preview: catalogo experimental de modelos nuevos con cuenta del usuario, sin romper local-first ni privacidad por defecto* |
-| *BH* | *OS Evolutivo (self-building, self-healing): el sistema se construye y repara a si mismo via patch engine + sandbox + bootc transaccional. Vision a 6+ meses, requiere spike de validacion antes de tocar codigo. Ver `fase-bh-os-evolutivo.md` y `docs/research/os-evolutivo/`* |
+| *BH* | *OS Evolutivo (self-building, self-healing) + Federacion de compatibilidad: el sistema se construye y repara a si mismo via patch engine + sandbox + bootc transaccional, y cada instalacion consentida puede contribuir fixes de hardware al upstream. Convierte el cuello de botella de "1 dev" en "matriz de compatibilidad federada". Vision a 9+ meses, requiere spike de validacion antes de tocar codigo. Ver `fase-bh-os-evolutivo.md` y `docs/research/os-evolutivo/`* |
 
 ## Como usar esta documentacion
 
