@@ -191,6 +191,25 @@ ENVEOF
     log_success "System directories created"
 }
 
+# Apply default LifeOS desktop layout (wallpaper, panel, dock).
+#
+# IMPORTANT: This function only runs on the very first boot of a fresh
+# install, because main() is gated by check_first_boot which exits early
+# when /var/lib/lifeos/.first-boot-complete already exists. On updates
+# the marker is already present and this function never runs — that is
+# precisely the "do not touch the user's customisations on update"
+# guarantee. The helper script also respects per-file existence so even
+# on a fresh install we never overwrite anything the user already had.
+apply_default_desktop_layout() {
+    log "Applying default LifeOS desktop layout..."
+    if [ -x /usr/local/bin/lifeos-apply-default-layout.sh ]; then
+        /usr/local/bin/lifeos-apply-default-layout.sh || \
+            log_warn "Default layout apply had non-fatal issues"
+    else
+        log_warn "lifeos-apply-default-layout.sh not found, skipping"
+    fi
+}
+
 # Configure GPU if present and update llama-server env
 configure_gpu() {
     log "Detecting and configuring GPU..."
@@ -420,6 +439,7 @@ main() {
 
     enforce_password_change
     system_setup
+    apply_default_desktop_layout
     configure_gpu
     setup_ai
     start_services
