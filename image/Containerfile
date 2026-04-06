@@ -584,6 +584,8 @@ RUN find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' !
 # Scripts de LifeOS
 COPY image/files/usr/local/bin/lifeos-first-boot.sh       /usr/local/bin/lifeos-first-boot.sh
 COPY image/files/usr/local/bin/lifeos-apply-default-layout.sh /usr/local/bin/lifeos-apply-default-layout.sh
+COPY image/files/usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh /usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh
+COPY image/files/usr/local/bin/lifeos-sync-greeter-wallpaper.sh /usr/local/bin/lifeos-sync-greeter-wallpaper.sh
 COPY image/files/usr/local/bin/lifeos-ai-setup.sh          /usr/local/bin/lifeos-ai-setup.sh
 COPY image/files/usr/local/bin/lifeos-embeddings-setup.sh  /usr/local/bin/lifeos-embeddings-setup.sh
 COPY image/files/usr/local/bin/lifeos-stt-setup.sh         /usr/local/bin/lifeos-stt-setup.sh
@@ -602,6 +604,8 @@ COPY image/files/usr/local/bin/lifeos-diarize.py               /usr/local/bin/li
 COPY image/files/usr/local/bin/lifeos-sentinel.sh              /usr/local/bin/lifeos-sentinel.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-apply-default-layout.sh \
+             /usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh \
+             /usr/local/bin/lifeos-sync-greeter-wallpaper.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
              /usr/local/bin/lifeos-embeddings-setup.sh \
              /usr/local/bin/lifeos-stt-setup.sh \
@@ -713,6 +717,7 @@ RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/di
 # --- Servicios systemd ---
 # Copiar unit files desde el repo
 COPY image/files/etc/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/lifeos-first-boot.service
+COPY image/files/etc/systemd/system/lifeos-cosmic-greeter-branding.service /usr/lib/systemd/system/lifeos-cosmic-greeter-branding.service
 COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
 COPY image/files/etc/systemd/system/llama-server.service.d/10-fast-kill.conf /etc/systemd/system/llama-server.service.d/10-fast-kill.conf
 COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/system/llama-embeddings.service
@@ -778,6 +783,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-aide-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-cosmic-greeter-branding.service /usr/lib/systemd/system/graphical.target.wants/lifeos-cosmic-greeter-branding.service && \
     ln -sf /usr/lib/systemd/system/bluetooth.service      /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \
     ln -sf /usr/lib/systemd/system/NetworkManager.service /usr/lib/systemd/system/multi-user.target.wants/NetworkManager.service && \
     if [ -f /usr/lib/systemd/system/supergfxd.service ]; then \

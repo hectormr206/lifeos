@@ -19,7 +19,9 @@ set -u
 
 LOG_TAG="[LifeOS]"
 SKEL_COSMIC="/etc/skel/.config/cosmic"
-LAYOUT_VERSION="v1"
+LAYOUT_VERSION="v2"
+WALLPAPER_STATE_SYNC="/usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh"
+DEFAULT_WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-default.png"
 
 log()      { echo "${LOG_TAG} $*"; }
 log_warn() { echo "${LOG_TAG} [!] $*"; }
@@ -30,6 +32,12 @@ COSMIC_GROUPS=(
     "com.system76.CosmicPanel/v1"
     "com.system76.CosmicPanel.Panel/v1"
     "com.system76.CosmicPanel.Dock/v1"
+    "com.system76.CosmicComp/v1"
+    "com.system76.CosmicTheme.Dark.Builder/v1"
+    "com.system76.CosmicTheme.Light.Builder/v1"
+    "com.system76.CosmicTheme.Mode/v1"
+    "com.system76.CosmicTk/v1"
+    "com.system76.CosmicSettings.FontConfig/v1"
 )
 
 # Copy a single file from skel to user dir if and only if the destination
@@ -83,9 +91,14 @@ apply_for_user() {
             log_warn "No se pudo cambiar dueño de ${cosmic_dir}"
     fi
 
+    if [ -x "$WALLPAPER_STATE_SYNC" ] && [ -f "$DEFAULT_WALLPAPER" ]; then
+        "$WALLPAPER_STATE_SYNC" "$user_home" "$DEFAULT_WALLPAPER" "${user_uid}:${user_gid}" || \
+            log_warn "No se pudo sincronizar el state de wallpaper para ${user_name}"
+    fi
+
     # Write idempotency marker.
     mkdir -p "$marker_dir" 2>/dev/null || true
-    chown -R "${user_uid}:${user_gid}" "${user_home}/.local" 2>/dev/null || true
+    chown -R "${user_uid}:${user_gid}" "$marker_dir" 2>/dev/null || true
     : > "$marker" 2>/dev/null || true
     chown "${user_uid}:${user_gid}" "$marker" 2>/dev/null || true
 
