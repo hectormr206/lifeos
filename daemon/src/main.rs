@@ -1325,6 +1325,7 @@ async fn main() -> anyhow::Result<()> {
     // --- Storage housekeeping: enforce file limits + purge old data (every 6h) ---
     let housekeeping_data_dir = data_dir.clone();
     let housekeeping_memory = state.memory_plane_manager.clone();
+    let housekeeping_router = state.llm_router.clone();
     let _housekeeping_handle = tokio::spawn(async move {
         // Wait 5 minutes after boot before first housekeeping run
         tokio::time::sleep(Duration::from_secs(300)).await;
@@ -1380,10 +1381,38 @@ async fn main() -> anyhow::Result<()> {
                     Ok(_) => {}
                     Err(e) => warn!("memory_plane: dedup_similar failed: {}", e),
                 }
+
+                // Cluster summarization runs in a tighter window (only
+                // when the local hour is 02:00-04:59) so the LLM is not
+                // burning cycles while the user is active. We also gate
+                // it behind the daily decay tick — so it runs at most
+                // once per day, and only on days where the housekeeping
+                // tick lands inside the night window.
+                //
+                // Local time is intentional: bedtime is local, not UTC.
+                use chrono::Timelike;
+                let hour = chrono::Local::now().hour();
+                if (2..5).contains(&hour) {
+                    // Hold the read guard a bit longer for the LLM call.
+                    // Cluster summarisation is bounded: max 3 clusters
+                    // per pass, max 30 entries per cluster — keeps the
+                    // nightly window predictable even on busy DBs.
+                    let router = housekeeping_router.read().await;
+                    match mem.summarize_clusters_with_router(&router, 3, 30).await {
+                        Ok(report) if report.clusters_processed > 0 => info!(
+                            "memory_plane: cluster summary pass complete (clusters={}, originals_archived={})",
+                            report.clusters_processed, report.originals_archived
+                        ),
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("memory_plane: summarize_clusters_with_router failed: {}", e)
+                        }
+                    }
+                }
             }
         }
     });
-    info!("Storage housekeeping started (every 6h, 120-file limit per dir, daily memory hygiene: garbage+decay+dedup)");
+    info!("Storage housekeeping started (every 6h, 120-file limit per dir, daily memory hygiene: garbage+decay+dedup, nightly LLM cluster summary 02-05h)");
 
     // --- Self-improvement loop (Fase U): tick every 6 hours ---
     {

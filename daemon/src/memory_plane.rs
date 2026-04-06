@@ -2283,6 +2283,244 @@ impl MemoryPlaneManager {
         })
         .await?
     }
+
+    /// Result of a [`MemoryPlaneManager::summarize_clusters`] pass.
+    ///
+    /// `clusters_processed` is the number of tag-clusters that received a
+    /// summary entry; `originals_archived` is the total number of source
+    /// entries moved to `memory_archive`.
+    pub async fn summarize_clusters_with_router(
+        &self,
+        router: &crate::llm_router::LlmRouter,
+        max_clusters: usize,
+        max_entries_per_cluster: usize,
+    ) -> Result<ClusterSummaryReport> {
+        use crate::llm_router::{ChatMessage, RouterRequest, TaskComplexity};
+
+        let candidates = self.get_cluster_candidates().await?;
+        let mut clusters_processed = 0usize;
+        let mut originals_archived = 0usize;
+
+        // Process at most `max_clusters` clusters per pass to keep the
+        // nightly window predictable.
+        for (tags_json, count) in candidates.into_iter().take(max_clusters) {
+            // The grouping key from get_cluster_candidates is the raw
+            // `tags` JSON column. Decode it to a Vec<String> so we can
+            // pass real tags into list_entries / the new summary entry.
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            if tags.is_empty() {
+                continue;
+            }
+
+            // Pull every entry that lives in this cluster (capped).
+            // We use the first tag as the filter — list_entries only
+            // accepts a single tag and that is enough to enclose the
+            // group because the cluster is keyed by the FULL tags JSON,
+            // so every member shares all tags including this one.
+            let primary_tag = tags[0].clone();
+            let entries = self
+                .list_entries(max_entries_per_cluster, None, Some(&primary_tag))
+                .await?;
+            if entries.len() < 5 {
+                // Below the floor — not enough to summarise meaningfully.
+                continue;
+            }
+
+            // Build a compact prompt. We give the LLM the cluster's
+            // tags + the chronological list of entries (truncated). The
+            // model is asked to return ONE short paragraph in Spanish.
+            let mut bullet_list = String::new();
+            for e in &entries {
+                let snippet: String = e.content.chars().take(220).collect();
+                bullet_list.push_str(&format!(
+                    "- [{}] {}\n",
+                    e.created_at.format("%Y-%m-%d"),
+                    snippet
+                ));
+            }
+
+            let user_prompt = format!(
+                "Tengo {} memorias antiguas con las etiquetas {:?}. \
+                 Resúmelas en UN SOLO párrafo corto en español (máx 4 oraciones), \
+                 conservando hechos clave, decisiones y nombres propios. \
+                 No inventes nada. No uses markdown. Aquí están las memorias:\n\n{}",
+                count, tags, bullet_list
+            );
+
+            let req = RouterRequest {
+                messages: vec![ChatMessage {
+                    role: "user".into(),
+                    content: serde_json::Value::String(user_prompt),
+                }],
+                complexity: Some(TaskComplexity::Simple),
+                sensitivity: None,
+                preferred_provider: None,
+                max_tokens: Some(400),
+            };
+
+            let summary_text = match router.chat(&req).await {
+                Ok(resp) => resp.text.trim().to_string(),
+                Err(e) => {
+                    log::warn!(
+                        "memory_plane: LLM summarization failed for cluster {:?}: {}",
+                        tags,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            if summary_text.is_empty() {
+                continue;
+            }
+
+            // Save the summary as a new memory entry. We mark it with
+            // its own kind ("cluster_summary") and the original tags
+            // so future searches still find it. Importance starts at 80
+            // so the new entry survives decay long enough to actually
+            // serve as the "narrative replacement" for the originals.
+            let mut summary_tags = tags.clone();
+            summary_tags.push("cluster_summary".to_string());
+            let summary_content = format!(
+                "Resumen de {} memorias del cluster {:?}:\n{}",
+                count, tags, summary_text
+            );
+            let summary_entry = match self
+                .add_entry(
+                    "cluster_summary",
+                    "user",
+                    &summary_tags,
+                    Some("memory_plane://summarize_clusters"),
+                    80,
+                    &summary_content,
+                )
+                .await
+            {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!(
+                        "memory_plane: failed to persist cluster summary for {:?}: {}",
+                        tags,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            // Archive the originals so they no longer appear in normal
+            // search but remain recoverable from `memory_archive`.
+            // We do this in one transaction.
+            let archived = self
+                .archive_entries_by_id(
+                    entries.iter().map(|e| e.entry_id.clone()).collect::<Vec<_>>(),
+                )
+                .await
+                .unwrap_or(0);
+            originals_archived += archived;
+            clusters_processed += 1;
+
+            log::info!(
+                "memory_plane: summarised cluster {:?} ({} entries -> {}) and archived {} originals",
+                tags,
+                entries.len(),
+                summary_entry.entry_id,
+                archived
+            );
+        }
+
+        Ok(ClusterSummaryReport {
+            clusters_processed,
+            originals_archived,
+        })
+    }
+
+    /// Move a specific list of entry IDs into `memory_archive` and
+    /// delete them from `memory_entries`.
+    ///
+    /// Used by `summarize_clusters_with_router` after the LLM produces
+    /// the consolidated narrative entry. Skips permanent entries.
+    pub async fn archive_entries_by_id(&self, ids: Vec<String>) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+
+            // Make sure the archive table exists (mirrors the layout used
+            // by `archive_old_entries`).
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS memory_archive (
+                    entry_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    importance INTEGER NOT NULL,
+                    archived_at TEXT NOT NULL
+                )",
+                [],
+            )?;
+
+            let has_permanent: bool = db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('memory_entries') WHERE name = 'permanent'",
+                )
+                .and_then(|mut stmt| stmt.exists([]))
+                .unwrap_or(false);
+
+            let tx = db.unchecked_transaction()?;
+            let now_str = chrono::Utc::now().to_rfc3339();
+            let mut moved = 0usize;
+
+            for id in &ids {
+                // Skip permanent entries (defensive — caller should have
+                // already filtered, but we double-check at the boundary).
+                if has_permanent {
+                    let is_permanent: bool = tx
+                        .query_row(
+                            "SELECT permanent FROM memory_entries WHERE entry_id = ?1",
+                            params![id],
+                            |r| r.get::<_, Option<i32>>(0).map(|v| v.unwrap_or(0) != 0),
+                        )
+                        .unwrap_or(false);
+                    if is_permanent {
+                        continue;
+                    }
+                }
+                let inserted = tx.execute(
+                    "INSERT OR IGNORE INTO memory_archive
+                         (entry_id, created_at, kind, scope, tags, importance, archived_at)
+                     SELECT entry_id, created_at, kind, scope, tags, importance, ?1
+                     FROM memory_entries
+                     WHERE entry_id = ?2",
+                    params![now_str, id],
+                )?;
+                if inserted > 0 {
+                    tx.execute(
+                        "DELETE FROM memory_entries WHERE entry_id = ?1",
+                        params![id],
+                    )?;
+                    tx.execute(
+                        "DELETE FROM memory_embeddings WHERE entry_id = ?1",
+                        params![id],
+                    )?;
+                    moved += 1;
+                }
+            }
+
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(moved)
+        })
+        .await?
+    }
+}
+
+/// Result of a [`MemoryPlaneManager::summarize_clusters_with_router`] pass.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct ClusterSummaryReport {
+    pub clusters_processed: usize,
+    pub originals_archived: usize,
 }
 
 fn normalize_non_empty(input: &str) -> Option<String> {
@@ -3510,5 +3748,169 @@ mod tests {
         assert!(kinds.contains(&"person"));
         assert!(kinds.contains(&"file"));
         assert!(kinds.contains(&"topic"));
+    }
+
+    // ---- Cluster summarization helpers --------------------------------------
+
+    #[tokio::test]
+    async fn test_archive_entries_by_id_moves_and_deletes() {
+        let dir = temp_dir("memory-plane-archive-by-id");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let e1 = mgr
+            .add_entry(
+                "note",
+                "user",
+                &["cluster_a".into()],
+                None,
+                40,
+                "Original entry one",
+            )
+            .await
+            .unwrap();
+        let e2 = mgr
+            .add_entry(
+                "note",
+                "user",
+                &["cluster_a".into()],
+                None,
+                40,
+                "Original entry two",
+            )
+            .await
+            .unwrap();
+        let e3 = mgr
+            .add_entry(
+                "note",
+                "user",
+                &["other".into()],
+                None,
+                40,
+                "Unrelated entry",
+            )
+            .await
+            .unwrap();
+
+        let moved = mgr
+            .archive_entries_by_id(vec![e1.entry_id.clone(), e2.entry_id.clone()])
+            .await
+            .unwrap();
+        assert_eq!(moved, 2, "Both targeted entries should move");
+
+        // Originals must be gone from memory_entries.
+        let entries = mgr.list_entries(50, None, None).await.unwrap();
+        let remaining_ids: Vec<&str> = entries.iter().map(|e| e.entry_id.as_str()).collect();
+        assert!(!remaining_ids.contains(&e1.entry_id.as_str()));
+        assert!(!remaining_ids.contains(&e2.entry_id.as_str()));
+        // Unrelated entry must survive.
+        assert!(remaining_ids.contains(&e3.entry_id.as_str()));
+
+        // And they must live in memory_archive.
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let archive_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM memory_archive WHERE entry_id IN (?1, ?2)",
+                params![e1.entry_id, e2.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(archive_count, 2);
+
+        // Embeddings must be cleaned too.
+        let embed_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM memory_embeddings WHERE entry_id IN (?1, ?2)",
+                params![e1.entry_id, e2.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(embed_count, 0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_archive_entries_by_id_skips_permanent() {
+        let dir = temp_dir("memory-plane-archive-skip-permanent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let entry = mgr
+            .add_entry(
+                "note",
+                "user",
+                &["cluster".into()],
+                None,
+                50,
+                "Permanent entry",
+            )
+            .await
+            .unwrap();
+        mgr.mark_permanent(&entry.entry_id).await.unwrap();
+
+        let moved = mgr
+            .archive_entries_by_id(vec![entry.entry_id.clone()])
+            .await
+            .unwrap();
+        assert_eq!(moved, 0, "Permanent entry must NOT be archived");
+
+        // The entry must still be present.
+        let entries = mgr.list_entries(50, None, None).await.unwrap();
+        assert!(entries.iter().any(|e| e.entry_id == entry.entry_id));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_get_cluster_candidates_finds_old_groups() {
+        let dir = temp_dir("memory-plane-cluster-candidates");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert 12 entries with the same tags JSON, all > 30 days old.
+        let mut ids = Vec::new();
+        for i in 0..12 {
+            let e = mgr
+                .add_entry(
+                    "note",
+                    "user",
+                    &["projectx".into()],
+                    None,
+                    20,
+                    &format!("Entry number {}", i),
+                )
+                .await
+                .unwrap();
+            ids.push(e.entry_id);
+        }
+        for id in &ids {
+            backdate(&dir, id, 45);
+        }
+
+        // And 3 fresh entries with different tags — these should NOT
+        // create a cluster candidate (count < 10 AND too recent).
+        for i in 0..3 {
+            mgr.add_entry(
+                "note",
+                "user",
+                &["recent".into()],
+                None,
+                20,
+                &format!("Recent {}", i),
+            )
+            .await
+            .unwrap();
+        }
+
+        let candidates = mgr.get_cluster_candidates().await.unwrap();
+        assert!(
+            !candidates.is_empty(),
+            "Should find at least one cluster candidate"
+        );
+        let (_tags, count) = &candidates[0];
+        assert!(*count >= 10, "Cluster size should meet the 10+ floor");
+
+        std::fs::remove_dir_all(dir).ok();
     }
 }
