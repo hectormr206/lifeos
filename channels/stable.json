@@ -1,9 +1,9 @@
 {
   "channel": "stable",
-  "version": "2026.03.30",
+  "version": "2026.04.06",
   "tag": "stable",
-  "digest": "sha256:cffcf7e3f6acefa13833b234cd382bdd4fc4853f7b31bbf8e36f9835c6c8ca52",
+  "digest": "sha256:f9bfc89c8b4d6c0cdccd698179ab6b85103831a5b64789333083aae9e89b27fb",
   "image": "ghcr.io/hectormr206/lifeos:stable",
-  "released_at": "2026-03-30T15:28:12Z",
-  "commit": "c1f83b11a9966283db95d4d260278168940b0587"
+  "released_at": "2026-04-06T05:49:48Z",
+  "commit": "9444dc387da7c3103e28c2ec5a31d8f7683354d4"
 }
