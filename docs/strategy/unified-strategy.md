@@ -69,6 +69,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | **AU** | **Seguridad por Defecto: firewall, sysctl, SSH hardening, auditd, DNS seguro, USB guard** |
 | **AY** | **OS Control Plane: 20+ MCP tools para ventanas/apps/clipboard/sistema + politica de seleccion de capa (MCP > adapter > AT-SPI2 > vision)** |
 | **BE** | **Actividad Real: tracking real de usuario (idle, lock, apps, Telegram, audio, camara) — Axi sabe si el usuario trabaja o descansa de verdad** |
+| **BI** | **Bienestar Integral & Coach Personal: salud médica estructurada, nutrición con recetas + listas de compras locales, salud mental con cifrado reforzado, ejercicio, ciclo menstrual, hábitos, lectura. Axi pasa de asistente productivo a compañero de vida — todo local-first, cifrado, opt-in. Sub-fases BI.1-BI.8. Ver `fase-bi-bienestar-integral.md` y `docs/research/wellness-pillar/`** |
 
 ### Fases de Investigacion (requieren mas research antes de implementar)
 
