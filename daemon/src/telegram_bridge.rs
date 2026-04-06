@@ -18,7 +18,6 @@ mod inner {
     };
     use tokio::sync::RwLock;
 
-    use crate::knowledge_graph::KnowledgeGraph;
     use crate::llm_router::LlmRouter;
     use crate::memory_plane::MemoryPlaneManager;
     use crate::supervisor::SupervisorNotification;
@@ -32,6 +31,8 @@ mod inner {
     const CRON_CHECK_INTERVAL_SECS: u64 = 60; // every minute
     /// Pairing code TTL in seconds (10 minutes).
     const PAIRING_TTL_SECS: u64 = 600;
+    /// Retry budget for bot identity lookups during startup.
+    const BOT_USERNAME_LOOKUP_ATTEMPTS: usize = 3;
 
     // -----------------------------------------------------------------------
     // Pairing store — allows authorized users to invite new users via /pair
@@ -173,7 +174,6 @@ mod inner {
         task_queue: Arc<TaskQueue>,
         router: Arc<RwLock<LlmRouter>>,
         memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
-        knowledge_graph: Option<Arc<RwLock<KnowledgeGraph>>>,
         mut notify_rx: tokio::sync::broadcast::Receiver<SupervisorNotification>,
         session_store: Option<Arc<crate::session_store::SessionStore>>,
         event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
@@ -217,25 +217,30 @@ mod inner {
         let heartbeat_chat_ids = config.allowed_chat_ids.clone();
 
         // Get bot username for group mention detection
-        let bot_username = bot
-            .get_me()
-            .await
-            .map(|me| me.username.clone().unwrap_or_default())
-            .unwrap_or_default();
-        info!("Telegram bot username: @{}", bot_username);
+        let bot_username = resolve_bot_username(&bot).await;
+        if bot_username.is_empty() {
+            warn!(
+                "[telegram] Bot username unavailable after startup checks; group mention fallback will be limited to replies, slash commands, and 'Axi ...' invocations."
+            );
+        } else {
+            info!("Telegram bot username: @{}", bot_username);
+        }
 
         // Register bot commands so Telegram shows a "/" menu
-        bot.set_my_commands(vec![
-            BotCommand::new("help", "Ayuda y comandos disponibles"),
-            BotCommand::new("new", "Nueva conversacion (limpiar historial)"),
-            BotCommand::new("status", "Estado del sistema"),
-            BotCommand::new("acciones", "Controles rapidos con botones"),
-            BotCommand::new("btw", "Conversacion lateral (no guarda historial)"),
-            BotCommand::new("do", "Ejecutar tarea del supervisor"),
-            BotCommand::new("pair", "Generar codigo para vincular nuevo usuario"),
-        ])
-        .await
-        .ok();
+        if let Err(err) = bot
+            .set_my_commands(vec![
+                BotCommand::new("help", "Ayuda y comandos disponibles"),
+                BotCommand::new("new", "Nueva conversacion (limpiar historial)"),
+                BotCommand::new("status", "Estado del sistema"),
+                BotCommand::new("acciones", "Controles rapidos con botones"),
+                BotCommand::new("btw", "Conversacion lateral (no guarda historial)"),
+                BotCommand::new("do", "Ejecutar tarea del supervisor"),
+                BotCommand::new("pair", "Generar codigo para vincular nuevo usuario"),
+            ])
+            .await
+        {
+            warn!("[telegram] Failed to register bot commands: {}", err);
+        }
 
         // Supervisor notification listener
         let notify_session = session_store.clone();
@@ -322,7 +327,6 @@ mod inner {
             router: router.clone(),
             task_queue: task_queue.clone(),
             memory: memory.clone(),
-            knowledge_graph: knowledge_graph.clone(),
             history: history.clone(),
             cron_store: cron_store.clone(),
             sdd_store: sdd_store.clone(),
@@ -440,7 +444,6 @@ mod inner {
             router,
             task_queue,
             memory,
-            knowledge_graph,
             history,
             cron_store,
             sdd_store,
@@ -726,6 +729,7 @@ mod inner {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let chat_id = msg.chat.id;
         let is_group = msg.chat.is_group() || msg.chat.is_supergroup();
+        let history_key = history_key_for_message(&msg, chat_id.0);
 
         // Auth check
         if is_group {
@@ -782,41 +786,50 @@ mod inner {
             return Ok(());
         }
 
+        let reply_context = reply_context_prefix(&msg);
+
         // Voice messages: transcribe, then process as natural language
         if let Some(voice) = msg.voice() {
-            return handle_voice(bot, msg.clone(), chat_id, voice.file.id.clone(), ctx).await;
+            return handle_voice(
+                bot,
+                chat_id,
+                history_key,
+                voice.file.id.clone(),
+                reply_context,
+                ctx,
+            )
+            .await;
         }
 
         // Videos: extract frame, then vision analysis through agentic loop
         if let Some(video) = msg.video() {
-            let caption = msg
-                .caption()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "Describe este video en español.".into());
-            return handle_video(bot, chat_id, &video.file.id, &caption, ctx).await;
+            let caption = sanitize_incoming_text(
+                &msg.caption()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "Describe este video en español.".into()),
+                &ctx.bot_username,
+                is_group,
+            );
+            let prompt = apply_reply_context(&caption, reply_context.as_deref());
+            return handle_video(bot, chat_id, history_key, &video.file.id, prompt, ctx).await;
         }
 
         // Photos: vision analysis through agentic loop
         if let Some(photo_id) = largest_photo(&msg) {
-            let caption = msg
-                .caption()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "Describe esta imagen en español.".into());
-            return handle_photo(bot, chat_id, photo_id, &caption, ctx).await;
+            let caption = sanitize_incoming_text(
+                &msg.caption()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "Describe esta imagen en español.".into()),
+                &ctx.bot_username,
+                is_group,
+            );
+            let prompt = apply_reply_context(&caption, reply_context.as_deref());
+            return handle_photo(bot, chat_id, history_key, photo_id, prompt, ctx).await;
         }
 
         // Text messages
         let text = match msg.text() {
-            Some(t) => {
-                let mut t = t.to_string();
-                if is_group {
-                    t = t
-                        .replace(&format!("@{}", ctx.bot_username), "")
-                        .trim()
-                        .to_string();
-                }
-                t
-            }
+            Some(t) => sanitize_incoming_text(t, &ctx.bot_username, is_group),
             None => {
                 bot.send_message(chat_id, "Acepto texto, voz, fotos y videos.")
                     .await?;
@@ -824,25 +837,7 @@ mod inner {
             }
         };
 
-        // Extract reply context: when user replies to a specific Axi message,
-        // prepend the original message so Axi knows what the user is referring to.
-        let text = if let Some(reply) = msg.reply_to_message() {
-            if let Some(reply_text) = reply.text() {
-                let reply_preview = if reply_text.len() > 300 {
-                    format!("{}...", &reply_text[..300])
-                } else {
-                    reply_text.to_string()
-                };
-                format!(
-                    "[Respondiendo a tu mensaje: \"{}\"]\n\n{}",
-                    reply_preview, text
-                )
-            } else {
-                text
-            }
-        } else {
-            text
-        };
+        let text = apply_reply_context(&text, reply_context.as_deref());
 
         if text.is_empty() {
             return Ok(());
@@ -996,7 +991,7 @@ mod inner {
             let worker_ctx = ctx.tool_ctx.clone();
             let worker_bot = bot.clone();
             let worker_pool = ctx.worker_pool.clone();
-            let worker_text = task_text.to_string();
+            let worker_text = build_trust_task_prompt(task_text);
             let cancel_flag = ctx.worker_pool.get_cancel_flag(&task_id).await;
 
             tokio::spawn(async move {
@@ -1004,9 +999,6 @@ mod inner {
                     .send_message(chat_id, "Ejecutando en modo trust...")
                     .await
                     .ok();
-
-                // Set auto-approve env for this session
-                std::env::set_var("LIFEOS_AUTO_APPROVE_MEDIUM", "true");
 
                 // Check cancellation
                 if let Some(ref flag) = cancel_flag {
@@ -1087,12 +1079,6 @@ mod inner {
 
             return Ok(());
         }
-
-        // Thread/topic support: use composite key when message is in a forum topic
-        let history_key = msg
-            .thread_id
-            .map(|tid| chat_id.0 ^ (tid.0 .0 as i64))
-            .unwrap_or(chat_id.0);
 
         // Classify and dispatch — Axi never blocks on long tasks
         match classify_message(&text) {
@@ -1209,81 +1195,13 @@ mod inner {
 
     async fn handle_voice(
         bot: Bot,
-        _msg: Message,
         chat_id: ChatId,
+        history_key: i64,
         file_id: String,
+        reply_context: Option<String>,
         ctx: BotCtx,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Telegram [{}]: voice message received", chat_id);
-        bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
-
-        let file = bot.get_file(&file_id).await?;
-        let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
-        tokio::fs::create_dir_all(&tmp_dir).await.ok();
-        let ogg_path = tmp_dir.join(format!("voice-{}.ogg", chrono::Utc::now().timestamp()));
-        let mut ogg_file = tokio::fs::File::create(&ogg_path).await?;
-        bot.download_file(&file.path, &mut ogg_file).await?;
-
-        let wav_path = ogg_path.with_extension("wav");
-        let ffmpeg = tokio::process::Command::new("ffmpeg")
-            .args([
-                "-i",
-                &ogg_path.to_string_lossy(),
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                "-y",
-                &wav_path.to_string_lossy(),
-            ])
-            .output()
-            .await;
-
-        let transcription = if ffmpeg.map(|o| o.status.success()).unwrap_or(false) {
-            let output = tokio::process::Command::new("whisper-cli")
-                .args([
-                    "-m",
-                    "/var/lib/lifeos/models/whisper/ggml-base.bin",
-                    "-f",
-                    &wav_path.to_string_lossy(),
-                    "--no-timestamps",
-                    "-l",
-                    "es",
-                ])
-                .output()
-                .await;
-
-            match output {
-                Ok(o) if o.status.success() => {
-                    String::from_utf8_lossy(&o.stdout).trim().to_string()
-                }
-                _ => {
-                    bot.send_message(chat_id, "No pude transcribir el audio.")
-                        .await?;
-                    return Ok(());
-                }
-            }
-        } else {
-            bot.send_message(chat_id, "No pude convertir el audio.")
-                .await?;
-            return Ok(());
-        };
-
-        tokio::fs::remove_file(&ogg_path).await.ok();
-        tokio::fs::remove_file(&wav_path).await.ok();
-
-        if transcription.is_empty() {
-            bot.send_message(chat_id, "(Audio vacio o no se entendio)")
-                .await?;
-            return Ok(());
-        }
-
-        info!(
-            "Telegram voice transcribed: {}",
-            &transcription[..transcription.len().min(80)]
-        );
-
-        // Voice messages are always delegated to an async worker
         if !ctx.worker_pool.can_spawn(chat_id.0).await {
             bot.send_message(
                 chat_id,
@@ -1294,27 +1212,155 @@ mod inner {
         }
 
         let task_id = uuid::Uuid::new_v4().to_string();
-        let desc = format!("voz: {}", &transcription[..transcription.len().min(60)]);
+        let desc = "voz: transcripcion y respuesta".to_string();
         ctx.worker_pool
             .register(task_id.clone(), chat_id.0, desc)
             .await;
 
-        bot.send_message(
-            chat_id,
-            format!(
-                "(tu dijiste: {})\n\nProcesando...",
-                &transcription[..transcription.len().min(200)]
-            ),
-        )
-        .await?;
+        bot.send_message(chat_id, "Recibi tu audio. Lo estoy transcribiendo...")
+            .await?;
 
         let worker_ctx = ctx.tool_ctx.clone();
         let worker_bot = bot.clone();
         let worker_pool = ctx.worker_pool.clone();
+        let cancel_flag = ctx.worker_pool.get_cancel_flag(&task_id).await;
 
         tokio::spawn(async move {
+            worker_bot
+                .send_chat_action(chat_id, ChatAction::Typing)
+                .await
+                .ok();
+
+            let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
+            tokio::fs::create_dir_all(&tmp_dir).await.ok();
+            let ogg_path = tmp_dir.join(format!(
+                "voice-{}-{}.ogg",
+                chat_id.0,
+                chrono::Utc::now().timestamp_millis()
+            ));
+            let wav_path = ogg_path.with_extension("wav");
+
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    worker_pool.cancel(&task_id).await;
+                    return;
+                }
+            }
+
+            let file = match worker_bot.get_file(&file_id).await {
+                Ok(file) => file,
+                Err(err) => {
+                    worker_bot
+                        .send_message(chat_id, "No pude descargar tu audio de Telegram.")
+                        .await
+                        .ok();
+                    worker_pool.fail(&task_id, err.to_string()).await;
+                    return;
+                }
+            };
+
+            let transcription_result = async {
+                let mut ogg_file = tokio::fs::File::create(&ogg_path).await?;
+                worker_bot.download_file(&file.path, &mut ogg_file).await?;
+
+                let ffmpeg = tokio::process::Command::new("ffmpeg")
+                    .args([
+                        "-i",
+                        &ogg_path.to_string_lossy(),
+                        "-ar",
+                        "16000",
+                        "-ac",
+                        "1",
+                        "-y",
+                        &wav_path.to_string_lossy(),
+                    ])
+                    .output()
+                    .await?;
+                if !ffmpeg.status.success() {
+                    anyhow::bail!("ffmpeg failed to convert voice note");
+                }
+
+                let output = tokio::process::Command::new("whisper-cli")
+                    .args([
+                        "-m",
+                        "/var/lib/lifeos/models/whisper/ggml-base.bin",
+                        "-f",
+                        &wav_path.to_string_lossy(),
+                        "--no-timestamps",
+                        "-l",
+                        "es",
+                    ])
+                    .output()
+                    .await?;
+                if !output.status.success() {
+                    anyhow::bail!("whisper-cli failed to transcribe voice note");
+                }
+
+                Ok::<String, anyhow::Error>(
+                    String::from_utf8_lossy(&output.stdout).trim().to_string(),
+                )
+            }
+            .await;
+
+            tokio::fs::remove_file(&ogg_path).await.ok();
+            tokio::fs::remove_file(&wav_path).await.ok();
+
+            let transcription = match transcription_result {
+                Ok(text) if !text.is_empty() => text,
+                Ok(_) => {
+                    worker_bot
+                        .send_message(chat_id, "(Audio vacio o no se entendio)")
+                        .await
+                        .ok();
+                    worker_pool.complete(&task_id).await;
+                    return;
+                }
+                Err(err) => {
+                    worker_bot
+                        .send_message(chat_id, "No pude transcribir el audio.")
+                        .await
+                        .ok();
+                    worker_pool.fail(&task_id, err.to_string()).await;
+                    return;
+                }
+            };
+
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    worker_pool.cancel(&task_id).await;
+                    return;
+                }
+            }
+
+            info!(
+                "Telegram voice transcribed: {}",
+                &transcription[..transcription.len().min(80)]
+            );
+            worker_bot
+                .send_message(
+                    chat_id,
+                    format!(
+                        "(tu dijiste: {})\n\nProcesando...",
+                        &transcription[..transcription.len().min(200)]
+                    ),
+                )
+                .await
+                .ok();
+
+            let prompt = apply_reply_context(&transcription, reply_context.as_deref());
             let (response, screenshot_path) =
-                telegram_tools::agentic_chat(&worker_ctx, chat_id.0, &transcription, None).await;
+                telegram_tools::agentic_chat(&worker_ctx, history_key, &prompt, None).await;
+
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    worker_bot
+                        .send_message(chat_id, "Tarea cancelada.")
+                        .await
+                        .ok();
+                    worker_pool.cancel(&task_id).await;
+                    return;
+                }
+            }
 
             // Send screenshot if one was taken
             if let Some(ref path) = screenshot_path {
@@ -1361,26 +1407,12 @@ mod inner {
     async fn handle_photo(
         bot: Bot,
         chat_id: ChatId,
+        history_key: i64,
         file_id: String,
-        caption: &str,
+        prompt: String,
         ctx: BotCtx,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Telegram [{}]: photo received", chat_id);
-        let file = bot.get_file(&file_id).await?;
-        let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
-        tokio::fs::create_dir_all(&tmp_dir).await.ok();
-        let img_path = tmp_dir.join(format!("photo-{}.jpg", chrono::Utc::now().timestamp()));
-        let mut img_file = tokio::fs::File::create(&img_path).await?;
-        bot.download_file(&file.path, &mut img_file).await?;
-
-        let img_bytes = tokio::fs::read(&img_path).await?;
-        use base64::Engine;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&img_bytes);
-        let data_url = format!("data:image/jpeg;base64,{}", b64);
-
-        tokio::fs::remove_file(&img_path).await.ok();
-
-        // Photos always go to async worker (vision analysis takes time)
         if !ctx.worker_pool.can_spawn(chat_id.0).await {
             bot.send_message(
                 chat_id,
@@ -1404,16 +1436,82 @@ mod inner {
         let worker_ctx = ctx.tool_ctx.clone();
         let worker_bot = bot.clone();
         let worker_pool = ctx.worker_pool.clone();
-        let worker_caption = caption.to_string();
+        let cancel_flag = ctx.worker_pool.get_cancel_flag(&task_id).await;
 
         tokio::spawn(async move {
-            let (response, screenshot_path) = telegram_tools::agentic_chat(
-                &worker_ctx,
+            let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
+            tokio::fs::create_dir_all(&tmp_dir).await.ok();
+            let img_path = tmp_dir.join(format!(
+                "photo-{}-{}.jpg",
                 chat_id.0,
-                &worker_caption,
-                Some(&data_url),
-            )
+                chrono::Utc::now().timestamp_millis()
+            ));
+
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    worker_pool.cancel(&task_id).await;
+                    return;
+                }
+            }
+
+            let file = match worker_bot.get_file(&file_id).await {
+                Ok(file) => file,
+                Err(err) => {
+                    worker_bot
+                        .send_message(chat_id, "No pude descargar la imagen desde Telegram.")
+                        .await
+                        .ok();
+                    worker_pool.fail(&task_id, err.to_string()).await;
+                    return;
+                }
+            };
+
+            let image_payload = async {
+                let mut img_file = tokio::fs::File::create(&img_path).await?;
+                worker_bot.download_file(&file.path, &mut img_file).await?;
+                let img_bytes = tokio::fs::read(&img_path).await?;
+                use base64::Engine;
+                Ok::<String, anyhow::Error>(format!(
+                    "data:image/jpeg;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(&img_bytes)
+                ))
+            }
             .await;
+            tokio::fs::remove_file(&img_path).await.ok();
+
+            let data_url = match image_payload {
+                Ok(data_url) => data_url,
+                Err(err) => {
+                    worker_bot
+                        .send_message(chat_id, "No pude preparar la imagen para analizarla.")
+                        .await
+                        .ok();
+                    worker_pool.fail(&task_id, err.to_string()).await;
+                    return;
+                }
+            };
+
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    worker_pool.cancel(&task_id).await;
+                    return;
+                }
+            }
+
+            let (response, screenshot_path) =
+                telegram_tools::agentic_chat(&worker_ctx, history_key, &prompt, Some(&data_url))
+                    .await;
+
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    worker_bot
+                        .send_message(chat_id, "Tarea cancelada.")
+                        .await
+                        .ok();
+                    worker_pool.cancel(&task_id).await;
+                    return;
+                }
+            }
 
             if let Some(ref path) = screenshot_path {
                 let screenshot_file = std::path::Path::new(path);
@@ -1440,118 +1538,167 @@ mod inner {
     async fn handle_video(
         bot: Bot,
         chat_id: ChatId,
+        history_key: i64,
         video_file_id: &str,
-        caption: &str,
+        prompt: String,
         ctx: BotCtx,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Telegram [{}]: video received", chat_id);
+        if !ctx.worker_pool.can_spawn(chat_id.0).await {
+            bot.send_message(
+                chat_id,
+                "Tengo 3 tareas en proceso. Espera a que termine una.",
+            )
+            .await?;
+            return Ok(());
+        }
+
         bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
         let _ = bot.send_message(chat_id, "Analizando video...").await;
 
-        let file = bot.get_file(video_file_id).await?;
-        let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
-        tokio::fs::create_dir_all(&tmp_dir).await.ok();
-        let video_path = tmp_dir.join(format!("video-{}.mp4", chrono::Utc::now().timestamp()));
-        let frame_path = tmp_dir.join(format!("frame-{}.jpg", chrono::Utc::now().timestamp()));
-        let mut dst = tokio::fs::File::create(&video_path).await?;
-        bot.download_file(&file.path, &mut dst).await?;
-
-        // Extract middle frame (frame #5)
-        let ffmpeg = tokio::process::Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-i",
-                video_path.to_str().unwrap_or_default(),
-                "-vf",
-                "select=eq(n\\,5)",
-                "-frames:v",
-                "1",
-                frame_path.to_str().unwrap_or_default(),
-            ])
-            .output()
+        let task_id = uuid::Uuid::new_v4().to_string();
+        ctx.worker_pool
+            .register(
+                task_id.clone(),
+                chat_id.0,
+                "video: analisis de frame".into(),
+            )
             .await;
 
-        if ffmpeg.is_err() || !frame_path.exists() {
-            // Fallback: just take first frame
-            let _ = tokio::process::Command::new("ffmpeg")
-                .args([
-                    "-y",
-                    "-i",
-                    video_path.to_str().unwrap_or_default(),
-                    "-vframes",
-                    "1",
-                    frame_path.to_str().unwrap_or_default(),
-                ])
-                .output()
-                .await;
-        }
+        let worker_ctx = ctx.tool_ctx.clone();
+        let worker_bot = bot.clone();
+        let worker_pool = ctx.worker_pool.clone();
+        let video_file_id = video_file_id.to_string();
+        let cancel_flag = ctx.worker_pool.get_cancel_flag(&task_id).await;
 
-        if frame_path.exists() {
-            let bytes = tokio::fs::read(&frame_path).await?;
-            use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            let data_url = format!("data:image/jpeg;base64,{}", b64);
+        tokio::spawn(async move {
+            let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
+            tokio::fs::create_dir_all(&tmp_dir).await.ok();
+            let video_path = tmp_dir.join(format!(
+                "video-{}-{}.mp4",
+                chat_id.0,
+                chrono::Utc::now().timestamp_millis()
+            ));
+            let frame_path = tmp_dir.join(format!(
+                "frame-{}-{}.jpg",
+                chat_id.0,
+                chrono::Utc::now().timestamp_millis()
+            ));
 
-            // Videos always go to async worker (vision analysis takes time)
-            if !ctx.worker_pool.can_spawn(chat_id.0).await {
-                bot.send_message(
-                    chat_id,
-                    "Tengo 3 tareas en proceso. Espera a que termine una.",
-                )
-                .await?;
-                let _ = tokio::fs::remove_file(&video_path).await;
-                let _ = tokio::fs::remove_file(&frame_path).await;
-                return Ok(());
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    worker_pool.cancel(&task_id).await;
+                    return;
+                }
             }
 
-            let task_id = uuid::Uuid::new_v4().to_string();
-            ctx.worker_pool
-                .register(
-                    task_id.clone(),
-                    chat_id.0,
-                    "video: analisis de frame".into(),
-                )
-                .await;
+            let file = match worker_bot.get_file(&video_file_id).await {
+                Ok(file) => file,
+                Err(err) => {
+                    worker_bot
+                        .send_message(chat_id, "No pude descargar el video desde Telegram.")
+                        .await
+                        .ok();
+                    worker_pool.fail(&task_id, err.to_string()).await;
+                    return;
+                }
+            };
 
-            let worker_ctx = ctx.tool_ctx.clone();
-            let worker_bot = bot.clone();
-            let worker_pool = ctx.worker_pool.clone();
-            let worker_caption = caption.to_string();
+            let video_payload = async {
+                let mut dst = tokio::fs::File::create(&video_path).await?;
+                worker_bot.download_file(&file.path, &mut dst).await?;
 
-            tokio::spawn(async move {
-                let (response, screenshot_path) = telegram_tools::agentic_chat(
-                    &worker_ctx,
-                    chat_id.0,
-                    &worker_caption,
-                    Some(&data_url),
-                )
-                .await;
+                let ffmpeg = tokio::process::Command::new("ffmpeg")
+                    .args([
+                        "-y",
+                        "-i",
+                        video_path.to_str().unwrap_or_default(),
+                        "-vf",
+                        "select=eq(n\\,5)",
+                        "-frames:v",
+                        "1",
+                        frame_path.to_str().unwrap_or_default(),
+                    ])
+                    .output()
+                    .await?;
 
-                if let Some(ref path) = screenshot_path {
-                    let screenshot_file = std::path::Path::new(path);
-                    if screenshot_file.exists() {
-                        worker_bot
-                            .send_document(chat_id, InputFile::file(screenshot_file))
-                            .await
-                            .ok();
-                        tokio::fs::remove_file(screenshot_file).await.ok();
+                if !ffmpeg.status.success() || !frame_path.exists() {
+                    let fallback = tokio::process::Command::new("ffmpeg")
+                        .args([
+                            "-y",
+                            "-i",
+                            video_path.to_str().unwrap_or_default(),
+                            "-vframes",
+                            "1",
+                            frame_path.to_str().unwrap_or_default(),
+                        ])
+                        .output()
+                        .await?;
+                    if !fallback.status.success() || !frame_path.exists() {
+                        anyhow::bail!("ffmpeg failed to extract preview frame from video");
                     }
                 }
 
-                send_chunked(&worker_bot, chat_id, &response).await.ok();
+                let bytes = tokio::fs::read(&frame_path).await?;
+                use base64::Engine;
+                Ok::<String, anyhow::Error>(format!(
+                    "data:image/jpeg;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(&bytes)
+                ))
+            }
+            .await;
 
-                // Cleanup video/frame files
-                let _ = tokio::fs::remove_file(&video_path).await;
-                let _ = tokio::fs::remove_file(&frame_path).await;
-
-                worker_pool.complete(&task_id).await;
-            });
-        } else {
-            bot.send_message(chat_id, "No pude extraer un frame del video.")
-                .await?;
             let _ = tokio::fs::remove_file(&video_path).await;
             let _ = tokio::fs::remove_file(&frame_path).await;
-        }
+
+            let data_url = match video_payload {
+                Ok(data_url) => data_url,
+                Err(err) => {
+                    worker_bot
+                        .send_message(chat_id, "No pude extraer un frame del video.")
+                        .await
+                        .ok();
+                    worker_pool.fail(&task_id, err.to_string()).await;
+                    return;
+                }
+            };
+
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    worker_pool.cancel(&task_id).await;
+                    return;
+                }
+            }
+
+            let (response, screenshot_path) =
+                telegram_tools::agentic_chat(&worker_ctx, history_key, &prompt, Some(&data_url))
+                    .await;
+
+            if let Some(ref flag) = cancel_flag {
+                if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    worker_bot
+                        .send_message(chat_id, "Tarea cancelada.")
+                        .await
+                        .ok();
+                    worker_pool.cancel(&task_id).await;
+                    return;
+                }
+            }
+
+            if let Some(ref path) = screenshot_path {
+                let screenshot_file = std::path::Path::new(path);
+                if screenshot_file.exists() {
+                    worker_bot
+                        .send_document(chat_id, InputFile::file(screenshot_file))
+                        .await
+                        .ok();
+                    tokio::fs::remove_file(screenshot_file).await.ok();
+                }
+            }
+
+            send_chunked(&worker_bot, chat_id, &response).await.ok();
+            worker_pool.complete(&task_id).await;
+        });
 
         Ok(())
     }
@@ -2448,10 +2595,187 @@ mod inner {
         }
     }
 
-    fn is_addressed_to_bot(msg: &Message, bot_username: &str) -> bool {
-        if bot_username.is_empty() {
+    fn history_key_for_message(msg: &Message, chat_id: i64) -> i64 {
+        msg.thread_id
+            .map(|tid| chat_id ^ (tid.0 .0 as i64))
+            .unwrap_or(chat_id)
+    }
+
+    fn sanitize_incoming_text(text: &str, bot_username: &str, is_group: bool) -> String {
+        let mut value = text.to_string();
+        if is_group && !bot_username.is_empty() {
+            value = value.replace(&format!("@{}", bot_username), "");
+        }
+        if is_group && looks_like_axi_invocation(&value) {
+            value = strip_axi_invocation_prefix(&value).to_string();
+        }
+        value.trim().to_string()
+    }
+
+    fn reply_context_prefix(msg: &Message) -> Option<String> {
+        let reply = msg.reply_to_message()?;
+        if let Some(reply_text) = reply.text() {
+            return Some(format!(
+                "[Respondiendo a este mensaje anterior: \"{}\"]",
+                preview_text(reply_text, 300)
+            ));
+        }
+        if let Some(caption) = reply.caption() {
+            return Some(format!(
+                "[Respondiendo a un mensaje con descripcion: \"{}\"]",
+                preview_text(caption, 300)
+            ));
+        }
+        if reply.voice().is_some() {
+            return Some("[Respondiendo a un mensaje de voz anterior]".into());
+        }
+        if largest_photo(reply).is_some() {
+            return Some("[Respondiendo a una imagen anterior]".into());
+        }
+        if reply.video().is_some() {
+            return Some("[Respondiendo a un video anterior]".into());
+        }
+        if reply.document().is_some() {
+            return Some("[Respondiendo a un archivo anterior]".into());
+        }
+        if reply.sticker().is_some() {
+            return Some("[Respondiendo a un sticker anterior]".into());
+        }
+        Some("[Respondiendo a un mensaje anterior]".into())
+    }
+
+    fn preview_text(text: &str, limit: usize) -> String {
+        if text.len() > limit {
+            format!("{}...", &text[..limit])
+        } else {
+            text.to_string()
+        }
+    }
+
+    fn apply_reply_context(text: &str, reply_context: Option<&str>) -> String {
+        let trimmed = text.trim();
+        match reply_context {
+            Some(prefix) if !prefix.trim().is_empty() && !trimmed.is_empty() => {
+                format!("{}\n\n{}", prefix.trim(), trimmed)
+            }
+            Some(prefix) if !prefix.trim().is_empty() => prefix.trim().to_string(),
+            _ => trimmed.to_string(),
+        }
+    }
+
+    async fn resolve_bot_username(bot: &Bot) -> String {
+        let configured = configured_bot_username();
+        for attempt in 1..=BOT_USERNAME_LOOKUP_ATTEMPTS {
+            match bot.get_me().await {
+                Ok(me) => {
+                    if let Some(username) = me.username.as_deref().and_then(normalize_bot_username)
+                    {
+                        if let Some(ref fallback) = configured {
+                            if fallback != &username {
+                                warn!(
+                                    "[telegram] LIFEOS_TELEGRAM_BOT_USERNAME=@{} does not match Telegram getMe=@{}; using Telegram value.",
+                                    fallback, username
+                                );
+                            }
+                        }
+                        return username;
+                    }
+                    warn!(
+                        "[telegram] getMe succeeded but returned no username on attempt {}.",
+                        attempt
+                    );
+                }
+                Err(err) => {
+                    warn!(
+                        "[telegram] getMe failed on attempt {}/{}: {}",
+                        attempt, BOT_USERNAME_LOOKUP_ATTEMPTS, err
+                    );
+                }
+            }
+
+            if attempt < BOT_USERNAME_LOOKUP_ATTEMPTS {
+                tokio::time::sleep(std::time::Duration::from_millis(250 * attempt as u64)).await;
+            }
+        }
+
+        if let Some(username) = configured {
+            warn!(
+                "[telegram] Falling back to LIFEOS_TELEGRAM_BOT_USERNAME=@{} after getMe startup failures.",
+                username
+            );
+            return username;
+        }
+
+        String::new()
+    }
+
+    fn configured_bot_username() -> Option<String> {
+        std::env::var("LIFEOS_TELEGRAM_BOT_USERNAME")
+            .ok()
+            .and_then(|value| normalize_bot_username(&value))
+    }
+
+    fn normalize_bot_username(value: &str) -> Option<String> {
+        let trimmed = value.trim().trim_start_matches('@');
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
+    fn build_trust_task_prompt(task_text: &str) -> String {
+        format!(
+            "[Modo trust para esta tarea]\nEl usuario ya autorizo que ejecutes herramientas sin pedir una confirmacion adicional en Telegram para esta solicitud. Mantente dentro de los limites de seguridad y evita acciones destructivas no solicitadas.\n\n{}",
+            task_text.trim()
+        )
+    }
+
+    fn strip_axi_invocation_prefix(text: &str) -> &str {
+        let trimmed = text.trim();
+        if !looks_like_axi_invocation(trimmed) {
+            return trimmed;
+        }
+        for prefix in ["Axi", "axi", "AXI", "Axí", "axí"] {
+            if let Some(rest) = trimmed.strip_prefix(prefix) {
+                let rest = rest.trim_start_matches(|c: char| c.is_whitespace());
+                let rest = rest.trim_start_matches(|c| {
+                    matches!(c, ',' | ':' | ';' | '!' | '?' | '.' | '-' | ' ')
+                });
+                if !rest.is_empty() {
+                    return rest.trim();
+                }
+            }
+        }
+        trimmed
+    }
+
+    fn looks_like_axi_invocation(text: &str) -> bool {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
             return false;
         }
+        for prefix in ["axi", "axí"] {
+            if trimmed.eq_ignore_ascii_case(prefix) {
+                return true;
+            }
+
+            let lower = trimmed.to_lowercase();
+            if lower.starts_with(prefix) {
+                let suffix = lower[prefix.len()..].chars().next();
+                let boundary_ok = match suffix {
+                    None => true,
+                    Some(c) => c.is_whitespace() || ",:;!?.-".contains(c),
+                };
+                if boundary_ok {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn is_addressed_to_bot(msg: &Message, bot_username: &str) -> bool {
         // Reply-to-bot: if user is replying to one of Axi's own messages, treat as addressed
         if let Some(reply) = msg.reply_to_message() {
             if reply.from.as_ref().map(|u| u.is_bot).unwrap_or(false) {
@@ -2459,19 +2783,78 @@ mod inner {
             }
         }
         if let Some(text) = msg.text() {
-            if text.contains(&format!("@{}", bot_username)) {
+            if text.starts_with('/') {
                 return true;
             }
-            if text.starts_with('/') {
+            if !bot_username.is_empty() && text.contains(&format!("@{}", bot_username)) {
+                return true;
+            }
+            if looks_like_axi_invocation(text) {
                 return true;
             }
         }
         if let Some(caption) = msg.caption() {
-            if caption.contains(&format!("@{}", bot_username)) {
+            if !bot_username.is_empty() && caption.contains(&format!("@{}", bot_username)) {
+                return true;
+            }
+            if looks_like_axi_invocation(caption) {
                 return true;
             }
         }
         false
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn axi_invocation_helpers_detect_prefix_without_false_positive_axioma() {
+            assert!(looks_like_axi_invocation("Axi, abre Telegram"));
+            assert!(looks_like_axi_invocation("axí responde"));
+            assert!(!looks_like_axi_invocation("axioma interesante"));
+            assert_eq!(
+                strip_axi_invocation_prefix("Axi, abre Telegram"),
+                "abre Telegram"
+            );
+            assert_eq!(
+                strip_axi_invocation_prefix("axioma interesante"),
+                "axioma interesante"
+            );
+        }
+
+        #[test]
+        fn normalize_bot_username_trims_at_prefix() {
+            assert_eq!(
+                normalize_bot_username("@LifeOSAxi"),
+                Some("LifeOSAxi".into())
+            );
+            assert_eq!(normalize_bot_username("   "), None);
+        }
+
+        #[test]
+        fn sanitize_incoming_text_removes_mentions_and_axi_prefix_in_groups() {
+            assert_eq!(
+                sanitize_incoming_text("@LifeOSAxi Axi, abre ajustes", "LifeOSAxi", true),
+                "abre ajustes"
+            );
+            assert_eq!(
+                sanitize_incoming_text("axioma interesante", "LifeOSAxi", true),
+                "axioma interesante"
+            );
+        }
+
+        #[test]
+        fn apply_reply_context_wraps_media_and_text_prompts() {
+            assert_eq!(
+                apply_reply_context(
+                    "Describe esta imagen",
+                    Some("[Respondiendo a una imagen anterior]")
+                ),
+                "[Respondiendo a una imagen anterior]\n\nDescribe esta imagen"
+            );
+            assert_eq!(apply_reply_context(" hola ", None), "hola");
+        }
     }
 
     fn largest_photo(msg: &Message) -> Option<String> {

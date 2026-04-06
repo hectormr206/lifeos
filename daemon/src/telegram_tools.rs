@@ -17,14 +17,14 @@ pub mod inner {
     use log::{info, warn};
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
     use crate::browser_automation::BrowserAutomation;
     use crate::computer_use::{ComputerUseAction, ComputerUseManager};
-    use crate::knowledge_graph::KnowledgeGraph;
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
-    use crate::memory_plane::MemoryPlaneManager;
+    use crate::memory_plane::{extract_entities_from_text, MemoryPlaneManager};
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
     use crate::task_queue::TaskQueue;
@@ -34,6 +34,18 @@ pub mod inner {
     const MAX_TOOL_ROUNDS: usize = 5;
     /// Conversation history TTL in seconds (48 hours — long-running sessions).
     const HISTORY_TTL_SECS: i64 = 48 * 3600;
+    /// Hard cap for commands triggered remotely from Telegram.
+    const TELEGRAM_TOOL_MAX_COMMAND_CHARS: usize = 2048;
+    /// Timeout for a single run_command execution.
+    const TELEGRAM_RUN_COMMAND_TIMEOUT_SECS: u64 = 60;
+    /// Maximum size for a file that Telegram tools may read/write/send directly.
+    const TELEGRAM_TOOL_MAX_FILE_BYTES: u64 = 128 * 1024;
+    /// Maximum characters returned from a file read.
+    const TELEGRAM_TOOL_MAX_READ_CHARS: usize = 6000;
+    /// Environment variable with colon-separated allowed paths for Telegram file tools.
+    const TELEGRAM_ALLOWED_PATHS_ENV: &str = "LIFEOS_TELEGRAM_ALLOWED_PATHS";
+    /// Optional safe working directory for Telegram run_command/write_file relative paths.
+    const TELEGRAM_WORKDIR_ENV: &str = "LIFEOS_TELEGRAM_WORKDIR";
 
     // -----------------------------------------------------------------------
     // Tool definitions (shown to the LLM in the system prompt)
@@ -434,10 +446,12 @@ Herramientas:
         pub fn new() -> Self {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
             let persist_path = std::path::PathBuf::from(format!(
-                "{}/.local/share/lifeos/conversation_history.json",
-                home
+                "{home}/.local/share/lifeos/conversation_history.json"
             ));
+            Self::with_persist_path(persist_path)
+        }
 
+        fn with_persist_path(persist_path: std::path::PathBuf) -> Self {
             // Load from disk if available
             let chats = if persist_path.exists() {
                 std::fs::read_to_string(&persist_path)
@@ -464,7 +478,7 @@ Herramientas:
         }
 
         /// Get the conversation history for a chat as a flat message list.
-        /// Returns: [first_message] + [compacted_summary_as_system] + [recent_messages]
+        /// Returns: [first_message] + [recent_messages]
         pub async fn get(&self, chat_id: i64) -> Vec<ChatMessage> {
             let chats = self.chats.read().await;
             if let Some(entry) = chats.get(&chat_id) {
@@ -482,23 +496,24 @@ Herramientas:
                     result.push(first.clone());
                 }
 
-                // 2. Compacted summary of older messages
-                if let Some(ref summary) = entry.compacted_summary {
-                    result.push(ChatMessage {
-                        role: "system".into(),
-                        content: serde_json::Value::String(format!(
-                            "[Resumen de conversacion anterior]: {}",
-                            summary
-                        )),
-                    });
-                }
-
-                // 3. Recent messages (verbatim)
+                // 2. Recent messages (verbatim)
                 result.extend(entry.messages.clone());
 
                 return result;
             }
             Vec::new()
+        }
+
+        pub async fn get_compacted_summary(&self, chat_id: i64) -> Option<String> {
+            let chats = self.chats.read().await;
+            let entry = chats.get(&chat_id)?;
+            let age = chrono::Utc::now()
+                .signed_duration_since(entry.last_active)
+                .num_seconds();
+            if age >= HISTORY_TTL_SECS {
+                return None;
+            }
+            entry.compacted_summary.clone()
         }
 
         /// Append messages and trigger compaction if needed.
@@ -642,6 +657,96 @@ Herramientas:
             if let Ok(json) = serde_json::to_string(chats) {
                 std::fs::write(&self.persist_path, json).ok();
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn history_for_tests(name: &str) -> ConversationHistory {
+            let unique = format!(
+                "lifeos-telegram-history-{}-{}-{}.json",
+                name,
+                std::process::id(),
+                chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            );
+            let path = std::env::temp_dir().join(unique);
+            let _ = std::fs::remove_file(&path);
+            ConversationHistory::with_persist_path(path)
+        }
+
+        #[tokio::test]
+        async fn history_get_keeps_system_context_out_of_message_list() {
+            let history = history_for_tests("messages-only");
+            let chat_id = 42;
+
+            history
+                .append(
+                    chat_id,
+                    &[
+                        ChatMessage {
+                            role: "user".into(),
+                            content: serde_json::Value::String("hola".into()),
+                        },
+                        ChatMessage {
+                            role: "assistant".into(),
+                            content: serde_json::Value::String("que onda".into()),
+                        },
+                    ],
+                )
+                .await;
+
+            {
+                let mut chats = history.chats.write().await;
+                if let Some(entry) = chats.get_mut(&chat_id) {
+                    entry.compacted_summary = Some("preferencia: respuestas cortas".into());
+                }
+            }
+
+            let messages = history.get(chat_id).await;
+            assert_eq!(messages.len(), 3);
+            assert!(messages.iter().all(|msg| msg.role != "system"));
+            assert_eq!(
+                history.get_compacted_summary(chat_id).await,
+                Some("preferencia: respuestas cortas".into())
+            );
+        }
+
+        #[test]
+        fn parse_safe_command_rejects_shell_operators() {
+            let roots = vec![PathBuf::from("/tmp/lifeos-telegram-tests")];
+            let workdir = roots[0].clone();
+            let err = parse_safe_command("rg todo . && rm -rf /", &roots, &workdir)
+                .expect_err("shell operators should be rejected");
+            assert!(err.to_string().contains("Operador de shell"));
+        }
+
+        #[test]
+        fn parse_safe_command_rejects_paths_outside_allowed_roots() {
+            let roots = vec![PathBuf::from("/tmp/lifeos-telegram-tests")];
+            let workdir = roots[0].clone();
+            let err = parse_safe_command("cat /etc/passwd", &roots, &workdir)
+                .expect_err("reading /etc should be rejected");
+            assert!(err.to_string().contains("fuera de las permitidas"));
+        }
+
+        #[test]
+        fn path_policy_allows_descendants_of_allowed_root() {
+            let roots = vec![PathBuf::from("/var/home/lifeos/personalProjects")];
+            let resolved = resolve_tool_path(
+                "/var/home/lifeos/personalProjects/gama/lifeos/README.md",
+                &roots,
+            )
+            .expect("repo file should be allowed");
+            assert!(resolved.starts_with(&roots[0]));
+        }
+
+        #[test]
+        fn simple_glob_match_supports_basic_wildcards() {
+            assert!(simple_glob_match("*.rs", "main.rs"));
+            assert!(simple_glob_match("file-??.txt", "file-01.txt"));
+            assert!(!simple_glob_match("*.rs", "main.py"));
         }
     }
 
@@ -968,7 +1073,6 @@ Herramientas:
         pub router: Arc<RwLock<LlmRouter>>,
         pub task_queue: Arc<TaskQueue>,
         pub memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
-        pub knowledge_graph: Option<Arc<RwLock<KnowledgeGraph>>>,
         pub history: Arc<ConversationHistory>,
         pub cron_store: Arc<CronStore>,
         pub sdd_store: Arc<SddStore>,
@@ -1254,6 +1358,12 @@ Herramientas:
         if !emotional_hint.is_empty() {
             system_prompt.push_str(&format!("\n[Estado emocional]\n{}", emotional_hint));
         }
+        if let Some(summary) = ctx.history.get_compacted_summary(chat_id).await {
+            system_prompt.push_str(&format!(
+                "\n\n[Resumen de conversacion anterior]: {}",
+                summary
+            ));
+        }
 
         // Inject conversation history for multi-turn context
         let history = ctx.history.get(chat_id).await;
@@ -1464,23 +1574,39 @@ Herramientas:
                         .await;
                 });
 
-                // Ingest user message and Axi's response into knowledge graph (background)
-                if let Some(kg) = &ctx.knowledge_graph {
-                    let kg = kg.clone();
-                    let user_text = user_text.to_string();
-                    let axi_response = tagged.clone();
+                // Extract entities mentioned by the user (and Axi's reply) into
+                // the knowledge graph as `(entity, "is_a", type)` triples plus a
+                // `(user, "mentioned", entity)` link. We do NOT create a per-message
+                // Conversation entity anymore — that pattern bloated the old
+                // JSON-backed graph without adding queryable signal. The message
+                // itself is already persisted as a memory entry by other paths.
+                if let Some(memory) = &ctx.memory {
+                    let mem = memory.clone();
+                    let user_text_owned = user_text.to_string();
+                    let axi_response_owned = tagged.clone();
                     tokio::spawn(async move {
-                        let now = chrono::Utc::now();
-                        let mut graph = kg.write().await;
-                        if let Err(e) = graph.ingest_telegram_message("user", &user_text, now).await
-                        {
-                            warn!("[knowledge_graph] Failed to ingest user message: {}", e);
+                        let m = mem.read().await;
+                        for (name, etype) in extract_entities_from_text(&user_text_owned) {
+                            if let Err(e) = m.add_entity_typed(&name, etype).await {
+                                warn!("[memory_plane] Failed to add entity: {}", e);
+                            }
+                            if let Err(e) = m
+                                .add_triple("user", "mentioned", &name, 1.0, None)
+                                .await
+                            {
+                                warn!("[memory_plane] Failed to add user→mentioned triple: {}", e);
+                            }
                         }
-                        if let Err(e) = graph
-                            .ingest_telegram_message("axi", &axi_response, now)
-                            .await
-                        {
-                            warn!("[knowledge_graph] Failed to ingest Axi response: {}", e);
+                        for (name, etype) in extract_entities_from_text(&axi_response_owned) {
+                            if let Err(e) = m.add_entity_typed(&name, etype).await {
+                                warn!("[memory_plane] Failed to add entity: {}", e);
+                            }
+                            if let Err(e) = m
+                                .add_triple("axi", "mentioned", &name, 1.0, None)
+                                .await
+                            {
+                                warn!("[memory_plane] Failed to add axi→mentioned triple: {}", e);
+                            }
                         }
                     });
                 }
@@ -1580,29 +1706,24 @@ Herramientas:
         let command = args["command"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'command'"))?;
+        let roots = telegram_allowed_roots();
+        let workdir = telegram_tool_workdir(&roots);
+        let parsed = parse_safe_command(command, &roots, &workdir)?;
 
-        let lower = command.to_lowercase();
-        let blocked = [
-            "rm -rf /",
-            "mkfs",
-            "dd if=",
-            ":(){",
-            "fork bomb",
-            "chmod -R 777 /",
-            "mv /* ",
-            ">(){ :|:",
-        ];
-        for pattern in &blocked {
-            if lower.contains(pattern) {
-                anyhow::bail!("Comando bloqueado por seguridad: {}", pattern);
-            }
-        }
-
-        let output = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .output()
-            .await?;
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(TELEGRAM_RUN_COMMAND_TIMEOUT_SECS),
+            tokio::process::Command::new(&parsed.program)
+                .args(&parsed.args)
+                .current_dir(&workdir)
+                .output(),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "El comando excedio el limite de {}s",
+                TELEGRAM_RUN_COMMAND_TIMEOUT_SECS
+            )
+        })??;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1738,9 +1859,20 @@ Herramientas:
         let path = args["path"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'path'"))?;
-        let expanded = expand_home(path);
-        let content = tokio::fs::read_to_string(&expanded).await?;
-        Ok(content.chars().take(6000).collect())
+        let roots = telegram_allowed_roots();
+        let resolved = resolve_tool_path(path, &roots)?;
+        let metadata = tokio::fs::metadata(&resolved).await?;
+        if metadata.len() > TELEGRAM_TOOL_MAX_FILE_BYTES {
+            anyhow::bail!(
+                "Archivo demasiado grande para Telegram ({} bytes max)",
+                TELEGRAM_TOOL_MAX_FILE_BYTES
+            );
+        }
+        let content = tokio::fs::read(&resolved).await?;
+        Ok(String::from_utf8_lossy(&content)
+            .chars()
+            .take(TELEGRAM_TOOL_MAX_READ_CHARS)
+            .collect())
     }
 
     async fn execute_write_file(args: &serde_json::Value) -> Result<String> {
@@ -1750,45 +1882,71 @@ Herramientas:
         let content = args["content"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'content'"))?;
-        let expanded = expand_home(path);
+        if content.len() as u64 > TELEGRAM_TOOL_MAX_FILE_BYTES {
+            anyhow::bail!(
+                "Contenido demasiado grande para write_file ({} bytes max)",
+                TELEGRAM_TOOL_MAX_FILE_BYTES
+            );
+        }
+        let roots = telegram_allowed_roots();
+        let resolved = resolve_tool_path(path, &roots)?;
 
-        if let Some(parent) = std::path::Path::new(&expanded).parent() {
+        if let Some(parent) = resolved.parent() {
             tokio::fs::create_dir_all(parent).await.ok();
         }
-        tokio::fs::write(&expanded, content).await?;
-        Ok(format!("Archivo guardado: {}", expanded))
+        tokio::fs::write(&resolved, content).await?;
+        Ok(format!("Archivo guardado: {}", resolved.display()))
     }
 
     async fn execute_list_files(args: &serde_json::Value) -> Result<String> {
-        let path = args["path"].as_str().unwrap_or("~");
+        let path = args["path"].as_str().unwrap_or(".");
         let pattern = args["pattern"].as_str().unwrap_or("*");
-        let expanded = expand_home(path);
+        let roots = telegram_allowed_roots();
+        let resolved = resolve_tool_path(path, &roots)?;
+        let mut entries = tokio::fs::read_dir(&resolved).await?;
+        let mut total = 0usize;
+        let mut matched = 0usize;
+        let mut lines = Vec::new();
 
-        let cmd = if pattern == "*" {
-            format!(
-                "ls -la '{}' 2>/dev/null; echo '---'; ls '{}' 2>/dev/null | wc -l",
-                expanded, expanded
-            )
-        } else {
-            // Sanitize pattern: allow glob chars (*, ?, [, ]) but reject shell injection chars
-            let bad_chars = [
-                ';', '|', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\'', '"', '\\', '\n',
-            ];
-            let safe_pattern: String = pattern.chars().filter(|c| !bad_chars.contains(c)).collect();
-            format!(
-                "ls -la '{}'/{} 2>/dev/null; echo '---'; ls '{}' 2>/dev/null | wc -l",
-                expanded, safe_pattern, expanded
-            )
-        };
+        while let Some(entry) = entries.next_entry().await? {
+            total += 1;
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !simple_glob_match(pattern, &name) {
+                continue;
+            }
+            matched += 1;
 
-        let output = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .output()
-            .await?;
+            let metadata = entry.metadata().await?;
+            let kind = if metadata.is_dir() {
+                "dir"
+            } else if metadata.is_file() {
+                "file"
+            } else {
+                "other"
+            };
+            let suffix = if metadata.is_dir() { "/" } else { "" };
+            lines.push(format!("- [{}] {}{}", kind, name, suffix));
+            if lines.len() >= 200 {
+                break;
+            }
+        }
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(stdout[..stdout.len().min(4000)].to_string())
+        if matched == 0 {
+            return Ok(format!(
+                "Ruta: {}\nSin coincidencias para '{}'. Total de entradas: {}",
+                resolved.display(),
+                pattern,
+                total
+            ));
+        }
+
+        Ok(format!(
+            "Ruta: {}\nCoincidencias: {} de {} entradas\n\n{}",
+            resolved.display(),
+            matched,
+            total,
+            lines.join("\n")
+        ))
     }
 
     async fn execute_system_status() -> Result<String> {
@@ -1882,27 +2040,29 @@ Herramientas:
                 .await
             {
                 Ok(entry) => {
-                    // Also create a knowledge graph entity for the memory
-                    if let Some(kg) = &ctx.knowledge_graph {
-                        let kg = kg.clone();
+                    // Also register the memory as an entity in the knowledge graph.
+                    // Backed by `memory_plane` triples now (see migration in
+                    // commit history); the standalone JSON-backed graph that
+                    // used to live in `knowledge_graph.rs` was removed because
+                    // it did a full file rewrite on every insert.
+                    if let Some(memory) = &ctx.memory {
+                        let mem = memory.clone();
                         let entity_name = if !title.is_empty() {
                             title.to_string()
                         } else {
                             structured_content.chars().take(60).collect::<String>()
                         };
                         let entity_type = match mem_type {
-                            "decision" | "architecture" => {
-                                crate::knowledge_graph::EntityType::Decision
-                            }
-                            "bugfix" | "discovery" | "pattern" => {
-                                crate::knowledge_graph::EntityType::Topic
-                            }
-                            "preference" | "config" => crate::knowledge_graph::EntityType::Topic,
-                            _ => crate::knowledge_graph::EntityType::Topic,
+                            "decision" | "architecture" => "decision",
+                            "bugfix" | "discovery" | "pattern" => "topic",
+                            "preference" | "config" => "topic",
+                            _ => "topic",
                         };
                         tokio::spawn(async move {
-                            let mut graph = kg.write().await;
-                            graph.add_entity(&entity_name, entity_type);
+                            let m = mem.read().await;
+                            if let Err(e) = m.add_entity_typed(&entity_name, entity_type).await {
+                                warn!("[memory_plane] Failed to add entity: {}", e);
+                            }
                         });
                     }
                     Ok(format!("Guardado en memoria (id: {})", entry.entry_id))
@@ -3557,11 +3717,19 @@ max_context = 128000
         if path.is_empty() {
             return Ok("Error: se requiere el campo 'path'.".into());
         }
-        let expanded = expand_home(path);
-        if std::path::Path::new(&expanded).exists() {
-            Ok(format!("__SEND_FILE__:{}", expanded))
+        let roots = telegram_allowed_roots();
+        let resolved = resolve_tool_path(path, &roots)?;
+        if resolved.exists() {
+            let metadata = std::fs::metadata(&resolved)?;
+            if metadata.len() > TELEGRAM_TOOL_MAX_FILE_BYTES {
+                anyhow::bail!(
+                    "Archivo demasiado grande para enviar por Telegram ({} bytes max)",
+                    TELEGRAM_TOOL_MAX_FILE_BYTES
+                );
+            }
+            Ok(format!("__SEND_FILE__:{}", resolved.display()))
         } else {
-            Ok(format!("Archivo no encontrado: {}", expanded))
+            Ok(format!("Archivo no encontrado: {}", resolved.display()))
         }
     }
 
@@ -3636,6 +3804,471 @@ max_context = 128000
     // -----------------------------------------------------------------------
     // Helper
     // -----------------------------------------------------------------------
+
+    #[derive(Debug, Clone)]
+    struct ParsedToolCommand {
+        program: String,
+        args: Vec<String>,
+    }
+
+    fn telegram_allowed_roots() -> Vec<PathBuf> {
+        if let Ok(configured) = std::env::var(TELEGRAM_ALLOWED_PATHS_ENV) {
+            let roots = configured
+                .split(':')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| normalize_path(&resolve_input_path(value, None)))
+                .collect::<Vec<_>>();
+            if !roots.is_empty() {
+                return roots;
+            }
+        }
+
+        default_telegram_allowed_roots()
+    }
+
+    fn default_telegram_allowed_roots() -> Vec<PathBuf> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let mut roots = vec![
+            PathBuf::from(format!("{home}/personalProjects")),
+            PathBuf::from(format!("{home}/Documents")),
+            PathBuf::from(format!("{home}/Downloads")),
+            PathBuf::from(format!("{home}/.local/share/lifeos")),
+            PathBuf::from(format!("{home}/.config/lifeos")),
+            std::env::temp_dir().join("lifeos-telegram"),
+        ];
+        roots.sort();
+        roots.dedup();
+        roots
+            .into_iter()
+            .map(|path| normalize_path(&path))
+            .collect()
+    }
+
+    fn telegram_tool_workdir(roots: &[PathBuf]) -> PathBuf {
+        if let Ok(configured) = std::env::var(TELEGRAM_WORKDIR_ENV) {
+            let configured = resolve_input_path(&configured, None);
+            if path_is_allowed(&configured, roots) {
+                return configured;
+            }
+        }
+
+        if let Ok(current) = std::env::current_dir() {
+            let current = normalize_path(&current);
+            if path_is_allowed(&current, roots) {
+                return current;
+            }
+        }
+
+        roots
+            .iter()
+            .find(|path| path.exists())
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+    }
+
+    fn resolve_tool_path(path: &str, roots: &[PathBuf]) -> Result<PathBuf> {
+        let workdir = telegram_tool_workdir(roots);
+        let resolved = resolve_input_path(path, Some(&workdir));
+        let resolved = canonicalize_for_policy(&resolved).unwrap_or(resolved);
+        if path_is_allowed(&resolved, roots) {
+            Ok(resolved)
+        } else {
+            anyhow::bail!(
+                "Ruta fuera de las permitidas para Telegram. Ajusta {} si necesitas otra raiz.",
+                TELEGRAM_ALLOWED_PATHS_ENV
+            );
+        }
+    }
+
+    fn resolve_input_path(path: &str, base_dir: Option<&Path>) -> PathBuf {
+        let expanded = PathBuf::from(expand_home(path));
+        let absolute = if expanded.is_absolute() {
+            expanded
+        } else {
+            base_dir
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")))
+                .join(expanded)
+        };
+        normalize_path(&absolute)
+    }
+
+    fn normalize_path(path: &Path) -> PathBuf {
+        let mut normalized = if path.is_absolute() {
+            PathBuf::from("/")
+        } else {
+            PathBuf::new()
+        };
+
+        for component in path.components() {
+            match component {
+                std::path::Component::RootDir => {}
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                std::path::Component::Normal(part) => normalized.push(part),
+                std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            }
+        }
+
+        normalized
+    }
+
+    fn path_is_allowed(path: &Path, roots: &[PathBuf]) -> bool {
+        let candidate = canonicalize_for_policy(path).unwrap_or_else(|_| normalize_path(path));
+        roots
+            .iter()
+            .map(|root| canonicalize_for_policy(root).unwrap_or_else(|_| normalize_path(root)))
+            .any(|root| candidate == root || candidate.starts_with(&root))
+    }
+
+    fn canonicalize_for_policy(path: &Path) -> Result<PathBuf> {
+        let normalized = normalize_path(path);
+        let mut current = normalized.clone();
+        let mut missing: Vec<std::ffi::OsString> = Vec::new();
+
+        while !current.exists() {
+            let name = current
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("Ruta invalida: {}", normalized.display()))?
+                .to_os_string();
+            missing.push(name);
+            current = current
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("Ruta invalida: {}", normalized.display()))?
+                .to_path_buf();
+        }
+
+        let mut resolved = std::fs::canonicalize(&current)?;
+        for component in missing.iter().rev() {
+            resolved.push(component);
+        }
+        Ok(normalize_path(&resolved))
+    }
+
+    fn parse_safe_command(
+        command: &str,
+        roots: &[PathBuf],
+        workdir: &Path,
+    ) -> Result<ParsedToolCommand> {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("El comando esta vacio");
+        }
+        if trimmed.len() > TELEGRAM_TOOL_MAX_COMMAND_CHARS {
+            anyhow::bail!(
+                "Comando demasiado largo (max {} caracteres)",
+                TELEGRAM_TOOL_MAX_COMMAND_CHARS
+            );
+        }
+
+        let blocked_fragments = ["\n", "\r", "&&", "||", ";", "|", ">", "<", "`", "$("];
+        if let Some(fragment) = blocked_fragments
+            .iter()
+            .find(|fragment| trimmed.contains(**fragment))
+        {
+            anyhow::bail!("Operador de shell no permitido en Telegram: {}", fragment);
+        }
+
+        let parts = shell_words::split(trimmed)
+            .map_err(|err| anyhow::anyhow!("No pude interpretar el comando: {}", err))?;
+        if parts.is_empty() {
+            anyhow::bail!("El comando esta vacio");
+        }
+
+        let program_token = &parts[0];
+        let args = parts[1..].to_vec();
+        validate_command_arguments(program_token, &args)?;
+        validate_path_like_args(&args, roots, workdir)?;
+
+        let program = if program_token.contains('/')
+            || program_token.starts_with('.')
+            || program_token.starts_with('~')
+        {
+            let resolved = resolve_input_path(program_token, Some(workdir));
+            let resolved = canonicalize_for_policy(&resolved).unwrap_or(resolved);
+            if !path_is_allowed(&resolved, roots) {
+                anyhow::bail!(
+                    "El ejecutable '{}' esta fuera de las permitidas para Telegram",
+                    program_token
+                );
+            }
+            if !resolved.exists() {
+                anyhow::bail!("El ejecutable no existe: {}", resolved.display());
+            }
+            resolved.display().to_string()
+        } else {
+            validate_allowed_program(program_token)?;
+            program_token.to_string()
+        };
+
+        Ok(ParsedToolCommand { program, args })
+    }
+
+    fn validate_allowed_program(program: &str) -> Result<()> {
+        let allowed = [
+            "pwd",
+            "ls",
+            "cat",
+            "sed",
+            "rg",
+            "find",
+            "git",
+            "cargo",
+            "make",
+            "just",
+            "npm",
+            "pnpm",
+            "yarn",
+            "node",
+            "python",
+            "python3",
+            "pytest",
+            "uv",
+            "go",
+            "rustc",
+            "rustfmt",
+            "journalctl",
+            "systemctl",
+            "ps",
+            "df",
+            "du",
+            "free",
+            "uptime",
+            "uname",
+            "whoami",
+            "id",
+            "nvidia-smi",
+            "flatpak",
+            "podman",
+            "docker",
+            "ffmpeg",
+            "whisper-cli",
+            "sqlite3",
+            "stat",
+            "head",
+            "tail",
+            "wc",
+            "cut",
+            "sort",
+            "uniq",
+            "tr",
+            "date",
+        ];
+
+        if allowed.contains(&program) {
+            Ok(())
+        } else {
+            anyhow::bail!(
+                "El comando '{}' no esta permitido desde Telegram. Usa herramientas dedicadas o ajusta el bridge.",
+                program
+            )
+        }
+    }
+
+    fn validate_command_arguments(program: &str, args: &[String]) -> Result<()> {
+        let lower_args: Vec<String> = args.iter().map(|arg| arg.to_lowercase()).collect();
+
+        match program {
+            "git" => {
+                let blocked = [
+                    "add",
+                    "am",
+                    "apply",
+                    "bisect",
+                    "checkout",
+                    "cherry-pick",
+                    "clean",
+                    "clone",
+                    "commit",
+                    "fetch",
+                    "merge",
+                    "pull",
+                    "push",
+                    "rebase",
+                    "reset",
+                    "restore",
+                    "revert",
+                    "stash",
+                    "submodule",
+                    "switch",
+                    "tag",
+                    "worktree",
+                ];
+                if let Some(subcommand) = lower_args.first() {
+                    if blocked.contains(&subcommand.as_str()) {
+                        anyhow::bail!("Subcomando git no permitido desde Telegram: {}", subcommand);
+                    }
+                }
+            }
+            "systemctl" => {
+                let allowed = [
+                    "status",
+                    "is-active",
+                    "is-enabled",
+                    "show",
+                    "list-units",
+                    "list-unit-files",
+                    "cat",
+                ];
+                if let Some(subcommand) = lower_args.first() {
+                    if !allowed.contains(&subcommand.as_str()) {
+                        anyhow::bail!("Usa service_manage para mutar servicios. systemctl '{}' no esta permitido.", subcommand);
+                    }
+                }
+            }
+            "podman" | "docker" => {
+                let blocked = [
+                    "build", "compose", "cp", "exec", "kill", "pull", "push", "restart", "rm",
+                    "rmi", "run", "start", "stop",
+                ];
+                if let Some(subcommand) = lower_args.first() {
+                    if blocked.contains(&subcommand.as_str()) {
+                        anyhow::bail!(
+                            "Subcomando {} no permitido desde Telegram: {}",
+                            program,
+                            subcommand
+                        );
+                    }
+                }
+            }
+            "flatpak" => {
+                let allowed = ["list", "info", "ps", "search", "remotes"];
+                if let Some(subcommand) = lower_args.first() {
+                    if !allowed.contains(&subcommand.as_str()) {
+                        anyhow::bail!(
+                            "Subcomando flatpak no permitido desde Telegram: {}",
+                            subcommand
+                        );
+                    }
+                }
+            }
+            "cargo" => {
+                let blocked = [
+                    "add",
+                    "clean",
+                    "doc",
+                    "init",
+                    "install",
+                    "login",
+                    "new",
+                    "owner",
+                    "package",
+                    "publish",
+                    "remove",
+                    "uninstall",
+                ];
+                if let Some(subcommand) = lower_args.first() {
+                    if blocked.contains(&subcommand.as_str()) {
+                        anyhow::bail!(
+                            "Subcomando cargo no permitido desde Telegram: {}",
+                            subcommand
+                        );
+                    }
+                }
+            }
+            "npm" | "pnpm" | "yarn" => {
+                let blocked = [
+                    "add",
+                    "create",
+                    "dlx",
+                    "exec",
+                    "global",
+                    "install",
+                    "link",
+                    "login",
+                    "publish",
+                    "remove",
+                    "uninstall",
+                    "update",
+                ];
+                if let Some(subcommand) = lower_args.first() {
+                    if blocked.contains(&subcommand.as_str()) {
+                        anyhow::bail!(
+                            "Subcomando {} no permitido desde Telegram: {}",
+                            program,
+                            subcommand
+                        );
+                    }
+                }
+            }
+            "python" | "python3" => {
+                if lower_args.first().map(|arg| arg.as_str()) == Some("-c") {
+                    anyhow::bail!("python -c no esta permitido desde Telegram");
+                }
+            }
+            "node" => {
+                if matches!(
+                    lower_args.first().map(|arg| arg.as_str()),
+                    Some("-e" | "--eval")
+                ) {
+                    anyhow::bail!("node --eval no esta permitido desde Telegram");
+                }
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn validate_path_like_args(args: &[String], roots: &[PathBuf], workdir: &Path) -> Result<()> {
+        for arg in args {
+            if !looks_like_path_argument(arg) {
+                continue;
+            }
+            let resolved = resolve_input_path(arg, Some(workdir));
+            if !path_is_allowed(&resolved, roots) {
+                anyhow::bail!(
+                    "La ruta '{}' esta fuera de las permitidas para Telegram",
+                    arg
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn looks_like_path_argument(arg: &str) -> bool {
+        !arg.starts_with('-')
+            && (arg.starts_with('/')
+                || arg.starts_with("./")
+                || arg.starts_with("../")
+                || arg.starts_with("~/")
+                || arg.contains('/'))
+    }
+
+    fn simple_glob_match(pattern: &str, text: &str) -> bool {
+        let pattern = if pattern.is_empty() { "*" } else { pattern };
+        let pattern = pattern.as_bytes();
+        let text = text.as_bytes();
+
+        let (mut p, mut t) = (0usize, 0usize);
+        let (mut star_idx, mut match_idx) = (None, 0usize);
+
+        while t < text.len() {
+            if p < pattern.len() && (pattern[p] == b'?' || pattern[p] == text[t]) {
+                p += 1;
+                t += 1;
+            } else if p < pattern.len() && pattern[p] == b'*' {
+                star_idx = Some(p);
+                match_idx = t;
+                p += 1;
+            } else if let Some(star) = star_idx {
+                p = star + 1;
+                match_idx += 1;
+                t = match_idx;
+            } else {
+                return false;
+            }
+        }
+
+        while p < pattern.len() && pattern[p] == b'*' {
+            p += 1;
+        }
+
+        p == pattern.len()
+    }
 
     fn expand_home(path: &str) -> String {
         if path.starts_with('~') {

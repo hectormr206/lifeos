@@ -24,6 +24,7 @@ mod ai;
 mod api;
 mod async_workers;
 mod atspi_layer;
+mod audio_frontend;
 mod autonomous_agent;
 mod axi_tray;
 mod backup_monitor;
@@ -48,7 +49,6 @@ mod health;
 mod health_tracking;
 #[cfg(feature = "homeassistant")]
 mod home_assistant;
-mod knowledge_graph;
 mod lab;
 mod llm_router;
 mod mcp_server;
@@ -955,7 +955,7 @@ async fn main() -> anyhow::Result<()> {
                         camera: runtime.camera_enabled,
                         screen: runtime.screen_enabled,
                         always_on: always_on.enabled,
-                        tts: runtime.audio_enabled, // TTS follows mic setting
+                        tts: runtime.tts_enabled,
                     }
                 };
                 let tray_rx = tray_state.event_bus.subscribe();
@@ -1669,13 +1669,6 @@ async fn main() -> anyhow::Result<()> {
             let notify_rx = state.supervisor.subscribe();
             let ss = Some(state.session_store.clone());
             let eb = Some(state.event_bus.clone());
-            let kg = {
-                let data_dir = std::path::PathBuf::from(
-                    std::env::var("LIFEOS_DATA_DIR").unwrap_or_else(|_| "/var/lib/lifeos".into()),
-                )
-                .join("knowledge_graph");
-                Arc::new(RwLock::new(knowledge_graph::KnowledgeGraph::new(data_dir)))
-            };
             // Load user model for personalization (Fase AQ)
             let um = {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
@@ -1692,7 +1685,6 @@ async fn main() -> anyhow::Result<()> {
                     tq,
                     router,
                     memory,
-                    Some(kg),
                     notify_rx,
                     ss,
                     eb,
@@ -1719,22 +1711,8 @@ async fn main() -> anyhow::Result<()> {
             let tq = state.task_queue.clone();
             let router = state.llm_router.clone();
             let memory = Some(state.memory_plane_manager.clone());
-            let kg = {
-                let data_dir = std::path::PathBuf::from(
-                    std::env::var("LIFEOS_DATA_DIR").unwrap_or_else(|_| "/var/lib/lifeos".into()),
-                )
-                .join("knowledge_graph");
-                Arc::new(RwLock::new(knowledge_graph::KnowledgeGraph::new(data_dir)))
-            };
             Some(tokio::spawn(async move {
-                email_bridge::run_conversational_email_loop(
-                    email_config,
-                    tq,
-                    router,
-                    memory,
-                    Some(kg),
-                )
-                .await;
+                email_bridge::run_conversational_email_loop(email_config, tq, router, memory).await;
             }))
         } else {
             info!("Email bridge: LIFEOS_EMAIL_CONVERSATIONAL not enabled, skipping");
@@ -2155,6 +2133,7 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     audio_enabled: runtime.audio_enabled,
                     screen_enabled: runtime.screen_enabled,
                     camera_enabled: runtime.camera_enabled,
+                    tts_enabled: runtime.tts_enabled,
                     kill_switch_active: runtime.kill_switch_active,
                     capture_interval_seconds: runtime.capture_interval_seconds,
                     always_on_active: always_on.enabled,

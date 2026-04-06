@@ -1200,6 +1200,88 @@ impl MemoryPlaneManager {
         .await?
     }
 
+    /// Convenience wrapper: register an entity by name and type as a triple
+    /// `(name, "is_a", type)`.
+    ///
+    /// Replaces the standalone `KnowledgeGraph::add_entity` API. Storing
+    /// entities as `is_a` triples lets us reuse the same indexed table
+    /// (`knowledge_graph` in this DB) instead of maintaining a parallel
+    /// JSON-backed graph that did a full file rewrite on every insert.
+    ///
+    /// Entity names and types are normalised to lowercase to match the
+    /// rest of the triple store.
+    pub async fn add_entity_typed(&self, name: &str, entity_type: &str) -> Result<()> {
+        let name = name.trim();
+        let entity_type = entity_type.trim();
+        if name.is_empty() || entity_type.is_empty() {
+            return Ok(());
+        }
+        self.add_triple(name, "is_a", entity_type, 1.0, None).await
+    }
+
+    /// Export the entire `knowledge_graph` triple table as a JSON value.
+    ///
+    /// Used by `/api/v1/knowledge-graph/export`. Returns
+    /// `{ "triples": [{ subject, predicate, object, confidence, created_at, updated_at }, ...] }`.
+    /// Does not include encrypted memory entries — only the public triple
+    /// store, which is plaintext metadata by design.
+    pub async fn export_graph(&self) -> Result<serde_json::Value> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT subject, predicate, object, confidence, created_at, updated_at
+                 FROM knowledge_graph
+                 ORDER BY created_at ASC",
+            )?;
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "subject": row.get::<_, String>(0)?,
+                        "predicate": row.get::<_, String>(1)?,
+                        "object": row.get::<_, String>(2)?,
+                        "confidence": row.get::<_, f64>(3)?,
+                        "created_at": row.get::<_, String>(4)?,
+                        "updated_at": row.get::<_, String>(5)?,
+                    }))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok::<_, anyhow::Error>(serde_json::json!({
+                "triples": rows,
+                "count": stmt.column_count(),
+            }))
+        })
+        .await?
+    }
+
+    /// Import a JSON document produced by [`export_graph`].
+    ///
+    /// Expected shape: `{ "triples": [{ "subject": ..., "predicate": ..., "object": ..., "confidence": optional }, ...] }`.
+    /// Returns the number of triples inserted (after dedup via the unique
+    /// `(subject, predicate, object)` constraint).
+    pub async fn import_graph(&self, value: &serde_json::Value) -> Result<usize> {
+        let triples = value
+            .get("triples")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut imported = 0usize;
+        for t in triples {
+            let subject = t.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+            let predicate = t.get("predicate").and_then(|v| v.as_str()).unwrap_or("");
+            let object = t.get("object").and_then(|v| v.as_str()).unwrap_or("");
+            let confidence = t.get("confidence").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            if subject.is_empty() || predicate.is_empty() || object.is_empty() {
+                continue;
+            }
+            self.add_triple(subject, predicate, object, confidence, None)
+                .await?;
+            imported += 1;
+        }
+        Ok(imported)
+    }
+
     // -----------------------------------------------------------------------
     // Procedural Memory (workflow memory)
     // -----------------------------------------------------------------------
@@ -2504,6 +2586,92 @@ fn tokenize(input: &str) -> HashSet<String> {
         .collect()
 }
 
+/// Cheap pattern-based entity extraction.
+///
+/// Returns `Vec<(name, entity_type)>` where `entity_type` is one of the
+/// short string tags used by [`MemoryPlaneManager::add_entity_typed`]:
+/// `"date"`, `"person"`, `"file"`, `"topic"`. The result is intentionally
+/// noisy-tolerant — recall matters more than precision because all
+/// downstream consumers normalise + dedup via the unique constraint on
+/// `knowledge_graph (subject, predicate, object)`.
+///
+/// Recognised patterns:
+/// - ISO dates `YYYY-MM-DD` -> `date`
+/// - Spanish day names (lunes..domingo, with or without accent) -> `date`
+/// - `@username` mentions -> `person`
+/// - Absolute paths (`/foo/bar`) and home paths (`~/foo`) -> `file`
+/// - URLs (`http://`, `https://`) -> `topic`
+///
+/// Replaces the equivalent helper from the deleted `knowledge_graph`
+/// module.
+pub fn extract_entities_from_text(text: &str) -> Vec<(String, &'static str)> {
+    use std::collections::HashSet;
+    let mut found: Vec<(String, &'static str)> = Vec::new();
+    let mut seen: HashSet<(String, &'static str)> = HashSet::new();
+
+    // ISO dates YYYY-MM-DD via byte scan (avoid pulling in regex just for this).
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 10 <= bytes.len() {
+        let slice = &bytes[i..i + 10];
+        let is_date = slice[0].is_ascii_digit()
+            && slice[1].is_ascii_digit()
+            && slice[2].is_ascii_digit()
+            && slice[3].is_ascii_digit()
+            && slice[4] == b'-'
+            && slice[5].is_ascii_digit()
+            && slice[6].is_ascii_digit()
+            && slice[7] == b'-'
+            && slice[8].is_ascii_digit()
+            && slice[9].is_ascii_digit();
+        if is_date {
+            let cap = std::str::from_utf8(slice).unwrap_or("").to_string();
+            if seen.insert((cap.clone(), "date")) {
+                found.push((cap, "date"));
+            }
+            i += 10;
+        } else {
+            i += 1;
+        }
+    }
+
+    let days = [
+        "lunes", "martes", "miercoles", "miércoles", "jueves", "viernes", "sabado", "sábado",
+        "domingo",
+    ];
+    for word in text.split_whitespace() {
+        let w = word
+            .trim_matches(|c: char| c.is_ascii_punctuation())
+            .to_lowercase();
+        if days.contains(&w.as_str()) && seen.insert((w.clone(), "date")) {
+            found.push((w, "date"));
+        }
+        if word.starts_with('@') && word.len() > 1 {
+            let name = word
+                .trim_start_matches('@')
+                .trim_matches(|c: char| c.is_ascii_punctuation());
+            if !name.is_empty() && seen.insert((name.to_string(), "person")) {
+                found.push((name.to_string(), "person"));
+            }
+        }
+        let clean = word.trim_matches(|c: char| c == ',' || c == ';' || c == ')' || c == '(');
+        if (clean.starts_with('/') || clean.starts_with("~/"))
+            && clean.len() > 2
+            && !clean.starts_with("//")
+            && seen.insert((clean.to_string(), "file"))
+        {
+            found.push((clean.to_string(), "file"));
+        }
+        if (clean.starts_with("https://") || clean.starts_with("http://"))
+            && seen.insert((clean.to_string(), "topic"))
+        {
+            found.push((clean.to_string(), "topic"));
+        }
+    }
+
+    found
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3105,5 +3273,76 @@ mod tests {
         assert_eq!(capped, 100, "importance must cap at 100");
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- Standalone KnowledgeGraph migration -------------------------------
+
+    #[tokio::test]
+    async fn test_add_entity_typed_creates_is_a_triple() {
+        let dir = temp_dir("memory-plane-entity-typed");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_entity_typed("Hector", "person").await.unwrap();
+        mgr.add_entity_typed("LifeOS", "project").await.unwrap();
+        // Same triple twice — must dedup via the unique constraint, not error.
+        mgr.add_entity_typed("Hector", "person").await.unwrap();
+
+        let triples = mgr.query_graph("hector", 10).await.unwrap();
+        assert!(
+            triples
+                .iter()
+                .any(|t| t["predicate"] == "is_a" && t["object"] == "person"),
+            "expected (hector, is_a, person) triple, got {:?}",
+            triples
+        );
+
+        let proj = mgr.query_graph("lifeos", 10).await.unwrap();
+        assert!(proj
+            .iter()
+            .any(|t| t["predicate"] == "is_a" && t["object"] == "project"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_export_import_graph_roundtrip() {
+        let dir = temp_dir("memory-plane-graph-roundtrip");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_entity_typed("Alice", "person").await.unwrap();
+        mgr.add_triple("alice", "works_on", "lifeos", 0.9, None)
+            .await
+            .unwrap();
+
+        let exported = mgr.export_graph().await.unwrap();
+        let triples = exported["triples"].as_array().unwrap();
+        assert!(triples.len() >= 2, "expected at least 2 triples in export");
+
+        // Fresh manager — verify we can import the same JSON.
+        let dir2 = temp_dir("memory-plane-graph-roundtrip-target");
+        let mgr2 = MemoryPlaneManager::new(dir2.clone()).unwrap();
+        mgr2.initialize().await.unwrap();
+        let imported = mgr2.import_graph(&exported).await.unwrap();
+        assert_eq!(imported, triples.len());
+
+        let alice_triples = mgr2.query_graph("alice", 10).await.unwrap();
+        assert_eq!(alice_triples.len(), 2);
+
+        std::fs::remove_dir_all(dir).ok();
+        std::fs::remove_dir_all(dir2).ok();
+    }
+
+    #[test]
+    fn test_extract_entities_from_text_finds_dates_and_people() {
+        let text =
+            "El 2026-04-12 me reuno con @carlos en /home/user/proyectos sobre https://lifeos.dev";
+        let entities = extract_entities_from_text(text);
+        let kinds: Vec<&'static str> = entities.iter().map(|(_, k)| *k).collect();
+        assert!(kinds.contains(&"date"));
+        assert!(kinds.contains(&"person"));
+        assert!(kinds.contains(&"file"));
+        assert!(kinds.contains(&"topic"));
     }
 }
