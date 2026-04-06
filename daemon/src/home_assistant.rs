@@ -779,30 +779,3 @@ pub mod homeassistant {
         }
     }
 }
-
-// =============================================================================
-// Stub — compiled when the `homeassistant` feature is NOT enabled
-// =============================================================================
-
-#[cfg(not(feature = "homeassistant"))]
-pub mod stub {
-    /// Placeholder config struct when the `homeassistant` feature is disabled.
-    pub struct HomeAssistantConfig;
-
-    impl HomeAssistantConfig {
-        /// Always returns `None` — feature is not compiled in.
-        pub fn from_env() -> Option<Self> {
-            None
-        }
-    }
-
-    /// Placeholder manager struct when the `homeassistant` feature is disabled.
-    pub struct HomeAssistantManager;
-
-    impl HomeAssistantManager {
-        /// Creates a no-op manager.
-        pub fn new(_config: HomeAssistantConfig) -> Self {
-            Self
-        }
-    }
-}

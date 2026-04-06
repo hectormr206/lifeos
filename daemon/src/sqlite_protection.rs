@@ -6,12 +6,6 @@ use anyhow::{Context, Result};
 use log::{info, warn};
 use std::path::{Path, PathBuf};
 
-/// Enable WAL mode on a SQLite database for crash resilience.
-pub fn enable_wal(conn: &rusqlite::Connection) -> Result<()> {
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
-    Ok(())
-}
-
 /// Run integrity check on a SQLite database.
 /// Returns Ok(true) if healthy, Ok(false) if corrupt.
 pub fn check_integrity(db_path: &Path) -> Result<bool> {

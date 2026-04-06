@@ -204,23 +204,6 @@ impl ReliabilityTracker {
             .map_err(|e| format!("Row error: {e}"))
     }
 
-    /// Success percentage of the last `n` tasks (0.0..=1.0).
-    pub fn success_rate_last_n(&self, n: u32) -> Result<f64, String> {
-        let conn = self.db.lock().map_err(|e| format!("DB lock: {e}"))?;
-        let (total, ok): (u32, u32) = conn
-            .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(success), 0)
-                 FROM (SELECT success FROM task_outcomes ORDER BY id DESC LIMIT ?1)",
-                params![n],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .map_err(|e| format!("Query error: {e}"))?;
-        if total == 0 {
-            return Ok(1.0);
-        }
-        Ok(ok as f64 / total as f64)
-    }
-
     /// Success percentage of tasks completed in the last `hours` hours.
     pub fn success_rate_period(&self, hours: u64) -> Result<f64, String> {
         let conn = self.db.lock().map_err(|e| format!("DB lock: {e}"))?;
@@ -407,13 +390,6 @@ pub fn suggest_recovery(error: &str) -> Option<String> {
 // Trend analysis
 // ---------------------------------------------------------------------------
 
-/// Compare success rates of the first and second halves of the outcome list.
-/// Returns "improving", "degrading", or "stable".
-pub fn calculate_trend(outcomes: &[TaskOutcome]) -> String {
-    let bools: Vec<bool> = outcomes.iter().map(|o| o.success).collect();
-    calculate_trend_from_bools(&bools)
-}
-
 fn calculate_trend_from_bools(outcomes: &[bool]) -> String {
     if outcomes.len() < 4 {
         return "stable".into();
@@ -438,33 +414,6 @@ fn calculate_trend_from_bools(outcomes: &[bool]) -> String {
     } else {
         "stable".into()
     }
-}
-
-// ---------------------------------------------------------------------------
-// JSON serialisation for dashboard / API
-// ---------------------------------------------------------------------------
-
-/// Format a `ReliabilityReport` as JSON for the dashboard.
-pub fn reliability_to_json(report: &ReliabilityReport) -> serde_json::Value {
-    serde_json::json!({
-        "total_tasks": report.total_tasks,
-        "successful": report.successful,
-        "failed": report.failed,
-        "success_rate": format!("{:.1}%", report.success_rate * 100.0),
-        "success_rate_raw": report.success_rate,
-        "mtbf_hours": format!("{:.1}", report.mtbf_hours),
-        "trend": report.trend,
-        "meets_target": report.meets_target,
-        "target": "95%",
-        "top_failures": report.top_failures.iter().map(|f| {
-            serde_json::json!({
-                "error_signature": f.error_signature,
-                "count": f.count,
-                "last_seen": f.last_seen.to_rfc3339(),
-                "suggested_fix": f.suggested_fix,
-            })
-        }).collect::<Vec<_>>(),
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -538,7 +487,7 @@ mod tests {
             .record_outcome(&make_outcome(false, Some("timeout")))
             .unwrap();
 
-        let rate = tracker.success_rate_last_n(10).unwrap();
+        let rate = tracker.success_rate_period(24).unwrap();
         assert!((rate - 0.9).abs() < 0.01, "Expected ~90%, got {rate}");
     }
 
@@ -546,7 +495,7 @@ mod tests {
     fn test_empty_db_returns_full_success() {
         let db = tmp_db();
         let tracker = ReliabilityTracker::new(db).unwrap();
-        let rate = tracker.success_rate_last_n(10).unwrap();
+        let rate = tracker.success_rate_period(24).unwrap();
         assert!((rate - 1.0).abs() < f64::EPSILON);
     }
 
@@ -588,33 +537,6 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_trend() {
-        // All success -> stable
-        let all_ok: Vec<TaskOutcome> = (0..10).map(|_| make_outcome(true, None)).collect();
-        assert_eq!(calculate_trend(&all_ok), "stable");
-
-        // First half bad, second half good -> improving
-        let mut improving: Vec<TaskOutcome> = Vec::new();
-        for _ in 0..5 {
-            improving.push(make_outcome(false, Some("err")));
-        }
-        for _ in 0..5 {
-            improving.push(make_outcome(true, None));
-        }
-        assert_eq!(calculate_trend(&improving), "improving");
-
-        // First half good, second half bad -> degrading
-        let mut degrading: Vec<TaskOutcome> = Vec::new();
-        for _ in 0..5 {
-            degrading.push(make_outcome(true, None));
-        }
-        for _ in 0..5 {
-            degrading.push(make_outcome(false, Some("err")));
-        }
-        assert_eq!(calculate_trend(&degrading), "degrading");
-    }
-
-    #[test]
     fn test_reliability_report() {
         let db = tmp_db();
         let tracker = ReliabilityTracker::new(db).unwrap();
@@ -632,23 +554,5 @@ mod tests {
         assert_eq!(report.failed, 1);
         assert!(report.success_rate >= 0.95);
         assert!(report.meets_target);
-    }
-
-    #[test]
-    fn test_reliability_to_json() {
-        let report = ReliabilityReport {
-            total_tasks: 100,
-            successful: 96,
-            failed: 4,
-            success_rate: 0.96,
-            mtbf_hours: 24.5,
-            top_failures: vec![],
-            trend: "stable".into(),
-            meets_target: true,
-        };
-        let json = reliability_to_json(&report);
-        assert_eq!(json["meets_target"], true);
-        assert_eq!(json["trend"], "stable");
-        assert_eq!(json["target"], "95%");
     }
 }

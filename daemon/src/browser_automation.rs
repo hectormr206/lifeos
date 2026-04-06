@@ -14,61 +14,6 @@ use std::process::Stdio;
 use tokio::process::Command;
 use tokio::time::Duration;
 
-use crate::cdp_client::CdpClient;
-
-/// A persistent browser session that keeps a single Firefox process alive
-/// so that page state (cookies, storage, sessions) is preserved across
-/// multiple operations.
-pub struct PersistentBrowserSession {
-    cdp: CdpClient,
-    process: tokio::process::Child,
-    port: u16,
-}
-
-impl PersistentBrowserSession {
-    /// Launch Firefox headless with CDP remote debugging and connect.
-    pub async fn start() -> Result<Self, String> {
-        Self::start_on_port(9222).await
-    }
-
-    /// Launch Firefox headless with CDP on a specific port.
-    pub async fn start_on_port(port: u16) -> Result<Self, String> {
-        let process = tokio::process::Command::new("firefox")
-            .args([
-                "--headless",
-                &format!("--remote-debugging-port={}", port),
-                "--no-remote",
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Failed to launch Firefox: {}", e))?;
-
-        // CdpClient::connect retries discovery for up to 10 seconds
-        let cdp = CdpClient::connect(port).await?;
-
-        Ok(Self { cdp, process, port })
-    }
-
-    /// Get a reference to the underlying CDP client.
-    pub fn cdp(&self) -> &CdpClient {
-        &self.cdp
-    }
-
-    /// The port this session is running on.
-    pub fn port(&self) -> u16 {
-        self.port
-    }
-}
-
-impl Drop for PersistentBrowserSession {
-    fn drop(&mut self) {
-        // Best-effort kill when the session is dropped.
-        // We can't .await here, but start() ensures the process handle is valid.
-        let _ = self.process.start_kill();
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserSession {
     pub url: String,
@@ -167,45 +112,6 @@ impl BrowserAutomation {
         let html = String::from_utf8_lossy(&output.stdout);
         // Truncate to prevent overwhelming the LLM
         Ok(html.chars().take(8000).collect())
-    }
-
-    /// Run a local development server check — navigate to localhost URL and verify it loads.
-    pub async fn check_local_server(&self, port: u16, path: &str) -> Result<String> {
-        let url = format!("http://127.0.0.1:{}{}", port, path);
-        info!("[browser] Checking local server: {}", url);
-
-        // First verify the server is responding
-        let output = Command::new("curl")
-            .args(["-sI", "--max-time", "5", &url])
-            .output()
-            .await
-            .context("curl failed")?;
-
-        let headers = String::from_utf8_lossy(&output.stdout);
-        let status_line = headers.lines().next().unwrap_or("");
-
-        if !status_line.contains("200")
-            && !status_line.contains("301")
-            && !status_line.contains("302")
-        {
-            return Ok(format!(
-                "Server check FAILED: {} returned {}",
-                url, status_line
-            ));
-        }
-
-        // Take a screenshot for visual verification
-        match self.navigate_and_capture(&url).await {
-            Ok(screenshot) => Ok(format!(
-                "Server check OK: {} — screenshot at {}",
-                url, screenshot
-            )),
-            Err(e) => Ok(format!(
-                "Server responds ({}), but screenshot failed: {}",
-                status_line.trim(),
-                e
-            )),
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -353,62 +259,5 @@ impl BrowserAutomation {
         let result = self.cdp_evaluate(js_code).await;
         child.kill().await.ok();
         result
-    }
-
-    /// Get console errors from a page by injecting an error collector.
-    pub async fn get_console_errors(&self, url: &str) -> Result<Vec<String>> {
-        let js = r#"
-            (function() {
-                var errors = [];
-                var origError = console.error;
-                console.error = function() {
-                    var args = Array.prototype.slice.call(arguments);
-                    errors.push(args.join(' '));
-                    origError.apply(console, arguments);
-                };
-                return JSON.stringify(errors);
-            })()
-        "#;
-        let result = self.evaluate_js_on_page(url, js).await?;
-        let errors: Vec<String> = serde_json::from_str(&result).unwrap_or_default();
-        Ok(errors)
-    }
-
-    /// Navigate to a URL, capture screenshot, and analyze with vision LLM.
-    /// Returns the LLM's description/analysis of what the page shows.
-    pub async fn navigate_and_analyze(
-        &self,
-        url: &str,
-        analysis_prompt: &str,
-        router: &std::sync::Arc<tokio::sync::RwLock<crate::llm_router::LlmRouter>>,
-    ) -> Result<String> {
-        let screenshot_path = self.navigate_and_capture(url).await?;
-
-        // Build a vision request to the LLM router
-        let request = crate::llm_router::RouterRequest {
-            messages: vec![crate::llm_router::ChatMessage {
-                role: "user".into(),
-                content: serde_json::Value::String(format!(
-                    "{}\n\n[Screenshot of {} attached at: {}]",
-                    analysis_prompt, url, screenshot_path
-                )),
-            }],
-            complexity: Some(crate::llm_router::TaskComplexity::Vision),
-            sensitivity: None,
-            preferred_provider: None,
-            max_tokens: Some(1024),
-        };
-
-        let router_guard = router.read().await;
-        match router_guard.chat(&request).await {
-            Ok(response) => Ok(response.text),
-            Err(e) => {
-                // Fallback: return the screenshot path if vision fails
-                Ok(format!(
-                    "Screenshot saved at {} but vision analysis failed: {}",
-                    screenshot_path, e
-                ))
-            }
-        }
     }
 }

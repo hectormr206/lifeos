@@ -6,8 +6,7 @@
 //! - Have I Been Pwned (HIBP) email breach check (k-anonymity, no full email sent)
 //! - Recent file access traces
 
-use anyhow::Result;
-use log::{info, warn};
+use log::info;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
@@ -120,32 +119,4 @@ pub async fn run_privacy_scan() -> PrivacyReport {
     );
 
     report
-}
-
-/// Check a password hash against Have I Been Pwned (k-anonymity model).
-/// Only sends first 5 chars of SHA-1 hash — the full password never leaves the device.
-pub async fn check_password_hibp(password_sha1: &str) -> Result<bool> {
-    if password_sha1.len() < 5 {
-        anyhow::bail!("SHA-1 hash too short");
-    }
-
-    let prefix = &password_sha1[..5];
-    let suffix = &password_sha1[5..].to_uppercase();
-
-    let url = format!("https://api.pwnedpasswords.com/range/{}", prefix);
-    let output = Command::new("curl").args(["-s", &url]).output().await?;
-
-    let text = String::from_utf8_lossy(&output.stdout);
-
-    // Check if our suffix appears in the response
-    for line in text.lines() {
-        if let Some((hash_suffix, _count)) = line.split_once(':') {
-            if hash_suffix.trim() == suffix {
-                warn!("[privacy] Password found in HIBP breach database!");
-                return Ok(true); // Breached
-            }
-        }
-    }
-
-    Ok(false) // Not found
 }

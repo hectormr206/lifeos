@@ -53,18 +53,6 @@ impl MessageDedupe {
         cache.insert(key, now);
         false // Not a duplicate
     }
-
-    /// Get cache stats for monitoring: (total_entries, active_entries)
-    pub async fn stats(&self) -> (usize, usize) {
-        let cache = self.cache.read().await;
-        let now = Instant::now();
-        let ttl = Duration::from_secs(DEDUPE_TTL_SECS);
-        let active = cache
-            .values()
-            .filter(|t| now.duration_since(**t) < ttl)
-            .count();
-        (cache.len(), active)
-    }
 }
 
 #[cfg(test)]
@@ -109,19 +97,5 @@ mod tests {
         };
         assert!(!dedupe.is_duplicate(key1).await);
         assert!(!dedupe.is_duplicate(key2).await);
-    }
-
-    #[tokio::test]
-    async fn stats_reports_correctly() {
-        let dedupe = MessageDedupe::new();
-        let key = DedupeKey {
-            channel: "telegram".into(),
-            peer_id: "123".into(),
-            message_id: "1".into(),
-        };
-        dedupe.is_duplicate(key).await;
-        let (total, active) = dedupe.stats().await;
-        assert_eq!(total, 1);
-        assert_eq!(active, 1);
     }
 }

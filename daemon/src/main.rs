@@ -24,54 +24,39 @@ mod ai;
 mod api;
 mod async_workers;
 mod atspi_layer;
-#[allow(dead_code)]
 mod autonomous_agent;
 mod axi_tray;
-#[allow(dead_code)]
 mod backup_monitor;
-#[allow(dead_code)]
 mod battery_manager;
-#[allow(dead_code)]
 mod browser_automation;
-#[allow(dead_code)]
 mod calendar;
-#[allow(dead_code)]
-mod cdp_client;
 mod circuit_breaker;
 mod computer_use;
 mod config_store;
 mod context_policies;
 mod control_layers;
-#[allow(dead_code)]
 mod desktop_operator;
 mod email_bridge;
 mod events;
-#[allow(dead_code)]
 mod exec_whitelist;
 mod experience_modes;
-#[allow(dead_code)]
 mod eye_health;
 mod follow_along;
 mod game_guard;
-#[allow(dead_code)]
 mod git_workflow;
 mod health;
-#[allow(dead_code)]
 mod health_tracking;
-#[allow(dead_code)]
+#[cfg(feature = "homeassistant")]
 mod home_assistant;
-#[allow(dead_code)]
 mod knowledge_graph;
 mod lab;
 mod llm_router;
-#[allow(dead_code)]
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
 mod meeting_archive;
 #[allow(dead_code)] // Used via Telegram tools + event bus + main loop
 mod meeting_assistant;
 mod memory_plane;
-#[allow(dead_code)]
 mod message_dedupe;
 #[cfg(feature = "ui-overlay")]
 mod mini_widget;
@@ -83,42 +68,30 @@ mod permissions;
 #[cfg(feature = "dbus")]
 mod portal;
 mod privacy_filter;
-#[allow(dead_code)]
 mod privacy_hygiene;
-#[allow(dead_code)]
 mod proactive;
-#[allow(dead_code)]
 mod reliability;
 mod safe_mode;
-#[allow(dead_code)]
 mod scheduled_tasks;
 mod screen_capture;
-#[allow(dead_code)]
 mod security_ai;
-#[allow(dead_code)]
-mod security_daemon;
 mod self_improving;
 mod sensory_memory;
 mod sensory_pipeline;
 mod session_store;
-#[allow(dead_code)]
 mod skill_generator;
 mod skill_registry;
-#[allow(dead_code)]
 mod speaker_id;
-#[allow(dead_code)]
 mod sqlite_protection;
 mod storage_housekeeping;
 mod supervisor;
 mod system;
-#[allow(dead_code)]
 mod system_tuner;
 mod task_queue;
 mod telegram_bridge;
 mod telegram_tools;
 mod telemetry;
 mod time_context;
-#[allow(dead_code)]
 mod translation;
 mod tuf;
 mod update_scheduler;
@@ -439,7 +412,6 @@ LIFEOS_HA_TOKEN=
 }
 
 #[cfg(feature = "ui-overlay")]
-#[allow(dead_code)]
 fn ensure_graphical_environment() {
     if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
         return;
@@ -468,7 +440,6 @@ fn ensure_graphical_environment() {
 }
 
 /// Daemon state shared across tasks
-#[allow(dead_code)]
 pub struct DaemonState {
     pub config: DaemonConfig,
     pub system_monitor: Arc<RwLock<SystemMonitor>>,

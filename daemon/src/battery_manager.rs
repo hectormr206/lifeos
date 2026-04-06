@@ -136,54 +136,6 @@ pub async fn get_power_profile() -> Result<String> {
     Ok("unknown".into())
 }
 
-/// Set power profile: "power-saver", "balanced", "performance"
-pub async fn set_power_profile(profile: &str) -> Result<()> {
-    info!("[battery] Setting power profile: {}", profile);
-
-    let output = Command::new("powerprofilesctl")
-        .args(["set", profile])
-        .output()
-        .await;
-
-    if let Ok(o) = output {
-        if o.status.success() {
-            return Ok(());
-        }
-    }
-
-    // Fallback: tuned-adm
-    let tuned_profile = match profile {
-        "power-saver" => "powersave",
-        "performance" => "throughput-performance",
-        _ => "balanced",
-    };
-
-    Command::new("tuned-adm")
-        .args(["profile", tuned_profile])
-        .output()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to set power profile: {}", e))?;
-
-    Ok(())
-}
-
-/// Configure NVIDIA RTD3 for maximum power savings on battery.
-pub async fn configure_nvidia_rtd3() -> Result<()> {
-    let conf_path = "/etc/modprobe.d/nvidia-power.conf";
-    let content = "options nvidia \"NVreg_DynamicPowerManagement=0x02\"\n";
-
-    match tokio::fs::write(conf_path, content).await {
-        Ok(()) => {
-            info!("[battery] NVIDIA RTD3 configured (fine-grained power management)");
-            Ok(())
-        }
-        Err(e) => {
-            warn!("[battery] Could not write RTD3 config ({}), needs root", e);
-            anyhow::bail!("RTD3 config requires root: {}", e)
-        }
-    }
-}
-
 /// Detect laptop vendor from DMI data.
 async fn detect_vendor() -> Option<String> {
     let vendor = tokio::fs::read_to_string("/sys/class/dmi/id/sys_vendor")
