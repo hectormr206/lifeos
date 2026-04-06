@@ -59,6 +59,8 @@ mod inner {
     use tokio::sync::{Notify, RwLock};
 
     const SAMPLE_RATE: usize = 16000;
+    const RESTART_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+    const RESTART_DELAY_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
     /// Streaming wake word detector backed by rustpotter.
     #[derive(Clone)]
@@ -77,6 +79,8 @@ mod inner {
         shutdown: Arc<AtomicBool>,
         /// Signals the listener thread to reload the model (hot-reload after training).
         reload: Arc<AtomicBool>,
+        /// PID of the active pw-record child, if any.
+        active_child_pid: Arc<std::sync::atomic::AtomicI32>,
     }
 
     impl WakeWordDetector {
@@ -97,6 +101,7 @@ mod inner {
                 source_rx,
                 shutdown: Arc::new(AtomicBool::new(false)),
                 reload: Arc::new(AtomicBool::new(false)),
+                active_child_pid: Arc::new(std::sync::atomic::AtomicI32::new(0)),
             })
         }
 
@@ -114,6 +119,7 @@ mod inner {
         /// Update the audio source (e.g. after BT connect/disconnect).
         pub fn set_source(&self, source: Option<String>) {
             let _ = self.source_tx.send(source);
+            self.signal_active_child(libc::SIGTERM, "source change");
         }
 
         /// Pause detection (mic stays open but detections are suppressed).
@@ -129,6 +135,7 @@ mod inner {
         /// Permanently stop the listener thread.
         pub fn stop(&self) {
             self.shutdown.store(true, Ordering::Relaxed);
+            self.signal_active_child(libc::SIGTERM, "shutdown");
         }
 
         pub fn is_active(&self) -> bool {
@@ -140,6 +147,7 @@ mod inner {
         pub fn reload_model(&self) {
             info!("Wake word model reload requested");
             self.reload.store(true, Ordering::Relaxed);
+            self.signal_active_child(libc::SIGTERM, "model reload");
         }
 
         /// Returns `true` when the feature is compiled.
@@ -166,7 +174,9 @@ mod inner {
                     return;
                 }
                 info!("Respawning pw-record in 2 s …");
-                std::thread::sleep(std::time::Duration::from_secs(2));
+                if self.wait_for_restart_delay() {
+                    return;
+                }
             }
         }
 
@@ -197,6 +207,7 @@ mod inner {
             // Spawn pw-record
             let source = self.source_rx.borrow().clone();
             let mut child = self.spawn_pw_record(source.as_deref())?;
+            let active_child = ActiveChildGuard::new(self.active_child_pid.clone(), child.id());
             let mut stdout = child
                 .stdout
                 .take()
@@ -212,6 +223,8 @@ mod inner {
                 // Check shutdown
                 if self.shutdown.load(Ordering::Relaxed) {
                     let _ = child.kill();
+                    let _ = child.wait();
+                    drop(active_child);
                     return Ok(());
                 }
 
@@ -219,6 +232,8 @@ mod inner {
                 if self.reload.load(Ordering::Relaxed) {
                     info!("Model reload requested, restarting listener");
                     let _ = child.kill();
+                    let _ = child.wait();
+                    drop(active_child);
                     return Ok(());
                 }
 
@@ -227,6 +242,8 @@ mod inner {
                 if current_source != last_source {
                     info!("Audio source changed, restarting pw-record");
                     let _ = child.kill();
+                    let _ = child.wait();
+                    drop(active_child);
                     return Ok(());
                 }
                 last_source = current_source;
@@ -235,6 +252,8 @@ mod inner {
                 match stdout.read_exact(&mut buf) {
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                        let _ = child.wait();
+                        drop(active_child);
                         return Ok(());
                     }
                     Err(e) => return Err(e.into()),
@@ -292,6 +311,128 @@ mod inner {
                 source
             );
             Ok(child)
+        }
+
+        fn signal_active_child(&self, signal: i32, reason: &str) {
+            let pid = self.active_child_pid.load(Ordering::SeqCst);
+            if pid <= 0 {
+                return;
+            }
+            let rc = unsafe { libc::kill(pid, signal) };
+            if rc == 0 {
+                info!(
+                    "Signaled active wake word audio process pid={} with signal {} ({reason})",
+                    pid, signal
+                );
+                return;
+            }
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::ESRCH) {
+                warn!(
+                    "Failed to signal active wake word audio process pid={} with signal {} ({}): {}",
+                    pid, signal, reason, err
+                );
+            }
+        }
+
+        fn wait_for_restart_delay(&self) -> bool {
+            let checks = RESTART_DELAY.as_millis() / RESTART_DELAY_POLL.as_millis();
+            for _ in 0..checks {
+                if self.shutdown.load(Ordering::Relaxed) {
+                    info!("Wake word detector restart canceled during shutdown");
+                    return true;
+                }
+                std::thread::sleep(RESTART_DELAY_POLL);
+            }
+            false
+        }
+    }
+
+    struct ActiveChildGuard {
+        pid_slot: Arc<std::sync::atomic::AtomicI32>,
+        pid: i32,
+    }
+
+    impl ActiveChildGuard {
+        fn new(pid_slot: Arc<std::sync::atomic::AtomicI32>, pid: u32) -> Self {
+            let pid = pid as i32;
+            pid_slot.store(pid, Ordering::SeqCst);
+            Self { pid_slot, pid }
+        }
+    }
+
+    impl Drop for ActiveChildGuard {
+        fn drop(&mut self) {
+            let _ = self
+                .pid_slot
+                .compare_exchange(self.pid, 0, Ordering::SeqCst, Ordering::SeqCst);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::WakeWordDetector;
+        use std::path::PathBuf;
+        use std::process::Command;
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        #[test]
+        fn stop_terminates_active_audio_process() {
+            let model_path = temp_model_path("stop");
+            let detector = WakeWordDetector::new(model_path.clone(), None).unwrap();
+            let mut child = Command::new("sh")
+                .args(["-c", "sleep 30"])
+                .spawn()
+                .expect("spawn sleep child");
+            let _active_child =
+                super::ActiveChildGuard::new(detector.active_child_pid.clone(), child.id());
+
+            detector.stop();
+
+            let mut exited = false;
+            for _ in 0..20 {
+                if child.try_wait().expect("try_wait").is_some() {
+                    exited = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            if !exited {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+
+            assert!(exited, "stop() should terminate the active audio process");
+
+            let _ = std::fs::remove_file(model_path);
+        }
+
+        #[test]
+        fn restart_delay_exits_early_when_shutdown_requested() {
+            let model_path = temp_model_path("delay");
+            let detector = WakeWordDetector::new(model_path.clone(), None).unwrap();
+            detector.stop();
+
+            let started = std::time::Instant::now();
+            let stopped_early = detector.wait_for_restart_delay();
+
+            assert!(stopped_early, "restart delay should stop during shutdown");
+            assert!(
+                started.elapsed() < Duration::from_millis(300),
+                "restart delay should not sleep the full 2s after shutdown"
+            );
+
+            let _ = std::fs::remove_file(model_path);
+        }
+
+        fn temp_model_path(label: &str) -> PathBuf {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock before epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("lifeos-wakeword-{label}-{nanos}.rpw"));
+            std::fs::write(&path, b"test-model").expect("write temp model");
+            path
         }
     }
 }

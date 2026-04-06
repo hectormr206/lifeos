@@ -503,6 +503,17 @@ fn notify_ready() {
     }
 }
 
+/// Notify systemd that the daemon is stopping.
+fn notify_stopping() {
+    if let Ok(socket_path) = std::env::var("NOTIFY_SOCKET") {
+        use std::os::unix::net::UnixDatagram;
+        let sock = UnixDatagram::unbound().ok();
+        if let Some(s) = sock {
+            let _ = s.send_to(b"STOPPING=1", &socket_path);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize logging
@@ -835,10 +846,13 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Start wake word detector if available.
-    if let Some(ref detector) = state.wake_word_detector {
-        detector.run();
+    let wake_word_handle = if let Some(ref detector) = state.wake_word_detector {
+        let handle = detector.run();
         info!("Rustpotter wake word listener started");
-    }
+        Some(handle)
+    } else {
+        None
+    };
 
     // Mini-widget: floating GTK4 orb ("Eye of Axi").
     // Controlled by overlay config `mini_widget_visible`. Defaults to hidden.
@@ -1777,6 +1791,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Graceful shutdown
     info!("Stopping background tasks...");
+    notify_stopping();
+
+    if let Some(ref detector) = state.wake_word_detector {
+        detector.stop();
+    }
 
     // Cancel all tasks
     health_handle.abort();
@@ -1798,8 +1817,16 @@ async fn main() -> anyhow::Result<()> {
         handle.abort();
     }
 
+    if let Some(handle) = wake_word_handle {
+        match tokio::time::timeout(Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => info!("Wake word detector stopped cleanly"),
+            Ok(Err(e)) => warn!("Wake word detector task ended with join error: {}", e),
+            Err(_) => warn!("Wake word detector did not stop within 5 seconds"),
+        }
+    }
+
     info!("Daemon stopped.");
-    Ok(())
+    std::process::exit(0)
 }
 
 /// Start REST API server
