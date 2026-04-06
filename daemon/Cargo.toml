@@ -1,6 +1,6 @@
 [package]
 name = "lifeosd"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2021"
 description = "LifeOS System Daemon"
 authors = ["Héctor Martínez <hector@hectormr.com>"]
@@ -86,10 +86,5 @@ wake-word = ["rustpotter"]
 speaker-id = []
 # mcp-client = ["rust-mcp-sdk"]  # disabled until rustc 1.88+ in CI
 telegram = ["teloxide"]
-whatsapp = []
-matrix = []
-signal = []
-slack = []
-discord = []
 homeassistant = []
 tray = ["ksni"]

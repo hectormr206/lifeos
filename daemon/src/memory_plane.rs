@@ -144,6 +144,15 @@ impl MemorySearchMode {
     }
 }
 
+/// Result of a [`MemoryPlaneManager::apply_decay`] pass.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct DecayReport {
+    /// Number of entries whose importance was lowered by this pass.
+    pub decayed: usize,
+    /// Number of entries deleted because they fell below retention thresholds.
+    pub deleted: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MemoryStats {
     pub total_entries: usize,
@@ -236,6 +245,11 @@ impl MemoryPlaneManager {
         }
         if !has_column("memory_entries", "mood") {
             db.execute_batch("ALTER TABLE memory_entries ADD COLUMN mood TEXT;")?;
+        }
+        if !has_column("memory_entries", "permanent") {
+            db.execute_batch(
+                "ALTER TABLE memory_entries ADD COLUMN permanent INTEGER NOT NULL DEFAULT 0;",
+            )?;
         }
 
         // -- knowledge_graph migrations --
@@ -790,6 +804,16 @@ impl MemoryPlaneManager {
         }
 
         results.truncate(limit);
+
+        // Boost importance + last_accessed for any entries returned to a caller.
+        // This is the "recall reinforces memory" half of the decay system.
+        let hit_ids: Vec<String> = results.iter().map(|r| r.entry.entry_id.clone()).collect();
+        if !hit_ids.is_empty() {
+            if let Err(e) = self.boost_on_access(&hit_ids).await {
+                log::warn!("memory_plane: boost_on_access failed: {}", e);
+            }
+        }
+
         Ok(results)
     }
 
@@ -1619,6 +1643,131 @@ impl MemoryPlaneManager {
             Ok(updated)
         })
         .await?
+    }
+
+    /// Apply linear time-based decay (Sprint 2.1).
+    ///
+    /// Rules:
+    /// - Skip entries marked `permanent = 1`.
+    /// - For non-permanent entries, drop importance by 5 per 30-day window
+    ///   since `last_accessed` (falling back to `updated_at` when never
+    ///   accessed). Entries with `importance >= 70` are kept indefinitely
+    ///   and never decayed.
+    /// - Delete entries with `importance < 10` AND older than 90 days.
+    /// - Delete entries with `importance < 30` AND older than 180 days.
+    ///
+    /// Returns a [`DecayReport`] with the count of decayed and deleted
+    /// entries.
+    pub async fn apply_decay(&self) -> Result<DecayReport> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let tx = db.unchecked_transaction()?;
+
+            // Compute new importance per row using COALESCE(last_accessed, updated_at).
+            // SQLite supports `julianday()` for day arithmetic on RFC3339 strings.
+            // Decay = 5 importance per 30-day bucket since last activity.
+            //
+            // We keep entries with importance >= 70 untouched (kept indefinitely)
+            // and skip permanent entries entirely.
+            let decayed = tx.execute(
+                "UPDATE memory_entries
+                 SET importance = MAX(
+                     0,
+                     importance - CAST(
+                         5 * (
+                             (julianday('now') - julianday(COALESCE(last_accessed, updated_at)))
+                             / 30.0
+                         ) AS INTEGER
+                     )
+                 )
+                 WHERE (permanent IS NULL OR permanent = 0)
+                   AND importance < 70
+                   AND CAST(
+                         5 * (
+                             (julianday('now') - julianday(COALESCE(last_accessed, updated_at)))
+                             / 30.0
+                         ) AS INTEGER
+                       ) > 0",
+                [],
+            )?;
+
+            // Garbage-collect: low importance + old entries.
+            let cutoff_90 = (chrono::Utc::now() - chrono::Duration::days(90)).to_rfc3339();
+            let cutoff_180 = (chrono::Utc::now() - chrono::Duration::days(180)).to_rfc3339();
+
+            // Collect ids first so we can also clean memory_embeddings.
+            let mut to_delete: Vec<String> = Vec::new();
+            {
+                let mut stmt = tx.prepare(
+                    "SELECT entry_id FROM memory_entries
+                     WHERE (permanent IS NULL OR permanent = 0)
+                       AND (
+                           (importance < 10 AND COALESCE(last_accessed, updated_at) < ?1)
+                           OR (importance < 30 AND COALESCE(last_accessed, updated_at) < ?2)
+                       )",
+                )?;
+                let rows = stmt.query_map(params![cutoff_90, cutoff_180], |row| {
+                    row.get::<_, String>(0)
+                })?;
+                for row in rows.flatten() {
+                    to_delete.push(row);
+                }
+            }
+
+            let deleted = to_delete.len();
+            for entry_id in &to_delete {
+                tx.execute(
+                    "DELETE FROM memory_entries WHERE entry_id = ?1",
+                    params![entry_id],
+                )?;
+                tx.execute(
+                    "DELETE FROM memory_embeddings WHERE entry_id = ?1",
+                    params![entry_id],
+                )?;
+            }
+
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(DecayReport { decayed, deleted })
+        })
+        .await?
+    }
+
+    /// Boost importance for entries that were just accessed (recall/search hit).
+    ///
+    /// For each `entry_id`:
+    /// - importance += 2 (capped at 100)
+    /// - last_accessed = now
+    /// - access_count += 1
+    ///
+    /// Permanent entries are still tracked (last_accessed/access_count) but
+    /// their importance value is left untouched since it has no effect on
+    /// retention.
+    pub async fn boost_on_access(&self, entry_ids: &[String]) -> Result<()> {
+        if entry_ids.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<String> = entry_ids.to_vec();
+        let db_path = self.db_path.clone();
+        let now = Utc::now().to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let tx = db.unchecked_transaction()?;
+            for id in &ids {
+                tx.execute(
+                    "UPDATE memory_entries
+                     SET importance = MIN(100, importance + 2),
+                         last_accessed = ?1,
+                         access_count = access_count + 1
+                     WHERE entry_id = ?2",
+                    params![now, id],
+                )?;
+            }
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        Ok(())
     }
 
     /// Mark a memory entry as permanent (exempt from decay and garbage collection).
@@ -2793,6 +2942,167 @@ mod tests {
             )
             .unwrap();
         assert_eq!(archive_count, 1, "Entry should exist in archive table");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- Sprint 2.1: memory decay tests ------------------------------------
+
+    /// Helper: backdate the `last_accessed` (and `updated_at`) of an entry by
+    /// `days` so it appears stale to the decay sweep.
+    fn backdate(dir: &Path, entry_id: &str, days: i64) {
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let when = (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+        db.execute(
+            "UPDATE memory_entries SET last_accessed = ?1, updated_at = ?1 WHERE entry_id = ?2",
+            params![when, entry_id],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_skips_permanent() {
+        let dir = temp_dir("memory-plane-decay-permanent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 50, "Permanent decay-resistant.")
+            .await
+            .unwrap();
+        mgr.mark_permanent(&entry.entry_id).await.unwrap();
+        backdate(&dir, &entry.entry_id, 365);
+
+        let report = mgr.apply_decay().await.unwrap();
+        assert_eq!(report.deleted, 0, "Permanent entry must not be deleted");
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            importance, 50,
+            "Permanent entry importance must be preserved"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_lowers_importance() {
+        let dir = temp_dir("memory-plane-decay-lower");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // importance 60, age ~60 days => -10 importance => ~50
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 60, "Stale moderate entry.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 60);
+
+        let report = mgr.apply_decay().await.unwrap();
+        assert!(
+            report.decayed >= 1,
+            "Should report at least one decayed entry"
+        );
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            importance < 60,
+            "Importance should have dropped from 60, got {}",
+            importance
+        );
+        assert!(
+            (40..=55).contains(&importance),
+            "Importance should be ~50 after 60d decay, got {}",
+            importance
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_deletes_low_importance_old() {
+        let dir = temp_dir("memory-plane-decay-delete");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Low importance + > 90 days old => deleted by the <10/90d rule.
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 5, "Old trivial entry.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 100);
+
+        let report = mgr.apply_decay().await.unwrap();
+        assert!(report.deleted >= 1, "Should delete at least one entry");
+
+        let entries = mgr.list_entries(50, None, None).await.unwrap();
+        assert!(
+            entries.iter().all(|e| e.entry_id != entry.entry_id),
+            "Stale low-importance entry should be deleted"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_boost_on_access_increases_importance() {
+        let dir = temp_dir("memory-plane-boost");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 40, "Frequently recalled entry.")
+            .await
+            .unwrap();
+
+        mgr.boost_on_access(&[entry.entry_id.clone()])
+            .await
+            .unwrap();
+        mgr.boost_on_access(&[entry.entry_id.clone()])
+            .await
+            .unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let (importance, access_count, last_accessed): (i32, i32, Option<String>) = db
+            .query_row(
+                "SELECT importance, access_count, last_accessed FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(importance, 44, "Two boosts of +2 should give 44");
+        assert_eq!(access_count, 2, "access_count should be 2");
+        assert!(last_accessed.is_some(), "last_accessed should be set");
+
+        // Cap at 100 verification.
+        let high = mgr
+            .add_entry("note", "user", &[], None, 99, "Already near cap.")
+            .await
+            .unwrap();
+        mgr.boost_on_access(&[high.entry_id.clone()]).await.unwrap();
+        mgr.boost_on_access(&[high.entry_id.clone()]).await.unwrap();
+        let capped: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![high.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(capped, 100, "importance must cap at 100");
 
         std::fs::remove_dir_all(dir).ok();
     }

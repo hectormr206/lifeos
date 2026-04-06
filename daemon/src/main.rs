@@ -22,8 +22,6 @@ mod agent_roles;
 mod agent_runtime;
 mod ai;
 mod api;
-#[allow(dead_code)]
-mod app_contracts;
 mod async_workers;
 mod atspi_layer;
 #[allow(dead_code)]
@@ -40,25 +38,13 @@ mod calendar;
 #[allow(dead_code)]
 mod cdp_client;
 mod circuit_breaker;
-#[allow(dead_code)]
-mod comm_bridges;
 mod computer_use;
 mod config_store;
-#[allow(dead_code)]
-mod config_validator;
-#[allow(dead_code)]
-mod connector_registry;
 mod context_policies;
 mod control_layers;
 #[allow(dead_code)]
-mod cosmic_control;
-#[allow(dead_code)]
 mod desktop_operator;
-#[allow(dead_code)]
-mod discord_bridge;
 mod email_bridge;
-#[allow(dead_code)]
-mod ergonomics;
 mod events;
 #[allow(dead_code)]
 mod exec_whitelist;
@@ -66,11 +52,7 @@ mod experience_modes;
 #[allow(dead_code)]
 mod eye_health;
 mod follow_along;
-#[allow(dead_code)]
-mod game_assistant;
 mod game_guard;
-#[allow(dead_code)]
-mod gaming_agent;
 #[allow(dead_code)]
 mod git_workflow;
 mod health;
@@ -79,16 +61,9 @@ mod health_tracking;
 #[allow(dead_code)]
 mod home_assistant;
 #[allow(dead_code)]
-mod intent_parser;
-#[cfg(feature = "ui-overlay")]
-#[allow(dead_code)]
-mod keyboard_shortcut;
-#[allow(dead_code)]
 mod knowledge_graph;
 mod lab;
 mod llm_router;
-#[allow(dead_code)]
-mod matrix_bridge;
 #[allow(dead_code)]
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
@@ -113,8 +88,6 @@ mod privacy_hygiene;
 #[allow(dead_code)]
 mod proactive;
 #[allow(dead_code)]
-mod prompt_tuner;
-#[allow(dead_code)]
 mod reliability;
 mod safe_mode;
 #[allow(dead_code)]
@@ -129,12 +102,8 @@ mod sensory_memory;
 mod sensory_pipeline;
 mod session_store;
 #[allow(dead_code)]
-mod signal_bridge;
-#[allow(dead_code)]
 mod skill_generator;
 mod skill_registry;
-#[allow(dead_code)]
-mod slack_bridge;
 #[allow(dead_code)]
 mod speaker_id;
 #[allow(dead_code)]
@@ -154,14 +123,10 @@ mod translation;
 mod tuf;
 mod update_scheduler;
 mod updates;
-#[allow(dead_code)]
-mod usb_guard;
 #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
 mod user_model;
 mod visual_comfort;
 mod wake_word;
-#[allow(dead_code)]
-mod whatsapp_bridge;
 #[cfg(feature = "http-api")]
 mod ws_gateway;
 
@@ -1166,6 +1131,10 @@ async fn main() -> anyhow::Result<()> {
             Some(meeting_memory),
         );
         assistant.set_archive(meeting_archive.clone());
+        // Share the speaker identification manager with the sensory pipeline so
+        // meetings and live voice interactions resolve against the same profiles.
+        let shared_speaker_id = state.sensory_pipeline_manager.read().await.speaker_id();
+        assistant.set_speaker_id(shared_speaker_id);
         std::sync::Arc::new(tokio::sync::RwLock::new(assistant))
     };
     let meeting_loop_assistant = shared_meeting_assistant.clone();
@@ -1366,18 +1335,35 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Storage housekeeping: enforce file limits + purge old data (every 6h) ---
     let housekeeping_data_dir = data_dir.clone();
+    let housekeeping_memory = state.memory_plane_manager.clone();
     let _housekeeping_handle = tokio::spawn(async move {
         // Wait 5 minutes after boot before first housekeeping run
         tokio::time::sleep(Duration::from_secs(300)).await;
         let mut interval = tokio::time::interval(Duration::from_secs(6 * 3600)); // 6 hours
+                                                                                 // Memory decay runs once per day; throttle by counting ticks (4 * 6h = 24h).
+        let mut decay_tick: u32 = 0;
         loop {
             interval.tick().await;
             storage_housekeeping::run_housekeeping(&housekeeping_data_dir).await;
             sqlite_protection::backup_all_databases(&housekeeping_data_dir).await;
             sqlite_protection::check_all_databases(&housekeeping_data_dir).await;
+
+            // Memory decay (Sprint 2.1): once per day, wired into the existing
+            // housekeeping loop so we do not spawn yet another timer task.
+            decay_tick = decay_tick.wrapping_add(1);
+            if decay_tick % 4 == 0 {
+                let mem = housekeeping_memory.read().await;
+                match mem.apply_decay().await {
+                    Ok(report) => info!(
+                        "memory_plane: decay pass complete (decayed={}, deleted={})",
+                        report.decayed, report.deleted
+                    ),
+                    Err(e) => warn!("memory_plane: apply_decay failed: {}", e),
+                }
+            }
         }
     });
-    info!("Storage housekeeping started (every 6h, 120-file limit per dir)");
+    info!("Storage housekeeping started (every 6h, 120-file limit per dir, daily memory decay)");
 
     // --- Self-improvement loop (Fase U): tick every 6 hours ---
     {
@@ -1736,96 +1722,6 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "telegram"))]
     let telegram_handle: Option<tokio::task::JoinHandle<()>> = None;
 
-    // Start WhatsApp bridge if configured
-    #[cfg(feature = "whatsapp")]
-    let whatsapp_handle = {
-        if let Some(wa_config) = whatsapp_bridge::WhatsAppConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                whatsapp_bridge::run_whatsapp_bridge(wa_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("WhatsApp bridge: LIFEOS_WHATSAPP_TOKEN not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "whatsapp"))]
-    let whatsapp_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Matrix bridge if configured
-    #[cfg(feature = "matrix")]
-    let matrix_handle = {
-        if let Some(mx_config) = matrix_bridge::MatrixConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                matrix_bridge::run_matrix_bridge(mx_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("Matrix bridge: LIFEOS_MATRIX_ACCESS_TOKEN not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "matrix"))]
-    let matrix_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Signal bridge if configured
-    #[cfg(feature = "signal")]
-    let signal_handle = {
-        if let Some(sig_config) = signal_bridge::SignalConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                signal_bridge::run_signal_bridge(sig_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("Signal bridge: LIFEOS_SIGNAL_PHONE not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "signal"))]
-    let signal_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Slack bridge if configured
-    #[cfg(feature = "slack")]
-    let slack_handle = {
-        if let Some(slack_config) = slack_bridge::SlackConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                slack_bridge::run_slack_bridge(slack_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("Slack bridge: LIFEOS_SLACK_BOT_TOKEN not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "slack"))]
-    let slack_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Discord bridge if configured
-    #[cfg(feature = "discord")]
-    let discord_handle = {
-        if let Some(discord_config) = discord_bridge::DiscordConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                discord_bridge::run_discord_bridge(discord_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("Discord bridge: LIFEOS_DISCORD_BOT_TOKEN not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "discord"))]
-    let discord_handle: Option<tokio::task::JoinHandle<()>> = None;
-
     // Start conversational email bridge if configured (requires telegram feature
     // because it reuses the agentic chat infrastructure from telegram_tools).
     #[cfg(feature = "telegram")]
@@ -1918,21 +1814,6 @@ async fn main() -> anyhow::Result<()> {
         h.abort();
     }
     if let Some(h) = telegram_handle {
-        h.abort();
-    }
-    if let Some(h) = whatsapp_handle {
-        h.abort();
-    }
-    if let Some(h) = matrix_handle {
-        h.abort();
-    }
-    if let Some(h) = signal_handle {
-        h.abort();
-    }
-    if let Some(h) = slack_handle {
-        h.abort();
-    }
-    if let Some(h) = discord_handle {
         h.abort();
     }
     dbus_handle.abort();

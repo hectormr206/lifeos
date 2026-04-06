@@ -10242,27 +10242,6 @@ async fn get_messaging_channels() -> Result<Json<serde_json::Value>, (StatusCode
             "status": if std::env::var("LIFEOS_TELEGRAM_BOT_TOKEN").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
         }),
         serde_json::json!({
-            "id": "whatsapp",
-            "name": "WhatsApp",
-            "enabled": cfg!(feature = "whatsapp"),
-            "configured": std::env::var("LIFEOS_WHATSAPP_TOKEN").map(|v| !v.is_empty()).unwrap_or(false),
-            "status": if std::env::var("LIFEOS_WHATSAPP_TOKEN").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
-        }),
-        serde_json::json!({
-            "id": "matrix",
-            "name": "Matrix/Element",
-            "enabled": cfg!(feature = "matrix"),
-            "configured": std::env::var("LIFEOS_MATRIX_ACCESS_TOKEN").map(|v| !v.is_empty()).unwrap_or(false),
-            "status": if std::env::var("LIFEOS_MATRIX_ACCESS_TOKEN").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
-        }),
-        serde_json::json!({
-            "id": "signal",
-            "name": "Signal",
-            "enabled": cfg!(feature = "signal"),
-            "configured": std::env::var("LIFEOS_SIGNAL_PHONE").map(|v| !v.is_empty()).unwrap_or(false),
-            "status": if std::env::var("LIFEOS_SIGNAL_PHONE").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
-        }),
-        serde_json::json!({
             "id": "homeassistant",
             "name": "Home Assistant",
             "enabled": cfg!(feature = "homeassistant"),

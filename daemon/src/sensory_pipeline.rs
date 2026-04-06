@@ -579,7 +579,7 @@ pub struct SensoryPipelineManager {
     data_dir: PathBuf,
     state: Arc<RwLock<SensoryPipelineState>>,
     playback: Arc<Mutex<Option<ActivePlayback>>>,
-    speaker_id: Arc<tokio::sync::Mutex<crate::speaker_id::SpeakerIdManager>>,
+    speaker_id: Arc<RwLock<crate::speaker_id::SpeakerIdManager>>,
 }
 
 impl SensoryPipelineManager {
@@ -590,10 +590,16 @@ impl SensoryPipelineManager {
             data_dir,
             state: Arc::new(RwLock::new(SensoryPipelineState::default())),
             playback: Arc::new(Mutex::new(None)),
-            speaker_id: Arc::new(tokio::sync::Mutex::new(
-                crate::speaker_id::SpeakerIdManager::new(speaker_dir),
-            )),
+            speaker_id: Arc::new(RwLock::new(crate::speaker_id::SpeakerIdManager::new(
+                speaker_dir,
+            ))),
         })
+    }
+
+    /// Returns the shared speaker identification manager so other subsystems
+    /// (e.g. meeting_assistant) can resolve speakers against the same profiles.
+    pub fn speaker_id(&self) -> Arc<RwLock<crate::speaker_id::SpeakerIdManager>> {
+        self.speaker_id.clone()
     }
 
     pub async fn initialize(&self) -> Result<()> {
@@ -1323,7 +1329,7 @@ impl SensoryPipelineManager {
             let audio_path = std::path::PathBuf::from(audio_file);
             match crate::speaker_id::extract_embedding(&audio_path).await {
                 Ok(embedding) => {
-                    let mut sid = self.speaker_id.lock().await;
+                    let mut sid = self.speaker_id.write().await;
                     let result = sid.identify(&embedding);
 
                     // Check if user is responding to "¿Como te llamas?" from previous interaction.
