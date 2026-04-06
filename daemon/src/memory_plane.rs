@@ -284,7 +284,206 @@ impl MemoryPlaneManager {
     }
 
     pub async fn initialize(&self) -> Result<()> {
-        self.migrate_from_json().await
+        // Legacy migrations run in this order on every startup. Each one
+        // is idempotent and cheap when there is nothing to migrate.
+        //
+        //   1. memory_plane_state.json  -> SQLite memory_entries
+        //      (the very first storage backend, pre-SQLite)
+        //   2. knowledge_graph/*.json   -> SQLite knowledge_graph triples
+        //      (the JSON-backed graph removed in commit 2940422)
+        //
+        // Both migrations also auto-backup `memory.db` to a timestamped
+        // file the first time they run, so a corrupted import never
+        // costs the user their existing data.
+        self.migrate_from_json().await?;
+        self.migrate_legacy_knowledge_graph().await?;
+        Ok(())
+    }
+
+    /// One-shot migration of the JSON-backed knowledge graph (removed in
+    /// commit 2940422) into the SQLite triple store.
+    ///
+    /// Reads `<data_dir>/knowledge_graph/kg_entities.json` and
+    /// `kg_relations.json` if they exist, converts each entity to a
+    /// `(name, "is_a", entity_type)` triple, and each relation to a
+    /// `(from_name, relation_type, to_name)` triple. Source files are
+    /// renamed to `*.migrated-YYYYMMDD-HHMMSS` so subsequent startups
+    /// no-op without losing the original data.
+    ///
+    /// Idempotent: if the source files do not exist, returns immediately.
+    /// Auto-backs-up `memory.db` to
+    /// `memory.db.pre-kg-migration-YYYYMMDD-HHMMSS.bak` before touching
+    /// anything, but only the first time (subsequent migrations skip the
+    /// backup if any `memory.db.pre-kg-migration-*.bak` is already present).
+    async fn migrate_legacy_knowledge_graph(&self) -> Result<()> {
+        let kg_dir = self.data_dir.join("knowledge_graph");
+        let entities_path = kg_dir.join("kg_entities.json");
+        let relations_path = kg_dir.join("kg_relations.json");
+
+        if !entities_path.exists() && !relations_path.exists() {
+            return Ok(()); // nothing to migrate
+        }
+
+        log::info!(
+            "memory_plane: detected legacy knowledge_graph JSON files at {} — running one-time migration",
+            kg_dir.display()
+        );
+
+        // -- Auto-backup memory.db before mutating anything. ---------------
+        // We only back up if no prior `pre-kg-migration` backup exists, so
+        // a partially-completed migration does not get its safety net
+        // overwritten on the next startup.
+        if self.db_path.exists() {
+            let backup_already_present = std::fs::read_dir(&self.data_dir)
+                .map(|rd| {
+                    rd.flatten().any(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with("memory.db.pre-kg-migration-")
+                    })
+                })
+                .unwrap_or(false);
+            if !backup_already_present {
+                let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+                let backup = self
+                    .data_dir
+                    .join(format!("memory.db.pre-kg-migration-{}.bak", stamp));
+                match tokio::fs::copy(&self.db_path, &backup).await {
+                    Ok(bytes) => log::info!(
+                        "memory_plane: pre-migration backup written to {} ({} bytes)",
+                        backup.display(),
+                        bytes
+                    ),
+                    Err(e) => log::warn!(
+                        "memory_plane: failed to back up memory.db before KG migration: {} (continuing anyway)",
+                        e
+                    ),
+                }
+            }
+        }
+
+        // -- Parse the two JSON files. We do NOT depend on the deleted
+        // KnowledgeGraph structs — generic serde_json::Value is fine and
+        // future-proof against minor schema drift in the source files.
+        let entities: Vec<serde_json::Value> = match tokio::fs::read_to_string(&entities_path).await
+        {
+            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        let relations: Vec<serde_json::Value> = match tokio::fs::read_to_string(&relations_path)
+            .await
+        {
+            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+
+        // Build id -> name lookup so we can resolve `from_id` / `to_id`
+        // in the relation file back to entity names.
+        let mut id_to_name: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut entity_count = 0usize;
+        for ent in &entities {
+            let id = ent
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let name = ent
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            // Entity type was an enum variant in the deleted module:
+            // `"Person"`, `"Project"`, etc. We accept both an enum-like
+            // string and an object with a `"type"` field for resilience.
+            let etype = ent
+                .get("entity_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_lowercase())
+                .or_else(|| {
+                    ent.get("entity_type")
+                        .and_then(|v| v.get("type"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_lowercase())
+                })
+                .unwrap_or_else(|| "topic".to_string());
+            if id.is_empty() || name.is_empty() {
+                continue;
+            }
+            id_to_name.insert(id, name.clone());
+            if let Err(e) = self.add_triple(&name, "is_a", &etype, 1.0, None).await {
+                log::warn!(
+                    "memory_plane: failed to migrate entity '{}': {} (skipping)",
+                    name,
+                    e
+                );
+            } else {
+                entity_count += 1;
+            }
+        }
+
+        let mut relation_count = 0usize;
+        for rel in &relations {
+            let from_id = rel.get("from_id").and_then(|v| v.as_str()).unwrap_or("");
+            let to_id = rel.get("to_id").and_then(|v| v.as_str()).unwrap_or("");
+            let rel_type = rel
+                .get("relation_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("related_to");
+            let confidence = rel
+                .get("confidence")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0);
+            let from_name = id_to_name.get(from_id);
+            let to_name = id_to_name.get(to_id);
+            if let (Some(f), Some(t)) = (from_name, to_name) {
+                if let Err(e) = self.add_triple(f, rel_type, t, confidence, None).await {
+                    log::warn!(
+                        "memory_plane: failed to migrate relation '{}' --[{}]-> '{}': {} (skipping)",
+                        f, rel_type, t, e
+                    );
+                } else {
+                    relation_count += 1;
+                }
+            }
+        }
+
+        // -- Rename source files so we never re-run on next startup, but
+        // keep them on disk as `*.migrated-*` evidence the user can
+        // inspect or delete manually if they want.
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+        if entities_path.exists() {
+            let migrated = kg_dir.join(format!("kg_entities.json.migrated-{}", stamp));
+            if let Err(e) = tokio::fs::rename(&entities_path, &migrated).await {
+                log::warn!(
+                    "memory_plane: failed to rename {} to {}: {} (migration will re-run on next startup unless this is fixed)",
+                    entities_path.display(),
+                    migrated.display(),
+                    e
+                );
+            }
+        }
+        if relations_path.exists() {
+            let migrated = kg_dir.join(format!("kg_relations.json.migrated-{}", stamp));
+            if let Err(e) = tokio::fs::rename(&relations_path, &migrated).await {
+                log::warn!(
+                    "memory_plane: failed to rename {} to {}: {}",
+                    relations_path.display(),
+                    migrated.display(),
+                    e
+                );
+            }
+        }
+
+        log::info!(
+            "memory_plane: legacy KG migration complete — {} entities + {} relations imported as SQLite triples",
+            entity_count,
+            relation_count
+        );
+        Ok(())
     }
 
     pub async fn add_entry(
@@ -3858,6 +4057,158 @@ mod tests {
         // The entry must still be present.
         let entries = mgr.list_entries(50, None, None).await.unwrap();
         assert!(entries.iter().any(|e| e.entry_id == entry.entry_id));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_legacy_kg_migration_imports_entities_and_relations() {
+        let dir = temp_dir("memory-plane-legacy-kg-migration");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Seed legacy JSON files in the location the deleted module
+        // used: <data_dir>/knowledge_graph/{kg_entities,kg_relations}.json
+        let kg_dir = dir.join("knowledge_graph");
+        std::fs::create_dir_all(&kg_dir).unwrap();
+        let entities = serde_json::json!([
+            {
+                "id": "ent-1",
+                "name": "Hector",
+                "entity_type": "Person",
+                "properties": {},
+                "created_at": "2026-01-01T00:00:00Z",
+                "last_seen":  "2026-01-01T00:00:00Z",
+                "relevance_score": 1.0
+            },
+            {
+                "id": "ent-2",
+                "name": "LifeOS",
+                "entity_type": "Project",
+                "properties": {},
+                "created_at": "2026-01-01T00:00:00Z",
+                "last_seen":  "2026-01-01T00:00:00Z",
+                "relevance_score": 1.0
+            }
+        ]);
+        let relations = serde_json::json!([
+            {
+                "from_id": "ent-1",
+                "to_id": "ent-2",
+                "relation_type": "works_on",
+                "weight": 1.0,
+                "context": "creator",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "confidence": 0.95
+            }
+        ]);
+        std::fs::write(
+            kg_dir.join("kg_entities.json"),
+            serde_json::to_string_pretty(&entities).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            kg_dir.join("kg_relations.json"),
+            serde_json::to_string_pretty(&relations).unwrap(),
+        )
+        .unwrap();
+
+        // Construct the manager and run initialize() — this triggers the
+        // migration as part of normal startup, exactly like main.rs does.
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Both entities should now exist as `(name, "is_a", type)` triples.
+        let hector_triples = mgr.query_graph("hector", 10).await.unwrap();
+        assert!(
+            hector_triples
+                .iter()
+                .any(|t| t["predicate"] == "is_a" && t["object"] == "person"),
+            "Migration must create (hector, is_a, person), got {:?}",
+            hector_triples
+        );
+        let lifeos_triples = mgr.query_graph("lifeos", 10).await.unwrap();
+        assert!(lifeos_triples
+            .iter()
+            .any(|t| t["predicate"] == "is_a" && t["object"] == "project"));
+
+        // The relation must be migrated and resolved through the
+        // id->name lookup table built during migration.
+        assert!(
+            hector_triples
+                .iter()
+                .any(|t| t["predicate"] == "works_on" && t["object"] == "lifeos"),
+            "Migration must create (hector, works_on, lifeos), got {:?}",
+            hector_triples
+        );
+
+        // Source files must be renamed (not deleted) so we have evidence
+        // and the second startup is a no-op.
+        assert!(!kg_dir.join("kg_entities.json").exists());
+        assert!(!kg_dir.join("kg_relations.json").exists());
+        let migrated_files: Vec<String> = std::fs::read_dir(&kg_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            migrated_files
+                .iter()
+                .any(|n| n.starts_with("kg_entities.json.migrated-")),
+            "expected renamed entities file, got {:?}",
+            migrated_files
+        );
+        assert!(migrated_files
+            .iter()
+            .any(|n| n.starts_with("kg_relations.json.migrated-")));
+
+        // memory.db must have been auto-backed-up.
+        let backup_files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            backup_files
+                .iter()
+                .any(|n| n.starts_with("memory.db.pre-kg-migration-") && n.ends_with(".bak")),
+            "expected auto-backup file, got {:?}",
+            backup_files
+        );
+
+        // Second initialize() must be a no-op (idempotent). Triple counts
+        // should not double.
+        mgr.initialize().await.unwrap();
+        let hector_after = mgr.query_graph("hector", 10).await.unwrap();
+        assert_eq!(
+            hector_triples.len(),
+            hector_after.len(),
+            "second initialize() must be a no-op"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_legacy_kg_migration_noop_when_no_files() {
+        let dir = temp_dir("memory-plane-legacy-kg-migration-noop");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        // Should succeed silently and create no backup file.
+        mgr.initialize().await.unwrap();
+
+        let backup_files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            backup_files
+                .iter()
+                .all(|n| !n.starts_with("memory.db.pre-kg-migration-")),
+            "no backup should be written when there is nothing to migrate, got {:?}",
+            backup_files
+        );
 
         std::fs::remove_dir_all(dir).ok();
     }
