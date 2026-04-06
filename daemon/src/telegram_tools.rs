@@ -4701,11 +4701,20 @@ max_context = 128000
     }
 
     /// Memory cleanup: run garbage filter + decay + dedup and report stats.
+    ///
+    /// This is the manual `/memory_cleanup` Telegram command. The same
+    /// three functions also run automatically every day from the daemon
+    /// housekeeping loop in `main.rs`, so calling this is normally only
+    /// useful right after importing data or when investigating issues.
     async fn execute_memory_cleanup(ctx: &ToolContext) -> Result<String> {
         if let Some(memory) = &ctx.memory {
             let mem = memory.read().await;
             let garbage = mem.filter_garbage().await.unwrap_or(0);
-            let decayed = mem.apply_exponential_decay().await.unwrap_or(0);
+            // apply_decay returns DecayReport { decayed, deleted }; we
+            // surface decayed count here to match the previous output.
+            let decay_report = mem.apply_decay().await.ok();
+            let decayed = decay_report.as_ref().map(|r| r.decayed).unwrap_or(0);
+            let deleted_by_decay = decay_report.as_ref().map(|r| r.deleted).unwrap_or(0);
             let deduped = mem.dedup_similar(0.90).await.unwrap_or(0);
             let stats = mem
                 .health_stats()
@@ -4715,10 +4724,12 @@ max_context = 128000
                 "Limpieza completada:\n\
                  - Basura eliminada: {}\n\
                  - Entradas con decay aplicado: {}\n\
+                 - Entradas borradas por decay: {}\n\
                  - Duplicados fusionados: {}\n\n\
                  Estado actual:\n{}",
                 garbage,
                 decayed,
+                deleted_by_decay,
                 deduped,
                 serde_json::to_string_pretty(&stats).unwrap_or_default()
             ))

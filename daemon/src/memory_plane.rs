@@ -1684,99 +1684,140 @@ impl MemoryPlaneManager {
         .await?
     }
 
-    /// Apply exponential decay to importance of infrequently accessed entries.
+    /// Apply Ebbinghaus-inspired decay + connection bonus to memory entries.
     ///
-    /// For entries with access_count < 2 and importance > 10:
-    ///   new_importance = importance * 0.85^(days_since_update / 30)
-    /// Skips entries marked as permanent (if the column exists).
-    pub async fn apply_exponential_decay(&self) -> Result<usize> {
-        let db_path = self.db_path.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = Self::open_db(&db_path)?;
-
-            // Check if the permanent column exists
-            let has_permanent: bool = db
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('memory_entries') WHERE name = 'permanent'",
-                )
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false);
-
-            let permanent_filter = if has_permanent {
-                "AND (permanent IS NULL OR permanent != 1)"
-            } else {
-                ""
-            };
-
-            let query = format!(
-                "UPDATE memory_entries SET importance = CAST(
-                    importance * power(0.85, (julianday('now') - julianday(updated_at)) / 30.0)
-                 AS INTEGER)
-                 WHERE access_count < 2
-                   AND importance > 10
-                   AND CAST(
-                       importance * power(0.85, (julianday('now') - julianday(updated_at)) / 30.0)
-                   AS INTEGER) < importance
-                   {}",
-                permanent_filter
-            );
-
-            let updated = db.execute(&query, [])?;
-            Ok(updated)
-        })
-        .await?
-    }
-
-    /// Apply linear time-based decay (Sprint 2.1).
+    /// This is the canonical decay function and runs daily from the
+    /// `lifeosd` housekeeping loop. It replaces both the older linear
+    /// `-5/30d` curve and the standalone `apply_exponential_decay`
+    /// helper that depended on SQLite's optional `power()` extension.
     ///
-    /// Rules:
-    /// - Skip entries marked `permanent = 1`.
-    /// - For non-permanent entries, drop importance by 5 per 30-day window
-    ///   since `last_accessed` (falling back to `updated_at` when never
-    ///   accessed). Entries with `importance >= 70` are kept indefinitely
-    ///   and never decayed.
-    /// - Delete entries with `importance < 10` AND older than 90 days.
-    /// - Delete entries with `importance < 30` AND older than 180 days.
+    /// # Curve
     ///
-    /// Returns a [`DecayReport`] with the count of decayed and deleted
-    /// entries.
+    /// For each non-permanent entry with `importance < 70`:
+    ///
+    /// 1. **Frequently-recalled (access_count >= 2):** the curve is
+    ///    flat. Recall is its own reinforcement so we do not apply the
+    ///    decay term — these entries are only candidates for the
+    ///    connection bonus below.
+    /// 2. **Otherwise:** `decayed = importance * 0.85^(days_since/30)`.
+    ///    Half-life ≈ 128 days. Faster than linear in the 1-6 month
+    ///    window (where most noise lives) and gentler in the long
+    ///    tail (a 2-year-old fact still has a faint signal instead of
+    ///    being clamped to 0).
+    /// 3. **Connection bonus:** `bonus = min(links * 2, 20)` where
+    ///    `links` is the count of incoming + outgoing edges in the
+    ///    `memory_links` table. Densely-connected memories resist
+    ///    forgetting — this is the structural counterpart to the
+    ///    importance/recall reinforcement.
+    /// 4. Final importance is clamped to `[0, 100]`.
+    ///
+    /// # Garbage collection
+    ///
+    /// After the decay/bonus pass, entries that satisfy any of the
+    /// following are deleted (along with their embeddings and links):
+    ///
+    /// - `importance < 10` AND older than 90 days
+    /// - `importance < 30` AND older than 180 days
+    ///
+    /// Permanent entries (`permanent = 1`) are skipped entirely at every
+    /// stage. Entries with `importance >= 70` are kept indefinitely and
+    /// not touched by the decay term, but they CAN still receive the
+    /// connection bonus.
+    ///
+    /// # Performance
+    ///
+    /// All math runs in Rust over a single `SELECT` to avoid depending
+    /// on SQLite's optional `power()` extension. Updates are batched
+    /// inside one transaction. Cost is O(N) over non-permanent entries,
+    /// fine for the daily cadence even at hundreds of thousands of
+    /// rows.
     pub async fn apply_decay(&self) -> Result<DecayReport> {
         let db_path = self.db_path.clone();
         tokio::task::spawn_blocking(move || {
             let db = Self::open_db(&db_path)?;
             let tx = db.unchecked_transaction()?;
+            let now_utc = chrono::Utc::now();
 
-            // Compute new importance per row using COALESCE(last_accessed, updated_at).
-            // SQLite supports `julianday()` for day arithmetic on RFC3339 strings.
-            // Decay = 5 importance per 30-day bucket since last activity.
+            // -- Phase 1: collect all candidate rows in one SELECT.
             //
-            // We keep entries with importance >= 70 untouched (kept indefinitely)
-            // and skip permanent entries entirely.
-            let decayed = tx.execute(
-                "UPDATE memory_entries
-                 SET importance = MAX(
-                     0,
-                     importance - CAST(
-                         5 * (
-                             (julianday('now') - julianday(COALESCE(last_accessed, updated_at)))
-                             / 30.0
-                         ) AS INTEGER
-                     )
-                 )
-                 WHERE (permanent IS NULL OR permanent = 0)
-                   AND importance < 70
-                   AND CAST(
-                         5 * (
-                             (julianday('now') - julianday(COALESCE(last_accessed, updated_at)))
-                             / 30.0
-                         ) AS INTEGER
-                       ) > 0",
-                [],
-            )?;
+            // We pull the link count via a correlated subquery so the
+            // result already carries everything needed to compute the
+            // new importance in Rust. The query also includes
+            // importance >= 70 entries because they CAN still receive
+            // the connection bonus (just not the decay term).
+            let updates: Vec<(String, i32)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT
+                        e.entry_id,
+                        e.importance,
+                        COALESCE(e.last_accessed, e.updated_at) AS ts,
+                        e.access_count,
+                        (
+                            SELECT COUNT(*) FROM memory_links l
+                            WHERE l.from_entry = e.entry_id
+                               OR l.to_entry = e.entry_id
+                        ) AS link_count
+                     FROM memory_entries e
+                     WHERE (e.permanent IS NULL OR e.permanent = 0)",
+                )?;
 
-            // Garbage-collect: low importance + old entries.
-            let cutoff_90 = (chrono::Utc::now() - chrono::Duration::days(90)).to_rfc3339();
-            let cutoff_180 = (chrono::Utc::now() - chrono::Duration::days(180)).to_rfc3339();
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i32>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                })?;
+
+                let mut out: Vec<(String, i32)> = Vec::new();
+                for row in rows {
+                    let (entry_id, importance, ts, access_count, link_count) = row?;
+
+                    // Parse timestamp; skip on parse error to stay safe.
+                    let parsed = match chrono::DateTime::parse_from_rfc3339(&ts) {
+                        Ok(t) => t.with_timezone(&chrono::Utc),
+                        Err(_) => continue,
+                    };
+                    let days_since = (now_utc - parsed).num_days().max(0) as f64;
+
+                    // Decay term: skipped for the >= 70 floor and for
+                    // frequently-recalled entries.
+                    let decayed: f64 = if importance >= 70 || access_count >= 2 {
+                        importance as f64
+                    } else {
+                        let factor = 0.85_f64.powf(days_since / 30.0);
+                        (importance as f64 * factor).round()
+                    };
+
+                    // Connection bonus: 2 importance per link, capped at 20.
+                    // `link_count.min(10) * 2` is the same as
+                    // `min(link_count * 2, 20)` but avoids overflow if
+                    // some weird ingest path produced a huge link count.
+                    let bonus = (link_count.min(10) as f64) * 2.0;
+
+                    let new_importance =
+                        (decayed + bonus).clamp(0.0, 100.0).round() as i32;
+
+                    if new_importance != importance {
+                        out.push((entry_id, new_importance));
+                    }
+                }
+                out
+            };
+
+            let decayed = updates.len();
+            for (id, new_imp) in &updates {
+                tx.execute(
+                    "UPDATE memory_entries SET importance = ?1 WHERE entry_id = ?2",
+                    params![new_imp, id],
+                )?;
+            }
+
+            // -- Phase 2: garbage-collect low-importance + old entries.
+            let cutoff_90 = (now_utc - chrono::Duration::days(90)).to_rfc3339();
+            let cutoff_180 = (now_utc - chrono::Duration::days(180)).to_rfc3339();
 
             // Collect ids first so we can also clean memory_embeddings.
             let mut to_delete: Vec<String> = Vec::new();
@@ -3221,6 +3262,131 @@ mod tests {
         assert!(
             entries.iter().all(|e| e.entry_id != entry.entry_id),
             "Stale low-importance entry should be deleted"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Helper: forcibly set access_count on an entry to simulate
+    /// frequently-recalled state without going through `boost_on_access`.
+    fn set_access_count(dir: &Path, entry_id: &str, count: i32) {
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        db.execute(
+            "UPDATE memory_entries SET access_count = ?1 WHERE entry_id = ?2",
+            params![count, entry_id],
+        )
+        .unwrap();
+    }
+
+    /// Helper: insert a row into `memory_links` so the entry has N
+    /// outgoing edges (with synthetic peer ids — they don't have to
+    /// resolve to real entries for the link count subquery).
+    fn add_synthetic_links(dir: &Path, entry_id: &str, n: usize) {
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        for i in 0..n {
+            db.execute(
+                "INSERT OR REPLACE INTO memory_links (from_entry, to_entry, relation, created_at)
+                 VALUES (?1, ?2, 'related_to', ?3)",
+                params![entry_id, format!("synthetic-peer-{}", i), now],
+            )
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_skips_frequently_accessed() {
+        let dir = temp_dir("memory-plane-decay-frequent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Importance 60, 60 days old → without the access guard this
+        // would decay to ~43. With access_count >= 2 the curve is flat
+        // and importance stays at 60.
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 60, "Frequently recalled.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 60);
+        set_access_count(&dir, &entry.entry_id, 5);
+
+        let _report = mgr.apply_decay().await.unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            importance, 60,
+            "Frequently-accessed entry must skip the decay term, got {}",
+            importance
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_connection_bonus_protects_linked_entries() {
+        let dir = temp_dir("memory-plane-decay-bonus");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Importance 30, 60 days old, no recall.
+        // Without the bonus: 30 * 0.85^2 = 21.7 → 22.
+        // With 5 links: bonus = min(5*2, 20) = 10.
+        // Final: 22 + 10 = 32 (which is HIGHER than the start because the
+        // bonus exceeded the small decay).
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 30, "Densely linked entry.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 60);
+        add_synthetic_links(&dir, &entry.entry_id, 5);
+
+        let _report = mgr.apply_decay().await.unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        // The connection bonus must have raised importance back at or
+        // above the decayed-without-bonus baseline (~22). 32 is the
+        // exact expected value but we accept a small rounding window.
+        assert!(
+            (28..=36).contains(&importance),
+            "Linked entry should be protected by bonus, got {}",
+            importance
+        );
+
+        // Now verify that without links the same entry would have
+        // dropped lower — confirms the bonus is the differentiator.
+        let entry2 = mgr
+            .add_entry("note", "user", &[], None, 30, "Lonely entry.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry2.entry_id, 60);
+        let _ = mgr.apply_decay().await.unwrap();
+        let lonely_importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry2.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            lonely_importance < importance,
+            "Lonely entry ({}) should decay further than linked one ({})",
+            lonely_importance,
+            importance
         );
 
         std::fs::remove_dir_all(dir).ok();

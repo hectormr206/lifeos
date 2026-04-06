@@ -1337,11 +1337,33 @@ async fn main() -> anyhow::Result<()> {
             sqlite_protection::backup_all_databases(&housekeeping_data_dir).await;
             sqlite_protection::check_all_databases(&housekeeping_data_dir).await;
 
-            // Memory decay (Sprint 2.1): once per day, wired into the existing
-            // housekeeping loop so we do not spawn yet another timer task.
+            // Memory hygiene runs once per day (every 4th tick of the 6h
+            // loop). Three-stage pipeline:
+            //
+            //   1. filter_garbage: drop entries with <30 ciphertext bytes
+            //      (proxy for plaintext < ~10 chars: "ok", "gracias",
+            //      etc.) and entries tagged/sourced as filler.
+            //   2. apply_decay: Ebbinghaus exponential curve + connection
+            //      bonus, plus garbage-collect of low-importance old
+            //      entries. See `MemoryPlaneManager::apply_decay`.
+            //   3. dedup_similar(0.92): merge memory pairs whose
+            //      embeddings are within cosine 0.08 of each other,
+            //      keeping the higher-importance one. The 0.92 threshold
+            //      is conservative — it only fuses near-duplicates
+            //      ("recordame X" / "recuérdame X") and leaves
+            //      distinct-but-related memories alone.
+            //
+            // The same three functions are also exposed via the
+            // `/memory_cleanup` Telegram tool for manual runs.
             decay_tick = decay_tick.wrapping_add(1);
             if decay_tick % 4 == 0 {
                 let mem = housekeeping_memory.read().await;
+
+                let garbage = mem.filter_garbage().await.unwrap_or(0);
+                if garbage > 0 {
+                    info!("memory_plane: filter_garbage removed {} entries", garbage);
+                }
+
                 match mem.apply_decay().await {
                     Ok(report) => info!(
                         "memory_plane: decay pass complete (decayed={}, deleted={})",
@@ -1349,10 +1371,19 @@ async fn main() -> anyhow::Result<()> {
                     ),
                     Err(e) => warn!("memory_plane: apply_decay failed: {}", e),
                 }
+
+                match mem.dedup_similar(0.92).await {
+                    Ok(merged) if merged > 0 => info!(
+                        "memory_plane: dedup_similar merged {} near-duplicate entries",
+                        merged
+                    ),
+                    Ok(_) => {}
+                    Err(e) => warn!("memory_plane: dedup_similar failed: {}", e),
+                }
             }
         }
     });
-    info!("Storage housekeeping started (every 6h, 120-file limit per dir, daily memory decay)");
+    info!("Storage housekeeping started (every 6h, 120-file limit per dir, daily memory hygiene: garbage+decay+dedup)");
 
     // --- Self-improvement loop (Fase U): tick every 6 hours ---
     {
