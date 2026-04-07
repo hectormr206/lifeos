@@ -20,9 +20,9 @@
 //! nested under this router.
 
 use super::{ApiError, ApiState};
-use crate::memory_plane::LifeSummaryWindow;
+use crate::memory_plane::{LifeSummaryWindow, ShoppingListItem};
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
     routing::{get, post},
@@ -72,6 +72,20 @@ pub fn vida_plena_routes() -> Router<ApiState> {
         .route("/food/by-barcode", get(get_food_by_barcode))
         // -- BI.3.1: Open Food Facts barcode lookup -----------------
         .route("/food/lookup-off", get(get_food_lookup_off))
+        // -- BI.3.1 sprint 3: live editable shopping lists ----------
+        .route("/shopping/active", get(get_shopping_list_active))
+        .route(
+            "/shopping/lists/:list_id/items",
+            post(post_add_shopping_list_item),
+        )
+        .route(
+            "/shopping/lists/:list_id/items/:item_index",
+            axum::routing::delete(delete_shopping_list_item),
+        )
+        .route(
+            "/shopping/lists/:list_id/check-by-name",
+            post(post_check_shopping_list_item_by_name),
+        )
 }
 
 // ----------------------------------------------------------------------
@@ -627,4 +641,80 @@ async fn get_food_lookup_off(
         .await
         .map_err(err_to_http)?;
     Ok(Json(serde_json::json!({ "lookup": result })))
+}
+
+// ----------------------------------------------------------------------
+// BI.3.1 sprint 3 — Live editable shopping lists
+// ----------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct AddShoppingItemPayload {
+    pub item: ShoppingListItem,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckByNamePayload {
+    pub needle: String,
+    #[serde(default = "default_true")]
+    pub checked: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+async fn get_shopping_list_active(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let list = mgr.get_active_shopping_list().await.map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "list": list })))
+}
+
+async fn post_add_shopping_list_item(
+    State(state): State<ApiState>,
+    Path(list_id): Path<String>,
+    Json(payload): Json<AddShoppingItemPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let updated = mgr
+        .add_shopping_list_item(&list_id, payload.item)
+        .await
+        .map_err(err_to_http)?;
+    match updated {
+        Some(l) => Ok(Json(serde_json::json!({ "list": l }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("no shopping list with id {}", list_id),
+                code: 404,
+            }),
+        )),
+    }
+}
+
+async fn delete_shopping_list_item(
+    State(state): State<ApiState>,
+    Path((list_id, item_index)): Path<(String, usize)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let removed = mgr
+        .remove_shopping_list_item(&list_id, item_index)
+        .await
+        .map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "removed": removed })))
+}
+
+async fn post_check_shopping_list_item_by_name(
+    State(state): State<ApiState>,
+    Path(list_id): Path<String>,
+    Json(payload): Json<CheckByNamePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let m = mgr
+        .check_shopping_list_item_by_name(&list_id, &payload.needle, payload.checked)
+        .await
+        .map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "match": m })))
 }

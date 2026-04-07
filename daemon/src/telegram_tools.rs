@@ -657,6 +657,22 @@ Cierra la sub-fase de nutricion (BI.3 sprint 2). Foundation NO sensible: catalog
 20o. **shopping_list_get** — Devuelve una lista completa con todos sus items.
     args: {"list_id": "shop-..."}
 
+20p. **shopping_list_active** — Devuelve LA lista activa mas reciente sin necesidad de pasar list_id. Conveniente para "Axi, qué necesito comprar". Devuelve null si no hay listas activas.
+    args: {}
+
+20q. **shopping_list_add_item** — Añade un item a una lista existente. Util para flujos en la tienda donde el usuario recuerda algo despues de crear la lista ("ah, tambien necesito pan").
+    args: {"list_id": "shop-...", "item": {"name": "pan", "quantity": 1, "unit": "pieza", "checked": false, "notes": null}}
+
+20r. **shopping_list_remove_item** — Quita un item por indice (idempotente sobre out-of-bounds — devuelve false en lugar de error).
+    args: {"list_id": "shop-...", "item_index": 2}
+
+20s. **shopping_list_check_by_name** — Marca el primer item cuyo nombre contenga `needle` (substring case-insensitive). Esta es la herramienta correcta para flujos por voz/Telegram donde el usuario dice "marca la leche" en lugar de "marca el item 3". Devuelve indice + nombre real del item marcado + total_matches.
+    args: {"list_id": "shop-...", "needle": "leche", "checked": true}
+
+    REGLAS:
+    - Si total_matches > 1, AVISA al usuario sobre la ambiguedad: "marque 'leche entera' pero tambien encontre 'leche deslactosada'. ¿Querias esa otra?"
+    - Si total_matches == 0, dile que no encontraste el item y sugiere `shopping_list_get` para que vea los nombres exactos.
+
 21. **Vida Plena — Modo panico (/wipe-*) y predictor menstrual**
 
 CRITICO. El modo panico borra TODAS las filas de las side-tables sensibles destructivamente. Es para casos donde el usuario esta en peligro fisico (familia abusiva, disputa legal, custodia, control sanitario). NO toca el vault — el vault sigue configurado, solo desaparecen los datos. Es IRRECUPERABLE.
@@ -1894,6 +1910,12 @@ REGLAS FIRMES:
             "shopping_list_archive" => execute_shopping_list_archive(&call.args, ctx).await,
             "shopping_list_list" => execute_shopping_list_list(&call.args, ctx).await,
             "shopping_list_get" => execute_shopping_list_get(&call.args, ctx).await,
+            "shopping_list_active" => execute_shopping_list_active(ctx).await,
+            "shopping_list_add_item" => execute_shopping_list_add_item(&call.args, ctx).await,
+            "shopping_list_remove_item" => execute_shopping_list_remove_item(&call.args, ctx).await,
+            "shopping_list_check_by_name" => {
+                execute_shopping_list_check_by_name(&call.args, ctx).await
+            }
             "wipe_mental_health" => execute_wipe_mental_health(&call.args, ctx).await,
             "wipe_menstrual" => execute_wipe_menstrual(&call.args, ctx).await,
             "wipe_sexual_health" => execute_wipe_sexual_health(&call.args, ctx).await,
@@ -6970,6 +6992,10 @@ REGLAS FIRMES:
             Some(l) => l,
             None => return Ok(format!("No encontre lista con id {}.", id)),
         };
+        Ok(render_shopping_list_markdown(&l))
+    }
+
+    fn render_shopping_list_markdown(l: &crate::memory_plane::ShoppingList) -> String {
         let mut out = format!("# {} ({})\n\n", l.name, l.status);
         for (i, it) in l.items.iter().enumerate() {
             let mark = if it.checked { "[x]" } else { "[ ]" };
@@ -6980,7 +7006,110 @@ REGLAS FIRMES:
             };
             out.push_str(&format!("{}. {} {}{}\n", i, mark, it.name, qty));
         }
-        Ok(out)
+        out
+    }
+
+    async fn execute_shopping_list_active(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        match mem.get_active_shopping_list().await? {
+            Some(l) => Ok(render_shopping_list_markdown(&l)),
+            None => Ok(
+                "No tienes ninguna lista de compras activa. Usa `shopping_list_create` para empezar una, o `shopping_list_generate_weekly` para que la genere por ti."
+                    .to_string(),
+            ),
+        }
+    }
+
+    async fn execute_shopping_list_add_item(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list_id = args["list_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'list_id'"))?;
+        let item_obj = &args["item"];
+        let name = item_obj["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta 'item.name'"))?
+            .to_string();
+        let item = ShoppingListItem {
+            name,
+            quantity: item_obj["quantity"].as_f64(),
+            unit: item_obj["unit"].as_str().map(|s| s.to_string()),
+            food_id: item_obj["food_id"].as_str().map(|s| s.to_string()),
+            checked: item_obj["checked"].as_bool().unwrap_or(false),
+            notes: item_obj["notes"].as_str().map(|s| s.to_string()),
+        };
+        let item_name = item.name.clone();
+        match mem.add_shopping_list_item(list_id, item).await? {
+            Some(l) => Ok(format!(
+                "Agregado: {} (lista ahora tiene {} items)",
+                item_name,
+                l.items.len()
+            )),
+            None => Ok(format!("No encontre lista con id {}.", list_id)),
+        }
+    }
+
+    async fn execute_shopping_list_remove_item(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list_id = args["list_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'list_id'"))?;
+        let item_index = args["item_index"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'item_index'"))?
+            as usize;
+        let ok = mem.remove_shopping_list_item(list_id, item_index).await?;
+        if ok {
+            Ok(format!("Item {} eliminado.", item_index))
+        } else {
+            Ok(format!(
+                "No pude eliminar el item {} (lista no existe o indice fuera de rango).",
+                item_index
+            ))
+        }
+    }
+
+    async fn execute_shopping_list_check_by_name(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list_id = args["list_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'list_id'"))?;
+        let needle = args["needle"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'needle'"))?;
+        let checked = args["checked"].as_bool().unwrap_or(true);
+        match mem
+            .check_shopping_list_item_by_name(list_id, needle, checked)
+            .await?
+        {
+            Some(m) => {
+                let action = if checked { "marcado" } else { "desmarcado" };
+                let mut out = format!(
+                    "✓ {} '{}' (item #{})",
+                    action, m.matched_name, m.item_index
+                );
+                if m.total_matches > 1 {
+                    out.push_str(&format!(
+                        "\n\n⚠️ Habia {} items que matcheaban '{}' — marque el primero. Si querias otro, usa `shopping_list_get` para ver los nombres exactos y luego `shopping_list_check_item` por indice.",
+                        m.total_matches, needle
+                    ));
+                }
+                Ok(out)
+            }
+            None => Ok(format!(
+                "No encontre ningun item que contenga '{}' en esa lista. Usa `shopping_list_get` para ver los nombres exactos.",
+                needle
+            )),
+        }
     }
 
     // -- BI panico + predictor menstrual ------------------------------------

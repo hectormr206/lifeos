@@ -7440,6 +7440,190 @@ impl MemoryPlaneManager {
         .await??;
         Ok(raw.map(shopping_list_from_raw))
     }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1 sprint 3 — Live editable shopping lists
+    // -----------------------------------------------------------------------
+    //
+    // Convierte una lista de "batch-create-once" en algo realmente
+    // usable EN la tienda: añadir items sobre la marcha, marcar por
+    // nombre ("marca la leche") en lugar de por indice, quitar
+    // items, y resolver "qué necesito comprar" sin tener que pasar
+    // un list_id.
+    //
+    // Todas las operaciones de modificacion siguen el mismo patron
+    // que `check_shopping_list_item`: leer items_json, mutar el Vec
+    // en memoria, escribir el JSON de vuelta. Ese es el modelo de
+    // simultaneidad que ya tiene la tabla.
+
+    /// Devuelve la lista activa mas reciente, o `None` si no hay
+    /// ninguna en estado `active`. Conveniente para flujos del tipo
+    /// "Axi, qué necesito comprar" donde el usuario no tiene un
+    /// list_id en mente.
+    pub async fn get_active_shopping_list(&self) -> Result<Option<ShoppingList>> {
+        let lists = self.list_shopping_lists(Some("active")).await?;
+        // list_shopping_lists ya viene ordenado por created_at DESC,
+        // asi que el primero es el mas reciente.
+        Ok(lists.into_iter().next())
+    }
+
+    /// Añade un item a una lista existente. Devuelve la lista
+    /// actualizada o `None` si el list_id no existe.
+    pub async fn add_shopping_list_item(
+        &self,
+        list_id: &str,
+        item: ShoppingListItem,
+    ) -> Result<Option<ShoppingList>> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let updated = tokio::task::spawn_blocking(move || -> Result<Option<ShoppingListRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let row: Option<(String,)> = db
+                .query_row(
+                    "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?,)),
+                )
+                .ok();
+            let json = match row {
+                Some((j,)) => j,
+                None => return Ok(None),
+            };
+            let mut items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            items.push(item);
+            let new_json = serde_json::to_string(&items)?;
+            db.execute(
+                "UPDATE shopping_lists
+                     SET items_json = ?1, updated_at = ?2
+                     WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            let mut stmt = db.prepare(
+                "SELECT list_id, name, target_store_id, status, items_json, notes,
+                            created_at, updated_at
+                     FROM shopping_lists WHERE list_id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(shopping_list_row_mapper(row)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(updated.map(shopping_list_from_raw))
+    }
+
+    /// Quita el item en `item_index`. Devuelve `true` si se hizo el
+    /// remove, `false` si la lista no existe o el indice está fuera
+    /// de rango (idempotente sobre out-of-bounds, igual que
+    /// `check_shopping_list_item`).
+    pub async fn remove_shopping_list_item(
+        &self,
+        list_id: &str,
+        item_index: usize,
+    ) -> Result<bool> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let updated = tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path)?;
+            let json: String = match db.query_row(
+                "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                params![id],
+                |r| r.get(0),
+            ) {
+                Ok(s) => s,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+                Err(e) => return Err(e.into()),
+            };
+            let mut items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            if item_index >= items.len() {
+                return Ok(false);
+            }
+            items.remove(item_index);
+            let new_json = serde_json::to_string(&items)?;
+            db.execute(
+                "UPDATE shopping_lists SET items_json = ?1, updated_at = ?2
+                 WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            Ok(true)
+        })
+        .await??;
+        Ok(updated)
+    }
+
+    /// Marca el primer item cuyo nombre contenga `needle` (case
+    /// insensitive substring). Devuelve `Some(match)` con el indice y
+    /// el nombre real del item, mas el `total_matches` para que el
+    /// caller pueda avisar al usuario si hubo ambiguedad. Devuelve
+    /// `None` si no hubo match o si la lista no existe.
+    pub async fn check_shopping_list_item_by_name(
+        &self,
+        list_id: &str,
+        needle: &str,
+        checked: bool,
+    ) -> Result<Option<ShoppingItemMatch>> {
+        let needle_lower = needle.trim().to_lowercase();
+        if needle_lower.is_empty() {
+            anyhow::bail!("needle (item name) cannot be empty");
+        }
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let result = tokio::task::spawn_blocking(move || -> Result<Option<ShoppingItemMatch>> {
+            let db = Self::open_db(&db_path)?;
+            let json: String = match db.query_row(
+                "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                params![id],
+                |r| r.get(0),
+            ) {
+                Ok(s) => s,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
+            let mut items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            let total_matches = items
+                .iter()
+                .filter(|i| i.name.to_lowercase().contains(&needle_lower))
+                .count();
+            if total_matches == 0 {
+                return Ok(None);
+            }
+            let first_idx = items
+                .iter()
+                .position(|i| i.name.to_lowercase().contains(&needle_lower))
+                .unwrap();
+            let matched_name = items[first_idx].name.clone();
+            items[first_idx].checked = checked;
+            let new_json = serde_json::to_string(&items)?;
+            db.execute(
+                "UPDATE shopping_lists SET items_json = ?1, updated_at = ?2
+                     WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            Ok(Some(ShoppingItemMatch {
+                item_index: first_idx,
+                matched_name,
+                total_matches,
+            }))
+        })
+        .await??;
+        Ok(result)
+    }
+}
+
+/// Result of a `check_shopping_list_item_by_name` lookup. The
+/// caller uses `total_matches` to decide whether to warn the user
+/// about ambiguity ("hay 2 items que contienen 'leche', marqué el
+/// primero").
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShoppingItemMatch {
+    pub item_index: usize,
+    pub matched_name: String,
+    pub total_matches: usize,
 }
 
 // -- Private raw rows + mappers for BI.3.1 ----------------------------------
@@ -20058,6 +20242,262 @@ mod tests {
         let g3 = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
         assert_eq!(g3.status, "archived");
 
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1 sprint 3 — Live editable shopping lists
+    // -----------------------------------------------------------------------
+
+    async fn make_shopping_list_with_items(mgr: &MemoryPlaneManager) -> ShoppingList {
+        let items = vec![
+            ShoppingListItem {
+                name: "Leche entera".to_string(),
+                quantity: Some(1.0),
+                unit: Some("l".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "Pan integral".to_string(),
+                quantity: Some(1.0),
+                unit: Some("pieza".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "Manzanas".to_string(),
+                quantity: Some(1.0),
+                unit: Some("kg".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+        ];
+        mgr.create_shopping_list("Despensa", None, &items, None)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_active_shopping_list_returns_most_recent() {
+        let dir = temp_dir("memory-plane-shop-active");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // No active lists yet.
+        assert!(mgr.get_active_shopping_list().await.unwrap().is_none());
+
+        let _l1 = mgr
+            .create_shopping_list("Lista 1", None, &[], None)
+            .await
+            .unwrap();
+        // Tiny sleep so created_at differs.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let l2 = mgr
+            .create_shopping_list("Lista 2 mas reciente", None, &[], None)
+            .await
+            .unwrap();
+
+        let active = mgr.get_active_shopping_list().await.unwrap().unwrap();
+        assert_eq!(active.list_id, l2.list_id);
+
+        // Archive the most recent → the older one becomes the active one.
+        mgr.archive_shopping_list(&l2.list_id).await.unwrap();
+        let active2 = mgr.get_active_shopping_list().await.unwrap().unwrap();
+        assert_eq!(active2.name, "Lista 1");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn add_shopping_list_item_extends_list() {
+        let dir = temp_dir("memory-plane-shop-add");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+
+        let new_item = ShoppingListItem {
+            name: "Tortillas".to_string(),
+            quantity: Some(1.0),
+            unit: Some("paquete".to_string()),
+            food_id: None,
+            checked: false,
+            notes: Some("para la cena".to_string()),
+        };
+        let updated = mgr
+            .add_shopping_list_item(&l.list_id, new_item)
+            .await
+            .unwrap()
+            .expect("list should exist");
+        assert_eq!(updated.items.len(), 4);
+        assert_eq!(updated.items.last().unwrap().name, "Tortillas");
+
+        // Persisted: re-fetch and verify.
+        let fetched = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(fetched.items.len(), 4);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn add_shopping_list_item_returns_none_for_unknown_list() {
+        let dir = temp_dir("memory-plane-shop-add-unknown");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let item = ShoppingListItem {
+            name: "X".to_string(),
+            quantity: None,
+            unit: None,
+            food_id: None,
+            checked: false,
+            notes: None,
+        };
+        let result = mgr
+            .add_shopping_list_item("shop-doesnt-exist", item)
+            .await
+            .unwrap();
+        assert!(result.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn remove_shopping_list_item_drops_correct_item() {
+        let dir = temp_dir("memory-plane-shop-remove");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+
+        // Remove the middle one (Pan).
+        let ok = mgr.remove_shopping_list_item(&l.list_id, 1).await.unwrap();
+        assert!(ok);
+
+        let fetched = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(fetched.items.len(), 2);
+        assert_eq!(fetched.items[0].name, "Leche entera");
+        assert_eq!(fetched.items[1].name, "Manzanas");
+
+        // Out-of-bounds → false, no error.
+        let bad = mgr.remove_shopping_list_item(&l.list_id, 99).await.unwrap();
+        assert!(!bad);
+
+        // Unknown list → false.
+        let unknown = mgr.remove_shopping_list_item("shop-nope", 0).await.unwrap();
+        assert!(!unknown);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_first_match_with_count() {
+        let dir = temp_dir("memory-plane-shop-check-name");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Create a list with TWO items containing "leche".
+        let items = vec![
+            ShoppingListItem {
+                name: "Leche entera".to_string(),
+                quantity: Some(1.0),
+                unit: Some("l".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "Leche deslactosada".to_string(),
+                quantity: Some(1.0),
+                unit: Some("l".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "Pan integral".to_string(),
+                quantity: Some(1.0),
+                unit: Some("pieza".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+        ];
+        let l = mgr
+            .create_shopping_list("Test", None, &items, None)
+            .await
+            .unwrap();
+
+        // Match "leche" → should pick the first one and report 2 matches.
+        let m = mgr
+            .check_shopping_list_item_by_name(&l.list_id, "leche", true)
+            .await
+            .unwrap()
+            .expect("should match");
+        assert_eq!(m.item_index, 0);
+        assert_eq!(m.matched_name, "Leche entera");
+        assert_eq!(m.total_matches, 2);
+
+        // Verify only the first item was checked.
+        let fetched = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert!(fetched.items[0].checked);
+        assert!(!fetched.items[1].checked);
+        assert!(!fetched.items[2].checked);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_unique_match() {
+        let dir = temp_dir("memory-plane-shop-check-unique");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+
+        let m = mgr
+            .check_shopping_list_item_by_name(&l.list_id, "PAN", true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.matched_name, "Pan integral");
+        assert_eq!(m.total_matches, 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_no_match() {
+        let dir = temp_dir("memory-plane-shop-check-nomatch");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+
+        let m = mgr
+            .check_shopping_list_item_by_name(&l.list_id, "chocolate", true)
+            .await
+            .unwrap();
+        assert!(m.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_unknown_list_returns_none() {
+        let dir = temp_dir("memory-plane-shop-check-noliste");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let m = mgr
+            .check_shopping_list_item_by_name("shop-nope", "leche", true)
+            .await
+            .unwrap();
+        assert!(m.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_rejects_empty_needle() {
+        let dir = temp_dir("memory-plane-shop-check-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+        let err = mgr
+            .check_shopping_list_item_by_name(&l.list_id, "   ", true)
+            .await;
+        assert!(err.is_err());
         std::fs::remove_dir_all(dir).ok();
     }
 
