@@ -3642,10 +3642,7 @@ impl MemoryPlaneManager {
 
     /// List all health facts of an optional `fact_type`. Notes are
     /// decrypted in this function (cheap — encrypted notes are tiny).
-    pub async fn list_health_facts(
-        &self,
-        fact_type: Option<&str>,
-    ) -> Result<Vec<HealthFact>> {
+    pub async fn list_health_facts(&self, fact_type: Option<&str>) -> Result<Vec<HealthFact>> {
         let db_path = self.db_path.clone();
         let filter = fact_type.map(|s| s.to_string());
         let rows = tokio::task::spawn_blocking(move || {
@@ -4162,7 +4159,9 @@ impl MemoryPlaneManager {
                 })
             };
             let raws: Vec<LabResultRaw> = if let Some(f) = filter {
-                stmt.query_map(params![f, limit], map_row)?.flatten().collect()
+                stmt.query_map(params![f, limit], map_row)?
+                    .flatten()
+                    .collect()
             } else {
                 stmt.query_map(params![limit], map_row)?.flatten().collect()
             };
@@ -4397,8 +4396,7 @@ impl MemoryPlaneManager {
             let db_path = self.db_path.clone();
             tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
                 let db = Self::open_db(&db_path)?;
-                let mut stmt =
-                    db.prepare("SELECT DISTINCT vital_type FROM health_vitals")?;
+                let mut stmt = db.prepare("SELECT DISTINCT vital_type FROM health_vitals")?;
                 let types: Vec<String> = stmt
                     .query_map([], |r| r.get::<_, String>(0))?
                     .flatten()
@@ -5233,10 +5231,7 @@ impl MemoryPlaneManager {
     }
 
     /// List growth goals, optionally filtered by status.
-    pub async fn list_growth_goals(
-        &self,
-        status: Option<GoalStatus>,
-    ) -> Result<Vec<GrowthGoal>> {
+    pub async fn list_growth_goals(&self, status: Option<GoalStatus>) -> Result<Vec<GrowthGoal>> {
         let db_path = self.db_path.clone();
         let filter = status.map(|s| s.as_str().to_string());
         let raws = tokio::task::spawn_blocking(move || {
@@ -5486,8 +5481,7 @@ impl MemoryPlaneManager {
         source_entry_id: Option<&str>,
     ) -> Result<ExerciseInventoryItem> {
         let item_name = normalize_non_empty(item_name).context("item_name required")?;
-        let item_category =
-            normalize_non_empty(item_category).context("item_category required")?;
+        let item_category = normalize_non_empty(item_category).context("item_category required")?;
         let notes = notes.and_then(normalize_non_empty);
 
         let now = Utc::now();
@@ -5633,8 +5627,8 @@ impl MemoryPlaneManager {
         if exercises.is_empty() {
             anyhow::bail!("plan must contain at least one exercise");
         }
-        let exercises_json = serde_json::to_string(&exercises)
-            .context("failed to serialise plan exercises")?;
+        let exercises_json =
+            serde_json::to_string(&exercises).context("failed to serialise plan exercises")?;
         let notes_owned = notes.trim().to_string();
         let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
             (None, None)
@@ -6532,8 +6526,7 @@ impl MemoryPlaneManager {
             .context("failed to serialise recipe ingredients")?;
         let steps_json =
             serde_json::to_string(&steps).context("failed to serialise recipe steps")?;
-        let tags_json =
-            serde_json::to_string(&tags).context("failed to serialise recipe tags")?;
+        let tags_json = serde_json::to_string(&tags).context("failed to serialise recipe tags")?;
         let notes_owned = notes.trim().to_string();
         let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
             (None, None)
@@ -7102,8 +7095,7 @@ impl MemoryPlaneManager {
         source_entry_id: Option<&str>,
     ) -> Result<CommunityActivity> {
         let name = normalize_non_empty(name).context("name required")?;
-        let activity_type =
-            normalize_non_empty(activity_type).context("activity_type required")?;
+        let activity_type = normalize_non_empty(activity_type).context("activity_type required")?;
         let frequency = frequency.and_then(normalize_non_empty);
         let notes_owned = notes.trim().to_string();
         let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
@@ -7926,8 +7918,7 @@ impl MemoryPlaneManager {
         notes: &str,
         source_entry_id: Option<&str>,
     ) -> Result<SpiritualPractice> {
-        let practice_name =
-            normalize_non_empty(practice_name).context("practice_name required")?;
+        let practice_name = normalize_non_empty(practice_name).context("practice_name required")?;
         let tradition = tradition.and_then(normalize_non_empty);
         let frequency = frequency.and_then(normalize_non_empty);
         let notes_owned = notes.trim().to_string();
@@ -8187,7 +8178,9 @@ impl MemoryPlaneManager {
                 })
             };
             let raws: Vec<SpiritualReflectionRaw> = if let Some(t) = topic_filter {
-                stmt.query_map(params![t, limit], map_row)?.flatten().collect()
+                stmt.query_map(params![t, limit], map_row)?
+                    .flatten()
+                    .collect()
             } else {
                 stmt.query_map(params![limit], map_row)?.flatten().collect()
             };
@@ -8531,11 +8524,7 @@ impl MemoryPlaneManager {
     }
 
     /// Update the balance of an account. Sets `balance_updated_at` to now.
-    pub async fn update_account_balance(
-        &self,
-        account_id: &str,
-        new_balance: f64,
-    ) -> Result<bool> {
+    pub async fn update_account_balance(&self, account_id: &str, new_balance: f64) -> Result<bool> {
         if !new_balance.is_finite() {
             anyhow::bail!("balance must be finite");
         }
@@ -9028,10 +9017,7 @@ impl MemoryPlaneManager {
         Ok(n > 0)
     }
 
-    pub async fn list_financial_goals(
-        &self,
-        active_only: bool,
-    ) -> Result<Vec<FinancialGoal>> {
+    pub async fn list_financial_goals(&self, active_only: bool) -> Result<Vec<FinancialGoal>> {
         let db_path = self.db_path.clone();
         let raws = tokio::task::spawn_blocking(move || {
             let db = Self::open_db(&db_path)?;
@@ -9110,27 +9096,28 @@ impl MemoryPlaneManager {
         let cutoff_30 = (now_utc - chrono::Duration::days(30)).to_rfc3339();
         let db_path = self.db_path.clone();
         let cutoff_clone = cutoff_30.clone();
-        let (expenses_30, income_30) = tokio::task::spawn_blocking(move || -> Result<(f64, f64)> {
-            let db = Self::open_db(&db_path)?;
-            let exp: f64 = db
-                .query_row(
-                    "SELECT COALESCE(SUM(amount), 0) FROM financial_expenses
+        let (expenses_30, income_30) =
+            tokio::task::spawn_blocking(move || -> Result<(f64, f64)> {
+                let db = Self::open_db(&db_path)?;
+                let exp: f64 = db
+                    .query_row(
+                        "SELECT COALESCE(SUM(amount), 0) FROM financial_expenses
                      WHERE occurred_at >= ?1",
-                    params![cutoff_clone],
-                    |r| r.get(0),
-                )
-                .unwrap_or(0.0);
-            let inc: f64 = db
-                .query_row(
-                    "SELECT COALESCE(SUM(amount), 0) FROM financial_income
+                        params![cutoff_clone],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0.0);
+                let inc: f64 = db
+                    .query_row(
+                        "SELECT COALESCE(SUM(amount), 0) FROM financial_income
                      WHERE received_at >= ?1",
-                    params![cutoff_clone],
-                    |r| r.get(0),
-                )
-                .unwrap_or(0.0);
-            Ok((exp, inc))
-        })
-        .await??;
+                        params![cutoff_clone],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0.0);
+                Ok((exp, inc))
+            })
+            .await??;
 
         Ok(FinancialSummary {
             active_accounts,
@@ -9143,6 +9130,637 @@ impl MemoryPlaneManager {
             generated_at: now_utc,
         })
     }
+}
+
+// ============================================================================
+// Fase BI.8 — Coaching unificado (Vida Plena)
+// ============================================================================
+//
+// BI.8 is the synthesis layer that sits on top of every other BI sub-fase.
+// It does NOT introduce new tables — instead it composes the per-domain
+// summaries into a single struct the LLM can reason over, plus three
+// higher-level helpers:
+//
+//   * `get_life_summary`           — narrative-ready snapshot across all pillars
+//   * `detect_cross_domain_patterns` — heuristic correlations (sleep ↔ exercise,
+//                                      gastos vs ingresos, metas estancadas, ...)
+//   * `prepare_medical_visit`       — structured packet for an upcoming doctor
+//                                      visit, combining health + recent symptoms
+//   * `forgetting_check`            — surfaces things the user once cared about
+//                                      and has gone quiet on (paused goals,
+//                                      stale habits, books abandoned, etc.)
+//
+// **Important:** none of these methods diagnose anything. Patterns are
+// surfaced as observations with evidence, never as conclusions. The
+// medical visit prep is an aid to talk to a real doctor, never a
+// replacement. See `docs/strategy/fase-bi-bienestar-integral.md` § "Lo
+// que NO va a hacer" — those constraints are non-negotiable and the
+// LLM system prompt around these tools enforces them at the dispatch
+// layer.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LifeSummaryWindow {
+    Week,
+    Month,
+}
+
+impl LifeSummaryWindow {
+    pub fn days(&self) -> i64 {
+        match self {
+            Self::Week => 7,
+            Self::Month => 30,
+        }
+    }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Week => "week",
+            Self::Month => "month",
+        }
+    }
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "week" | "weekly" | "7d" | "semana" | "semanal" => Ok(Self::Week),
+            "month" | "monthly" | "30d" | "mes" | "mensual" => Ok(Self::Month),
+            other => anyhow::bail!("invalid life summary window: {}", other),
+        }
+    }
+}
+
+/// One observation linking two or more wellness domains. The
+/// description is human-readable Spanish; the evidence array carries
+/// the raw numbers behind the claim so the LLM can quote them.
+///
+/// `confidence` is a coarse 0..1 self-rating from the heuristic that
+/// produced the pattern — it is **not** a probability, just a hint to
+/// the LLM about how strongly to phrase the observation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossDomainPattern {
+    pub kind: String,
+    pub description: String,
+    pub evidence: Vec<String>,
+    pub confidence: f64,
+}
+
+/// One thing the user once cared about that has gone quiet. The
+/// `suggestion` is a gentle prompt for Axi to use when surfacing the
+/// item ("¿sigue activa esta meta?"). Never imperatively asks the
+/// user to drop or resume it — that decision is theirs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgottenItem {
+    /// Convención: `growth_goal`, `growth_goal_paused`, `book_reading`,
+    /// `habit_inactive`, `community_inactive`, `spiritual_inactive`,
+    /// `financial_goal_inactive`.
+    pub item_type: String,
+    pub item_id: String,
+    pub name: String,
+    pub last_seen_at: Option<DateTime<Utc>>,
+    pub days_since_seen: Option<i64>,
+    pub suggestion: String,
+}
+
+/// Structured prep packet for an upcoming medical visit. Returned by
+/// `prepare_medical_visit` and meant to be rendered as a single
+/// markdown message the user can show their doctor on the phone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MedicalVisitPrep {
+    pub reason: String,
+    pub allergies: Vec<HealthFact>,
+    pub conditions: Vec<HealthFact>,
+    pub other_facts: Vec<HealthFact>,
+    pub current_medications: Vec<Medication>,
+    pub recent_vitals: Vec<Vital>,
+    pub recent_labs: Vec<LabResult>,
+    pub recent_symptom_entries: Vec<MemoryEntry>,
+    pub suggested_questions: Vec<String>,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// The unified Vida Plena snapshot. Embeds every per-domain summary
+/// plus the cross-domain patterns. Designed to be serialized to JSON
+/// and dropped into an LLM prompt as the "what's going on with the
+/// user this {week,month}" payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LifeSummary {
+    pub window: LifeSummaryWindow,
+    pub period_start: DateTime<Utc>,
+    pub period_end: DateTime<Utc>,
+    pub health: HealthSummary,
+    pub growth: GrowthSummary,
+    pub exercise: ExerciseSummary,
+    pub nutrition: NutritionSummary,
+    pub social: SocialSummary,
+    pub sleep: SleepSummary,
+    pub spiritual: SpiritualSummary,
+    pub financial: FinancialSummary,
+    pub patterns: Vec<CrossDomainPattern>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// BI.8 — Build the unified life summary. This composes the
+    /// per-domain summaries (health, growth, exercise, nutrition,
+    /// social, sleep, spiritual, financial) and adds the cross-domain
+    /// pattern detector on top.
+    ///
+    /// `today_local` is the user's local date in `YYYY-MM-DD` format —
+    /// needed for habit-streak calculations whose semantics are
+    /// per-day, not per-RFC3339-instant.
+    ///
+    /// All sub-summary calls use `unwrap_or_default()` so a single
+    /// missing pillar (e.g. user has not logged any sleep yet) does
+    /// not poison the whole snapshot.
+    pub async fn get_life_summary(
+        &self,
+        window: LifeSummaryWindow,
+        today_local: &str,
+    ) -> Result<LifeSummary> {
+        let now = Utc::now();
+        let period_start = now - chrono::Duration::days(window.days());
+
+        let health = self.get_health_summary(10, 5).await.unwrap_or_default();
+        let growth = self
+            .get_growth_summary(5, today_local, window.days() as u32)
+            .await
+            .unwrap_or_default();
+        let exercise = self.get_exercise_summary(10).await.unwrap_or_default();
+        let nutrition = self.get_nutrition_summary(15).await.unwrap_or_default();
+        let social = self.get_social_summary(10, 10).await.unwrap_or_default();
+        let sleep = self.get_sleep_summary(10).await.unwrap_or_default();
+        let spiritual = self.get_spiritual_summary(10).await.unwrap_or_default();
+        let financial = self.get_financial_summary(10, 10).await.unwrap_or_default();
+
+        let patterns = detect_patterns_static(
+            &exercise, &sleep, &nutrition, &spiritual, &social, &financial, &growth,
+        );
+
+        Ok(LifeSummary {
+            window,
+            period_start,
+            period_end: now,
+            health,
+            growth,
+            exercise,
+            nutrition,
+            social,
+            sleep,
+            spiritual,
+            financial,
+            patterns,
+            generated_at: now,
+        })
+    }
+
+    /// Convenience wrapper that returns just the patterns (the rest of
+    /// `LifeSummary` can be expensive when the user only wants the
+    /// "what stood out" view).
+    pub async fn detect_cross_domain_patterns(
+        &self,
+        today_local: &str,
+    ) -> Result<Vec<CrossDomainPattern>> {
+        let summary = self
+            .get_life_summary(LifeSummaryWindow::Month, today_local)
+            .await?;
+        Ok(summary.patterns)
+    }
+
+    /// BI.8 — Build a structured prep packet for an upcoming medical
+    /// visit. `reason` is what the user is going for ("control de
+    /// diabetes", "dolor de espalda", "chequeo anual"). Recent
+    /// symptom entries are pulled from `memory_entries` whose `kind`
+    /// starts with `health_` OR whose narrative content mentions a
+    /// symptom keyword in Spanish.
+    ///
+    /// Returns suggested questions the user could ask the doctor —
+    /// these are conversation starters, never diagnostic prompts.
+    pub async fn prepare_medical_visit(
+        &self,
+        reason: &str,
+        symptoms_lookback_days: u32,
+    ) -> Result<MedicalVisitPrep> {
+        let reason = normalize_non_empty(reason).context("reason required")?;
+        let allergies = self
+            .list_health_facts(Some("allergy"))
+            .await
+            .unwrap_or_default();
+        let conditions = self
+            .list_health_facts(Some("condition"))
+            .await
+            .unwrap_or_default();
+        let all_facts = self.list_health_facts(None).await.unwrap_or_default();
+        let other_facts: Vec<HealthFact> = all_facts
+            .into_iter()
+            .filter(|f| f.fact_type != "allergy" && f.fact_type != "condition")
+            .collect();
+        let current_medications = self.list_active_medications().await.unwrap_or_default();
+        let health = self.get_health_summary(8, 8).await.unwrap_or_default();
+
+        let cutoff = Utc::now() - chrono::Duration::days(symptoms_lookback_days as i64);
+        let recent_entries = self.list_entries(100, None, None).await.unwrap_or_default();
+        let recent_symptom_entries: Vec<MemoryEntry> = recent_entries
+            .into_iter()
+            .filter(|e| e.created_at >= cutoff)
+            .filter(|e| e.kind.starts_with("health_") || mentions_symptom(&e.content))
+            .take(20)
+            .collect();
+
+        let suggested_questions =
+            build_suggested_questions(&reason, &current_medications, &conditions);
+
+        Ok(MedicalVisitPrep {
+            reason,
+            allergies,
+            conditions,
+            other_facts,
+            current_medications,
+            recent_vitals: health.recent_vitals,
+            recent_labs: health.recent_labs,
+            recent_symptom_entries,
+            suggested_questions,
+            generated_at: Utc::now(),
+        })
+    }
+
+    /// BI.8 — Proactive forgetting check. Surfaces things the user
+    /// once cared about that have gone quiet:
+    ///
+    ///   * Active growth goals not updated in 60+ days.
+    ///   * Paused growth goals (always — explicit pause is worth re-checking).
+    ///   * Books in `Reading` status with no updates in 60+ days.
+    ///   * Active habits with zero check-ins in the last 30 days.
+    ///   * Active community activities not attended in 90+ days.
+    ///   * Active spiritual practices not marked in 30+ days.
+    ///   * Active financial goals with no progress in 60+ days.
+    ///
+    /// Items are ordered "longest forgotten first" and capped to 20 so
+    /// the LLM cannot get drowned in noise.
+    pub async fn forgetting_check(&self, today_local: &str) -> Result<Vec<ForgottenItem>> {
+        let now = Utc::now();
+        let mut items: Vec<ForgottenItem> = Vec::new();
+
+        // Active growth goals not updated in 60+ days.
+        if let Ok(active_goals) = self.list_growth_goals(Some(GoalStatus::Active)).await {
+            for g in active_goals {
+                let days = (now - g.updated_at).num_days();
+                if days >= 60 {
+                    items.push(ForgottenItem {
+                        item_type: "growth_goal".to_string(),
+                        item_id: g.goal_id,
+                        name: g.name,
+                        last_seen_at: Some(g.updated_at),
+                        days_since_seen: Some(days),
+                        suggestion: format!(
+                            "Hace {} dias que no actualizas esta meta. Sigue activa o la cerramos?",
+                            days
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Paused growth goals — always surface.
+        if let Ok(paused) = self.list_growth_goals(Some(GoalStatus::Paused)).await {
+            for g in paused {
+                let days = (now - g.updated_at).num_days();
+                items.push(ForgottenItem {
+                    item_type: "growth_goal_paused".to_string(),
+                    item_id: g.goal_id,
+                    name: g.name,
+                    last_seen_at: Some(g.updated_at),
+                    days_since_seen: Some(days),
+                    suggestion: format!(
+                        "Pausaste esta meta hace {} dias. La retomamos o la cerramos formalmente?",
+                        days
+                    ),
+                });
+            }
+        }
+
+        // Books in Reading status with stale updated_at.
+        if let Ok(reading) = self.list_books(Some(BookStatus::Reading)).await {
+            for b in reading {
+                let days = (now - b.updated_at).num_days();
+                if days >= 60 {
+                    items.push(ForgottenItem {
+                        item_type: "book_reading".to_string(),
+                        item_id: b.book_id,
+                        name: b.title,
+                        last_seen_at: Some(b.updated_at),
+                        days_since_seen: Some(days),
+                        suggestion: format!(
+                            "Llevas {} dias sin avanzar este libro. Lo retomamos, lo abandonamos o lo movemos a wishlist?",
+                            days
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Active habits with zero check-ins in last 30 days.
+        if let Ok(habits) = self.list_habits(true).await {
+            for h in habits {
+                if let Ok(streak) = self.get_habit_streak(&h.habit_id, today_local, 30).await {
+                    if streak.completed_days == 0 {
+                        let days = (now - h.updated_at).num_days().max(30);
+                        items.push(ForgottenItem {
+                            item_type: "habit_inactive".to_string(),
+                            item_id: h.habit_id,
+                            name: h.name,
+                            last_seen_at: Some(h.updated_at),
+                            days_since_seen: Some(days),
+                            suggestion:
+                                "Sin check-ins en 30 dias. Sigue siendo un habito que quieres mantener?"
+                                    .to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Active community activities not attended in 90+ days.
+        if let Ok(communities) = self.list_community_activities(true).await {
+            for c in communities {
+                let last = c.last_attended;
+                let days_since = last.map(|t| (now - t).num_days());
+                let stale_attended = matches!(days_since, Some(d) if d >= 90);
+                let stale_never = last.is_none() && (now - c.created_at).num_days() >= 90;
+                if stale_attended || stale_never {
+                    items.push(ForgottenItem {
+                        item_type: "community_inactive".to_string(),
+                        item_id: c.activity_id,
+                        name: c.name,
+                        last_seen_at: last,
+                        days_since_seen: days_since.or(Some((now - c.created_at).num_days())),
+                        suggestion: "No hay registros recientes. Sigues yendo o ya no?".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Active spiritual practices with no recent mark.
+        if let Ok(practices) = self.list_spiritual_practices(true).await {
+            for p in practices {
+                let last = p.last_practiced;
+                let days_since = last.map(|t| (now - t).num_days());
+                let stale_marked = matches!(days_since, Some(d) if d >= 30);
+                let stale_never = last.is_none() && (now - p.created_at).num_days() >= 30;
+                if stale_marked || stale_never {
+                    items.push(ForgottenItem {
+                        item_type: "spiritual_inactive".to_string(),
+                        item_id: p.practice_id,
+                        name: p.practice_name,
+                        last_seen_at: last,
+                        days_since_seen: days_since.or(Some((now - p.created_at).num_days())),
+                        suggestion:
+                            "Hace tiempo que no la marcas. Sigue siendo importante para ti?"
+                                .to_string(),
+                    });
+                }
+            }
+        }
+
+        // Active financial goals with no movement in 60+ days.
+        if let Ok(fgoals) = self.list_financial_goals(true).await {
+            for g in fgoals {
+                let days = (now - g.updated_at).num_days();
+                if days >= 60 {
+                    items.push(ForgottenItem {
+                        item_type: "financial_goal_inactive".to_string(),
+                        item_id: g.goal_id,
+                        name: g.name,
+                        last_seen_at: Some(g.updated_at),
+                        days_since_seen: Some(days),
+                        suggestion: format!(
+                            "Sin movimiento en {} dias. La meta sigue vigente?",
+                            days
+                        ),
+                    });
+                }
+            }
+        }
+
+        items.sort_by(|a, b| {
+            b.days_since_seen
+                .unwrap_or(0)
+                .cmp(&a.days_since_seen.unwrap_or(0))
+        });
+        items.truncate(20);
+        Ok(items)
+    }
+}
+
+/// Heuristic cross-domain pattern detector. Pure function over the
+/// already-loaded summaries — no DB I/O. Conservative on purpose:
+/// every pattern carries `evidence` so the LLM can quote the numbers
+/// instead of speculating.
+fn detect_patterns_static(
+    exercise: &ExerciseSummary,
+    sleep: &SleepSummary,
+    nutrition: &NutritionSummary,
+    spiritual: &SpiritualSummary,
+    social: &SocialSummary,
+    financial: &FinancialSummary,
+    growth: &GrowthSummary,
+) -> Vec<CrossDomainPattern> {
+    let mut patterns = Vec::new();
+
+    // 1) Sleep quality low + low exercise frequency.
+    if let Some(q) = sleep.avg_quality_7d {
+        if q < 5.0 && exercise.sessions_last_7_days < 2 {
+            patterns.push(CrossDomainPattern {
+                kind: "sleep_exercise_low".to_string(),
+                description:
+                    "Tu calidad de sueno reciente es baja y haces poco ejercicio. La actividad fisica regular suele mejorar el sueno (correlacion, no diagnostico)."
+                        .to_string(),
+                evidence: vec![
+                    format!("calidad_sueno_7d = {:.1}/10", q),
+                    format!("sesiones_7d = {}", exercise.sessions_last_7_days),
+                ],
+                confidence: 0.6,
+            });
+        }
+    }
+
+    // 2) Sleep duration below 6h average.
+    if let Some(d) = sleep.avg_duration_hours_7d {
+        if d < 6.0 {
+            patterns.push(CrossDomainPattern {
+                kind: "sleep_duration_low".to_string(),
+                description: format!(
+                    "Promedio de sueno de los ultimos 7 dias: {:.1}h. Por debajo del rango recomendado (7-9h) para adultos.",
+                    d
+                ),
+                evidence: vec![format!("avg_duration_hours_7d = {:.2}", d)],
+                confidence: 0.85,
+            });
+        }
+    }
+
+    // 3) High training volume + low protein in nutrition log.
+    if exercise.sessions_last_7_days >= 3
+        && nutrition.meals_last_7_days >= 5
+        && nutrition.protein_g_last_7_days < 350.0
+    {
+        patterns.push(CrossDomainPattern {
+            kind: "nutrition_protein_low".to_string(),
+            description:
+                "Entrenas con frecuencia pero la proteina registrada en los ultimos 7 dias es baja. Para mantener masa muscular suelen sugerirse 1.6-2.2 g/kg/dia."
+                    .to_string(),
+            evidence: vec![
+                format!("sesiones_7d = {}", exercise.sessions_last_7_days),
+                format!("comidas_registradas_7d = {}", nutrition.meals_last_7_days),
+                format!(
+                    "proteina_total_7d_g = {:.0}",
+                    nutrition.protein_g_last_7_days
+                ),
+            ],
+            confidence: 0.5,
+        });
+    }
+
+    // 4) Spiritual drift (>=14 days since last practice mark).
+    if let Some(d) = spiritual.days_since_last_practice {
+        if d >= 14 && !spiritual.active_practices.is_empty() {
+            patterns.push(CrossDomainPattern {
+                kind: "spiritual_drift".to_string(),
+                description: format!(
+                    "Hace {} dias que no marcas una practica espiritual activa.",
+                    d
+                ),
+                evidence: vec![format!(
+                    "active_practices_count = {}",
+                    spiritual.active_practices.len()
+                )],
+                confidence: 0.7,
+            });
+        }
+    }
+
+    // 5) Social drift (>=21 days since last community activity).
+    if let Some(d) = social.days_since_last_activity {
+        if d >= 21 && !social.active_activities.is_empty() {
+            patterns.push(CrossDomainPattern {
+                kind: "social_drift".to_string(),
+                description: format!(
+                    "Hace {} dias que no asistes a tus actividades comunitarias activas. La conexion social pesa en bienestar.",
+                    d
+                ),
+                evidence: vec![format!(
+                    "active_activities_count = {}",
+                    social.active_activities.len()
+                )],
+                confidence: 0.7,
+            });
+        }
+    }
+
+    // 6) Financial: gastos > ingresos en 30d.
+    if financial.expenses_total_last_30_days > 0.0
+        && financial.income_total_last_30_days > 0.0
+        && financial.expenses_total_last_30_days > financial.income_total_last_30_days
+    {
+        let delta = financial.expenses_total_last_30_days - financial.income_total_last_30_days;
+        patterns.push(CrossDomainPattern {
+            kind: "financial_negative_net".to_string(),
+            description: format!(
+                "En los ultimos 30 dias gastaste mas de lo que ingreso (delta: {:.0}). Puede ser puntual; el dato esta aqui sin juicio.",
+                delta
+            ),
+            evidence: vec![
+                format!(
+                    "ingresos_30d = {:.0}",
+                    financial.income_total_last_30_days
+                ),
+                format!(
+                    "gastos_30d = {:.0}",
+                    financial.expenses_total_last_30_days
+                ),
+            ],
+            confidence: 0.95,
+        });
+    }
+
+    // 7) Growth: many active goals at 0% — possible overload.
+    let stalled = growth
+        .active_goals
+        .iter()
+        .filter(|g| g.progress_pct == 0)
+        .count();
+    if stalled >= 3 {
+        patterns.push(CrossDomainPattern {
+            kind: "goals_stalled".to_string(),
+            description: format!(
+                "Tienes {} metas activas con 0% de progreso. Quiza vale priorizar 1-2 antes de mantener tantas en paralelo.",
+                stalled
+            ),
+            evidence: vec![format!(
+                "active_goals_total = {}",
+                growth.active_goals.len()
+            )],
+            confidence: 0.65,
+        });
+    }
+
+    patterns
+}
+
+/// Cheap Spanish-keyword check used by `prepare_medical_visit` to
+/// surface narrative entries that look like the user described a
+/// symptom. Intentionally permissive — false positives are fine,
+/// false negatives are not (we want the doctor to see it).
+fn mentions_symptom(content: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "dolor",
+        "duele",
+        "sintoma",
+        "síntoma",
+        "fiebre",
+        "nausea",
+        "náusea",
+        "mareo",
+        "fatiga",
+        "cansancio",
+        "tos ",
+        "vomito",
+        "vómito",
+        "migrana",
+        "migraña",
+        "presion",
+        "presión",
+        "diarrea",
+        "ardor",
+        "comezon",
+        "comezón",
+        "sangrado",
+    ];
+    let lower = content.to_lowercase();
+    KEYWORDS.iter().any(|k| lower.contains(k))
+}
+
+/// Build a small list of conversation-starter questions for the user
+/// to consider asking their doctor. None of these are diagnostic.
+fn build_suggested_questions(
+    reason: &str,
+    current_meds: &[Medication],
+    conditions: &[HealthFact],
+) -> Vec<String> {
+    let mut q = Vec::new();
+    q.push(format!("Cual es el siguiente paso para {}?", reason));
+    if !current_meds.is_empty() {
+        q.push(
+            "Mis medicamentos actuales siguen siendo los adecuados? Hay interacciones a vigilar?"
+                .to_string(),
+        );
+    }
+    for c in conditions.iter().take(3) {
+        q.push(format!(
+            "Sobre mi {}: hay algun cambio o seguimiento que recomiende?",
+            c.label
+        ));
+    }
+    q.push("Que sintomas o senales debo vigilar antes de la siguiente visita?".to_string());
+    q.push("Cuando deberia agendar la proxima consulta?".to_string());
+    q
 }
 
 // -- Private raw row types for BI.10 + BI.11 ---------------------------------
@@ -10601,7 +11219,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(archived_count, 2, "Both entries should be flagged archived=1");
+        assert_eq!(
+            archived_count, 2,
+            "Both entries should be flagged archived=1"
+        );
 
         // Embeddings are PRESERVED on archive so search_archived can find
         // them via semantic recall (the BI.1 "never lose anything" rule).
@@ -11368,11 +11989,9 @@ mod tests {
             .unwrap();
 
         for v in [110.0_f64, 105.0, 98.0] {
-            mgr.record_vital(
-                "glucose", Some(v), None, "mg/dL", None, None, None,
-            )
-            .await
-            .unwrap();
+            mgr.record_vital("glucose", Some(v), None, "mg/dL", None, None, None)
+                .await
+                .unwrap();
         }
 
         mgr.add_lab_result(
@@ -11444,7 +12063,10 @@ mod tests {
         assert_eq!(after[0].status, BookStatus::Finished);
         assert_eq!(after[0].rating_1_5, Some(5));
         assert!(after[0].finished_at.is_some());
-        assert!(after[0].started_at.is_some(), "started_at must be preserved");
+        assert!(
+            after[0].started_at.is_some(),
+            "started_at must be preserved"
+        );
 
         std::fs::remove_dir_all(dir).ok();
     }
@@ -11487,15 +12109,7 @@ mod tests {
         mgr.initialize().await.unwrap();
 
         let result = mgr
-            .add_book(
-                "X",
-                None,
-                None,
-                BookStatus::Finished,
-                Some(7),
-                "",
-                None,
-            )
+            .add_book("X", None, None, BookStatus::Finished, Some(7), "", None)
             .await;
         assert!(result.is_err());
 
@@ -11578,10 +12192,7 @@ mod tests {
         let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
         mgr.initialize().await.unwrap();
 
-        let h = mgr
-            .add_habit("Run", None, "daily", "", None)
-            .await
-            .unwrap();
+        let h = mgr.add_habit("Run", None, "daily", "", None).await.unwrap();
         // Mark 5 days completed in a 7-day window ending 2026-04-07.
         for d in [
             "2026-04-01",
@@ -11688,28 +12299,12 @@ mod tests {
         mgr.add_book("Read1", None, None, BookStatus::Reading, None, "", None)
             .await
             .unwrap();
-        mgr.add_book(
-            "Done1",
-            None,
-            None,
-            BookStatus::Finished,
-            Some(5),
-            "",
-            None,
-        )
-        .await
-        .unwrap();
-        mgr.add_book(
-            "Done2",
-            None,
-            None,
-            BookStatus::Finished,
-            Some(4),
-            "",
-            None,
-        )
-        .await
-        .unwrap();
+        mgr.add_book("Done1", None, None, BookStatus::Finished, Some(5), "", None)
+            .await
+            .unwrap();
+        mgr.add_book("Done2", None, None, BookStatus::Finished, Some(4), "", None)
+            .await
+            .unwrap();
         mgr.add_book("Wish1", None, None, BookStatus::Wishlist, None, "", None)
             .await
             .unwrap();
@@ -11750,10 +12345,7 @@ mod tests {
             .await
             .unwrap();
 
-        let summary = mgr
-            .get_growth_summary(10, "2026-04-30", 30)
-            .await
-            .unwrap();
+        let summary = mgr.get_growth_summary(10, "2026-04-30", 30).await.unwrap();
 
         assert_eq!(summary.currently_reading.len(), 1);
         assert_eq!(summary.recently_finished.len(), 2);
@@ -11898,17 +12490,7 @@ mod tests {
         mgr.initialize().await.unwrap();
 
         let result = mgr
-            .add_exercise_plan(
-                "X",
-                None,
-                None,
-                None,
-                None,
-                vec![],
-                None,
-                "",
-                None,
-            )
+            .add_exercise_plan("X", None, None, None, None, vec![], None, "", None)
             .await;
         assert!(result.is_err());
 
@@ -11923,31 +12505,13 @@ mod tests {
 
         // duration_min = 0 must error.
         let result = mgr
-            .log_exercise_session(
-                None,
-                "strength",
-                "test",
-                0,
-                Some(7),
-                None,
-                "",
-                None,
-            )
+            .log_exercise_session(None, "strength", "test", 0, Some(7), None, "", None)
             .await;
         assert!(result.is_err());
 
         // rpe out of range must error.
         let result = mgr
-            .log_exercise_session(
-                None,
-                "strength",
-                "test",
-                30,
-                Some(15),
-                None,
-                "",
-                None,
-            )
+            .log_exercise_session(None, "strength", "test", 30, Some(15), None, "", None)
             .await;
         assert!(result.is_err());
 
@@ -11984,18 +12548,9 @@ mod tests {
         let t3 = Utc::now();
 
         for (t, desc) in [(t1, "oldest"), (t2, "middle"), (t3, "newest")] {
-            mgr.log_exercise_session(
-                None,
-                "cardio",
-                desc,
-                30,
-                None,
-                Some(t),
-                "",
-                None,
-            )
-            .await
-            .unwrap();
+            mgr.log_exercise_session(None, "cardio", desc, 30, None, Some(t), "", None)
+                .await
+                .unwrap();
         }
 
         let sessions = mgr.list_exercise_sessions(50).await.unwrap();
@@ -12065,7 +12620,9 @@ mod tests {
             )
             .await
             .unwrap();
-        mgr.deactivate_exercise_plan(&dead_plan.plan_id).await.unwrap();
+        mgr.deactivate_exercise_plan(&dead_plan.plan_id)
+            .await
+            .unwrap();
 
         // Sessions: 2 within last 7 days, 1 more within last 30 days,
         // 1 older than 30 days.
@@ -12075,12 +12632,7 @@ mod tests {
         let in_30d = now - chrono::Duration::days(20);
         let old = now - chrono::Duration::days(40);
 
-        for (t, mins) in [
-            (in_7d_a, 45_u32),
-            (in_7d_b, 30),
-            (in_30d, 60),
-            (old, 90),
-        ] {
+        for (t, mins) in [(in_7d_a, 45_u32), (in_7d_b, 30), (in_30d, 60), (old, 90)] {
             mgr.log_exercise_session(
                 None,
                 "strength",
@@ -12217,17 +12769,7 @@ mod tests {
         // Empty meal_type must error.
         let result = mgr
             .log_nutrition_meal(
-                "",
-                "test",
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                "",
-                None,
+                "", "test", None, None, None, None, None, None, None, "", None,
             )
             .await;
         assert!(result.is_err());
@@ -12275,10 +12817,7 @@ mod tests {
             .unwrap();
         }
 
-        let breakfasts = mgr
-            .list_nutrition_log(Some("breakfast"), 50)
-            .await
-            .unwrap();
+        let breakfasts = mgr.list_nutrition_log(Some("breakfast"), 50).await.unwrap();
         assert_eq!(breakfasts.len(), 2);
         let snacks = mgr.list_nutrition_log(Some("snack"), 50).await.unwrap();
         assert_eq!(snacks.len(), 1);
@@ -12320,10 +12859,7 @@ mod tests {
             "Saltear la espinaca".to_string(),
             "Servir junto".to_string(),
         ];
-        let tags = vec![
-            "alto_proteina".to_string(),
-            "almuerzo".to_string(),
-        ];
+        let tags = vec!["alto_proteina".to_string(), "almuerzo".to_string()];
 
         let recipe = mgr
             .add_recipe(
@@ -12350,14 +12886,8 @@ mod tests {
         let listed = mgr.list_recipes(None).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].ingredients.len(), 3);
-        assert_eq!(
-            listed[0].ingredients[0].name,
-            "pechuga de pollo"
-        );
-        assert_eq!(
-            listed[0].ingredients[0].notes.as_deref(),
-            Some("sin piel")
-        );
+        assert_eq!(listed[0].ingredients[0].name, "pechuga de pollo");
+        assert_eq!(listed[0].ingredients[0].notes.as_deref(), Some("sin piel"));
         assert_eq!(listed[0].steps[1], "Sazonar y asar el pollo");
         assert_eq!(listed[0].notes, "Receta favorita");
 
@@ -12515,7 +13045,13 @@ mod tests {
         // 4 meals: 3 within last 7 days, 1 older.
         let now = Utc::now();
         let meals = [
-            (now - chrono::Duration::days(1), 500.0_f64, 30.0_f64, 50.0_f64, 18.0_f64),
+            (
+                now - chrono::Duration::days(1),
+                500.0_f64,
+                30.0_f64,
+                50.0_f64,
+                18.0_f64,
+            ),
             (now - chrono::Duration::days(3), 600.0, 35.0, 60.0, 22.0),
             (now - chrono::Duration::days(6), 450.0, 25.0, 45.0, 15.0),
             (now - chrono::Duration::days(20), 700.0, 40.0, 70.0, 25.0),
@@ -12639,14 +13175,9 @@ mod tests {
         let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
         mgr.initialize().await.unwrap();
 
-        mgr.log_contribution(
-            "Ayude con compras",
-            Some("Doña Lupe"),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        mgr.log_contribution("Ayude con compras", Some("Doña Lupe"), None, None)
+            .await
+            .unwrap();
         mgr.log_contribution("Done sangre", None, None, None)
             .await
             .unwrap();
@@ -12720,7 +13251,15 @@ mod tests {
         // wake_time before bedtime must error.
         let now = Utc::now();
         let bad = mgr
-            .log_sleep(now, now - chrono::Duration::hours(1), None, 0, None, "", None)
+            .log_sleep(
+                now,
+                now - chrono::Duration::hours(1),
+                None,
+                0,
+                None,
+                "",
+                None,
+            )
             .await;
         assert!(bad.is_err());
 
@@ -12816,10 +13355,26 @@ mod tests {
         // 3 nights in last 7 days: durations 7.0, 8.0, 6.0 — qualities 7, 8, 6.
         // 1 night older than 7 days that should NOT be included in averages.
         let nights = [
-            (now - chrono::Duration::days(1) - chrono::Duration::hours(7), 7.0_f64, 7),
-            (now - chrono::Duration::days(3) - chrono::Duration::hours(8), 8.0, 8),
-            (now - chrono::Duration::days(5) - chrono::Duration::hours(6), 6.0, 6),
-            (now - chrono::Duration::days(20) - chrono::Duration::hours(5), 5.0, 4),
+            (
+                now - chrono::Duration::days(1) - chrono::Duration::hours(7),
+                7.0_f64,
+                7,
+            ),
+            (
+                now - chrono::Duration::days(3) - chrono::Duration::hours(8),
+                8.0,
+                8,
+            ),
+            (
+                now - chrono::Duration::days(5) - chrono::Duration::hours(6),
+                6.0,
+                6,
+            ),
+            (
+                now - chrono::Duration::days(20) - chrono::Duration::hours(5),
+                5.0,
+                4,
+            ),
         ];
         for (bedtime, duration_h, quality) in nights {
             let wake_time = bedtime + chrono::Duration::seconds((duration_h * 3600.0) as i64);
@@ -12947,7 +13502,9 @@ mod tests {
         let bad = mgr.add_core_value("X", 11, "", None).await;
         assert!(bad.is_err());
 
-        mgr.add_core_value("creatividad", 7, "", None).await.unwrap();
+        mgr.add_core_value("creatividad", 7, "", None)
+            .await
+            .unwrap();
         mgr.add_core_value("familia", 10, "Lo mas importante", None)
             .await
             .unwrap();
@@ -12973,7 +13530,14 @@ mod tests {
         mgr.initialize().await.unwrap();
 
         let p1 = mgr
-            .add_spiritual_practice("Meditar", Some("secular"), Some("diaria"), Some(15), "", None)
+            .add_spiritual_practice(
+                "Meditar",
+                Some("secular"),
+                Some("diaria"),
+                Some(15),
+                "",
+                None,
+            )
             .await
             .unwrap();
         mgr.add_spiritual_practice("Caminata bosque", None, Some("semanal"), None, "", None)
@@ -12990,7 +13554,9 @@ mod tests {
             .await
             .unwrap();
         mgr.add_core_value("familia", 10, "", None).await.unwrap();
-        mgr.add_core_value("creatividad", 8, "", None).await.unwrap();
+        mgr.add_core_value("creatividad", 8, "", None)
+            .await
+            .unwrap();
 
         let summary = mgr.get_spiritual_summary(10).await.unwrap();
         assert_eq!(summary.active_practices.len(), 2);
@@ -13038,7 +13604,10 @@ mod tests {
         assert!(bad.is_err());
 
         // Update balance.
-        let updated = mgr.update_account_balance(&a.account_id, 18500.0).await.unwrap();
+        let updated = mgr
+            .update_account_balance(&a.account_id, 18500.0)
+            .await
+            .unwrap();
         assert!(updated);
         let after = mgr.list_financial_accounts(true).await.unwrap();
         assert_eq!(after[0].balance_last_known, Some(18500.0));
@@ -13141,17 +13710,9 @@ mod tests {
         mgr.initialize().await.unwrap();
 
         // 1 active account.
-        mgr.add_financial_account(
-            "BBVA",
-            "checking",
-            None,
-            Some(20000.0),
-            "MXN",
-            "",
-            None,
-        )
-        .await
-        .unwrap();
+        mgr.add_financial_account("BBVA", "checking", None, Some(20000.0), "MXN", "", None)
+            .await
+            .unwrap();
 
         // 1 active goal.
         mgr.add_financial_goal("Viaje", 15000.0, "MXN", None, "", None)
@@ -13184,7 +13745,10 @@ mod tests {
         .unwrap();
 
         // Insert 2 income entries: both within last 30 days.
-        for when in [now - chrono::Duration::days(5), now - chrono::Duration::days(25)] {
+        for when in [
+            now - chrono::Duration::days(5),
+            now - chrono::Duration::days(25),
+        ] {
             mgr.log_income(25000.0, "MXN", "salario", None, Some(when), false, "", None)
                 .await
                 .unwrap();
@@ -13211,6 +13775,200 @@ mod tests {
             "net_last_30_days should be 47500, got {}",
             summary.net_last_30_days
         );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.8 — Coaching unificado
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn life_summary_window_parses_es_and_en() {
+        assert_eq!(
+            LifeSummaryWindow::parse("week").unwrap(),
+            LifeSummaryWindow::Week
+        );
+        assert_eq!(
+            LifeSummaryWindow::parse("Mensual").unwrap(),
+            LifeSummaryWindow::Month
+        );
+        assert_eq!(
+            LifeSummaryWindow::parse("7d").unwrap(),
+            LifeSummaryWindow::Week
+        );
+        assert_eq!(LifeSummaryWindow::Week.days(), 7);
+        assert_eq!(LifeSummaryWindow::Month.days(), 30);
+        assert!(LifeSummaryWindow::parse("century").is_err());
+    }
+
+    #[tokio::test]
+    async fn life_summary_aggregates_all_pillars_on_empty_db() {
+        let dir = temp_dir("memory-plane-life-summary-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Week, "2026-04-07")
+            .await
+            .unwrap();
+        assert_eq!(summary.window, LifeSummaryWindow::Week);
+        assert!(summary.health.facts.is_empty());
+        assert!(summary.growth.active_goals.is_empty());
+        assert!(summary.exercise.recent_sessions.is_empty());
+        assert!(summary.nutrition.recent_meals.is_empty());
+        assert!(summary.social.active_activities.is_empty());
+        assert!(summary.sleep.recent_entries.is_empty());
+        assert!(summary.spiritual.active_practices.is_empty());
+        assert!(summary.financial.active_accounts.is_empty());
+        assert!(summary.patterns.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn life_summary_detects_negative_net_pattern() {
+        let dir = temp_dir("memory-plane-life-summary-net");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Spend more than earned in last 30d.
+        mgr.log_income(
+            10000.0,
+            "MXN",
+            "salary",
+            None,
+            Some(Utc::now()),
+            false,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.log_expense(
+            20000.0,
+            "MXN",
+            "rent",
+            None,
+            None,
+            Some(Utc::now()),
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Month, "2026-04-07")
+            .await
+            .unwrap();
+        assert!(summary
+            .patterns
+            .iter()
+            .any(|p| p.kind == "financial_negative_net"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn forgetting_check_surfaces_paused_goal_and_stale_active_goal() {
+        let dir = temp_dir("memory-plane-forgetting");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Create one growth goal then pause it.
+        let g = mgr
+            .add_growth_goal("Aprender Rust", None, None, "", None)
+            .await
+            .unwrap();
+        mgr.update_growth_goal_progress(&g.goal_id, 10, Some(GoalStatus::Paused))
+            .await
+            .unwrap();
+
+        // Create one active goal and backdate its updated_at to 90 days ago
+        // by hand-editing SQLite (no public API for that — keeps the
+        // production code from exposing time travel).
+        let stale = mgr
+            .add_growth_goal("Meta vieja", None, None, "", None)
+            .await
+            .unwrap();
+        let db_path = mgr.db_path.clone();
+        let stale_id = stale.goal_id.clone();
+        let backdate = (Utc::now() - chrono::Duration::days(90)).to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = MemoryPlaneManager::open_db(&db_path).unwrap();
+            db.execute(
+                "UPDATE growth_goals SET updated_at = ?1 WHERE goal_id = ?2",
+                rusqlite::params![backdate, stale_id],
+            )
+            .unwrap();
+        })
+        .await
+        .unwrap();
+
+        let items = mgr.forgetting_check("2026-04-07").await.unwrap();
+        assert!(items
+            .iter()
+            .any(|i| i.item_type == "growth_goal_paused" && i.name == "Aprender Rust"));
+        assert!(items
+            .iter()
+            .any(|i| i.item_type == "growth_goal" && i.name == "Meta vieja"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn medical_visit_prep_collects_all_health_data() {
+        let dir = temp_dir("memory-plane-visit-prep");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_health_fact("allergy", "Penicilina", Some("severe"), "", None)
+            .await
+            .unwrap();
+        mgr.add_health_fact("condition", "Diabetes tipo 2", None, "", None)
+            .await
+            .unwrap();
+        mgr.add_health_fact("blood_type", "O+", None, "", None)
+            .await
+            .unwrap();
+        mgr.start_medication(
+            "Metformina",
+            "850mg",
+            "2x/dia",
+            Some("Diabetes tipo 2"),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // A symptom narrative entry.
+        mgr.add_entry(
+            "note",
+            "user",
+            &[],
+            None,
+            50,
+            "Hoy me duele la cabeza por la tarde, presion en las sienes.",
+        )
+        .await
+        .unwrap();
+
+        let prep = mgr
+            .prepare_medical_visit("control de diabetes", 30)
+            .await
+            .unwrap();
+        assert_eq!(prep.allergies.len(), 1);
+        assert_eq!(prep.conditions.len(), 1);
+        assert_eq!(prep.other_facts.len(), 1);
+        assert_eq!(prep.current_medications.len(), 1);
+        assert!(!prep.recent_symptom_entries.is_empty());
+        assert!(!prep.suggested_questions.is_empty());
+        assert!(prep
+            .suggested_questions
+            .iter()
+            .any(|q| q.contains("control de diabetes")));
 
         std::fs::remove_dir_all(dir).ok();
     }

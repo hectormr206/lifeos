@@ -434,25 +434,31 @@ poderosas para todas las demás dimensiones.
 Esta es la culminación. Sin BI.1-BI.14 no hay datos suficientes; con
 ellos, Axi puede empezar a sintetizar.
 
-- [ ] **Resúmenes semanales/mensuales** automáticos: cada domingo
-  noche, Axi genera un resumen narrativo de tu semana usando datos de
-  todas las side-tables. "Comiste bien lunes y martes, cena pesada
-  miércoles, tres días de ejercicio, dormiste mal jueves, te dolió la
-  cabeza viernes (probablemente conectado), estado de ánimo promedio
-  6/10 (mejor que la semana pasada)."
-- [ ] **Detección de patrones cruzados**: cuando varias señales se
-  alinean ("tu glucosa ha estado alta los días que comes pasta",
-  "tus migrañas correlacionan con noches de menos de 6h de sueño"),
-  Axi te lo nota — sin diagnosticar, solo señalando la correlación.
-- [ ] **Preparación para visitas médicas**: comando "Axi, mañana voy
-  al doctor por mi diabetes" → Axi prepara un resumen estructurado
-  con: medicamentos actuales, vitales recientes, eventos relevantes,
-  preguntas que el usuario podría hacer.
-- [ ] **Chequeo proactivo de no-olvido**: cada cierto tiempo (mensual)
-  Axi revisa cosas pendientes de hace meses ("Hace 3 meses mencionaste
-  que querías retomar el proyecto X, ¿sigue en pie?"). Esto resuelve
-  el caso original que motivó toda esta fase.
-- [ ] Tests + version bump.
+- [x] **Resúmenes semanales/mensuales** automáticos: `get_life_summary(window, today_local)`
+  agrega health + growth + exercise + nutrition + social + sleep +
+  spiritual + financial en un solo struct narrativo, con cabeceras
+  por pilar y los patrones cruzados detectados al final. Telegram
+  tool: `life_summary`.
+- [x] **Detección de patrones cruzados**: `detect_cross_domain_patterns`
+  + heurística pura sobre las summaries cargadas. Hoy detecta: sueno
+  bajo + ejercicio bajo, sueno < 6h, alta carga + proteina baja,
+  drift espiritual (>14d), drift social (>21d), gastos > ingresos en
+  30d, metas estancadas (>=3 con 0%). Cada patrón viene con
+  evidencia citable. Telegram tool: `cross_domain_patterns`.
+- [x] **Preparación para visitas médicas**: `prepare_medical_visit(reason, lookback_days)`
+  arma un paquete con alergias, condiciones, medicamentos activos,
+  vitales recientes, labs recientes, sintomas mencionados en
+  `memory_entries` (kind `health_*` o keywords en español) y
+  preguntas sugeridas para el doctor. Telegram tool: `medical_visit_prep`.
+- [x] **Chequeo proactivo de no-olvido**: `forgetting_check(today_local)`
+  saca a la luz growth_goals activas con `updated_at` >60d, growth_goals
+  pausadas, libros en `Reading` sin mover en 60d, hábitos activos sin
+  check-ins en 30d, comunidades sin asistencia en 90d, prácticas
+  espirituales sin marca en 30d y metas financieras sin movimiento
+  en 60d. Ordenadas "más olvidado primero", cap 20. Telegram tool:
+  `forgetting_check`.
+- [x] Tests + version bump (5 tests añadidos en `memory_plane::tests`,
+  daemon → v0.3.20).
 
 ## Lo que NO va a hacer (CRÍTICO — no negociable)
 

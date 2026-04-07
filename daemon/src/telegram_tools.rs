@@ -25,8 +25,8 @@ pub mod inner {
     use crate::computer_use::{ComputerUseAction, ComputerUseManager};
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
     use crate::memory_plane::{
-        extract_entities_from_text, BookStatus, ExercisePlanItem, GoalStatus, MemoryPlaneManager,
-        RecipeIngredient,
+        extract_entities_from_text, BookStatus, ExercisePlanItem, GoalStatus, LifeSummaryWindow,
+        MemoryPlaneManager, RecipeIngredient,
     };
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
@@ -377,6 +377,30 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
 
 12s. **financial_summary** — Devuelve resumen completo: cuentas activas + gastos recientes + ingresos recientes + metas activas + totales rolling de 30 dias (gastos, ingresos, neto). Usalo cuando el usuario te pida revisar como va con sus finanzas o quiera reflexionar sobre su mes.
     args: {}
+
+13. **Vida Plena — Coaching unificado (BI.8)**
+
+Estas herramientas sintetizan TODOS los pilares de bienestar (salud, nutricion, ejercicio, crecimiento, social, sueno, espiritualidad, finanzas) en una sola vista. Usalas cuando el usuario pida una reflexion amplia sobre como va su vida, o cuando vayas a preparar algo que cruce dimensiones.
+
+REGLAS FIRMES (no negociables):
+- NO diagnosticas. Patrones cruzados son OBSERVACIONES con evidencia, jamas conclusiones medicas/psicologicas/financieras.
+- Frasea siempre como "se observa", "el dato muestra", nunca "tienes X" o "deberias hacer Y".
+- Para temas serios siempre recomienda profesional certificado (medico, terapeuta, nutriologo, asesor financiero).
+- En crisis (autolesion, abuso, suicidio) NO improvisa: hotline + nunca "aqui estoy para ti" como unica respuesta.
+
+13a. **life_summary** — Devuelve un snapshot unificado de Vida Plena: salud + crecimiento + ejercicio + nutricion + social + sueno + espiritualidad + finanzas + patrones cruzados detectados. Es la herramienta para responder "como voy en general" o "haz un resumen de mi semana/mes".
+    args: {"window": "week|month", "today_local": "2026-04-07"}
+    El campo today_local es la fecha local del usuario en YYYY-MM-DD. Si no la sabes, usa current_time primero.
+
+13b. **cross_domain_patterns** — Devuelve solo los patrones cruzados detectados en los ultimos 30 dias (sleep ↔ exercise, gastos vs ingresos, metas estancadas, drift social/espiritual, etc.). Usala cuando quieras responder corto y enfocado a "que destacar" sin todo el resumen.
+    args: {"today_local": "2026-04-07"}
+
+13c. **medical_visit_prep** — Construye un paquete estructurado para una proxima cita medica. Incluye alergias, condiciones, medicamentos activos, vitales recientes, labs recientes, sintomas mencionados ultimamente, y preguntas sugeridas para hacerle al doctor. Usala cuando el usuario diga "manana voy al doctor" o "tengo cita medica".
+    args: {"reason": "control de diabetes", "symptoms_lookback_days": 14}
+    symptoms_lookback_days es opcional; default sensato es 14.
+
+13d. **forgetting_check** — Saca a la luz cosas que el usuario alguna vez le importaron y se han quedado en silencio: metas pausadas, libros sin avanzar, habitos sin check-ins, comunidades sin asistir, practicas espirituales sin marcar, metas financieras sin movimiento. Usala cuando el usuario diga "que se me esta olvidando" o de manera proactiva al hacer un resumen mensual. Es respetuoso: nunca presiona, solo pregunta si siguen vigentes.
+    args: {"today_local": "2026-04-07"}
 
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
@@ -1508,6 +1532,10 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
             "financial_goal_progress" => execute_financial_goal_progress(&call.args, ctx).await,
             "financial_goal_list" => execute_financial_goal_list(ctx).await,
             "financial_summary" => execute_financial_summary(ctx).await,
+            "life_summary" => execute_life_summary(&call.args, ctx).await,
+            "cross_domain_patterns" => execute_cross_domain_patterns(&call.args, ctx).await,
+            "medical_visit_prep" => execute_medical_visit_prep(&call.args, ctx).await,
+            "forgetting_check" => execute_forgetting_check(&call.args, ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -2647,10 +2675,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         Ok(format!("Medicamentos activos:\n{}", lines.join("\n")))
     }
 
-    async fn execute_vital_record(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_vital_record(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let vital_type = args["vital_type"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'vital_type'"))?;
@@ -2682,10 +2707,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         ))
     }
 
-    async fn execute_vital_history(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_vital_history(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let vital_type = args["vital_type"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'vital_type'"))?;
@@ -2724,10 +2746,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         ))
     }
 
-    async fn execute_lab_add(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_lab_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let test_name = args["test_name"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'test_name'"))?;
@@ -2845,9 +2864,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
             out.push('\n');
         }
 
-        out.push_str(
-            "\n_Generado por LifeOS — para consulta con tu medico, no es diagnostico._\n",
-        );
+        out.push_str("\n_Generado por LifeOS — para consulta con tu medico, no es diagnostico._\n");
         Ok(out)
     }
 
@@ -2855,10 +2872,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
     // Fase BI.7 — Crecimiento personal (Vida Plena)
     // ========================================================================
 
-    async fn execute_book_add(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_book_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let title = args["title"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'title'"))?;
@@ -2909,10 +2923,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         }
     }
 
-    async fn execute_book_list(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_book_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let status = match args["status"].as_str() {
             Some(s) => Some(BookStatus::parse(s)?),
             None => None,
@@ -2947,10 +2958,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         Ok(format!("Libros:\n{}", lines.join("\n")))
     }
 
-    async fn execute_habit_add(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_habit_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let name = args["name"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
@@ -2967,10 +2975,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         ))
     }
 
-    async fn execute_habit_checkin(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_habit_checkin(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let habit_id = args["habit_id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'habit_id'"))?;
@@ -3004,19 +3009,13 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
                     .as_deref()
                     .map(|d| format!(" — {}", d))
                     .unwrap_or_default();
-                format!(
-                    "- [{}] {} ({}) {}",
-                    h.habit_id, h.name, h.frequency, desc
-                )
+                format!("- [{}] {} ({}) {}", h.habit_id, h.name, h.frequency, desc)
             })
             .collect();
         Ok(format!("Habitos activos:\n{}", lines.join("\n")))
     }
 
-    async fn execute_goal_add(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_goal_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let name = args["name"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
@@ -3033,10 +3032,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         ))
     }
 
-    async fn execute_goal_progress(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_goal_progress(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let goal_id = args["goal_id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'goal_id'"))?;
@@ -3068,10 +3064,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         }
     }
 
-    async fn execute_growth_summary(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_growth_summary(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         // Caller passes today as YYYY-MM-DD; default to UTC today.
         let today = args["today"]
             .as_str()
@@ -3119,10 +3112,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
                     .iter()
                     .find(|s| s.habit_id == h.habit_id);
                 let streak_str = match streak {
-                    Some(s) => format!(
-                        " — {}/{} días",
-                        s.completed_days, s.total_days
-                    ),
+                    Some(s) => format!(" — {}/{} días", s.completed_days, s.total_days),
                     None => String::new(),
                 };
                 out.push_str(&format!("- {} ({}){}\n", h.name, h.frequency, streak_str));
@@ -3138,10 +3128,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
                     .as_deref()
                     .map(|d| format!(" (deadline: {})", d))
                     .unwrap_or_default();
-                out.push_str(&format!(
-                    "- {} — {}%{}\n",
-                    g.name, g.progress_pct, deadline
-                ));
+                out.push_str(&format!("- {} — {}%{}\n", g.name, g.progress_pct, deadline));
             }
             out.push('\n');
         }
@@ -3544,9 +3531,8 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         let ingredients_value = args
             .get("ingredients")
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'ingredients'"))?;
-        let ingredients: Vec<RecipeIngredient> =
-            serde_json::from_value(ingredients_value.clone())
-                .map_err(|e| anyhow::anyhow!("'ingredients' invalido: {}", e))?;
+        let ingredients: Vec<RecipeIngredient> = serde_json::from_value(ingredients_value.clone())
+            .map_err(|e| anyhow::anyhow!("'ingredients' invalido: {}", e))?;
 
         let steps_value = args
             .get("steps")
@@ -3759,10 +3745,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
     // Fase BI.13 — Salud social y comunitaria (Vida Plena)
     // ========================================================================
 
-    async fn execute_community_add(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_community_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let name = args["name"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
@@ -3824,10 +3807,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         Ok(format!("Comunidades activas:\n{}", lines.join("\n")))
     }
 
-    async fn execute_civic_log(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_civic_log(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let engagement_type = args["engagement_type"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'engagement_type'"))?;
@@ -3854,7 +3834,9 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'description'"))?;
         let beneficiary = args["beneficiary"].as_str();
         let mem = require_memory(ctx).await?;
-        let c = mem.log_contribution(description, beneficiary, None, None).await?;
+        let c = mem
+            .log_contribution(description, beneficiary, None, None)
+            .await?;
         Ok(format!(
             "Contribucion registrada (id: {}): {}{}",
             c.contribution_id,
@@ -3885,10 +3867,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
                     .last_attended
                     .map(|d| format!(" (ultima: {})", d.format("%Y-%m-%d")))
                     .unwrap_or_default();
-                out.push_str(&format!(
-                    "- [{}] {}{}\n",
-                    a.activity_type, a.name, last
-                ));
+                out.push_str(&format!("- [{}] {}{}\n", a.activity_type, a.name, last));
             }
             out.push('\n');
         }
@@ -3939,10 +3918,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
     // Fase BI.14 — Sueño profundo (Vida Plena)
     // ========================================================================
 
-    async fn execute_sleep_log(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_sleep_log(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let bedtime_str = args["bedtime"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'bedtime' (ISO-8601)"))?;
@@ -3961,7 +3937,15 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         let dreams = args["dreams_notes"].as_str().unwrap_or("");
         let mem = require_memory(ctx).await?;
         let entry = mem
-            .log_sleep(bedtime, wake_time, quality, interruptions, feeling, dreams, None)
+            .log_sleep(
+                bedtime,
+                wake_time,
+                quality,
+                interruptions,
+                feeling,
+                dreams,
+                None,
+            )
             .await?;
         Ok(format!(
             "Sueño registrado (id: {}): {:.1}h{}",
@@ -3984,9 +3968,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         let room_temp = args["room_temperature_c"].as_f64();
         let darkness = args["darkness_1_10"].as_u64().map(|n| n as u8);
         let noise = args["noise_1_10"].as_u64().map(|n| n as u8);
-        let screen = args["screen_use_min_before_bed"]
-            .as_u64()
-            .map(|n| n as u32);
+        let screen = args["screen_use_min_before_bed"].as_u64().map(|n| n as u32);
         let caffeine = args["caffeine_after_2pm"].as_bool().unwrap_or(false);
         let alcohol = args["alcohol"].as_bool().unwrap_or(false);
         let heavy = args["heavy_dinner"].as_bool().unwrap_or(false);
@@ -3995,8 +3977,8 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         let mem = require_memory(ctx).await?;
         let env = mem
             .add_sleep_environment(
-                sleep_id, room_temp, darkness, noise, screen, caffeine, alcohol, heavy,
-                exercise, notes,
+                sleep_id, room_temp, darkness, noise, screen, caffeine, alcohol, heavy, exercise,
+                notes,
             )
             .await?;
         Ok(format!(
@@ -4005,10 +3987,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         ))
     }
 
-    async fn execute_sleep_history(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_sleep_history(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let limit = args["limit"].as_u64().unwrap_or(20) as usize;
         let mem = require_memory(ctx).await?;
         let entries = mem.list_sleep_log(limit).await?;
@@ -4100,7 +4079,14 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         let notes = args["notes"].as_str().unwrap_or("");
         let mem = require_memory(ctx).await?;
         let p = mem
-            .add_spiritual_practice(practice_name, tradition, frequency, duration_min, notes, None)
+            .add_spiritual_practice(
+                practice_name,
+                tradition,
+                frequency,
+                duration_min,
+                notes,
+                None,
+            )
             .await?;
         Ok(format!(
             "Practica registrada (id: {}): \"{}\"",
@@ -4197,10 +4183,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         Ok(format!("Reflexiones recientes:\n{}", lines.join("\n")))
     }
 
-    async fn execute_core_value_add(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_core_value_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let name = args["name"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
@@ -4236,10 +4219,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         let mut out = String::from("# Resumen espiritual\n\n");
 
         if let Some(days) = summary.days_since_last_practice {
-            out.push_str(&format!(
-                "## Ultima practica\nHace {} dias\n\n",
-                days
-            ));
+            out.push_str(&format!("## Ultima practica\nHace {} dias\n\n", days));
         }
 
         if !summary.values.is_empty() {
@@ -4367,16 +4347,16 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
                     .balance_last_known
                     .map(|b| format!(" — {:.2} {}", b, a.balance_currency))
                     .unwrap_or_default();
-                format!("- [{}] [{}] {}{}", a.account_id, a.account_type, a.name, bal)
+                format!(
+                    "- [{}] [{}] {}{}",
+                    a.account_id, a.account_type, a.name, bal
+                )
             })
             .collect();
         Ok(format!("Cuentas activas:\n{}", lines.join("\n")))
     }
 
-    async fn execute_expense_log(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_expense_log(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let amount = args["amount"]
             .as_f64()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'amount'"))?;
@@ -4406,10 +4386,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         ))
     }
 
-    async fn execute_expense_list(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_expense_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let category = args["category"].as_str();
         let limit = args["limit"].as_u64().unwrap_or(20) as usize;
         let mem = require_memory(ctx).await?;
@@ -4438,10 +4415,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         Ok(format!("Gastos recientes:\n{}", lines.join("\n")))
     }
 
-    async fn execute_income_log(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_income_log(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let amount = args["amount"]
             .as_f64()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'amount'"))?;
@@ -4471,10 +4445,7 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         ))
     }
 
-    async fn execute_income_list(
-        args: &serde_json::Value,
-        ctx: &ToolContext,
-    ) -> Result<String> {
+    async fn execute_income_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let limit = args["limit"].as_u64().unwrap_or(20) as usize;
         let mem = require_memory(ctx).await?;
         let income = mem.list_income(limit).await?;
@@ -4513,7 +4484,14 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
         let notes = args["notes"].as_str().unwrap_or("");
         let mem = require_memory(ctx).await?;
         let g = mem
-            .add_financial_goal(name, target_amount, target_currency, target_date, notes, None)
+            .add_financial_goal(
+                name,
+                target_amount,
+                target_currency,
+                target_date,
+                notes,
+                None,
+            )
             .await?;
         Ok(format!(
             "Meta financiera creada (id: {}): {} — target {:.2} {}",
@@ -4643,6 +4621,350 @@ LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como 
             );
         }
 
+        Ok(out)
+    }
+
+    // -- BI.8: Coaching unificado (Vida Plena) -------------------------------
+
+    fn today_local_arg(args: &serde_json::Value) -> String {
+        args["today_local"]
+            .as_str()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string())
+    }
+
+    async fn execute_life_summary(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let window = LifeSummaryWindow::parse(args["window"].as_str().unwrap_or("week"))
+            .unwrap_or(LifeSummaryWindow::Week);
+        let today_local = today_local_arg(args);
+        let summary = mem.get_life_summary(window, &today_local).await?;
+
+        let mut out = String::new();
+        out.push_str(&format!("# Resumen Vida Plena ({})\n\n", window.as_str()));
+        out.push_str(&format!(
+            "Periodo: {} → {}\n\n",
+            summary.period_start.format("%Y-%m-%d"),
+            summary.period_end.format("%Y-%m-%d")
+        ));
+
+        // Sleep
+        if let (Some(d), Some(q)) = (
+            summary.sleep.avg_duration_hours_7d,
+            summary.sleep.avg_quality_7d,
+        ) {
+            out.push_str(&format!(
+                "**Sueno (7d):** {:.1}h promedio, calidad {:.1}/10, {} noches registradas.\n",
+                d, q, summary.sleep.nights_logged_last_7_days
+            ));
+        } else if summary.sleep.nights_logged_last_7_days > 0 {
+            out.push_str(&format!(
+                "**Sueno (7d):** {} noches registradas.\n",
+                summary.sleep.nights_logged_last_7_days
+            ));
+        }
+
+        // Exercise
+        if summary.exercise.sessions_last_30_days > 0 {
+            out.push_str(&format!(
+                "**Ejercicio:** {} sesiones (7d) / {} sesiones (30d), {} min totales (30d).\n",
+                summary.exercise.sessions_last_7_days,
+                summary.exercise.sessions_last_30_days,
+                summary.exercise.total_minutes_last_30_days
+            ));
+        }
+
+        // Nutrition
+        if summary.nutrition.meals_last_7_days > 0 {
+            out.push_str(&format!(
+                "**Nutricion (7d):** {} comidas, ~{:.0} kcal totales, ~{:.0}g proteina.\n",
+                summary.nutrition.meals_last_7_days,
+                summary.nutrition.kcal_last_7_days,
+                summary.nutrition.protein_g_last_7_days
+            ));
+        }
+
+        // Health
+        let med_count = summary.health.active_medications.len();
+        let vital_count = summary.health.recent_vitals.len();
+        if med_count + vital_count > 0 {
+            out.push_str(&format!(
+                "**Salud:** {} medicamentos activos, {} vitales recientes registrados.\n",
+                med_count, vital_count
+            ));
+        }
+
+        // Growth
+        if !summary.growth.active_goals.is_empty() || !summary.growth.active_habits.is_empty() {
+            out.push_str(&format!(
+                "**Crecimiento:** {} habitos activos, {} metas activas, {} libros en lectura.\n",
+                summary.growth.active_habits.len(),
+                summary.growth.active_goals.len(),
+                summary.growth.currently_reading.len()
+            ));
+        }
+
+        // Social
+        if !summary.social.active_activities.is_empty() {
+            let last = summary
+                .social
+                .days_since_last_activity
+                .map(|d| format!(", ultima asistencia hace {}d", d))
+                .unwrap_or_else(|| ", sin asistencia registrada".to_string());
+            out.push_str(&format!(
+                "**Social:** {} actividades activas{}.\n",
+                summary.social.active_activities.len(),
+                last
+            ));
+        }
+
+        // Spiritual
+        if !summary.spiritual.active_practices.is_empty() {
+            let last = summary
+                .spiritual
+                .days_since_last_practice
+                .map(|d| format!(", ultima marca hace {}d", d))
+                .unwrap_or_else(|| ", sin marca reciente".to_string());
+            out.push_str(&format!(
+                "**Espiritualidad:** {} practicas activas{}.\n",
+                summary.spiritual.active_practices.len(),
+                last
+            ));
+        }
+
+        // Financial
+        if summary.financial.expenses_total_last_30_days > 0.0
+            || summary.financial.income_total_last_30_days > 0.0
+        {
+            out.push_str(&format!(
+                "**Finanzas (30d):** ingresos {:.0}, gastos {:.0}, neto {:.0}.\n",
+                summary.financial.income_total_last_30_days,
+                summary.financial.expenses_total_last_30_days,
+                summary.financial.net_last_30_days
+            ));
+        }
+
+        // Patterns
+        if !summary.patterns.is_empty() {
+            out.push_str("\n## Patrones cruzados detectados (observaciones, no diagnosticos)\n");
+            for p in &summary.patterns {
+                out.push_str(&format!(
+                    "- **[{}]** {} _(confianza: {:.0}%)_\n  evidencia: {}\n",
+                    p.kind,
+                    p.description,
+                    p.confidence * 100.0,
+                    p.evidence.join(", ")
+                ));
+            }
+        }
+
+        if out.lines().count() <= 3 {
+            out.push_str(
+                "\nAun no hay datos suficientes en ningun pilar para resumir. \
+                 Empieza registrando algo (sueno, comida, ejercicio, gasto) y vuelve a pedir el resumen.\n",
+            );
+        }
+
+        out.push_str(
+            "\n_Recordatorio: este resumen es informativo. Para temas medicos, mentales, \
+             nutricionales o financieros importantes, consulta a un profesional certificado._\n",
+        );
+
+        Ok(out)
+    }
+
+    async fn execute_cross_domain_patterns(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let today_local = today_local_arg(args);
+        let patterns = mem.detect_cross_domain_patterns(&today_local).await?;
+
+        if patterns.is_empty() {
+            return Ok(
+                "No se detectaron patrones cruzados notables en los ultimos 30 dias. \
+                 (Esto puede significar todo bien o que no hay suficientes datos aun.)"
+                    .to_string(),
+            );
+        }
+
+        let mut out = String::from("# Patrones cruzados (ultimos 30 dias)\n\n");
+        out.push_str(
+            "_Estas son OBSERVACIONES con evidencia, no diagnosticos. \
+             Para cualquier tema serio: profesional certificado._\n\n",
+        );
+        for p in patterns {
+            out.push_str(&format!(
+                "## [{}] (confianza {:.0}%)\n{}\n\nEvidencia: {}\n\n",
+                p.kind,
+                p.confidence * 100.0,
+                p.description,
+                p.evidence.join(", ")
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_medical_visit_prep(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let reason = args["reason"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'reason'"))?;
+        let lookback = args["symptoms_lookback_days"]
+            .as_u64()
+            .map(|n| n as u32)
+            .unwrap_or(14);
+        let prep = mem.prepare_medical_visit(reason, lookback).await?;
+
+        let mut out = format!(
+            "# Preparacion para visita medica\n\n**Motivo:** {}\n\n",
+            prep.reason
+        );
+
+        if !prep.allergies.is_empty() {
+            out.push_str("## Alergias\n");
+            for a in &prep.allergies {
+                let sev = a
+                    .severity
+                    .as_deref()
+                    .map(|s| format!(" ({})", s))
+                    .unwrap_or_default();
+                out.push_str(&format!("- {}{}\n", a.label, sev));
+            }
+            out.push('\n');
+        }
+
+        if !prep.conditions.is_empty() {
+            out.push_str("## Condiciones conocidas\n");
+            for c in &prep.conditions {
+                out.push_str(&format!("- {}\n", c.label));
+            }
+            out.push('\n');
+        }
+
+        if !prep.other_facts.is_empty() {
+            out.push_str("## Otros datos medicos\n");
+            for f in &prep.other_facts {
+                out.push_str(&format!("- [{}] {}\n", f.fact_type, f.label));
+            }
+            out.push('\n');
+        }
+
+        if !prep.current_medications.is_empty() {
+            out.push_str("## Medicamentos actuales\n");
+            for m in &prep.current_medications {
+                let cond = m
+                    .condition
+                    .as_deref()
+                    .map(|c| format!(" — para {}", c))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- {} {} ({}){}\n",
+                    m.name, m.dosage, m.frequency, cond
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !prep.recent_vitals.is_empty() {
+            out.push_str("## Vitales recientes\n");
+            for v in prep.recent_vitals.iter().take(15) {
+                let val = v
+                    .value_numeric
+                    .map(|n| format!("{:.1}", n))
+                    .or_else(|| v.value_text.clone())
+                    .unwrap_or_else(|| "?".to_string());
+                out.push_str(&format!(
+                    "- [{}] {} = {} {}\n",
+                    v.measured_at.format("%Y-%m-%d"),
+                    v.vital_type,
+                    val,
+                    v.unit
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !prep.recent_labs.is_empty() {
+            out.push_str("## Labs recientes\n");
+            for l in prep.recent_labs.iter().take(10) {
+                let range = match (l.reference_low, l.reference_high) {
+                    (Some(lo), Some(hi)) => format!(" [ref {}-{}]", lo, hi),
+                    _ => String::new(),
+                };
+                out.push_str(&format!(
+                    "- [{}] {} = {} {}{}\n",
+                    l.measured_at.format("%Y-%m-%d"),
+                    l.test_name,
+                    l.value_numeric,
+                    l.unit,
+                    range
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !prep.recent_symptom_entries.is_empty() {
+            out.push_str("## Sintomas / notas recientes\n");
+            for e in prep.recent_symptom_entries.iter().take(10) {
+                let snippet: String = e.content.chars().take(160).collect();
+                out.push_str(&format!(
+                    "- [{}] {}\n",
+                    e.created_at.format("%Y-%m-%d"),
+                    snippet
+                ));
+            }
+            out.push('\n');
+        }
+
+        out.push_str("## Preguntas sugeridas para el doctor\n");
+        for (i, q) in prep.suggested_questions.iter().enumerate() {
+            out.push_str(&format!("{}. {}\n", i + 1, q));
+        }
+
+        out.push_str(
+            "\n_Este paquete es un apoyo para tu conversacion con el doctor, \
+             no un diagnostico ni un plan de tratamiento._\n",
+        );
+        Ok(out)
+    }
+
+    async fn execute_forgetting_check(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let today_local = today_local_arg(args);
+        let items = mem.forgetting_check(&today_local).await?;
+
+        if items.is_empty() {
+            return Ok(
+                "No detecte cosas pendientes de hace mucho. Todo lo que tienes activo \
+                 muestra movimiento reciente."
+                    .to_string(),
+            );
+        }
+
+        let mut out = String::from("# Cosas que se han quedado en silencio\n\n");
+        out.push_str(
+            "_Estas son cosas que en algun momento te importaron. \
+             Solo te las recuerdo — tu decides si siguen vigentes._\n\n",
+        );
+        for it in items {
+            let days = it
+                .days_since_seen
+                .map(|d| format!(" (hace {}d)", d))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "- **[{}]** {}{}\n  {}\n",
+                it.item_type, it.name, days, it.suggestion
+            ));
+        }
         Ok(out)
     }
 
