@@ -256,23 +256,28 @@ de mi esposa, ¿cómo mejoro?"*. Axi necesita conocer las relaciones del
 usuario para dar consejos contextualizados — quién es quién, en qué
 etapa están, qué ha pasado, qué le importa.
 
-- [ ] Side-table `relationships` — personas importantes en la vida del
+- [x] **(sprint 1)** Side-table `relationships` — personas importantes en la vida del
   usuario con tipo de relación, etapa actual (amistad, noviazgo,
   matrimonio, divorcio, distanciamiento, etc.), fechas clave
-  (cumpleaños, aniversarios, primer encuentro), notas.
+  (cumpleaños, aniversarios, primer encuentro), notas. Implementado
+  con `add_relationship`, `update_relationship_stage`,
+  `mark_relationship_contact`, `deactivate_relationship`,
+  `list_relationships`. Notas cifradas. importance_1_10 con clamp.
 - [ ] Side-table `relationship_events` — eventos significativos en
   cada relación: discusiones, reconciliaciones, momentos importantes,
   sentimientos del usuario sobre esa persona en esa fecha. **Cifrado
   reforzado** porque es categoría sensible (puede haber abuso, infidelidad,
-  conflictos legales).
-- [ ] Side-table `family_members` — específica para familiares con
+  conflictos legales). **Bloqueado por Argon2id (junto con BI.4/6/12).**
+- [x] **(sprint 1)** Side-table `family_members` — específica para familiares con
   parentesco, fechas relevantes (nacimiento, fallecimiento, eventos),
-  condiciones de salud heredables relevantes (cruza con `health_facts`
-  del usuario para alertas tipo "tu papá tuvo diabetes a los 50, vale
-  la pena que te chequees").
-- [ ] Side-table `children_milestones` — para padres: hitos de
+  condiciones de salud heredables relevantes que cruza con
+  `medical_visit_prep` (BI.8) — los familiares con
+  `health_conditions_known` aparecen en el paquete del doctor como
+  contexto hereditario.
+- [x] **(sprint 1)** Side-table `children_milestones` — para padres: hitos de
   desarrollo, vacunas, primer diente, primera palabra, escuela,
-  problemas de conducta, logros. Permanente por diseño.
+  problemas de conducta, logros. Permanente por diseño. Validación
+  estricta de fecha YYYY-MM-DD. Notas cifradas.
 - [ ] **Coaching de relaciones** — Axi puede:
   - Dar consejos generales basados en literatura de relaciones (Gottman,
     Esther Perel, Gary Chapman) — sin ser terapeuta de pareja.
@@ -289,9 +294,18 @@ etapa están, qué ha pasado, qué le importa.
   profesional. Las recomendaciones son generales — para problemas
   serios (abuso, infidelidad, divorcio en curso, custodia), recomendar
   profesional certificado.
-- [ ] Tools nuevos: `relationship_add`, `relationship_event_log`,
-  `relationship_advice` (que combina contexto + literatura + recursos),
-  `family_member_add`, `child_milestone_log`.
+- [x] **(sprint 1)** Tools en Telegram (sección 14 del system prompt):
+  `relationship_add`, `relationship_stage`, `relationship_contact`,
+  `relationship_list`, `family_member_add`, `family_list`,
+  `child_milestone_log`, `child_milestones_list`,
+  `relationships_summary`. Pendiente: `relationship_event_log` +
+  `relationship_advice` (esperan a Argon2id y a curaduría de
+  literatura).
+- [x] **(sprint 1)** BI.8 wired: `LifeSummary.relationships`
+  agregado, patrón cruzado `relationships_stale_contacts` (contactos
+  >=7 sin movimiento en 30d), `forgetting_check` surface
+  `relationship_stale` (importancia >=7 con >=45d sin contacto), y
+  `medical_visit_prep` incluye `family_health_history`.
 
 ### BI.10 — Espiritualidad (con o sin religión)
 

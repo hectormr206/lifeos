@@ -699,6 +699,85 @@ CREATE TABLE IF NOT EXISTS financial_goals (
 );
 CREATE INDEX IF NOT EXISTS idx_financial_goals_status
     ON financial_goals(status);
+
+-- ----------------------------------------------------------------------
+-- BI.9 sprint 1 — Relaciones humanas (no sensible: perfil + familia + hijos)
+--
+-- Las side-tables sensibles (`relationship_events` con narrativa de
+-- conflictos, infidelidad, abuso) NO viven aqui — esperan a la fase
+-- de cifrado reforzado (Argon2id) que tambien desbloquea BI.4/6/12.
+--
+-- Convención de `kind` en `memory_entries` ligados a estas tablas:
+--   * relationship_*  → perfil de pareja, amistades, jefes
+--   * family_*        → familiares directos
+--   * child_*         → hijos del usuario
+-- Todos auto-permanentes via `is_wellness_kind`.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS relationships (
+    relationship_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,                  -- nombre de la persona
+    relationship_type TEXT NOT NULL,     -- 'partner', 'spouse', 'ex_partner',
+                                         -- 'friend', 'best_friend', 'colleague',
+                                         -- 'boss', 'mentor', 'mentee', 'neighbor',
+                                         -- 'acquaintance', 'other'
+    stage TEXT,                          -- libre: 'dating', 'engaged', 'married',
+                                         -- 'separated', 'divorced', 'distanced',
+                                         -- 'close', 'casual', 'reconnecting'
+    importance_1_10 INTEGER NOT NULL DEFAULT 5,  -- ranking subjetivo
+    started_on TEXT,                     -- ISO date opcional ('YYYY-MM-DD')
+    birthday TEXT,                       -- 'MM-DD' o 'YYYY-MM-DD'
+    anniversary TEXT,                    -- 'MM-DD' o 'YYYY-MM-DD'
+    last_contact_at TEXT,                -- ISO-8601 opcional
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relationships_type
+    ON relationships(relationship_type);
+CREATE INDEX IF NOT EXISTS idx_relationships_active
+    ON relationships(active);
+
+CREATE TABLE IF NOT EXISTS family_members (
+    member_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kinship TEXT NOT NULL,               -- 'mother', 'father', 'sibling', 'grandparent',
+                                         -- 'aunt_uncle', 'cousin', 'in_law', 'other'
+    side TEXT,                           -- libre: 'maternal', 'paternal', 'spouse_side'
+    birth_date TEXT,                     -- 'YYYY-MM-DD' o 'MM-DD' o 'YYYY'
+    death_date TEXT,                     -- ISO opcional
+    health_conditions_known TEXT,        -- texto plano resumen (ej "diabetes a los 50, hipertension")
+                                         -- usado por BI.8 para alertas hereditarias
+    contact_preferred TEXT,              -- libre: 'whatsapp', 'llamada', 'visita'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_family_members_kinship
+    ON family_members(kinship);
+
+CREATE TABLE IF NOT EXISTS children_milestones (
+    milestone_id TEXT PRIMARY KEY,
+    child_name TEXT NOT NULL,
+    milestone_type TEXT NOT NULL,        -- 'first_word', 'first_step', 'tooth',
+                                         -- 'school_start', 'achievement', 'concern',
+                                         -- 'vaccine', 'medical', 'other'
+    description TEXT NOT NULL,
+    occurred_on TEXT NOT NULL,           -- ISO date 'YYYY-MM-DD'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_children_milestones_child
+    ON children_milestones(child_name);
+CREATE INDEX IF NOT EXISTS idx_children_milestones_when
+    ON children_milestones(occurred_on);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9232,6 +9311,9 @@ pub struct MedicalVisitPrep {
     pub recent_vitals: Vec<Vital>,
     pub recent_labs: Vec<LabResult>,
     pub recent_symptom_entries: Vec<MemoryEntry>,
+    /// Family members (BI.9) with `health_conditions_known` populated
+    /// — surfaces hereditary context the doctor may want to know.
+    pub family_health_history: Vec<FamilyMember>,
     pub suggested_questions: Vec<String>,
     pub generated_at: DateTime<Utc>,
 }
@@ -9253,6 +9335,7 @@ pub struct LifeSummary {
     pub sleep: SleepSummary,
     pub spiritual: SpiritualSummary,
     pub financial: FinancialSummary,
+    pub relationships: RelationshipsSummary,
     pub patterns: Vec<CrossDomainPattern>,
     pub generated_at: DateTime<Utc>,
 }
@@ -9289,9 +9372,20 @@ impl MemoryPlaneManager {
         let sleep = self.get_sleep_summary(10).await.unwrap_or_default();
         let spiritual = self.get_spiritual_summary(10).await.unwrap_or_default();
         let financial = self.get_financial_summary(10, 10).await.unwrap_or_default();
+        let relationships = self
+            .get_relationships_summary(today_local, 30, 10)
+            .await
+            .unwrap_or_default();
 
         let patterns = detect_patterns_static(
-            &exercise, &sleep, &nutrition, &spiritual, &social, &financial, &growth,
+            &exercise,
+            &sleep,
+            &nutrition,
+            &spiritual,
+            &social,
+            &financial,
+            &growth,
+            &relationships,
         );
 
         Ok(LifeSummary {
@@ -9306,6 +9400,7 @@ impl MemoryPlaneManager {
             sleep,
             spiritual,
             financial,
+            relationships,
             patterns,
             generated_at: now,
         })
@@ -9364,6 +9459,21 @@ impl MemoryPlaneManager {
             .take(20)
             .collect();
 
+        // BI.9 — Surface family members whose recorded heredity is
+        // worth telling the doctor about.
+        let family_health_history: Vec<FamilyMember> = self
+            .list_family_members()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| {
+                f.health_conditions_known
+                    .as_deref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+            })
+            .collect();
+
         let suggested_questions =
             build_suggested_questions(&reason, &current_medications, &conditions);
 
@@ -9376,6 +9486,7 @@ impl MemoryPlaneManager {
             recent_vitals: health.recent_vitals,
             recent_labs: health.recent_labs,
             recent_symptom_entries,
+            family_health_history,
             suggested_questions,
             generated_at: Utc::now(),
         })
@@ -9519,6 +9630,34 @@ impl MemoryPlaneManager {
             }
         }
 
+        // BI.9 — Active relationships with importance >= 7 not contacted
+        // in 45+ days. Lower the bar than the BI.8 pattern (30d) so this
+        // surfaces only the truly forgotten ones.
+        if let Ok(rels) = self.list_relationships(true).await {
+            for r in rels {
+                if r.importance_1_10 < 7 {
+                    continue;
+                }
+                let (last, days) = match r.last_contact_at {
+                    Some(t) => (Some(t), (now - t).num_days()),
+                    None => (None, (now - r.created_at).num_days()),
+                };
+                if days >= 45 {
+                    items.push(ForgottenItem {
+                        item_type: "relationship_stale".to_string(),
+                        item_id: r.relationship_id,
+                        name: r.name,
+                        last_seen_at: last,
+                        days_since_seen: Some(days),
+                        suggestion: format!(
+                            "Hace {} dias sin contacto registrado con esta persona. Quieres mandarle un mensaje hoy?",
+                            days
+                        ),
+                    });
+                }
+            }
+        }
+
         // Active financial goals with no movement in 60+ days.
         if let Ok(fgoals) = self.list_financial_goals(true).await {
             for g in fgoals {
@@ -9553,6 +9692,7 @@ impl MemoryPlaneManager {
 /// already-loaded summaries — no DB I/O. Conservative on purpose:
 /// every pattern carries `evidence` so the LLM can quote the numbers
 /// instead of speculating.
+#[allow(clippy::too_many_arguments)]
 fn detect_patterns_static(
     exercise: &ExerciseSummary,
     sleep: &SleepSummary,
@@ -9561,6 +9701,7 @@ fn detect_patterns_static(
     social: &SocialSummary,
     financial: &FinancialSummary,
     growth: &GrowthSummary,
+    relationships: &RelationshipsSummary,
 ) -> Vec<CrossDomainPattern> {
     let mut patterns = Vec::new();
 
@@ -9680,6 +9821,25 @@ fn detect_patterns_static(
         });
     }
 
+    // 6b) Relationships: close people not contacted in 30+ days.
+    if !relationships.stale_contacts.is_empty() {
+        let names: Vec<String> = relationships
+            .stale_contacts
+            .iter()
+            .take(5)
+            .map(|r| r.name.clone())
+            .collect();
+        patterns.push(CrossDomainPattern {
+            kind: "relationships_stale_contacts".to_string(),
+            description: format!(
+                "Tienes {} personas importantes (importancia >=7) sin contacto registrado en los ultimos 30 dias.",
+                relationships.stale_contacts.len()
+            ),
+            evidence: vec![format!("personas = {}", names.join(", "))],
+            confidence: 0.7,
+        });
+    }
+
     // 7) Growth: many active goals at 0% — possible overload.
     let stalled = growth
         .active_goals
@@ -9761,6 +9921,839 @@ fn build_suggested_questions(
     q.push("Que sintomas o senales debo vigilar antes de la siguiente visita?".to_string());
     q.push("Cuando deberia agendar la proxima consulta?".to_string());
     q
+}
+
+// ============================================================================
+// Fase BI.9 sprint 1 — Relaciones humanas (perfil + familia + hijos)
+// ============================================================================
+//
+// SOLO la parte no sensible: el perfil de la persona, datos familiares,
+// hitos de hijos. La narrativa intima de eventos relacionales
+// (discusiones, infidelidad, abuso) NO vive en estas tablas — espera
+// al cifrado reforzado (Argon2id) que comparte con BI.4/6/12.
+//
+// Disclaimers que el system prompt enforza: Axi NO es consejero
+// matrimonial ni terapeuta de pareja. Los consejos son generales,
+// basados en literatura amplia (Gottman, Esther Perel, Sue Johnson).
+// Para temas serios (abuso, custodia, divorcio en curso) → siempre
+// recomendar profesional certificado o lineas de ayuda.
+
+/// One human relationship the user explicitly tracks. Pareja, mejor
+/// amigo, compañero de trabajo importante — quienquiera que el
+/// usuario considere parte de su mapa relacional.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Relationship {
+    pub relationship_id: String,
+    pub name: String,
+    /// `partner`, `spouse`, `ex_partner`, `friend`, `best_friend`,
+    /// `colleague`, `boss`, `mentor`, `mentee`, `neighbor`,
+    /// `acquaintance`, `other`.
+    pub relationship_type: String,
+    /// Free text. Convención: `dating`, `engaged`, `married`,
+    /// `separated`, `divorced`, `distanced`, `close`, `casual`,
+    /// `reconnecting`.
+    pub stage: Option<String>,
+    pub importance_1_10: u8,
+    pub started_on: Option<String>,
+    pub birthday: Option<String>,
+    pub anniversary: Option<String>,
+    pub last_contact_at: Option<DateTime<Utc>>,
+    /// Encrypted free-form notes — empty when none.
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One family member with kinship + medical heredity hints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FamilyMember {
+    pub member_id: String,
+    pub name: String,
+    /// `mother`, `father`, `sibling`, `grandparent`, `aunt_uncle`,
+    /// `cousin`, `in_law`, `other`.
+    pub kinship: String,
+    pub side: Option<String>,
+    pub birth_date: Option<String>,
+    pub death_date: Option<String>,
+    /// Plain text summary of known health conditions, used by BI.8 to
+    /// surface heredity hints. Not encrypted because it is meant to
+    /// be quoted in medical visit prep packets.
+    pub health_conditions_known: Option<String>,
+    pub contact_preferred: Option<String>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One developmental milestone for a child. Permanent by design —
+/// these are the kind of records the user wishes they had written
+/// down in 10 years.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChildMilestone {
+    pub milestone_id: String,
+    pub child_name: String,
+    /// `first_word`, `first_step`, `tooth`, `school_start`,
+    /// `achievement`, `concern`, `vaccine`, `medical`, `other`.
+    pub milestone_type: String,
+    pub description: String,
+    pub occurred_on: String,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `get_relationships_summary`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RelationshipsSummary {
+    pub close_relationships: Vec<Relationship>,
+    pub family_members: Vec<FamilyMember>,
+    pub recent_child_milestones: Vec<ChildMilestone>,
+    pub upcoming_birthdays: Vec<UpcomingDate>,
+    pub stale_contacts: Vec<Relationship>,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// One upcoming birthday/anniversary the user might want a nudge
+/// about. The `days_until` is computed against `today_local`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpcomingDate {
+    pub name: String,
+    /// `birthday` or `anniversary`.
+    pub kind: String,
+    /// `MM-DD`.
+    pub when_md: String,
+    pub days_until: u32,
+    /// `relationship` or `family_member`.
+    pub source_table: String,
+    pub source_id: String,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.9: relationships
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_relationship(
+        &self,
+        name: &str,
+        relationship_type: &str,
+        stage: Option<&str>,
+        importance_1_10: u8,
+        started_on: Option<&str>,
+        birthday: Option<&str>,
+        anniversary: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Relationship> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let relationship_type =
+            normalize_non_empty(relationship_type).context("relationship_type required")?;
+        let stage = stage.and_then(normalize_non_empty);
+        let importance = importance_1_10.clamp(1, 10);
+        let started_on = started_on.and_then(normalize_non_empty);
+        let birthday = birthday.and_then(normalize_non_empty);
+        let anniversary = anniversary.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("rel-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let type_clone = relationship_type.clone();
+        let stage_clone = stage.clone();
+        let started_clone = started_on.clone();
+        let bday_clone = birthday.clone();
+        let anniv_clone = anniversary.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO relationships
+                 (relationship_id, name, relationship_type, stage,
+                  importance_1_10, started_on, birthday, anniversary,
+                  last_contact_at, notes_nonce_b64, notes_ciphertext_b64,
+                  active, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, 1, ?11, ?12, ?12)",
+                params![
+                    id_clone,
+                    name_clone,
+                    type_clone,
+                    stage_clone,
+                    importance as i32,
+                    started_clone,
+                    bday_clone,
+                    anniv_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Relationship {
+            relationship_id: id,
+            name,
+            relationship_type,
+            stage,
+            importance_1_10: importance,
+            started_on,
+            birthday,
+            anniversary,
+            last_contact_at: None,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update the relationship `stage` (e.g. dating → engaged →
+    /// married). Idempotent.
+    pub async fn update_relationship_stage(
+        &self,
+        relationship_id: &str,
+        stage: &str,
+    ) -> Result<bool> {
+        let stage = normalize_non_empty(stage).context("stage required")?;
+        let now = Utc::now().to_rfc3339();
+        let id = relationship_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE relationships
+                 SET stage = ?1, updated_at = ?2
+                 WHERE relationship_id = ?3 AND active = 1",
+                params![stage, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// Mark that the user just contacted this person. Used by the
+    /// "stale contacts" detection in `get_relationships_summary`.
+    pub async fn mark_relationship_contact(
+        &self,
+        relationship_id: &str,
+        contacted_at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let when = contacted_at.unwrap_or_else(Utc::now).to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let id = relationship_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE relationships
+                 SET last_contact_at = ?1, updated_at = ?2
+                 WHERE relationship_id = ?3",
+                params![when, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn deactivate_relationship(&self, relationship_id: &str) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        let id = relationship_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE relationships
+                 SET active = 0, updated_at = ?1
+                 WHERE relationship_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_relationships(&self, active_only: bool) -> Result<Vec<Relationship>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT relationship_id, name, relationship_type, stage,
+                        importance_1_10, started_on, birthday, anniversary,
+                        last_contact_at, notes_nonce_b64, notes_ciphertext_b64,
+                        active, source_entry_id, created_at, updated_at
+                 FROM relationships WHERE active = 1
+                 ORDER BY importance_1_10 DESC, name ASC"
+            } else {
+                "SELECT relationship_id, name, relationship_type, stage,
+                        importance_1_10, started_on, birthday, anniversary,
+                        last_contact_at, notes_nonce_b64, notes_ciphertext_b64,
+                        active, source_entry_id, created_at, updated_at
+                 FROM relationships
+                 ORDER BY importance_1_10 DESC, name ASC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let rows: Vec<RelationshipRaw> = stmt
+                .query_map([], |row| {
+                    Ok(RelationshipRaw {
+                        relationship_id: row.get(0)?,
+                        name: row.get(1)?,
+                        relationship_type: row.get(2)?,
+                        stage: row.get(3)?,
+                        importance_1_10: row.get(4)?,
+                        started_on: row.get(5)?,
+                        birthday: row.get(6)?,
+                        anniversary: row.get(7)?,
+                        last_contact_at: row.get(8)?,
+                        notes_nonce_b64: row.get(9)?,
+                        notes_ciphertext_b64: row.get(10)?,
+                        active: row.get::<_, i32>(11)? != 0,
+                        source_entry_id: row.get(12)?,
+                        created_at: row.get(13)?,
+                        updated_at: row.get(14)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Relationship {
+                relationship_id: r.relationship_id,
+                name: r.name,
+                relationship_type: r.relationship_type,
+                stage: r.stage,
+                importance_1_10: r.importance_1_10.clamp(1, 10) as u8,
+                started_on: r.started_on,
+                birthday: r.birthday,
+                anniversary: r.anniversary,
+                last_contact_at: r.last_contact_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9: family members
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_family_member(
+        &self,
+        name: &str,
+        kinship: &str,
+        side: Option<&str>,
+        birth_date: Option<&str>,
+        death_date: Option<&str>,
+        health_conditions_known: Option<&str>,
+        contact_preferred: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<FamilyMember> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let kinship = normalize_non_empty(kinship).context("kinship required")?;
+        let side = side.and_then(normalize_non_empty);
+        let birth_date = birth_date.and_then(normalize_non_empty);
+        let death_date = death_date.and_then(normalize_non_empty);
+        let health_conditions_known = health_conditions_known.and_then(normalize_non_empty);
+        let contact_preferred = contact_preferred.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("fam-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let kin_clone = kinship.clone();
+        let side_clone = side.clone();
+        let birth_clone = birth_date.clone();
+        let death_clone = death_date.clone();
+        let health_clone = health_conditions_known.clone();
+        let contact_clone = contact_preferred.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO family_members
+                 (member_id, name, kinship, side, birth_date, death_date,
+                  health_conditions_known, contact_preferred,
+                  notes_nonce_b64, notes_ciphertext_b64, active,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?12)",
+                params![
+                    id_clone,
+                    name_clone,
+                    kin_clone,
+                    side_clone,
+                    birth_clone,
+                    death_clone,
+                    health_clone,
+                    contact_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(FamilyMember {
+            member_id: id,
+            name,
+            kinship,
+            side,
+            birth_date,
+            death_date,
+            health_conditions_known,
+            contact_preferred,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_family_members(&self) -> Result<Vec<FamilyMember>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT member_id, name, kinship, side, birth_date, death_date,
+                        health_conditions_known, contact_preferred,
+                        notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM family_members
+                 ORDER BY created_at ASC",
+            )?;
+            let rows: Vec<FamilyMemberRaw> = stmt
+                .query_map([], |row| {
+                    Ok(FamilyMemberRaw {
+                        member_id: row.get(0)?,
+                        name: row.get(1)?,
+                        kinship: row.get(2)?,
+                        side: row.get(3)?,
+                        birth_date: row.get(4)?,
+                        death_date: row.get(5)?,
+                        health_conditions_known: row.get(6)?,
+                        contact_preferred: row.get(7)?,
+                        notes_nonce_b64: row.get(8)?,
+                        notes_ciphertext_b64: row.get(9)?,
+                        active: row.get::<_, i32>(10)? != 0,
+                        source_entry_id: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| FamilyMember {
+                member_id: r.member_id,
+                name: r.name,
+                kinship: r.kinship,
+                side: r.side,
+                birth_date: r.birth_date,
+                death_date: r.death_date,
+                health_conditions_known: r.health_conditions_known,
+                contact_preferred: r.contact_preferred,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9: child milestones
+    // -----------------------------------------------------------------------
+
+    pub async fn add_child_milestone(
+        &self,
+        child_name: &str,
+        milestone_type: &str,
+        description: &str,
+        occurred_on: &str,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<ChildMilestone> {
+        let child_name = normalize_non_empty(child_name).context("child_name required")?;
+        let milestone_type =
+            normalize_non_empty(milestone_type).context("milestone_type required")?;
+        let description = normalize_non_empty(description).context("description required")?;
+        let occurred_on =
+            normalize_non_empty(occurred_on).context("occurred_on required (YYYY-MM-DD)")?;
+        // Validate the date format — we want this strict because the
+        // upcoming_birthdays heuristic in BI.8 reads it later.
+        chrono::NaiveDate::parse_from_str(&occurred_on, "%Y-%m-%d")
+            .with_context(|| format!("invalid occurred_on '{}': use YYYY-MM-DD", occurred_on))?;
+
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("cmile-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let child_clone = child_name.clone();
+        let type_clone = milestone_type.clone();
+        let desc_clone = description.clone();
+        let when_clone = occurred_on.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO children_milestones
+                 (milestone_id, child_name, milestone_type, description,
+                  occurred_on, notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id_clone,
+                    child_clone,
+                    type_clone,
+                    desc_clone,
+                    when_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ChildMilestone {
+            milestone_id: id,
+            child_name,
+            milestone_type,
+            description,
+            occurred_on,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_child_milestones(
+        &self,
+        child_name: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ChildMilestone>> {
+        let db_path = self.db_path.clone();
+        let filter = child_name.map(|s| s.to_string());
+        let limit = limit.clamp(1, 500);
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<ChildMilestoneRaw> {
+                Ok(ChildMilestoneRaw {
+                    milestone_id: row.get(0)?,
+                    child_name: row.get(1)?,
+                    milestone_type: row.get(2)?,
+                    description: row.get(3)?,
+                    occurred_on: row.get(4)?,
+                    notes_nonce_b64: row.get(5)?,
+                    notes_ciphertext_b64: row.get(6)?,
+                    source_entry_id: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            };
+            let rows: Vec<ChildMilestoneRaw> = if let Some(c) = filter {
+                let mut stmt = db.prepare(
+                    "SELECT milestone_id, child_name, milestone_type, description,
+                            occurred_on, notes_nonce_b64, notes_ciphertext_b64,
+                            source_entry_id, created_at
+                     FROM children_milestones
+                     WHERE child_name = ?1
+                     ORDER BY occurred_on DESC
+                     LIMIT ?2",
+                )?;
+                let collected: Vec<ChildMilestoneRaw> = stmt
+                    .query_map(params![c, limit as i64], map_row)?
+                    .flatten()
+                    .collect();
+                collected
+            } else {
+                let mut stmt = db.prepare(
+                    "SELECT milestone_id, child_name, milestone_type, description,
+                            occurred_on, notes_nonce_b64, notes_ciphertext_b64,
+                            source_entry_id, created_at
+                     FROM children_milestones
+                     ORDER BY occurred_on DESC
+                     LIMIT ?1",
+                )?;
+                let collected: Vec<ChildMilestoneRaw> = stmt
+                    .query_map(params![limit as i64], map_row)?
+                    .flatten()
+                    .collect();
+                collected
+            };
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ChildMilestone {
+                milestone_id: r.milestone_id,
+                child_name: r.child_name,
+                milestone_type: r.milestone_type,
+                description: r.description,
+                occurred_on: r.occurred_on,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// BI.9 — Aggregate snapshot for the relationships pillar.
+    ///
+    /// Includes a small but useful "upcoming birthdays / anniversaries"
+    /// pre-computation in the next `lookahead_days` window so the
+    /// caller (Telegram bot) can phrase nudges in advance, plus
+    /// "stale contacts" (active relationships with `importance >= 7`
+    /// that have no `last_contact_at` in the last 30 days).
+    pub async fn get_relationships_summary(
+        &self,
+        today_local: &str,
+        lookahead_days: u32,
+        recent_milestones_limit: usize,
+    ) -> Result<RelationshipsSummary> {
+        let close_relationships = self.list_relationships(true).await.unwrap_or_default();
+        let family_members = self.list_family_members().await.unwrap_or_default();
+        let recent_child_milestones = self
+            .list_child_milestones(None, recent_milestones_limit)
+            .await
+            .unwrap_or_default();
+
+        let today = chrono::NaiveDate::parse_from_str(today_local, "%Y-%m-%d")
+            .with_context(|| format!("invalid today_local '{}'", today_local))?;
+        let lookahead = lookahead_days.clamp(1, 366);
+
+        let mut upcoming_birthdays: Vec<UpcomingDate> = Vec::new();
+        for r in &close_relationships {
+            if let Some(ref bday) = r.birthday {
+                if let Some((md, days)) = days_until_md(bday, today, lookahead) {
+                    upcoming_birthdays.push(UpcomingDate {
+                        name: r.name.clone(),
+                        kind: "birthday".to_string(),
+                        when_md: md,
+                        days_until: days,
+                        source_table: "relationship".to_string(),
+                        source_id: r.relationship_id.clone(),
+                    });
+                }
+            }
+            if let Some(ref anniv) = r.anniversary {
+                if let Some((md, days)) = days_until_md(anniv, today, lookahead) {
+                    upcoming_birthdays.push(UpcomingDate {
+                        name: r.name.clone(),
+                        kind: "anniversary".to_string(),
+                        when_md: md,
+                        days_until: days,
+                        source_table: "relationship".to_string(),
+                        source_id: r.relationship_id.clone(),
+                    });
+                }
+            }
+        }
+        for f in &family_members {
+            if let Some(ref bday) = f.birth_date {
+                if let Some((md, days)) = days_until_md(bday, today, lookahead) {
+                    upcoming_birthdays.push(UpcomingDate {
+                        name: f.name.clone(),
+                        kind: "birthday".to_string(),
+                        when_md: md,
+                        days_until: days,
+                        source_table: "family_member".to_string(),
+                        source_id: f.member_id.clone(),
+                    });
+                }
+            }
+        }
+        upcoming_birthdays.sort_by_key(|u| u.days_until);
+
+        let now = Utc::now();
+        let stale_contacts: Vec<Relationship> = close_relationships
+            .iter()
+            .filter(|r| r.importance_1_10 >= 7)
+            .filter(|r| match r.last_contact_at {
+                Some(t) => (now - t).num_days() >= 30,
+                None => (now - r.created_at).num_days() >= 30,
+            })
+            .cloned()
+            .collect();
+
+        Ok(RelationshipsSummary {
+            close_relationships,
+            family_members,
+            recent_child_milestones,
+            upcoming_birthdays,
+            stale_contacts,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw rows for BI.9 ----------------------------------------------
+
+struct RelationshipRaw {
+    relationship_id: String,
+    name: String,
+    relationship_type: String,
+    stage: Option<String>,
+    importance_1_10: i32,
+    started_on: Option<String>,
+    birthday: Option<String>,
+    anniversary: Option<String>,
+    last_contact_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct FamilyMemberRaw {
+    member_id: String,
+    name: String,
+    kinship: String,
+    side: Option<String>,
+    birth_date: Option<String>,
+    death_date: Option<String>,
+    health_conditions_known: Option<String>,
+    contact_preferred: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct ChildMilestoneRaw {
+    milestone_id: String,
+    child_name: String,
+    milestone_type: String,
+    description: String,
+    occurred_on: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+/// Parse a `MM-DD` or `YYYY-MM-DD` (or `YYYY-MM-DDT...`) string and
+/// return `(canonical "MM-DD", days_until)` if the next occurrence
+/// falls within `lookahead` days from `today`. Returns `None`
+/// otherwise.
+fn days_until_md(when: &str, today: chrono::NaiveDate, lookahead: u32) -> Option<(String, u32)> {
+    let trimmed = when.trim();
+    let (month, day) = if let Some(rest) = trimmed.split('T').next() {
+        // Try YYYY-MM-DD first.
+        if let Ok(parts) = chrono::NaiveDate::parse_from_str(rest, "%Y-%m-%d") {
+            (parts.month(), parts.day())
+        } else {
+            // Try MM-DD.
+            let segs: Vec<&str> = rest.split('-').collect();
+            if segs.len() != 2 {
+                return None;
+            }
+            let m: u32 = segs[0].parse().ok()?;
+            let d: u32 = segs[1].parse().ok()?;
+            (m, d)
+        }
+    } else {
+        return None;
+    };
+
+    use chrono::Datelike;
+    // Try this year first; if already past, try next year.
+    let candidate = chrono::NaiveDate::from_ymd_opt(today.year(), month, day).or_else(|| {
+        // Feb 29 on non-leap year fallback to Feb 28.
+        if month == 2 && day == 29 {
+            chrono::NaiveDate::from_ymd_opt(today.year(), 2, 28)
+        } else {
+            None
+        }
+    })?;
+    let next = if candidate < today {
+        chrono::NaiveDate::from_ymd_opt(today.year() + 1, month, day).or_else(|| {
+            if month == 2 && day == 29 {
+                chrono::NaiveDate::from_ymd_opt(today.year() + 1, 2, 28)
+            } else {
+                None
+            }
+        })?
+    } else {
+        candidate
+    };
+
+    let diff = (next - today).num_days();
+    if diff < 0 || diff as u32 > lookahead {
+        return None;
+    }
+    Some((format!("{:02}-{:02}", month, day), diff as u32))
 }
 
 // -- Private raw row types for BI.10 + BI.11 ---------------------------------
@@ -13912,6 +14905,261 @@ mod tests {
         assert!(items
             .iter()
             .any(|i| i.item_type == "growth_goal" && i.name == "Meta vieja"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9 — Relaciones humanas (sprint 1)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn relationship_add_list_and_stage_lifecycle() {
+        let dir = temp_dir("memory-plane-relationship");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let r = mgr
+            .add_relationship(
+                "Maria",
+                "spouse",
+                Some("married"),
+                10,
+                Some("2018-06-15"),
+                Some("03-22"),
+                Some("06-15"),
+                "amor de mi vida",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.name, "Maria");
+        assert_eq!(r.importance_1_10, 10);
+        assert_eq!(r.notes, "amor de mi vida"); // round-trip decrypted
+
+        let updated = mgr
+            .update_relationship_stage(&r.relationship_id, "separated")
+            .await
+            .unwrap();
+        assert!(updated);
+
+        let rels = mgr.list_relationships(true).await.unwrap();
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0].stage.as_deref(), Some("separated"));
+
+        let deactivated = mgr
+            .deactivate_relationship(&r.relationship_id)
+            .await
+            .unwrap();
+        assert!(deactivated);
+        let active_after = mgr.list_relationships(true).await.unwrap();
+        assert!(active_after.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_importance_clamped_to_1_10() {
+        let dir = temp_dir("memory-plane-relationship-clamp");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let r = mgr
+            .add_relationship("Bob", "friend", None, 99, None, None, None, "", None)
+            .await
+            .unwrap();
+        assert_eq!(r.importance_1_10, 10);
+
+        let r2 = mgr
+            .add_relationship("Carol", "friend", None, 0, None, None, None, "", None)
+            .await
+            .unwrap();
+        assert_eq!(r2.importance_1_10, 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn family_member_health_history_surfaces_in_visit_prep() {
+        let dir = temp_dir("memory-plane-family-visit");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_family_member(
+            "Papa",
+            "father",
+            Some("paternal"),
+            Some("1965-08-10"),
+            None,
+            Some("diabetes tipo 2 a los 50"),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        // A family member without health hints — must NOT surface.
+        mgr.add_family_member(
+            "Tia Ana",
+            "aunt_uncle",
+            Some("maternal"),
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let prep = mgr
+            .prepare_medical_visit("chequeo anual", 14)
+            .await
+            .unwrap();
+        assert_eq!(prep.family_health_history.len(), 1);
+        assert_eq!(prep.family_health_history[0].name, "Papa");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn child_milestone_log_validates_date() {
+        let dir = temp_dir("memory-plane-child-milestone");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Bad date format → reject.
+        let bad = mgr
+            .add_child_milestone("Sofia", "first_word", "agua", "abril 5", "", None)
+            .await;
+        assert!(bad.is_err());
+
+        // Good date.
+        let good = mgr
+            .add_child_milestone(
+                "Sofia",
+                "first_word",
+                "dijo agua",
+                "2026-04-05",
+                "fue en la cocina",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(good.child_name, "Sofia");
+        assert_eq!(good.notes, "fue en la cocina");
+
+        let listed = mgr.list_child_milestones(Some("Sofia"), 10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+
+        let other = mgr.list_child_milestones(Some("Pedro"), 10).await.unwrap();
+        assert!(other.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationships_summary_picks_upcoming_birthdays_and_stale_contacts() {
+        let dir = temp_dir("memory-plane-rels-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Today (in test) is 2026-04-07. Birthday in 5 days = 04-12.
+        mgr.add_relationship(
+            "Maria",
+            "spouse",
+            Some("married"),
+            10,
+            None,
+            Some("04-12"),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        // Birthday far away (200 days) — should NOT appear with default lookahead 30.
+        mgr.add_relationship(
+            "Lejano",
+            "friend",
+            None,
+            5,
+            None,
+            Some("11-15"),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        // Family birthday in 3 days.
+        mgr.add_family_member(
+            "Mama",
+            "mother",
+            Some("maternal"),
+            Some("1968-04-10"),
+            None,
+            None,
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let summary = mgr
+            .get_relationships_summary("2026-04-07", 30, 10)
+            .await
+            .unwrap();
+        // Maria (in 5 days) + Mama (in 3 days) = 2 upcoming events.
+        assert_eq!(summary.upcoming_birthdays.len(), 2);
+        // Sorted by days_until ascending → Mama first.
+        assert_eq!(summary.upcoming_birthdays[0].name, "Mama");
+        assert_eq!(summary.upcoming_birthdays[0].days_until, 3);
+        assert_eq!(summary.upcoming_birthdays[1].name, "Maria");
+
+        // Maria has importance 10 and no last_contact_at — should appear
+        // as stale (created_at is now, so diff is 0 days; but the
+        // cutoff is 30 days). Override created_at to backdate.
+        let db_path = mgr.db_path.clone();
+        let backdate = (Utc::now() - chrono::Duration::days(45)).to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = MemoryPlaneManager::open_db(&db_path).unwrap();
+            db.execute(
+                "UPDATE relationships SET created_at = ?1 WHERE name = 'Maria'",
+                rusqlite::params![backdate],
+            )
+            .unwrap();
+        })
+        .await
+        .unwrap();
+
+        let summary2 = mgr
+            .get_relationships_summary("2026-04-07", 30, 10)
+            .await
+            .unwrap();
+        assert!(summary2.stale_contacts.iter().any(|r| r.name == "Maria"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn life_summary_includes_relationships_pillar() {
+        let dir = temp_dir("memory-plane-life-rels");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_relationship("Pedro", "best_friend", None, 8, None, None, None, "", None)
+            .await
+            .unwrap();
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Week, "2026-04-07")
+            .await
+            .unwrap();
+        assert_eq!(summary.relationships.close_relationships.len(), 1);
+        assert_eq!(summary.relationships.close_relationships[0].name, "Pedro");
 
         std::fs::remove_dir_all(dir).ok();
     }

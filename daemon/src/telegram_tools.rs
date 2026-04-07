@@ -399,8 +399,51 @@ REGLAS FIRMES (no negociables):
     args: {"reason": "control de diabetes", "symptoms_lookback_days": 14}
     symptoms_lookback_days es opcional; default sensato es 14.
 
-13d. **forgetting_check** — Saca a la luz cosas que el usuario alguna vez le importaron y se han quedado en silencio: metas pausadas, libros sin avanzar, habitos sin check-ins, comunidades sin asistir, practicas espirituales sin marcar, metas financieras sin movimiento. Usala cuando el usuario diga "que se me esta olvidando" o de manera proactiva al hacer un resumen mensual. Es respetuoso: nunca presiona, solo pregunta si siguen vigentes.
+13d. **forgetting_check** — Saca a la luz cosas que el usuario alguna vez le importaron y se han quedado en silencio: metas pausadas, libros sin avanzar, habitos sin check-ins, comunidades sin asistir, practicas espirituales sin marcar, metas financieras sin movimiento, personas importantes sin contacto. Usala cuando el usuario diga "que se me esta olvidando" o de manera proactiva al hacer un resumen mensual. Es respetuoso: nunca presiona, solo pregunta si siguen vigentes.
     args: {"today_local": "2026-04-07"}
+
+14. **Vida Plena — Relaciones humanas (BI.9)**
+
+Estas herramientas registran el mapa relacional del usuario: pareja, familia, hijos, amigos, mentores. La parte SENSIBLE (eventos relacionales con narrativa intima sobre conflictos, infidelidad, abuso) NO esta aqui — espera al cifrado reforzado (Argon2id), sub-fase pendiente.
+
+REGLAS FIRMES:
+- Axi NO es consejero matrimonial ni terapeuta de pareja.
+- Consejos generales basados en literatura amplia (Gottman, Esther Perel, Sue Johnson, Brene Brown, Gary Chapman) — nunca peritaje clinico.
+- Para abuso, infidelidad, divorcio en curso, custodia, violencia familiar → SIEMPRE recomendar profesional certificado o linea de ayuda.
+- Si el usuario describe abuso o crisis: NO improvises consejos, da la linea de ayuda.
+
+14a. **relationship_add** — Agrega una persona al mapa relacional. importance_1_10 marca cuanto pesa en la vida del usuario (1 = conocido, 10 = pareja/madre/mejor amigo).
+    args: {"name": "Maria", "relationship_type": "spouse", "stage": "married", "importance_1_10": 10, "started_on": "2018-06-15", "birthday": "03-22", "anniversary": "06-15", "notes": ""}
+    relationship_type: partner | spouse | ex_partner | friend | best_friend | colleague | boss | mentor | mentee | neighbor | acquaintance | other
+    Fechas pueden ser MM-DD o YYYY-MM-DD.
+
+14b. **relationship_stage** — Actualiza la etapa actual de una relacion (ej dating → engaged → married).
+    args: {"relationship_id": "rel-...", "stage": "engaged"}
+
+14c. **relationship_contact** — Marca que el usuario acaba de contactar a esta persona. Resetea el contador de stale contacts.
+    args: {"relationship_id": "rel-...", "contacted_at": "2026-04-07T18:30:00Z"}
+    contacted_at es opcional; default ahora.
+
+14d. **relationship_list** — Lista relaciones activas, ordenadas por importancia.
+    args: {}
+
+14e. **family_member_add** — Agrega un familiar. health_conditions_known es texto plano que se usa en medical_visit_prep como contexto hereditario.
+    args: {"name": "Papa", "kinship": "father", "side": "paternal", "birth_date": "1965-08-10", "health_conditions_known": "diabetes tipo 2 a los 50, hipertension"}
+    kinship: mother | father | sibling | grandparent | aunt_uncle | cousin | in_law | other
+
+14f. **family_list** — Lista todos los familiares registrados.
+    args: {}
+
+14g. **child_milestone_log** — Registra un hito de un hijo (palabra, paso, diente, escuela, logro, vacuna, preocupacion). Permanente por diseno.
+    args: {"child_name": "Sofia", "milestone_type": "first_word", "description": "dijo agua por primera vez", "occurred_on": "2026-04-05", "notes": ""}
+    occurred_on debe ser YYYY-MM-DD.
+    milestone_type: first_word | first_step | tooth | school_start | achievement | concern | vaccine | medical | other
+
+14h. **child_milestones_list** — Lista hitos de hijos. Si pasas child_name, filtra por ese hijo.
+    args: {"child_name": "Sofia", "limit": 30}
+
+14i. **relationships_summary** — Devuelve resumen completo: relaciones cercanas + familia + hitos recientes de hijos + cumpleanos/aniversarios proximos en los siguientes N dias + contactos importantes que no has visto en 30+ dias.
+    args: {"today_local": "2026-04-07", "lookahead_days": 30}
 
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
@@ -1536,6 +1579,15 @@ REGLAS FIRMES (no negociables):
             "cross_domain_patterns" => execute_cross_domain_patterns(&call.args, ctx).await,
             "medical_visit_prep" => execute_medical_visit_prep(&call.args, ctx).await,
             "forgetting_check" => execute_forgetting_check(&call.args, ctx).await,
+            "relationship_add" => execute_relationship_add(&call.args, ctx).await,
+            "relationship_stage" => execute_relationship_stage(&call.args, ctx).await,
+            "relationship_contact" => execute_relationship_contact(&call.args, ctx).await,
+            "relationship_list" => execute_relationship_list(ctx).await,
+            "family_member_add" => execute_family_member_add(&call.args, ctx).await,
+            "family_list" => execute_family_list(ctx).await,
+            "child_milestone_log" => execute_child_milestone_log(&call.args, ctx).await,
+            "child_milestones_list" => execute_child_milestones_list(&call.args, ctx).await,
+            "relationships_summary" => execute_relationships_summary(&call.args, ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -4965,6 +5017,289 @@ REGLAS FIRMES (no negociables):
                 it.item_type, it.name, days, it.suggestion
             ));
         }
+        Ok(out)
+    }
+
+    // -- BI.9: relaciones humanas --------------------------------------------
+
+    async fn execute_relationship_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let rtype = args["relationship_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'relationship_type'"))?;
+        let stage = args["stage"].as_str();
+        let importance = args["importance_1_10"].as_u64().unwrap_or(5) as u8;
+        let started_on = args["started_on"].as_str();
+        let birthday = args["birthday"].as_str();
+        let anniversary = args["anniversary"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let r = mem
+            .add_relationship(
+                name,
+                rtype,
+                stage,
+                importance,
+                started_on,
+                birthday,
+                anniversary,
+                notes,
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Relacion guardada: {} ({}) — id={}",
+            r.name, r.relationship_type, r.relationship_id
+        ))
+    }
+
+    async fn execute_relationship_stage(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = args["relationship_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'relationship_id'"))?;
+        let stage = args["stage"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'stage'"))?;
+        let ok = mem.update_relationship_stage(id, stage).await?;
+        if ok {
+            Ok(format!("Etapa actualizada a '{}'.", stage))
+        } else {
+            Ok(format!("No encontre relacion activa con id {}.", id))
+        }
+    }
+
+    async fn execute_relationship_contact(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = args["relationship_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'relationship_id'"))?;
+        let contacted_at = args["contacted_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc));
+        let ok = mem.mark_relationship_contact(id, contacted_at).await?;
+        if ok {
+            Ok("Contacto registrado.".to_string())
+        } else {
+            Ok(format!("No encontre relacion con id {}.", id))
+        }
+    }
+
+    async fn execute_relationship_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let rels = mem.list_relationships(true).await?;
+        if rels.is_empty() {
+            return Ok("Aun no hay relaciones registradas. Usa `relationship_add`.".to_string());
+        }
+        let mut out = String::from("# Relaciones activas\n\n");
+        for r in rels {
+            let stage = r
+                .stage
+                .as_deref()
+                .map(|s| format!(" — {}", s))
+                .unwrap_or_default();
+            let last = r
+                .last_contact_at
+                .map(|t| format!(", ultimo contacto: {}", t.format("%Y-%m-%d")))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "- [{}/10] {} ({}{}){}\n  id: {}\n",
+                r.importance_1_10, r.name, r.relationship_type, stage, last, r.relationship_id
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_family_member_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let kinship = args["kinship"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'kinship'"))?;
+        let f = mem
+            .add_family_member(
+                name,
+                kinship,
+                args["side"].as_str(),
+                args["birth_date"].as_str(),
+                args["death_date"].as_str(),
+                args["health_conditions_known"].as_str(),
+                args["contact_preferred"].as_str(),
+                args["notes"].as_str().unwrap_or(""),
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Familiar guardado: {} ({}) — id={}",
+            f.name, f.kinship, f.member_id
+        ))
+    }
+
+    async fn execute_family_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let members = mem.list_family_members().await?;
+        if members.is_empty() {
+            return Ok("Aun no hay familiares registrados.".to_string());
+        }
+        let mut out = String::from("# Familia\n\n");
+        for f in members {
+            let bday = f
+                .birth_date
+                .as_deref()
+                .map(|s| format!(" (n. {})", s))
+                .unwrap_or_default();
+            let health = f
+                .health_conditions_known
+                .as_deref()
+                .map(|s| format!(" — heredidad: {}", s))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "- {} ({}){}{}\n  id: {}\n",
+                f.name, f.kinship, bday, health, f.member_id
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_child_milestone_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let child_name = args["child_name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'child_name'"))?;
+        let milestone_type = args["milestone_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'milestone_type'"))?;
+        let description = args["description"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'description'"))?;
+        let occurred_on = args["occurred_on"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'occurred_on' (YYYY-MM-DD)"))?;
+        let m = mem
+            .add_child_milestone(
+                child_name,
+                milestone_type,
+                description,
+                occurred_on,
+                args["notes"].as_str().unwrap_or(""),
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Hito guardado: {} — {} ({}) el {}",
+            m.child_name, m.milestone_type, m.description, m.occurred_on
+        ))
+    }
+
+    async fn execute_child_milestones_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let child_name = args["child_name"].as_str();
+        let limit = args["limit"].as_u64().unwrap_or(30) as usize;
+        let items = mem.list_child_milestones(child_name, limit).await?;
+        if items.is_empty() {
+            return Ok("Aun no hay hitos registrados.".to_string());
+        }
+        let mut out = String::from("# Hitos\n\n");
+        for m in items {
+            out.push_str(&format!(
+                "- [{}] {} — {}: {}\n",
+                m.occurred_on, m.child_name, m.milestone_type, m.description
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_relationships_summary(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let today_local = today_local_arg(args);
+        let lookahead = args["lookahead_days"].as_u64().unwrap_or(30) as u32;
+        let summary = mem
+            .get_relationships_summary(&today_local, lookahead, 10)
+            .await?;
+
+        let mut out = String::from("# Mapa relacional\n\n");
+
+        if !summary.upcoming_birthdays.is_empty() {
+            out.push_str("## Proximos cumpleanos / aniversarios\n");
+            for u in &summary.upcoming_birthdays {
+                let when = if u.days_until == 0 {
+                    "HOY".to_string()
+                } else if u.days_until == 1 {
+                    "manana".to_string()
+                } else {
+                    format!("en {} dias", u.days_until)
+                };
+                out.push_str(&format!(
+                    "- {} — {} ({}) — {}\n",
+                    u.name, u.kind, u.when_md, when
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !summary.stale_contacts.is_empty() {
+            out.push_str("## Personas importantes sin contacto reciente\n");
+            for r in &summary.stale_contacts {
+                out.push_str(&format!(
+                    "- {} ({}/10, {})\n",
+                    r.name, r.importance_1_10, r.relationship_type
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !summary.close_relationships.is_empty() {
+            out.push_str(&format!(
+                "**Relaciones activas:** {} personas registradas.\n",
+                summary.close_relationships.len()
+            ));
+        }
+        if !summary.family_members.is_empty() {
+            out.push_str(&format!(
+                "**Familia:** {} familiares registrados.\n",
+                summary.family_members.len()
+            ));
+        }
+        if !summary.recent_child_milestones.is_empty() {
+            out.push_str(&format!(
+                "**Hitos recientes de hijos:** {}.\n",
+                summary.recent_child_milestones.len()
+            ));
+        }
+
+        if summary.close_relationships.is_empty()
+            && summary.family_members.is_empty()
+            && summary.recent_child_milestones.is_empty()
+        {
+            out.push_str("Aun no hay datos relacionales. Empieza con `relationship_add` o `family_member_add`.\n");
+        }
+
         Ok(out)
     }
 
