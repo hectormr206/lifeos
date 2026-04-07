@@ -7,6 +7,7 @@
 //! - System management
 
 mod lab;
+mod vida_plena;
 
 use axum::{
     body::Body,
@@ -1520,6 +1521,7 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/memory/health", get(get_memory_health))
         // Lab endpoints
         .nest("/lab", lab::lab_routes())
+        .nest("/vida-plena", vida_plena::vida_plena_routes())
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bootstrap_token,
