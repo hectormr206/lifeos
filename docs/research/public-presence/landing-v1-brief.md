@@ -102,6 +102,15 @@ Por ahora incluso puede salir sin analitica.
 
 Esto te permite maximizar alcance sin obligarte a vivir creando contenido en ingles.
 
+### Guardrail de posicionamiento
+
+Si la landing menciona el origen del proyecto, el framing correcto es:
+
+- **built in Mexico**
+- **open to anyone**
+
+No debe presentar a LifeOS como algo regionalmente exclusivo ni usar lenguaje turistico o folklorico.
+
 ---
 
 ## 5. CTA Strategy
@@ -431,4 +440,3 @@ Si optimizeamos por velocidad y claridad, el mejor siguiente movimiento es:
 5. **hero claro + follow + support**
 
 Eso te da una presencia publica real sin distraerte del desarrollo principal.
-

@@ -147,11 +147,11 @@ Axi, con sus branquias externas (parecen antenas) y aspecto casi alienígena per
 
 #### Identidad Cultural
 
-El ajolote es **mexicano** (endémico de Xochimilco). Esto da a LifeOS una identidad cultural propia como distro latinoamericana, no solo otra distribución genérica:
+El ajolote es **mexicano** (endémico de Xochimilco). Eso le da a LifeOS una raíz cultural real y una identidad propia. Esa raíz no debe usarse de forma excluyente: LifeOS está hecho en México, pero es un proyecto abierto para usuarios y contribuidores de cualquier lugar.
 
-- Linux → Tux (pingüino, universal)
+- Linux → Tux (pingüino, símbolo del ecosistema)
 - Rust → Ferris (cangrejo, juego de palabras)
-- **LifeOS → Axi (regeneración + latino)**
+- **LifeOS → Axi (regeneración + memoria local)**
 
 #### Variaciones Visuales de Axi por Estado del Sistema
 
@@ -207,13 +207,13 @@ life --axi-facts
 
 #### Merchandising y Comunidad
 
-En eventos y conferencias, la comunidad se identifica usando:
+En eventos y conferencias, la comunidad puede usar material sencillo y consistente:
 
-- **Gorritos de ajolote rosados/neón** — Distintivo visual inconfundible
-- **Batas de laboratorio** — Como "Biólogos de Sistemas", creando sentido de tribu
-- **Pines/Stickers de Axi** — En diferentes estados (happy, updating, recovering)
+- **Pines/Stickers de Axi** — En diferentes estados (healthy, updating, recovering)
+- **Playeras, sudaderas o badges** — Con la paleta y el sistema visual oficial
+- **Assets de release o wallpapers impresos** — Para reforzar la identidad sin disfraces ni gimmicks
 
-Esto crea un sentido de pertenencia poderoso y divertido alrededor del código abierto, sin ser corporativo ni aburrido.
+Esto ayuda a construir pertenencia alrededor del código abierto sin caer en clichés culturales, disfraces o una estética excluyente.
 
 #### Especificaciones de Arte para Axi
 

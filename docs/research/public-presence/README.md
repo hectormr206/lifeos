@@ -27,6 +27,13 @@ It should live as:
 
 The goal is not to build a huge website. The goal is to create a clean public front door for the project.
 
+Public messaging should keep two truths together:
+
+- LifeOS is built in Mexico.
+- LifeOS is open to users, contributors, and supporters anywhere.
+
+The public front door should avoid sounding region-exclusive or turning the brand into tourism or folklore.
+
 ---
 
 ## 2. Why This Matters Now

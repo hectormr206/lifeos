@@ -4,6 +4,8 @@ Public-facing documents that summarize LifeOS in a way that is easier to underst
 
 These files are not a replacement for the technical strategy docs. They are a curated layer built on top of them.
 
+Public messaging should keep the project's Mexican origin visible without presenting LifeOS as region-exclusive or as folkloric branding.
+
 ## Files
 
 - [roadmap.md](roadmap.md) - Public roadmap in English

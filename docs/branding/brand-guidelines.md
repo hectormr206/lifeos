@@ -197,6 +197,7 @@ Regla adicional:
 - Mantener fondos oscuros (#0F0F1B) para dark mode
 - Usar Rosa Axi (#FF6B9D) solo para errores/destructivo/branquias de Axi
 - Mantener contraste WCAG AA minimo (4.5:1 para texto)
+- Presentar a LifeOS como un proyecto hecho en Mexico y abierto a usuarios y contribuidores de cualquier lugar
 
 ### NO HACER
 - No usar azul System76 (#62a0ea) — ese es el default de COSMIC, no de LifeOS
@@ -205,6 +206,8 @@ Regla adicional:
 - No poner texto sobre wallpapers sin overlay de contraste
 - No cambiar las proporciones de Axi
 - No usar Axi en contextos que contradigan su personalidad (violencia, adulto)
+- No comunicar la identidad mexicana como exclusividad geografica o cultural
+- No convertir a Axi o a LifeOS en una postal turistica o en folklore superficial
 
 ---
 
