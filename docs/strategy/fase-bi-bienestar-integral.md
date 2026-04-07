@@ -266,13 +266,18 @@ etapa están, qué ha pasado, qué le importa.
   con `add_relationship`, `update_relationship_stage`,
   `mark_relationship_contact`, `deactivate_relationship`,
   `list_relationships`. Notas cifradas. importance_1_10 con clamp.
-- [ ] Side-table `relationship_events` — eventos significativos en
-  cada relación: discusiones, reconciliaciones, momentos importantes,
-  sentimientos del usuario sobre esa persona en esa fecha. **Cifrado
-  reforzado** porque es categoría sensible (puede haber abuso, infidelidad,
-  conflictos legales). **Foundation Argon2id ya entregada
-  (commit "BI vault foundation"); falta el sub-fase de datos que
-  consume `encrypt_reinforced` / `decrypt_reinforced`.**
+- [x] **(BI.9.2 entregado)** Side-table `relationship_events` —
+  eventos significativos en cada relación: discusiones,
+  reconciliaciones, momentos importantes, sentimientos del usuario
+  sobre esa persona en esa fecha. La narrativa va SIEMPRE cifrada
+  bajo el vault Argon2id (commit "vault foundation"). Crisis
+  detection (BI.4) corre en plaintext antes de cifrar y solo el bool
+  persiste. Metadata (event_type, intensity, sentiment, fecha,
+  had_crisis_pattern) visible sin vault. API:
+  `add_relationship_event`, `list_relationship_events` (vault
+  required), `list_relationship_event_meta` (sin vault),
+  `get_relationship_timeline` (cualquier estado del vault). Tools
+  Telegram seccion 17.
 - [x] **(sprint 1)** Side-table `family_members` — específica para familiares con
   parentesco, fechas relevantes (nacimiento, fallecimiento, eventos),
   condiciones de salud heredables relevantes que cruza con

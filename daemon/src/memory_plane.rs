@@ -874,6 +874,42 @@ CREATE INDEX IF NOT EXISTS idx_mh_journal_logged
 CREATE INDEX IF NOT EXISTS idx_mh_journal_crisis
     ON mental_health_journal(had_crisis_pattern);
 
+-- ----------------------------------------------------------------------
+-- BI.9.2 — Relationship events (narrativa intima, sensible)
+--
+-- Eventos significativos en una relacion: discusiones, reconciliaciones,
+-- momentos importantes. Categoria sensible (puede haber abuso,
+-- infidelidad, conflictos legales) — la narrativa SIEMPRE va cifrada
+-- bajo el vault Argon2id. Sin vault_unlock no se puede leer ni escribir.
+--
+-- Los campos publicos (event_type, intensity_1_10, sentiment, fecha,
+-- had_crisis_pattern) son visibles sin vault — diseno intencional para
+-- que la timeline pueda decir "tres discusiones intensas en 7 dias"
+-- sin abrir nada.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS relationship_events (
+    event_id TEXT PRIMARY KEY,
+    relationship_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,        -- 'argument', 'reconciliation',
+                                     -- 'milestone', 'achievement', 'concern',
+                                     -- 'distance', 'closeness', 'support',
+                                     -- 'conflict', 'breakthrough', 'other'
+    intensity_1_10 INTEGER,
+    sentiment TEXT,                  -- 'positive', 'neutral', 'mixed', 'negative'
+    narrative_nonce_b64 TEXT NOT NULL,
+    narrative_cipher_b64 TEXT NOT NULL,
+    had_crisis_pattern INTEGER NOT NULL DEFAULT 0,
+    occurred_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rel_events_rel
+    ON relationship_events(relationship_id);
+CREATE INDEX IF NOT EXISTS idx_rel_events_when
+    ON relationship_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_rel_events_crisis
+    ON relationship_events(had_crisis_pattern);
+
 CREATE TABLE IF NOT EXISTS reinforced_vault_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     salt_b64 TEXT NOT NULL,
@@ -4674,6 +4710,343 @@ fn avg_field<I: Iterator<Item = f64>>(iter: I) -> Option<f64> {
     } else {
         Some(collected.iter().sum::<f64>() / collected.len() as f64)
     }
+}
+
+// ============================================================================
+// Fase BI.9.2 — Relationship events (narrativa intima, sensible)
+// ============================================================================
+//
+// Construye sobre BI.9 sprint 1 (perfil de relaciones, ya entregado) y
+// el vault reforzado (BI cifrado foundation). Cada evento referencia
+// una `relationships.relationship_id` existente. La narrativa va
+// SIEMPRE cifrada bajo el vault — sin unlock no se puede leer ni
+// escribir. El crisis detector (BI.4) corre en plaintext antes de
+// cifrar y solo el bool persiste.
+
+/// One full relationship event with the narrative decrypted.
+/// `narrative` viene vacio cuando se obtiene via `list_relationship_event_meta`
+/// (la version sin vault).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipEvent {
+    pub event_id: String,
+    pub relationship_id: String,
+    /// `argument`, `reconciliation`, `milestone`, `achievement`,
+    /// `concern`, `distance`, `closeness`, `support`, `conflict`,
+    /// `breakthrough`, `other`.
+    pub event_type: String,
+    pub intensity_1_10: Option<u8>,
+    /// `positive`, `neutral`, `mixed`, `negative`.
+    pub sentiment: Option<String>,
+    pub narrative: String,
+    pub had_crisis_pattern: bool,
+    pub occurred_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate timeline for one relationship. Funciona vault locked O
+/// unlocked — la version locked omite las narrativas pero devuelve
+/// counts por tipo y crisis pattern total.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RelationshipTimeline {
+    pub relationship_id: String,
+    pub recent_events_meta: Vec<RelationshipEvent>,
+    pub events_last_30d: u32,
+    pub crisis_pattern_count_last_30d: u32,
+    pub avg_intensity_30d: Option<f64>,
+    pub negative_sentiment_count_30d: u32,
+    pub vault_unlocked: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Add a relationship event. **REQUIRES `unlock_reinforced_vault`
+    /// to have been called first** — fails with a clear error
+    /// otherwise. Crisis detection runs on plaintext BEFORE encryption.
+    /// Returns the entry plus any detected crisis pattern.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_relationship_event(
+        &self,
+        relationship_id: &str,
+        event_type: &str,
+        intensity_1_10: Option<u8>,
+        sentiment: Option<&str>,
+        narrative: &str,
+        occurred_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<(RelationshipEvent, Option<CrisisDetection>)> {
+        let relationship_id =
+            normalize_non_empty(relationship_id).context("relationship_id required")?;
+        let event_type = normalize_non_empty(event_type).context("event_type required")?;
+        let sentiment = sentiment
+            .and_then(normalize_non_empty)
+            .map(|s| s.to_lowercase());
+        if let Some(ref s) = sentiment {
+            if !matches!(s.as_str(), "positive" | "neutral" | "mixed" | "negative") {
+                anyhow::bail!("sentiment must be one of: positive, neutral, mixed, negative");
+            }
+        }
+        let narrative_owned = narrative.trim().to_string();
+        if narrative_owned.is_empty() {
+            anyhow::bail!("relationship event narrative cannot be empty");
+        }
+        if let Some(i) = intensity_1_10 {
+            if !(1..=10).contains(&i) {
+                anyhow::bail!("intensity_1_10 must be in 1..=10");
+            }
+        }
+
+        // Verify the relationship exists. Sin esto el evento queda
+        // como huérfano sin forma de surgir en la timeline.
+        let id_check = relationship_id.clone();
+        let db_path_check = self.db_path.clone();
+        let exists = tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path_check)?;
+            let count: i64 = db.query_row(
+                "SELECT COUNT(*) FROM relationships WHERE relationship_id = ?1",
+                params![id_check],
+                |r| r.get(0),
+            )?;
+            Ok(count > 0)
+        })
+        .await??;
+        if !exists {
+            anyhow::bail!("no such relationship_id: {}", relationship_id);
+        }
+
+        // Crisis detection runs on plaintext BEFORE encryption.
+        let detection = detect_crisis_in_text(&narrative_owned);
+        let had_crisis = detection.is_some();
+
+        // Encrypt under the reinforced vault. This is the gate.
+        let (narrative_nonce, narrative_cipher) = self.encrypt_reinforced(&narrative_owned)?;
+
+        let now = Utc::now();
+        let occurred = occurred_at.unwrap_or(now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("revt-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let rel_clone = relationship_id.clone();
+        let type_clone = event_type.clone();
+        let sentiment_clone = sentiment.clone();
+        let nonce_clone = narrative_nonce.clone();
+        let cipher_clone = narrative_cipher.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO relationship_events
+                 (event_id, relationship_id, event_type, intensity_1_10,
+                  sentiment, narrative_nonce_b64, narrative_cipher_b64,
+                  had_crisis_pattern, occurred_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id_clone,
+                    rel_clone,
+                    type_clone,
+                    intensity_1_10.map(|i| i as i32),
+                    sentiment_clone,
+                    nonce_clone,
+                    cipher_clone,
+                    had_crisis as i32,
+                    occurred_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        let event = RelationshipEvent {
+            event_id: id,
+            relationship_id,
+            event_type,
+            intensity_1_10,
+            sentiment,
+            narrative: narrative_owned,
+            had_crisis_pattern: had_crisis,
+            occurred_at: occurred,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        };
+        Ok((event, detection))
+    }
+
+    /// List events for one relationship WITH narratives decrypted.
+    /// **Requires the vault to be unlocked.** Errors out otherwise.
+    pub async fn list_relationship_events(
+        &self,
+        relationship_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RelationshipEvent>> {
+        let metas = self
+            .list_relationship_event_meta(Some(relationship_id), limit)
+            .await?;
+        let mut out = Vec::with_capacity(metas.len());
+        for m in metas {
+            let id = m.event_id.clone();
+            let db_path = self.db_path.clone();
+            let (nonce, cipher) =
+                tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+                    let db = Self::open_db(&db_path)?;
+                    let row: (String, String) = db.query_row(
+                        "SELECT narrative_nonce_b64, narrative_cipher_b64
+                         FROM relationship_events WHERE event_id = ?1",
+                        params![id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )?;
+                    Ok(row)
+                })
+                .await??;
+            let plaintext = self.decrypt_reinforced(&nonce, &cipher)?;
+            out.push(RelationshipEvent {
+                narrative: plaintext,
+                ..m
+            });
+        }
+        Ok(out)
+    }
+
+    /// Metadata-only list. Always works (does NOT need the vault).
+    /// Narratives are returned as empty strings. If
+    /// `relationship_id` is `None`, returns events across ALL
+    /// relationships ordered by occurred_at DESC.
+    pub async fn list_relationship_event_meta(
+        &self,
+        relationship_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RelationshipEvent>> {
+        let limit = limit.clamp(1, 500);
+        let filter = relationship_id.map(|s| s.to_string());
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<RelationshipEventMetaRaw> {
+                Ok(RelationshipEventMetaRaw {
+                    event_id: row.get(0)?,
+                    relationship_id: row.get(1)?,
+                    event_type: row.get(2)?,
+                    intensity_1_10: row.get::<_, Option<i32>>(3)?.map(|x| x as u8),
+                    sentiment: row.get(4)?,
+                    had_crisis_pattern: row.get::<_, i32>(5)? != 0,
+                    occurred_at: row.get(6)?,
+                    source_entry_id: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            };
+            let rows: Vec<RelationshipEventMetaRaw> = if let Some(rid) = filter {
+                let mut stmt = db.prepare(
+                    "SELECT event_id, relationship_id, event_type, intensity_1_10,
+                            sentiment, had_crisis_pattern, occurred_at,
+                            source_entry_id, created_at
+                     FROM relationship_events
+                     WHERE relationship_id = ?1
+                     ORDER BY occurred_at DESC
+                     LIMIT ?2",
+                )?;
+                let collected: Vec<RelationshipEventMetaRaw> = stmt
+                    .query_map(params![rid, limit as i64], map_row)?
+                    .flatten()
+                    .collect();
+                collected
+            } else {
+                let mut stmt = db.prepare(
+                    "SELECT event_id, relationship_id, event_type, intensity_1_10,
+                            sentiment, had_crisis_pattern, occurred_at,
+                            source_entry_id, created_at
+                     FROM relationship_events
+                     ORDER BY occurred_at DESC
+                     LIMIT ?1",
+                )?;
+                let collected: Vec<RelationshipEventMetaRaw> = stmt
+                    .query_map(params![limit as i64], map_row)?
+                    .flatten()
+                    .collect();
+                collected
+            };
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| RelationshipEvent {
+                event_id: r.event_id,
+                relationship_id: r.relationship_id,
+                event_type: r.event_type,
+                intensity_1_10: r.intensity_1_10,
+                sentiment: r.sentiment,
+                narrative: String::new(),
+                had_crisis_pattern: r.had_crisis_pattern,
+                occurred_at: parse_utc(&r.occurred_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// Aggregate timeline snapshot for one relationship. Works locked
+    /// OR unlocked. Locked version omits narratives but returns
+    /// counts, intensity averages, and crisis_pattern_count_last_30d
+    /// so the caller can decide to surface hotlines proactively.
+    pub async fn get_relationship_timeline(
+        &self,
+        relationship_id: &str,
+        recent_limit: usize,
+    ) -> Result<RelationshipTimeline> {
+        let metas = self
+            .list_relationship_event_meta(Some(relationship_id), recent_limit)
+            .await?;
+        let vault_unlocked = self.reinforced_vault_status().await?.unlocked;
+
+        let now = Utc::now();
+        let cutoff_30 = now - chrono::Duration::days(30);
+        let in_window: Vec<&RelationshipEvent> = metas
+            .iter()
+            .filter(|e| e.occurred_at >= cutoff_30)
+            .collect();
+        let events_last_30d = in_window.len() as u32;
+        let crisis_pattern_count_last_30d =
+            in_window.iter().filter(|e| e.had_crisis_pattern).count() as u32;
+        let negative_sentiment_count_30d = in_window
+            .iter()
+            .filter(|e| e.sentiment.as_deref() == Some("negative"))
+            .count() as u32;
+        let avg_intensity_30d = avg_field(
+            in_window
+                .iter()
+                .filter_map(|e| e.intensity_1_10.map(|i| i as f64)),
+        );
+
+        Ok(RelationshipTimeline {
+            relationship_id: relationship_id.to_string(),
+            recent_events_meta: metas,
+            events_last_30d,
+            crisis_pattern_count_last_30d,
+            avg_intensity_30d,
+            negative_sentiment_count_30d,
+            vault_unlocked,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw rows for BI.9.2 --------------------------------------------
+
+struct RelationshipEventMetaRaw {
+    event_id: String,
+    relationship_id: String,
+    event_type: String,
+    intensity_1_10: Option<u8>,
+    sentiment: Option<String>,
+    had_crisis_pattern: bool,
+    occurred_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
 }
 
 // ============================================================================
@@ -16064,6 +16437,297 @@ mod tests {
             .iter()
             .any(|i| i.item_type == "growth_goal" && i.name == "Meta vieja"));
 
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9.2 — Relationship events (vault-protected narrative)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn relationship_event_requires_vault_unlocked() {
+        let dir = temp_dir("memory-plane-revt-locked");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Vault not configured at all → should fail.
+        // We don't even get to the relationship check because the
+        // crisis detector + encrypt path runs first and bails on vault.
+        // (Actually no — we check rel exists first, then encrypt.
+        // So we need a relationship to test the vault gate.)
+        let r = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        let err = mgr
+            .add_relationship_event(
+                &r.relationship_id,
+                "argument",
+                Some(7),
+                Some("negative"),
+                "no debería poder escribir esto",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err(), "should fail without vault");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_rejects_unknown_relationship_id() {
+        let dir = temp_dir("memory-plane-revt-orphan");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let err = mgr
+            .add_relationship_event(
+                "rel-doesnt-exist",
+                "argument",
+                Some(5),
+                Some("negative"),
+                "test",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_rejects_invalid_sentiment() {
+        let dir = temp_dir("memory-plane-revt-bad-sentiment");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let r = mgr
+            .add_relationship("Bob", "friend", None, 5, None, None, None, "", None)
+            .await
+            .unwrap();
+        let err = mgr
+            .add_relationship_event(
+                &r.relationship_id,
+                "argument",
+                Some(5),
+                Some("super-bad"),
+                "test",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_roundtrip_under_vault_meta_visible_locked() {
+        let dir = temp_dir("memory-plane-revt-rt");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let r = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        let (event, detection) = mgr
+            .add_relationship_event(
+                &r.relationship_id,
+                "argument",
+                Some(8),
+                Some("negative"),
+                "discutimos por la cena, ambos estabamos cansados",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(detection.is_none());
+        assert!(!event.had_crisis_pattern);
+        assert_eq!(event.event_type, "argument");
+
+        // Lock vault → meta still visible, full list errors out.
+        mgr.lock_reinforced_vault();
+        let metas = mgr
+            .list_relationship_event_meta(Some(&r.relationship_id), 10)
+            .await
+            .unwrap();
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].narrative, "");
+        assert_eq!(metas[0].intensity_1_10, Some(8));
+        let full = mgr.list_relationship_events(&r.relationship_id, 10).await;
+        assert!(full.is_err());
+
+        // Unlock → full list returns plaintext.
+        mgr.unlock_reinforced_vault("super-secret-pass-123")
+            .await
+            .unwrap();
+        let full = mgr
+            .list_relationship_events(&r.relationship_id, 10)
+            .await
+            .unwrap();
+        assert_eq!(full.len(), 1);
+        assert!(full[0].narrative.contains("cansados"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_crisis_persists_flag_not_keywords() {
+        let dir = temp_dir("memory-plane-revt-crisis");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let r = mgr
+            .add_relationship("Persona", "ex_partner", None, 8, None, None, None, "", None)
+            .await
+            .unwrap();
+        let (event, detection) = mgr
+            .add_relationship_event(
+                &r.relationship_id,
+                "concern",
+                Some(10),
+                Some("negative"),
+                "me grita y me amenaza, ya no aguanto",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let det = detection.expect("crisis expected");
+        assert_eq!(det.severity, "high");
+        assert!(event.had_crisis_pattern);
+
+        mgr.lock_reinforced_vault();
+        let metas = mgr
+            .list_relationship_event_meta(Some(&r.relationship_id), 10)
+            .await
+            .unwrap();
+        assert_eq!(metas.len(), 1);
+        assert!(metas[0].had_crisis_pattern);
+        assert_eq!(metas[0].narrative, ""); // keywords stay encrypted
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_timeline_aggregates_with_locked_vault() {
+        let dir = temp_dir("memory-plane-revt-timeline");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let r = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        // 2 negative events, 1 positive, 1 with crisis pattern.
+        mgr.add_relationship_event(
+            &r.relationship_id,
+            "argument",
+            Some(7),
+            Some("negative"),
+            "discusion por dinero",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_relationship_event(
+            &r.relationship_id,
+            "concern",
+            Some(9),
+            Some("negative"),
+            "me grita y no aguanto",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_relationship_event(
+            &r.relationship_id,
+            "reconciliation",
+            Some(8),
+            Some("positive"),
+            "logramos hablar tranquilos despues",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        mgr.lock_reinforced_vault();
+        let t = mgr
+            .get_relationship_timeline(&r.relationship_id, 50)
+            .await
+            .unwrap();
+        assert!(!t.vault_unlocked);
+        assert_eq!(t.events_last_30d, 3);
+        assert_eq!(t.crisis_pattern_count_last_30d, 1);
+        assert_eq!(t.negative_sentiment_count_30d, 2);
+        let avg = t.avg_intensity_30d.unwrap();
+        assert!((avg - 8.0).abs() < 0.01);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_meta_all_relationships() {
+        let dir = temp_dir("memory-plane-revt-meta-all");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let r1 = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        let r2 = mgr
+            .add_relationship("Pedro", "friend", None, 7, None, None, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_relationship_event(
+            &r1.relationship_id,
+            "milestone",
+            Some(9),
+            Some("positive"),
+            "aniversario",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_relationship_event(
+            &r2.relationship_id,
+            "support",
+            Some(6),
+            Some("positive"),
+            "me acompano en un dia dificil",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // No filter → both events visible.
+        let all = mgr.list_relationship_event_meta(None, 100).await.unwrap();
+        assert_eq!(all.len(), 2);
+        // Filter by r1 → only one.
+        let only_r1 = mgr
+            .list_relationship_event_meta(Some(&r1.relationship_id), 100)
+            .await
+            .unwrap();
+        assert_eq!(only_r1.len(), 1);
+        assert_eq!(only_r1[0].event_type, "milestone");
         std::fs::remove_dir_all(dir).ok();
     }
 

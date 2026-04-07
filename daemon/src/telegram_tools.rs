@@ -504,6 +504,32 @@ Esta es la fase más sensible del pillar. Reglas absolutas:
 16g. **crisis_resources** — Devuelve lista de lineas de ayuda en Mexico (SAPTEL, Linea de la Vida, Locatel, Red de Refugios, 911). Usalo cuando el usuario describa crisis, autolesion, abuso, ideacion suicida, o lo pida explicitamente.
     args: {}
 
+17. **Vida Plena — Eventos de relaciones (BI.9.2)**
+
+Para eventos significativos en relaciones del usuario: discusiones, reconciliaciones, momentos importantes, sentimientos sobre esa persona en esa fecha. CATEGORIA SENSIBLE — la narrativa siempre va cifrada bajo el VAULT REFORZADO. Sin `vault_unlock` no se puede leer ni escribir la narrativa, aunque la metadata si es visible.
+
+REGLAS FIRMES (heredadas de BI.9 y BI.4):
+- Axi NO es consejero matrimonial ni terapeuta de pareja.
+- Para abuso, infidelidad, divorcio en curso, custodia, violencia familiar → SIEMPRE recomienda profesional certificado o linea de ayuda.
+- Si la narrativa contiene patrones de crisis (auto detect), la respuesta INCLUYE hotlines automaticamente.
+- NUNCA mandes el contenido de eventos relacionales a un LLM remoto por defecto.
+- relationship_id debe existir previamente — usa `relationship_add` antes si no esta.
+
+17a. **relationship_event_log** — Registra un evento. REQUIERE VAULT UNLOCKED. Crisis detection corre antes de cifrar; si matchea, la respuesta incluira hotlines.
+    args: {"relationship_id": "rel-...", "event_type": "argument", "intensity_1_10": 8, "sentiment": "negative", "narrative": "...texto largo...", "occurred_at": "2026-04-07T20:30:00Z"}
+    event_type: argument | reconciliation | milestone | achievement | concern | distance | closeness | support | conflict | breakthrough | other
+    sentiment: positive | neutral | mixed | negative
+    occurred_at es opcional; default ahora. La narrativa NO puede estar vacia.
+
+17b. **relationship_events_list** — Lista los ultimos N eventos de UNA relacion CON narrativa decifrada. REQUIERE VAULT UNLOCKED.
+    args: {"relationship_id": "rel-...", "limit": 10}
+
+17c. **relationship_events_meta** — Lista los ultimos N eventos SIN narrativa (solo tipo + intensidad + sentiment + had_crisis_pattern + fecha). NO requiere vault. Si pasas relationship_id, filtra por ese; si no, devuelve eventos de TODAS las relaciones.
+    args: {"relationship_id": "rel-...", "limit": 30}
+
+17d. **relationship_timeline** — Resumen agregado de UNA relacion: ultimos eventos meta + counts en 30d + intensidad promedio + sentiment negativo count + crisis pattern count. Funciona vault locked O unlocked. Si crisis_pattern_count > 0, incluye hotlines automaticamente.
+    args: {"relationship_id": "rel-...", "recent_limit": 30}
+
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
 
@@ -1659,6 +1685,10 @@ Esta es la fase más sensible del pillar. Reglas absolutas:
             "journal_meta" => execute_journal_meta(&call.args, ctx).await,
             "mental_health_summary" => execute_mental_health_summary(&call.args, ctx).await,
             "crisis_resources" => execute_crisis_resources().await,
+            "relationship_event_log" => execute_relationship_event_log(&call.args, ctx).await,
+            "relationship_events_list" => execute_relationship_events_list(&call.args, ctx).await,
+            "relationship_events_meta" => execute_relationship_events_meta(&call.args, ctx).await,
+            "relationship_timeline" => execute_relationship_timeline(&call.args, ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -5658,6 +5688,194 @@ Esta es la fase más sensible del pillar. Reglas absolutas:
 
     async fn execute_crisis_resources() -> Result<String> {
         Ok(render_crisis_block())
+    }
+
+    // -- BI.9.2: relationship events ----------------------------------------
+
+    async fn execute_relationship_event_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let relationship_id = args["relationship_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'relationship_id'"))?;
+        let event_type = args["event_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'event_type'"))?;
+        let intensity = args["intensity_1_10"].as_u64().map(|i| i as u8);
+        let sentiment = args["sentiment"].as_str();
+        let narrative = args["narrative"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'narrative'"))?;
+        let occurred_at = args["occurred_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc));
+
+        let (event, detection) = mem
+            .add_relationship_event(
+                relationship_id,
+                event_type,
+                intensity,
+                sentiment,
+                narrative,
+                occurred_at,
+                None,
+            )
+            .await?;
+
+        let mut out = format!(
+            "Evento relacional guardado (id={}, cifrado bajo el vault).\nTipo: {}{}{}",
+            event.event_id,
+            event.event_type,
+            event
+                .intensity_1_10
+                .map(|i| format!(", intensidad {}/10", i))
+                .unwrap_or_default(),
+            event
+                .sentiment
+                .as_deref()
+                .map(|s| format!(", sentiment {}", s))
+                .unwrap_or_default(),
+        );
+        if let Some(d) = detection {
+            out.push_str(&format!(
+                "\n\n_Detecte un patron de **{}** en tu narrativa. Quiero asegurarme de que tengas apoyo a la mano:_",
+                d.severity
+            ));
+            out.push_str(&render_crisis_block());
+        }
+        Ok(out)
+    }
+
+    async fn execute_relationship_events_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let relationship_id = args["relationship_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'relationship_id'"))?;
+        let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+        let events = mem.list_relationship_events(relationship_id, limit).await?;
+        if events.is_empty() {
+            return Ok("Aun no hay eventos registrados para esta relacion.".to_string());
+        }
+        let mut out = format!("# Eventos de la relacion {}\n\n", relationship_id);
+        for e in events {
+            let intensity = e
+                .intensity_1_10
+                .map(|i| format!(" intensidad {}/10", i))
+                .unwrap_or_default();
+            let sent = e
+                .sentiment
+                .as_deref()
+                .map(|s| format!(" sentiment {}", s))
+                .unwrap_or_default();
+            let crisis = if e.had_crisis_pattern { " ⚠️" } else { "" };
+            out.push_str(&format!(
+                "## [{}] {}{}{}{}\n{}\n\n",
+                e.occurred_at.format("%Y-%m-%d %H:%M"),
+                e.event_type,
+                intensity,
+                sent,
+                crisis,
+                e.narrative
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_relationship_events_meta(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let relationship_id = args["relationship_id"].as_str();
+        let limit = args["limit"].as_u64().unwrap_or(30) as usize;
+        let metas = mem
+            .list_relationship_event_meta(relationship_id, limit)
+            .await?;
+        if metas.is_empty() {
+            return Ok("Aun no hay eventos registrados.".to_string());
+        }
+        let mut out = String::from("# Eventos relacionales (metadata)\n\n");
+        for e in metas {
+            let intensity = e
+                .intensity_1_10
+                .map(|i| format!("{}/10", i))
+                .unwrap_or_else(|| "—".to_string());
+            let crisis = if e.had_crisis_pattern { " ⚠️" } else { "" };
+            out.push_str(&format!(
+                "- [{}] [{}] {} intensidad {} ({}){}\n",
+                e.occurred_at.format("%Y-%m-%d"),
+                &e.relationship_id,
+                e.event_type,
+                intensity,
+                e.sentiment.as_deref().unwrap_or("—"),
+                crisis,
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_relationship_timeline(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let relationship_id = args["relationship_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'relationship_id'"))?;
+        let limit = args["recent_limit"].as_u64().unwrap_or(30) as usize;
+        let t = mem
+            .get_relationship_timeline(relationship_id, limit)
+            .await?;
+
+        let mut out = format!("# Timeline de la relacion {}\n\n", t.relationship_id);
+        out.push_str(&format!(
+            "Vault: {}\n",
+            if t.vault_unlocked {
+                "UNLOCKED"
+            } else {
+                "LOCKED (las narrativas no se cargan)"
+            }
+        ));
+        out.push_str(&format!("Eventos en 30d: {}\n", t.events_last_30d));
+        if let Some(avg) = t.avg_intensity_30d {
+            out.push_str(&format!("Intensidad promedio 30d: {:.1}/10\n", avg));
+        }
+        out.push_str(&format!(
+            "Eventos negativos en 30d: {}\n",
+            t.negative_sentiment_count_30d
+        ));
+        if t.crisis_pattern_count_last_30d > 0 {
+            out.push_str(&format!(
+                "**Patrones de crisis detectados en 30d: {}**\n",
+                t.crisis_pattern_count_last_30d
+            ));
+            out.push_str(&render_crisis_block());
+        }
+        if t.recent_events_meta.is_empty() {
+            out.push_str("\nAun no hay eventos. Usa `relationship_event_log`.\n");
+        } else {
+            out.push_str("\n## Eventos recientes (meta)\n");
+            for e in t.recent_events_meta.iter().take(10) {
+                let crisis = if e.had_crisis_pattern { " ⚠️" } else { "" };
+                out.push_str(&format!(
+                    "- [{}] {}{} ({}){}\n",
+                    e.occurred_at.format("%Y-%m-%d"),
+                    e.event_type,
+                    e.intensity_1_10
+                        .map(|i| format!(" {}/10", i))
+                        .unwrap_or_default(),
+                    e.sentiment.as_deref().unwrap_or("—"),
+                    crisis,
+                ));
+            }
+        }
+        Ok(out)
     }
 
     async fn execute_computer_type(args: &serde_json::Value) -> Result<String> {
