@@ -447,6 +447,108 @@ CREATE TABLE IF NOT EXISTS nutrition_plans (
 );
 CREATE INDEX IF NOT EXISTS idx_nutrition_plans_active
     ON nutrition_plans(active);
+
+-- ============================================================================
+-- Fase BI.13 — Salud social y comunitaria (Vida Plena)
+-- ============================================================================
+-- The Harvard Study of Adult Development + Holt-Lunstad meta-analysis
+-- (2010) document that broad community connections — beyond the inner
+-- circle of family and close friends — are as important to longevity
+-- as exercise. LifeOS tracks the user's communities, civic engagement
+-- and contributions so the BI.8 coaching layer can notice when the
+-- user has been disconnected for too long.
+--
+-- Three side-tables. All free-text notes encrypted. Auto-permanent
+-- via the BI.1 wellness-kind contract for `community_*` kind entries.
+
+CREATE TABLE IF NOT EXISTS community_activities (
+    activity_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,              -- 'club de lectura', 'parroquia',
+                                     -- 'liga de futbol', 'voluntariado X'
+    activity_type TEXT NOT NULL,     -- 'religious', 'sport', 'volunteer',
+                                     -- 'hobby', 'professional', 'educational',
+                                     -- 'civic', 'other'
+    frequency TEXT,                  -- 'semanal', 'mensual', 'irregular'
+    last_attended TEXT,              -- ISO-8601 opcional
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_community_activities_active
+    ON community_activities(active);
+CREATE INDEX IF NOT EXISTS idx_community_activities_type
+    ON community_activities(activity_type);
+
+CREATE TABLE IF NOT EXISTS civic_engagement (
+    engagement_id TEXT PRIMARY KEY,
+    engagement_type TEXT NOT NULL,   -- 'vote', 'volunteer', 'donation',
+                                     -- 'protest', 'town_hall',
+                                     -- 'community_meeting', 'other'
+    description TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_civic_engagement_occurred
+    ON civic_engagement(occurred_at);
+
+CREATE TABLE IF NOT EXISTS contribution_log (
+    contribution_id TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    beneficiary TEXT,
+    occurred_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contribution_log_occurred
+    ON contribution_log(occurred_at);
+
+-- ============================================================================
+-- Fase BI.14 — Sueño profundo (Vida Plena)
+-- ============================================================================
+-- Matthew Walker ("Why We Sleep") synthesises decades of evidence
+-- that sleep is one of the most powerful levers for every other
+-- wellness dimension. LifeOS treats it as its own pillar with two
+-- linked tables: the sleep entry itself, and the environment +
+-- behaviour context that explains the quality.
+
+CREATE TABLE IF NOT EXISTS sleep_log (
+    sleep_id TEXT PRIMARY KEY,
+    bedtime TEXT NOT NULL,           -- ISO-8601 (when the user went to bed)
+    wake_time TEXT NOT NULL,         -- ISO-8601 (when the user got up)
+    duration_hours REAL NOT NULL,    -- denormalised for fast queries
+    quality_1_10 INTEGER,
+    interruptions INTEGER NOT NULL DEFAULT 0,
+    feeling_on_wake TEXT,            -- 'descansado', 'cansado', 'irritable'
+    dreams_notes_nonce_b64 TEXT,
+    dreams_notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sleep_log_bedtime
+    ON sleep_log(bedtime);
+
+CREATE TABLE IF NOT EXISTS sleep_environment (
+    env_id TEXT PRIMARY KEY,
+    sleep_id TEXT NOT NULL,          -- FK to sleep_log
+    room_temperature_c REAL,
+    darkness_1_10 INTEGER,
+    noise_1_10 INTEGER,
+    screen_use_min_before_bed INTEGER,
+    caffeine_after_2pm INTEGER NOT NULL DEFAULT 0,
+    alcohol INTEGER NOT NULL DEFAULT 0,
+    heavy_dinner INTEGER NOT NULL DEFAULT 0,
+    exercise_intensity_today TEXT,   -- 'none', 'light', 'moderate', 'intense'
+    notes TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sleep_env_sleep_id
+    ON sleep_environment(sleep_id);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6778,6 +6880,831 @@ struct NutritionPlanRaw {
     updated_at: String,
 }
 
+// ============================================================================
+// Fase BI.13 — Salud social y comunitaria (Vida Plena)
+// ============================================================================
+
+/// One community/group the user belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommunityActivity {
+    pub activity_id: String,
+    pub name: String,
+    /// `religious`, `sport`, `volunteer`, `hobby`, `professional`,
+    /// `educational`, `civic`, `other`.
+    pub activity_type: String,
+    pub frequency: Option<String>,
+    pub last_attended: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One civic engagement event (vote, donation, town hall, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CivicEngagement {
+    pub engagement_id: String,
+    /// `vote`, `volunteer`, `donation`, `protest`, `town_hall`,
+    /// `community_meeting`, `other`.
+    pub engagement_type: String,
+    pub description: String,
+    pub occurred_at: DateTime<Utc>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One moment where the user contributed to someone or something.
+/// Tracking these is associated with subjective wellbeing
+/// (gratitude/giving research).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Contribution {
+    pub contribution_id: String,
+    pub description: String,
+    pub beneficiary: Option<String>,
+    pub occurred_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the social/community pillar.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SocialSummary {
+    pub active_activities: Vec<CommunityActivity>,
+    pub recent_civic_events: Vec<CivicEngagement>,
+    pub recent_contributions: Vec<Contribution>,
+    pub days_since_last_activity: Option<i64>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.13: Community activities
+    // -----------------------------------------------------------------------
+
+    pub async fn add_community_activity(
+        &self,
+        name: &str,
+        activity_type: &str,
+        frequency: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<CommunityActivity> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let activity_type =
+            normalize_non_empty(activity_type).context("activity_type required")?;
+        let frequency = frequency.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let activity_id = format!("comm-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let activity_id_clone = activity_id.clone();
+        let name_clone = name.clone();
+        let type_clone = activity_type.clone();
+        let freq_clone = frequency.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO community_activities
+                 (activity_id, name, activity_type, frequency, last_attended,
+                  notes_nonce_b64, notes_ciphertext_b64, active,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, 1, ?7, ?8, ?8)",
+                params![
+                    activity_id_clone,
+                    name_clone,
+                    type_clone,
+                    freq_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CommunityActivity {
+            activity_id,
+            name,
+            activity_type,
+            frequency,
+            last_attended: None,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark that the user attended an activity. Updates `last_attended`
+    /// to the given timestamp (defaulting to now). The caller chooses
+    /// the timestamp because some users log retroactively.
+    pub async fn mark_community_attendance(
+        &self,
+        activity_id: &str,
+        attended_at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let when = attended_at.unwrap_or_else(Utc::now).to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = activity_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE community_activities
+                 SET last_attended = ?1, updated_at = ?2
+                 WHERE activity_id = ?3",
+                params![when, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn deactivate_community_activity(&self, activity_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = activity_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE community_activities
+                 SET active = 0, updated_at = ?1
+                 WHERE activity_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_community_activities(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<CommunityActivity>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT activity_id, name, activity_type, frequency, last_attended,
+                        notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM community_activities WHERE active = 1
+                 ORDER BY name"
+            } else {
+                "SELECT activity_id, name, activity_type, frequency, last_attended,
+                        notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM community_activities
+                 ORDER BY name"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<CommunityActivityRaw> = stmt
+                .query_map([], |row| {
+                    Ok(CommunityActivityRaw {
+                        activity_id: row.get(0)?,
+                        name: row.get(1)?,
+                        activity_type: row.get(2)?,
+                        frequency: row.get(3)?,
+                        last_attended: row.get(4)?,
+                        notes_nonce_b64: row.get(5)?,
+                        notes_ciphertext_b64: row.get(6)?,
+                        active: row.get::<_, i32>(7)? != 0,
+                        source_entry_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| CommunityActivity {
+                activity_id: r.activity_id,
+                name: r.name,
+                activity_type: r.activity_type,
+                frequency: r.frequency,
+                last_attended: r.last_attended.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.13: Civic engagement
+    // -----------------------------------------------------------------------
+
+    pub async fn log_civic_engagement(
+        &self,
+        engagement_type: &str,
+        description: &str,
+        occurred_at: Option<DateTime<Utc>>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<CivicEngagement> {
+        let engagement_type =
+            normalize_non_empty(engagement_type).context("engagement_type required")?;
+        let description = normalize_non_empty(description).context("description required")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let occurred = occurred_at.unwrap_or_else(Utc::now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let engagement_id = format!("civic-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let engagement_id_clone = engagement_id.clone();
+        let type_clone = engagement_type.clone();
+        let desc_clone = description.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO civic_engagement
+                 (engagement_id, engagement_type, description, occurred_at,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    engagement_id_clone,
+                    type_clone,
+                    desc_clone,
+                    occurred_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CivicEngagement {
+            engagement_id,
+            engagement_type,
+            description,
+            occurred_at: occurred,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_civic_engagement(&self, limit: usize) -> Result<Vec<CivicEngagement>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT engagement_id, engagement_type, description, occurred_at,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id, created_at
+                 FROM civic_engagement
+                 ORDER BY occurred_at DESC
+                 LIMIT ?1",
+            )?;
+            let raws: Vec<CivicEngagementRaw> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(CivicEngagementRaw {
+                        engagement_id: row.get(0)?,
+                        engagement_type: row.get(1)?,
+                        description: row.get(2)?,
+                        occurred_at: row.get(3)?,
+                        notes_nonce_b64: row.get(4)?,
+                        notes_ciphertext_b64: row.get(5)?,
+                        source_entry_id: row.get(6)?,
+                        created_at: row.get(7)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| CivicEngagement {
+                engagement_id: r.engagement_id,
+                engagement_type: r.engagement_type,
+                description: r.description,
+                occurred_at: parse_utc(&r.occurred_at),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.13: Contribution log
+    // -----------------------------------------------------------------------
+
+    pub async fn log_contribution(
+        &self,
+        description: &str,
+        beneficiary: Option<&str>,
+        occurred_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<Contribution> {
+        let description = normalize_non_empty(description).context("description required")?;
+        let beneficiary = beneficiary.and_then(normalize_non_empty);
+        let occurred = occurred_at.unwrap_or_else(Utc::now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let contribution_id = format!("contrib-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = contribution_id.clone();
+        let desc_clone = description.clone();
+        let benef_clone = beneficiary.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO contribution_log
+                 (contribution_id, description, beneficiary, occurred_at,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    id_clone,
+                    desc_clone,
+                    benef_clone,
+                    occurred_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Contribution {
+            contribution_id,
+            description,
+            beneficiary,
+            occurred_at: occurred,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_contributions(&self, limit: usize) -> Result<Vec<Contribution>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let rows = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT contribution_id, description, beneficiary, occurred_at,
+                        source_entry_id, created_at
+                 FROM contribution_log
+                 ORDER BY occurred_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<Contribution> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(Contribution {
+                        contribution_id: row.get(0)?,
+                        description: row.get(1)?,
+                        beneficiary: row.get(2)?,
+                        occurred_at: parse_utc(&row.get::<_, String>(3)?),
+                        source_entry_id: row.get(4)?,
+                        created_at: parse_utc(&row.get::<_, String>(5)?),
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    /// Aggregate snapshot for the BI.13 pillar.
+    ///
+    /// `days_since_last_activity` is computed against the
+    /// `last_attended` field of the most recently attended active
+    /// activity (None if there are no active activities or none
+    /// have a `last_attended` set yet).
+    pub async fn get_social_summary(
+        &self,
+        recent_civic_limit: usize,
+        recent_contrib_limit: usize,
+    ) -> Result<SocialSummary> {
+        let active_activities = self.list_community_activities(true).await?;
+        let recent_civic_events = self.list_civic_engagement(recent_civic_limit).await?;
+        let recent_contributions = self.list_contributions(recent_contrib_limit).await?;
+
+        let now = Utc::now();
+        let days_since_last_activity = active_activities
+            .iter()
+            .filter_map(|a| a.last_attended)
+            .max()
+            .map(|last| (now - last).num_days());
+
+        Ok(SocialSummary {
+            active_activities,
+            recent_civic_events,
+            recent_contributions,
+            days_since_last_activity,
+            generated_at: now,
+        })
+    }
+}
+
+// ============================================================================
+// Fase BI.14 — Sueño profundo (Vida Plena)
+// ============================================================================
+
+/// One night's sleep entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepEntry {
+    pub sleep_id: String,
+    pub bedtime: DateTime<Utc>,
+    pub wake_time: DateTime<Utc>,
+    /// Denormalised duration in hours so timeseries queries don't
+    /// have to subtract two RFC-3339 strings in SQL.
+    pub duration_hours: f64,
+    pub quality_1_10: Option<u8>,
+    pub interruptions: u32,
+    pub feeling_on_wake: Option<String>,
+    /// Encrypted dream notes / things to remember about the night.
+    pub dreams_notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Optional context for a sleep entry. The caller may choose to log
+/// only the sleep itself (when they don't have time to record
+/// environment details) or both. Each `SleepEnvironment` row
+/// references exactly one `sleep_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepEnvironment {
+    pub env_id: String,
+    pub sleep_id: String,
+    pub room_temperature_c: Option<f64>,
+    pub darkness_1_10: Option<u8>,
+    pub noise_1_10: Option<u8>,
+    pub screen_use_min_before_bed: Option<u32>,
+    pub caffeine_after_2pm: bool,
+    pub alcohol: bool,
+    pub heavy_dinner: bool,
+    /// `none`, `light`, `moderate`, `intense`.
+    pub exercise_intensity_today: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the sleep pillar.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SleepSummary {
+    pub recent_entries: Vec<SleepEntry>,
+    /// Average duration over the last 7 entries.
+    pub avg_duration_hours_7d: Option<f64>,
+    /// Average self-reported quality 1-10 over the last 7 entries.
+    pub avg_quality_7d: Option<f64>,
+    pub nights_logged_last_7_days: u32,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Record a night's sleep. `duration_hours` is computed from the
+    /// difference between `bedtime` and `wake_time` and stored
+    /// denormalised.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_sleep(
+        &self,
+        bedtime: DateTime<Utc>,
+        wake_time: DateTime<Utc>,
+        quality_1_10: Option<u8>,
+        interruptions: u32,
+        feeling_on_wake: Option<&str>,
+        dreams_notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<SleepEntry> {
+        if wake_time <= bedtime {
+            anyhow::bail!("wake_time must be after bedtime");
+        }
+        if let Some(q) = quality_1_10 {
+            if !(1..=10).contains(&q) {
+                anyhow::bail!("quality_1_10 must be in 1..=10");
+            }
+        }
+        let feeling_on_wake = feeling_on_wake.and_then(normalize_non_empty);
+        let dreams_owned = dreams_notes.trim().to_string();
+        let (dreams_nonce, dreams_cipher) = if dreams_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&dreams_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let duration_hours = (wake_time - bedtime).num_seconds() as f64 / 3600.0;
+        let bedtime_rfc = bedtime.to_rfc3339();
+        let wake_rfc = wake_time.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let sleep_id = format!("sleep-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let sleep_id_clone = sleep_id.clone();
+        let feeling_clone = feeling_on_wake.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO sleep_log
+                 (sleep_id, bedtime, wake_time, duration_hours, quality_1_10,
+                  interruptions, feeling_on_wake, dreams_notes_nonce_b64,
+                  dreams_notes_ciphertext_b64, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    sleep_id_clone,
+                    bedtime_rfc,
+                    wake_rfc,
+                    duration_hours,
+                    quality_1_10.map(|q| q as i32),
+                    interruptions as i32,
+                    feeling_clone,
+                    dreams_nonce,
+                    dreams_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(SleepEntry {
+            sleep_id,
+            bedtime,
+            wake_time,
+            duration_hours,
+            quality_1_10,
+            interruptions,
+            feeling_on_wake,
+            dreams_notes: dreams_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// Add an environment record for a sleep entry. Each call adds a
+    /// new row, so a user can record the environment after the fact
+    /// (multiple rows for the same sleep_id are tolerated but the
+    /// caller should normally write only one).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_sleep_environment(
+        &self,
+        sleep_id: &str,
+        room_temperature_c: Option<f64>,
+        darkness_1_10: Option<u8>,
+        noise_1_10: Option<u8>,
+        screen_use_min_before_bed: Option<u32>,
+        caffeine_after_2pm: bool,
+        alcohol: bool,
+        heavy_dinner: bool,
+        exercise_intensity_today: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<SleepEnvironment> {
+        let sleep_id_owned = normalize_non_empty(sleep_id).context("sleep_id required")?;
+        if let Some(d) = darkness_1_10 {
+            if !(1..=10).contains(&d) {
+                anyhow::bail!("darkness_1_10 must be in 1..=10");
+            }
+        }
+        if let Some(n) = noise_1_10 {
+            if !(1..=10).contains(&n) {
+                anyhow::bail!("noise_1_10 must be in 1..=10");
+            }
+        }
+        let exercise_intensity_today = exercise_intensity_today.and_then(normalize_non_empty);
+        let notes = notes.and_then(normalize_non_empty);
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let env_id = format!("slpenv-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let env_id_clone = env_id.clone();
+        let sleep_id_clone = sleep_id_owned.clone();
+        let exercise_clone = exercise_intensity_today.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO sleep_environment
+                 (env_id, sleep_id, room_temperature_c, darkness_1_10, noise_1_10,
+                  screen_use_min_before_bed, caffeine_after_2pm, alcohol,
+                  heavy_dinner, exercise_intensity_today, notes, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    env_id_clone,
+                    sleep_id_clone,
+                    room_temperature_c,
+                    darkness_1_10.map(|d| d as i32),
+                    noise_1_10.map(|n| n as i32),
+                    screen_use_min_before_bed.map(|n| n as i32),
+                    caffeine_after_2pm as i32,
+                    alcohol as i32,
+                    heavy_dinner as i32,
+                    exercise_clone,
+                    notes_clone,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(SleepEnvironment {
+            env_id,
+            sleep_id: sleep_id_owned,
+            room_temperature_c,
+            darkness_1_10,
+            noise_1_10,
+            screen_use_min_before_bed,
+            caffeine_after_2pm,
+            alcohol,
+            heavy_dinner,
+            exercise_intensity_today,
+            notes,
+            created_at: now,
+        })
+    }
+
+    pub async fn list_sleep_log(&self, limit: usize) -> Result<Vec<SleepEntry>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT sleep_id, bedtime, wake_time, duration_hours, quality_1_10,
+                        interruptions, feeling_on_wake, dreams_notes_nonce_b64,
+                        dreams_notes_ciphertext_b64, source_entry_id, created_at
+                 FROM sleep_log
+                 ORDER BY bedtime DESC
+                 LIMIT ?1",
+            )?;
+            let raws: Vec<SleepEntryRaw> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(SleepEntryRaw {
+                        sleep_id: row.get(0)?,
+                        bedtime: row.get(1)?,
+                        wake_time: row.get(2)?,
+                        duration_hours: row.get(3)?,
+                        quality_1_10: row.get(4)?,
+                        interruptions: row.get(5)?,
+                        feeling_on_wake: row.get(6)?,
+                        dreams_notes_nonce_b64: row.get(7)?,
+                        dreams_notes_ciphertext_b64: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| SleepEntry {
+                sleep_id: r.sleep_id,
+                bedtime: parse_utc(&r.bedtime),
+                wake_time: parse_utc(&r.wake_time),
+                duration_hours: r.duration_hours,
+                quality_1_10: r.quality_1_10.map(|q| q.clamp(0, 10) as u8),
+                interruptions: r.interruptions.max(0) as u32,
+                feeling_on_wake: r.feeling_on_wake,
+                dreams_notes: match (r.dreams_notes_nonce_b64, r.dreams_notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// Aggregate snapshot for the BI.14 pillar.
+    pub async fn get_sleep_summary(&self, recent_limit: usize) -> Result<SleepSummary> {
+        let recent_entries = self.list_sleep_log(recent_limit).await?;
+
+        let now = Utc::now();
+        let cutoff = now - chrono::Duration::days(7);
+        let recent_7d: Vec<&SleepEntry> = recent_entries
+            .iter()
+            .filter(|e| e.bedtime >= cutoff)
+            .collect();
+        let nights_logged_last_7_days = recent_7d.len() as u32;
+
+        let avg_duration_hours_7d = if recent_7d.is_empty() {
+            None
+        } else {
+            let sum: f64 = recent_7d.iter().map(|e| e.duration_hours).sum();
+            Some(sum / recent_7d.len() as f64)
+        };
+        let avg_quality_7d = {
+            let qualities: Vec<f64> = recent_7d
+                .iter()
+                .filter_map(|e| e.quality_1_10.map(|q| q as f64))
+                .collect();
+            if qualities.is_empty() {
+                None
+            } else {
+                Some(qualities.iter().sum::<f64>() / qualities.len() as f64)
+            }
+        };
+
+        Ok(SleepSummary {
+            recent_entries,
+            avg_duration_hours_7d,
+            avg_quality_7d,
+            nights_logged_last_7_days,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw row types for BI.13 + BI.14 ---------------------------------
+
+struct CommunityActivityRaw {
+    activity_id: String,
+    name: String,
+    activity_type: String,
+    frequency: Option<String>,
+    last_attended: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct CivicEngagementRaw {
+    engagement_id: String,
+    engagement_type: String,
+    description: String,
+    occurred_at: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct SleepEntryRaw {
+    sleep_id: String,
+    bedtime: String,
+    wake_time: String,
+    duration_hours: f64,
+    quality_1_10: Option<i32>,
+    interruptions: i32,
+    feeling_on_wake: Option<String>,
+    dreams_notes_nonce_b64: Option<String>,
+    dreams_notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
 fn parse_utc(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
@@ -10090,6 +11017,293 @@ mod tests {
         assert!((summary.protein_g_last_7_days - 90.0).abs() < 0.01);
         assert!((summary.carbs_g_last_7_days - 155.0).abs() < 0.01);
         assert!((summary.fat_g_last_7_days - 55.0).abs() < 0.01);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.13: Salud social y comunitaria ---------------------------------
+
+    #[tokio::test]
+    async fn test_community_activity_lifecycle() {
+        let dir = temp_dir("memory-plane-community-lifecycle");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let act = mgr
+            .add_community_activity(
+                "Club de lectura",
+                "hobby",
+                Some("mensual"),
+                "Primer sabado del mes",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(act.active);
+        assert!(act.last_attended.is_none());
+        assert_eq!(act.notes, "Primer sabado del mes");
+
+        // Mark attendance — last_attended must populate.
+        let attended_at = Utc::now() - chrono::Duration::days(2);
+        mgr.mark_community_attendance(&act.activity_id, Some(attended_at))
+            .await
+            .unwrap();
+        let after = mgr.list_community_activities(true).await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0].last_attended.is_some());
+
+        // Deactivate.
+        mgr.deactivate_community_activity(&act.activity_id)
+            .await
+            .unwrap();
+        let active_after = mgr.list_community_activities(true).await.unwrap();
+        assert_eq!(active_after.len(), 0);
+        let all = mgr.list_community_activities(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_civic_engagement_log_and_list() {
+        let dir = temp_dir("memory-plane-civic");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.log_civic_engagement(
+            "vote",
+            "Eleccion estatal",
+            Some(Utc::now() - chrono::Duration::days(60)),
+            "Vote temprano",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.log_civic_engagement("donation", "Cruz Roja", None, "", None)
+            .await
+            .unwrap();
+
+        let events = mgr.list_civic_engagement(50).await.unwrap();
+        assert_eq!(events.len(), 2);
+        // Newest first.
+        assert_eq!(events[0].engagement_type, "donation");
+        assert_eq!(events[1].engagement_type, "vote");
+        // Notes encryption roundtrip.
+        assert_eq!(events[1].notes, "Vote temprano");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_contribution_log_and_list() {
+        let dir = temp_dir("memory-plane-contribution");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.log_contribution(
+            "Ayude con compras",
+            Some("Doña Lupe"),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.log_contribution("Done sangre", None, None, None)
+            .await
+            .unwrap();
+
+        let contribs = mgr.list_contributions(50).await.unwrap();
+        assert_eq!(contribs.len(), 2);
+        // Both descriptions present.
+        let descs: Vec<&str> = contribs.iter().map(|c| c.description.as_str()).collect();
+        assert!(descs.contains(&"Ayude con compras"));
+        assert!(descs.contains(&"Done sangre"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_social_summary_aggregates_with_days_since() {
+        let dir = temp_dir("memory-plane-social-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Two active activities — one attended 10 days ago, one never.
+        let recent = mgr
+            .add_community_activity("Liga de futbol", "sport", Some("semanal"), "", None)
+            .await
+            .unwrap();
+        mgr.mark_community_attendance(
+            &recent.activity_id,
+            Some(Utc::now() - chrono::Duration::days(10)),
+        )
+        .await
+        .unwrap();
+        mgr.add_community_activity("Voluntariado", "volunteer", None, "", None)
+            .await
+            .unwrap();
+
+        // 1 civic + 2 contributions.
+        mgr.log_civic_engagement("vote", "Eleccion local", None, "", None)
+            .await
+            .unwrap();
+        mgr.log_contribution("Doné ropa", None, None, None)
+            .await
+            .unwrap();
+        mgr.log_contribution("Recoji basura del parque", None, None, None)
+            .await
+            .unwrap();
+
+        let summary = mgr.get_social_summary(10, 10).await.unwrap();
+        assert_eq!(summary.active_activities.len(), 2);
+        assert_eq!(summary.recent_civic_events.len(), 1);
+        assert_eq!(summary.recent_contributions.len(), 2);
+        // days_since is computed from the most recent last_attended,
+        // which is `recent` at -10 days. Tolerance ±1 day.
+        let days = summary.days_since_last_activity.unwrap();
+        assert!(
+            (9..=11).contains(&days),
+            "days_since_last_activity should be ~10, got {}",
+            days
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.14: Sueño profundo ---------------------------------------------
+
+    #[tokio::test]
+    async fn test_sleep_log_validation_and_duration() {
+        let dir = temp_dir("memory-plane-sleep-validation");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // wake_time before bedtime must error.
+        let now = Utc::now();
+        let bad = mgr
+            .log_sleep(now, now - chrono::Duration::hours(1), None, 0, None, "", None)
+            .await;
+        assert!(bad.is_err());
+
+        // quality out of range must error.
+        let bedtime = now - chrono::Duration::hours(8);
+        let wake_time = now;
+        let bad2 = mgr
+            .log_sleep(bedtime, wake_time, Some(15), 0, None, "", None)
+            .await;
+        assert!(bad2.is_err());
+
+        // Valid call: 7.5h sleep, quality 8, encrypted dream notes.
+        let bedtime = now - chrono::Duration::hours(8);
+        let wake_time = now - chrono::Duration::minutes(30);
+        let entry = mgr
+            .log_sleep(
+                bedtime,
+                wake_time,
+                Some(8),
+                1,
+                Some("descansado"),
+                "Sueño tranquilo, recuerdo el mar",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!((entry.duration_hours - 7.5).abs() < 0.01);
+        assert_eq!(entry.quality_1_10, Some(8));
+        assert_eq!(entry.interruptions, 1);
+        assert_eq!(entry.dreams_notes, "Sueño tranquilo, recuerdo el mar");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_sleep_environment_links_to_sleep_entry() {
+        let dir = temp_dir("memory-plane-sleep-environment");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let bedtime = Utc::now() - chrono::Duration::hours(8);
+        let entry = mgr
+            .log_sleep(bedtime, Utc::now(), Some(7), 0, None, "", None)
+            .await
+            .unwrap();
+
+        let env = mgr
+            .add_sleep_environment(
+                &entry.sleep_id,
+                Some(18.0),
+                Some(9),
+                Some(2),
+                Some(0),
+                false,
+                false,
+                false,
+                Some("moderate"),
+                Some("Cuarto fresco"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(env.sleep_id, entry.sleep_id);
+        assert_eq!(env.darkness_1_10, Some(9));
+        assert!(!env.alcohol);
+
+        // Validation: darkness out of range.
+        let bad = mgr
+            .add_sleep_environment(
+                &entry.sleep_id,
+                None,
+                Some(15),
+                None,
+                None,
+                false,
+                false,
+                false,
+                None,
+                None,
+            )
+            .await;
+        assert!(bad.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_sleep_summary_averages_last_7_days() {
+        let dir = temp_dir("memory-plane-sleep-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let now = Utc::now();
+        // 3 nights in last 7 days: durations 7.0, 8.0, 6.0 — qualities 7, 8, 6.
+        // 1 night older than 7 days that should NOT be included in averages.
+        let nights = [
+            (now - chrono::Duration::days(1) - chrono::Duration::hours(7), 7.0_f64, 7),
+            (now - chrono::Duration::days(3) - chrono::Duration::hours(8), 8.0, 8),
+            (now - chrono::Duration::days(5) - chrono::Duration::hours(6), 6.0, 6),
+            (now - chrono::Duration::days(20) - chrono::Duration::hours(5), 5.0, 4),
+        ];
+        for (bedtime, duration_h, quality) in nights {
+            let wake_time = bedtime + chrono::Duration::seconds((duration_h * 3600.0) as i64);
+            mgr.log_sleep(bedtime, wake_time, Some(quality), 0, None, "", None)
+                .await
+                .unwrap();
+        }
+
+        let summary = mgr.get_sleep_summary(50).await.unwrap();
+        assert_eq!(summary.recent_entries.len(), 4);
+        assert_eq!(summary.nights_logged_last_7_days, 3);
+        let avg_dur = summary.avg_duration_hours_7d.unwrap();
+        assert!(
+            (avg_dur - 7.0).abs() < 0.05,
+            "avg duration should be ~7.0, got {}",
+            avg_dur
+        );
+        let avg_q = summary.avg_quality_7d.unwrap();
+        assert!(
+            (avg_q - 7.0).abs() < 0.05,
+            "avg quality should be ~7.0, got {}",
+            avg_q
+        );
 
         std::fs::remove_dir_all(dir).ok();
     }

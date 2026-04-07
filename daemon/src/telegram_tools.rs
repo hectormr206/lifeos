@@ -275,6 +275,44 @@ LifeOS lleva el registro completo de lo que el usuario come, sus preferencias/al
 11i. **nutrition_summary** — Devuelve resumen completo: preferencias activas + plan activo + comidas recientes + totales rolling de 7 dias (kcal, proteina, carbs, grasa, conteo de comidas). Usalo cuando el usuario te pida revisar como va comiendo o quiera prepararse para una visita con su nutriologo.
     args: {}
 
+## Vida social y comunitaria (Vida Plena BI.13)
+
+LifeOS lleva el registro de las comunidades del usuario, su participacion civica, y los momentos donde contribuyo a alguien. La investigacion (Harvard Study of Adult Development, Holt-Lunstad meta-analysis) muestra que las conexiones sociales amplias son tan importantes para la longevidad como el ejercicio. **Reglas:** Axi acompaña con curiosidad sin presionar. Si el usuario lleva mucho sin asistir a una actividad, puedes preguntar gentilmente si la extraña — sin sermonear.
+
+11j. **community_add** — Registra una comunidad/grupo al que pertenece el usuario. activity_type: religious, sport, volunteer, hobby, professional, educational, civic, other.
+    args: {"name": "Club de lectura del barrio", "activity_type": "hobby", "frequency": "mensual", "notes": "Nos juntamos el primer sabado"}
+
+11k. **community_attend** — Marca que el usuario asistio a una actividad. Actualiza el last_attended.
+    args: {"activity_id": "comm-..."}
+
+11l. **community_list** — Lista las comunidades activas del usuario.
+    args: {}
+
+11m. **civic_log** — Registra un acto de participacion civica. engagement_type: vote, volunteer, donation, protest, town_hall, community_meeting, other.
+    args: {"engagement_type": "vote", "description": "Eleccion estatal 2026", "notes": "Vote temprano"}
+
+11n. **contribution_log** — Registra un momento donde el usuario ayudo a alguien o a una causa. La gratitud por contribuir esta ligada al bienestar.
+    args: {"description": "Ayude a mi vecina con sus compras", "beneficiary": "Doña Lupe"}
+
+11o. **social_summary** — Devuelve resumen completo: comunidades activas + civic events recientes + contribuciones recientes + dias desde la ultima actividad asistida. Usalo cuando el usuario te pida reflexionar sobre su vida social.
+    args: {}
+
+## Sueño (Vida Plena BI.14)
+
+El sueño es una de las palancas mas poderosas para todas las demas dimensiones (Matthew Walker, "Why We Sleep"). LifeOS lleva el registro de noches con duracion + calidad subjetiva + interrupciones, y opcionalmente el ambiente (temperatura, oscuridad, ruido, cafeina, alcohol, ejercicio) para detectar patrones. **Reglas:** NO diagnostiques trastornos del sueño (apnea, insomnio cronico, narcolepsia). Si el usuario reporta sintomas serios, recomienda especialista en medicina del sueño.
+
+11p. **sleep_log** — Registra una noche de sueño. bedtime y wake_time son ISO-8601. quality_1_10 es opcional pero ayuda mucho al coaching.
+    args: {"bedtime": "2026-04-06T23:30:00Z", "wake_time": "2026-04-07T07:15:00Z", "quality_1_10": 7, "interruptions": 1, "feeling_on_wake": "descansado", "dreams_notes": "Sueño tranquilo"}
+
+11q. **sleep_environment_add** — Agrega contexto a una entrada de sueño existente: ambiente fisico + comportamiento del dia. Util para detectar patrones cruzados.
+    args: {"sleep_id": "sleep-...", "room_temperature_c": 18, "darkness_1_10": 9, "noise_1_10": 2, "screen_use_min_before_bed": 0, "caffeine_after_2pm": false, "alcohol": false, "heavy_dinner": false, "exercise_intensity_today": "moderate"}
+
+11r. **sleep_history** — Devuelve las ultimas N entradas de sueño, mas reciente primero.
+    args: {"limit": 30}
+
+11s. **sleep_summary** — Devuelve resumen completo: ultimas entradas + promedio de duracion en los ultimos 7 dias + promedio de calidad + cantidad de noches registradas en los ultimos 7 dias.
+    args: {}
+
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
 
@@ -1372,6 +1410,18 @@ LifeOS lleva el registro completo de lo que el usuario come, sus preferencias/al
             "nutrition_plan_add" => execute_nutrition_plan_add(&call.args, ctx).await,
             "nutrition_plan_list" => execute_nutrition_plan_list(ctx).await,
             "nutrition_summary" => execute_nutrition_summary(ctx).await,
+            // BI.13 — Salud social y comunitaria
+            "community_add" => execute_community_add(&call.args, ctx).await,
+            "community_attend" => execute_community_attend(&call.args, ctx).await,
+            "community_list" => execute_community_list(ctx).await,
+            "civic_log" => execute_civic_log(&call.args, ctx).await,
+            "contribution_log" => execute_contribution_log(&call.args, ctx).await,
+            "social_summary" => execute_social_summary(ctx).await,
+            // BI.14 — Sueño profundo
+            "sleep_log" => execute_sleep_log(&call.args, ctx).await,
+            "sleep_environment_add" => execute_sleep_environment_add(&call.args, ctx).await,
+            "sleep_history" => execute_sleep_history(&call.args, ctx).await,
+            "sleep_summary" => execute_sleep_summary(ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -3613,6 +3663,334 @@ LifeOS lleva el registro completo de lo que el usuario come, sus preferencias/al
             out.push_str(
                 "Aun no hay datos de nutricion. Empieza registrando una preferencia \
                  con `nutrition_pref_add` o una comida con `nutrition_log_meal`.\n",
+            );
+        }
+
+        Ok(out)
+    }
+
+    // ========================================================================
+    // Fase BI.13 — Salud social y comunitaria (Vida Plena)
+    // ========================================================================
+
+    async fn execute_community_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let activity_type = args["activity_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'activity_type'"))?;
+        let frequency = args["frequency"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let act = mem
+            .add_community_activity(name, activity_type, frequency, notes, None)
+            .await?;
+        Ok(format!(
+            "Comunidad guardada (id: {}): \"{}\" [{}]",
+            act.activity_id, act.name, act.activity_type
+        ))
+    }
+
+    async fn execute_community_attend(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let activity_id = args["activity_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'activity_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let updated = mem.mark_community_attendance(activity_id, None).await?;
+        if updated {
+            Ok(format!("Asistencia registrada para {}.", activity_id))
+        } else {
+            Ok(format!("No se encontro actividad con id {}.", activity_id))
+        }
+    }
+
+    async fn execute_community_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let acts = mem.list_community_activities(true).await?;
+        if acts.is_empty() {
+            return Ok("Sin comunidades registradas.".into());
+        }
+        let lines: Vec<String> = acts
+            .iter()
+            .map(|a| {
+                let last = a
+                    .last_attended
+                    .map(|d| format!(" (ultima: {})", d.format("%Y-%m-%d")))
+                    .unwrap_or_default();
+                let freq = a
+                    .frequency
+                    .as_deref()
+                    .map(|f| format!(" — {}", f))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] [{}] {}{}{}",
+                    a.activity_id, a.activity_type, a.name, freq, last
+                )
+            })
+            .collect();
+        Ok(format!("Comunidades activas:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_civic_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let engagement_type = args["engagement_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'engagement_type'"))?;
+        let description = args["description"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'description'"))?;
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let ev = mem
+            .log_civic_engagement(engagement_type, description, None, notes, None)
+            .await?;
+        Ok(format!(
+            "Civic engagement registrado (id: {}): {} — {}",
+            ev.engagement_id, ev.engagement_type, ev.description
+        ))
+    }
+
+    async fn execute_contribution_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let description = args["description"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'description'"))?;
+        let beneficiary = args["beneficiary"].as_str();
+        let mem = require_memory(ctx).await?;
+        let c = mem.log_contribution(description, beneficiary, None, None).await?;
+        Ok(format!(
+            "Contribucion registrada (id: {}): {}{}",
+            c.contribution_id,
+            c.description,
+            c.beneficiary
+                .as_deref()
+                .map(|b| format!(" — beneficiario: {}", b))
+                .unwrap_or_default()
+        ))
+    }
+
+    async fn execute_social_summary(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let summary = mem.get_social_summary(15, 15).await?;
+        let mut out = String::from("# Resumen social y comunitario\n\n");
+
+        if let Some(days) = summary.days_since_last_activity {
+            out.push_str(&format!(
+                "## Ultima actividad asistida\nHace {} dias\n\n",
+                days
+            ));
+        }
+
+        if !summary.active_activities.is_empty() {
+            out.push_str("## Comunidades activas\n");
+            for a in &summary.active_activities {
+                let last = a
+                    .last_attended
+                    .map(|d| format!(" (ultima: {})", d.format("%Y-%m-%d")))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- [{}] {}{}\n",
+                    a.activity_type, a.name, last
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !summary.recent_civic_events.is_empty() {
+            out.push_str("## Civic engagement reciente\n");
+            for e in summary.recent_civic_events.iter().take(10) {
+                out.push_str(&format!(
+                    "- [{}] {}: {}\n",
+                    e.occurred_at.format("%Y-%m-%d"),
+                    e.engagement_type,
+                    e.description
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !summary.recent_contributions.is_empty() {
+            out.push_str("## Contribuciones recientes\n");
+            for c in summary.recent_contributions.iter().take(10) {
+                out.push_str(&format!(
+                    "- [{}] {}{}\n",
+                    c.occurred_at.format("%Y-%m-%d"),
+                    c.description,
+                    c.beneficiary
+                        .as_deref()
+                        .map(|b| format!(" → {}", b))
+                        .unwrap_or_default()
+                ));
+            }
+            out.push('\n');
+        }
+
+        if summary.active_activities.is_empty()
+            && summary.recent_civic_events.is_empty()
+            && summary.recent_contributions.is_empty()
+        {
+            out.push_str(
+                "Aun no hay datos sociales registrados. Empieza con `community_add`, \
+                 `civic_log` o `contribution_log`.\n",
+            );
+        }
+
+        Ok(out)
+    }
+
+    // ========================================================================
+    // Fase BI.14 — Sueño profundo (Vida Plena)
+    // ========================================================================
+
+    async fn execute_sleep_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let bedtime_str = args["bedtime"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'bedtime' (ISO-8601)"))?;
+        let wake_time_str = args["wake_time"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'wake_time' (ISO-8601)"))?;
+        let bedtime = chrono::DateTime::parse_from_rfc3339(bedtime_str)
+            .map_err(|e| anyhow::anyhow!("'bedtime' invalido: {}", e))?
+            .with_timezone(&chrono::Utc);
+        let wake_time = chrono::DateTime::parse_from_rfc3339(wake_time_str)
+            .map_err(|e| anyhow::anyhow!("'wake_time' invalido: {}", e))?
+            .with_timezone(&chrono::Utc);
+        let quality = args["quality_1_10"].as_u64().map(|n| n as u8);
+        let interruptions = args["interruptions"].as_u64().unwrap_or(0) as u32;
+        let feeling = args["feeling_on_wake"].as_str();
+        let dreams = args["dreams_notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let entry = mem
+            .log_sleep(bedtime, wake_time, quality, interruptions, feeling, dreams, None)
+            .await?;
+        Ok(format!(
+            "Sueño registrado (id: {}): {:.1}h{}",
+            entry.sleep_id,
+            entry.duration_hours,
+            entry
+                .quality_1_10
+                .map(|q| format!(" — calidad {}/10", q))
+                .unwrap_or_default()
+        ))
+    }
+
+    async fn execute_sleep_environment_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let sleep_id = args["sleep_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'sleep_id'"))?;
+        let room_temp = args["room_temperature_c"].as_f64();
+        let darkness = args["darkness_1_10"].as_u64().map(|n| n as u8);
+        let noise = args["noise_1_10"].as_u64().map(|n| n as u8);
+        let screen = args["screen_use_min_before_bed"]
+            .as_u64()
+            .map(|n| n as u32);
+        let caffeine = args["caffeine_after_2pm"].as_bool().unwrap_or(false);
+        let alcohol = args["alcohol"].as_bool().unwrap_or(false);
+        let heavy = args["heavy_dinner"].as_bool().unwrap_or(false);
+        let exercise = args["exercise_intensity_today"].as_str();
+        let notes = args["notes"].as_str();
+        let mem = require_memory(ctx).await?;
+        let env = mem
+            .add_sleep_environment(
+                sleep_id, room_temp, darkness, noise, screen, caffeine, alcohol, heavy,
+                exercise, notes,
+            )
+            .await?;
+        Ok(format!(
+            "Ambiente de sueño registrado (id: {}) para {}",
+            env.env_id, env.sleep_id
+        ))
+    }
+
+    async fn execute_sleep_history(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let mem = require_memory(ctx).await?;
+        let entries = mem.list_sleep_log(limit).await?;
+        if entries.is_empty() {
+            return Ok("Sin registros de sueño.".into());
+        }
+        let lines: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                let q = e
+                    .quality_1_10
+                    .map(|n| format!(" — calidad {}/10", n))
+                    .unwrap_or_default();
+                let feel = e
+                    .feeling_on_wake
+                    .as_deref()
+                    .map(|f| format!(" — {}", f))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] {:.1}h ({} interrupciones){}{}",
+                    e.bedtime.format("%Y-%m-%d"),
+                    e.duration_hours,
+                    e.interruptions,
+                    q,
+                    feel
+                )
+            })
+            .collect();
+        Ok(format!("Historial de sueño:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_sleep_summary(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let summary = mem.get_sleep_summary(20).await?;
+        let mut out = String::from("# Resumen de sueño\n\n");
+
+        out.push_str(&format!(
+            "## Ultimos 7 dias\n- Noches registradas: {}\n",
+            summary.nights_logged_last_7_days
+        ));
+        if let Some(d) = summary.avg_duration_hours_7d {
+            out.push_str(&format!("- Duracion promedio: {:.1}h\n", d));
+        }
+        if let Some(q) = summary.avg_quality_7d {
+            out.push_str(&format!("- Calidad promedio: {:.1}/10\n", q));
+        }
+        out.push('\n');
+
+        if !summary.recent_entries.is_empty() {
+            out.push_str("## Noches recientes\n");
+            for e in summary.recent_entries.iter().take(10) {
+                let q = e
+                    .quality_1_10
+                    .map(|n| format!(" — {}/10", n))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- [{}] {:.1}h{}\n",
+                    e.bedtime.format("%Y-%m-%d"),
+                    e.duration_hours,
+                    q
+                ));
+            }
+            out.push('\n');
+        }
+
+        if summary.recent_entries.is_empty() {
+            out.push_str(
+                "Aun no hay registros de sueño. Empieza con `sleep_log` despues de despertar.\n",
             );
         }
 
