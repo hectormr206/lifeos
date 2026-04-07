@@ -2167,9 +2167,14 @@ impl AgentRuntimeManager {
             changed = true;
         }
 
+        // v1 was about Bluetooth AUDIO CAPTURE conflicts. tts_enabled
+        // is an OUTPUT path (speakers), not capture, so it must not be
+        // part of the trigger nor of the disable body — otherwise the
+        // default `tts_enabled = true` causes v1 to fire on a freshly
+        // user-disabled state, falsely marking v1 as applied and
+        // triggering v2's re-enable.
         if state.sensory_capture_runtime.enabled
             || state.sensory_capture_runtime.audio_enabled
-            || state.sensory_capture_runtime.tts_enabled
             || state.sensory_capture_runtime.running
         {
             detail.insert(
@@ -2177,13 +2182,11 @@ impl AgentRuntimeManager {
                 serde_json::json!({
                     "enabled": state.sensory_capture_runtime.enabled,
                     "audio_enabled": state.sensory_capture_runtime.audio_enabled,
-                    "tts_enabled": state.sensory_capture_runtime.tts_enabled,
                     "running": state.sensory_capture_runtime.running,
                 }),
             );
             state.sensory_capture_runtime.enabled = false;
             state.sensory_capture_runtime.audio_enabled = false;
-            state.sensory_capture_runtime.tts_enabled = false;
             state.sensory_capture_runtime.running = false;
             state.sensory_capture_runtime.updated_at = Some(Utc::now());
             changed = true;
