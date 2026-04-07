@@ -344,6 +344,109 @@ CREATE INDEX IF NOT EXISTS idx_exercise_log_completed
     ON exercise_log(completed_at);
 CREATE INDEX IF NOT EXISTS idx_exercise_log_type
     ON exercise_log(session_type);
+
+-- ============================================================================
+-- Fase BI.3 sprint 1 — Nutricion (Vida Plena)
+-- ============================================================================
+-- Four side-tables for the food/nutrition layer:
+--   * nutrition_preferences: alergias, intolerancias, dietas, gustos.
+--     Auto-permanent via the nutrition_ kind contract.
+--   * nutrition_log: cada comida/snack registrada por el usuario, con
+--     descripcion libre + opcional foto/voz + macros estimados.
+--   * nutrition_recipes: recetas guardadas con ingredientes + pasos
+--     en JSON. Pueden venir de Axi, del usuario, o de un nutriologo.
+--   * nutrition_plans: planes de alimentacion activos (de Axi o
+--     subidos por el usuario).
+--
+-- Sprint 2 (BI.3.1) agregara nutrition_food_db precargada (USDA +
+-- Open Food Facts MX + SMAE) y local_commerce_products / _stores
+-- para las listas de compras filtradas por catalogo local. Esta
+-- iteracion deja todo el storage layer + tools listos.
+
+CREATE TABLE IF NOT EXISTS nutrition_preferences (
+    pref_id TEXT PRIMARY KEY,
+    pref_type TEXT NOT NULL,         -- 'allergy', 'intolerance', 'diet',
+                                     -- 'like', 'dislike', 'goal'
+    label TEXT NOT NULL,             -- 'mariscos', 'lactosa', 'mediterránea',
+                                     -- 'aguacate', 'cilantro', 'bajar 5kg'
+    severity TEXT,                   -- only relevant for allergy:
+                                     -- 'mild', 'moderate', 'severe', 'life_threatening'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_pref_type
+    ON nutrition_preferences(pref_type);
+CREATE INDEX IF NOT EXISTS idx_nutrition_pref_active
+    ON nutrition_preferences(active);
+
+CREATE TABLE IF NOT EXISTS nutrition_log (
+    log_id TEXT PRIMARY KEY,
+    meal_type TEXT NOT NULL,         -- 'breakfast', 'lunch', 'dinner',
+                                     -- 'snack', 'drink', 'craving'
+    description TEXT NOT NULL,       -- texto libre o resultado de vision LLM
+    photo_attachment_id TEXT,        -- FK opcional a health_attachments
+    voice_attachment_id TEXT,        -- FK opcional a health_attachments
+    macros_kcal REAL,                -- estimacion opcional
+    macros_protein_g REAL,
+    macros_carbs_g REAL,
+    macros_fat_g REAL,
+    consumed_at TEXT NOT NULL,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_log_consumed
+    ON nutrition_log(consumed_at);
+CREATE INDEX IF NOT EXISTS idx_nutrition_log_meal_type
+    ON nutrition_log(meal_type);
+
+CREATE TABLE IF NOT EXISTS nutrition_recipes (
+    recipe_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    ingredients_json TEXT NOT NULL,  -- ver Rust RecipeIngredient
+    steps_json TEXT NOT NULL,        -- Vec<String>
+    prep_time_min INTEGER,
+    cook_time_min INTEGER,
+    servings INTEGER,
+    tags TEXT NOT NULL,              -- JSON: ["desayuno","alto_proteina"]
+    source TEXT,                     -- 'axi', 'usuario', 'nutriologo:Juan'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_recipes_name
+    ON nutrition_recipes(name);
+
+CREATE TABLE IF NOT EXISTS nutrition_plans (
+    plan_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    goal TEXT,                       -- 'control glucosa', 'bajar peso',
+                                     -- 'ganar masa', 'mantener'
+    duration_days INTEGER,
+    daily_kcal_target REAL,
+    daily_protein_g_target REAL,
+    daily_carbs_g_target REAL,
+    daily_fat_g_target REAL,
+    source TEXT,                     -- 'axi', 'nutriologo:Maria'
+    active INTEGER NOT NULL DEFAULT 1,
+    started_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_plans_active
+    ON nutrition_plans(active);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5684,6 +5787,997 @@ struct ExerciseSessionRaw {
     created_at: String,
 }
 
+// ============================================================================
+// Fase BI.3 sprint 1 — Nutricion (Vida Plena)
+// ============================================================================
+
+/// One nutrition preference / restriction the user has.
+///
+/// Examples: alergia a los mariscos (severe), intolerancia a la
+/// lactosa, dieta mediterranea, le encanta el aguacate, odia el
+/// cilantro, meta de bajar 5kg para junio.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NutritionPreference {
+    pub pref_id: String,
+    /// `allergy`, `intolerance`, `diet`, `like`, `dislike`, `goal`.
+    pub pref_type: String,
+    pub label: String,
+    /// Solo relevante para alergias: `mild`, `moderate`, `severe`,
+    /// `life_threatening`.
+    pub severity: Option<String>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One meal/snack/drink/craving registered by the user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NutritionLogEntry {
+    pub log_id: String,
+    /// `breakfast`, `lunch`, `dinner`, `snack`, `drink`, `craving`.
+    pub meal_type: String,
+    /// Free text or vision-LLM result. The narrative; not the macros.
+    pub description: String,
+    /// FK opcional a `health_attachments` para la foto.
+    pub photo_attachment_id: Option<String>,
+    /// FK opcional a `health_attachments` para la nota de voz.
+    pub voice_attachment_id: Option<String>,
+    pub macros_kcal: Option<f64>,
+    pub macros_protein_g: Option<f64>,
+    pub macros_carbs_g: Option<f64>,
+    pub macros_fat_g: Option<f64>,
+    pub consumed_at: DateTime<Utc>,
+    /// Encrypted free-text notes (sentir, despues de comer, etc.).
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One ingredient inside a recipe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipeIngredient {
+    pub name: String,
+    pub amount: f64,
+    pub unit: String,
+    pub notes: Option<String>,
+}
+
+/// A saved recipe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Recipe {
+    pub recipe_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub ingredients: Vec<RecipeIngredient>,
+    pub steps: Vec<String>,
+    pub prep_time_min: Option<u32>,
+    pub cook_time_min: Option<u32>,
+    pub servings: Option<u32>,
+    pub tags: Vec<String>,
+    pub source: Option<String>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A nutrition plan (defined by Axi or by a real nutrionist).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NutritionPlan {
+    pub plan_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub goal: Option<String>,
+    pub duration_days: Option<u32>,
+    pub daily_kcal_target: Option<f64>,
+    pub daily_protein_g_target: Option<f64>,
+    pub daily_carbs_g_target: Option<f64>,
+    pub daily_fat_g_target: Option<f64>,
+    pub source: Option<String>,
+    pub active: bool,
+    pub started_at: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `get_nutrition_summary`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NutritionSummary {
+    pub preferences: Vec<NutritionPreference>,
+    pub active_plan: Option<NutritionPlan>,
+    pub recent_meals: Vec<NutritionLogEntry>,
+    /// Sumas rolling de los ultimos 7 dias.
+    pub kcal_last_7_days: f64,
+    pub protein_g_last_7_days: f64,
+    pub carbs_g_last_7_days: f64,
+    pub fat_g_last_7_days: f64,
+    pub meals_last_7_days: u32,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Nutrition preferences
+    // -----------------------------------------------------------------------
+
+    pub async fn add_nutrition_preference(
+        &self,
+        pref_type: &str,
+        label: &str,
+        severity: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<NutritionPreference> {
+        let pref_type = normalize_non_empty(pref_type).context("pref_type required")?;
+        let label = normalize_non_empty(label).context("label required")?;
+        let severity = severity
+            .and_then(normalize_non_empty)
+            .map(|s| s.to_lowercase());
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let pref_id = format!("npref-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let pref_id_clone = pref_id.clone();
+        let pref_type_clone = pref_type.clone();
+        let label_clone = label.clone();
+        let severity_clone = severity.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO nutrition_preferences
+                 (pref_id, pref_type, label, severity, notes_nonce_b64,
+                  notes_ciphertext_b64, active, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8)",
+                params![
+                    pref_id_clone,
+                    pref_type_clone,
+                    label_clone,
+                    severity_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(NutritionPreference {
+            pref_id,
+            pref_type,
+            label,
+            severity,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark a preference inactive (the user grew out of an allergy,
+    /// gave up a diet, etc.). Allergies are particularly delicate —
+    /// the caller should confirm with the user before deactivating
+    /// a `severity = severe` row.
+    pub async fn deactivate_nutrition_preference(&self, pref_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = pref_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE nutrition_preferences
+                 SET active = 0, updated_at = ?1
+                 WHERE pref_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// List nutrition preferences. `pref_type` filter is optional;
+    /// `active_only` defaults to true at the call site.
+    pub async fn list_nutrition_preferences(
+        &self,
+        pref_type: Option<&str>,
+        active_only: bool,
+    ) -> Result<Vec<NutritionPreference>> {
+        let db_path = self.db_path.clone();
+        let filter = pref_type.map(|s| s.to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT pref_id, pref_type, label, severity, notes_nonce_b64,
+                        notes_ciphertext_b64, active, source_entry_id,
+                        created_at, updated_at
+                 FROM nutrition_preferences",
+            );
+            let mut conditions: Vec<&str> = Vec::new();
+            if active_only {
+                conditions.push("active = 1");
+            }
+            if filter.is_some() {
+                conditions.push("pref_type = ?1");
+            }
+            if !conditions.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&conditions.join(" AND "));
+            }
+            sql.push_str(" ORDER BY created_at DESC");
+
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<NutritionPreferenceRaw> {
+                Ok(NutritionPreferenceRaw {
+                    pref_id: row.get(0)?,
+                    pref_type: row.get(1)?,
+                    label: row.get(2)?,
+                    severity: row.get(3)?,
+                    notes_nonce_b64: row.get(4)?,
+                    notes_ciphertext_b64: row.get(5)?,
+                    active: row.get::<_, i32>(6)? != 0,
+                    source_entry_id: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            };
+            let raws: Vec<NutritionPreferenceRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| NutritionPreference {
+                pref_id: r.pref_id,
+                pref_type: r.pref_type,
+                label: r.label,
+                severity: r.severity,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Nutrition log
+    // -----------------------------------------------------------------------
+
+    /// Record a meal/snack/drink. Most fields are optional — even
+    /// `description` allows free narrative; macros and attachments
+    /// are populated only when the user (or vision pipeline) provides
+    /// them.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_nutrition_meal(
+        &self,
+        meal_type: &str,
+        description: &str,
+        macros_kcal: Option<f64>,
+        macros_protein_g: Option<f64>,
+        macros_carbs_g: Option<f64>,
+        macros_fat_g: Option<f64>,
+        photo_attachment_id: Option<&str>,
+        voice_attachment_id: Option<&str>,
+        consumed_at: Option<DateTime<Utc>>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<NutritionLogEntry> {
+        let meal_type = normalize_non_empty(meal_type).context("meal_type required")?;
+        let description = normalize_non_empty(description).context("description required")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        // Validate: macros, when present, must be non-negative.
+        for (label, v) in [
+            ("macros_kcal", macros_kcal),
+            ("macros_protein_g", macros_protein_g),
+            ("macros_carbs_g", macros_carbs_g),
+            ("macros_fat_g", macros_fat_g),
+        ] {
+            if let Some(value) = v {
+                if value < 0.0 || !value.is_finite() {
+                    anyhow::bail!("{} must be a non-negative finite number", label);
+                }
+            }
+        }
+
+        let consumed = consumed_at.unwrap_or_else(Utc::now);
+        let consumed_rfc = consumed.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let log_id = format!("nlog-{}", Uuid::new_v4());
+        let photo_owned = photo_attachment_id.map(|s| s.to_string());
+        let voice_owned = voice_attachment_id.map(|s| s.to_string());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let log_id_clone = log_id.clone();
+        let meal_type_clone = meal_type.clone();
+        let description_clone = description.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO nutrition_log
+                 (log_id, meal_type, description, photo_attachment_id,
+                  voice_attachment_id, macros_kcal, macros_protein_g,
+                  macros_carbs_g, macros_fat_g, consumed_at, notes_nonce_b64,
+                  notes_ciphertext_b64, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    log_id_clone,
+                    meal_type_clone,
+                    description_clone,
+                    photo_owned,
+                    voice_owned,
+                    macros_kcal,
+                    macros_protein_g,
+                    macros_carbs_g,
+                    macros_fat_g,
+                    consumed_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(NutritionLogEntry {
+            log_id,
+            meal_type,
+            description,
+            photo_attachment_id: photo_attachment_id.map(|s| s.to_string()),
+            voice_attachment_id: voice_attachment_id.map(|s| s.to_string()),
+            macros_kcal,
+            macros_protein_g,
+            macros_carbs_g,
+            macros_fat_g,
+            consumed_at: consumed,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// List the most recent N nutrition log entries (newest first),
+    /// optionally filtered by meal_type.
+    pub async fn list_nutrition_log(
+        &self,
+        meal_type: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<NutritionLogEntry>> {
+        let db_path = self.db_path.clone();
+        let filter = meal_type.map(|s| s.to_string());
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT log_id, meal_type, description, photo_attachment_id,
+                        voice_attachment_id, macros_kcal, macros_protein_g,
+                        macros_carbs_g, macros_fat_g, consumed_at, notes_nonce_b64,
+                        notes_ciphertext_b64, source_entry_id, created_at
+                 FROM nutrition_log",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE meal_type = ?1 ORDER BY consumed_at DESC LIMIT ?2");
+            } else {
+                sql.push_str(" ORDER BY consumed_at DESC LIMIT ?1");
+            }
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<NutritionLogRaw> {
+                Ok(NutritionLogRaw {
+                    log_id: row.get(0)?,
+                    meal_type: row.get(1)?,
+                    description: row.get(2)?,
+                    photo_attachment_id: row.get(3)?,
+                    voice_attachment_id: row.get(4)?,
+                    macros_kcal: row.get(5)?,
+                    macros_protein_g: row.get(6)?,
+                    macros_carbs_g: row.get(7)?,
+                    macros_fat_g: row.get(8)?,
+                    consumed_at: row.get(9)?,
+                    notes_nonce_b64: row.get(10)?,
+                    notes_ciphertext_b64: row.get(11)?,
+                    source_entry_id: row.get(12)?,
+                    created_at: row.get(13)?,
+                })
+            };
+            let raws: Vec<NutritionLogRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f, limit], map_row)?
+                    .flatten()
+                    .collect()
+            } else {
+                stmt.query_map(params![limit], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| NutritionLogEntry {
+                log_id: r.log_id,
+                meal_type: r.meal_type,
+                description: r.description,
+                photo_attachment_id: r.photo_attachment_id,
+                voice_attachment_id: r.voice_attachment_id,
+                macros_kcal: r.macros_kcal,
+                macros_protein_g: r.macros_protein_g,
+                macros_carbs_g: r.macros_carbs_g,
+                macros_fat_g: r.macros_fat_g,
+                consumed_at: parse_utc(&r.consumed_at),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Nutrition recipes
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_recipe(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        ingredients: Vec<RecipeIngredient>,
+        steps: Vec<String>,
+        prep_time_min: Option<u32>,
+        cook_time_min: Option<u32>,
+        servings: Option<u32>,
+        tags: Vec<String>,
+        source: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Recipe> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        if ingredients.is_empty() {
+            anyhow::bail!("recipe must have at least one ingredient");
+        }
+        if steps.is_empty() {
+            anyhow::bail!("recipe must have at least one step");
+        }
+        let source = source.and_then(normalize_non_empty);
+        let ingredients_json = serde_json::to_string(&ingredients)
+            .context("failed to serialise recipe ingredients")?;
+        let steps_json =
+            serde_json::to_string(&steps).context("failed to serialise recipe steps")?;
+        let tags_json =
+            serde_json::to_string(&tags).context("failed to serialise recipe tags")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let recipe_id = format!("nrec-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let recipe_id_clone = recipe_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let source_clone = source.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO nutrition_recipes
+                 (recipe_id, name, description, ingredients_json, steps_json,
+                  prep_time_min, cook_time_min, servings, tags, source,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                params![
+                    recipe_id_clone,
+                    name_clone,
+                    description_clone,
+                    ingredients_json,
+                    steps_json,
+                    prep_time_min.map(|n| n as i32),
+                    cook_time_min.map(|n| n as i32),
+                    servings.map(|n| n as i32),
+                    tags_json,
+                    source_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Recipe {
+            recipe_id,
+            name,
+            description,
+            ingredients,
+            steps,
+            prep_time_min,
+            cook_time_min,
+            servings,
+            tags,
+            source,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_recipes(&self, tag: Option<&str>) -> Result<Vec<Recipe>> {
+        let db_path = self.db_path.clone();
+        let tag_filter = tag.map(|s| s.to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT recipe_id, name, description, ingredients_json, steps_json,
+                        prep_time_min, cook_time_min, servings, tags, source,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM nutrition_recipes
+                 ORDER BY updated_at DESC",
+            )?;
+            let raws: Vec<RecipeRaw> = stmt
+                .query_map([], |row| {
+                    Ok(RecipeRaw {
+                        recipe_id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        ingredients_json: row.get(3)?,
+                        steps_json: row.get(4)?,
+                        prep_time_min: row.get(5)?,
+                        cook_time_min: row.get(6)?,
+                        servings: row.get(7)?,
+                        tags_json: row.get(8)?,
+                        source: row.get(9)?,
+                        notes_nonce_b64: row.get(10)?,
+                        notes_ciphertext_b64: row.get(11)?,
+                        source_entry_id: row.get(12)?,
+                        created_at: row.get(13)?,
+                        updated_at: row.get(14)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        // Convert + apply tag filter in Rust because the tags are
+        // stored as JSON. Cheap because we already pulled the rows.
+        let recipes: Vec<Recipe> = raws
+            .into_iter()
+            .map(|r| Recipe {
+                recipe_id: r.recipe_id,
+                name: r.name,
+                description: r.description,
+                ingredients: serde_json::from_str(&r.ingredients_json).unwrap_or_default(),
+                steps: serde_json::from_str(&r.steps_json).unwrap_or_default(),
+                prep_time_min: r.prep_time_min.map(|n| n.max(0) as u32),
+                cook_time_min: r.cook_time_min.map(|n| n.max(0) as u32),
+                servings: r.servings.map(|n| n.max(0) as u32),
+                tags: serde_json::from_str(&r.tags_json).unwrap_or_default(),
+                source: r.source,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect();
+
+        Ok(match tag_filter {
+            Some(t) => {
+                let needle = t.to_lowercase();
+                recipes
+                    .into_iter()
+                    .filter(|r| {
+                        r.tags
+                            .iter()
+                            .any(|x| x.eq_ignore_ascii_case(needle.as_str()))
+                    })
+                    .collect()
+            }
+            None => recipes,
+        })
+    }
+
+    pub async fn delete_recipe(&self, recipe_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = recipe_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "DELETE FROM nutrition_recipes WHERE recipe_id = ?1",
+                params![id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Nutrition plans
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_nutrition_plan(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        goal: Option<&str>,
+        duration_days: Option<u32>,
+        daily_kcal_target: Option<f64>,
+        daily_protein_g_target: Option<f64>,
+        daily_carbs_g_target: Option<f64>,
+        daily_fat_g_target: Option<f64>,
+        source: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<NutritionPlan> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        let goal = goal.and_then(normalize_non_empty);
+        let source = source.and_then(normalize_non_empty);
+        for (label, v) in [
+            ("daily_kcal_target", daily_kcal_target),
+            ("daily_protein_g_target", daily_protein_g_target),
+            ("daily_carbs_g_target", daily_carbs_g_target),
+            ("daily_fat_g_target", daily_fat_g_target),
+        ] {
+            if let Some(value) = v {
+                if value < 0.0 || !value.is_finite() {
+                    anyhow::bail!("{} must be non-negative finite", label);
+                }
+            }
+        }
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let plan_id = format!("nplan-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let plan_id_clone = plan_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let goal_clone = goal.clone();
+        let source_clone = source.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO nutrition_plans
+                 (plan_id, name, description, goal, duration_days,
+                  daily_kcal_target, daily_protein_g_target, daily_carbs_g_target,
+                  daily_fat_g_target, source, active, started_at,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?13, ?14, ?11, ?11)",
+                params![
+                    plan_id_clone,
+                    name_clone,
+                    description_clone,
+                    goal_clone,
+                    duration_days.map(|n| n as i32),
+                    daily_kcal_target,
+                    daily_protein_g_target,
+                    daily_carbs_g_target,
+                    daily_fat_g_target,
+                    source_clone,
+                    now_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(NutritionPlan {
+            plan_id,
+            name,
+            description,
+            goal,
+            duration_days,
+            daily_kcal_target,
+            daily_protein_g_target,
+            daily_carbs_g_target,
+            daily_fat_g_target,
+            source,
+            active: true,
+            started_at: Some(now),
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn deactivate_nutrition_plan(&self, plan_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = plan_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE nutrition_plans SET active = 0, updated_at = ?1
+                 WHERE plan_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_nutrition_plans(&self, active_only: bool) -> Result<Vec<NutritionPlan>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT plan_id, name, description, goal, duration_days,
+                        daily_kcal_target, daily_protein_g_target, daily_carbs_g_target,
+                        daily_fat_g_target, source, active, started_at,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM nutrition_plans WHERE active = 1
+                 ORDER BY created_at DESC"
+            } else {
+                "SELECT plan_id, name, description, goal, duration_days,
+                        daily_kcal_target, daily_protein_g_target, daily_carbs_g_target,
+                        daily_fat_g_target, source, active, started_at,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM nutrition_plans
+                 ORDER BY created_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<NutritionPlanRaw> = stmt
+                .query_map([], |row| {
+                    Ok(NutritionPlanRaw {
+                        plan_id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        goal: row.get(3)?,
+                        duration_days: row.get(4)?,
+                        daily_kcal_target: row.get(5)?,
+                        daily_protein_g_target: row.get(6)?,
+                        daily_carbs_g_target: row.get(7)?,
+                        daily_fat_g_target: row.get(8)?,
+                        source: row.get(9)?,
+                        active: row.get::<_, i32>(10)? != 0,
+                        started_at: row.get(11)?,
+                        notes_nonce_b64: row.get(12)?,
+                        notes_ciphertext_b64: row.get(13)?,
+                        source_entry_id: row.get(14)?,
+                        created_at: row.get(15)?,
+                        updated_at: row.get(16)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| NutritionPlan {
+                plan_id: r.plan_id,
+                name: r.name,
+                description: r.description,
+                goal: r.goal,
+                duration_days: r.duration_days.map(|n| n.max(0) as u32),
+                daily_kcal_target: r.daily_kcal_target,
+                daily_protein_g_target: r.daily_protein_g_target,
+                daily_carbs_g_target: r.daily_carbs_g_target,
+                daily_fat_g_target: r.daily_fat_g_target,
+                source: r.source,
+                active: r.active,
+                started_at: r.started_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Nutrition summary aggregator
+    // -----------------------------------------------------------------------
+
+    /// Aggregate nutrition snapshot. Combines: all active preferences,
+    /// the most-recent active plan (if any), the last
+    /// `recent_meals_limit` meals, and rolling 7-day macro totals.
+    pub async fn get_nutrition_summary(
+        &self,
+        recent_meals_limit: usize,
+    ) -> Result<NutritionSummary> {
+        let preferences = self.list_nutrition_preferences(None, true).await?;
+        let active_plans = self.list_nutrition_plans(true).await?;
+        let active_plan = active_plans.into_iter().next();
+        let recent_meals = self.list_nutrition_log(None, recent_meals_limit).await?;
+
+        // Pull rolling 7-day macros via a single SQL aggregation.
+        let now_utc = Utc::now();
+        let cutoff_7 = (now_utc - chrono::Duration::days(7)).to_rfc3339();
+        let db_path = self.db_path.clone();
+        let totals: (f64, f64, f64, f64, u32) =
+            tokio::task::spawn_blocking(move || -> Result<(f64, f64, f64, f64, u32)> {
+                let db = Self::open_db(&db_path)?;
+                let row: (Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64) = db
+                    .query_row(
+                        "SELECT
+                            SUM(macros_kcal),
+                            SUM(macros_protein_g),
+                            SUM(macros_carbs_g),
+                            SUM(macros_fat_g),
+                            COUNT(*)
+                         FROM nutrition_log
+                         WHERE consumed_at >= ?1",
+                        params![cutoff_7],
+                        |r| {
+                            Ok((
+                                r.get::<_, Option<f64>>(0)?,
+                                r.get::<_, Option<f64>>(1)?,
+                                r.get::<_, Option<f64>>(2)?,
+                                r.get::<_, Option<f64>>(3)?,
+                                r.get::<_, i64>(4)?,
+                            ))
+                        },
+                    )
+                    .unwrap_or((None, None, None, None, 0));
+                Ok((
+                    row.0.unwrap_or(0.0),
+                    row.1.unwrap_or(0.0),
+                    row.2.unwrap_or(0.0),
+                    row.3.unwrap_or(0.0),
+                    row.4.max(0) as u32,
+                ))
+            })
+            .await??;
+
+        Ok(NutritionSummary {
+            preferences,
+            active_plan,
+            recent_meals,
+            kcal_last_7_days: totals.0,
+            protein_g_last_7_days: totals.1,
+            carbs_g_last_7_days: totals.2,
+            fat_g_last_7_days: totals.3,
+            meals_last_7_days: totals.4,
+            generated_at: now_utc,
+        })
+    }
+}
+
+// -- Private raw row types for BI.3 -------------------------------------------
+
+struct NutritionPreferenceRaw {
+    pref_id: String,
+    pref_type: String,
+    label: String,
+    severity: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct NutritionLogRaw {
+    log_id: String,
+    meal_type: String,
+    description: String,
+    photo_attachment_id: Option<String>,
+    voice_attachment_id: Option<String>,
+    macros_kcal: Option<f64>,
+    macros_protein_g: Option<f64>,
+    macros_carbs_g: Option<f64>,
+    macros_fat_g: Option<f64>,
+    consumed_at: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct RecipeRaw {
+    recipe_id: String,
+    name: String,
+    description: Option<String>,
+    ingredients_json: String,
+    steps_json: String,
+    prep_time_min: Option<i32>,
+    cook_time_min: Option<i32>,
+    servings: Option<i32>,
+    tags_json: String,
+    source: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct NutritionPlanRaw {
+    plan_id: String,
+    name: String,
+    description: Option<String>,
+    goal: Option<String>,
+    duration_days: Option<i32>,
+    daily_kcal_target: Option<f64>,
+    daily_protein_g_target: Option<f64>,
+    daily_carbs_g_target: Option<f64>,
+    daily_fat_g_target: Option<f64>,
+    source: Option<String>,
+    active: bool,
+    started_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
 fn parse_utc(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
@@ -8544,6 +9638,458 @@ mod tests {
         assert_eq!(summary.sessions_last_7_days, 2);
         assert_eq!(summary.sessions_last_30_days, 3);
         assert_eq!(summary.total_minutes_last_30_days, 45 + 30 + 60);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.3 sprint 1: Nutricion ------------------------------------------
+
+    #[tokio::test]
+    async fn test_nutrition_preference_lifecycle() {
+        let dir = temp_dir("memory-plane-nutrition-pref");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let allergy = mgr
+            .add_nutrition_preference(
+                "allergy",
+                "mariscos",
+                Some("severe"),
+                "Reaccion en restaurante en 2023",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(allergy.active);
+        assert_eq!(allergy.severity.as_deref(), Some("severe"));
+        assert_eq!(allergy.notes, "Reaccion en restaurante en 2023");
+
+        mgr.add_nutrition_preference("diet", "mediterranea", None, "", None)
+            .await
+            .unwrap();
+        mgr.add_nutrition_preference("dislike", "cilantro", None, "", None)
+            .await
+            .unwrap();
+
+        let all = mgr.list_nutrition_preferences(None, true).await.unwrap();
+        assert_eq!(all.len(), 3);
+
+        let allergies = mgr
+            .list_nutrition_preferences(Some("allergy"), true)
+            .await
+            .unwrap();
+        assert_eq!(allergies.len(), 1);
+        assert_eq!(allergies[0].label, "mariscos");
+
+        // Deactivate the dislike — must drop out of active list.
+        let dislike_id = mgr
+            .list_nutrition_preferences(Some("dislike"), true)
+            .await
+            .unwrap()[0]
+            .pref_id
+            .clone();
+        let deact = mgr
+            .deactivate_nutrition_preference(&dislike_id)
+            .await
+            .unwrap();
+        assert!(deact);
+        let active_after = mgr.list_nutrition_preferences(None, true).await.unwrap();
+        assert_eq!(active_after.len(), 2);
+
+        // Idempotent deactivate.
+        let deact2 = mgr
+            .deactivate_nutrition_preference(&dislike_id)
+            .await
+            .unwrap();
+        assert!(!deact2);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_nutrition_log_meal_validation() {
+        let dir = temp_dir("memory-plane-nutrition-log-validation");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Negative kcal must error.
+        let result = mgr
+            .log_nutrition_meal(
+                "breakfast",
+                "test",
+                Some(-100.0),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        // NaN must error.
+        let result = mgr
+            .log_nutrition_meal(
+                "breakfast",
+                "test",
+                Some(f64::NAN),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        // Empty meal_type must error.
+        let result = mgr
+            .log_nutrition_meal(
+                "",
+                "test",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        // Valid call succeeds.
+        let entry = mgr
+            .log_nutrition_meal(
+                "breakfast",
+                "Huevos revueltos con aguacate",
+                Some(420.0),
+                Some(22.0),
+                Some(15.0),
+                Some(28.0),
+                None,
+                None,
+                None,
+                "Despues de yoga",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(entry.macros_kcal, Some(420.0));
+        assert_eq!(entry.notes, "Despues de yoga");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_nutrition_log_filter_by_meal_type() {
+        let dir = temp_dir("memory-plane-nutrition-log-filter");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        for (mtype, desc) in [
+            ("breakfast", "huevos"),
+            ("breakfast", "avena"),
+            ("lunch", "ensalada"),
+            ("dinner", "pollo"),
+            ("snack", "manzana"),
+        ] {
+            mgr.log_nutrition_meal(
+                mtype, desc, None, None, None, None, None, None, None, "", None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let breakfasts = mgr
+            .list_nutrition_log(Some("breakfast"), 50)
+            .await
+            .unwrap();
+        assert_eq!(breakfasts.len(), 2);
+        let snacks = mgr.list_nutrition_log(Some("snack"), 50).await.unwrap();
+        assert_eq!(snacks.len(), 1);
+        let all = mgr.list_nutrition_log(None, 50).await.unwrap();
+        assert_eq!(all.len(), 5);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_recipe_with_ingredients_json_roundtrip() {
+        let dir = temp_dir("memory-plane-recipe-roundtrip");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let ingredients = vec![
+            RecipeIngredient {
+                name: "pechuga de pollo".into(),
+                amount: 150.0,
+                unit: "g".into(),
+                notes: Some("sin piel".into()),
+            },
+            RecipeIngredient {
+                name: "arroz integral".into(),
+                amount: 80.0,
+                unit: "g".into(),
+                notes: None,
+            },
+            RecipeIngredient {
+                name: "espinaca".into(),
+                amount: 1.0,
+                unit: "taza".into(),
+                notes: None,
+            },
+        ];
+        let steps = vec![
+            "Cocer el arroz".to_string(),
+            "Sazonar y asar el pollo".to_string(),
+            "Saltear la espinaca".to_string(),
+            "Servir junto".to_string(),
+        ];
+        let tags = vec![
+            "alto_proteina".to_string(),
+            "almuerzo".to_string(),
+        ];
+
+        let recipe = mgr
+            .add_recipe(
+                "Bowl de pollo y arroz",
+                Some("Para post-entreno"),
+                ingredients.clone(),
+                steps.clone(),
+                Some(10),
+                Some(25),
+                Some(1),
+                tags,
+                Some("axi"),
+                "Receta favorita",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(recipe.ingredients.len(), 3);
+        assert_eq!(recipe.steps.len(), 4);
+        assert_eq!(recipe.tags.len(), 2);
+        assert_eq!(recipe.notes, "Receta favorita");
+
+        // Roundtrip via list.
+        let listed = mgr.list_recipes(None).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].ingredients.len(), 3);
+        assert_eq!(
+            listed[0].ingredients[0].name,
+            "pechuga de pollo"
+        );
+        assert_eq!(
+            listed[0].ingredients[0].notes.as_deref(),
+            Some("sin piel")
+        );
+        assert_eq!(listed[0].steps[1], "Sazonar y asar el pollo");
+        assert_eq!(listed[0].notes, "Receta favorita");
+
+        // Tag filter.
+        let filtered = mgr.list_recipes(Some("alto_proteina")).await.unwrap();
+        assert_eq!(filtered.len(), 1);
+        let none = mgr.list_recipes(Some("postre")).await.unwrap();
+        assert_eq!(none.len(), 0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_recipe_requires_at_least_one_ingredient_and_step() {
+        let dir = temp_dir("memory-plane-recipe-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let result_no_ingr = mgr
+            .add_recipe(
+                "X",
+                None,
+                vec![],
+                vec!["paso 1".into()],
+                None,
+                None,
+                None,
+                vec![],
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result_no_ingr.is_err());
+
+        let result_no_steps = mgr
+            .add_recipe(
+                "X",
+                None,
+                vec![RecipeIngredient {
+                    name: "agua".into(),
+                    amount: 1.0,
+                    unit: "L".into(),
+                    notes: None,
+                }],
+                vec![],
+                None,
+                None,
+                None,
+                vec![],
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result_no_steps.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_nutrition_plan_lifecycle() {
+        let dir = temp_dir("memory-plane-nutrition-plan");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let plan = mgr
+            .add_nutrition_plan(
+                "Plan mantenimiento",
+                Some("30 dias"),
+                Some("mantener peso"),
+                Some(30),
+                Some(2200.0),
+                Some(130.0),
+                Some(220.0),
+                Some(73.0),
+                Some("axi"),
+                "Recalcular en 30 dias",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(plan.active);
+        assert_eq!(plan.daily_kcal_target, Some(2200.0));
+        assert!(plan.started_at.is_some());
+
+        let active = mgr.list_nutrition_plans(true).await.unwrap();
+        assert_eq!(active.len(), 1);
+
+        // Negative kcal target must error.
+        let bad = mgr
+            .add_nutrition_plan(
+                "Bad",
+                None,
+                None,
+                None,
+                Some(-1.0),
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(bad.is_err());
+
+        // Deactivate.
+        let deact = mgr.deactivate_nutrition_plan(&plan.plan_id).await.unwrap();
+        assert!(deact);
+        let after = mgr.list_nutrition_plans(true).await.unwrap();
+        assert_eq!(after.len(), 0);
+        let all = mgr.list_nutrition_plans(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(!all[0].active);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_nutrition_summary_aggregates_everything() {
+        let dir = temp_dir("memory-plane-nutrition-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 1 active allergy + 1 deactivated dislike.
+        mgr.add_nutrition_preference("allergy", "mariscos", Some("severe"), "", None)
+            .await
+            .unwrap();
+        let dis = mgr
+            .add_nutrition_preference("dislike", "cilantro", None, "", None)
+            .await
+            .unwrap();
+        mgr.deactivate_nutrition_preference(&dis.pref_id)
+            .await
+            .unwrap();
+
+        // 1 active plan.
+        mgr.add_nutrition_plan(
+            "Plan A",
+            None,
+            Some("mantener"),
+            Some(30),
+            Some(2000.0),
+            Some(120.0),
+            Some(200.0),
+            Some(70.0),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // 4 meals: 3 within last 7 days, 1 older.
+        let now = Utc::now();
+        let meals = [
+            (now - chrono::Duration::days(1), 500.0_f64, 30.0_f64, 50.0_f64, 18.0_f64),
+            (now - chrono::Duration::days(3), 600.0, 35.0, 60.0, 22.0),
+            (now - chrono::Duration::days(6), 450.0, 25.0, 45.0, 15.0),
+            (now - chrono::Duration::days(20), 700.0, 40.0, 70.0, 25.0),
+        ];
+        for (when, k, p, c, f) in meals {
+            mgr.log_nutrition_meal(
+                "lunch",
+                "comida",
+                Some(k),
+                Some(p),
+                Some(c),
+                Some(f),
+                None,
+                None,
+                Some(when),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let summary = mgr.get_nutrition_summary(50).await.unwrap();
+
+        // Active prefs: 1 (allergy only — dislike is deactivated).
+        assert_eq!(summary.preferences.len(), 1);
+        assert_eq!(summary.preferences[0].pref_type, "allergy");
+
+        assert!(summary.active_plan.is_some());
+        assert_eq!(summary.active_plan.as_ref().unwrap().name, "Plan A");
+
+        // All 4 meals returned (limit 50).
+        assert_eq!(summary.recent_meals.len(), 4);
+
+        // Rolling 7-day totals: 3 meals, 1550 kcal, 90g protein, etc.
+        assert_eq!(summary.meals_last_7_days, 3);
+        assert!((summary.kcal_last_7_days - 1550.0).abs() < 0.01);
+        assert!((summary.protein_g_last_7_days - 90.0).abs() < 0.01);
+        assert!((summary.carbs_g_last_7_days - 155.0).abs() < 0.01);
+        assert!((summary.fat_g_last_7_days - 55.0).abs() < 0.01);
 
         std::fs::remove_dir_all(dir).ok();
     }

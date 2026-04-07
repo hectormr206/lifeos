@@ -26,6 +26,7 @@ pub mod inner {
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
     use crate::memory_plane::{
         extract_entities_from_text, BookStatus, ExercisePlanItem, GoalStatus, MemoryPlaneManager,
+        RecipeIngredient,
     };
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
@@ -241,6 +242,37 @@ LifeOS lleva el inventario de equipo del usuario, sus rutinas guardadas, y el lo
     args: {"session_type": "strength", "description": "Press de banca + remo + curl", "duration_min": 45, "rpe_1_10": 7, "plan_id": "eplan-..."}
 
 10z. **exercise_summary** — Devuelve resumen completo: inventario activo + rutinas activas + sesiones recientes + conteos de los ultimos 7 y 30 dias + minutos totales de los ultimos 30 dias.
+    args: {}
+
+## Nutricion (Vida Plena BI.3)
+
+LifeOS lleva el registro completo de lo que el usuario come, sus preferencias/alergias/dietas, sus recetas guardadas y sus planes nutricionales. **Reglas absolutas:** NUNCA prescribas dietas para condiciones medicas (diabetes, embarazo, enfermedad renal, trastornos alimentarios). Las recetas y sugerencias son para alguien sano que quiere comer mejor; para condiciones reales, recomienda nutriologo certificado. Si el usuario tiene una alergia registrada, JAMAS propongas algo que la contenga.
+
+11a. **nutrition_pref_add** — Registra una preferencia/restriccion. pref_type: allergy (+severity), intolerance, diet, like, dislike, goal.
+    args: {"pref_type": "allergy", "label": "mariscos", "severity": "severe", "notes": "Reaccion fuerte en 2023"}
+
+11b. **nutrition_pref_list** — Lista las preferencias del usuario. pref_type es opcional para filtrar.
+    args: {"pref_type": "allergy"} o {} para todas
+
+11c. **nutrition_log_meal** — Registra una comida. meal_type: breakfast, lunch, dinner, snack, drink, craving. Macros y attachments son opcionales. Si el usuario manda foto o voz, primero crea un health_attachment y pasa el id aqui.
+    args: {"meal_type": "breakfast", "description": "Huevos revueltos con aguacate y cafe", "macros_kcal": 420, "macros_protein_g": 22}
+
+11d. **nutrition_log_recent** — Devuelve los registros recientes. limit por defecto 20. meal_type opcional para filtrar.
+    args: {"limit": 30, "meal_type": "dinner"} o {} para los ultimos 20
+
+11e. **nutrition_recipe_add** — Guarda una receta. ingredients es una lista de objetos {name, amount, unit, notes}. steps es una lista de strings. tags ayuda a filtrar despues.
+    args: {"name": "Bowl de pollo y arroz", "ingredients": [{"name":"pechuga de pollo","amount":150,"unit":"g"},{"name":"arroz integral","amount":80,"unit":"g"}], "steps": ["Cocer el arroz","Sazonar y asar el pollo","Servir junto"], "prep_time_min": 10, "cook_time_min": 25, "servings": 1, "tags": ["alto_proteina","cena"]}
+
+11f. **nutrition_recipe_list** — Lista las recetas guardadas, opcionalmente filtradas por tag.
+    args: {"tag": "alto_proteina"} o {}
+
+11g. **nutrition_plan_add** — Crea un plan de nutricion. ANTES de generar uno, REVISA las preferencias del usuario (alergias, dietas) — las metas calorias/macros vienen del usuario o de su nutriologo, NO las inventes con autoridad medica.
+    args: {"name": "Plan mantenimiento marzo", "goal": "mantener", "duration_days": 30, "daily_kcal_target": 2200, "daily_protein_g_target": 130, "source": "axi"}
+
+11h. **nutrition_plan_list** — Lista los planes activos del usuario.
+    args: {}
+
+11i. **nutrition_summary** — Devuelve resumen completo: preferencias activas + plan activo + comidas recientes + totales rolling de 7 dias (kcal, proteina, carbs, grasa, conteo de comidas). Usalo cuando el usuario te pida revisar como va comiendo o quiera prepararse para una visita con su nutriologo.
     args: {}
 
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
@@ -1330,6 +1362,16 @@ LifeOS lleva el inventario de equipo del usuario, sus rutinas guardadas, y el lo
             "exercise_plan_list" => execute_exercise_plan_list(ctx).await,
             "exercise_log_session" => execute_exercise_log_session(&call.args, ctx).await,
             "exercise_summary" => execute_exercise_summary(ctx).await,
+            // BI.3 — Nutricion (sprint 1: storage layer + tools)
+            "nutrition_pref_add" => execute_nutrition_pref_add(&call.args, ctx).await,
+            "nutrition_pref_list" => execute_nutrition_pref_list(&call.args, ctx).await,
+            "nutrition_log_meal" => execute_nutrition_log_meal(&call.args, ctx).await,
+            "nutrition_log_recent" => execute_nutrition_log_recent(&call.args, ctx).await,
+            "nutrition_recipe_add" => execute_nutrition_recipe_add(&call.args, ctx).await,
+            "nutrition_recipe_list" => execute_nutrition_recipe_list(&call.args, ctx).await,
+            "nutrition_plan_add" => execute_nutrition_plan_add(&call.args, ctx).await,
+            "nutrition_plan_list" => execute_nutrition_plan_list(ctx).await,
+            "nutrition_summary" => execute_nutrition_summary(ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -3215,6 +3257,362 @@ LifeOS lleva el inventario de equipo del usuario, sus rutinas guardadas, y el lo
                 "Aun no hay datos de ejercicio. Empieza registrando tu equipo \
                  con `exercise_inventory_add` o una sesion con \
                  `exercise_log_session`.\n",
+            );
+        }
+
+        Ok(out)
+    }
+
+    // ========================================================================
+    // Fase BI.3 sprint 1 — Nutricion (Vida Plena)
+    // ========================================================================
+
+    async fn execute_nutrition_pref_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let pref_type = args["pref_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'pref_type'"))?;
+        let label = args["label"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'label'"))?;
+        let severity = args["severity"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let pref = mem
+            .add_nutrition_preference(pref_type, label, severity, notes, None)
+            .await?;
+        Ok(format!(
+            "Preferencia guardada (id: {}, tipo: {}): \"{}\"",
+            pref.pref_id, pref.pref_type, pref.label
+        ))
+    }
+
+    async fn execute_nutrition_pref_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let pref_type = args["pref_type"].as_str();
+        let mem = require_memory(ctx).await?;
+        let prefs = mem.list_nutrition_preferences(pref_type, true).await?;
+        if prefs.is_empty() {
+            return Ok("Sin preferencias registradas.".into());
+        }
+        let lines: Vec<String> = prefs
+            .iter()
+            .map(|p| {
+                let sev = p
+                    .severity
+                    .as_deref()
+                    .map(|s| format!(" [{}]", s))
+                    .unwrap_or_default();
+                let notes = if p.notes.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", p.notes)
+                };
+                format!("- [{}] {}{}{}", p.pref_type, p.label, sev, notes)
+            })
+            .collect();
+        Ok(format!("Preferencias:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_nutrition_log_meal(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let meal_type = args["meal_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'meal_type'"))?;
+        let description = args["description"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'description'"))?;
+        let macros_kcal = args["macros_kcal"].as_f64();
+        let macros_protein_g = args["macros_protein_g"].as_f64();
+        let macros_carbs_g = args["macros_carbs_g"].as_f64();
+        let macros_fat_g = args["macros_fat_g"].as_f64();
+        let photo = args["photo_attachment_id"].as_str();
+        let voice = args["voice_attachment_id"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let entry = mem
+            .log_nutrition_meal(
+                meal_type,
+                description,
+                macros_kcal,
+                macros_protein_g,
+                macros_carbs_g,
+                macros_fat_g,
+                photo,
+                voice,
+                None,
+                notes,
+                None,
+            )
+            .await?;
+        let macros = match entry.macros_kcal {
+            Some(k) => format!(" — ~{:.0} kcal", k),
+            None => String::new(),
+        };
+        Ok(format!(
+            "Comida registrada (id: {}): {} — \"{}\"{}",
+            entry.log_id, entry.meal_type, entry.description, macros
+        ))
+    }
+
+    async fn execute_nutrition_log_recent(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let meal_type = args["meal_type"].as_str();
+        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let mem = require_memory(ctx).await?;
+        let entries = mem.list_nutrition_log(meal_type, limit).await?;
+        if entries.is_empty() {
+            return Ok("Sin comidas registradas.".into());
+        }
+        let lines: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                let kcal = e
+                    .macros_kcal
+                    .map(|k| format!(" — ~{:.0} kcal", k))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] [{}] {}{}",
+                    e.consumed_at.format("%Y-%m-%d %H:%M"),
+                    e.meal_type,
+                    e.description,
+                    kcal
+                )
+            })
+            .collect();
+        Ok(format!("Comidas recientes:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_nutrition_recipe_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let description = args["description"].as_str();
+        let prep_time_min = args["prep_time_min"].as_u64().map(|n| n as u32);
+        let cook_time_min = args["cook_time_min"].as_u64().map(|n| n as u32);
+        let servings = args["servings"].as_u64().map(|n| n as u32);
+        let source = args["source"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+
+        let ingredients_value = args
+            .get("ingredients")
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'ingredients'"))?;
+        let ingredients: Vec<RecipeIngredient> =
+            serde_json::from_value(ingredients_value.clone())
+                .map_err(|e| anyhow::anyhow!("'ingredients' invalido: {}", e))?;
+
+        let steps_value = args
+            .get("steps")
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'steps'"))?;
+        let steps: Vec<String> = serde_json::from_value(steps_value.clone())
+            .map_err(|e| anyhow::anyhow!("'steps' invalido: {}", e))?;
+
+        let tags: Vec<String> = match args.get("tags") {
+            Some(v) => serde_json::from_value(v.clone())
+                .map_err(|e| anyhow::anyhow!("'tags' invalido: {}", e))?,
+            None => Vec::new(),
+        };
+
+        let mem = require_memory(ctx).await?;
+        let recipe = mem
+            .add_recipe(
+                name,
+                description,
+                ingredients,
+                steps,
+                prep_time_min,
+                cook_time_min,
+                servings,
+                tags,
+                source,
+                notes,
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Receta guardada (id: {}): \"{}\" — {} ingredientes, {} pasos",
+            recipe.recipe_id,
+            recipe.name,
+            recipe.ingredients.len(),
+            recipe.steps.len()
+        ))
+    }
+
+    async fn execute_nutrition_recipe_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let tag = args["tag"].as_str();
+        let mem = require_memory(ctx).await?;
+        let recipes = mem.list_recipes(tag).await?;
+        if recipes.is_empty() {
+            return Ok("Sin recetas guardadas.".into());
+        }
+        let lines: Vec<String> = recipes
+            .iter()
+            .map(|r| {
+                let tags = if r.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", r.tags.join(", "))
+                };
+                let times = match (r.prep_time_min, r.cook_time_min) {
+                    (Some(p), Some(c)) => format!(" — {}min prep + {}min coccion", p, c),
+                    (Some(p), None) => format!(" — {}min prep", p),
+                    (None, Some(c)) => format!(" — {}min coccion", c),
+                    _ => String::new(),
+                };
+                format!(
+                    "- [{}] \"{}\"{} ({} ingredientes){}",
+                    r.recipe_id,
+                    r.name,
+                    tags,
+                    r.ingredients.len(),
+                    times
+                )
+            })
+            .collect();
+        Ok(format!("Recetas:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_nutrition_plan_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let description = args["description"].as_str();
+        let goal = args["goal"].as_str();
+        let duration_days = args["duration_days"].as_u64().map(|n| n as u32);
+        let daily_kcal = args["daily_kcal_target"].as_f64();
+        let daily_protein = args["daily_protein_g_target"].as_f64();
+        let daily_carbs = args["daily_carbs_g_target"].as_f64();
+        let daily_fat = args["daily_fat_g_target"].as_f64();
+        let source = args["source"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let plan = mem
+            .add_nutrition_plan(
+                name,
+                description,
+                goal,
+                duration_days,
+                daily_kcal,
+                daily_protein,
+                daily_carbs,
+                daily_fat,
+                source,
+                notes,
+                None,
+            )
+            .await?;
+        let target = match plan.daily_kcal_target {
+            Some(k) => format!(" — meta diaria {:.0} kcal", k),
+            None => String::new(),
+        };
+        Ok(format!(
+            "Plan creado (id: {}): \"{}\"{}",
+            plan.plan_id, plan.name, target
+        ))
+    }
+
+    async fn execute_nutrition_plan_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let plans = mem.list_nutrition_plans(true).await?;
+        if plans.is_empty() {
+            return Ok("Sin planes activos.".into());
+        }
+        let lines: Vec<String> = plans
+            .iter()
+            .map(|p| {
+                let kcal = p
+                    .daily_kcal_target
+                    .map(|k| format!(" — {:.0} kcal/dia", k))
+                    .unwrap_or_default();
+                format!("- [{}] \"{}\"{}", p.plan_id, p.name, kcal)
+            })
+            .collect();
+        Ok(format!("Planes activos:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_nutrition_summary(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let summary = mem.get_nutrition_summary(15).await?;
+        let mut out = String::from("# Resumen de nutricion\n\n");
+
+        out.push_str(&format!(
+            "## Ultimos 7 dias\n- Comidas registradas: {}\n- Total ~{:.0} kcal | {:.0}g proteina | {:.0}g carbs | {:.0}g grasa\n\n",
+            summary.meals_last_7_days,
+            summary.kcal_last_7_days,
+            summary.protein_g_last_7_days,
+            summary.carbs_g_last_7_days,
+            summary.fat_g_last_7_days
+        ));
+
+        if !summary.preferences.is_empty() {
+            out.push_str("## Preferencias activas\n");
+            for p in &summary.preferences {
+                let sev = p
+                    .severity
+                    .as_deref()
+                    .map(|s| format!(" [{}]", s))
+                    .unwrap_or_default();
+                out.push_str(&format!("- [{}] {}{}\n", p.pref_type, p.label, sev));
+            }
+            out.push('\n');
+        }
+
+        if let Some(plan) = &summary.active_plan {
+            out.push_str("## Plan activo\n");
+            let goal = plan
+                .goal
+                .as_deref()
+                .map(|g| format!(" — {}", g))
+                .unwrap_or_default();
+            let kcal = plan
+                .daily_kcal_target
+                .map(|k| format!(" — meta {:.0} kcal/dia", k))
+                .unwrap_or_default();
+            out.push_str(&format!("- {}{}{}\n\n", plan.name, goal, kcal));
+        }
+
+        if !summary.recent_meals.is_empty() {
+            out.push_str("## Comidas recientes\n");
+            for m in summary.recent_meals.iter().take(10) {
+                let kcal = m
+                    .macros_kcal
+                    .map(|k| format!(" — ~{:.0} kcal", k))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- [{}] {}: {}{}\n",
+                    m.consumed_at.format("%Y-%m-%d %H:%M"),
+                    m.meal_type,
+                    m.description,
+                    kcal
+                ));
+            }
+            out.push('\n');
+        }
+
+        if summary.preferences.is_empty()
+            && summary.active_plan.is_none()
+            && summary.recent_meals.is_empty()
+        {
+            out.push_str(
+                "Aun no hay datos de nutricion. Empieza registrando una preferencia \
+                 con `nutrition_pref_add` o una comida con `nutrition_log_meal`.\n",
             );
         }
 
