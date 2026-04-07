@@ -148,17 +148,30 @@ así narrativa y estructura quedan vinculadas.
   `nutrition_log`.
 - [ ] Pipeline de **ingest desde voz**: ya existe el STT, solo conectar
   al `nutrition_log`.
-- [ ] **Generador de listas de compras** — Axi propone una lista
-  semanal basada en `nutrition_preferences` + `nutrition_recipes` +
-  `nutrition_plans` activos.
-- [ ] **Integración con catálogo local** (BI.3.1, opcional pero
-  importante): nuevo módulo `local_commerce` que mantiene un catálogo
-  de productos disponibles en la zona del usuario (configurable
-  manualmente al principio, eventualmente con scrapers opt-in para
-  Walmart México, Soriana, Chedraui, mercados locales). Las listas de
-  compras se filtran contra este catálogo y Axi marca claramente qué
-  productos hay localmente, cuáles hay solo online, y cuáles no hay.
-- [ ] Tests + version bump.
+- [x] **Generador de listas de compras (BI.3.1 sprint inicial)** —
+  side-table `shopping_lists` con `items_json` (cada item con name,
+  quantity, unit, food_id opcional, checked, notes). API:
+  `create_shopping_list`, `check_shopping_list_item`,
+  `complete_shopping_list`, `archive_shopping_list`,
+  `list_shopping_lists`, `get_shopping_list`. Telegram tools
+  seccion 20j-20o. **Pendiente**: el generador automatico que cruza
+  `nutrition_preferences` + recipes + plans para proponer una lista
+  semanal — el storage ya esta listo, falta el wrapper inteligente.
+- [x] **Integración con catálogo local (BI.3.1)** — tablas
+  `food_db`, `commerce_stores`, `commerce_prices`. food_db con
+  source = usda | openfoodfacts | smae | user, busqueda por
+  substring de name + brand, lookup por barcode. commerce_prices
+  cruza opcionalmente con food_db (food_id es nullable, asi se
+  puede registrar precio de algo que no esta en el catalogo).
+  API: `add_food`, `search_foods`, `get_food_by_id`,
+  `get_food_by_barcode`, `add_commerce_store`,
+  `deactivate_commerce_store`, `list_commerce_stores`,
+  `record_commerce_price`, `list_prices_for_food`,
+  `list_prices_at_store`. Telegram tools seccion 20a-20i.
+  **Pendiente**: importadores que precarguen USDA / Open Food
+  Facts MX / SMAE — la foundation ya acepta los rows, los
+  scripts de import corren aparte.
+- [x] Tests añadidos: 6 nuevos en BI.3.1. Daemon → v0.3.26.
 
 ### BI.4 — Salud mental + diario emocional
 

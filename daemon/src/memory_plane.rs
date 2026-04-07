@@ -983,6 +983,98 @@ CREATE TABLE IF NOT EXISTS contraception_methods (
 CREATE INDEX IF NOT EXISTS idx_contraception_active
     ON contraception_methods(ended_at);
 
+-- ----------------------------------------------------------------------
+-- BI.3.1 — food_db + comercio local + listas de compras (no sensible)
+--
+-- Tres capas:
+--
+--   * food_db: catalogo de alimentos con macros (kcal, prot, carbs,
+--     grasa). Source identifica de donde viene cada row: 'usda',
+--     'openfoodfacts', 'smae' (catalogo mexicano), o 'user'. Esta
+--     foundation NO precarga datos — los importadores corren aparte.
+--     El barcode permite lookups por foto de codigo de barras.
+--
+--   * commerce_stores + commerce_prices: tiendas que el usuario
+--     frecuenta (Walmart, Soriana, mercado local) y precios
+--     observados. Sirve para sugerir donde es mas barato comprar
+--     algo y para detectar inflacion personal.
+--
+--   * shopping_lists: listas de compras con items en JSON. Cada item
+--     puede referenciar un food_id (si esta en el catalogo) o ser
+--     texto libre. Los items tienen quantity, unit, checked, notes.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS food_db (
+    food_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    brand TEXT,
+    category TEXT,                   -- libre: fruit, vegetable, meat,
+                                     -- dairy, grain, snack, beverage, ...
+    kcal_per_100g REAL,
+    protein_g_per_100g REAL,
+    carbs_g_per_100g REAL,
+    fat_g_per_100g REAL,
+    fiber_g_per_100g REAL,
+    serving_size_g REAL,
+    source TEXT NOT NULL,            -- 'usda', 'openfoodfacts', 'smae', 'user'
+    barcode TEXT,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_food_db_name
+    ON food_db(name);
+CREATE INDEX IF NOT EXISTS idx_food_db_barcode
+    ON food_db(barcode);
+CREATE INDEX IF NOT EXISTS idx_food_db_source
+    ON food_db(source);
+
+CREATE TABLE IF NOT EXISTS commerce_stores (
+    store_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    store_type TEXT,                 -- 'supermarket', 'mercado', 'farmacia',
+                                     -- 'tienda', 'online', 'other'
+    location TEXT,
+    notes TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_commerce_stores_active
+    ON commerce_stores(active);
+
+CREATE TABLE IF NOT EXISTS commerce_prices (
+    price_id TEXT PRIMARY KEY,
+    store_id TEXT NOT NULL,
+    food_id TEXT,                    -- opcional FK textual a food_db
+    product_name TEXT NOT NULL,      -- usado cuando food_id es NULL
+    price REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'MXN',
+    unit TEXT,                       -- 'kg', 'l', 'unit', 'pack', etc.
+    observed_at TEXT NOT NULL,
+    notes TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_commerce_prices_store
+    ON commerce_prices(store_id);
+CREATE INDEX IF NOT EXISTS idx_commerce_prices_food
+    ON commerce_prices(food_id);
+CREATE INDEX IF NOT EXISTS idx_commerce_prices_when
+    ON commerce_prices(observed_at);
+
+CREATE TABLE IF NOT EXISTS shopping_lists (
+    list_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    target_store_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',  -- 'active','completed','archived'
+    items_json TEXT NOT NULL DEFAULT '[]',
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_shopping_lists_status
+    ON shopping_lists(status);
+
 CREATE TABLE IF NOT EXISTS reinforced_vault_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     salt_b64 TEXT NOT NULL,
@@ -6072,6 +6164,898 @@ struct ContraceptionMethodRaw {
     source_entry_id: Option<String>,
     created_at: String,
     updated_at: String,
+}
+
+// ============================================================================
+// Fase BI.3.1 — food_db + comercio local + listas de compras
+// ============================================================================
+//
+// Sub-fase NO sensible. Cierra el pillar Vida Plena en el dominio de
+// nutricion: catalogo de alimentos con macros, registro de tiendas y
+// precios observados, listas de compras con items que pueden
+// referenciar el catalogo o ser texto libre.
+//
+// Esta foundation NO precarga datos del catalogo (USDA, Open Food
+// Facts, SMAE) — los importadores corren aparte y pueden bombear
+// data via `add_food`. Mantenerlo separado del schema deja la
+// migracion del DB rapida y permite que el usuario empiece a usar
+// shopping_lists con texto libre desde el dia uno.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Food {
+    pub food_id: String,
+    pub name: String,
+    pub brand: Option<String>,
+    pub category: Option<String>,
+    pub kcal_per_100g: Option<f64>,
+    pub protein_g_per_100g: Option<f64>,
+    pub carbs_g_per_100g: Option<f64>,
+    pub fat_g_per_100g: Option<f64>,
+    pub fiber_g_per_100g: Option<f64>,
+    pub serving_size_g: Option<f64>,
+    /// `usda`, `openfoodfacts`, `smae`, `user`.
+    pub source: String,
+    pub barcode: Option<String>,
+    pub tags: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommerceStore {
+    pub store_id: String,
+    pub name: String,
+    /// `supermarket`, `mercado`, `farmacia`, `tienda`, `online`, `other`.
+    pub store_type: Option<String>,
+    pub location: Option<String>,
+    pub notes: Option<String>,
+    pub active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommercePrice {
+    pub price_id: String,
+    pub store_id: String,
+    pub food_id: Option<String>,
+    pub product_name: String,
+    pub price: f64,
+    pub currency: String,
+    pub unit: Option<String>,
+    pub observed_at: DateTime<Utc>,
+    pub notes: Option<String>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One item inside a shopping list. Stored as JSON inside the parent
+/// row's `items_json` column. `food_id` is optional — items can be
+/// pure free-text ("pan dulce") without referencing the catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShoppingListItem {
+    pub name: String,
+    pub quantity: Option<f64>,
+    pub unit: Option<String>,
+    pub food_id: Option<String>,
+    pub checked: bool,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShoppingList {
+    pub list_id: String,
+    pub name: String,
+    pub target_store_id: Option<String>,
+    /// `active`, `completed`, `archived`.
+    pub status: String,
+    pub items: Vec<ShoppingListItem>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.3.1: food_db
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_food(
+        &self,
+        name: &str,
+        brand: Option<&str>,
+        category: Option<&str>,
+        kcal_per_100g: Option<f64>,
+        protein_g_per_100g: Option<f64>,
+        carbs_g_per_100g: Option<f64>,
+        fat_g_per_100g: Option<f64>,
+        fiber_g_per_100g: Option<f64>,
+        serving_size_g: Option<f64>,
+        source: &str,
+        barcode: Option<&str>,
+        tags: &[String],
+    ) -> Result<Food> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let brand = brand.and_then(normalize_non_empty);
+        let category = category.and_then(normalize_non_empty);
+        let source = normalize_non_empty(source)
+            .context("source required")?
+            .to_lowercase();
+        if !matches!(source.as_str(), "usda" | "openfoodfacts" | "smae" | "user") {
+            anyhow::bail!("source must be: usda, openfoodfacts, smae, user");
+        }
+        let barcode = barcode.and_then(normalize_non_empty);
+        for (label, val) in [
+            ("kcal_per_100g", kcal_per_100g),
+            ("protein_g_per_100g", protein_g_per_100g),
+            ("carbs_g_per_100g", carbs_g_per_100g),
+            ("fat_g_per_100g", fat_g_per_100g),
+            ("fiber_g_per_100g", fiber_g_per_100g),
+            ("serving_size_g", serving_size_g),
+        ] {
+            if let Some(v) = val {
+                if !v.is_finite() || v < 0.0 {
+                    anyhow::bail!("{} must be a non-negative finite number", label);
+                }
+            }
+        }
+        let tags_norm = normalize_tags(tags);
+        let tags_json = serde_json::to_string(&tags_norm)?;
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("food-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let brand_clone = brand.clone();
+        let category_clone = category.clone();
+        let source_clone = source.clone();
+        let barcode_clone = barcode.clone();
+        let tags_clone = tags_json.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO food_db
+                 (food_id, name, brand, category, kcal_per_100g,
+                  protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+                  fiber_g_per_100g, serving_size_g, source, barcode,
+                  tags_json, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                params![
+                    id_clone,
+                    name_clone,
+                    brand_clone,
+                    category_clone,
+                    kcal_per_100g,
+                    protein_g_per_100g,
+                    carbs_g_per_100g,
+                    fat_g_per_100g,
+                    fiber_g_per_100g,
+                    serving_size_g,
+                    source_clone,
+                    barcode_clone,
+                    tags_clone,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Food {
+            food_id: id,
+            name,
+            brand,
+            category,
+            kcal_per_100g,
+            protein_g_per_100g,
+            carbs_g_per_100g,
+            fat_g_per_100g,
+            fiber_g_per_100g,
+            serving_size_g,
+            source,
+            barcode,
+            tags: tags_norm,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Search foods by case-insensitive substring on name + brand.
+    /// Returns up to `limit` results, ordered by name.
+    pub async fn search_foods(&self, query: &str, limit: usize) -> Result<Vec<Food>> {
+        let query = query.trim().to_lowercase();
+        let limit = limit.clamp(1, 200);
+        let db_path = self.db_path.clone();
+        let pat = format!("%{}%", query);
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT food_id, name, brand, category, kcal_per_100g,
+                        protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+                        fiber_g_per_100g, serving_size_g, source, barcode,
+                        tags_json, created_at, updated_at
+                 FROM food_db
+                 WHERE LOWER(name) LIKE ?1 OR LOWER(IFNULL(brand,'')) LIKE ?1
+                 ORDER BY name ASC
+                 LIMIT ?2",
+            )?;
+            let rows: Vec<FoodRaw> = stmt
+                .query_map(params![pat, limit as i64], food_row_mapper)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(food_from_raw).collect())
+    }
+
+    pub async fn get_food_by_id(&self, food_id: &str) -> Result<Option<Food>> {
+        let db_path = self.db_path.clone();
+        let id = food_id.to_string();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<FoodRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT food_id, name, brand, category, kcal_per_100g,
+                        protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+                        fiber_g_per_100g, serving_size_g, source, barcode,
+                        tags_json, created_at, updated_at
+                 FROM food_db WHERE food_id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(food_row_mapper(row)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(raw.map(food_from_raw))
+    }
+
+    pub async fn get_food_by_barcode(&self, barcode: &str) -> Result<Option<Food>> {
+        let db_path = self.db_path.clone();
+        let bc = barcode.to_string();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<FoodRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT food_id, name, brand, category, kcal_per_100g,
+                        protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+                        fiber_g_per_100g, serving_size_g, source, barcode,
+                        tags_json, created_at, updated_at
+                 FROM food_db WHERE barcode = ?1
+                 LIMIT 1",
+            )?;
+            let mut rows = stmt.query(params![bc])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(food_row_mapper(row)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(raw.map(food_from_raw))
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1: commerce stores
+    // -----------------------------------------------------------------------
+
+    pub async fn add_commerce_store(
+        &self,
+        name: &str,
+        store_type: Option<&str>,
+        location: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<CommerceStore> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let store_type = store_type.and_then(normalize_non_empty);
+        let location = location.and_then(normalize_non_empty);
+        let notes = notes.and_then(normalize_non_empty);
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("store-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let type_clone = store_type.clone();
+        let loc_clone = location.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO commerce_stores
+                 (store_id, name, store_type, location, notes, active,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?6)",
+                params![
+                    id_clone,
+                    name_clone,
+                    type_clone,
+                    loc_clone,
+                    notes_clone,
+                    now_rfc
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CommerceStore {
+            store_id: id,
+            name,
+            store_type,
+            location,
+            notes,
+            active: true,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn deactivate_commerce_store(&self, store_id: &str) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        let id = store_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE commerce_stores
+                 SET active = 0, updated_at = ?1
+                 WHERE store_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_commerce_stores(&self, active_only: bool) -> Result<Vec<CommerceStore>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT store_id, name, store_type, location, notes, active,
+                        created_at, updated_at
+                 FROM commerce_stores WHERE active = 1
+                 ORDER BY name ASC"
+            } else {
+                "SELECT store_id, name, store_type, location, notes, active,
+                        created_at, updated_at
+                 FROM commerce_stores
+                 ORDER BY name ASC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let rows: Vec<CommerceStoreRaw> = stmt
+                .query_map([], |row| {
+                    Ok(CommerceStoreRaw {
+                        store_id: row.get(0)?,
+                        name: row.get(1)?,
+                        store_type: row.get(2)?,
+                        location: row.get(3)?,
+                        notes: row.get(4)?,
+                        active: row.get::<_, i32>(5)? != 0,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| CommerceStore {
+                store_id: r.store_id,
+                name: r.name,
+                store_type: r.store_type,
+                location: r.location,
+                notes: r.notes,
+                active: r.active,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1: commerce prices
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_commerce_price(
+        &self,
+        store_id: &str,
+        food_id: Option<&str>,
+        product_name: &str,
+        price: f64,
+        currency: &str,
+        unit: Option<&str>,
+        observed_at: Option<DateTime<Utc>>,
+        notes: Option<&str>,
+        source_entry_id: Option<&str>,
+    ) -> Result<CommercePrice> {
+        let store_id = normalize_non_empty(store_id).context("store_id required")?;
+        let product_name = normalize_non_empty(product_name).context("product_name required")?;
+        let food_id_owned = food_id.and_then(normalize_non_empty);
+        let currency = normalize_non_empty(currency).unwrap_or_else(|| "MXN".to_string());
+        let unit = unit.and_then(normalize_non_empty);
+        let notes = notes.and_then(normalize_non_empty);
+        if !price.is_finite() || price < 0.0 {
+            anyhow::bail!("price must be non-negative finite");
+        }
+
+        // Verify the store exists.
+        let sid_check = store_id.clone();
+        let db_path_check = self.db_path.clone();
+        let exists = tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path_check)?;
+            let n: i64 = db.query_row(
+                "SELECT COUNT(*) FROM commerce_stores WHERE store_id = ?1",
+                params![sid_check],
+                |r| r.get(0),
+            )?;
+            Ok(n > 0)
+        })
+        .await??;
+        if !exists {
+            anyhow::bail!("no such store_id: {}", store_id);
+        }
+
+        let now = Utc::now();
+        let observed = observed_at.unwrap_or(now);
+        let observed_rfc = observed.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("price-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let store_clone = store_id.clone();
+        let food_clone = food_id_owned.clone();
+        let product_clone = product_name.clone();
+        let currency_clone = currency.clone();
+        let unit_clone = unit.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO commerce_prices
+                 (price_id, store_id, food_id, product_name, price, currency,
+                  unit, observed_at, notes, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id_clone,
+                    store_clone,
+                    food_clone,
+                    product_clone,
+                    price,
+                    currency_clone,
+                    unit_clone,
+                    observed_rfc,
+                    notes_clone,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CommercePrice {
+            price_id: id,
+            store_id,
+            food_id: food_id_owned,
+            product_name,
+            price,
+            currency,
+            unit,
+            observed_at: observed,
+            notes,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_prices_for_food(
+        &self,
+        food_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CommercePrice>> {
+        let limit = limit.clamp(1, 200);
+        let id = food_id.to_string();
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT price_id, store_id, food_id, product_name, price, currency,
+                        unit, observed_at, notes, source_entry_id, created_at
+                 FROM commerce_prices
+                 WHERE food_id = ?1
+                 ORDER BY observed_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows: Vec<CommercePriceRaw> = stmt
+                .query_map(params![id, limit as i64], commerce_price_row_mapper)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(commerce_price_from_raw).collect())
+    }
+
+    pub async fn list_prices_at_store(
+        &self,
+        store_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CommercePrice>> {
+        let limit = limit.clamp(1, 500);
+        let id = store_id.to_string();
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT price_id, store_id, food_id, product_name, price, currency,
+                        unit, observed_at, notes, source_entry_id, created_at
+                 FROM commerce_prices
+                 WHERE store_id = ?1
+                 ORDER BY observed_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows: Vec<CommercePriceRaw> = stmt
+                .query_map(params![id, limit as i64], commerce_price_row_mapper)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(commerce_price_from_raw).collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1: shopping lists
+    // -----------------------------------------------------------------------
+
+    pub async fn create_shopping_list(
+        &self,
+        name: &str,
+        target_store_id: Option<&str>,
+        items: &[ShoppingListItem],
+        notes: Option<&str>,
+    ) -> Result<ShoppingList> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let target_store_id = target_store_id.and_then(normalize_non_empty);
+        let notes = notes.and_then(normalize_non_empty);
+        let items_owned = items.to_vec();
+        let items_json = serde_json::to_string(&items_owned)?;
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("shop-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let store_clone = target_store_id.clone();
+        let items_clone = items_json.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO shopping_lists
+                 (list_id, name, target_store_id, status, items_json, notes,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?6)",
+                params![
+                    id_clone,
+                    name_clone,
+                    store_clone,
+                    items_clone,
+                    notes_clone,
+                    now_rfc
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ShoppingList {
+            list_id: id,
+            name,
+            target_store_id,
+            status: "active".to_string(),
+            items: items_owned,
+            notes,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Toggle the `checked` flag on the item at `item_index`. Updates
+    /// the row's items_json + updated_at. Idempotent on bounds.
+    pub async fn check_shopping_list_item(
+        &self,
+        list_id: &str,
+        item_index: usize,
+        checked: bool,
+    ) -> Result<bool> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let updated = tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path)?;
+            let json: String = match db.query_row(
+                "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                params![id],
+                |r| r.get(0),
+            ) {
+                Ok(s) => s,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+                Err(e) => return Err(e.into()),
+            };
+            let mut items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            if item_index >= items.len() {
+                return Ok(false);
+            }
+            items[item_index].checked = checked;
+            let new_json = serde_json::to_string(&items)?;
+            db.execute(
+                "UPDATE shopping_lists SET items_json = ?1, updated_at = ?2
+                 WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            Ok(true)
+        })
+        .await??;
+        Ok(updated)
+    }
+
+    pub async fn complete_shopping_list(&self, list_id: &str) -> Result<bool> {
+        self.set_shopping_list_status(list_id, "completed").await
+    }
+
+    pub async fn archive_shopping_list(&self, list_id: &str) -> Result<bool> {
+        self.set_shopping_list_status(list_id, "archived").await
+    }
+
+    async fn set_shopping_list_status(&self, list_id: &str, status: &str) -> Result<bool> {
+        let id = list_id.to_string();
+        let status_owned = status.to_string();
+        let now_rfc = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE shopping_lists SET status = ?1, updated_at = ?2
+                 WHERE list_id = ?3",
+                params![status_owned, now_rfc, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_shopping_lists(
+        &self,
+        status_filter: Option<&str>,
+    ) -> Result<Vec<ShoppingList>> {
+        let filter = status_filter.map(|s| s.to_string());
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let rows: Vec<ShoppingListRaw> = if let Some(f) = filter {
+                let mut stmt = db.prepare(
+                    "SELECT list_id, name, target_store_id, status, items_json, notes,
+                            created_at, updated_at
+                     FROM shopping_lists WHERE status = ?1
+                     ORDER BY created_at DESC",
+                )?;
+                let collected: Vec<ShoppingListRaw> = stmt
+                    .query_map(params![f], shopping_list_row_mapper)?
+                    .flatten()
+                    .collect();
+                collected
+            } else {
+                let mut stmt = db.prepare(
+                    "SELECT list_id, name, target_store_id, status, items_json, notes,
+                            created_at, updated_at
+                     FROM shopping_lists
+                     ORDER BY created_at DESC",
+                )?;
+                let collected: Vec<ShoppingListRaw> = stmt
+                    .query_map([], shopping_list_row_mapper)?
+                    .flatten()
+                    .collect();
+                collected
+            };
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(shopping_list_from_raw).collect())
+    }
+
+    pub async fn get_shopping_list(&self, list_id: &str) -> Result<Option<ShoppingList>> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<ShoppingListRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT list_id, name, target_store_id, status, items_json, notes,
+                        created_at, updated_at
+                 FROM shopping_lists WHERE list_id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(shopping_list_row_mapper(row)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(raw.map(shopping_list_from_raw))
+    }
+}
+
+// -- Private raw rows + mappers for BI.3.1 ----------------------------------
+
+struct FoodRaw {
+    food_id: String,
+    name: String,
+    brand: Option<String>,
+    category: Option<String>,
+    kcal_per_100g: Option<f64>,
+    protein_g_per_100g: Option<f64>,
+    carbs_g_per_100g: Option<f64>,
+    fat_g_per_100g: Option<f64>,
+    fiber_g_per_100g: Option<f64>,
+    serving_size_g: Option<f64>,
+    source: String,
+    barcode: Option<String>,
+    tags_json: String,
+    created_at: String,
+    updated_at: String,
+}
+
+fn food_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Result<FoodRaw> {
+    Ok(FoodRaw {
+        food_id: row.get(0)?,
+        name: row.get(1)?,
+        brand: row.get(2)?,
+        category: row.get(3)?,
+        kcal_per_100g: row.get(4)?,
+        protein_g_per_100g: row.get(5)?,
+        carbs_g_per_100g: row.get(6)?,
+        fat_g_per_100g: row.get(7)?,
+        fiber_g_per_100g: row.get(8)?,
+        serving_size_g: row.get(9)?,
+        source: row.get(10)?,
+        barcode: row.get(11)?,
+        tags_json: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+    })
+}
+
+fn food_from_raw(r: FoodRaw) -> Food {
+    Food {
+        food_id: r.food_id,
+        name: r.name,
+        brand: r.brand,
+        category: r.category,
+        kcal_per_100g: r.kcal_per_100g,
+        protein_g_per_100g: r.protein_g_per_100g,
+        carbs_g_per_100g: r.carbs_g_per_100g,
+        fat_g_per_100g: r.fat_g_per_100g,
+        fiber_g_per_100g: r.fiber_g_per_100g,
+        serving_size_g: r.serving_size_g,
+        source: r.source,
+        barcode: r.barcode,
+        tags: serde_json::from_str(&r.tags_json).unwrap_or_default(),
+        created_at: parse_utc(&r.created_at),
+        updated_at: parse_utc(&r.updated_at),
+    }
+}
+
+struct CommerceStoreRaw {
+    store_id: String,
+    name: String,
+    store_type: Option<String>,
+    location: Option<String>,
+    notes: Option<String>,
+    active: bool,
+    created_at: String,
+    updated_at: String,
+}
+
+struct CommercePriceRaw {
+    price_id: String,
+    store_id: String,
+    food_id: Option<String>,
+    product_name: String,
+    price: f64,
+    currency: String,
+    unit: Option<String>,
+    observed_at: String,
+    notes: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+fn commerce_price_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommercePriceRaw> {
+    Ok(CommercePriceRaw {
+        price_id: row.get(0)?,
+        store_id: row.get(1)?,
+        food_id: row.get(2)?,
+        product_name: row.get(3)?,
+        price: row.get(4)?,
+        currency: row.get(5)?,
+        unit: row.get(6)?,
+        observed_at: row.get(7)?,
+        notes: row.get(8)?,
+        source_entry_id: row.get(9)?,
+        created_at: row.get(10)?,
+    })
+}
+
+fn commerce_price_from_raw(r: CommercePriceRaw) -> CommercePrice {
+    CommercePrice {
+        price_id: r.price_id,
+        store_id: r.store_id,
+        food_id: r.food_id,
+        product_name: r.product_name,
+        price: r.price,
+        currency: r.currency,
+        unit: r.unit,
+        observed_at: parse_utc(&r.observed_at),
+        notes: r.notes,
+        source_entry_id: r.source_entry_id,
+        created_at: parse_utc(&r.created_at),
+    }
+}
+
+struct ShoppingListRaw {
+    list_id: String,
+    name: String,
+    target_store_id: Option<String>,
+    status: String,
+    items_json: String,
+    notes: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+fn shopping_list_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Result<ShoppingListRaw> {
+    Ok(ShoppingListRaw {
+        list_id: row.get(0)?,
+        name: row.get(1)?,
+        target_store_id: row.get(2)?,
+        status: row.get(3)?,
+        items_json: row.get(4)?,
+        notes: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
+fn shopping_list_from_raw(r: ShoppingListRaw) -> ShoppingList {
+    ShoppingList {
+        list_id: r.list_id,
+        name: r.name,
+        target_store_id: r.target_store_id,
+        status: r.status,
+        items: serde_json::from_str(&r.items_json).unwrap_or_default(),
+        notes: r.notes,
+        created_at: parse_utc(&r.created_at),
+        updated_at: parse_utc(&r.updated_at),
+    }
 }
 
 // ============================================================================
@@ -17461,6 +18445,326 @@ mod tests {
         assert!(items
             .iter()
             .any(|i| i.item_type == "growth_goal" && i.name == "Meta vieja"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1 — food_db + commerce + shopping lists
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn food_add_validates_source_and_round_trips() {
+        let dir = temp_dir("memory-plane-food-add");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let bad = mgr
+            .add_food(
+                "Test",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "weird",
+                None,
+                &[],
+            )
+            .await;
+        assert!(bad.is_err(), "invalid source must reject");
+
+        let f = mgr
+            .add_food(
+                "Avena Quaker",
+                Some("Quaker"),
+                Some("grain"),
+                Some(380.0),
+                Some(13.0),
+                Some(67.0),
+                Some(7.0),
+                Some(10.0),
+                Some(40.0),
+                "user",
+                Some("7501234567890"),
+                &["desayuno".to_string()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(f.name, "Avena Quaker");
+        assert_eq!(f.source, "user");
+        assert_eq!(f.tags, vec!["desayuno".to_string()]);
+
+        let by_id = mgr.get_food_by_id(&f.food_id).await.unwrap().unwrap();
+        assert_eq!(by_id.name, "Avena Quaker");
+        let by_bc = mgr
+            .get_food_by_barcode("7501234567890")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_bc.food_id, f.food_id);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn food_search_matches_substring_case_insensitive() {
+        let dir = temp_dir("memory-plane-food-search");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.add_food(
+            "Avena Quaker",
+            Some("Quaker"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "user",
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+        mgr.add_food(
+            "Manzana Roja",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "user",
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+        mgr.add_food(
+            "Pan integral Bimbo",
+            Some("Bimbo"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "user",
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let hits = mgr.search_foods("AVENA", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "Avena Quaker");
+
+        let by_brand = mgr.search_foods("bimbo", 10).await.unwrap();
+        assert_eq!(by_brand.len(), 1);
+
+        let none = mgr.search_foods("torta", 10).await.unwrap();
+        assert!(none.is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn food_rejects_negative_macros() {
+        let dir = temp_dir("memory-plane-food-neg");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr
+            .add_food(
+                "Bad",
+                None,
+                None,
+                Some(-50.0),
+                None,
+                None,
+                None,
+                None,
+                None,
+                "user",
+                None,
+                &[],
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn commerce_store_lifecycle_and_active_filter() {
+        let dir = temp_dir("memory-plane-store");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let s1 = mgr
+            .add_commerce_store("Walmart", Some("supermarket"), Some("Centro"), None)
+            .await
+            .unwrap();
+        let _s2 = mgr
+            .add_commerce_store("Mercado SJR", Some("mercado"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(mgr.list_commerce_stores(true).await.unwrap().len(), 2);
+
+        let ok = mgr.deactivate_commerce_store(&s1.store_id).await.unwrap();
+        assert!(ok);
+        assert_eq!(mgr.list_commerce_stores(true).await.unwrap().len(), 1);
+        assert_eq!(mgr.list_commerce_stores(false).await.unwrap().len(), 2);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn commerce_price_rejects_unknown_store_and_records_valid() {
+        let dir = temp_dir("memory-plane-prices");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let bad = mgr
+            .record_commerce_price(
+                "store-doesnt-exist",
+                None,
+                "leche",
+                28.0,
+                "MXN",
+                Some("l"),
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(bad.is_err());
+
+        let s = mgr
+            .add_commerce_store("Walmart", Some("supermarket"), None, None)
+            .await
+            .unwrap();
+        let f = mgr
+            .add_food(
+                "Leche",
+                None,
+                None,
+                Some(60.0),
+                None,
+                None,
+                None,
+                None,
+                None,
+                "user",
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+        let p = mgr
+            .record_commerce_price(
+                &s.store_id,
+                Some(&f.food_id),
+                "Leche entera 1L",
+                28.50,
+                "MXN",
+                Some("l"),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(p.product_name, "Leche entera 1L");
+
+        let by_food = mgr.list_prices_for_food(&f.food_id, 10).await.unwrap();
+        assert_eq!(by_food.len(), 1);
+        let by_store = mgr.list_prices_at_store(&s.store_id, 10).await.unwrap();
+        assert_eq!(by_store.len(), 1);
+
+        // Negative price → reject.
+        let neg = mgr
+            .record_commerce_price(
+                &s.store_id,
+                None,
+                "test",
+                -1.0,
+                "MXN",
+                None,
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(neg.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn shopping_list_lifecycle_and_check_item() {
+        let dir = temp_dir("memory-plane-shopping");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let items = vec![
+            ShoppingListItem {
+                name: "leche".to_string(),
+                quantity: Some(2.0),
+                unit: Some("l".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "manzanas".to_string(),
+                quantity: Some(1.0),
+                unit: Some("kg".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+        ];
+        let l = mgr
+            .create_shopping_list("Despensa semanal", None, &items, None)
+            .await
+            .unwrap();
+        assert_eq!(l.items.len(), 2);
+        assert_eq!(l.status, "active");
+
+        // Check first item.
+        let ok = mgr
+            .check_shopping_list_item(&l.list_id, 0, true)
+            .await
+            .unwrap();
+        assert!(ok);
+        let g = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert!(g.items[0].checked);
+        assert!(!g.items[1].checked);
+
+        // Out-of-bounds index → false but not error.
+        let bad_idx = mgr
+            .check_shopping_list_item(&l.list_id, 99, true)
+            .await
+            .unwrap();
+        assert!(!bad_idx);
+
+        // Filter by status.
+        let active = mgr.list_shopping_lists(Some("active")).await.unwrap();
+        assert_eq!(active.len(), 1);
+        let archived = mgr.list_shopping_lists(Some("archived")).await.unwrap();
+        assert!(archived.is_empty());
+
+        // Complete + archive lifecycle.
+        assert!(mgr.complete_shopping_list(&l.list_id).await.unwrap());
+        let g2 = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(g2.status, "completed");
+        assert!(mgr.archive_shopping_list(&l.list_id).await.unwrap());
+        let g3 = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(g3.status, "archived");
 
         std::fs::remove_dir_all(dir).ok();
     }

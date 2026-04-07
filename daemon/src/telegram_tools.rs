@@ -27,6 +27,7 @@ pub mod inner {
     use crate::memory_plane::{
         crisis_resources_mx, detect_crisis_in_text, extract_entities_from_text, BookStatus,
         ExercisePlanItem, GoalStatus, LifeSummaryWindow, MemoryPlaneManager, RecipeIngredient,
+        ShoppingListItem,
     };
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
@@ -591,6 +592,57 @@ REGLAS FIRMES:
 
 19i. **sexual_health_summary** — Resumen agregado: encuentros 30d, crisis pattern count 30d, **consent violations count 30d**, dias desde el ultimo test ITS, metodos anticonceptivos activos. Si hay crisis o consent violations, incluye hotlines automaticamente.
     args: {"recent_limit": 30}
+
+20. **Vida Plena — food_db + comercio + listas de compras (BI.3.1)**
+
+Cierra la sub-fase de nutricion (BI.3 sprint 2). Foundation NO sensible: catalogo de alimentos, tiendas que el usuario frecuenta, precios observados, y listas de compras. Esta foundation no precarga datos del catalogo (USDA, Open Food Facts MX, SMAE) — los importadores corren aparte.
+
+20a. **food_add** — Agrega un alimento al catalogo personal del usuario. Source debe ser uno de: usda, openfoodfacts, smae, user. Casi siempre el LLM agrega entradas con source="user".
+    args: {"name": "Avena Quaker", "brand": "Quaker", "category": "grain", "kcal_per_100g": 380, "protein_g_per_100g": 13, "carbs_g_per_100g": 67, "fat_g_per_100g": 7, "fiber_g_per_100g": 10, "serving_size_g": 40, "source": "user", "barcode": "7501234567890", "tags": ["desayuno"]}
+    Todos los campos numericos son opcionales. category, brand, barcode tambien.
+
+20b. **food_search** — Busca por substring en nombre + brand. Devuelve hasta `limit` resultados.
+    args: {"query": "avena", "limit": 20}
+
+20c. **food_by_barcode** — Busca un alimento por codigo de barras. Util para escaneo rapido.
+    args: {"barcode": "7501234567890"}
+
+20d. **store_add** — Agrega una tienda que el usuario frecuenta.
+    args: {"name": "Walmart Centro", "store_type": "supermarket", "location": "Av Reforma 123", "notes": ""}
+    store_type: supermarket | mercado | farmacia | tienda | online | other
+
+20e. **store_list** — Lista tiendas activas (default) o todas.
+    args: {"active_only": true}
+
+20f. **store_deactivate** — Marca una tienda como inactiva.
+    args: {"store_id": "store-..."}
+
+20g. **price_record** — Registra el precio observado de un producto en una tienda. food_id es opcional (puedes registrar precios de productos que no estan en el catalogo).
+    args: {"store_id": "store-...", "food_id": "food-...", "product_name": "Leche entera 1L", "price": 28.50, "currency": "MXN", "unit": "l", "observed_at": "2026-04-07T10:00:00Z", "notes": ""}
+
+20h. **prices_for_food** — Lista los ultimos precios observados para un alimento del catalogo.
+    args: {"food_id": "food-...", "limit": 20}
+
+20i. **prices_at_store** — Lista los ultimos precios observados en una tienda.
+    args: {"store_id": "store-...", "limit": 50}
+
+20j. **shopping_list_create** — Crea una nueva lista de compras con items iniciales. Cada item es un objeto con name, quantity, unit, food_id (opcional), checked (default false), notes (opcional).
+    args: {"name": "Despensa semanal", "target_store_id": "store-...", "items": [{"name": "leche", "quantity": 2, "unit": "l", "food_id": null, "checked": false, "notes": null}, {"name": "manzanas", "quantity": 1, "unit": "kg", "food_id": null, "checked": false, "notes": null}]}
+
+20k. **shopping_list_check_item** — Marca un item de una lista como checked (o no).
+    args: {"list_id": "shop-...", "item_index": 0, "checked": true}
+
+20l. **shopping_list_complete** — Marca una lista como completed.
+    args: {"list_id": "shop-..."}
+
+20m. **shopping_list_archive** — Marca una lista como archived.
+    args: {"list_id": "shop-..."}
+
+20n. **shopping_list_list** — Lista todas las listas, opcionalmente filtradas por status.
+    args: {"status": "active"}
+
+20o. **shopping_list_get** — Devuelve una lista completa con todos sus items.
+    args: {"list_id": "shop-..."}
 
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
@@ -1766,6 +1818,21 @@ REGLAS FIRMES:
             "contraception_end" => execute_contraception_end(&call.args, ctx).await,
             "contraception_list" => execute_contraception_list(&call.args, ctx).await,
             "sexual_health_summary" => execute_sexual_health_summary(&call.args, ctx).await,
+            "food_add" => execute_food_add(&call.args, ctx).await,
+            "food_search" => execute_food_search(&call.args, ctx).await,
+            "food_by_barcode" => execute_food_by_barcode(&call.args, ctx).await,
+            "store_add" => execute_store_add(&call.args, ctx).await,
+            "store_list" => execute_store_list(&call.args, ctx).await,
+            "store_deactivate" => execute_store_deactivate(&call.args, ctx).await,
+            "price_record" => execute_price_record(&call.args, ctx).await,
+            "prices_for_food" => execute_prices_for_food(&call.args, ctx).await,
+            "prices_at_store" => execute_prices_at_store(&call.args, ctx).await,
+            "shopping_list_create" => execute_shopping_list_create(&call.args, ctx).await,
+            "shopping_list_check_item" => execute_shopping_list_check_item(&call.args, ctx).await,
+            "shopping_list_complete" => execute_shopping_list_complete(&call.args, ctx).await,
+            "shopping_list_archive" => execute_shopping_list_archive(&call.args, ctx).await,
+            "shopping_list_list" => execute_shopping_list_list(&call.args, ctx).await,
+            "shopping_list_get" => execute_shopping_list_get(&call.args, ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -6395,6 +6462,397 @@ REGLAS FIRMES:
             && s.active_contraception.is_empty()
         {
             out.push_str("\nAun no hay datos.\n");
+        }
+        Ok(out)
+    }
+
+    // -- BI.3.1: food_db + commerce + shopping lists ------------------------
+
+    async fn execute_food_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let brand = args["brand"].as_str();
+        let category = args["category"].as_str();
+        let kcal = args["kcal_per_100g"].as_f64();
+        let protein = args["protein_g_per_100g"].as_f64();
+        let carbs = args["carbs_g_per_100g"].as_f64();
+        let fat = args["fat_g_per_100g"].as_f64();
+        let fiber = args["fiber_g_per_100g"].as_f64();
+        let serving = args["serving_size_g"].as_f64();
+        let source = args["source"].as_str().unwrap_or("user");
+        let barcode = args["barcode"].as_str();
+        let tags: Vec<String> = args["tags"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let f = mem
+            .add_food(
+                name, brand, category, kcal, protein, carbs, fat, fiber, serving, source, barcode,
+                &tags,
+            )
+            .await?;
+        Ok(format!(
+            "Alimento guardado: {} (id={}, source={})",
+            f.name, f.food_id, f.source
+        ))
+    }
+
+    async fn execute_food_search(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let query = args["query"].as_str().unwrap_or("");
+        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let foods = mem.search_foods(query, limit).await?;
+        if foods.is_empty() {
+            return Ok(format!("Sin resultados para '{}'.", query));
+        }
+        let mut out = String::from("# Catalogo de alimentos\n\n");
+        for f in foods {
+            let kcal = f
+                .kcal_per_100g
+                .map(|k| format!(" {:.0} kcal/100g", k))
+                .unwrap_or_default();
+            let brand = f
+                .brand
+                .as_deref()
+                .map(|b| format!(" [{}]", b))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "- {}{}{} (id: {})\n",
+                f.name, brand, kcal, f.food_id
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_food_by_barcode(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let barcode = args["barcode"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'barcode'"))?;
+        match mem.get_food_by_barcode(barcode).await? {
+            Some(f) => Ok(format!(
+                "Encontrado: {} {} (id={}, kcal/100g {})",
+                f.name,
+                f.brand.as_deref().unwrap_or(""),
+                f.food_id,
+                f.kcal_per_100g
+                    .map(|k| format!("{:.0}", k))
+                    .unwrap_or_else(|| "—".to_string())
+            )),
+            None => Ok(format!(
+                "Codigo de barras {} no esta en el catalogo.",
+                barcode
+            )),
+        }
+    }
+
+    async fn execute_store_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let store_type = args["store_type"].as_str();
+        let location = args["location"].as_str();
+        let notes = args["notes"].as_str();
+        let s = mem
+            .add_commerce_store(name, store_type, location, notes)
+            .await?;
+        Ok(format!("Tienda guardada: {} (id={})", s.name, s.store_id))
+    }
+
+    async fn execute_store_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let active_only = args["active_only"].as_bool().unwrap_or(true);
+        let stores = mem.list_commerce_stores(active_only).await?;
+        if stores.is_empty() {
+            return Ok("Aun no hay tiendas registradas.".to_string());
+        }
+        let mut out = String::from("# Tiendas\n\n");
+        for s in stores {
+            let t = s
+                .store_type
+                .as_deref()
+                .map(|x| format!(" [{}]", x))
+                .unwrap_or_default();
+            let active = if s.active { "" } else { " (inactiva)" };
+            out.push_str(&format!(
+                "- {}{}{}\n  id: {}\n",
+                s.name, t, active, s.store_id
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_store_deactivate(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = args["store_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'store_id'"))?;
+        let ok = mem.deactivate_commerce_store(id).await?;
+        if ok {
+            Ok("Tienda desactivada.".to_string())
+        } else {
+            Ok(format!("No encontre tienda activa con id {}.", id))
+        }
+    }
+
+    async fn execute_price_record(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let store_id = args["store_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'store_id'"))?;
+        let food_id = args["food_id"].as_str();
+        let product_name = args["product_name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'product_name'"))?;
+        let price = args["price"]
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'price' (numero)"))?;
+        let currency = args["currency"].as_str().unwrap_or("MXN");
+        let unit = args["unit"].as_str();
+        let observed_at = args["observed_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc));
+        let notes = args["notes"].as_str();
+        let p = mem
+            .record_commerce_price(
+                store_id,
+                food_id,
+                product_name,
+                price,
+                currency,
+                unit,
+                observed_at,
+                notes,
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Precio guardado: {} {} {} en {} (id={})",
+            p.product_name, p.price, p.currency, p.store_id, p.price_id
+        ))
+    }
+
+    async fn execute_prices_for_food(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let food_id = args["food_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'food_id'"))?;
+        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let prices = mem.list_prices_for_food(food_id, limit).await?;
+        if prices.is_empty() {
+            return Ok(format!("Sin precios registrados para {}.", food_id));
+        }
+        let mut out = String::from("# Precios\n\n");
+        for p in prices {
+            let unit = p
+                .unit
+                .as_deref()
+                .map(|u| format!("/{}", u))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "- [{}] {} {:.2} {}{} en {}\n",
+                p.observed_at.format("%Y-%m-%d"),
+                p.product_name,
+                p.price,
+                p.currency,
+                unit,
+                p.store_id
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_prices_at_store(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let store_id = args["store_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'store_id'"))?;
+        let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+        let prices = mem.list_prices_at_store(store_id, limit).await?;
+        if prices.is_empty() {
+            return Ok(format!("Sin precios registrados en {}.", store_id));
+        }
+        let mut out = String::from("# Precios en tienda\n\n");
+        for p in prices {
+            out.push_str(&format!(
+                "- [{}] {} {:.2} {}\n",
+                p.observed_at.format("%Y-%m-%d"),
+                p.product_name,
+                p.price,
+                p.currency
+            ));
+        }
+        Ok(out)
+    }
+
+    fn parse_shopping_items(value: &serde_json::Value) -> Vec<ShoppingListItem> {
+        value
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| {
+                        let name = v["name"].as_str()?.to_string();
+                        Some(ShoppingListItem {
+                            name,
+                            quantity: v["quantity"].as_f64(),
+                            unit: v["unit"].as_str().map(|s| s.to_string()),
+                            food_id: v["food_id"].as_str().map(|s| s.to_string()),
+                            checked: v["checked"].as_bool().unwrap_or(false),
+                            notes: v["notes"].as_str().map(|s| s.to_string()),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    async fn execute_shopping_list_create(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let target_store_id = args["target_store_id"].as_str();
+        let notes = args["notes"].as_str();
+        let items = parse_shopping_items(&args["items"]);
+        let l = mem
+            .create_shopping_list(name, target_store_id, &items, notes)
+            .await?;
+        Ok(format!(
+            "Lista creada: {} (id={}, {} items)",
+            l.name,
+            l.list_id,
+            l.items.len()
+        ))
+    }
+
+    async fn execute_shopping_list_check_item(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list_id = args["list_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'list_id'"))?;
+        let item_index = args["item_index"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'item_index'"))?
+            as usize;
+        let checked = args["checked"].as_bool().unwrap_or(true);
+        let ok = mem
+            .check_shopping_list_item(list_id, item_index, checked)
+            .await?;
+        if ok {
+            Ok(format!(
+                "Item {} marcado como {}.",
+                item_index,
+                if checked { "checked" } else { "unchecked" }
+            ))
+        } else {
+            Ok(format!(
+                "No encontre el item {} en la lista {}.",
+                item_index, list_id
+            ))
+        }
+    }
+
+    async fn execute_shopping_list_complete(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = args["list_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'list_id'"))?;
+        let ok = mem.complete_shopping_list(id).await?;
+        if ok {
+            Ok("Lista completada.".to_string())
+        } else {
+            Ok(format!("No encontre lista con id {}.", id))
+        }
+    }
+
+    async fn execute_shopping_list_archive(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = args["list_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'list_id'"))?;
+        let ok = mem.archive_shopping_list(id).await?;
+        if ok {
+            Ok("Lista archivada.".to_string())
+        } else {
+            Ok(format!("No encontre lista con id {}.", id))
+        }
+    }
+
+    async fn execute_shopping_list_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let status_filter = args["status"].as_str();
+        let lists = mem.list_shopping_lists(status_filter).await?;
+        if lists.is_empty() {
+            return Ok("Aun no hay listas de compras.".to_string());
+        }
+        let mut out = String::from("# Listas de compras\n\n");
+        for l in lists {
+            let total = l.items.len();
+            let done = l.items.iter().filter(|i| i.checked).count();
+            out.push_str(&format!(
+                "- [{}] {} ({}/{} items)\n  id: {}\n",
+                l.status, l.name, done, total, l.list_id
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_shopping_list_get(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = args["list_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'list_id'"))?;
+        let l = match mem.get_shopping_list(id).await? {
+            Some(l) => l,
+            None => return Ok(format!("No encontre lista con id {}.", id)),
+        };
+        let mut out = format!("# {} ({})\n\n", l.name, l.status);
+        for (i, it) in l.items.iter().enumerate() {
+            let mark = if it.checked { "[x]" } else { "[ ]" };
+            let qty = match (it.quantity, it.unit.as_deref()) {
+                (Some(q), Some(u)) => format!(" ({} {})", q, u),
+                (Some(q), None) => format!(" ({})", q),
+                _ => String::new(),
+            };
+            out.push_str(&format!("{}. {} {}{}\n", i, mark, it.name, qty));
         }
         Ok(out)
     }
