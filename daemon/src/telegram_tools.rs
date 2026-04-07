@@ -154,6 +154,40 @@ Herramientas:
 10b. **recall_archived** — Busca en el ARCHIVO de memoria. El sistema mueve automaticamente al archivo las memorias que dejaron de ser relevantes (poco accedidas + importancia baja + viejas), para que la busqueda activa quede limpia. Pero esas memorias NO se borran: viven en el archivo y se pueden recuperar con esta herramienta. Usala cuando el usuario diga frases como "tenia una idea pero ya no recuerdo cual era", "que paso con aquel proyecto que pause hace meses", "creo que te conte algo importante hace tiempo, ¿que era?", o cuando `recall` no encuentre nada y sospeches que el dato es viejo. Si encuentras algo aqui, MENCIONA explicitamente que es del archivo para que el usuario sepa que es algo que se habia "enfriado".
     args: {"query": "proyecto pausado o idea olvidada"}
 
+## Salud (Vida Plena BI.2)
+
+LifeOS guarda salud medica estructurada con las siguientes herramientas. **Reglas absolutas:** NUNCA diagnostiques, NUNCA prescribas medicamentos, NUNCA reemplazes a un medico real. Solo registras lo que el usuario te dice y le ayudas a llevar su historial. Si el usuario describe sintomas preocupantes, recomienda ver a un medico. Toda esta informacion es PERMANENTE — nunca se borra ni se pierde.
+
+10c. **health_fact_add** — Registra un hecho permanente de salud (alergia, condicion cronica, tipo de sangre, contacto de emergencia). Auto-permanente.
+    args: {"fact_type": "allergy", "label": "Penicilina", "severity": "severe", "notes": "Reaccion en 2024"}
+    fact_type: allergy, condition, blood_type, emergency_contact, donor, insurance, other
+    severity (opcional): mild, moderate, severe, life_threatening
+
+10d. **health_fact_list** — Lista los hechos de salud guardados, opcionalmente filtrados por tipo.
+    args: {"fact_type": "allergy"} o {} para ver todos
+
+10e. **medication_start** — Registra que el usuario empieza a tomar un medicamento. Si ya tomaba ese mismo medicamento con otra dosis, primero usa medication_stop con el med_id viejo. Cada cambio de dosis es un row nuevo (history table).
+    args: {"name": "Metformina", "dosage": "500mg", "frequency": "cada 12h", "condition": "diabetes tipo 2", "prescribed_by": "Dr. Lopez", "notes": "Con la comida"}
+
+10f. **medication_stop** — Marca que el usuario dejo de tomar un medicamento. Necesitas el med_id (lo obtienes con medication_active).
+    args: {"med_id": "hmed-..."}
+
+10g. **medication_active** — Lista los medicamentos que el usuario esta tomando ACTUALMENTE (los que no tienen ended_at).
+    args: {}
+
+10h. **vital_record** — Registra una lectura de signo vital. Para presion arterial, registra los DOS valores (sistolica y diastolica) como dos llamadas separadas con el mismo measured_at.
+    args: {"vital_type": "glucose", "value_numeric": 110, "unit": "mg/dL", "context": "en ayunas"}
+    Tipos comunes: glucose, weight, blood_pressure_systolic, blood_pressure_diastolic, heart_rate_resting, temperature, oxygen_saturation, sleep_hours, mood, pain_intensity, migraine_intensity
+
+10i. **vital_history** — Devuelve la serie temporal de un tipo de vital, mas reciente primero.
+    args: {"vital_type": "glucose", "limit": 30}
+
+10j. **lab_add** — Registra el resultado de un analisis de laboratorio.
+    args: {"test_name": "HbA1c", "value_numeric": 6.4, "unit": "%", "reference_low": 0, "reference_high": 5.7, "lab_name": "Salud Digna", "notes": "Tomado en ayunas"}
+
+10k. **health_summary** — Devuelve el resumen completo de salud del usuario: hechos permanentes + medicamentos activos + vitales recientes + analisis recientes. Usalo cuando el usuario te pida prepararse para una visita medica o quiera revisar todo su historial.
+    args: {}
+
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
 
@@ -1214,6 +1248,16 @@ Herramientas:
             "remember" => execute_remember(&call.args, ctx).await,
             "recall" => execute_recall(&call.args, ctx).await,
             "recall_archived" => execute_recall_archived(&call.args, ctx).await,
+            // BI.2 — Salud médica estructurada
+            "health_fact_add" => execute_health_fact_add(&call.args, ctx).await,
+            "health_fact_list" => execute_health_fact_list(&call.args, ctx).await,
+            "medication_start" => execute_medication_start(&call.args, ctx).await,
+            "medication_stop" => execute_medication_stop(&call.args, ctx).await,
+            "medication_active" => execute_medication_active(ctx).await,
+            "vital_record" => execute_vital_record(&call.args, ctx).await,
+            "vital_history" => execute_vital_history(&call.args, ctx).await,
+            "lab_add" => execute_lab_add(&call.args, ctx).await,
+            "health_summary" => execute_health_summary(ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -2201,6 +2245,360 @@ Herramientas:
             }
             Err(e) => Ok(format!("Error buscando en el archivo: {}", e)),
         }
+    }
+
+    // ========================================================================
+    // Fase BI.2 — Salud médica estructurada (Vida Plena)
+    // ========================================================================
+
+    /// Helper: pull `&MemoryPlaneManager` out of `ctx.memory` or fail
+    /// gracefully with a Spanish error string. Saves the same 5 lines
+    /// of boilerplate from each BI.2 tool below.
+    async fn require_memory(
+        ctx: &ToolContext,
+    ) -> Result<tokio::sync::RwLockReadGuard<'_, MemoryPlaneManager>> {
+        match &ctx.memory {
+            Some(m) => Ok(m.read().await),
+            None => Err(anyhow::anyhow!(
+                "La memoria persistente no esta disponible (memory_plane no inicializado)"
+            )),
+        }
+    }
+
+    async fn execute_health_fact_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let fact_type = args["fact_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'fact_type'"))?;
+        let label = args["label"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'label'"))?;
+        let severity = args["severity"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let fact = mem
+            .add_health_fact(fact_type, label, severity, notes, None)
+            .await?;
+        Ok(format!(
+            "Hecho de salud guardado (id: {}, tipo: {}, etiqueta: \"{}\")",
+            fact.fact_id, fact.fact_type, fact.label
+        ))
+    }
+
+    async fn execute_health_fact_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let fact_type = args["fact_type"].as_str();
+        let mem = require_memory(ctx).await?;
+        let facts = mem.list_health_facts(fact_type).await?;
+        if facts.is_empty() {
+            return Ok("No hay hechos de salud registrados.".into());
+        }
+        let lines: Vec<String> = facts
+            .iter()
+            .map(|f| {
+                let sev = f
+                    .severity
+                    .as_deref()
+                    .map(|s| format!(" [{}]", s))
+                    .unwrap_or_default();
+                let notes = if f.notes.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {}", f.notes)
+                };
+                format!("- [{}] {}{}{}", f.fact_type, f.label, sev, notes)
+            })
+            .collect();
+        Ok(format!("Hechos de salud:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_medication_start(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let dosage = args["dosage"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'dosage'"))?;
+        let frequency = args["frequency"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'frequency'"))?;
+        let condition = args["condition"].as_str();
+        let prescribed_by = args["prescribed_by"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let med = mem
+            .start_medication(
+                name,
+                dosage,
+                frequency,
+                condition,
+                prescribed_by,
+                notes,
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Medicamento iniciado (id: {}): {} {} {}",
+            med.med_id, med.name, med.dosage, med.frequency
+        ))
+    }
+
+    async fn execute_medication_stop(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let med_id = args["med_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'med_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let stopped = mem.stop_medication(med_id).await?;
+        if stopped {
+            Ok(format!("Medicamento {} marcado como suspendido.", med_id))
+        } else {
+            Ok(format!(
+                "No se encontro un medicamento activo con id {}.",
+                med_id
+            ))
+        }
+    }
+
+    async fn execute_medication_active(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let meds = mem.list_active_medications().await?;
+        if meds.is_empty() {
+            return Ok("No hay medicamentos activos.".into());
+        }
+        let lines: Vec<String> = meds
+            .iter()
+            .map(|m| {
+                let cond = m
+                    .condition
+                    .as_deref()
+                    .map(|c| format!(" para {}", c))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] {} {} {}{} (desde {})",
+                    m.med_id,
+                    m.name,
+                    m.dosage,
+                    m.frequency,
+                    cond,
+                    m.started_at.format("%Y-%m-%d")
+                )
+            })
+            .collect();
+        Ok(format!("Medicamentos activos:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_vital_record(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let vital_type = args["vital_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'vital_type'"))?;
+        let unit = args["unit"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'unit'"))?;
+        let value_numeric = args["value_numeric"].as_f64();
+        let value_text = args["value_text"].as_str();
+        let context = args["context"].as_str();
+        let mem = require_memory(ctx).await?;
+        let vital = mem
+            .record_vital(
+                vital_type,
+                value_numeric,
+                value_text,
+                unit,
+                None,
+                context,
+                None,
+            )
+            .await?;
+        let value_display = vital
+            .value_numeric
+            .map(|v| format!("{}", v))
+            .unwrap_or_else(|| vital.value_text.clone().unwrap_or_default());
+        Ok(format!(
+            "Vital registrado: {} = {} {}",
+            vital.vital_type, value_display, vital.unit
+        ))
+    }
+
+    async fn execute_vital_history(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let vital_type = args["vital_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'vital_type'"))?;
+        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let mem = require_memory(ctx).await?;
+        let series = mem.get_vitals_timeseries(vital_type, limit).await?;
+        if series.is_empty() {
+            return Ok(format!("No hay registros de '{}'.", vital_type));
+        }
+        let lines: Vec<String> = series
+            .iter()
+            .map(|v| {
+                let value = v
+                    .value_numeric
+                    .map(|n| format!("{}", n))
+                    .unwrap_or_else(|| v.value_text.clone().unwrap_or_default());
+                let ctx_str = v
+                    .context
+                    .as_deref()
+                    .map(|c| format!(" ({})", c))
+                    .unwrap_or_default();
+                format!(
+                    "- {}: {} {}{}",
+                    v.measured_at.format("%Y-%m-%d %H:%M"),
+                    value,
+                    v.unit,
+                    ctx_str
+                )
+            })
+            .collect();
+        Ok(format!(
+            "Historial de {} ({} lecturas):\n{}",
+            vital_type,
+            series.len(),
+            lines.join("\n")
+        ))
+    }
+
+    async fn execute_lab_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let test_name = args["test_name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'test_name'"))?;
+        let value_numeric = args["value_numeric"]
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'value_numeric'"))?;
+        let unit = args["unit"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'unit'"))?;
+        let reference_low = args["reference_low"].as_f64();
+        let reference_high = args["reference_high"].as_f64();
+        let lab_name = args["lab_name"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let lab = mem
+            .add_lab_result(
+                test_name,
+                value_numeric,
+                unit,
+                reference_low,
+                reference_high,
+                None,
+                lab_name,
+                notes,
+                None,
+                None,
+            )
+            .await?;
+        let range = match (lab.reference_low, lab.reference_high) {
+            (Some(lo), Some(hi)) => format!(" (referencia {}-{})", lo, hi),
+            _ => String::new(),
+        };
+        Ok(format!(
+            "Resultado registrado: {} = {} {}{}",
+            lab.test_name, lab.value_numeric, lab.unit, range
+        ))
+    }
+
+    async fn execute_health_summary(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let summary = mem.get_health_summary(5, 20).await?;
+        let mut out = String::from("# Resumen de salud\n\n");
+
+        if summary.facts.is_empty() {
+            out.push_str("## Hechos permanentes\n(ninguno registrado)\n\n");
+        } else {
+            out.push_str("## Hechos permanentes\n");
+            for f in &summary.facts {
+                let sev = f
+                    .severity
+                    .as_deref()
+                    .map(|s| format!(" [{}]", s))
+                    .unwrap_or_default();
+                out.push_str(&format!("- [{}] {}{}\n", f.fact_type, f.label, sev));
+            }
+            out.push('\n');
+        }
+
+        if summary.active_medications.is_empty() {
+            out.push_str("## Medicamentos activos\n(ninguno)\n\n");
+        } else {
+            out.push_str("## Medicamentos activos\n");
+            for m in &summary.active_medications {
+                let cond = m
+                    .condition
+                    .as_deref()
+                    .map(|c| format!(" para {}", c))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- {} {} {}{} (desde {})\n",
+                    m.name,
+                    m.dosage,
+                    m.frequency,
+                    cond,
+                    m.started_at.format("%Y-%m-%d")
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !summary.recent_vitals.is_empty() {
+            out.push_str("## Vitales recientes\n");
+            for v in summary.recent_vitals.iter().take(15) {
+                let value = v
+                    .value_numeric
+                    .map(|n| format!("{}", n))
+                    .unwrap_or_else(|| v.value_text.clone().unwrap_or_default());
+                out.push_str(&format!(
+                    "- [{}] {}: {} {}\n",
+                    v.measured_at.format("%Y-%m-%d"),
+                    v.vital_type,
+                    value,
+                    v.unit
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !summary.recent_labs.is_empty() {
+            out.push_str("## Análisis recientes\n");
+            for l in &summary.recent_labs {
+                let range = match (l.reference_low, l.reference_high) {
+                    (Some(lo), Some(hi)) => format!(" (ref {}-{})", lo, hi),
+                    _ => String::new(),
+                };
+                out.push_str(&format!(
+                    "- [{}] {}: {} {}{}\n",
+                    l.measured_at.format("%Y-%m-%d"),
+                    l.test_name,
+                    l.value_numeric,
+                    l.unit,
+                    range
+                ));
+            }
+            out.push('\n');
+        }
+
+        out.push_str(
+            "\n_Generado por LifeOS — para consulta con tu medico, no es diagnostico._\n",
+        );
+        Ok(out)
     }
 
     async fn execute_computer_type(args: &serde_json::Value) -> Result<String> {

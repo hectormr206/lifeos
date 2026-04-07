@@ -102,6 +102,100 @@ CREATE TABLE IF NOT EXISTS memory_links (
 );
 CREATE INDEX IF NOT EXISTS idx_links_from ON memory_links(from_entry);
 CREATE INDEX IF NOT EXISTS idx_links_to ON memory_links(to_entry);
+
+-- ============================================================================
+-- Fase BI.2 — Salud médica estructurada (Vida Plena)
+-- ============================================================================
+-- All five tables below live in the same memory.db file as memory_entries,
+-- share the same encryption key for sensitive fields, share the same
+-- backup, and link to memory_entries via `source_entry_id` so the narrative
+-- and the structured fact stay coupled. Every row is auto-permanent at the
+-- application level by virtue of the `health_*` kind being inserted into
+-- memory_entries when the user records a health event.
+
+-- Permanent facts: alergias, condiciones, tipo de sangre, contactos.
+CREATE TABLE IF NOT EXISTS health_facts (
+    fact_id TEXT PRIMARY KEY,
+    fact_type TEXT NOT NULL,
+    label TEXT NOT NULL,
+    severity TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_facts_type ON health_facts(fact_type);
+
+-- Medications as a HISTORY TABLE: every dose change is a new row.
+CREATE TABLE IF NOT EXISTS health_medications (
+    med_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    dosage TEXT NOT NULL,
+    frequency TEXT NOT NULL,
+    condition TEXT,
+    prescribed_by TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_meds_name ON health_medications(name);
+CREATE INDEX IF NOT EXISTS idx_health_meds_active ON health_medications(ended_at);
+
+-- Vital signs timeseries (presión, glucosa, peso, FC, etc.).
+CREATE TABLE IF NOT EXISTS health_vitals (
+    vital_id TEXT PRIMARY KEY,
+    vital_type TEXT NOT NULL,
+    value_numeric REAL,
+    value_text TEXT,
+    unit TEXT NOT NULL,
+    measured_at TEXT NOT NULL,
+    context TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_vitals_type_time
+    ON health_vitals(vital_type, measured_at);
+
+-- Resultados de laboratorio con rangos de referencia.
+CREATE TABLE IF NOT EXISTS health_lab_results (
+    lab_id TEXT PRIMARY KEY,
+    test_name TEXT NOT NULL,
+    value_numeric REAL NOT NULL,
+    unit TEXT NOT NULL,
+    reference_low REAL,
+    reference_high REAL,
+    measured_at TEXT NOT NULL,
+    lab_name TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    attachment_id TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_labs_name_time
+    ON health_lab_results(test_name, measured_at);
+
+-- Adjuntos cifrados (recetas, radiografías, PDFs de análisis).
+-- El archivo binario vive en ~/.local/share/lifeos/health_attachments/
+-- cifrado con AES-GCM-SIV; este row solo guarda la metadata.
+CREATE TABLE IF NOT EXISTS health_attachments (
+    attachment_id TEXT PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    description TEXT,
+    related_event TEXT,
+    sha256 TEXT NOT NULL,
+    nonce_b64 TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_attachments_type
+    ON health_attachments(file_type);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2842,6 +2936,1058 @@ pub struct ClusterSummaryReport {
     pub originals_archived: usize,
 }
 
+// ============================================================================
+// Fase BI.2 — Salud médica estructurada (Vida Plena)
+// ============================================================================
+
+/// A persistent medical fact about the user.
+///
+/// Examples: alergia a la penicilina, diabetes tipo 2 desde 2024,
+/// tipo de sangre O+, contacto de emergencia. Auto-permanent: never
+/// decays, never archives, never dedups.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthFact {
+    pub fact_id: String,
+    /// Categoría: `allergy`, `condition`, `blood_type`, `emergency_contact`,
+    /// `donor`, `insurance`, etc. (free text — convention only).
+    pub fact_type: String,
+    /// Etiqueta humana: "Penicilina", "Diabetes tipo 2", "O+",
+    /// "Mamá: 555-1234".
+    pub label: String,
+    /// Severidad cuando aplica: `mild`, `moderate`, `severe`,
+    /// `life_threatening`. None para hechos sin gravedad (tipo de
+    /// sangre, contacto).
+    pub severity: Option<String>,
+    /// Notas adicionales — cifradas en disco. Vacío cuando no hay.
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One row in the medications history table.
+///
+/// **History semantics:** every dose change creates a NEW row. The
+/// previous row gets `ended_at` set, never deleted. This means a
+/// query for "qué tomas hoy" filters `WHERE ended_at IS NULL`, while
+/// "todo el historial" simply selects all rows. Two rows for the
+/// same medication name are normal and expected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Medication {
+    pub med_id: String,
+    pub name: String,
+    pub dosage: String,
+    pub frequency: String,
+    pub condition: Option<String>,
+    pub prescribed_by: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One vital sign reading.
+///
+/// Most vitals fit in `value_numeric` (peso, glucosa, temperatura).
+/// Blood pressure is the exception — it needs both systolic and
+/// diastolic, so we either store it as two separate rows
+/// (`blood_pressure_systolic`, `blood_pressure_diastolic`) sharing
+/// the same `measured_at`, OR as a single row with `value_text =
+/// "130/85"`. The convenience helpers in this module use the
+/// two-row pattern because it makes timeseries queries cleaner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vital {
+    pub vital_id: String,
+    pub vital_type: String,
+    pub value_numeric: Option<f64>,
+    pub value_text: Option<String>,
+    pub unit: String,
+    pub measured_at: DateTime<Utc>,
+    pub context: Option<String>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One lab test result with reference range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabResult {
+    pub lab_id: String,
+    pub test_name: String,
+    pub value_numeric: f64,
+    pub unit: String,
+    pub reference_low: Option<f64>,
+    pub reference_high: Option<f64>,
+    pub measured_at: DateTime<Utc>,
+    pub lab_name: Option<String>,
+    pub notes: String,
+    /// Optional FK to a row in `health_attachments`.
+    pub attachment_id: Option<String>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Encrypted attachment metadata. The actual binary lives at
+/// `~/.local/share/lifeos/health_attachments/<attachment_id>.enc`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthAttachment {
+    pub attachment_id: String,
+    pub file_path: String,
+    /// Categoría libre: `prescription`, `lab_pdf`, `xray`, `scan`,
+    /// `consult_note`, `other`.
+    pub file_type: String,
+    pub description: Option<String>,
+    pub related_event: Option<String>,
+    pub sha256: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `MemoryPlaneManager::get_health_summary`.
+///
+/// This is what powers the "preparación para visita médica" coaching
+/// flow: a single struct with everything a doctor would want to see
+/// at a glance.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HealthSummary {
+    pub facts: Vec<HealthFact>,
+    pub active_medications: Vec<Medication>,
+    pub recent_vitals: Vec<Vital>,
+    pub recent_labs: Vec<LabResult>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Health facts (alergias, condiciones, tipo de sangre, contactos)
+    // -----------------------------------------------------------------------
+
+    /// Add a permanent medical fact about the user.
+    ///
+    /// `notes` is encrypted at rest with the same default key as the
+    /// rest of `memory.db`. An empty `notes` string skips the
+    /// encryption step entirely. The optional `source_entry_id` links
+    /// this fact to a narrative entry in `memory_entries` so the
+    /// conversational context (where the user told Axi about the
+    /// allergy) is recoverable.
+    pub async fn add_health_fact(
+        &self,
+        fact_type: &str,
+        label: &str,
+        severity: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<HealthFact> {
+        let fact_type = normalize_non_empty(fact_type).context("fact_type required")?;
+        let label = normalize_non_empty(label).context("label required")?;
+        let severity = severity
+            .and_then(normalize_non_empty)
+            .map(|s| s.to_lowercase());
+        let notes_owned = notes.trim().to_string();
+
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _digest) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let fact_id = format!("hfact-{}", Uuid::new_v4());
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let fact_id_clone = fact_id.clone();
+        let fact_type_clone = fact_type.clone();
+        let label_clone = label.clone();
+        let severity_clone = severity.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_facts
+                 (fact_id, fact_type, label, severity, notes_nonce_b64,
+                  notes_ciphertext_b64, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                params![
+                    fact_id_clone,
+                    fact_type_clone,
+                    label_clone,
+                    severity_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(HealthFact {
+            fact_id,
+            fact_type,
+            label,
+            severity,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// List all health facts of an optional `fact_type`. Notes are
+    /// decrypted in this function (cheap — encrypted notes are tiny).
+    pub async fn list_health_facts(
+        &self,
+        fact_type: Option<&str>,
+    ) -> Result<Vec<HealthFact>> {
+        let db_path = self.db_path.clone();
+        let filter = fact_type.map(|s| s.to_string());
+        let rows = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT fact_id, fact_type, label, severity, notes_nonce_b64,
+                        notes_ciphertext_b64, source_entry_id, created_at, updated_at
+                 FROM health_facts",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE fact_type = ?1");
+            }
+            sql.push_str(" ORDER BY created_at DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<HealthFactRaw> {
+                Ok(HealthFactRaw {
+                    fact_id: row.get(0)?,
+                    fact_type: row.get(1)?,
+                    label: row.get(2)?,
+                    severity: row.get(3)?,
+                    notes_nonce_b64: row.get(4)?,
+                    notes_ciphertext_b64: row.get(5)?,
+                    source_entry_id: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            };
+            let raws: Vec<HealthFactRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let notes = match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                _ => String::new(),
+            };
+            out.push(HealthFact {
+                fact_id: r.fact_id,
+                fact_type: r.fact_type,
+                label: r.label,
+                severity: r.severity,
+                notes,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Delete a health fact. Returns `true` if a row was actually
+    /// removed. Use with care — the auto-permanent contract for
+    /// wellness data means this should only be called when the user
+    /// explicitly asks ("ya no soy alérgico a X después del
+    /// tratamiento de desensibilización").
+    pub async fn delete_health_fact(&self, fact_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = fact_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute("DELETE FROM health_facts WHERE fact_id = ?1", params![id])?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Medications (history table)
+    // -----------------------------------------------------------------------
+
+    /// Start a new medication. If the user is already taking the same
+    /// medication, the caller should `stop_medication(old_med_id)`
+    /// first to close out the previous row — that is the history-table
+    /// contract.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_medication(
+        &self,
+        name: &str,
+        dosage: &str,
+        frequency: &str,
+        condition: Option<&str>,
+        prescribed_by: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Medication> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let dosage = normalize_non_empty(dosage).context("dosage required")?;
+        let frequency = normalize_non_empty(frequency).context("frequency required")?;
+        let condition = condition.and_then(normalize_non_empty);
+        let prescribed_by = prescribed_by.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _digest) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let med_id = format!("hmed-{}", Uuid::new_v4());
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let med_id_clone = med_id.clone();
+        let name_clone = name.clone();
+        let dosage_clone = dosage.clone();
+        let frequency_clone = frequency.clone();
+        let condition_clone = condition.clone();
+        let prescribed_by_clone = prescribed_by.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_medications
+                 (med_id, name, dosage, frequency, condition, prescribed_by,
+                  started_at, ended_at, notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?7, ?7)",
+                params![
+                    med_id_clone,
+                    name_clone,
+                    dosage_clone,
+                    frequency_clone,
+                    condition_clone,
+                    prescribed_by_clone,
+                    now_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Medication {
+            med_id,
+            name,
+            dosage,
+            frequency,
+            condition,
+            prescribed_by,
+            started_at: now,
+            ended_at: None,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark a medication as ended (the user stopped taking it). Sets
+    /// `ended_at = now` and updates `updated_at`. Returns `true` if
+    /// the row was active and is now closed.
+    pub async fn stop_medication(&self, med_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = med_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE health_medications
+                 SET ended_at = ?1, updated_at = ?1
+                 WHERE med_id = ?2 AND ended_at IS NULL",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// All medications the user is currently taking (ended_at IS NULL),
+    /// most-recently-started first.
+    pub async fn list_active_medications(&self) -> Result<Vec<Medication>> {
+        self.list_medications_internal(true).await
+    }
+
+    /// Full medication history (active + stopped), most-recently-started first.
+    pub async fn list_medication_history(&self) -> Result<Vec<Medication>> {
+        self.list_medications_internal(false).await
+    }
+
+    async fn list_medications_internal(&self, active_only: bool) -> Result<Vec<Medication>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT med_id, name, dosage, frequency, condition, prescribed_by,
+                        started_at, ended_at, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM health_medications
+                 WHERE ended_at IS NULL
+                 ORDER BY started_at DESC"
+            } else {
+                "SELECT med_id, name, dosage, frequency, condition, prescribed_by,
+                        started_at, ended_at, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM health_medications
+                 ORDER BY started_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<MedicationRaw> = stmt
+                .query_map([], |row| {
+                    Ok(MedicationRaw {
+                        med_id: row.get(0)?,
+                        name: row.get(1)?,
+                        dosage: row.get(2)?,
+                        frequency: row.get(3)?,
+                        condition: row.get(4)?,
+                        prescribed_by: row.get(5)?,
+                        started_at: row.get(6)?,
+                        ended_at: row.get(7)?,
+                        notes_nonce_b64: row.get(8)?,
+                        notes_ciphertext_b64: row.get(9)?,
+                        source_entry_id: row.get(10)?,
+                        created_at: row.get(11)?,
+                        updated_at: row.get(12)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Medication {
+                med_id: r.med_id,
+                name: r.name,
+                dosage: r.dosage,
+                frequency: r.frequency,
+                condition: r.condition,
+                prescribed_by: r.prescribed_by,
+                started_at: parse_utc(&r.started_at),
+                ended_at: r.ended_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Vital signs (timeseries)
+    // -----------------------------------------------------------------------
+
+    /// Record a vital sign reading.
+    ///
+    /// `value_numeric` covers most cases. Use `value_text` only when
+    /// the reading does not fit in a single number — but prefer the
+    /// two-row pattern for blood pressure (one row for systolic, one
+    /// for diastolic, both with the same `measured_at`).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_vital(
+        &self,
+        vital_type: &str,
+        value_numeric: Option<f64>,
+        value_text: Option<&str>,
+        unit: &str,
+        measured_at: Option<DateTime<Utc>>,
+        context: Option<&str>,
+        source_entry_id: Option<&str>,
+    ) -> Result<Vital> {
+        let vital_type = normalize_non_empty(vital_type).context("vital_type required")?;
+        let unit = normalize_non_empty(unit).context("unit required")?;
+        let value_text = value_text.and_then(normalize_non_empty);
+        let context = context.and_then(normalize_non_empty);
+        if value_numeric.is_none() && value_text.is_none() {
+            anyhow::bail!("vital must have value_numeric or value_text");
+        }
+
+        let measured = measured_at.unwrap_or_else(Utc::now);
+        let measured_rfc = measured.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let vital_id = format!("hvit-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let vital_id_clone = vital_id.clone();
+        let vital_type_clone = vital_type.clone();
+        let unit_clone = unit.clone();
+        let value_text_clone = value_text.clone();
+        let context_clone = context.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_vitals
+                 (vital_id, vital_type, value_numeric, value_text, unit,
+                  measured_at, context, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    vital_id_clone,
+                    vital_type_clone,
+                    value_numeric,
+                    value_text_clone,
+                    unit_clone,
+                    measured_rfc,
+                    context_clone,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Vital {
+            vital_id,
+            vital_type,
+            value_numeric,
+            value_text,
+            unit,
+            measured_at: measured,
+            context,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// Returns the timeseries for a given `vital_type`, newest first,
+    /// limited to `limit` rows.
+    pub async fn get_vitals_timeseries(
+        &self,
+        vital_type: &str,
+        limit: usize,
+    ) -> Result<Vec<Vital>> {
+        let db_path = self.db_path.clone();
+        let vital_type = vital_type.to_string();
+        let limit = limit.clamp(1, 5000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT vital_id, vital_type, value_numeric, value_text, unit,
+                        measured_at, context, source_entry_id, created_at
+                 FROM health_vitals
+                 WHERE vital_type = ?1
+                 ORDER BY measured_at DESC
+                 LIMIT ?2",
+            )?;
+            let raws: Vec<VitalRaw> = stmt
+                .query_map(params![vital_type, limit], |row| {
+                    Ok(VitalRaw {
+                        vital_id: row.get(0)?,
+                        vital_type: row.get(1)?,
+                        value_numeric: row.get(2)?,
+                        value_text: row.get(3)?,
+                        unit: row.get(4)?,
+                        measured_at: row.get(5)?,
+                        context: row.get(6)?,
+                        source_entry_id: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Vital {
+                vital_id: r.vital_id,
+                vital_type: r.vital_type,
+                value_numeric: r.value_numeric,
+                value_text: r.value_text,
+                unit: r.unit,
+                measured_at: parse_utc(&r.measured_at),
+                context: r.context,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Lab results
+    // -----------------------------------------------------------------------
+
+    /// Add a lab test result with optional reference range.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_lab_result(
+        &self,
+        test_name: &str,
+        value_numeric: f64,
+        unit: &str,
+        reference_low: Option<f64>,
+        reference_high: Option<f64>,
+        measured_at: Option<DateTime<Utc>>,
+        lab_name: Option<&str>,
+        notes: &str,
+        attachment_id: Option<&str>,
+        source_entry_id: Option<&str>,
+    ) -> Result<LabResult> {
+        let test_name = normalize_non_empty(test_name).context("test_name required")?;
+        let unit = normalize_non_empty(unit).context("unit required")?;
+        let lab_name = lab_name.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _digest) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let measured = measured_at.unwrap_or_else(Utc::now);
+        let measured_rfc = measured.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let lab_id = format!("hlab-{}", Uuid::new_v4());
+        let attachment_owned = attachment_id.map(|s| s.to_string());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let lab_id_clone = lab_id.clone();
+        let test_name_clone = test_name.clone();
+        let unit_clone = unit.clone();
+        let lab_name_clone = lab_name.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_lab_results
+                 (lab_id, test_name, value_numeric, unit, reference_low,
+                  reference_high, measured_at, lab_name, notes_nonce_b64,
+                  notes_ciphertext_b64, attachment_id, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    lab_id_clone,
+                    test_name_clone,
+                    value_numeric,
+                    unit_clone,
+                    reference_low,
+                    reference_high,
+                    measured_rfc,
+                    lab_name_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    attachment_owned,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(LabResult {
+            lab_id,
+            test_name,
+            value_numeric,
+            unit,
+            reference_low,
+            reference_high,
+            measured_at: measured,
+            lab_name,
+            notes: notes_owned,
+            attachment_id: attachment_id.map(|s| s.to_string()),
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// List lab results for an optional test name, newest first.
+    pub async fn list_lab_results(
+        &self,
+        test_name: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<LabResult>> {
+        let db_path = self.db_path.clone();
+        let filter = test_name.map(|s| s.to_string());
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT lab_id, test_name, value_numeric, unit, reference_low,
+                        reference_high, measured_at, lab_name, notes_nonce_b64,
+                        notes_ciphertext_b64, attachment_id, source_entry_id, created_at
+                 FROM health_lab_results",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE test_name = ?1 ORDER BY measured_at DESC LIMIT ?2");
+            } else {
+                sql.push_str(" ORDER BY measured_at DESC LIMIT ?1");
+            }
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<LabResultRaw> {
+                Ok(LabResultRaw {
+                    lab_id: row.get(0)?,
+                    test_name: row.get(1)?,
+                    value_numeric: row.get(2)?,
+                    unit: row.get(3)?,
+                    reference_low: row.get(4)?,
+                    reference_high: row.get(5)?,
+                    measured_at: row.get(6)?,
+                    lab_name: row.get(7)?,
+                    notes_nonce_b64: row.get(8)?,
+                    notes_ciphertext_b64: row.get(9)?,
+                    attachment_id: row.get(10)?,
+                    source_entry_id: row.get(11)?,
+                    created_at: row.get(12)?,
+                })
+            };
+            let raws: Vec<LabResultRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f, limit], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map(params![limit], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| LabResult {
+                lab_id: r.lab_id,
+                test_name: r.test_name,
+                value_numeric: r.value_numeric,
+                unit: r.unit,
+                reference_low: r.reference_low,
+                reference_high: r.reference_high,
+                measured_at: parse_utc(&r.measured_at),
+                lab_name: r.lab_name,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                attachment_id: r.attachment_id,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Encrypted attachments (recetas, radiografías, PDFs)
+    // -----------------------------------------------------------------------
+
+    /// Encrypt a binary blob and store it under
+    /// `<data_dir>/health_attachments/<attachment_id>.enc`.
+    ///
+    /// Returns the metadata row for the new attachment. The plaintext
+    /// is never written to disk — only the AES-GCM-SIV ciphertext.
+    pub async fn add_health_attachment(
+        &self,
+        file_type: &str,
+        description: Option<&str>,
+        related_event: Option<&str>,
+        plaintext_bytes: Vec<u8>,
+        source_entry_id: Option<&str>,
+    ) -> Result<HealthAttachment> {
+        let file_type = normalize_non_empty(file_type).context("file_type required")?;
+        let description = description.and_then(normalize_non_empty);
+        let related_event = related_event.and_then(normalize_non_empty);
+        if plaintext_bytes.is_empty() {
+            anyhow::bail!("attachment is empty");
+        }
+
+        let attachment_id = format!("hatt-{}", Uuid::new_v4());
+        let attachments_dir = self.data_dir.join("health_attachments");
+        std::fs::create_dir_all(&attachments_dir)
+            .context("failed to create health_attachments directory")?;
+        let file_path = attachments_dir.join(format!("{}.enc", attachment_id));
+
+        // SHA256 of plaintext for integrity check on read.
+        let sha256 = format!("{:x}", Sha256::digest(&plaintext_bytes));
+
+        // Encrypt the binary blob.
+        let cipher = cipher()?;
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext_bytes.as_ref())
+            .map_err(|e| anyhow::anyhow!("attachment encryption failed: {}", e))?;
+        let nonce_b64 = B64.encode(nonce_bytes);
+
+        // Write to disk (cipher only — never the plaintext).
+        let file_path_str = file_path.to_string_lossy().to_string();
+        tokio::fs::write(&file_path, &ciphertext)
+            .await
+            .with_context(|| format!("failed to write attachment to {}", file_path_str))?;
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let attachment_id_clone = attachment_id.clone();
+        let file_path_clone = file_path_str.clone();
+        let file_type_clone = file_type.clone();
+        let description_clone = description.clone();
+        let related_event_clone = related_event.clone();
+        let sha256_clone = sha256.clone();
+        let nonce_b64_clone = nonce_b64.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_attachments
+                 (attachment_id, file_path, file_type, description, related_event,
+                  sha256, nonce_b64, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    attachment_id_clone,
+                    file_path_clone,
+                    file_type_clone,
+                    description_clone,
+                    related_event_clone,
+                    sha256_clone,
+                    nonce_b64_clone,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(HealthAttachment {
+            attachment_id,
+            file_path: file_path_str,
+            file_type,
+            description,
+            related_event,
+            sha256,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// Decrypt and return the plaintext of an attachment by id.
+    /// Verifies the SHA256 — bails if the file has been tampered with.
+    pub async fn get_health_attachment(&self, attachment_id: &str) -> Result<Vec<u8>> {
+        let db_path = self.db_path.clone();
+        let id = attachment_id.to_string();
+        let (file_path, nonce_b64, expected_sha) = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let row: (String, String, String) = db.query_row(
+                "SELECT file_path, nonce_b64, sha256 FROM health_attachments
+                 WHERE attachment_id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            Ok::<_, anyhow::Error>(row)
+        })
+        .await??;
+
+        let ciphertext = tokio::fs::read(&file_path)
+            .await
+            .with_context(|| format!("failed to read attachment file {}", file_path))?;
+
+        let cipher = cipher()?;
+        let nonce_bytes = B64
+            .decode(nonce_b64.as_bytes())
+            .context("invalid attachment nonce encoding")?;
+        if nonce_bytes.len() != 12 {
+            anyhow::bail!("invalid attachment nonce length");
+        }
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|e| anyhow::anyhow!("attachment decryption failed: {}", e))?;
+
+        let actual_sha = format!("{:x}", Sha256::digest(&plaintext));
+        if actual_sha != expected_sha {
+            anyhow::bail!("attachment integrity check failed");
+        }
+        Ok(plaintext)
+    }
+
+    /// List attachment metadata (NOT the binary contents).
+    pub async fn list_health_attachments(
+        &self,
+        file_type: Option<&str>,
+    ) -> Result<Vec<HealthAttachment>> {
+        let db_path = self.db_path.clone();
+        let filter = file_type.map(|s| s.to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT attachment_id, file_path, file_type, description,
+                        related_event, sha256, nonce_b64, source_entry_id, created_at
+                 FROM health_attachments",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE file_type = ?1");
+            }
+            sql.push_str(" ORDER BY created_at DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<HealthAttachment> {
+                Ok(HealthAttachment {
+                    attachment_id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    file_type: row.get(2)?,
+                    description: row.get(3)?,
+                    related_event: row.get(4)?,
+                    sha256: row.get(5)?,
+                    // skip nonce — caller does not need it
+                    source_entry_id: row.get(7)?,
+                    created_at: parse_utc(&row.get::<_, String>(8)?),
+                })
+            };
+            let raws: Vec<HealthAttachment> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws)
+    }
+
+    // -----------------------------------------------------------------------
+    // Health summary aggregator
+    // -----------------------------------------------------------------------
+
+    /// Aggregate health snapshot for the user.
+    ///
+    /// Combines: all health_facts, all active medications, the last
+    /// `vitals_per_type` vitals per known vital_type, and the last
+    /// `recent_labs_count` lab results. This is what powers the
+    /// "preparación para visita médica" coaching flow — one struct
+    /// the doctor can review at a glance.
+    pub async fn get_health_summary(
+        &self,
+        vitals_per_type: usize,
+        recent_labs_count: usize,
+    ) -> Result<HealthSummary> {
+        let facts = self.list_health_facts(None).await?;
+        let active_medications = self.list_active_medications().await?;
+
+        // Pull recent vitals across all types. We grab the union of
+        // every distinct vital_type and then take the most recent N
+        // per type so the timeseries summary is balanced.
+        let known_types: Vec<String> = {
+            let db_path = self.db_path.clone();
+            tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+                let db = Self::open_db(&db_path)?;
+                let mut stmt =
+                    db.prepare("SELECT DISTINCT vital_type FROM health_vitals")?;
+                let types: Vec<String> = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .flatten()
+                    .collect();
+                Ok(types)
+            })
+            .await??
+        };
+
+        let mut recent_vitals = Vec::new();
+        for t in known_types {
+            let mut series = self.get_vitals_timeseries(&t, vitals_per_type).await?;
+            recent_vitals.append(&mut series);
+        }
+
+        let recent_labs = self.list_lab_results(None, recent_labs_count).await?;
+
+        Ok(HealthSummary {
+            facts,
+            active_medications,
+            recent_vitals,
+            recent_labs,
+            generated_at: Utc::now(),
+        })
+    }
+}
+
+// -- Private raw row types (one per side-table) used to keep the
+//    SQLite-facing structs clearly separated from the public Rust API.
+
+struct HealthFactRaw {
+    fact_id: String,
+    fact_type: String,
+    label: String,
+    severity: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct MedicationRaw {
+    med_id: String,
+    name: String,
+    dosage: String,
+    frequency: String,
+    condition: Option<String>,
+    prescribed_by: Option<String>,
+    started_at: String,
+    ended_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct VitalRaw {
+    vital_id: String,
+    vital_type: String,
+    value_numeric: Option<f64>,
+    value_text: Option<String>,
+    unit: String,
+    measured_at: String,
+    context: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct LabResultRaw {
+    lab_id: String,
+    test_name: String,
+    value_numeric: f64,
+    unit: String,
+    reference_low: Option<f64>,
+    reference_high: Option<f64>,
+    measured_at: String,
+    lab_name: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    attachment_id: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+fn parse_utc(s: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now())
+}
+
 fn normalize_non_empty(input: &str) -> Option<String> {
     let value = input.trim();
     if value.is_empty() {
@@ -4680,6 +5826,320 @@ mod tests {
         );
         // And the live entry must NOT show up in the archive search.
         assert!(!arch_ids.contains(&live.entry_id.as_str()));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.2: Salud médica estructurada -----------------------------------
+
+    #[tokio::test]
+    async fn test_health_fact_add_and_list() {
+        let dir = temp_dir("memory-plane-health-facts");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let fact = mgr
+            .add_health_fact(
+                "allergy",
+                "Penicilina",
+                Some("severe"),
+                "Reaccion en el hospital en 2024",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(fact.fact_type, "allergy");
+        assert_eq!(fact.severity.as_deref(), Some("severe"));
+        assert_eq!(fact.notes, "Reaccion en el hospital en 2024");
+
+        // Add a second one of a different type.
+        mgr.add_health_fact("blood_type", "O+", None, "", None)
+            .await
+            .unwrap();
+
+        // List all.
+        let all = mgr.list_health_facts(None).await.unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Filter by type.
+        let allergies = mgr.list_health_facts(Some("allergy")).await.unwrap();
+        assert_eq!(allergies.len(), 1);
+        assert_eq!(allergies[0].label, "Penicilina");
+        // Notes survived encryption + decryption.
+        assert_eq!(allergies[0].notes, "Reaccion en el hospital en 2024");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_medication_history_lifecycle() {
+        let dir = temp_dir("memory-plane-meds-history");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Start with metformina 500mg.
+        let m1 = mgr
+            .start_medication(
+                "Metformina",
+                "500mg",
+                "cada 12h",
+                Some("diabetes tipo 2"),
+                Some("Dr. Lopez"),
+                "Con la comida",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(m1.ended_at.is_none());
+        assert_eq!(m1.notes, "Con la comida");
+
+        // Active list = 1.
+        let active = mgr.list_active_medications().await.unwrap();
+        assert_eq!(active.len(), 1);
+
+        // Stop the original.
+        let stopped = mgr.stop_medication(&m1.med_id).await.unwrap();
+        assert!(stopped, "stop should return true");
+
+        // Start a new dose.
+        let m2 = mgr
+            .start_medication(
+                "Metformina",
+                "850mg",
+                "cada 12h",
+                Some("diabetes tipo 2"),
+                Some("Dr. Lopez"),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_ne!(m1.med_id, m2.med_id);
+
+        // Active list = 1 (only m2).
+        let active = mgr.list_active_medications().await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].med_id, m2.med_id);
+        assert_eq!(active[0].dosage, "850mg");
+
+        // Full history = 2 (both rows).
+        let history = mgr.list_medication_history().await.unwrap();
+        assert_eq!(history.len(), 2);
+        // Most-recent-started first (m2).
+        assert_eq!(history[0].med_id, m2.med_id);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_stop_medication_idempotent() {
+        let dir = temp_dir("memory-plane-meds-stop-idempotent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let m = mgr
+            .start_medication("Sitagliptina", "100mg", "1x dia", None, None, "", None)
+            .await
+            .unwrap();
+        assert!(mgr.stop_medication(&m.med_id).await.unwrap());
+        // Second call must return false (already ended).
+        assert!(!mgr.stop_medication(&m.med_id).await.unwrap());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_vital_record_and_timeseries() {
+        let dir = temp_dir("memory-plane-vitals");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Record 3 glucose readings.
+        for v in [110.0_f64, 105.0, 98.0] {
+            mgr.record_vital(
+                "glucose",
+                Some(v),
+                None,
+                "mg/dL",
+                None,
+                Some("en ayunas"),
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        // Record an unrelated weight.
+        mgr.record_vital("weight", Some(78.5), None, "kg", None, None, None)
+            .await
+            .unwrap();
+
+        // Glucose timeseries should return exactly 3 entries.
+        let glucose = mgr.get_vitals_timeseries("glucose", 100).await.unwrap();
+        assert_eq!(glucose.len(), 3);
+        for v in &glucose {
+            assert_eq!(v.unit, "mg/dL");
+            assert_eq!(v.context.as_deref(), Some("en ayunas"));
+        }
+
+        // Weight is its own series.
+        let weight = mgr.get_vitals_timeseries("weight", 100).await.unwrap();
+        assert_eq!(weight.len(), 1);
+        assert_eq!(weight[0].value_numeric, Some(78.5));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_vital_requires_value() {
+        let dir = temp_dir("memory-plane-vital-requires-value");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let result = mgr
+            .record_vital("glucose", None, None, "mg/dL", None, None, None)
+            .await;
+        assert!(result.is_err(), "vital with no value should fail");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_lab_result_with_reference_range() {
+        let dir = temp_dir("memory-plane-labs");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let lab = mgr
+            .add_lab_result(
+                "HbA1c",
+                6.4,
+                "%",
+                Some(0.0),
+                Some(5.7),
+                None,
+                Some("Salud Digna"),
+                "En ayunas",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(lab.test_name, "HbA1c");
+        assert_eq!(lab.value_numeric, 6.4);
+        assert_eq!(lab.reference_high, Some(5.7));
+        assert_eq!(lab.notes, "En ayunas");
+
+        let labs = mgr.list_lab_results(Some("HbA1c"), 10).await.unwrap();
+        assert_eq!(labs.len(), 1);
+        assert_eq!(labs[0].notes, "En ayunas");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_health_attachment_roundtrip_with_integrity() {
+        let dir = temp_dir("memory-plane-attachments");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let plaintext = b"PRESCRIPTION: Metformina 500mg cada 12h. Dr. Lopez.".to_vec();
+        let original_len = plaintext.len();
+
+        let att = mgr
+            .add_health_attachment(
+                "prescription",
+                Some("Receta de la consulta del 5 de abril"),
+                Some("gripa abril 2026"),
+                plaintext.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(att.file_type, "prescription");
+        assert!(att.file_path.ends_with(".enc"));
+
+        // The file on disk MUST NOT contain the plaintext.
+        let disk_bytes = std::fs::read(&att.file_path).unwrap();
+        assert!(!disk_bytes.windows(11).any(|w| w == b"Metformina "));
+        assert_ne!(disk_bytes, plaintext);
+
+        // Decrypted contents must match exactly.
+        let decrypted = mgr.get_health_attachment(&att.attachment_id).await.unwrap();
+        assert_eq!(decrypted, plaintext);
+        assert_eq!(decrypted.len(), original_len);
+
+        // Tamper with the file on disk and verify integrity check fires.
+        let mut tampered = disk_bytes.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0xFF;
+        std::fs::write(&att.file_path, &tampered).unwrap();
+        let tampered_result = mgr.get_health_attachment(&att.attachment_id).await;
+        assert!(
+            tampered_result.is_err(),
+            "tampered attachment must fail integrity check"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_health_summary_aggregates_everything() {
+        let dir = temp_dir("memory-plane-health-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Seed: 1 fact + 1 active med + 2 stopped med + 3 vitals + 1 lab.
+        mgr.add_health_fact("allergy", "Latex", Some("moderate"), "", None)
+            .await
+            .unwrap();
+
+        let m1 = mgr
+            .start_medication("Metformina", "500mg", "12h", None, None, "", None)
+            .await
+            .unwrap();
+        mgr.stop_medication(&m1.med_id).await.unwrap();
+        mgr.start_medication("Metformina", "850mg", "12h", None, None, "", None)
+            .await
+            .unwrap();
+        mgr.start_medication("Sitagliptina", "100mg", "24h", None, None, "", None)
+            .await
+            .unwrap();
+
+        for v in [110.0_f64, 105.0, 98.0] {
+            mgr.record_vital(
+                "glucose", Some(v), None, "mg/dL", None, None, None,
+            )
+            .await
+            .unwrap();
+        }
+
+        mgr.add_lab_result(
+            "HbA1c",
+            6.4,
+            "%",
+            Some(0.0),
+            Some(5.7),
+            None,
+            None,
+            "",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let summary = mgr.get_health_summary(5, 10).await.unwrap();
+        assert_eq!(summary.facts.len(), 1);
+        // Active medications = 2 (Metformina 850 + Sitagliptina); the
+        // 500mg row was stopped.
+        assert_eq!(summary.active_medications.len(), 2);
+        assert!(summary
+            .active_medications
+            .iter()
+            .all(|m| m.ended_at.is_none()));
+        // Recent vitals: 3 glucose readings (only one type registered).
+        assert_eq!(summary.recent_vitals.len(), 3);
+        assert_eq!(summary.recent_labs.len(), 1);
 
         std::fs::remove_dir_all(dir).ok();
     }
