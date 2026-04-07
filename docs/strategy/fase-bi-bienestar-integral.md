@@ -226,18 +226,27 @@ nacional desde 2023 (SCJN), en algunos estados sigue habiendo
 criminalización efectiva, y los usuarios pueden viajar. Trato similar
 al de salud mental en cuanto a cifrado y exportación.
 
-- [ ] Side-table `menstrual_cycle` — entradas con flujo (ninguno,
-  ligero, moderado, abundante), síntomas (cólicos, dolor de cabeza,
-  cambios de humor, antojos, etc.), notas.
+- [x] Side-table `menstrual_cycle_log` — entradas con
+  cycle_day, flow_intensity (none/spotting/light/medium/heavy),
+  symptoms (JSON array), mood/energia/dolor 1-10, narrativa
+  OPCIONAL cifrada bajo vault. API: `log_menstrual_entry`,
+  `list_menstrual_entries_meta` (sin vault),
+  `list_menstrual_entries` (require vault),
+  `get_menstrual_cycle_summary` (cualquier estado del vault, computa
+  `days_since_last_period` como la entrada mas reciente con flow != none).
 - [ ] Predicciones simples (no ML, no cloud) basadas en promedio de
-  los últimos 6 ciclos del propio usuario.
-- [ ] **Cifrado reforzado** igual que mental health — passphrase
-  separada opcional.
-- [ ] **Jamás sale del dispositivo.** Cero sync, cero export
-  automático, cero federación.
-- [ ] **Modo pánico** equivalente: `/wipe-cycle` para borrado
-  irrecuperable bajo doble confirmación.
-- [ ] Tests + version bump.
+  los últimos 6 ciclos del propio usuario. **Pendiente** — la
+  foundation ya tiene los datos, solo falta el predictor.
+- [x] **Cifrado reforzado** via vault Argon2id (foundation). La
+  narrativa va bajo vault solo si existe. Crisis detection corre sobre
+  la narrativa en plaintext antes de cifrar.
+- [x] **Jamás sale del dispositivo.** Prefijo `health_*` ya esta en
+  `is_wellness_kind`, asi que la federacion BH.13 lo excluye por
+  diseno (mismo path que BI.4).
+- [ ] **Modo pánico** equivalente: `/wipe-cycle`. Pendiente como
+  sub-tarea junto con `/wipe-mental` (BI.4).
+- [x] Tests añadidos (5 nuevos en BI.6) + Telegram tools seccion 18.
+  Daemon → v0.3.25.
 
 ### BI.7 — Crecimiento personal (lectura, hábitos, carrera)
 
@@ -389,24 +398,36 @@ etc.). LifeOS la trata como wellness, no como contabilidad.
 Categoría sensible que combina salud física, salud mental y salud
 relacional. Trato similar a mental health en cuanto a salvaguardas.
 
-- [ ] Side-table `sexual_health` — chequeos médicos relacionados,
-  ITS (negativo/positivo + tratamiento si aplica), métodos
-  anticonceptivos actuales, alergias a látex/lubricantes, etc.
-  **Cifrado reforzado** con la misma passphrase que mental.
-- [ ] Side-table `intimacy_log` — opcional, opt-in: el usuario puede
-  registrar frecuencia, calidad subjetiva, satisfacción en pareja,
-  cambios en libido, dudas. Útil para detectar patrones (ej. caída
-  de libido correlacionada con depresión, medicamentos, estrés).
-  Cifrado reforzado.
-- [ ] **Educación sin tabú**: Axi responde preguntas de salud sexual
-  con información médicamente correcta, sin juzgar, sin moralizar.
-- [ ] **Detección de violencia sexual**: si el usuario describe algo
-  que parece abuso, Axi responde con empatía + recursos (Línea
-  Mujeres en CDMX 800 1084, locatel.cdmx.gob.mx). Sin diagnosticar
-  ni presionar.
-- [ ] **Jamás sale del dispositivo. Modo pánico activo. NO sync.**
-- [ ] Tools: `sexual_health_log`, `intimacy_log_add`,
-  `contraception_track`.
+- [x] Side-table `sti_tests` — pruebas de ITS (HIV, syphilis,
+  hepatitis_b, gonorrhea, chlamydia, panel) con result
+  (negative/positive/pending/inconclusive), tested_at, lab_name,
+  notas opcionales con cifrado por defecto. NO requiere vault.
+- [x] Side-table `contraception_methods` — metodo, started_at,
+  ended_at (history table style), notas. NO requiere vault.
+- [x] Side-table `sexual_health_log` — encounter_type
+  (solo/partner/multiple/other), partner_relationship_id (FK
+  textual a relationships, opcional), protection_used,
+  satisfaction_1_10, **consent_clear (default true)**, narrativa
+  cifrada bajo vault, had_crisis_pattern. La narrativa SIEMPRE va
+  bajo vault — no es opcional.
+- [x] **Detección de consent violation absoluta**: si
+  `consent_clear=false`, AUTOMATICAMENTE marca had_crisis_pattern
+  con severity=severe, surface hotlines + Red Nacional de Refugios
+  + 911. Esto NUNCA se desactiva. Cuenta separada en summary
+  (`consent_violations_count_30d`).
+- [x] **Cifrado reforzado** via vault Argon2id (foundation).
+- [x] **Detección de violencia sexual**: el detector de crisis
+  (BI.4) corre sobre la narrativa antes de cifrar; consent=false
+  ademas dispara automaticamente. Hotlines incluyen Red Nacional de
+  Refugios.
+- [x] **NUNCA sale del dispositivo.** El prefijo `sexual_*` esta en
+  `is_wellness_kind` para excluirlo de federacion BH.13.
+- [ ] **Modo pánico** equivalente: pendiente como sub-tarea junto
+  con `/wipe-mental` (BI.4) y `/wipe-cycle` (BI.6).
+- [x] Tools: `sexual_health_log`, `sexual_health_history_meta`,
+  `sexual_health_history`, `sti_test_log`, `sti_tests_list`,
+  `contraception_add`, `contraception_end`, `contraception_list`,
+  `sexual_health_summary`. Telegram seccion 19. Daemon → v0.3.25.
 
 ### BI.13 — Salud social y comunitaria
 

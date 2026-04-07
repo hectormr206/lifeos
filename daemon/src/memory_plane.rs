@@ -910,6 +910,79 @@ CREATE INDEX IF NOT EXISTS idx_rel_events_when
 CREATE INDEX IF NOT EXISTS idx_rel_events_crisis
     ON relationship_events(had_crisis_pattern);
 
+-- ----------------------------------------------------------------------
+-- BI.6 — Salud femenina / ciclo menstrual (sensible, opt-in)
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS menstrual_cycle_log (
+    entry_id TEXT PRIMARY KEY,
+    cycle_day INTEGER,
+    flow_intensity TEXT,                -- 'none','spotting','light','medium','heavy'
+    symptoms_json TEXT NOT NULL DEFAULT '[]',
+    mood_1_10 INTEGER,
+    energy_1_10 INTEGER,
+    pain_1_10 INTEGER,
+    narrative_nonce_b64 TEXT,
+    narrative_cipher_b64 TEXT,
+    had_crisis_pattern INTEGER NOT NULL DEFAULT 0,
+    logged_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_menstrual_logged
+    ON menstrual_cycle_log(logged_at);
+
+-- ----------------------------------------------------------------------
+-- BI.12 — Salud sexual (sensible, opt-in)
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sexual_health_log (
+    entry_id TEXT PRIMARY KEY,
+    encounter_type TEXT NOT NULL,       -- 'solo','partner','multiple','other'
+    partner_relationship_id TEXT,
+    protection_used INTEGER,
+    satisfaction_1_10 INTEGER,
+    consent_clear INTEGER NOT NULL DEFAULT 1,
+    narrative_nonce_b64 TEXT NOT NULL,
+    narrative_cipher_b64 TEXT NOT NULL,
+    had_crisis_pattern INTEGER NOT NULL DEFAULT 0,
+    occurred_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sexual_health_when
+    ON sexual_health_log(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_sexual_health_consent
+    ON sexual_health_log(consent_clear);
+CREATE INDEX IF NOT EXISTS idx_sexual_health_crisis
+    ON sexual_health_log(had_crisis_pattern);
+
+CREATE TABLE IF NOT EXISTS sti_tests (
+    test_id TEXT PRIMARY KEY,
+    test_name TEXT NOT NULL,
+    result TEXT NOT NULL,               -- 'negative','positive','pending','inconclusive'
+    tested_at TEXT NOT NULL,
+    lab_name TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sti_tests_when
+    ON sti_tests(tested_at);
+
+CREATE TABLE IF NOT EXISTS contraception_methods (
+    method_id TEXT PRIMARY KEY,
+    method_name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contraception_active
+    ON contraception_methods(ended_at);
+
 CREATE TABLE IF NOT EXISTS reinforced_vault_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     salt_b64 TEXT NOT NULL,
@@ -5047,6 +5120,958 @@ struct RelationshipEventMetaRaw {
     occurred_at: String,
     source_entry_id: Option<String>,
     created_at: String,
+}
+
+// ============================================================================
+// Fase BI.6 — Salud femenina / ciclo menstrual (sensible, opt-in)
+// ============================================================================
+//
+// Mismo patron que BI.4: metadata visible sin vault, narrativa
+// opcional cifrada bajo vault Argon2id. La narrativa aqui ES
+// opcional (a diferencia de mental_health_journal donde es
+// obligatoria) — el caso comun es solo trackear flujo + sintomas
+// numericos sin escribir mucho.
+
+/// One menstrual cycle entry. La narrativa es OPCIONAL — si se
+/// proporciona, va cifrada bajo el vault. Los sintomas son free
+/// text en JSON array. Crisis detection corre sobre la narrativa
+/// si existe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MenstrualCycleEntry {
+    pub entry_id: String,
+    pub cycle_day: Option<u32>,
+    /// `none`, `spotting`, `light`, `medium`, `heavy`.
+    pub flow_intensity: Option<String>,
+    pub symptoms: Vec<String>,
+    pub mood_1_10: Option<u8>,
+    pub energy_1_10: Option<u8>,
+    pub pain_1_10: Option<u8>,
+    /// Plaintext después de decifrar via vault. Empty cuando se
+    /// pide via meta o cuando no hay narrativa.
+    pub narrative: String,
+    pub had_crisis_pattern: bool,
+    pub logged_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the menstrual cycle pillar. Funciona
+/// vault locked O unlocked.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MenstrualCycleSummary {
+    pub recent_entries_meta: Vec<MenstrualCycleEntry>,
+    pub entries_last_30d: u32,
+    pub avg_pain_30d: Option<f64>,
+    pub avg_mood_30d: Option<f64>,
+    pub days_since_last_period: Option<i64>,
+    pub vault_unlocked: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Add one menstrual cycle entry. La narrativa es opcional. Si
+    /// se proporciona, **requiere vault unlocked**. Si es vacia, no
+    /// requiere vault. Crisis detection corre solo si hay narrativa.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_menstrual_entry(
+        &self,
+        cycle_day: Option<u32>,
+        flow_intensity: Option<&str>,
+        symptoms: &[String],
+        mood_1_10: Option<u8>,
+        energy_1_10: Option<u8>,
+        pain_1_10: Option<u8>,
+        narrative: &str,
+        logged_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<(MenstrualCycleEntry, Option<CrisisDetection>)> {
+        let flow = flow_intensity
+            .and_then(normalize_non_empty)
+            .map(|s| s.to_lowercase());
+        if let Some(ref f) = flow {
+            if !matches!(
+                f.as_str(),
+                "none" | "spotting" | "light" | "medium" | "heavy"
+            ) {
+                anyhow::bail!(
+                    "flow_intensity must be one of: none, spotting, light, medium, heavy"
+                );
+            }
+        }
+        for (label, val) in [
+            ("mood_1_10", mood_1_10),
+            ("energy_1_10", energy_1_10),
+            ("pain_1_10", pain_1_10),
+        ] {
+            if let Some(v) = val {
+                if !(1..=10).contains(&v) {
+                    anyhow::bail!("{} must be in 1..=10", label);
+                }
+            }
+        }
+        let narrative_owned = narrative.trim().to_string();
+        let detection = if narrative_owned.is_empty() {
+            None
+        } else {
+            detect_crisis_in_text(&narrative_owned)
+        };
+        let had_crisis = detection.is_some();
+
+        let (narrative_nonce, narrative_cipher) = if narrative_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c) = self.encrypt_reinforced(&narrative_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let symptoms_norm = normalize_tags(symptoms);
+        let symptoms_json = serde_json::to_string(&symptoms_norm)?;
+
+        let now = Utc::now();
+        let logged = logged_at.unwrap_or(now);
+        let logged_rfc = logged.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("mens-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let flow_clone = flow.clone();
+        let symptoms_clone = symptoms_json.clone();
+        let n_clone = narrative_nonce.clone();
+        let c_clone = narrative_cipher.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO menstrual_cycle_log
+                 (entry_id, cycle_day, flow_intensity, symptoms_json,
+                  mood_1_10, energy_1_10, pain_1_10,
+                  narrative_nonce_b64, narrative_cipher_b64,
+                  had_crisis_pattern, logged_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    id_clone,
+                    cycle_day.map(|d| d as i32),
+                    flow_clone,
+                    symptoms_clone,
+                    mood_1_10.map(|m| m as i32),
+                    energy_1_10.map(|e| e as i32),
+                    pain_1_10.map(|p| p as i32),
+                    n_clone,
+                    c_clone,
+                    had_crisis as i32,
+                    logged_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        let entry = MenstrualCycleEntry {
+            entry_id: id,
+            cycle_day,
+            flow_intensity: flow,
+            symptoms: symptoms_norm,
+            mood_1_10,
+            energy_1_10,
+            pain_1_10,
+            narrative: narrative_owned,
+            had_crisis_pattern: had_crisis,
+            logged_at: logged,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        };
+        Ok((entry, detection))
+    }
+
+    /// Metadata-only list. NO requiere vault.
+    pub async fn list_menstrual_entries_meta(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<MenstrualCycleEntry>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT entry_id, cycle_day, flow_intensity, symptoms_json,
+                        mood_1_10, energy_1_10, pain_1_10, had_crisis_pattern,
+                        logged_at, source_entry_id, created_at,
+                        narrative_nonce_b64
+                 FROM menstrual_cycle_log
+                 ORDER BY logged_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<MenstrualMetaRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(MenstrualMetaRaw {
+                        entry_id: row.get(0)?,
+                        cycle_day: row.get::<_, Option<i32>>(1)?.map(|x| x as u32),
+                        flow_intensity: row.get(2)?,
+                        symptoms_json: row.get(3)?,
+                        mood_1_10: row.get::<_, Option<i32>>(4)?.map(|x| x as u8),
+                        energy_1_10: row.get::<_, Option<i32>>(5)?.map(|x| x as u8),
+                        pain_1_10: row.get::<_, Option<i32>>(6)?.map(|x| x as u8),
+                        had_crisis_pattern: row.get::<_, i32>(7)? != 0,
+                        logged_at: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                        has_narrative: row.get::<_, Option<String>>(11)?.is_some(),
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| {
+                let _ = r.has_narrative; // keep field used (informational)
+                MenstrualCycleEntry {
+                    entry_id: r.entry_id,
+                    cycle_day: r.cycle_day,
+                    flow_intensity: r.flow_intensity,
+                    symptoms: serde_json::from_str(&r.symptoms_json).unwrap_or_default(),
+                    mood_1_10: r.mood_1_10,
+                    energy_1_10: r.energy_1_10,
+                    pain_1_10: r.pain_1_10,
+                    narrative: String::new(),
+                    had_crisis_pattern: r.had_crisis_pattern,
+                    logged_at: parse_utc(&r.logged_at),
+                    source_entry_id: r.source_entry_id,
+                    created_at: parse_utc(&r.created_at),
+                }
+            })
+            .collect())
+    }
+
+    /// Full list with narratives decrypted (only for entries that
+    /// have one). **Requires vault unlocked.**
+    pub async fn list_menstrual_entries(&self, limit: usize) -> Result<Vec<MenstrualCycleEntry>> {
+        let metas = self.list_menstrual_entries_meta(limit).await?;
+        let mut out = Vec::with_capacity(metas.len());
+        for m in metas {
+            let id = m.entry_id.clone();
+            let db_path = self.db_path.clone();
+            let blobs = tokio::task::spawn_blocking(move || -> Result<Option<(String, String)>> {
+                let db = Self::open_db(&db_path)?;
+                let row: (Option<String>, Option<String>) = db.query_row(
+                    "SELECT narrative_nonce_b64, narrative_cipher_b64
+                         FROM menstrual_cycle_log WHERE entry_id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                Ok(match row {
+                    (Some(n), Some(c)) => Some((n, c)),
+                    _ => None,
+                })
+            })
+            .await??;
+            let plaintext = match blobs {
+                Some((n, c)) => self.decrypt_reinforced(&n, &c)?,
+                None => String::new(),
+            };
+            out.push(MenstrualCycleEntry {
+                narrative: plaintext,
+                ..m
+            });
+        }
+        Ok(out)
+    }
+
+    /// Aggregate snapshot. Funciona en cualquier estado del vault.
+    pub async fn get_menstrual_cycle_summary(
+        &self,
+        recent_limit: usize,
+    ) -> Result<MenstrualCycleSummary> {
+        let metas = self
+            .list_menstrual_entries_meta(recent_limit)
+            .await
+            .unwrap_or_default();
+        let vault_unlocked = self.reinforced_vault_status().await?.unlocked;
+
+        let now = Utc::now();
+        let cutoff_30 = now - chrono::Duration::days(30);
+        let in_window: Vec<&MenstrualCycleEntry> =
+            metas.iter().filter(|e| e.logged_at >= cutoff_30).collect();
+        let entries_last_30d = in_window.len() as u32;
+        let avg_pain_30d = avg_field(
+            in_window
+                .iter()
+                .filter_map(|e| e.pain_1_10.map(|p| p as f64)),
+        );
+        let avg_mood_30d = avg_field(
+            in_window
+                .iter()
+                .filter_map(|e| e.mood_1_10.map(|m| m as f64)),
+        );
+
+        // "Last period" = la entrada mas reciente con flow != "none".
+        let days_since_last_period = metas
+            .iter()
+            .find(|e| {
+                e.flow_intensity
+                    .as_deref()
+                    .map(|f| f != "none")
+                    .unwrap_or(false)
+            })
+            .map(|e| (now - e.logged_at).num_days());
+
+        Ok(MenstrualCycleSummary {
+            recent_entries_meta: metas,
+            entries_last_30d,
+            avg_pain_30d,
+            avg_mood_30d,
+            days_since_last_period,
+            vault_unlocked,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw rows for BI.6 -----------------------------------------------
+
+struct MenstrualMetaRaw {
+    entry_id: String,
+    cycle_day: Option<u32>,
+    flow_intensity: Option<String>,
+    symptoms_json: String,
+    mood_1_10: Option<u8>,
+    energy_1_10: Option<u8>,
+    pain_1_10: Option<u8>,
+    had_crisis_pattern: bool,
+    logged_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+    #[allow(dead_code)]
+    has_narrative: bool,
+}
+
+// ============================================================================
+// Fase BI.12 — Salud sexual (sensible, opt-in)
+// ============================================================================
+//
+// Tres tablas:
+//   * sexual_health_log → encuentros con narrativa cifrada bajo vault
+//   * sti_tests         → resultados de pruebas (sin narrativa, similar a labs)
+//   * contraception_methods → metodo activo + historial
+//
+// Reglas firmes:
+//   * Axi NUNCA hace educacion sexual prescriptiva. Solo registra.
+//   * Para problemas medicos (ITS positivo, dolor cronico, disfuncion)
+//     SIEMPRE recomienda profesional.
+//   * Si consent_clear es false → trato como crisis_pattern, surface
+//     hotlines y recomienda profesional + lineas de violencia.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SexualHealthEntry {
+    pub entry_id: String,
+    /// `solo`, `partner`, `multiple`, `other`.
+    pub encounter_type: String,
+    pub partner_relationship_id: Option<String>,
+    pub protection_used: Option<bool>,
+    pub satisfaction_1_10: Option<u8>,
+    /// Si false, esto es una RED FLAG seria. La logica de crisis
+    /// trata cualquier `consent_clear=false` como pattern obligatorio.
+    pub consent_clear: bool,
+    pub narrative: String,
+    pub had_crisis_pattern: bool,
+    pub occurred_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StiTest {
+    pub test_id: String,
+    pub test_name: String,
+    /// `negative`, `positive`, `pending`, `inconclusive`.
+    pub result: String,
+    pub tested_at: DateTime<Utc>,
+    pub lab_name: Option<String>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContraceptionMethod {
+    pub method_id: String,
+    pub method_name: String,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SexualHealthSummary {
+    pub recent_entries_meta: Vec<SexualHealthEntry>,
+    pub recent_sti_tests: Vec<StiTest>,
+    pub active_contraception: Vec<ContraceptionMethod>,
+    pub entries_last_30d: u32,
+    pub crisis_pattern_count_30d: u32,
+    pub consent_violations_count_30d: u32,
+    pub days_since_last_sti_test: Option<i64>,
+    pub vault_unlocked: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.12: sexual health log (REQUIRES vault for narrative)
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_sexual_health_entry(
+        &self,
+        encounter_type: &str,
+        partner_relationship_id: Option<&str>,
+        protection_used: Option<bool>,
+        satisfaction_1_10: Option<u8>,
+        consent_clear: bool,
+        narrative: &str,
+        occurred_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<(SexualHealthEntry, Option<CrisisDetection>)> {
+        let encounter_type =
+            normalize_non_empty(encounter_type).context("encounter_type required")?;
+        if !matches!(
+            encounter_type.as_str(),
+            "solo" | "partner" | "multiple" | "other"
+        ) {
+            anyhow::bail!("encounter_type must be: solo, partner, multiple, other");
+        }
+        let partner = partner_relationship_id.and_then(normalize_non_empty);
+        if let Some(s) = satisfaction_1_10 {
+            if !(1..=10).contains(&s) {
+                anyhow::bail!("satisfaction_1_10 must be in 1..=10");
+            }
+        }
+        let narrative_owned = narrative.trim().to_string();
+        if narrative_owned.is_empty() {
+            anyhow::bail!("sexual health entry narrative cannot be empty");
+        }
+
+        // Crisis detection runs on plaintext BEFORE encryption.
+        // ALSO: consent_clear=false counts as crisis automatically,
+        // independientemente del contenido de la narrativa. Esto es
+        // critico — un encuentro sin consentimiento siempre debe
+        // surface hotlines.
+        let detection_text = detect_crisis_in_text(&narrative_owned);
+        let detection = if !consent_clear {
+            Some(CrisisDetection {
+                matched_keywords: detection_text
+                    .as_ref()
+                    .map(|d| d.matched_keywords.clone())
+                    .unwrap_or_else(|| vec!["consent_violation".to_string()]),
+                severity: "severe".to_string(),
+            })
+        } else {
+            detection_text
+        };
+        let had_crisis = detection.is_some();
+
+        // Encrypt under the vault. Gate.
+        let (narrative_nonce, narrative_cipher) = self.encrypt_reinforced(&narrative_owned)?;
+
+        let now = Utc::now();
+        let occurred = occurred_at.unwrap_or(now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("sxh-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let type_clone = encounter_type.clone();
+        let partner_clone = partner.clone();
+        let n_clone = narrative_nonce.clone();
+        let c_clone = narrative_cipher.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO sexual_health_log
+                 (entry_id, encounter_type, partner_relationship_id,
+                  protection_used, satisfaction_1_10, consent_clear,
+                  narrative_nonce_b64, narrative_cipher_b64,
+                  had_crisis_pattern, occurred_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    id_clone,
+                    type_clone,
+                    partner_clone,
+                    protection_used.map(|b| b as i32),
+                    satisfaction_1_10.map(|s| s as i32),
+                    consent_clear as i32,
+                    n_clone,
+                    c_clone,
+                    had_crisis as i32,
+                    occurred_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        let entry = SexualHealthEntry {
+            entry_id: id,
+            encounter_type,
+            partner_relationship_id: partner,
+            protection_used,
+            satisfaction_1_10,
+            consent_clear,
+            narrative: narrative_owned,
+            had_crisis_pattern: had_crisis,
+            occurred_at: occurred,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        };
+        Ok((entry, detection))
+    }
+
+    pub async fn list_sexual_health_meta(&self, limit: usize) -> Result<Vec<SexualHealthEntry>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT entry_id, encounter_type, partner_relationship_id,
+                        protection_used, satisfaction_1_10, consent_clear,
+                        had_crisis_pattern, occurred_at, source_entry_id, created_at
+                 FROM sexual_health_log
+                 ORDER BY occurred_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<SexualHealthMetaRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(SexualHealthMetaRaw {
+                        entry_id: row.get(0)?,
+                        encounter_type: row.get(1)?,
+                        partner_relationship_id: row.get(2)?,
+                        protection_used: row.get::<_, Option<i32>>(3)?.map(|x| x != 0),
+                        satisfaction_1_10: row.get::<_, Option<i32>>(4)?.map(|x| x as u8),
+                        consent_clear: row.get::<_, i32>(5)? != 0,
+                        had_crisis_pattern: row.get::<_, i32>(6)? != 0,
+                        occurred_at: row.get(7)?,
+                        source_entry_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| SexualHealthEntry {
+                entry_id: r.entry_id,
+                encounter_type: r.encounter_type,
+                partner_relationship_id: r.partner_relationship_id,
+                protection_used: r.protection_used,
+                satisfaction_1_10: r.satisfaction_1_10,
+                consent_clear: r.consent_clear,
+                narrative: String::new(),
+                had_crisis_pattern: r.had_crisis_pattern,
+                occurred_at: parse_utc(&r.occurred_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// Full list with narratives. **Requires vault unlocked.**
+    pub async fn list_sexual_health_entries(&self, limit: usize) -> Result<Vec<SexualHealthEntry>> {
+        let metas = self.list_sexual_health_meta(limit).await?;
+        let mut out = Vec::with_capacity(metas.len());
+        for m in metas {
+            let id = m.entry_id.clone();
+            let db_path = self.db_path.clone();
+            let (n, c) = tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+                let db = Self::open_db(&db_path)?;
+                let row: (String, String) = db.query_row(
+                    "SELECT narrative_nonce_b64, narrative_cipher_b64
+                         FROM sexual_health_log WHERE entry_id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                Ok(row)
+            })
+            .await??;
+            let plaintext = self.decrypt_reinforced(&n, &c)?;
+            out.push(SexualHealthEntry {
+                narrative: plaintext,
+                ..m
+            });
+        }
+        Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.12: STI tests (no vault required — analogous to lab_results)
+    // -----------------------------------------------------------------------
+
+    pub async fn log_sti_test(
+        &self,
+        test_name: &str,
+        result: &str,
+        tested_at: DateTime<Utc>,
+        lab_name: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<StiTest> {
+        let test_name = normalize_non_empty(test_name).context("test_name required")?;
+        let result = normalize_non_empty(result)
+            .context("result required")?
+            .to_lowercase();
+        if !matches!(
+            result.as_str(),
+            "negative" | "positive" | "pending" | "inconclusive"
+        ) {
+            anyhow::bail!("result must be: negative, positive, pending, inconclusive");
+        }
+        let lab_name = lab_name.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let tested_rfc = tested_at.to_rfc3339();
+        let id = format!("sti-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let test_clone = test_name.clone();
+        let result_clone = result.clone();
+        let lab_clone = lab_name.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO sti_tests
+                 (test_id, test_name, result, tested_at, lab_name,
+                  notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id_clone,
+                    test_clone,
+                    result_clone,
+                    tested_rfc,
+                    lab_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(StiTest {
+            test_id: id,
+            test_name,
+            result,
+            tested_at,
+            lab_name,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_sti_tests(&self, limit: usize) -> Result<Vec<StiTest>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT test_id, test_name, result, tested_at, lab_name,
+                        notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at
+                 FROM sti_tests
+                 ORDER BY tested_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<StiTestRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(StiTestRaw {
+                        test_id: row.get(0)?,
+                        test_name: row.get(1)?,
+                        result: row.get(2)?,
+                        tested_at: row.get(3)?,
+                        lab_name: row.get(4)?,
+                        notes_nonce_b64: row.get(5)?,
+                        notes_ciphertext_b64: row.get(6)?,
+                        source_entry_id: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| StiTest {
+                test_id: r.test_id,
+                test_name: r.test_name,
+                result: r.result,
+                tested_at: parse_utc(&r.tested_at),
+                lab_name: r.lab_name,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.12: contraception methods
+    // -----------------------------------------------------------------------
+
+    pub async fn add_contraception_method(
+        &self,
+        method_name: &str,
+        started_at: DateTime<Utc>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<ContraceptionMethod> {
+        let method_name = normalize_non_empty(method_name).context("method_name required")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let started_rfc = started_at.to_rfc3339();
+        let id = format!("ctp-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = method_name.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO contraception_methods
+                 (method_id, method_name, started_at, ended_at,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?7)",
+                params![
+                    id_clone,
+                    name_clone,
+                    started_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ContraceptionMethod {
+            method_id: id,
+            method_name,
+            started_at,
+            ended_at: None,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn end_contraception_method(
+        &self,
+        method_id: &str,
+        ended_at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let when = ended_at.unwrap_or_else(Utc::now).to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let id = method_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE contraception_methods
+                 SET ended_at = ?1, updated_at = ?2
+                 WHERE method_id = ?3 AND ended_at IS NULL",
+                params![when, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_contraception_methods(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<ContraceptionMethod>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT method_id, method_name, started_at, ended_at,
+                        notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM contraception_methods WHERE ended_at IS NULL
+                 ORDER BY started_at DESC"
+            } else {
+                "SELECT method_id, method_name, started_at, ended_at,
+                        notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM contraception_methods
+                 ORDER BY started_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let rows: Vec<ContraceptionMethodRaw> = stmt
+                .query_map([], |row| {
+                    Ok(ContraceptionMethodRaw {
+                        method_id: row.get(0)?,
+                        method_name: row.get(1)?,
+                        started_at: row.get(2)?,
+                        ended_at: row.get(3)?,
+                        notes_nonce_b64: row.get(4)?,
+                        notes_ciphertext_b64: row.get(5)?,
+                        source_entry_id: row.get(6)?,
+                        created_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ContraceptionMethod {
+                method_id: r.method_id,
+                method_name: r.method_name,
+                started_at: parse_utc(&r.started_at),
+                ended_at: r.ended_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    pub async fn get_sexual_health_summary(
+        &self,
+        recent_limit: usize,
+    ) -> Result<SexualHealthSummary> {
+        let metas = self
+            .list_sexual_health_meta(recent_limit)
+            .await
+            .unwrap_or_default();
+        let recent_sti_tests = self.list_sti_tests(recent_limit).await.unwrap_or_default();
+        let active_contraception = self
+            .list_contraception_methods(true)
+            .await
+            .unwrap_or_default();
+        let vault_unlocked = self.reinforced_vault_status().await?.unlocked;
+
+        let now = Utc::now();
+        let cutoff_30 = now - chrono::Duration::days(30);
+        let in_window: Vec<&SexualHealthEntry> = metas
+            .iter()
+            .filter(|e| e.occurred_at >= cutoff_30)
+            .collect();
+        let entries_last_30d = in_window.len() as u32;
+        let crisis_pattern_count_30d =
+            in_window.iter().filter(|e| e.had_crisis_pattern).count() as u32;
+        let consent_violations_count_30d =
+            in_window.iter().filter(|e| !e.consent_clear).count() as u32;
+        let days_since_last_sti_test = recent_sti_tests
+            .first()
+            .map(|t| (now - t.tested_at).num_days());
+
+        Ok(SexualHealthSummary {
+            recent_entries_meta: metas,
+            recent_sti_tests,
+            active_contraception,
+            entries_last_30d,
+            crisis_pattern_count_30d,
+            consent_violations_count_30d,
+            days_since_last_sti_test,
+            vault_unlocked,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw rows for BI.12 ----------------------------------------------
+
+struct SexualHealthMetaRaw {
+    entry_id: String,
+    encounter_type: String,
+    partner_relationship_id: Option<String>,
+    protection_used: Option<bool>,
+    satisfaction_1_10: Option<u8>,
+    consent_clear: bool,
+    had_crisis_pattern: bool,
+    occurred_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct StiTestRaw {
+    test_id: String,
+    test_name: String,
+    result: String,
+    tested_at: String,
+    lab_name: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct ContraceptionMethodRaw {
+    method_id: String,
+    method_name: String,
+    started_at: String,
+    ended_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
 }
 
 // ============================================================================
@@ -16437,6 +17462,372 @@ mod tests {
             .iter()
             .any(|i| i.item_type == "growth_goal" && i.name == "Meta vieja"));
 
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.6 — Salud femenina / ciclo menstrual
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn menstrual_log_without_narrative_does_not_need_vault() {
+        let dir = temp_dir("memory-plane-mens-no-vault");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let (entry, det) = mgr
+            .log_menstrual_entry(
+                Some(2),
+                Some("medium"),
+                &["calambres".to_string()],
+                Some(5),
+                Some(4),
+                Some(7),
+                "",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(det.is_none());
+        assert!(!entry.had_crisis_pattern);
+        assert_eq!(entry.flow_intensity.as_deref(), Some("medium"));
+        assert_eq!(entry.symptoms, vec!["calambres".to_string()]);
+
+        // Lock vault is the default — meta should still be visible.
+        let meta = mgr.list_menstrual_entries_meta(10).await.unwrap();
+        assert_eq!(meta.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_log_with_narrative_requires_vault() {
+        let dir = temp_dir("memory-plane-mens-vault-needed");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let err = mgr
+            .log_menstrual_entry(
+                Some(2),
+                Some("medium"),
+                &[],
+                None,
+                None,
+                None,
+                "tuve un dia muy dificil con mucho dolor",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err(), "narrative requires vault");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_log_rejects_invalid_flow_intensity() {
+        let dir = temp_dir("memory-plane-mens-bad-flow");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr
+            .log_menstrual_entry(
+                None,
+                Some("torrencial"),
+                &[],
+                None,
+                None,
+                None,
+                "",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_summary_computes_days_since_last_period() {
+        let dir = temp_dir("memory-plane-mens-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Mid-cycle entry today (no flow).
+        mgr.log_menstrual_entry(
+            Some(14),
+            Some("none"),
+            &[],
+            Some(7),
+            None,
+            None,
+            "",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        // Period entry 5 days ago — flow=medium.
+        let five_days_ago = Utc::now() - chrono::Duration::days(5);
+        mgr.log_menstrual_entry(
+            Some(1),
+            Some("medium"),
+            &["calambres".to_string()],
+            Some(5),
+            None,
+            Some(7),
+            "",
+            Some(five_days_ago),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let s = mgr.get_menstrual_cycle_summary(50).await.unwrap();
+        assert_eq!(s.entries_last_30d, 2);
+        // days_since_last_period should be ~5
+        let d = s.days_since_last_period.unwrap();
+        assert!((4..=6).contains(&d), "expected ~5, got {}", d);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_roundtrip_under_vault_decrypts_narrative() {
+        let dir = temp_dir("memory-plane-mens-rt");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        mgr.log_menstrual_entry(
+            Some(3),
+            Some("heavy"),
+            &["dolor".to_string()],
+            Some(3),
+            None,
+            Some(8),
+            "fue un dia complicado",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let full = mgr.list_menstrual_entries(10).await.unwrap();
+        assert_eq!(full.len(), 1);
+        assert!(full[0].narrative.contains("complicado"));
+
+        // Lock and verify narrative is empty in full list (errors out).
+        mgr.lock_reinforced_vault();
+        let err = mgr.list_menstrual_entries(10).await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.12 — Salud sexual
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn sexual_health_requires_vault_unlocked() {
+        let dir = temp_dir("memory-plane-sxh-locked");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr
+            .log_sexual_health_entry(
+                "partner",
+                None,
+                Some(true),
+                Some(8),
+                true,
+                "test",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sexual_health_consent_false_always_marks_crisis() {
+        let dir = temp_dir("memory-plane-sxh-consent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        // Narrative deliberately neutral — but consent_clear=false
+        // must still set the flag and severity=severe.
+        let (entry, det) = mgr
+            .log_sexual_health_entry(
+                "partner",
+                None,
+                Some(true),
+                Some(3),
+                false,
+                "una situacion confusa",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let d = det.expect("consent=false must always trigger crisis");
+        assert_eq!(d.severity, "severe");
+        assert!(entry.had_crisis_pattern);
+        assert!(!entry.consent_clear);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sexual_health_meta_visible_locked_narrative_protected() {
+        let dir = temp_dir("memory-plane-sxh-meta");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        mgr.log_sexual_health_entry(
+            "partner",
+            None,
+            Some(true),
+            Some(8),
+            true,
+            "encuentro tranquilo",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.lock_reinforced_vault();
+
+        let meta = mgr.list_sexual_health_meta(10).await.unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].encounter_type, "partner");
+        assert_eq!(meta[0].narrative, "");
+        assert!(meta[0].consent_clear);
+
+        let err = mgr.list_sexual_health_entries(10).await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sexual_health_rejects_invalid_encounter_type() {
+        let dir = temp_dir("memory-plane-sxh-bad-type");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let err = mgr
+            .log_sexual_health_entry("weird", None, None, None, true, "test", None, None)
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sti_test_lifecycle_and_validation() {
+        let dir = temp_dir("memory-plane-sti");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Bad result → reject.
+        let bad = mgr
+            .log_sti_test("HIV", "maybe", Utc::now(), None, "", None)
+            .await;
+        assert!(bad.is_err());
+
+        // Good result.
+        let t = mgr
+            .log_sti_test(
+                "HIV",
+                "Negative",
+                Utc::now(),
+                Some("Lab Salud"),
+                "rutinario",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(t.result, "negative"); // lowercased
+        assert_eq!(t.notes, "rutinario"); // round-trip decrypted
+
+        let listed = mgr.list_sti_tests(10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn contraception_lifecycle() {
+        let dir = temp_dir("memory-plane-ctp");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let m = mgr
+            .add_contraception_method(
+                "iud_hormonal",
+                Utc::now() - chrono::Duration::days(120),
+                "tolerado bien",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(m.method_name, "iud_hormonal");
+
+        let active = mgr.list_contraception_methods(true).await.unwrap();
+        assert_eq!(active.len(), 1);
+
+        let ended = mgr
+            .end_contraception_method(&m.method_id, None)
+            .await
+            .unwrap();
+        assert!(ended);
+        let active = mgr.list_contraception_methods(true).await.unwrap();
+        assert!(active.is_empty());
+        let all = mgr.list_contraception_methods(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].ended_at.is_some());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sexual_health_summary_aggregates_with_consent_violations() {
+        let dir = temp_dir("memory-plane-sxh-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        // 1 normal, 1 consent violation.
+        mgr.log_sexual_health_entry("partner", None, Some(true), Some(8), true, "ok", None, None)
+            .await
+            .unwrap();
+        mgr.log_sexual_health_entry(
+            "partner",
+            None,
+            None,
+            None,
+            false,
+            "no me sentia bien con la situacion",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.log_sti_test("HIV", "negative", Utc::now(), None, "", None)
+            .await
+            .unwrap();
+
+        mgr.lock_reinforced_vault();
+        let s = mgr.get_sexual_health_summary(50).await.unwrap();
+        assert!(!s.vault_unlocked);
+        assert_eq!(s.entries_last_30d, 2);
+        assert_eq!(s.consent_violations_count_30d, 1);
+        // Only the consent violation triggers crisis. The "ok" text
+        // does not match any moderate/high/severe keyword.
+        assert_eq!(s.crisis_pattern_count_30d, 1);
+        assert_eq!(s.days_since_last_sti_test, Some(0));
         std::fs::remove_dir_all(dir).ok();
     }
 

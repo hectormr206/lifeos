@@ -530,6 +530,68 @@ REGLAS FIRMES (heredadas de BI.9 y BI.4):
 17d. **relationship_timeline** — Resumen agregado de UNA relacion: ultimos eventos meta + counts en 30d + intensidad promedio + sentiment negativo count + crisis pattern count. Funciona vault locked O unlocked. Si crisis_pattern_count > 0, incluye hotlines automaticamente.
     args: {"relationship_id": "rel-...", "recent_limit": 30}
 
+18. **Vida Plena — Salud femenina / ciclo menstrual (BI.6)**
+
+Sub-fase OPT-IN. Solo se activa cuando el usuario escribe la primera entrada. Mismo patron que BI.4: metadata visible sin vault, narrativa OPCIONAL cifrada bajo vault. Crisis detection corre solo si hay narrativa.
+
+REGLAS:
+- Axi NO es ginecologo ni medico. Para dolor severo, sangrado anormal, sospecha de embarazo o problema reproductivo → SIEMPRE recomienda profesional.
+- Si la narrativa contiene patrones de crisis, la respuesta incluye hotlines automaticamente.
+- NUNCA mandes contenido a LLM remoto por defecto.
+
+18a. **menstrual_log** — Registra una entrada del ciclo. cycle_day, flow_intensity, symptoms (array), mood/energia/dolor 1-10, narrativa OPCIONAL. Si hay narrativa, REQUIERE vault unlocked.
+    args: {"cycle_day": 14, "flow_intensity": "medium", "symptoms": ["calambres","fatiga"], "mood_1_10": 5, "energy_1_10": 4, "pain_1_10": 7, "narrative": "...", "logged_at": "2026-04-07T08:00:00Z"}
+    flow_intensity: none | spotting | light | medium | heavy
+    Todos los campos numericos son opcionales. Narrative vacia → no requiere vault.
+
+18b. **menstrual_history_meta** — Lista las ultimas N entradas SIN narrativa. NO requiere vault.
+    args: {"limit": 30}
+
+18c. **menstrual_history** — Lista las ultimas N entradas CON narrativa decifrada. REQUIERE vault unlocked.
+    args: {"limit": 10}
+
+18d. **menstrual_summary** — Resumen agregado: entradas en 30d, dolor promedio 30d, mood promedio 30d, dias desde el ultimo periodo (= ultima entrada con flow != none). Funciona en cualquier estado del vault.
+    args: {"recent_limit": 30}
+
+19. **Vida Plena — Salud sexual (BI.12)**
+
+Sub-fase OPT-IN. La mas sensible del pillar. Mismo patron que BI.4 + BI.9.2 con un agregado critico: si `consent_clear` es false, AUTOMATICAMENTE cuenta como crisis pattern (severe), independientemente del contenido de la narrativa. Esto NUNCA se desactiva.
+
+REGLAS FIRMES:
+- Axi NO es educador sexual ni medico de salud sexual. Para problemas medicos (ITS positivo, dolor, disfuncion) SIEMPRE recomienda ginecologo/urologo/sexologo.
+- Para abuso, agresion sexual, violencia → SIEMPRE da hotlines + Red Nacional de Refugios + 911.
+- Si consent_clear es false, surface IMMEDIATAMENTE hotlines + recomendar profesional + linea de violencia.
+- NUNCA mandar contenido a LLM remoto por defecto.
+
+19a. **sexual_health_log** — Registra un encuentro. La narrativa SIEMPRE va cifrada bajo vault. consent_clear default true; pasalo explicitamente como false si el usuario describe una situacion sin consentimiento — esto disparara hotlines automaticamente.
+    args: {"encounter_type": "partner", "partner_relationship_id": "rel-...", "protection_used": true, "satisfaction_1_10": 8, "consent_clear": true, "narrative": "...", "occurred_at": "2026-04-07T22:00:00Z"}
+    encounter_type: solo | partner | multiple | other
+
+19b. **sexual_health_history_meta** — Lista los ultimos N encuentros SIN narrativa. NO requiere vault.
+    args: {"limit": 30}
+
+19c. **sexual_health_history** — Lista los ultimos N encuentros CON narrativa decifrada. REQUIERE vault unlocked.
+    args: {"limit": 10}
+
+19d. **sti_test_log** — Registra el resultado de una prueba de ITS. NO requiere vault. Notas opcionales con cifrado por defecto.
+    args: {"test_name": "HIV", "result": "negative", "tested_at": "2026-03-15T10:00:00Z", "lab_name": "Lab Salud", "notes": ""}
+    result: negative | positive | pending | inconclusive
+
+19e. **sti_tests_list** — Lista los ultimos N tests.
+    args: {"limit": 20}
+
+19f. **contraception_add** — Agrega un metodo anticonceptivo activo.
+    args: {"method_name": "iud_hormonal", "started_at": "2025-08-01T00:00:00Z", "notes": ""}
+
+19g. **contraception_end** — Marca un metodo como terminado.
+    args: {"method_id": "ctp-...", "ended_at": "2026-04-07T00:00:00Z"}
+
+19h. **contraception_list** — Lista metodos activos (default) o todos.
+    args: {"active_only": true}
+
+19i. **sexual_health_summary** — Resumen agregado: encuentros 30d, crisis pattern count 30d, **consent violations count 30d**, dias desde el ultimo test ITS, metodos anticonceptivos activos. Si hay crisis o consent violations, incluye hotlines automaticamente.
+    args: {"recent_limit": 30}
+
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
 
@@ -1689,6 +1751,21 @@ REGLAS FIRMES (heredadas de BI.9 y BI.4):
             "relationship_events_list" => execute_relationship_events_list(&call.args, ctx).await,
             "relationship_events_meta" => execute_relationship_events_meta(&call.args, ctx).await,
             "relationship_timeline" => execute_relationship_timeline(&call.args, ctx).await,
+            "menstrual_log" => execute_menstrual_log(&call.args, ctx).await,
+            "menstrual_history_meta" => execute_menstrual_history_meta(&call.args, ctx).await,
+            "menstrual_history" => execute_menstrual_history(&call.args, ctx).await,
+            "menstrual_summary" => execute_menstrual_summary(&call.args, ctx).await,
+            "sexual_health_log" => execute_sexual_health_log(&call.args, ctx).await,
+            "sexual_health_history_meta" => {
+                execute_sexual_health_history_meta(&call.args, ctx).await
+            }
+            "sexual_health_history" => execute_sexual_health_history(&call.args, ctx).await,
+            "sti_test_log" => execute_sti_test_log(&call.args, ctx).await,
+            "sti_tests_list" => execute_sti_tests_list(&call.args, ctx).await,
+            "contraception_add" => execute_contraception_add(&call.args, ctx).await,
+            "contraception_end" => execute_contraception_end(&call.args, ctx).await,
+            "contraception_list" => execute_contraception_list(&call.args, ctx).await,
+            "sexual_health_summary" => execute_sexual_health_summary(&call.args, ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -5874,6 +5951,450 @@ REGLAS FIRMES (heredadas de BI.9 y BI.4):
                     crisis,
                 ));
             }
+        }
+        Ok(out)
+    }
+
+    // -- BI.6: salud femenina / ciclo menstrual ----------------------------
+
+    async fn execute_menstrual_log(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let cycle_day = args["cycle_day"].as_u64().map(|d| d as u32);
+        let flow = args["flow_intensity"].as_str();
+        let symptoms: Vec<String> = args["symptoms"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mood = args["mood_1_10"].as_u64().map(|m| m as u8);
+        let energy = args["energy_1_10"].as_u64().map(|e| e as u8);
+        let pain = args["pain_1_10"].as_u64().map(|p| p as u8);
+        let narrative = args["narrative"].as_str().unwrap_or("");
+        let logged_at = args["logged_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc));
+
+        let (entry, detection) = mem
+            .log_menstrual_entry(
+                cycle_day, flow, &symptoms, mood, energy, pain, narrative, logged_at, None,
+            )
+            .await?;
+
+        let mut out = format!(
+            "Entrada del ciclo guardada (id={}{}{}).",
+            entry.entry_id,
+            entry
+                .flow_intensity
+                .as_deref()
+                .map(|f| format!(", flow {}", f))
+                .unwrap_or_default(),
+            entry
+                .pain_1_10
+                .map(|p| format!(", dolor {}/10", p))
+                .unwrap_or_default(),
+        );
+        if let Some(d) = detection {
+            out.push_str(&format!(
+                "\n\n_Detecte un patron de **{}** en tu narrativa. Quiero asegurarme de que tengas apoyo a la mano:_",
+                d.severity
+            ));
+            out.push_str(&render_crisis_block());
+        }
+        Ok(out)
+    }
+
+    async fn execute_menstrual_history_meta(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["limit"].as_u64().unwrap_or(30) as usize;
+        let items = mem.list_menstrual_entries_meta(limit).await?;
+        if items.is_empty() {
+            return Ok("Aun no hay entradas del ciclo registradas.".to_string());
+        }
+        let mut out = String::from("# Ciclo menstrual (metadata)\n\n");
+        for e in items {
+            let pain = e
+                .pain_1_10
+                .map(|p| format!(" dolor {}/10", p))
+                .unwrap_or_default();
+            let flow = e
+                .flow_intensity
+                .as_deref()
+                .map(|f| format!(" flow {}", f))
+                .unwrap_or_default();
+            let crisis = if e.had_crisis_pattern { " ⚠️" } else { "" };
+            out.push_str(&format!(
+                "- [{}]{}{}{}\n",
+                e.logged_at.format("%Y-%m-%d"),
+                flow,
+                pain,
+                crisis
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_menstrual_history(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+        let items = mem.list_menstrual_entries(limit).await?;
+        if items.is_empty() {
+            return Ok("Aun no hay entradas del ciclo.".to_string());
+        }
+        let mut out = String::from("# Ciclo menstrual\n\n");
+        for e in items {
+            let crisis = if e.had_crisis_pattern { " ⚠️" } else { "" };
+            out.push_str(&format!(
+                "## [{}]{}{}\n",
+                e.logged_at.format("%Y-%m-%d"),
+                e.flow_intensity
+                    .as_deref()
+                    .map(|f| format!(" {}", f))
+                    .unwrap_or_default(),
+                crisis
+            ));
+            if !e.narrative.is_empty() {
+                out.push_str(&format!("{}\n", e.narrative));
+            }
+            out.push('\n');
+        }
+        Ok(out)
+    }
+
+    async fn execute_menstrual_summary(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["recent_limit"].as_u64().unwrap_or(30) as usize;
+        let s = mem.get_menstrual_cycle_summary(limit).await?;
+        let mut out = String::from("# Ciclo menstrual — resumen\n\n");
+        out.push_str(&format!(
+            "Vault: {}\n",
+            if s.vault_unlocked {
+                "UNLOCKED"
+            } else {
+                "LOCKED (las narrativas no se cargan)"
+            }
+        ));
+        out.push_str(&format!("Entradas en 30d: {}\n", s.entries_last_30d));
+        if let Some(p) = s.avg_pain_30d {
+            out.push_str(&format!("Dolor promedio 30d: {:.1}/10\n", p));
+        }
+        if let Some(m) = s.avg_mood_30d {
+            out.push_str(&format!("Mood promedio 30d: {:.1}/10\n", m));
+        }
+        if let Some(d) = s.days_since_last_period {
+            out.push_str(&format!("Dias desde el ultimo periodo: {}\n", d));
+        }
+        if s.recent_entries_meta.is_empty() {
+            out.push_str("\nAun no hay datos. Usa `menstrual_log`.\n");
+        }
+        Ok(out)
+    }
+
+    // -- BI.12: salud sexual ------------------------------------------------
+
+    async fn execute_sexual_health_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let encounter_type = args["encounter_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'encounter_type'"))?;
+        let partner = args["partner_relationship_id"].as_str();
+        let protection_used = args["protection_used"].as_bool();
+        let satisfaction = args["satisfaction_1_10"].as_u64().map(|s| s as u8);
+        let consent_clear = args["consent_clear"].as_bool().unwrap_or(true);
+        let narrative = args["narrative"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'narrative'"))?;
+        let occurred_at = args["occurred_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc));
+
+        let (entry, detection) = mem
+            .log_sexual_health_entry(
+                encounter_type,
+                partner,
+                protection_used,
+                satisfaction,
+                consent_clear,
+                narrative,
+                occurred_at,
+                None,
+            )
+            .await?;
+
+        let mut out = format!(
+            "Entrada de salud sexual guardada (id={}, cifrada bajo el vault).",
+            entry.entry_id
+        );
+        if !consent_clear {
+            out.push_str(
+                "\n\n**⚠️ Marcaste consent_clear = false. Esto es serio.** \
+                 No estas solo/a. Por favor considera hablar con un profesional o contactar una linea de ayuda. \
+                 Si estas en peligro inmediato, llama al 911.",
+            );
+            out.push_str(&render_crisis_block());
+        } else if let Some(d) = detection {
+            out.push_str(&format!(
+                "\n\n_Detecte un patron de **{}** en tu narrativa:_",
+                d.severity
+            ));
+            out.push_str(&render_crisis_block());
+        }
+        Ok(out)
+    }
+
+    async fn execute_sexual_health_history_meta(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["limit"].as_u64().unwrap_or(30) as usize;
+        let items = mem.list_sexual_health_meta(limit).await?;
+        if items.is_empty() {
+            return Ok("Aun no hay entradas de salud sexual.".to_string());
+        }
+        let mut out = String::from("# Salud sexual (metadata)\n\n");
+        for e in items {
+            let prot = e
+                .protection_used
+                .map(|b| {
+                    if b {
+                        " proteccion=si"
+                    } else {
+                        " proteccion=no"
+                    }
+                })
+                .unwrap_or("");
+            let consent = if e.consent_clear {
+                ""
+            } else {
+                " ⚠️ consent=NO"
+            };
+            let crisis = if e.had_crisis_pattern { " ⚠️" } else { "" };
+            out.push_str(&format!(
+                "- [{}] {}{}{}{}\n",
+                e.occurred_at.format("%Y-%m-%d"),
+                e.encounter_type,
+                prot,
+                consent,
+                crisis
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_sexual_health_history(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+        let items = mem.list_sexual_health_entries(limit).await?;
+        if items.is_empty() {
+            return Ok("Aun no hay entradas de salud sexual.".to_string());
+        }
+        let mut out = String::from("# Salud sexual\n\n");
+        for e in items {
+            let crisis = if e.had_crisis_pattern { " ⚠️" } else { "" };
+            out.push_str(&format!(
+                "## [{}] {}{}\n{}\n\n",
+                e.occurred_at.format("%Y-%m-%d %H:%M"),
+                e.encounter_type,
+                crisis,
+                e.narrative
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_sti_test_log(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let test_name = args["test_name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'test_name'"))?;
+        let result = args["result"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'result'"))?;
+        let tested_at = args["tested_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc))
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'tested_at' (RFC3339)"))?;
+        let lab_name = args["lab_name"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let t = mem
+            .log_sti_test(test_name, result, tested_at, lab_name, notes, None)
+            .await?;
+        let mut out = format!(
+            "Test ITS guardado: {} = {} (id={})",
+            t.test_name, t.result, t.test_id
+        );
+        if t.result == "positive" {
+            out.push_str(
+                "\n\n**Resultado positivo registrado.** Por favor agenda una consulta con un especialista. Hay tratamientos efectivos para casi todas las ITS — el siguiente paso correcto es ver a un medico.",
+            );
+        }
+        Ok(out)
+    }
+
+    async fn execute_sti_tests_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let tests = mem.list_sti_tests(limit).await?;
+        if tests.is_empty() {
+            return Ok("Aun no hay tests ITS registrados.".to_string());
+        }
+        let mut out = String::from("# Tests ITS\n\n");
+        for t in tests {
+            let lab = t
+                .lab_name
+                .as_deref()
+                .map(|l| format!(" ({})", l))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "- [{}] {} = **{}**{}\n",
+                t.tested_at.format("%Y-%m-%d"),
+                t.test_name,
+                t.result,
+                lab
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_contraception_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let method_name = args["method_name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'method_name'"))?;
+        let started_at = args["started_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc))
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'started_at' (RFC3339)"))?;
+        let notes = args["notes"].as_str().unwrap_or("");
+        let m = mem
+            .add_contraception_method(method_name, started_at, notes, None)
+            .await?;
+        Ok(format!(
+            "Metodo anticonceptivo guardado: {} (id={})",
+            m.method_name, m.method_id
+        ))
+    }
+
+    async fn execute_contraception_end(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let id = args["method_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'method_id'"))?;
+        let ended_at = args["ended_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc));
+        let ok = mem.end_contraception_method(id, ended_at).await?;
+        if ok {
+            Ok("Metodo terminado.".to_string())
+        } else {
+            Ok(format!("No encontre metodo activo con id {}.", id))
+        }
+    }
+
+    async fn execute_contraception_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let active_only = args["active_only"].as_bool().unwrap_or(true);
+        let methods = mem.list_contraception_methods(active_only).await?;
+        if methods.is_empty() {
+            return Ok("Aun no hay metodos anticonceptivos registrados.".to_string());
+        }
+        let mut out = String::from("# Metodos anticonceptivos\n\n");
+        for m in methods {
+            let status = m
+                .ended_at
+                .map(|e| format!(" (terminado: {})", e.format("%Y-%m-%d")))
+                .unwrap_or_else(|| " (activo)".to_string());
+            out.push_str(&format!(
+                "- {} desde {}{}\n  id: {}\n",
+                m.method_name,
+                m.started_at.format("%Y-%m-%d"),
+                status,
+                m.method_id
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_sexual_health_summary(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["recent_limit"].as_u64().unwrap_or(30) as usize;
+        let s = mem.get_sexual_health_summary(limit).await?;
+        let mut out = String::from("# Salud sexual — resumen\n\n");
+        out.push_str(&format!(
+            "Vault: {}\n",
+            if s.vault_unlocked {
+                "UNLOCKED"
+            } else {
+                "LOCKED"
+            }
+        ));
+        out.push_str(&format!("Encuentros en 30d: {}\n", s.entries_last_30d));
+        if !s.active_contraception.is_empty() {
+            out.push_str(&format!(
+                "Metodos anticonceptivos activos: {}\n",
+                s.active_contraception
+                    .iter()
+                    .map(|m| m.method_name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if let Some(d) = s.days_since_last_sti_test {
+            out.push_str(&format!("Dias desde el ultimo test ITS: {}\n", d));
+        }
+        if s.consent_violations_count_30d > 0 {
+            out.push_str(&format!(
+                "**⚠️ Consent violations en 30d: {}**\n",
+                s.consent_violations_count_30d
+            ));
+            out.push_str(&render_crisis_block());
+        } else if s.crisis_pattern_count_30d > 0 {
+            out.push_str(&format!(
+                "**Patrones de crisis detectados en 30d: {}**\n",
+                s.crisis_pattern_count_30d
+            ));
+            out.push_str(&render_crisis_block());
+        }
+        if s.recent_entries_meta.is_empty()
+            && s.recent_sti_tests.is_empty()
+            && s.active_contraception.is_empty()
+        {
+            out.push_str("\nAun no hay datos.\n");
         }
         Ok(out)
     }
