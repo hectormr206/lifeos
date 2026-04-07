@@ -4878,6 +4878,204 @@ fn avg_field<I: Iterator<Item = f64>>(iter: I) -> Option<f64> {
 }
 
 // ============================================================================
+// Fase BI sensible — Modo panico (/wipe-*) y predictor menstrual
+// ============================================================================
+//
+// Modo panico: borra TODAS las filas de las side-tables sensibles
+// (mental_health_journal/_mood_log, menstrual_cycle_log,
+// sexual_health_log + sti_tests + contraception_methods,
+// relationship_events). Es destructivo e irrecuperable. NO toca el
+// vault — el vault sigue configurado, solo desaparecen los datos.
+// Requiere una `confirmation_phrase` exacta para prevenir triggers
+// accidentales por LLM.
+//
+// El uso esperado es: usuario en peligro fisico (familia abusiva,
+// disputa legal, custodia, frontera de control sanitario) que
+// necesita borrar evidencia rapidamente.
+
+/// La frase exacta que el caller debe pasar para confirmar un wipe
+/// destructivo. Se exige una sola constante para todos los wipes —
+/// la UI puede pedirle al usuario que escriba "BORRAR DEFINITIVAMENTE"
+/// y solo si coincide pasa esta frase a la API.
+pub const PANIC_WIPE_CONFIRMATION: &str = "BORRAR DEFINITIVAMENTE";
+
+/// One row in the menstrual predictor output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MenstrualPrediction {
+    /// Number of period starts detected in the historical data.
+    pub period_starts_detected: u32,
+    /// Average days between consecutive period starts (rolling
+    /// window of up to 6).
+    pub avg_cycle_length_days: Option<f64>,
+    /// Last period start date observed.
+    pub last_period_start: Option<DateTime<Utc>>,
+    /// Predicted next period start = last + avg. None if not enough
+    /// data.
+    pub predicted_next_period: Option<DateTime<Utc>>,
+    /// Days from `now` to the predicted next period (negative means
+    /// already overdue).
+    pub days_until_next: Option<i64>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Validate that the caller passed the exact confirmation phrase.
+    /// Internal helper used by all wipe methods.
+    fn check_wipe_confirmation(confirmation: &str) -> Result<()> {
+        if confirmation.trim() != PANIC_WIPE_CONFIRMATION {
+            anyhow::bail!(
+                "wipe rejected: confirmation_phrase must be exactly '{}'",
+                PANIC_WIPE_CONFIRMATION
+            );
+        }
+        Ok(())
+    }
+
+    /// Wipe ALL mental_health rows. Idempotent. Returns the number of
+    /// rows deleted across both tables (mood log + journal). Does NOT
+    /// touch the vault — the vault stays configured.
+    pub async fn wipe_mental_health_data(&self, confirmation: &str) -> Result<u64> {
+        Self::check_wipe_confirmation(confirmation)?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<u64> {
+            let db = Self::open_db(&db_path)?;
+            let n1 = db.execute("DELETE FROM mental_health_journal", [])? as u64;
+            let n2 = db.execute("DELETE FROM mental_health_mood_log", [])? as u64;
+            Ok(n1 + n2)
+        })
+        .await??;
+        Ok(n)
+    }
+
+    /// Wipe ALL menstrual_cycle_log rows. Idempotent.
+    pub async fn wipe_menstrual_data(&self, confirmation: &str) -> Result<u64> {
+        Self::check_wipe_confirmation(confirmation)?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<u64> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute("DELETE FROM menstrual_cycle_log", [])? as u64)
+        })
+        .await??;
+        Ok(n)
+    }
+
+    /// Wipe ALL sexual health data: sexual_health_log + sti_tests +
+    /// contraception_methods. Idempotent.
+    pub async fn wipe_sexual_health_data(&self, confirmation: &str) -> Result<u64> {
+        Self::check_wipe_confirmation(confirmation)?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<u64> {
+            let db = Self::open_db(&db_path)?;
+            let n1 = db.execute("DELETE FROM sexual_health_log", [])? as u64;
+            let n2 = db.execute("DELETE FROM sti_tests", [])? as u64;
+            let n3 = db.execute("DELETE FROM contraception_methods", [])? as u64;
+            Ok(n1 + n2 + n3)
+        })
+        .await??;
+        Ok(n)
+    }
+
+    /// Wipe ALL relationship_events rows. Does NOT touch the
+    /// `relationships` table — the perfil queda y el usuario decide
+    /// si lo borra aparte.
+    pub async fn wipe_relationship_events_data(&self, confirmation: &str) -> Result<u64> {
+        Self::check_wipe_confirmation(confirmation)?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<u64> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute("DELETE FROM relationship_events", [])? as u64)
+        })
+        .await??;
+        Ok(n)
+    }
+
+    /// BI.6 predictor: estimate the next period date based on the
+    /// average length of the last (up to) 6 cycles.
+    ///
+    /// Detection rule: a "period start" is an entry with
+    /// `flow_intensity != 'none'` whose previous flow entry (within
+    /// 7 days backwards) is also non-none → same period; or no
+    /// previous → new start. We then compute the avg gap between
+    /// consecutive period starts.
+    ///
+    /// Need >=2 starts to predict. Otherwise returns the row with
+    /// only `last_period_start` filled.
+    pub async fn predict_next_period(&self) -> Result<MenstrualPrediction> {
+        // Pull all entries with flow != none, ordered ASC.
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT logged_at, flow_intensity FROM menstrual_cycle_log
+                 WHERE flow_intensity IS NOT NULL AND flow_intensity != 'none'
+                 ORDER BY logged_at ASC",
+            )?;
+            let rows: Vec<(String, String)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+
+        let now = Utc::now();
+        let entries: Vec<DateTime<Utc>> = raws.into_iter().map(|(d, _)| parse_utc(&d)).collect();
+
+        // Detect period starts: an entry that is NOT preceded by
+        // another entry within the previous 7 days.
+        let mut starts: Vec<DateTime<Utc>> = Vec::new();
+        let mut prev: Option<DateTime<Utc>> = None;
+        for ts in &entries {
+            let is_start = match prev {
+                Some(p) => (*ts - p).num_days() > 7,
+                None => true,
+            };
+            if is_start {
+                starts.push(*ts);
+            }
+            prev = Some(*ts);
+        }
+
+        let last_period_start = starts.last().copied();
+        if starts.len() < 2 {
+            return Ok(MenstrualPrediction {
+                period_starts_detected: starts.len() as u32,
+                avg_cycle_length_days: None,
+                last_period_start,
+                predicted_next_period: None,
+                days_until_next: None,
+                generated_at: now,
+            });
+        }
+
+        // Compute gaps between consecutive starts, take last (up to)
+        // 6 cycles.
+        let mut gaps: Vec<i64> = starts
+            .windows(2)
+            .map(|w| (w[1] - w[0]).num_days())
+            .collect();
+        if gaps.len() > 6 {
+            let drop = gaps.len() - 6;
+            gaps = gaps.split_off(drop);
+        }
+        let avg = gaps.iter().sum::<i64>() as f64 / gaps.len() as f64;
+
+        let last = last_period_start.unwrap();
+        let predicted = last + chrono::Duration::days(avg.round() as i64);
+        let days_until = (predicted - now).num_days();
+
+        Ok(MenstrualPrediction {
+            period_starts_detected: starts.len() as u32,
+            avg_cycle_length_days: Some(avg),
+            last_period_start,
+            predicted_next_period: Some(predicted),
+            days_until_next: Some(days_until),
+            generated_at: now,
+        })
+    }
+}
+
+// ============================================================================
 // Fase BI.9.2 — Relationship events (narrativa intima, sensible)
 // ============================================================================
 //
@@ -18446,6 +18644,282 @@ mod tests {
             .iter()
             .any(|i| i.item_type == "growth_goal" && i.name == "Meta vieja"));
 
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI sensible — Modo panico (/wipe-*) y predictor menstrual
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn wipe_rejects_wrong_confirmation_phrase() {
+        let dir = temp_dir("memory-plane-wipe-bad-phrase");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert one mood checkin so there is data to (try to) wipe.
+        mgr.log_mood_checkin(7, None, None, "ok", None, None)
+            .await
+            .unwrap();
+
+        let bad = mgr.wipe_mental_health_data("borrar todo").await;
+        assert!(bad.is_err());
+        let bad2 = mgr.wipe_mental_health_data("").await;
+        assert!(bad2.is_err());
+
+        // Data is still there.
+        let still = mgr.list_mood_checkins(10).await.unwrap();
+        assert_eq!(still.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn wipe_mental_health_with_correct_phrase_clears_both_tables() {
+        let dir = temp_dir("memory-plane-wipe-mental-ok");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        mgr.log_mood_checkin(5, None, None, "", None, None)
+            .await
+            .unwrap();
+        mgr.log_mood_checkin(7, None, None, "", None, None)
+            .await
+            .unwrap();
+        mgr.add_journal_entry(
+            Some(4),
+            None,
+            None,
+            "una entrada de diario",
+            &[],
+            &[],
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let n = mgr
+            .wipe_mental_health_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+
+        // Both tables empty now.
+        assert!(mgr.list_mood_checkins(10).await.unwrap().is_empty());
+        assert!(mgr.list_journal_meta(10).await.unwrap().is_empty());
+
+        // Vault still configured.
+        assert!(mgr.is_reinforced_vault_configured().await.unwrap());
+
+        // Idempotent.
+        let n2 = mgr
+            .wipe_mental_health_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n2, 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn wipe_menstrual_clears_table_keeps_vault() {
+        let dir = temp_dir("memory-plane-wipe-mens");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.log_menstrual_entry(
+            Some(1),
+            Some("medium"),
+            &[],
+            None,
+            None,
+            None,
+            "",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let n = mgr
+            .wipe_menstrual_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(mgr
+            .list_menstrual_entries_meta(10)
+            .await
+            .unwrap()
+            .is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn wipe_sexual_health_clears_all_three_tables() {
+        let dir = temp_dir("memory-plane-wipe-sxh");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        mgr.log_sexual_health_entry("partner", None, Some(true), Some(8), true, "ok", None, None)
+            .await
+            .unwrap();
+        mgr.log_sti_test("HIV", "negative", Utc::now(), None, "", None)
+            .await
+            .unwrap();
+        mgr.add_contraception_method("condom", Utc::now(), "", None)
+            .await
+            .unwrap();
+
+        let n = mgr
+            .wipe_sexual_health_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+        assert!(mgr.list_sexual_health_meta(10).await.unwrap().is_empty());
+        assert!(mgr.list_sti_tests(10).await.unwrap().is_empty());
+        assert!(mgr
+            .list_contraception_methods(false)
+            .await
+            .unwrap()
+            .is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn wipe_relationship_events_keeps_relationship_profile() {
+        let dir = temp_dir("memory-plane-wipe-revt");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let r = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_relationship_event(
+            &r.relationship_id,
+            "argument",
+            Some(7),
+            Some("negative"),
+            "test",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let n = mgr
+            .wipe_relationship_events_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+
+        // Events gone, but Maria still in relationships.
+        let metas = mgr
+            .list_relationship_event_meta(Some(&r.relationship_id), 10)
+            .await
+            .unwrap();
+        assert!(metas.is_empty());
+        let still = mgr.list_relationships(true).await.unwrap();
+        assert_eq!(still.len(), 1);
+        assert_eq!(still[0].name, "Maria");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_predictor_with_zero_or_one_periods() {
+        let dir = temp_dir("memory-plane-predict-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // No entries.
+        let p0 = mgr.predict_next_period().await.unwrap();
+        assert_eq!(p0.period_starts_detected, 0);
+        assert!(p0.predicted_next_period.is_none());
+
+        // One period — still cannot predict.
+        mgr.log_menstrual_entry(None, Some("medium"), &[], None, None, None, "", None, None)
+            .await
+            .unwrap();
+        let p1 = mgr.predict_next_period().await.unwrap();
+        assert_eq!(p1.period_starts_detected, 1);
+        assert!(p1.predicted_next_period.is_none());
+        assert!(p1.last_period_start.is_some());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_predictor_averages_last_cycles() {
+        let dir = temp_dir("memory-plane-predict-3cycles");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Simulate 3 period starts at 28-day intervals, ending today.
+        // Each period is 1 entry (sufficient — the gap-detection
+        // logic only needs the start day).
+        let now = Utc::now();
+        for days_ago in [56, 28, 0] {
+            mgr.log_menstrual_entry(
+                None,
+                Some("medium"),
+                &[],
+                None,
+                None,
+                None,
+                "",
+                Some(now - chrono::Duration::days(days_ago)),
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let p = mgr.predict_next_period().await.unwrap();
+        assert_eq!(p.period_starts_detected, 3);
+        // 2 gaps of 28 days → avg 28.
+        let avg = p.avg_cycle_length_days.unwrap();
+        assert!((avg - 28.0).abs() < 0.5, "expected ~28 got {}", avg);
+        // Predicted = today + 28 days, days_until ≈ 28.
+        let d = p.days_until_next.unwrap();
+        assert!((27..=29).contains(&d), "expected days_until ~28, got {}", d);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_predictor_groups_consecutive_days_as_one_period() {
+        let dir = temp_dir("memory-plane-predict-grouping");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 3 consecutive days of flow + 1 entry 28 days later =
+        // 2 distinct period starts (not 4).
+        let now = Utc::now();
+        for days_ago in [30, 29, 28, 0] {
+            mgr.log_menstrual_entry(
+                None,
+                Some("medium"),
+                &[],
+                None,
+                None,
+                None,
+                "",
+                Some(now - chrono::Duration::days(days_ago)),
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        let p = mgr.predict_next_period().await.unwrap();
+        assert_eq!(p.period_starts_detected, 2);
+        let avg = p.avg_cycle_length_days.unwrap();
+        // Gap between start (30d ago) and start (0d ago) = 30.
+        assert!((avg - 30.0).abs() < 0.5, "expected ~30 got {}", avg);
         std::fs::remove_dir_all(dir).ok();
     }
 

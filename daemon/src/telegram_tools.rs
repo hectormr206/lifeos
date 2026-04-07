@@ -27,7 +27,7 @@ pub mod inner {
     use crate::memory_plane::{
         crisis_resources_mx, detect_crisis_in_text, extract_entities_from_text, BookStatus,
         ExercisePlanItem, GoalStatus, LifeSummaryWindow, MemoryPlaneManager, RecipeIngredient,
-        ShoppingListItem,
+        ShoppingListItem, PANIC_WIPE_CONFIRMATION,
     };
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
@@ -643,6 +643,31 @@ Cierra la sub-fase de nutricion (BI.3 sprint 2). Foundation NO sensible: catalog
 
 20o. **shopping_list_get** — Devuelve una lista completa con todos sus items.
     args: {"list_id": "shop-..."}
+
+21. **Vida Plena — Modo panico (/wipe-*) y predictor menstrual**
+
+CRITICO. El modo panico borra TODAS las filas de las side-tables sensibles destructivamente. Es para casos donde el usuario esta en peligro fisico (familia abusiva, disputa legal, custodia, control sanitario). NO toca el vault — el vault sigue configurado, solo desaparecen los datos. Es IRRECUPERABLE.
+
+REGLAS FIRMES:
+- NUNCA invoques un wipe sin confirmacion explicita doble del usuario.
+- El parametro `confirmation_phrase` debe ser EXACTAMENTE "BORRAR DEFINITIVAMENTE". La API rechaza cualquier otra cosa.
+- Pidele al usuario que escriba la frase EL MISMO. No la escribas tu por el. Si el usuario solo dice "borralo" o "siga", PIDELE que escriba la frase exacta.
+- Tras un wipe, sugiere al usuario que considere `vault_reset` si quiere borrar tambien la metadata del vault (irrecuperabilidad maxima).
+
+21a. **wipe_mental_health** — Borra TODAS las filas de mental_health_journal y mental_health_mood_log. Devuelve cuantas filas borro. NO toca vault.
+    args: {"confirmation_phrase": "BORRAR DEFINITIVAMENTE"}
+
+21b. **wipe_menstrual** — Borra TODAS las filas de menstrual_cycle_log.
+    args: {"confirmation_phrase": "BORRAR DEFINITIVAMENTE"}
+
+21c. **wipe_sexual_health** — Borra TODAS las filas de sexual_health_log + sti_tests + contraception_methods.
+    args: {"confirmation_phrase": "BORRAR DEFINITIVAMENTE"}
+
+21d. **wipe_relationship_events** — Borra TODAS las filas de relationship_events. NO toca la tabla `relationships` (el perfil de las personas queda).
+    args: {"confirmation_phrase": "BORRAR DEFINITIVAMENTE"}
+
+21e. **menstrual_predict** — Estima la fecha del proximo periodo basado en el promedio de los ultimos (hasta) 6 ciclos detectados en menstrual_cycle_log. Devuelve avg_cycle_length_days, last_period_start, predicted_next_period, days_until_next. Si days_until_next es negativo, el periodo ya esta atrasado segun la prediccion. **NO es diagnostico** — es solo una estimacion estadistica del propio historial del usuario.
+    args: {}
 
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
@@ -1833,6 +1858,11 @@ Cierra la sub-fase de nutricion (BI.3 sprint 2). Foundation NO sensible: catalog
             "shopping_list_archive" => execute_shopping_list_archive(&call.args, ctx).await,
             "shopping_list_list" => execute_shopping_list_list(&call.args, ctx).await,
             "shopping_list_get" => execute_shopping_list_get(&call.args, ctx).await,
+            "wipe_mental_health" => execute_wipe_mental_health(&call.args, ctx).await,
+            "wipe_menstrual" => execute_wipe_menstrual(&call.args, ctx).await,
+            "wipe_sexual_health" => execute_wipe_sexual_health(&call.args, ctx).await,
+            "wipe_relationship_events" => execute_wipe_relationship_events(&call.args, ctx).await,
+            "menstrual_predict" => execute_menstrual_predict(ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -6854,6 +6884,118 @@ Cierra la sub-fase de nutricion (BI.3 sprint 2). Foundation NO sensible: catalog
             };
             out.push_str(&format!("{}. {} {}{}\n", i, mark, it.name, qty));
         }
+        Ok(out)
+    }
+
+    // -- BI panico + predictor menstrual ------------------------------------
+
+    fn require_panic_phrase(args: &serde_json::Value) -> Result<&str> {
+        let phrase = args["confirmation_phrase"].as_str().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Falta parametro 'confirmation_phrase'. Debe ser exactamente '{}'",
+                PANIC_WIPE_CONFIRMATION
+            )
+        })?;
+        if phrase.trim() != PANIC_WIPE_CONFIRMATION {
+            anyhow::bail!(
+                "confirmation_phrase no coincide. Pide al usuario que escriba EXACTAMENTE '{}'",
+                PANIC_WIPE_CONFIRMATION
+            );
+        }
+        Ok(phrase)
+    }
+
+    async fn execute_wipe_mental_health(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let phrase = require_panic_phrase(args)?;
+        let n = mem.wipe_mental_health_data(phrase).await?;
+        Ok(format!(
+            "✓ Borradas {} filas de salud mental (journal + mood log). El vault sigue configurado — usa `vault_reset` si quieres borrar tambien la metadata del vault.",
+            n
+        ))
+    }
+
+    async fn execute_wipe_menstrual(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let phrase = require_panic_phrase(args)?;
+        let n = mem.wipe_menstrual_data(phrase).await?;
+        Ok(format!(
+            "✓ Borradas {} filas del ciclo menstrual. El vault sigue configurado.",
+            n
+        ))
+    }
+
+    async fn execute_wipe_sexual_health(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let phrase = require_panic_phrase(args)?;
+        let n = mem.wipe_sexual_health_data(phrase).await?;
+        Ok(format!(
+            "✓ Borradas {} filas de salud sexual (encuentros + ITS + anticoncepcion). El vault sigue configurado.",
+            n
+        ))
+    }
+
+    async fn execute_wipe_relationship_events(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let phrase = require_panic_phrase(args)?;
+        let n = mem.wipe_relationship_events_data(phrase).await?;
+        Ok(format!(
+            "✓ Borradas {} filas de eventos relacionales. El perfil de las personas en `relationships` queda intacto — borralas con `relationship_deactivate` si tambien las quieres fuera.",
+            n
+        ))
+    }
+
+    async fn execute_menstrual_predict(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let p = mem.predict_next_period().await?;
+        let mut out = String::from("# Predictor menstrual\n\n");
+        out.push_str(&format!(
+            "Periodos detectados en el historial: {}\n",
+            p.period_starts_detected
+        ));
+        if let Some(avg) = p.avg_cycle_length_days {
+            out.push_str(&format!(
+                "Promedio de ciclo (ultimos hasta 6): {:.1} dias\n",
+                avg
+            ));
+        }
+        if let Some(last) = p.last_period_start {
+            out.push_str(&format!(
+                "Ultimo periodo registrado: {}\n",
+                last.format("%Y-%m-%d")
+            ));
+        }
+        if let Some(next) = p.predicted_next_period {
+            out.push_str(&format!(
+                "Proximo periodo estimado: {}\n",
+                next.format("%Y-%m-%d")
+            ));
+        }
+        if let Some(d) = p.days_until_next {
+            if d >= 0 {
+                out.push_str(&format!("En {} dias.\n", d));
+            } else {
+                out.push_str(&format!("Atrasado por {} dias segun la prediccion.\n", -d));
+            }
+        }
+        if p.period_starts_detected < 2 {
+            out.push_str(
+                "\nNo hay suficientes datos historicos para predecir. \
+                 Se necesitan al menos 2 periodos detectados.\n",
+            );
+        }
+        out.push_str(
+            "\n_Esto es una estimacion estadistica de tu propio historial, NO un diagnostico medico._\n",
+        );
         Ok(out)
     }
 
