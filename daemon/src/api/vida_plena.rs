@@ -50,6 +50,11 @@ pub fn vida_plena_routes() -> Router<ApiState> {
         .route("/life-summary", get(get_life_summary))
         .route("/cross-domain-patterns", get(get_cross_domain_patterns))
         .route("/forgetting-check", get(get_forgetting_check))
+        // -- BI.3.1 sprint 2: weekly shopping list generator --------
+        .route(
+            "/shopping/generate-weekly",
+            post(post_generate_weekly_shopping_list),
+        )
         // -- Vault control (BI cifrado reforzado) -------------------
         .route("/vault/status", get(get_vault_status))
         .route("/vault/set-passphrase", post(post_vault_set_passphrase))
@@ -388,4 +393,37 @@ async fn post_vault_reset(
         .await
         .map_err(err_to_http)?;
     Ok(Json(VaultActionResponse { status: "reset" }))
+}
+
+// ----------------------------------------------------------------------
+// BI.3.1 sprint 2 — Weekly shopping list generator
+// ----------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct GenerateWeeklyShoppingPayload {
+    pub name: String,
+    #[serde(default)]
+    pub target_store_id: Option<String>,
+    #[serde(default)]
+    pub tag_filter: Option<String>,
+    #[serde(default)]
+    pub max_recipes: Option<usize>,
+}
+
+async fn post_generate_weekly_shopping_list(
+    State(state): State<ApiState>,
+    Json(payload): Json<GenerateWeeklyShoppingPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let max_recipes = payload.max_recipes.unwrap_or(7);
+    let mgr = state.memory_plane_manager.read().await;
+    let plan = mgr
+        .generate_weekly_shopping_list(
+            &payload.name,
+            payload.target_store_id.as_deref(),
+            payload.tag_filter.as_deref(),
+            max_recipes,
+        )
+        .await
+        .map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "plan": plan })))
 }

@@ -7257,6 +7257,196 @@ fn shopping_list_from_raw(r: ShoppingListRaw) -> ShoppingList {
 }
 
 // ============================================================================
+// Fase BI.3.1 sprint 2 — Generador inteligente de listas semanales
+// ============================================================================
+//
+// Cierra el ultimo hilo abierto de Vida Plena: convertir
+// nutrition_preferences + recipes en una lista de compras automatica
+// que respeta restricciones del usuario.
+//
+// El algoritmo es DETERMINISTICO (no LLM, no cloud, sin
+// non-determinism que asuste a un usuario con alergias serias):
+//
+//   1. Pull active nutrition_preferences con pref_type en
+//      ["allergy", "intolerance", "dislike"]. Estos son
+//      INGREDIENTES PROHIBIDOS.
+//   2. Pull recipes (con tag opcional para el caso "solo recetas
+//      etiquetadas como 'cena rapida' o 'desayuno saludable'").
+//   3. Para cada receta, comprueba ingredient.name (case-insensitive
+//      substring) contra cada label prohibido. Si matchea, EXCLUYE
+//      la receta entera. Esto es agresivo a proposito — preferimos
+//      excluir de mas a darle al usuario un ingrediente que lo
+//      mande al hospital.
+//   4. Toma hasta `max_recipes` de las que pasaron, agrega sus
+//      ingredientes, dedupea por (name + unit) sumando amounts.
+//   5. Crea un shopping_list con esos items y devuelve un reporte
+//      de exclusiones (que recetas, por que ingrediente).
+
+/// One excluded recipe + the reason it was filtered out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipeExclusion {
+    pub recipe_id: String,
+    pub recipe_name: String,
+    /// The pref label (e.g. "mariscos") that triggered exclusion.
+    pub matched_label: String,
+    /// `allergy`, `intolerance`, `dislike`.
+    pub matched_pref_type: String,
+    /// The ingredient name (e.g. "Camarones") that contained the label.
+    pub ingredient_name: String,
+}
+
+/// Result of `generate_weekly_shopping_list`. Wraps the created
+/// ShoppingList with the auditing metadata the caller (Telegram,
+/// dashboard, or LLM) needs to explain *why* certain recipes were
+/// dropped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeeklyShoppingPlan {
+    pub list: ShoppingList,
+    /// Recipe IDs that were used to derive the items.
+    pub recipes_used: Vec<String>,
+    /// Recipes that were filtered out and the reason.
+    pub recipes_excluded: Vec<RecipeExclusion>,
+    /// Labels (allergens, intolerances, dislikes) that were enforced.
+    pub allergens_avoided: Vec<String>,
+}
+
+impl MemoryPlaneManager {
+    /// BI.3.1 sprint 2 — Build a weekly shopping list from the user's
+    /// recipes filtered by their nutrition preferences. The algorithm
+    /// is deterministic and conservative: any recipe whose ingredient
+    /// names contain a forbidden label (allergy/intolerance/dislike)
+    /// is excluded entirely.
+    ///
+    /// The created ShoppingList is persisted normally — the caller
+    /// can later call `check_shopping_list_item`, `complete_shopping_list`,
+    /// etc.
+    pub async fn generate_weekly_shopping_list(
+        &self,
+        name: &str,
+        target_store_id: Option<&str>,
+        tag_filter: Option<&str>,
+        max_recipes: usize,
+    ) -> Result<WeeklyShoppingPlan> {
+        let max_recipes = max_recipes.clamp(1, 50);
+
+        // 1. Pull forbidden labels from active prefs.
+        let mut forbidden: Vec<(String, String)> = Vec::new(); // (lowercased label, pref_type)
+        for pt in &["allergy", "intolerance", "dislike"] {
+            let prefs = self
+                .list_nutrition_preferences(Some(pt), true)
+                .await
+                .unwrap_or_default();
+            for p in prefs {
+                let label = p.label.trim().to_lowercase();
+                if !label.is_empty() {
+                    forbidden.push((label, p.pref_type));
+                }
+            }
+        }
+
+        // 2. Pull candidate recipes.
+        let recipes = self.list_recipes(tag_filter).await.unwrap_or_default();
+
+        // 3. Filter.
+        let mut used: Vec<Recipe> = Vec::new();
+        let mut excluded: Vec<RecipeExclusion> = Vec::new();
+        for r in recipes {
+            if used.len() >= max_recipes {
+                break;
+            }
+            let hit = recipe_first_forbidden_match(&r, &forbidden);
+            match hit {
+                Some((label, pref_type, ing_name)) => {
+                    excluded.push(RecipeExclusion {
+                        recipe_id: r.recipe_id.clone(),
+                        recipe_name: r.name.clone(),
+                        matched_label: label,
+                        matched_pref_type: pref_type,
+                        ingredient_name: ing_name,
+                    });
+                }
+                None => used.push(r),
+            }
+        }
+
+        // 4. Aggregate ingredients across used recipes.
+        let items = dedup_recipe_ingredients(&used);
+
+        // 5. Persist as a normal shopping_list.
+        let list = self
+            .create_shopping_list(name, target_store_id, &items, None)
+            .await?;
+
+        let allergens_avoided: Vec<String> = forbidden.into_iter().map(|(l, _)| l).collect();
+        let recipes_used_ids: Vec<String> = used.into_iter().map(|r| r.recipe_id).collect();
+
+        Ok(WeeklyShoppingPlan {
+            list,
+            recipes_used: recipes_used_ids,
+            recipes_excluded: excluded,
+            allergens_avoided,
+        })
+    }
+}
+
+/// If any ingredient name in `recipe` contains any forbidden label
+/// (case-insensitive substring), return the first match.
+/// Otherwise return None.
+fn recipe_first_forbidden_match(
+    recipe: &Recipe,
+    forbidden: &[(String, String)],
+) -> Option<(String, String, String)> {
+    for ing in &recipe.ingredients {
+        let lower_name = ing.name.to_lowercase();
+        for (label, pref_type) in forbidden {
+            if lower_name.contains(label) {
+                return Some((label.clone(), pref_type.clone(), ing.name.clone()));
+            }
+        }
+    }
+    None
+}
+
+/// Combine ingredients across recipes into a deduped shopping list.
+/// Ingredients with the same lowercased name AND same unit are
+/// summed; otherwise kept as separate items so the caller never
+/// loses information (e.g. "leche 1 l" + "leche 200 ml" stays as
+/// two rows because the units differ).
+fn dedup_recipe_ingredients(recipes: &[Recipe]) -> Vec<ShoppingListItem> {
+    let mut buckets: BTreeMap<(String, String), ShoppingListItem> = BTreeMap::new();
+    for r in recipes {
+        for ing in &r.ingredients {
+            let key = (
+                ing.name.trim().to_lowercase(),
+                ing.unit.trim().to_lowercase(),
+            );
+            buckets
+                .entry(key)
+                .and_modify(|existing| {
+                    if let Some(q) = existing.quantity.as_mut() {
+                        *q += ing.amount;
+                    } else {
+                        existing.quantity = Some(ing.amount);
+                    }
+                })
+                .or_insert_with(|| ShoppingListItem {
+                    name: ing.name.clone(),
+                    quantity: Some(ing.amount),
+                    unit: if ing.unit.is_empty() {
+                        None
+                    } else {
+                        Some(ing.unit.clone())
+                    },
+                    food_id: None,
+                    checked: false,
+                    notes: ing.notes.clone(),
+                });
+        }
+    }
+    buckets.into_values().collect()
+}
+
+// ============================================================================
 // Fase BI.2 — Salud médica estructurada (Vida Plena)
 // ============================================================================
 
@@ -18644,6 +18834,294 @@ mod tests {
             .iter()
             .any(|i| i.item_type == "growth_goal" && i.name == "Meta vieja"));
 
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1 sprint 2 — Weekly shopping list generator
+    // -----------------------------------------------------------------------
+
+    async fn seed_recipes_for_generator(mgr: &MemoryPlaneManager) {
+        // Recipe 1: Pasta con camarones (contiene "camarones" → trigger).
+        mgr.add_recipe(
+            "Pasta con camarones",
+            None,
+            vec![
+                RecipeIngredient {
+                    name: "Camarones".to_string(),
+                    amount: 300.0,
+                    unit: "g".to_string(),
+                    notes: None,
+                },
+                RecipeIngredient {
+                    name: "Pasta".to_string(),
+                    amount: 250.0,
+                    unit: "g".to_string(),
+                    notes: None,
+                },
+            ],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec!["cena".to_string()],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Recipe 2: Ensalada cesar (no trigger).
+        mgr.add_recipe(
+            "Ensalada cesar",
+            None,
+            vec![
+                RecipeIngredient {
+                    name: "Lechuga".to_string(),
+                    amount: 1.0,
+                    unit: "pieza".to_string(),
+                    notes: None,
+                },
+                RecipeIngredient {
+                    name: "Pollo".to_string(),
+                    amount: 200.0,
+                    unit: "g".to_string(),
+                    notes: None,
+                },
+            ],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec!["cena".to_string()],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Recipe 3: Tacos de pollo (NO trigger, pollo + tortilla).
+        mgr.add_recipe(
+            "Tacos de pollo",
+            None,
+            vec![
+                RecipeIngredient {
+                    name: "Pollo".to_string(),
+                    amount: 300.0,
+                    unit: "g".to_string(),
+                    notes: None,
+                },
+                RecipeIngredient {
+                    name: "Tortilla".to_string(),
+                    amount: 8.0,
+                    unit: "pieza".to_string(),
+                    notes: None,
+                },
+            ],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(4),
+            vec!["cena".to_string()],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn weekly_shopping_excludes_recipes_with_allergens() {
+        let dir = temp_dir("memory-plane-weekly-shop-allergens");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Allergy to mariscos (substring of "camarones" via "mariscos"
+        // doesn't actually match — but "camarones" itself is an
+        // allergy label here).
+        mgr.add_nutrition_preference(
+            "allergy",
+            "camarones",
+            Some("severe"),
+            "alergia desde nino",
+            None,
+        )
+        .await
+        .unwrap();
+
+        seed_recipes_for_generator(&mgr).await;
+
+        let plan = mgr
+            .generate_weekly_shopping_list("Despensa de prueba", None, None, 10)
+            .await
+            .unwrap();
+
+        // Pasta con camarones is excluded; the other two are used.
+        assert_eq!(plan.recipes_used.len(), 2);
+        assert_eq!(plan.recipes_excluded.len(), 1);
+        assert_eq!(plan.recipes_excluded[0].matched_label, "camarones");
+        assert_eq!(plan.recipes_excluded[0].matched_pref_type, "allergy");
+
+        // Ingredients aggregated: pollo appears in both ensalada
+        // and tacos (200 + 300 = 500 g).
+        let pollo = plan
+            .list
+            .items
+            .iter()
+            .find(|i| i.name.to_lowercase().contains("pollo"));
+        let pollo = pollo.expect("pollo should be in the list");
+        assert_eq!(pollo.unit.as_deref(), Some("g"));
+        assert!(
+            (pollo.quantity.unwrap() - 500.0).abs() < 0.01,
+            "expected 500g pollo, got {:?}",
+            pollo.quantity
+        );
+
+        // The allergens_avoided list contains the trigger.
+        assert!(plan.allergens_avoided.iter().any(|l| l == "camarones"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn weekly_shopping_respects_max_recipes_cap() {
+        let dir = temp_dir("memory-plane-weekly-shop-cap");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        seed_recipes_for_generator(&mgr).await;
+
+        let plan = mgr
+            .generate_weekly_shopping_list("Compras", None, None, 1)
+            .await
+            .unwrap();
+        assert_eq!(plan.recipes_used.len(), 1);
+        assert!(plan.recipes_excluded.is_empty()); // not excluded, just not picked
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn weekly_shopping_empty_list_when_all_excluded() {
+        let dir = temp_dir("memory-plane-weekly-shop-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Allergy to "pollo" + "camarones" excludes ALL three seeded
+        // recipes.
+        mgr.add_nutrition_preference("allergy", "pollo", Some("severe"), "", None)
+            .await
+            .unwrap();
+        mgr.add_nutrition_preference("allergy", "camarones", Some("severe"), "", None)
+            .await
+            .unwrap();
+
+        seed_recipes_for_generator(&mgr).await;
+
+        let plan = mgr
+            .generate_weekly_shopping_list("Compras vacias", None, None, 10)
+            .await
+            .unwrap();
+        assert!(plan.recipes_used.is_empty());
+        assert_eq!(plan.recipes_excluded.len(), 3);
+        assert!(plan.list.items.is_empty());
+        // Even an empty list is persisted — the user can still see it.
+        let fetched = mgr.get_shopping_list(&plan.list.list_id).await.unwrap();
+        assert!(fetched.is_some());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn weekly_shopping_dedups_by_name_and_unit() {
+        let dir = temp_dir("memory-plane-weekly-shop-dedup");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Two recipes that share an ingredient with the SAME unit
+        // (should be summed) plus a recipe with the same ingredient
+        // in a different unit (should remain separate).
+        mgr.add_recipe(
+            "R1",
+            None,
+            vec![RecipeIngredient {
+                name: "Leche".to_string(),
+                amount: 1.0,
+                unit: "l".to_string(),
+                notes: None,
+            }],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec![],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_recipe(
+            "R2",
+            None,
+            vec![RecipeIngredient {
+                name: "Leche".to_string(),
+                amount: 0.5,
+                unit: "l".to_string(),
+                notes: None,
+            }],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec![],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_recipe(
+            "R3",
+            None,
+            vec![RecipeIngredient {
+                name: "Leche".to_string(),
+                amount: 200.0,
+                unit: "ml".to_string(),
+                notes: None,
+            }],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec![],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let plan = mgr
+            .generate_weekly_shopping_list("Test dedup", None, None, 10)
+            .await
+            .unwrap();
+        let leche_rows: Vec<_> = plan
+            .list
+            .items
+            .iter()
+            .filter(|i| i.name.to_lowercase() == "leche")
+            .collect();
+        assert_eq!(
+            leche_rows.len(),
+            2,
+            "expected one row per unit (l + ml), got {}",
+            leche_rows.len()
+        );
+        let l_row = leche_rows
+            .iter()
+            .find(|r| r.unit.as_deref() == Some("l"))
+            .unwrap();
+        assert!((l_row.quantity.unwrap() - 1.5).abs() < 0.01);
         std::fs::remove_dir_all(dir).ok();
     }
 

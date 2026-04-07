@@ -669,6 +669,16 @@ REGLAS FIRMES:
 21e. **menstrual_predict** — Estima la fecha del proximo periodo basado en el promedio de los ultimos (hasta) 6 ciclos detectados en menstrual_cycle_log. Devuelve avg_cycle_length_days, last_period_start, predicted_next_period, days_until_next. Si days_until_next es negativo, el periodo ya esta atrasado segun la prediccion. **NO es diagnostico** — es solo una estimacion estadistica del propio historial del usuario.
     args: {}
 
+22. **Vida Plena — Generador inteligente de listas semanales (BI.3.1 sprint 2)**
+
+22a. **shopping_list_generate_weekly** — Genera automaticamente una lista de compras semanal a partir de las recetas guardadas, EXCLUYENDO cualquiera que contenga ingredientes prohibidos por las nutrition_preferences activas (alergias, intolerancias, dislikes). El algoritmo es deterministico y agresivo: prefiere excluir de mas a darle al usuario un ingrediente que lo mande al hospital. Devuelve la lista creada + un reporte de exclusiones (que recetas se filtraron y por que ingrediente).
+    args: {"name": "Despensa semanal", "target_store_id": "store-...", "tag_filter": "cena_rapida", "max_recipes": 7}
+    target_store_id, tag_filter son opcionales. max_recipes default 7, clamp [1, 50].
+
+    REGLAS:
+    - Si el usuario tiene alergias serias, AVISALE SIEMPRE de las exclusiones que se hicieron y dile que vuelva a verificar la lista antes de comprar. Las alergias son responsabilidad del usuario, no del LLM.
+    - Si la lista resulta vacia (todas las recetas fueron excluidas), sugiere que registre mas recetas con `nutrition_recipe_add` o que revise sus preferencias.
+
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
 
@@ -1863,6 +1873,9 @@ REGLAS FIRMES:
             "wipe_sexual_health" => execute_wipe_sexual_health(&call.args, ctx).await,
             "wipe_relationship_events" => execute_wipe_relationship_events(&call.args, ctx).await,
             "menstrual_predict" => execute_menstrual_predict(ctx).await,
+            "shopping_list_generate_weekly" => {
+                execute_shopping_list_generate_weekly(&call.args, ctx).await
+            }
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -6996,6 +7009,76 @@ REGLAS FIRMES:
         out.push_str(
             "\n_Esto es una estimacion estadistica de tu propio historial, NO un diagnostico medico._\n",
         );
+        Ok(out)
+    }
+
+    // -- BI.3.1 sprint 2: generador inteligente de listas semanales --------
+
+    async fn execute_shopping_list_generate_weekly(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let target_store_id = args["target_store_id"].as_str();
+        let tag_filter = args["tag_filter"].as_str();
+        let max_recipes = args["max_recipes"].as_u64().unwrap_or(7) as usize;
+
+        let plan = mem
+            .generate_weekly_shopping_list(name, target_store_id, tag_filter, max_recipes)
+            .await?;
+
+        let mut out = format!(
+            "Lista generada: {} (id={}, {} items, {} recetas usadas)\n\n",
+            plan.list.name,
+            plan.list.list_id,
+            plan.list.items.len(),
+            plan.recipes_used.len()
+        );
+
+        if !plan.allergens_avoided.is_empty() {
+            out.push_str(&format!(
+                "Restricciones aplicadas: {}\n\n",
+                plan.allergens_avoided.join(", ")
+            ));
+        }
+
+        if !plan.recipes_excluded.is_empty() {
+            out.push_str(&format!(
+                "## Recetas excluidas ({}):\n",
+                plan.recipes_excluded.len()
+            ));
+            for ex in &plan.recipes_excluded {
+                out.push_str(&format!(
+                    "- {} → contiene **{}** ({}: {})\n",
+                    ex.recipe_name, ex.ingredient_name, ex.matched_pref_type, ex.matched_label,
+                ));
+            }
+            out.push('\n');
+        }
+
+        if plan.list.items.is_empty() {
+            out.push_str(
+                "**La lista quedo vacia.** O todas tus recetas fueron excluidas por tus preferencias, o aun no hay recetas registradas. Considera agregar recetas con `nutrition_recipe_add` o revisar tus preferencias en `nutrition_pref_list`.\n",
+            );
+        } else {
+            out.push_str("## Items\n");
+            for it in &plan.list.items {
+                let qty = match (it.quantity, it.unit.as_deref()) {
+                    (Some(q), Some(u)) => format!(" {} {}", q, u),
+                    (Some(q), None) => format!(" {}", q),
+                    _ => String::new(),
+                };
+                out.push_str(&format!("- {}{}\n", it.name, qty));
+            }
+        }
+
+        out.push_str(
+            "\n_Las alergias son tu responsabilidad. Vuelve a verificar la lista antes de comprar._\n",
+        );
+
         Ok(out)
     }
 
