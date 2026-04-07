@@ -66,6 +66,10 @@ pub fn vida_plena_routes() -> Router<ApiState> {
         .route("/pin/set", post(post_pin_set))
         .route("/pin/validate", post(post_pin_validate))
         .route("/pin/clear", post(post_pin_clear))
+        // -- BI.3.1: food_db write endpoints (importers) ------------
+        .route("/food", post(post_add_food))
+        .route("/food/search", get(get_food_search))
+        .route("/food/by-barcode", get(get_food_by_barcode))
 }
 
 // ----------------------------------------------------------------------
@@ -516,4 +520,97 @@ async fn post_pin_clear(
     let mgr = state.memory_plane_manager.read().await;
     mgr.clear_local_pin().await.map_err(err_to_http)?;
     Ok(Json(VaultActionResponse { status: "cleared" }))
+}
+
+// ----------------------------------------------------------------------
+// BI.3.1 — food_db write endpoints (used by importers)
+// ----------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct AddFoodPayload {
+    pub name: String,
+    #[serde(default)]
+    pub brand: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub kcal_per_100g: Option<f64>,
+    #[serde(default)]
+    pub protein_g_per_100g: Option<f64>,
+    #[serde(default)]
+    pub carbs_g_per_100g: Option<f64>,
+    #[serde(default)]
+    pub fat_g_per_100g: Option<f64>,
+    #[serde(default)]
+    pub fiber_g_per_100g: Option<f64>,
+    #[serde(default)]
+    pub serving_size_g: Option<f64>,
+    pub source: String,
+    #[serde(default)]
+    pub barcode: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FoodSearchQuery {
+    pub q: String,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BarcodeQuery {
+    pub barcode: String,
+}
+
+async fn post_add_food(
+    State(state): State<ApiState>,
+    Json(payload): Json<AddFoodPayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let tags = payload.tags.unwrap_or_default();
+    let food = mgr
+        .add_food(
+            &payload.name,
+            payload.brand.as_deref(),
+            payload.category.as_deref(),
+            payload.kcal_per_100g,
+            payload.protein_g_per_100g,
+            payload.carbs_g_per_100g,
+            payload.fat_g_per_100g,
+            payload.fiber_g_per_100g,
+            payload.serving_size_g,
+            &payload.source,
+            payload.barcode.as_deref(),
+            &tags,
+        )
+        .await
+        .map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "food": food })))
+}
+
+async fn get_food_search(
+    State(state): State<ApiState>,
+    Query(q): Query<FoodSearchQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let limit = q.limit.unwrap_or(20);
+    let mgr = state.memory_plane_manager.read().await;
+    let foods = mgr.search_foods(&q.q, limit).await.map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({
+        "foods": foods,
+        "count": foods.len(),
+    })))
+}
+
+async fn get_food_by_barcode(
+    State(state): State<ApiState>,
+    Query(q): Query<BarcodeQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let food = mgr
+        .get_food_by_barcode(&q.barcode)
+        .await
+        .map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "food": food })))
 }
