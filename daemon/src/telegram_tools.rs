@@ -25,8 +25,8 @@ pub mod inner {
     use crate::computer_use::{ComputerUseAction, ComputerUseManager};
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
     use crate::memory_plane::{
-        extract_entities_from_text, BookStatus, ExercisePlanItem, GoalStatus, LifeSummaryWindow,
-        MemoryPlaneManager, RecipeIngredient,
+        crisis_resources_mx, detect_crisis_in_text, extract_entities_from_text, BookStatus,
+        ExercisePlanItem, GoalStatus, LifeSummaryWindow, MemoryPlaneManager, RecipeIngredient,
     };
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
@@ -468,7 +468,40 @@ REGLAS FIRMES:
 15d. **vault_lock** — Cierra el vault inmediatamente (zero out de la llave en memoria). Idempotente. Seguro y rapido — usalo siempre que el usuario diga "cierra el vault" o "lock".
     args: {}
 
-15e. **vault_reset** — RESET DESTRUCTIVO. Borra los metadatos del vault. Tras esto, todo lo que estaba cifrado bajo el vault queda IRRECUPERABLE. Solo usalo despues de confirmar dos veces con el usuario. La fundacion BI.4/6/9.2/12 todavia no escribe datos, asi que en este momento es seguro hacer reset, pero documenta el riesgo de uso futuro.
+15e. **vault_reset** — RESET DESTRUCTIVO. Borra los metadatos del vault. Tras esto, todo lo que estaba cifrado bajo el vault queda IRRECUPERABLE. Solo usalo despues de confirmar dos veces con el usuario.
+    args: {}
+
+16. **Vida Plena — Salud mental + diario emocional (BI.4)**
+
+Esta es la fase más sensible del pillar. Reglas absolutas:
+
+- Axi NO es terapeuta. NO diagnostica trastornos mentales. NO interpreta sueños. Solo registra, refleja, y recomienda profesional.
+- El diario narrativo (`journal_add`) requiere VAULT REFORZADO unlocked. Si no esta, dile al usuario que primero use `vault_unlock`.
+- Mood log (`mood_log`) NO requiere vault — es para check-ins rapidos.
+- Crisis pattern detection corre LOCALMENTE en plaintext antes de cifrar. Si hay match, SIEMPRE incluye hotlines en tu respuesta — no solo "aqui estoy para ti".
+- NUNCA mandes el contenido del journal a un LLM remoto por defecto. Solo procesamiento local. Si el usuario quiere mandarlo a un modelo especifico, requiere confirmacion explicita por entrada con preview de que se manda.
+- Si el usuario describe abuso, violencia, autolesion, o ideacion suicida → da hotlines ANTES que cualquier otra cosa. Recomienda contacto con linea de ayuda o 911. NUNCA improvises consejos.
+
+16a. **mood_log** — Quick check-in de estado de animo. Mood obligatorio (1-10), energia y ansiedad opcionales (1-10), nota corta opcional. NO requiere vault.
+    args: {"mood_1_10": 6, "energy_1_10": 4, "anxiety_1_10": 7, "note": "tarde pesada en el trabajo"}
+
+16b. **mood_history** — Lista los ultimos N check-ins de mood.
+    args: {"limit": 30}
+
+16c. **journal_add** — Agrega una entrada larga al diario emocional. REQUIERE VAULT UNLOCKED. Crisis pattern detection corre antes de cifrar — si detecta algo, la respuesta incluira hotlines. Mood/energia/ansiedad son opcionales pero recomendados.
+    args: {"narrative": "...texto largo...", "mood_1_10": 5, "energy_1_10": 4, "anxiety_1_10": 6, "tags": ["trabajo", "familia"], "triggers": ["junta dificil"], "logged_at": "2026-04-07T20:00:00Z"}
+    logged_at es opcional; default ahora. La narrativa NO puede estar vacia.
+
+16d. **journal_list** — Lista las ultimas N entradas del diario CON narrativa decifrada. REQUIERE VAULT UNLOCKED.
+    args: {"limit": 10}
+
+16e. **journal_meta** — Lista las ultimas N entradas del diario SIN narrativa (solo numeros + tags + had_crisis_pattern). NO requiere vault — sirve para responder "cuantas entradas hice esta semana" sin abrir el vault.
+    args: {"limit": 30}
+
+16f. **mental_health_summary** — Resumen completo: mood timeseries 7d, journal counts 30d, crisis pattern count 30d, vault status. Funciona con vault locked O unlocked. Si hay crisis_pattern_count > 0, SIEMPRE incluye hotlines en tu respuesta al usuario.
+    args: {"recent_limit": 30}
+
+16g. **crisis_resources** — Devuelve lista de lineas de ayuda en Mexico (SAPTEL, Linea de la Vida, Locatel, Red de Refugios, 911). Usalo cuando el usuario describa crisis, autolesion, abuso, ideacion suicida, o lo pida explicitamente.
     args: {}
 
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
@@ -1619,6 +1652,13 @@ REGLAS FIRMES:
             "vault_unlock" => execute_vault_unlock(&call.args, ctx).await,
             "vault_lock" => execute_vault_lock(ctx).await,
             "vault_reset" => execute_vault_reset(ctx).await,
+            "mood_log" => execute_mood_log(&call.args, ctx).await,
+            "mood_history" => execute_mood_history(&call.args, ctx).await,
+            "journal_add" => execute_journal_add(&call.args, ctx).await,
+            "journal_list" => execute_journal_list(&call.args, ctx).await,
+            "journal_meta" => execute_journal_meta(&call.args, ctx).await,
+            "mental_health_summary" => execute_mental_health_summary(&call.args, ctx).await,
+            "crisis_resources" => execute_crisis_resources().await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -5388,6 +5428,236 @@ REGLAS FIRMES:
         let mem = require_memory(ctx).await?;
         mem.reset_reinforced_passphrase().await?;
         Ok("Vault reseteado. Toda la metadata fue borrada — cualquier dato sensible previamente cifrado bajo este vault quedo INRECUPERABLE.".to_string())
+    }
+
+    // -- BI.4: salud mental + diario emocional ------------------------------
+
+    fn render_crisis_block() -> String {
+        let mut out =
+            String::from("\n\n## ⚠️ Lineas de ayuda (Mexico) — pide apoyo profesional ahora\n");
+        for r in crisis_resources_mx() {
+            out.push_str(&format!(
+                "- **{}** — {} ({})\n",
+                r.name, r.phone, r.coverage
+            ));
+        }
+        out.push_str(
+            "\nNo estas solo. Si estas en peligro inmediato o el de alguien mas, llama al 911. \
+             Para acompanamiento emocional: SAPTEL 24h.\n",
+        );
+        out
+    }
+
+    async fn execute_mood_log(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let mood = args["mood_1_10"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'mood_1_10' (1-10)"))?
+            as u8;
+        let energy = args["energy_1_10"].as_u64().map(|e| e as u8);
+        let anxiety = args["anxiety_1_10"].as_u64().map(|a| a as u8);
+        let note = args["note"].as_str().unwrap_or("");
+        let logged_at = args["logged_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc));
+        let c = mem
+            .log_mood_checkin(mood, energy, anxiety, note, logged_at, None)
+            .await?;
+        let mut out = format!(
+            "Mood {}/10 registrado{}{}.",
+            c.mood_1_10,
+            energy
+                .map(|e| format!(", energia {}/10", e))
+                .unwrap_or_default(),
+            anxiety
+                .map(|a| format!(", ansiedad {}/10", a))
+                .unwrap_or_default(),
+        );
+        // Even though mood_log is short, run crisis detection on the
+        // note — short notes can still contain a cry for help.
+        if let Some(d) = detect_crisis_in_text(note) {
+            out.push_str(&format!(
+                "\n\n_Note un patron de {} en tu nota. Quiero asegurarme de que tengas ayuda a la mano:_",
+                d.severity
+            ));
+            out.push_str(&render_crisis_block());
+        }
+        Ok(out)
+    }
+
+    async fn execute_mood_history(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["limit"].as_u64().unwrap_or(30) as usize;
+        let items = mem.list_mood_checkins(limit).await?;
+        if items.is_empty() {
+            return Ok("Aun no hay check-ins de mood registrados.".to_string());
+        }
+        let mut out = String::from("# Mood history\n\n");
+        for c in items {
+            out.push_str(&format!(
+                "- [{}] mood {}/10{}{}\n",
+                c.logged_at.format("%Y-%m-%d %H:%M"),
+                c.mood_1_10,
+                c.energy_1_10
+                    .map(|e| format!(", energia {}/10", e))
+                    .unwrap_or_default(),
+                c.anxiety_1_10
+                    .map(|a| format!(", ansiedad {}/10", a))
+                    .unwrap_or_default(),
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_journal_add(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let narrative = args["narrative"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'narrative'"))?;
+        let mood = args["mood_1_10"].as_u64().map(|m| m as u8);
+        let energy = args["energy_1_10"].as_u64().map(|e| e as u8);
+        let anxiety = args["anxiety_1_10"].as_u64().map(|a| a as u8);
+        let tags: Vec<String> = args["tags"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let triggers: Vec<String> = args["triggers"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let logged_at = args["logged_at"]
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&chrono::Utc));
+
+        let (entry, detection) = mem
+            .add_journal_entry(
+                mood, energy, anxiety, narrative, &tags, &triggers, logged_at, None,
+            )
+            .await?;
+
+        let mut out = format!(
+            "Entrada del diario guardada (id={}, cifrada bajo el vault).",
+            entry.entry_id
+        );
+        if let Some(d) = detection {
+            out.push_str(&format!(
+                "\n\n_Detecte un patron de **{}** en tu entrada. Esto NO es un diagnostico — es una senal de que vale la pena hablar con alguien que pueda acompanarte de verdad._",
+                d.severity
+            ));
+            out.push_str(&render_crisis_block());
+        }
+        Ok(out)
+    }
+
+    async fn execute_journal_list(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+        let items = mem.list_journal_entries(limit).await?;
+        if items.is_empty() {
+            return Ok("Aun no hay entradas en el diario.".to_string());
+        }
+        let mut out = String::from("# Diario emocional\n\n");
+        for e in items {
+            let mood = e
+                .mood_1_10
+                .map(|m| format!(" mood {}/10", m))
+                .unwrap_or_default();
+            let crisis = if e.had_crisis_pattern {
+                " ⚠️ patron"
+            } else {
+                ""
+            };
+            out.push_str(&format!(
+                "## [{}]{}{}\n{}\n\n",
+                e.logged_at.format("%Y-%m-%d %H:%M"),
+                mood,
+                crisis,
+                e.narrative
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_journal_meta(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["limit"].as_u64().unwrap_or(30) as usize;
+        let items = mem.list_journal_meta(limit).await?;
+        if items.is_empty() {
+            return Ok("Aun no hay entradas en el diario.".to_string());
+        }
+        let mut out = String::from("# Diario (metadata, sin narrativa)\n\n");
+        for e in items {
+            let mood = e
+                .mood_1_10
+                .map(|m| format!("mood {}/10", m))
+                .unwrap_or_else(|| "sin mood".to_string());
+            let crisis = if e.had_crisis_pattern { " ⚠️" } else { "" };
+            out.push_str(&format!(
+                "- [{}] {}{} (tags: {})\n",
+                e.logged_at.format("%Y-%m-%d"),
+                mood,
+                crisis,
+                if e.tags.is_empty() {
+                    "—".to_string()
+                } else {
+                    e.tags.join(", ")
+                },
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn execute_mental_health_summary(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let limit = args["recent_limit"].as_u64().unwrap_or(30) as usize;
+        let s = mem.get_mental_health_summary(limit).await?;
+        let mut out = String::from("# Salud mental — resumen\n\n");
+        out.push_str(&format!(
+            "Vault: {}\n",
+            if s.vault_unlocked {
+                "UNLOCKED"
+            } else {
+                "LOCKED (las narrativas no se cargan)"
+            }
+        ));
+        if let Some(m) = s.avg_mood_7d {
+            out.push_str(&format!("Mood promedio 7d: {:.1}/10\n", m));
+        }
+        if let Some(a) = s.avg_anxiety_7d {
+            out.push_str(&format!("Ansiedad promedio 7d: {:.1}/10\n", a));
+        }
+        out.push_str(&format!(
+            "Entradas del diario en los ultimos 30 dias: {}\n",
+            s.journal_entries_last_30d
+        ));
+        if s.crisis_pattern_count_last_30d > 0 {
+            out.push_str(&format!(
+                "**Patrones de crisis detectados en 30d: {}**\n",
+                s.crisis_pattern_count_last_30d
+            ));
+            out.push_str(&render_crisis_block());
+        }
+        if s.recent_mood_checkins.is_empty() && s.recent_journal_meta.is_empty() {
+            out.push_str("\nAun no hay datos. Empieza con `mood_log` o `journal_add`.\n");
+        }
+        Ok(out)
+    }
+
+    async fn execute_crisis_resources() -> Result<String> {
+        Ok(render_crisis_block())
     }
 
     async fn execute_computer_type(args: &serde_json::Value) -> Result<String> {

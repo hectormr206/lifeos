@@ -165,37 +165,40 @@ así narrativa y estructura quedan vinculadas.
 **Esta es la sub-fase más sensible.** Por eso tiene salvaguardas
 adicionales que no aplican al resto.
 
-- [ ] Side-table `mental_health_journal` — entradas narrativas con
-  timestamp, etiquetas emocionales (ansioso, triste, enojado, feliz,
-  abrumado, tranquilo, etc.), nivel del 1-10, contexto.
-- [ ] **Cifrado reforzado**: clave derivada de una passphrase del
-  usuario, separada de la clave default de `memory.db`. Si el usuario
-  no ingresa la passphrase, las entradas mentales NO se descifran ni
-  para search ni para recall — quedan opacas.
-- [ ] **Auth secundaria (opt-in)**: para abrir el diario mental desde
-  el dashboard o desde Telegram, segundo factor (PIN local). Esto
-  protege contra "alguien abrió mi laptop sin permiso".
-- [ ] **Detección de crisis**: patrones tipo "quiero morirme", "no
-  puedo más", "no vale la pena seguir", "mejor ya no estar aquí" →
-  Axi **siempre** responde con número de hotline local
-  (SAPTEL 55 5259 8121, Línea de la Vida 800 290 0024 en México)
-  además de la respuesta empática. Esto **no es opcional** y no se
-  puede desactivar.
-- [ ] **Disclaimer obligatorio**: la primera entrada de cada sesión que
-  toca salud mental, Axi recuerda que NO es terapeuta, que es un
-  registro/reflejo, y que ver a un profesional real es valioso. Se
-  puede ocultar después de N veces si el usuario lo pide.
-- [ ] **No salir nunca**: las entradas de `mental_health_journal`
-  jamás se sincronizan, jamás se exportan automáticamente, jamás se
-  mandan al upstream de federación de compatibilidad (Fase BH.13).
-  El usuario tiene que exportarlas explícitamente él mismo si quiere
-  llevarlas a un terapeuta.
-- [ ] **Modo pánico**: comando explícito (`/wipe-mental` desde
-  Telegram, botón rojo en el dashboard) que borra de forma segura
-  TODO el `mental_health_journal` con confirmación doble. Para casos
-  donde el usuario está en peligro físico (familia abusiva, disputa
-  legal, etc.) y necesita borrar evidencia.
-- [ ] Tests + version bump.
+- [x] Side-table `mental_health_journal` — entradas narrativas con
+  mood/energia/ansiedad 1-10, tags JSON, triggers JSON, narrativa
+  cifrada (vault reforzado), `had_crisis_pattern` flag (visible sin
+  vault).
+- [x] Side-table `mental_health_mood_log` — quick check-ins (mood +
+  energia + ansiedad + nota corta opcional). NO requiere vault.
+- [x] **Cifrado reforzado**: la narrativa del diario va bajo el vault
+  Argon2id (commit "BI vault foundation"). Sin `vault_unlock`, no se
+  puede leer ni escribir la narrativa. Los campos numericos y el
+  flag `had_crisis_pattern` SI son visibles sin vault, asi
+  `mental_health_summary` puede decir "logueaste 3 entradas con
+  patron en 30d" sin abrir nada.
+- [ ] **Auth secundaria (opt-in)**: PIN local + dashboard wiring
+  pendiente — se construye sobre `vault_unlock`/`vault_lock`.
+- [x] **Detección de crisis**: `detect_crisis_in_text` corre sobre
+  plaintext ANTES de cifrar. 3 niveles (severe → suicidio,
+  autolesion; high → abuso, violencia; moderate → desesperanza,
+  panico). En cualquier match, las respuestas de Telegram inyectan
+  el bloque de hotlines (SAPTEL, Linea de la Vida, Locatel,
+  Refugios, 911) ANTES de cualquier otra cosa. Las palabras gatillo
+  NUNCA se persisten en claro — solo el bool del row.
+- [x] **Disclaimer obligatorio**: seccion 16 del system prompt
+  enforza que Axi NO es terapeuta y SIEMPRE recomienda profesional
+  para temas serios.
+- [x] **No salir nunca (parcial)**: la fase BH.13 (federacion) ya
+  excluye todo lo de `is_wellness_kind` por diseno; el prefijo
+  `mental_*` esta en esa lista. Falta validar que ningun otro path
+  exporte el journal — se hace cuando se aterrice federacion.
+- [ ] **Modo pánico**: comando `/wipe-mental` con confirmacion doble
+  pendiente. La foundation ya tiene `reset_reinforced_passphrase`
+  que vuelve los datos del vault inrecuperables, pero un wipe
+  selectivo del journal sin tocar el vault es trabajo separado.
+- [x] Tests añadidos: 10 nuevos en `memory_plane::tests`. Daemon
+  → v0.3.23.
 
 ### BI.5 — Ejercicio + actividad física
 

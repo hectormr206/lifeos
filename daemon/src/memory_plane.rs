@@ -820,6 +820,60 @@ CREATE INDEX IF NOT EXISTS idx_children_milestones_when
 --   * `lock_reinforced` zeros the cached key.
 --   * Auto-relock after `idle_timeout_secs` of inactivity.
 -- ----------------------------------------------------------------------
+-- ----------------------------------------------------------------------
+-- BI.4 — Salud mental + diario emocional (Vida Plena, sensible)
+--
+-- DOS niveles de sensibilidad:
+--
+--   * `mental_health_mood_log` — quick check-ins (mood + energia +
+--     ansiedad + nota corta opcional). NO requiere vault. La nota usa
+--     el cifrado por defecto del memory_plane (la misma capa que ya
+--     protege todo lo demas).
+--
+--   * `mental_health_journal` — entradas narrativas largas. La
+--     narrativa SIEMPRE va cifrada bajo el VAULT REFORZADO (Argon2id).
+--     Si la vault esta locked, no se puede escribir ni leer la
+--     narrativa. Los campos numericos (mood/energia/ansiedad) y el
+--     flag `had_crisis_pattern` SI son visibles sin vault, para que
+--     el resumen pueda decir "logueaste 3 entradas con patron de
+--     crisis en los ultimos 7 dias" sin tener que decifrar nada.
+--
+-- Crisis detection corre en plaintext ANTES de cifrar y solo el bool
+-- queda en el row. NUNCA almacenamos las palabras gatillo en claro.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mental_health_mood_log (
+    checkin_id TEXT PRIMARY KEY,
+    mood_1_10 INTEGER NOT NULL,
+    energy_1_10 INTEGER,
+    anxiety_1_10 INTEGER,
+    note_nonce_b64 TEXT,
+    note_ciphertext_b64 TEXT,
+    logged_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mh_mood_logged
+    ON mental_health_mood_log(logged_at);
+
+CREATE TABLE IF NOT EXISTS mental_health_journal (
+    entry_id TEXT PRIMARY KEY,
+    mood_1_10 INTEGER,
+    energy_1_10 INTEGER,
+    anxiety_1_10 INTEGER,
+    narrative_nonce_b64 TEXT NOT NULL,
+    narrative_cipher_b64 TEXT NOT NULL,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    triggers_json TEXT NOT NULL DEFAULT '[]',
+    had_crisis_pattern INTEGER NOT NULL DEFAULT 0,
+    logged_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mh_journal_logged
+    ON mental_health_journal(logged_at);
+CREATE INDEX IF NOT EXISTS idx_mh_journal_crisis
+    ON mental_health_journal(had_crisis_pattern);
+
 CREATE TABLE IF NOT EXISTS reinforced_vault_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     salt_b64 TEXT NOT NULL,
@@ -3984,6 +4038,642 @@ fn derive_reinforced_key(
         .hash_password_into(passphrase, salt, &mut out)
         .map_err(|e| anyhow::anyhow!("argon2id derive failed: {}", e))?;
     Ok(out)
+}
+
+// ============================================================================
+// Fase BI.4 — Salud mental + diario emocional (Vida Plena)
+// ============================================================================
+//
+// Reglas firmes (system prompt enforced):
+//
+//   * Axi NO es terapeuta. NO diagnostica trastornos. NO interpreta
+//     sueños. Solo registra, refleja y recomienda ayuda profesional
+//     cuando aplique.
+//   * El diario narrativo (`mental_health_journal.narrative`) SIEMPRE
+//     va cifrado bajo el VAULT REFORZADO. Sin vault unlocked, no se
+//     puede leer ni escribir.
+//   * Crisis pattern detection corre LOCALMENTE en plaintext ANTES de
+//     cifrar. Solo el bool `had_crisis_pattern` se persiste — nunca
+//     las palabras gatillo en claro.
+//   * NUNCA se manda contenido de mental_health al LLM remoto por
+//     defecto. Activacion explicita por entrada (con preview) — eso
+//     es trabajo de la capa de routing, no de esta foundation.
+//   * En crisis, Axi NUNCA improvisa "aqui estoy para ti" como UNICA
+//     respuesta. SIEMPRE entrega lineas de ayuda + recomienda
+//     contacto con profesional/911. La logica de UI vive en
+//     telegram_tools y referencia `crisis_resources_mx()`.
+
+/// One row in `mental_health_mood_log` — quick mood/energia/ansiedad
+/// check-in. La nota corta usa el cifrado por defecto del
+/// memory_plane (no requiere vault).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoodCheckIn {
+    pub checkin_id: String,
+    pub mood_1_10: u8,
+    pub energy_1_10: Option<u8>,
+    pub anxiety_1_10: Option<u8>,
+    pub note: String,
+    pub logged_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One full journal entry. La narrativa SIEMPRE viene del vault
+/// reforzado — para crearla o leerla, el caller necesita
+/// `unlock_reinforced_vault` activo. Los campos numericos y
+/// `had_crisis_pattern` se ven sin vault.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MentalHealthJournalEntry {
+    pub entry_id: String,
+    pub mood_1_10: Option<u8>,
+    pub energy_1_10: Option<u8>,
+    pub anxiety_1_10: Option<u8>,
+    /// Plaintext después de decifrar via vault. Empty string si la
+    /// entrada se listo via `list_journal_meta` (la version sin
+    /// narrativa).
+    pub narrative: String,
+    pub tags: Vec<String>,
+    pub triggers: Vec<String>,
+    pub had_crisis_pattern: bool,
+    pub logged_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the mental health pillar. Funciona vault
+/// locked O unlocked — la version locked omite las narrativas pero
+/// devuelve mood log + counts + crisis flags.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MentalHealthSummary {
+    pub recent_mood_checkins: Vec<MoodCheckIn>,
+    pub recent_journal_meta: Vec<MentalHealthJournalEntry>,
+    pub avg_mood_7d: Option<f64>,
+    pub avg_anxiety_7d: Option<f64>,
+    pub journal_entries_last_30d: u32,
+    pub crisis_pattern_count_last_30d: u32,
+    pub vault_unlocked: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// One detected crisis pattern in plaintext. Returned by
+/// `detect_crisis_in_text` — never persisted, just used to decide
+/// whether to surface hotlines and to set the row flag.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CrisisDetection {
+    pub matched_keywords: Vec<String>,
+    pub severity: String,
+}
+
+/// One crisis-resource row. Hardcoded list (no DB) so the user can
+/// always reach a hotline even if their DB is corrupted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrisisResource {
+    pub name: &'static str,
+    pub phone: &'static str,
+    pub coverage: &'static str,
+    /// `general`, `suicide`, `domestic_violence`, `emergency`.
+    pub kind: &'static str,
+}
+
+/// Mexican crisis hotlines. Hardcoded for the user's locale (San Juan
+/// del Río, QRO). Future versions can localize per-locale; for now we
+/// always include `911` as the universal emergency number.
+pub fn crisis_resources_mx() -> &'static [CrisisResource] {
+    &[
+        CrisisResource {
+            name: "SAPTEL",
+            phone: "55 5259-8121",
+            coverage: "Mexico, 24h, gratuito",
+            kind: "general",
+        },
+        CrisisResource {
+            name: "Linea de la Vida (CONADIC)",
+            phone: "800-911-2000",
+            coverage: "Mexico, 24h, gratuito",
+            kind: "general",
+        },
+        CrisisResource {
+            name: "Locatel",
+            phone: "55 5658-1111",
+            coverage: "CDMX y nacional",
+            kind: "general",
+        },
+        CrisisResource {
+            name: "Red Nacional de Refugios (violencia)",
+            phone: "800-822-4460",
+            coverage: "Mexico, 24h, gratuito",
+            kind: "domestic_violence",
+        },
+        CrisisResource {
+            name: "Emergencias",
+            phone: "911",
+            coverage: "Mexico, emergencias",
+            kind: "emergency",
+        },
+    ]
+}
+
+/// Detect crisis patterns in narrative text. Conservative on
+/// purpose: false positives are fine (we just surface hotlines),
+/// false negatives are NOT (we want every plausible signal to
+/// trigger a recommendation).
+///
+/// Severity tiers:
+///   * `severe`  → suicidio, autolesion, "no quiero vivir", "matarme"
+///   * `high`    → violencia, abuso, golpear, violacion
+///   * `moderate` → ansiedad fuerte recurrente, panico, desesperanza
+///                  ("ya no puedo", "no aguanto")
+pub fn detect_crisis_in_text(text: &str) -> Option<CrisisDetection> {
+    let lower = text.to_lowercase();
+    let severe: &[&str] = &[
+        "suicidio",
+        "suicidarme",
+        "matarme",
+        "quitarme la vida",
+        "no quiero vivir",
+        "no quiero seguir",
+        "acabar con todo",
+        "autolesion",
+        "autolesión",
+        "lastimarme",
+        "hacerme dano",
+        "hacerme daño",
+        "cortarme",
+    ];
+    let high: &[&str] = &[
+        "abuso",
+        "violencia",
+        "golpear",
+        "golpea",
+        "violacion",
+        "violación",
+        "me pega",
+        "me grita",
+        "me amenaza",
+        "no me deja salir",
+    ];
+    let moderate: &[&str] = &[
+        "ya no puedo",
+        "no aguanto",
+        "desesperanza",
+        "panico",
+        "pánico",
+        "ataque de ansiedad",
+        "no sirvo para nada",
+    ];
+
+    let mut matched: Vec<String> = Vec::new();
+    let mut severity = "moderate";
+
+    for k in severe {
+        if lower.contains(k) {
+            matched.push((*k).to_string());
+            severity = "severe";
+        }
+    }
+    if severity != "severe" {
+        for k in high {
+            if lower.contains(k) {
+                matched.push((*k).to_string());
+                severity = "high";
+            }
+        }
+    }
+    if matched.is_empty() {
+        for k in moderate {
+            if lower.contains(k) {
+                matched.push((*k).to_string());
+            }
+        }
+    }
+
+    if matched.is_empty() {
+        None
+    } else {
+        Some(CrisisDetection {
+            matched_keywords: matched,
+            severity: severity.to_string(),
+        })
+    }
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.4: mood log (no vault required)
+    // -----------------------------------------------------------------------
+
+    pub async fn log_mood_checkin(
+        &self,
+        mood_1_10: u8,
+        energy_1_10: Option<u8>,
+        anxiety_1_10: Option<u8>,
+        note: &str,
+        logged_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<MoodCheckIn> {
+        if !(1..=10).contains(&mood_1_10) {
+            anyhow::bail!("mood_1_10 must be in 1..=10");
+        }
+        if let Some(e) = energy_1_10 {
+            if !(1..=10).contains(&e) {
+                anyhow::bail!("energy_1_10 must be in 1..=10");
+            }
+        }
+        if let Some(a) = anxiety_1_10 {
+            if !(1..=10).contains(&a) {
+                anyhow::bail!("anxiety_1_10 must be in 1..=10");
+            }
+        }
+        let note_owned = note.trim().to_string();
+        let (note_nonce, note_cipher) = if note_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&note_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let logged = logged_at.unwrap_or(now);
+        let logged_rfc = logged.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("mood-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO mental_health_mood_log
+                 (checkin_id, mood_1_10, energy_1_10, anxiety_1_10,
+                  note_nonce_b64, note_ciphertext_b64, logged_at,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id_clone,
+                    mood_1_10 as i32,
+                    energy_1_10.map(|e| e as i32),
+                    anxiety_1_10.map(|a| a as i32),
+                    note_nonce,
+                    note_cipher,
+                    logged_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(MoodCheckIn {
+            checkin_id: id,
+            mood_1_10,
+            energy_1_10,
+            anxiety_1_10,
+            note: note_owned,
+            logged_at: logged,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_mood_checkins(&self, limit: usize) -> Result<Vec<MoodCheckIn>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT checkin_id, mood_1_10, energy_1_10, anxiety_1_10,
+                        note_nonce_b64, note_ciphertext_b64, logged_at,
+                        source_entry_id, created_at
+                 FROM mental_health_mood_log
+                 ORDER BY logged_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<MoodCheckInRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(MoodCheckInRaw {
+                        checkin_id: row.get(0)?,
+                        mood_1_10: row.get::<_, i32>(1)? as u8,
+                        energy_1_10: row.get::<_, Option<i32>>(2)?.map(|x| x as u8),
+                        anxiety_1_10: row.get::<_, Option<i32>>(3)?.map(|x| x as u8),
+                        note_nonce_b64: row.get(4)?,
+                        note_ciphertext_b64: row.get(5)?,
+                        logged_at: row.get(6)?,
+                        source_entry_id: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| MoodCheckIn {
+                checkin_id: r.checkin_id,
+                mood_1_10: r.mood_1_10,
+                energy_1_10: r.energy_1_10,
+                anxiety_1_10: r.anxiety_1_10,
+                note: match (r.note_nonce_b64, r.note_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                logged_at: parse_utc(&r.logged_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.4: journal (REQUIRES reinforced vault)
+    // -----------------------------------------------------------------------
+
+    /// Add a full journal entry. **Requires `unlock_reinforced_vault`
+    /// to have been called first** — fails with a clear error
+    /// otherwise. Crisis detection runs on the plaintext BEFORE
+    /// encrypting. Returns the entry along with any detected crisis
+    /// pattern so the caller can surface hotlines immediately.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_journal_entry(
+        &self,
+        mood_1_10: Option<u8>,
+        energy_1_10: Option<u8>,
+        anxiety_1_10: Option<u8>,
+        narrative: &str,
+        tags: &[String],
+        triggers: &[String],
+        logged_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<(MentalHealthJournalEntry, Option<CrisisDetection>)> {
+        let narrative_owned = narrative.trim().to_string();
+        if narrative_owned.is_empty() {
+            anyhow::bail!("journal narrative cannot be empty");
+        }
+        for (label, val) in [
+            ("mood_1_10", mood_1_10),
+            ("energy_1_10", energy_1_10),
+            ("anxiety_1_10", anxiety_1_10),
+        ] {
+            if let Some(v) = val {
+                if !(1..=10).contains(&v) {
+                    anyhow::bail!("{} must be in 1..=10", label);
+                }
+            }
+        }
+
+        // Crisis detection runs on plaintext BEFORE encryption.
+        let detection = detect_crisis_in_text(&narrative_owned);
+        let had_crisis = detection.is_some();
+
+        // Encrypt under the reinforced vault. This is the gate that
+        // forces the caller to have unlocked.
+        let (narrative_nonce, narrative_cipher) = self.encrypt_reinforced(&narrative_owned)?;
+
+        let tags_owned = normalize_tags(tags);
+        let triggers_owned = normalize_tags(triggers);
+        let tags_json = serde_json::to_string(&tags_owned)?;
+        let triggers_json = serde_json::to_string(&triggers_owned)?;
+
+        let now = Utc::now();
+        let logged = logged_at.unwrap_or(now);
+        let logged_rfc = logged.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("mhj-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let tags_clone = tags_json.clone();
+        let trig_clone = triggers_json.clone();
+        let nonce_clone = narrative_nonce.clone();
+        let cipher_clone = narrative_cipher.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO mental_health_journal
+                 (entry_id, mood_1_10, energy_1_10, anxiety_1_10,
+                  narrative_nonce_b64, narrative_cipher_b64,
+                  tags_json, triggers_json, had_crisis_pattern,
+                  logged_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    id_clone,
+                    mood_1_10.map(|m| m as i32),
+                    energy_1_10.map(|e| e as i32),
+                    anxiety_1_10.map(|a| a as i32),
+                    nonce_clone,
+                    cipher_clone,
+                    tags_clone,
+                    trig_clone,
+                    had_crisis as i32,
+                    logged_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        let entry = MentalHealthJournalEntry {
+            entry_id: id,
+            mood_1_10,
+            energy_1_10,
+            anxiety_1_10,
+            narrative: narrative_owned,
+            tags: tags_owned,
+            triggers: triggers_owned,
+            had_crisis_pattern: had_crisis,
+            logged_at: logged,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        };
+        Ok((entry, detection))
+    }
+
+    /// List recent journal entries WITH narratives decrypted.
+    /// **Requires the vault to be unlocked.** Returns an error
+    /// otherwise — does not silently fall back to metadata-only.
+    pub async fn list_journal_entries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<MentalHealthJournalEntry>> {
+        let metas = self.list_journal_meta(limit).await?;
+        let mut out = Vec::with_capacity(metas.len());
+        for m in metas {
+            // Re-fetch the encrypted blob and decrypt under vault.
+            let id = m.entry_id.clone();
+            let db_path = self.db_path.clone();
+            let (nonce, cipher) =
+                tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+                    let db = Self::open_db(&db_path)?;
+                    let row: (String, String) = db.query_row(
+                        "SELECT narrative_nonce_b64, narrative_cipher_b64
+                         FROM mental_health_journal WHERE entry_id = ?1",
+                        params![id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )?;
+                    Ok(row)
+                })
+                .await??;
+            let plaintext = self.decrypt_reinforced(&nonce, &cipher)?;
+            out.push(MentalHealthJournalEntry {
+                narrative: plaintext,
+                ..m
+            });
+        }
+        Ok(out)
+    }
+
+    /// Metadata-only list. Always works (does NOT need the vault).
+    /// Narratives are returned as empty strings.
+    pub async fn list_journal_meta(&self, limit: usize) -> Result<Vec<MentalHealthJournalEntry>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT entry_id, mood_1_10, energy_1_10, anxiety_1_10,
+                        tags_json, triggers_json, had_crisis_pattern,
+                        logged_at, source_entry_id, created_at
+                 FROM mental_health_journal
+                 ORDER BY logged_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<JournalMetaRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(JournalMetaRaw {
+                        entry_id: row.get(0)?,
+                        mood_1_10: row.get::<_, Option<i32>>(1)?.map(|x| x as u8),
+                        energy_1_10: row.get::<_, Option<i32>>(2)?.map(|x| x as u8),
+                        anxiety_1_10: row.get::<_, Option<i32>>(3)?.map(|x| x as u8),
+                        tags_json: row.get(4)?,
+                        triggers_json: row.get(5)?,
+                        had_crisis_pattern: row.get::<_, i32>(6)? != 0,
+                        logged_at: row.get(7)?,
+                        source_entry_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| MentalHealthJournalEntry {
+                entry_id: r.entry_id,
+                mood_1_10: r.mood_1_10,
+                energy_1_10: r.energy_1_10,
+                anxiety_1_10: r.anxiety_1_10,
+                narrative: String::new(),
+                tags: serde_json::from_str(&r.tags_json).unwrap_or_default(),
+                triggers: serde_json::from_str(&r.triggers_json).unwrap_or_default(),
+                had_crisis_pattern: r.had_crisis_pattern,
+                logged_at: parse_utc(&r.logged_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// Aggregate snapshot. Works locked OR unlocked. Locked version
+    /// omits narratives but includes counts, mood timeseries, and
+    /// crisis_pattern_count_last_30d so the caller can decide whether
+    /// to surface hotlines proactively.
+    pub async fn get_mental_health_summary(
+        &self,
+        recent_limit: usize,
+    ) -> Result<MentalHealthSummary> {
+        let recent_mood_checkins = self
+            .list_mood_checkins(recent_limit)
+            .await
+            .unwrap_or_default();
+        let recent_journal_meta = self
+            .list_journal_meta(recent_limit)
+            .await
+            .unwrap_or_default();
+        let vault_unlocked = self.reinforced_vault_status().await?.unlocked;
+
+        let now = Utc::now();
+        let cutoff_7 = now - chrono::Duration::days(7);
+        let cutoff_30 = now - chrono::Duration::days(30);
+
+        let avg_mood_7d = avg_field(
+            recent_mood_checkins
+                .iter()
+                .filter(|c| c.logged_at >= cutoff_7)
+                .map(|c| c.mood_1_10 as f64),
+        );
+        let avg_anxiety_7d = avg_field(
+            recent_mood_checkins
+                .iter()
+                .filter(|c| c.logged_at >= cutoff_7)
+                .filter_map(|c| c.anxiety_1_10.map(|a| a as f64)),
+        );
+
+        let journal_entries_last_30d = recent_journal_meta
+            .iter()
+            .filter(|e| e.logged_at >= cutoff_30)
+            .count() as u32;
+        let crisis_pattern_count_last_30d = recent_journal_meta
+            .iter()
+            .filter(|e| e.logged_at >= cutoff_30 && e.had_crisis_pattern)
+            .count() as u32;
+
+        Ok(MentalHealthSummary {
+            recent_mood_checkins,
+            recent_journal_meta,
+            avg_mood_7d,
+            avg_anxiety_7d,
+            journal_entries_last_30d,
+            crisis_pattern_count_last_30d,
+            vault_unlocked,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw rows for BI.4 ----------------------------------------------
+
+struct MoodCheckInRaw {
+    checkin_id: String,
+    mood_1_10: u8,
+    energy_1_10: Option<u8>,
+    anxiety_1_10: Option<u8>,
+    note_nonce_b64: Option<String>,
+    note_ciphertext_b64: Option<String>,
+    logged_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct JournalMetaRaw {
+    entry_id: String,
+    mood_1_10: Option<u8>,
+    energy_1_10: Option<u8>,
+    anxiety_1_10: Option<u8>,
+    tags_json: String,
+    triggers_json: String,
+    had_crisis_pattern: bool,
+    logged_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+fn avg_field<I: Iterator<Item = f64>>(iter: I) -> Option<f64> {
+    let collected: Vec<f64> = iter.collect();
+    if collected.is_empty() {
+        None
+    } else {
+        Some(collected.iter().sum::<f64>() / collected.len() as f64)
+    }
 }
 
 // ============================================================================
@@ -15373,6 +16063,216 @@ mod tests {
         assert!(items
             .iter()
             .any(|i| i.item_type == "growth_goal" && i.name == "Meta vieja"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.4 — Salud mental + diario emocional
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detect_crisis_severe_keywords() {
+        let d = detect_crisis_in_text("a veces pienso en suicidio").unwrap();
+        assert_eq!(d.severity, "severe");
+        let d2 = detect_crisis_in_text("tengo ganas de cortarme cuando me siento asi").unwrap();
+        assert_eq!(d2.severity, "severe");
+    }
+
+    #[test]
+    fn detect_crisis_high_keywords() {
+        let d = detect_crisis_in_text("mi pareja me grita y me amenaza").unwrap();
+        assert_eq!(d.severity, "high");
+    }
+
+    #[test]
+    fn detect_crisis_moderate_keywords() {
+        let d = detect_crisis_in_text("ya no puedo con tanto trabajo").unwrap();
+        assert_eq!(d.severity, "moderate");
+    }
+
+    #[test]
+    fn detect_crisis_no_match() {
+        assert!(detect_crisis_in_text("hoy fui al parque con la familia").is_none());
+    }
+
+    #[test]
+    fn crisis_resources_mx_includes_911_and_saptel() {
+        let r = crisis_resources_mx();
+        assert!(r.iter().any(|c| c.phone == "911"));
+        assert!(r.iter().any(|c| c.name == "SAPTEL"));
+    }
+
+    #[tokio::test]
+    async fn mood_log_validates_range_and_lists() {
+        let dir = temp_dir("memory-plane-mood");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let bad = mgr.log_mood_checkin(11, None, None, "", None, None).await;
+        assert!(bad.is_err());
+
+        let c = mgr
+            .log_mood_checkin(7, Some(5), Some(4), "tarde tranquila", None, None)
+            .await
+            .unwrap();
+        assert_eq!(c.mood_1_10, 7);
+        assert_eq!(c.note, "tarde tranquila");
+
+        let listed = mgr.list_mood_checkins(10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].mood_1_10, 7);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn journal_add_requires_unlocked_vault() {
+        let dir = temp_dir("memory-plane-journal-locked");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Vault not configured at all → should fail.
+        let err = mgr
+            .add_journal_entry(
+                Some(5),
+                None,
+                None,
+                "no debería poder escribir esto",
+                &[],
+                &[],
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn journal_roundtrip_under_vault_and_meta_visible_locked() {
+        let dir = temp_dir("memory-plane-journal-rt");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let (entry, detection) = mgr
+            .add_journal_entry(
+                Some(4),
+                Some(3),
+                Some(7),
+                "hoy fue un dia dificil pero no tan terrible",
+                &["trabajo".to_string(), "agotamiento".to_string()],
+                &["junta".to_string()],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(detection.is_none(), "no crisis pattern expected");
+        assert!(!entry.had_crisis_pattern);
+
+        // Lock vault → meta is still visible, full list errors out.
+        mgr.lock_reinforced_vault();
+        let meta = mgr.list_journal_meta(10).await.unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].mood_1_10, Some(4));
+        assert_eq!(meta[0].narrative, "");
+        let full = mgr.list_journal_entries(10).await;
+        assert!(
+            full.is_err(),
+            "list_journal_entries should fail when locked"
+        );
+
+        // Unlock → full list returns plaintext.
+        mgr.unlock_reinforced_vault("super-secret-pass-123")
+            .await
+            .unwrap();
+        let full = mgr.list_journal_entries(10).await.unwrap();
+        assert_eq!(full.len(), 1);
+        assert!(full[0].narrative.contains("dia dificil"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn journal_crisis_pattern_persists_flag_but_not_keywords() {
+        let dir = temp_dir("memory-plane-journal-crisis");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let (entry, detection) = mgr
+            .add_journal_entry(
+                Some(2),
+                None,
+                Some(9),
+                "hoy ya no puedo con todo, a veces pienso en suicidio",
+                &[],
+                &[],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let det = detection.expect("expected crisis detection");
+        assert_eq!(det.severity, "severe");
+        assert!(entry.had_crisis_pattern);
+
+        // Lock and check meta — the flag is visible without vault but
+        // narrative is not.
+        mgr.lock_reinforced_vault();
+        let meta = mgr.list_journal_meta(10).await.unwrap();
+        assert_eq!(meta.len(), 1);
+        assert!(meta[0].had_crisis_pattern);
+        assert_eq!(meta[0].narrative, "");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn mental_health_summary_works_locked_and_counts_crisis() {
+        let dir = temp_dir("memory-plane-mh-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        // 2 mood check-ins.
+        mgr.log_mood_checkin(6, Some(5), Some(4), "ok", None, None)
+            .await
+            .unwrap();
+        mgr.log_mood_checkin(7, Some(6), Some(3), "mejor", None, None)
+            .await
+            .unwrap();
+        // 1 journal entry with crisis pattern.
+        mgr.add_journal_entry(
+            Some(3),
+            None,
+            Some(8),
+            "no aguanto mas, me quiero quitar la vida",
+            &[],
+            &[],
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        mgr.lock_reinforced_vault();
+        let s = mgr.get_mental_health_summary(50).await.unwrap();
+        assert!(!s.vault_unlocked);
+        assert_eq!(s.recent_mood_checkins.len(), 2);
+        assert_eq!(s.journal_entries_last_30d, 1);
+        assert_eq!(s.crisis_pattern_count_last_30d, 1);
+        let avg = s.avg_mood_7d.unwrap();
+        assert!((avg - 6.5).abs() < 0.01);
 
         std::fs::remove_dir_all(dir).ok();
     }
