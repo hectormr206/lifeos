@@ -267,7 +267,9 @@ etapa están, qué ha pasado, qué le importa.
   cada relación: discusiones, reconciliaciones, momentos importantes,
   sentimientos del usuario sobre esa persona en esa fecha. **Cifrado
   reforzado** porque es categoría sensible (puede haber abuso, infidelidad,
-  conflictos legales). **Bloqueado por Argon2id (junto con BI.4/6/12).**
+  conflictos legales). **Foundation Argon2id ya entregada
+  (commit "BI vault foundation"); falta el sub-fase de datos que
+  consume `encrypt_reinforced` / `decrypt_reinforced`.**
 - [x] **(sprint 1)** Side-table `family_members` — específica para familiares con
   parentesco, fechas relevantes (nacimiento, fallecimiento, eventos),
   condiciones de salud heredables relevantes que cruza con

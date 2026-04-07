@@ -445,6 +445,32 @@ REGLAS FIRMES:
 14i. **relationships_summary** — Devuelve resumen completo: relaciones cercanas + familia + hitos recientes de hijos + cumpleanos/aniversarios proximos en los siguientes N dias + contactos importantes que no has visto en 30+ dias.
     args: {"today_local": "2026-04-07", "lookahead_days": 30}
 
+15. **Vida Plena — Cifrado reforzado (vault) — foundation BI.4/6/9.2/12**
+
+Esta es la capa de cifrado opt-in para datos extra-sensibles. NO reemplaza el cifrado por defecto del memory_plane (que ya protege todo). Es una segunda capa con passphrase del usuario, derivada con Argon2id. Defiende contra: lectura del disco crudo, snapshots de respaldo, lectura del DB cuando el daemon corre pero el vault esta locked. NO defiende contra: keylogger, root attacker que vuelque RAM.
+
+REGLAS FIRMES:
+- La passphrase NUNCA se persiste en disco. Solo se persisten salt + parametros KDF + un verifier cifrado.
+- Si el usuario olvida la passphrase: NO hay recuperacion. Los datos sensibles bajo el vault son IRRECUPERABLES.
+- ADVERTENCIA DE CANAL: si el usuario manda su passphrase por Telegram, esa pasa por servidores de Telegram. Para maxima seguridad la passphrase debe configurarse via CLI local. Si el usuario insiste en hacerlo via Telegram, AVISALE explicitamente del riesgo antes de aceptarla.
+- Auto-relock por idle: el vault se cierra solo despues de N segundos sin actividad (default 900 = 15 min).
+
+15a. **vault_status** — Devuelve si la vault esta configurada, si esta unlocked ahora mismo, idle_timeout_secs y segundos hasta auto-relock. Side effect: si paso el idle, lockea antes de devolver. Usalo siempre antes de proponer escribir/leer datos sensibles.
+    args: {}
+
+15b. **vault_set_passphrase** — Configura la passphrase por PRIMERA vez. Falla si ya hay una configurada. Tras exito el vault queda unlocked. ADVIERTE explicitamente al usuario sobre el riesgo del canal Telegram antes de pedir la passphrase. Minimo 8 caracteres.
+    args: {"passphrase": "...", "idle_timeout_secs": 900}
+    idle_timeout_secs es opcional; default 900 (15 min), clamp [60, 86400].
+
+15c. **vault_unlock** — Desbloquea la vault con la passphrase. ADVIERTE al usuario sobre el canal antes de pedirla. Si la passphrase es incorrecta, devuelve error sin exponer datos.
+    args: {"passphrase": "..."}
+
+15d. **vault_lock** — Cierra el vault inmediatamente (zero out de la llave en memoria). Idempotente. Seguro y rapido — usalo siempre que el usuario diga "cierra el vault" o "lock".
+    args: {}
+
+15e. **vault_reset** — RESET DESTRUCTIVO. Borra los metadatos del vault. Tras esto, todo lo que estaba cifrado bajo el vault queda IRRECUPERABLE. Solo usalo despues de confirmar dos veces con el usuario. La fundacion BI.4/6/9.2/12 todavia no escribe datos, asi que en este momento es seguro hacer reset, pero documenta el riesgo de uso futuro.
+    args: {}
+
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
 
@@ -1588,6 +1614,11 @@ REGLAS FIRMES:
             "child_milestone_log" => execute_child_milestone_log(&call.args, ctx).await,
             "child_milestones_list" => execute_child_milestones_list(&call.args, ctx).await,
             "relationships_summary" => execute_relationships_summary(&call.args, ctx).await,
+            "vault_status" => execute_vault_status(ctx).await,
+            "vault_set_passphrase" => execute_vault_set_passphrase(&call.args, ctx).await,
+            "vault_unlock" => execute_vault_unlock(&call.args, ctx).await,
+            "vault_lock" => execute_vault_lock(ctx).await,
+            "vault_reset" => execute_vault_reset(ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -5301,6 +5332,62 @@ REGLAS FIRMES:
         }
 
         Ok(out)
+    }
+
+    // -- Vault: cifrado reforzado (foundation BI.4/6/9.2/12) -----------------
+
+    async fn execute_vault_status(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let status = mem.reinforced_vault_status().await?;
+        let unlocked = if status.unlocked {
+            let secs = status.seconds_until_relock.unwrap_or(0);
+            format!("UNLOCKED (auto-relock en {} s)", secs)
+        } else {
+            "LOCKED".to_string()
+        };
+        let configured = if status.configured {
+            "configurado"
+        } else {
+            "NO configurado (usa vault_set_passphrase para iniciar)"
+        };
+        Ok(format!(
+            "# Vault reforzado\n\nEstado: {}\nConfigurado: {}\nIdle timeout: {}s",
+            unlocked, configured, status.idle_timeout_secs
+        ))
+    }
+
+    async fn execute_vault_set_passphrase(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let passphrase = args["passphrase"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'passphrase'"))?;
+        let idle = args["idle_timeout_secs"].as_u64();
+        mem.set_reinforced_passphrase(passphrase, idle).await?;
+        Ok("Vault configurado y desbloqueado. RECUERDA: si olvidas la passphrase, los datos cifrados bajo el vault son irrecuperables. Considera usar `vault_lock` cuando termines.".to_string())
+    }
+
+    async fn execute_vault_unlock(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let passphrase = args["passphrase"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'passphrase'"))?;
+        mem.unlock_reinforced_vault(passphrase).await?;
+        Ok("Vault desbloqueado. Se cerrara solo por idle.".to_string())
+    }
+
+    async fn execute_vault_lock(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        mem.lock_reinforced_vault();
+        Ok("Vault cerrado.".to_string())
+    }
+
+    async fn execute_vault_reset(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        mem.reset_reinforced_passphrase().await?;
+        Ok("Vault reseteado. Toda la metadata fue borrada — cualquier dato sensible previamente cifrado bajo este vault quedo INRECUPERABLE.".to_string())
     }
 
     async fn execute_computer_type(args: &serde_json::Value) -> Result<String> {

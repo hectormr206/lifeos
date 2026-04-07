@@ -1,6 +1,6 @@
 [package]
 name = "lifeosd"
-version = "0.3.21"
+version = "0.3.22"
 edition = "2021"
 description = "LifeOS System Daemon"
 authors = ["Héctor Martínez <hector@hectormr.com>"]
@@ -56,6 +56,11 @@ uuid = { version = "1", features = ["v4", "serde"] }
 aes-gcm-siv = "0.11"
 sha2 = "0.10"
 rand = "0.8"
+# Reinforced encryption (BI.4/6/9.2/12) — passphrase-derived key with KDF.
+# Argon2id is the OWASP-recommended password hash; zeroize wipes derived
+# key material from memory on lock.
+argon2 = "0.5"
+zeroize = { version = "1", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 sqlite-vec = "0.1"
 zerocopy = "0.8"
