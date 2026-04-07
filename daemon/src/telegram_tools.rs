@@ -24,7 +24,9 @@ pub mod inner {
     use crate::browser_automation::BrowserAutomation;
     use crate::computer_use::{ComputerUseAction, ComputerUseManager};
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
-    use crate::memory_plane::{extract_entities_from_text, MemoryPlaneManager};
+    use crate::memory_plane::{
+        extract_entities_from_text, BookStatus, GoalStatus, MemoryPlaneManager,
+    };
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
     use crate::task_queue::TaskQueue;
@@ -187,6 +189,37 @@ LifeOS guarda salud medica estructurada con las siguientes herramientas. **Regla
 
 10k. **health_summary** — Devuelve el resumen completo de salud del usuario: hechos permanentes + medicamentos activos + vitales recientes + analisis recientes. Usalo cuando el usuario te pida prepararse para una visita medica o quiera revisar todo su historial.
     args: {}
+
+## Crecimiento personal (Vida Plena BI.7)
+
+LifeOS lleva el registro de lectura, habitos y metas a largo plazo del usuario. **No eres coach certificado**: las recomendaciones son generales, los recursos son sugerencias. Acompañas la disciplina del usuario, no la impones. Toda esta informacion tambien es PERMANENTE.
+
+10l. **book_add** — Registra un libro en el reading log. status: wishlist (quiere leerlo), reading (leyendo ahora), finished (terminado), abandoned (lo dejo).
+    args: {"title": "Atomic Habits", "author": "James Clear", "status": "reading", "notes": "Capitulo 4 me hizo click sobre habit stacking"}
+
+10m. **book_status_set** — Cambia el status de un libro. Para terminar uno, usa status=finished y opcionalmente rating de 1 a 5.
+    args: {"book_id": "book-...", "status": "finished", "rating_1_5": 5}
+
+10n. **book_list** — Lista los libros del usuario, opcionalmente filtrados por status.
+    args: {"status": "reading"} o {} para todos
+
+10o. **habit_add** — Crea un habito que el usuario quiere construir. frequency es texto libre: "daily", "weekly:3", "custom:MO,WE,FR".
+    args: {"name": "Meditar 10 minutos", "frequency": "daily", "description": "Por la mañana antes de cafe"}
+
+10p. **habit_checkin** — Registra el check-in de un habito en una fecha especifica. logged_for_date es YYYY-MM-DD en la zona local del usuario. Marcar dos veces el mismo dia simplemente sobreescribe (idempotente).
+    args: {"habit_id": "habit-...", "completed": true, "logged_for_date": "2026-04-06", "notes": "Antes de las 7am"}
+
+10q. **habit_active** — Lista los habitos activos del usuario.
+    args: {}
+
+10r. **goal_add** — Registra una meta a largo plazo (carrera, finanzas, salud, lo que sea). Empieza con progress 0 y status active.
+    args: {"name": "Aprender Rust al nivel de poder contribuir a un proyecto open source", "deadline": "2026-12-31", "description": "Trabajando con LifeOS me esta ayudando"}
+
+10s. **goal_progress** — Actualiza el progreso (0-100) de una meta y opcionalmente cambia el status. Si pones progress=100 sin status explicito, automaticamente queda como achieved.
+    args: {"goal_id": "goal-...", "progress_pct": 60}
+
+10t. **growth_summary** — Devuelve el resumen completo de crecimiento personal: libros que esta leyendo + libros recien terminados + habitos activos con su streak de los ultimos 30 dias + metas activas. Usalo cuando el usuario te pida revisar como va con sus metas o cuando quiera reflexionar sobre su progreso.
+    args: {"today": "2026-04-06"}
 
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
@@ -1258,6 +1291,16 @@ LifeOS guarda salud medica estructurada con las siguientes herramientas. **Regla
             "vital_history" => execute_vital_history(&call.args, ctx).await,
             "lab_add" => execute_lab_add(&call.args, ctx).await,
             "health_summary" => execute_health_summary(ctx).await,
+            // BI.7 — Crecimiento personal
+            "book_add" => execute_book_add(&call.args, ctx).await,
+            "book_status_set" => execute_book_status_set(&call.args, ctx).await,
+            "book_list" => execute_book_list(&call.args, ctx).await,
+            "habit_add" => execute_habit_add(&call.args, ctx).await,
+            "habit_checkin" => execute_habit_checkin(&call.args, ctx).await,
+            "habit_active" => execute_habit_active(ctx).await,
+            "goal_add" => execute_goal_add(&call.args, ctx).await,
+            "goal_progress" => execute_goal_progress(&call.args, ctx).await,
+            "growth_summary" => execute_growth_summary(&call.args, ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -2598,6 +2641,315 @@ LifeOS guarda salud medica estructurada con las siguientes herramientas. **Regla
         out.push_str(
             "\n_Generado por LifeOS — para consulta con tu medico, no es diagnostico._\n",
         );
+        Ok(out)
+    }
+
+    // ========================================================================
+    // Fase BI.7 — Crecimiento personal (Vida Plena)
+    // ========================================================================
+
+    async fn execute_book_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let title = args["title"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'title'"))?;
+        let author = args["author"].as_str();
+        let isbn = args["isbn"].as_str();
+        let status_str = args["status"].as_str().unwrap_or("wishlist");
+        let status = BookStatus::parse(status_str)?;
+        let rating = args["rating_1_5"].as_u64().map(|n| n as u8);
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let book = mem
+            .add_book(title, author, isbn, status, rating, notes, None)
+            .await?;
+        Ok(format!(
+            "Libro guardado (id: {}): \"{}\"{} — status: {}",
+            book.book_id,
+            book.title,
+            book.author
+                .as_deref()
+                .map(|a| format!(" por {}", a))
+                .unwrap_or_default(),
+            book.status.as_str()
+        ))
+    }
+
+    async fn execute_book_status_set(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let book_id = args["book_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'book_id'"))?;
+        let status_str = args["status"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'status'"))?;
+        let status = BookStatus::parse(status_str)?;
+        let rating = args["rating_1_5"].as_u64().map(|n| n as u8);
+        let mem = require_memory(ctx).await?;
+        let updated = mem.update_book_status(book_id, status, rating).await?;
+        if updated {
+            Ok(format!(
+                "Libro {} actualizado a status '{}'.",
+                book_id,
+                status.as_str()
+            ))
+        } else {
+            Ok(format!("No se encontro libro con id {}.", book_id))
+        }
+    }
+
+    async fn execute_book_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let status = match args["status"].as_str() {
+            Some(s) => Some(BookStatus::parse(s)?),
+            None => None,
+        };
+        let mem = require_memory(ctx).await?;
+        let books = mem.list_books(status).await?;
+        if books.is_empty() {
+            return Ok("No hay libros registrados.".into());
+        }
+        let lines: Vec<String> = books
+            .iter()
+            .map(|b| {
+                let author = b
+                    .author
+                    .as_deref()
+                    .map(|a| format!(" — {}", a))
+                    .unwrap_or_default();
+                let rating = b
+                    .rating_1_5
+                    .map(|r| format!(" ★{}/5", r))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] [{}] \"{}\"{}{}",
+                    b.book_id,
+                    b.status.as_str(),
+                    b.title,
+                    author,
+                    rating
+                )
+            })
+            .collect();
+        Ok(format!("Libros:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_habit_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let description = args["description"].as_str();
+        let frequency = args["frequency"].as_str().unwrap_or("daily");
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let habit = mem
+            .add_habit(name, description, frequency, notes, None)
+            .await?;
+        Ok(format!(
+            "Habito creado (id: {}): \"{}\" — {}",
+            habit.habit_id, habit.name, habit.frequency
+        ))
+    }
+
+    async fn execute_habit_checkin(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let habit_id = args["habit_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'habit_id'"))?;
+        let completed = args["completed"].as_bool().unwrap_or(true);
+        let logged_for_date = args["logged_for_date"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'logged_for_date' (YYYY-MM-DD)"))?;
+        let notes = args["notes"].as_str();
+        let mem = require_memory(ctx).await?;
+        let _checkin = mem
+            .log_habit_checkin(habit_id, completed, logged_for_date, notes)
+            .await?;
+        let mark = if completed { "✓" } else { "✗" };
+        Ok(format!(
+            "Check-in registrado: {} {} en {}",
+            mark, habit_id, logged_for_date
+        ))
+    }
+
+    async fn execute_habit_active(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let habits = mem.list_habits(true).await?;
+        if habits.is_empty() {
+            return Ok("No hay habitos activos.".into());
+        }
+        let lines: Vec<String> = habits
+            .iter()
+            .map(|h| {
+                let desc = h
+                    .description
+                    .as_deref()
+                    .map(|d| format!(" — {}", d))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] {} ({}) {}",
+                    h.habit_id, h.name, h.frequency, desc
+                )
+            })
+            .collect();
+        Ok(format!("Habitos activos:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_goal_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let description = args["description"].as_str();
+        let deadline = args["deadline"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let goal = mem
+            .add_growth_goal(name, description, deadline, notes, None)
+            .await?;
+        Ok(format!(
+            "Meta creada (id: {}): \"{}\" — progreso 0%",
+            goal.goal_id, goal.name
+        ))
+    }
+
+    async fn execute_goal_progress(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let goal_id = args["goal_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'goal_id'"))?;
+        let progress_pct = args["progress_pct"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'progress_pct' (0-100)"))?
+            as u8;
+        let new_status = match args["status"].as_str() {
+            Some(s) => Some(GoalStatus::parse(s)?),
+            None => None,
+        };
+        let mem = require_memory(ctx).await?;
+        let updated = mem
+            .update_growth_goal_progress(goal_id, progress_pct, new_status)
+            .await?;
+        if updated {
+            Ok(format!(
+                "Meta {} actualizada: progreso {}%{}",
+                goal_id,
+                progress_pct.min(100),
+                if progress_pct >= 100 {
+                    " — ¡lograda!"
+                } else {
+                    ""
+                }
+            ))
+        } else {
+            Ok(format!("No se encontro meta con id {}.", goal_id))
+        }
+    }
+
+    async fn execute_growth_summary(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        // Caller passes today as YYYY-MM-DD; default to UTC today.
+        let today = args["today"]
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+        let mem = require_memory(ctx).await?;
+        let summary = mem.get_growth_summary(5, &today, 30).await?;
+        let mut out = String::from("# Resumen de crecimiento personal\n\n");
+
+        if !summary.currently_reading.is_empty() {
+            out.push_str("## Leyendo actualmente\n");
+            for b in &summary.currently_reading {
+                let author = b
+                    .author
+                    .as_deref()
+                    .map(|a| format!(" — {}", a))
+                    .unwrap_or_default();
+                out.push_str(&format!("- \"{}\"{}\n", b.title, author));
+            }
+            out.push('\n');
+        }
+
+        if !summary.recently_finished.is_empty() {
+            out.push_str("## Terminados recientemente\n");
+            for b in &summary.recently_finished {
+                let rating = b
+                    .rating_1_5
+                    .map(|r| format!(" ★{}/5", r))
+                    .unwrap_or_default();
+                let author = b
+                    .author
+                    .as_deref()
+                    .map(|a| format!(" — {}", a))
+                    .unwrap_or_default();
+                out.push_str(&format!("- \"{}\"{}{}\n", b.title, author, rating));
+            }
+            out.push('\n');
+        }
+
+        if !summary.active_habits.is_empty() {
+            out.push_str("## Hábitos activos (últimos 30 días)\n");
+            for h in &summary.active_habits {
+                let streak = summary
+                    .habit_streak_30d
+                    .iter()
+                    .find(|s| s.habit_id == h.habit_id);
+                let streak_str = match streak {
+                    Some(s) => format!(
+                        " — {}/{} días",
+                        s.completed_days, s.total_days
+                    ),
+                    None => String::new(),
+                };
+                out.push_str(&format!("- {} ({}){}\n", h.name, h.frequency, streak_str));
+            }
+            out.push('\n');
+        }
+
+        if !summary.active_goals.is_empty() {
+            out.push_str("## Metas activas\n");
+            for g in &summary.active_goals {
+                let deadline = g
+                    .deadline
+                    .as_deref()
+                    .map(|d| format!(" (deadline: {})", d))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- {} — {}%{}\n",
+                    g.name, g.progress_pct, deadline
+                ));
+            }
+            out.push('\n');
+        }
+
+        if summary.currently_reading.is_empty()
+            && summary.recently_finished.is_empty()
+            && summary.active_habits.is_empty()
+            && summary.active_goals.is_empty()
+        {
+            out.push_str(
+                "Aun no hay datos de crecimiento personal registrados. \
+                 Empieza con `book_add`, `habit_add` o `goal_add`.\n",
+            );
+        }
+
         Ok(out)
     }
 

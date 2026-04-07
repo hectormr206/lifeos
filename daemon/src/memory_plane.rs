@@ -196,6 +196,82 @@ CREATE TABLE IF NOT EXISTS health_attachments (
 );
 CREATE INDEX IF NOT EXISTS idx_health_attachments_type
     ON health_attachments(file_type);
+
+-- ============================================================================
+-- Fase BI.7 — Crecimiento personal (Vida Plena)
+-- ============================================================================
+-- Reading log + habits + growth goals. No reinforced encryption — these
+-- are not sensitive categories like mental health or sexual health. Notes
+-- and reflections are still encrypted at rest using the same default key
+-- as the rest of memory.db.
+--
+-- All inserts via the BI.7 API also create a `growth_*` kind entry in
+-- memory_entries (see telegram_tools.rs / API), which means BI.1's
+-- auto-permanent contract makes these rows survive decay forever even if
+-- the user doesn't access them for years.
+
+CREATE TABLE IF NOT EXISTS reading_log (
+    book_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    author TEXT,
+    isbn TEXT,
+    status TEXT NOT NULL,            -- 'wishlist', 'reading', 'finished', 'abandoned'
+    rating_1_5 INTEGER,
+    started_at TEXT,
+    finished_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reading_status ON reading_log(status);
+CREATE INDEX IF NOT EXISTS idx_reading_author ON reading_log(author);
+
+CREATE TABLE IF NOT EXISTS habits (
+    habit_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    frequency TEXT NOT NULL,         -- 'daily', 'weekly:N', 'custom:MO,WE,FR'
+    started_at TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_habits_active ON habits(active);
+
+-- Per-day check-in log for habits. One row per (habit_id, date) — the
+-- UNIQUE constraint enforces idempotency: marking the same habit twice
+-- on the same day is a no-op via INSERT OR REPLACE.
+CREATE TABLE IF NOT EXISTS habit_log (
+    log_id TEXT PRIMARY KEY,
+    habit_id TEXT NOT NULL,
+    completed INTEGER NOT NULL,      -- 0 or 1
+    logged_for_date TEXT NOT NULL,   -- YYYY-MM-DD
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(habit_id, logged_for_date)
+);
+CREATE INDEX IF NOT EXISTS idx_habit_log_habit_date
+    ON habit_log(habit_id, logged_for_date);
+
+CREATE TABLE IF NOT EXISTS growth_goals (
+    goal_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    deadline TEXT,                   -- optional ISO-8601
+    progress_pct INTEGER NOT NULL DEFAULT 0,  -- 0..100
+    status TEXT NOT NULL,            -- 'active', 'paused', 'achieved', 'abandoned'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_growth_goals_status ON growth_goals(status);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3982,6 +4058,905 @@ struct LabResultRaw {
     created_at: String,
 }
 
+// ============================================================================
+// Fase BI.7 — Crecimiento personal (Vida Plena)
+// ============================================================================
+
+/// Reading status for a book in `reading_log`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BookStatus {
+    Wishlist,
+    Reading,
+    Finished,
+    Abandoned,
+}
+
+impl BookStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Wishlist => "wishlist",
+            Self::Reading => "reading",
+            Self::Finished => "finished",
+            Self::Abandoned => "abandoned",
+        }
+    }
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "wishlist" => Ok(Self::Wishlist),
+            "reading" => Ok(Self::Reading),
+            "finished" => Ok(Self::Finished),
+            "abandoned" => Ok(Self::Abandoned),
+            other => anyhow::bail!("invalid book status: {}", other),
+        }
+    }
+}
+
+/// One book in the reading log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Book {
+    pub book_id: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub isbn: Option<String>,
+    pub status: BookStatus,
+    pub rating_1_5: Option<u8>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    /// Highlights, takeaways, notes — encrypted at rest. Empty when none.
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A habit the user wants to build (meditate, read, run, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Habit {
+    pub habit_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Free-form: `daily`, `weekly:3`, `custom:MO,WE,FR`.
+    pub frequency: String,
+    pub started_at: DateTime<Utc>,
+    pub active: bool,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One day's check-in for a habit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HabitCheckIn {
+    pub log_id: String,
+    pub habit_id: String,
+    pub completed: bool,
+    /// `YYYY-MM-DD` (local date for the user).
+    pub logged_for_date: String,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Status of a long-term growth goal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalStatus {
+    Active,
+    Paused,
+    Achieved,
+    Abandoned,
+}
+
+impl GoalStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Achieved => "achieved",
+            Self::Abandoned => "abandoned",
+        }
+    }
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "active" => Ok(Self::Active),
+            "paused" => Ok(Self::Paused),
+            "achieved" => Ok(Self::Achieved),
+            "abandoned" => Ok(Self::Abandoned),
+            other => anyhow::bail!("invalid goal status: {}", other),
+        }
+    }
+}
+
+/// A long-term growth goal (carrera, finanzas, salud, lo que sea).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrowthGoal {
+    pub goal_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Optional ISO-8601 deadline. Free-form because some goals have
+    /// soft deadlines ("este año") and others are precise.
+    pub deadline: Option<String>,
+    /// Progress 0..100. Capped at insert/update.
+    pub progress_pct: u8,
+    pub status: GoalStatus,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `MemoryPlaneManager::get_growth_summary`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GrowthSummary {
+    pub currently_reading: Vec<Book>,
+    pub recently_finished: Vec<Book>,
+    pub active_habits: Vec<Habit>,
+    pub habit_streak_30d: Vec<HabitStreak>,
+    pub active_goals: Vec<GrowthGoal>,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// Per-habit completion stats over the last N days.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HabitStreak {
+    pub habit_id: String,
+    pub habit_name: String,
+    pub completed_days: u32,
+    pub total_days: u32,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Reading log
+    // -----------------------------------------------------------------------
+
+    /// Add a book to the reading log. `status` defaults to `wishlist`
+    /// if the user only knows they want to read it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_book(
+        &self,
+        title: &str,
+        author: Option<&str>,
+        isbn: Option<&str>,
+        status: BookStatus,
+        rating_1_5: Option<u8>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Book> {
+        let title = normalize_non_empty(title).context("title required")?;
+        let author = author.and_then(normalize_non_empty);
+        let isbn = isbn.and_then(normalize_non_empty);
+        let rating_1_5 = match rating_1_5 {
+            Some(r) if (1..=5).contains(&r) => Some(r),
+            Some(_) => anyhow::bail!("rating must be 1..=5"),
+            None => None,
+        };
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let book_id = format!("book-{}", Uuid::new_v4());
+        let started_at = if status == BookStatus::Reading {
+            Some(now_rfc.clone())
+        } else {
+            None
+        };
+        let finished_at = if status == BookStatus::Finished {
+            Some(now_rfc.clone())
+        } else {
+            None
+        };
+        let status_str = status.as_str().to_string();
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let book_id_clone = book_id.clone();
+        let title_clone = title.clone();
+        let author_clone = author.clone();
+        let isbn_clone = isbn.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO reading_log
+                 (book_id, title, author, isbn, status, rating_1_5,
+                  started_at, finished_at, notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                params![
+                    book_id_clone,
+                    title_clone,
+                    author_clone,
+                    isbn_clone,
+                    status_str,
+                    rating_1_5.map(|r| r as i32),
+                    started_at,
+                    finished_at,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Book {
+            book_id,
+            title,
+            author,
+            isbn,
+            status,
+            rating_1_5,
+            started_at: if status == BookStatus::Reading {
+                Some(now)
+            } else {
+                None
+            },
+            finished_at: if status == BookStatus::Finished {
+                Some(now)
+            } else {
+                None
+            },
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update the status of a book. Side-effects:
+    /// - Setting `Reading` populates `started_at` if not already set.
+    /// - Setting `Finished` or `Abandoned` populates `finished_at`.
+    /// - `Wishlist` clears `started_at` and `finished_at`.
+    pub async fn update_book_status(
+        &self,
+        book_id: &str,
+        new_status: BookStatus,
+        rating_1_5: Option<u8>,
+    ) -> Result<bool> {
+        if let Some(r) = rating_1_5 {
+            if !(1..=5).contains(&r) {
+                anyhow::bail!("rating must be 1..=5");
+            }
+        }
+        let db_path = self.db_path.clone();
+        let id = book_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let status_str = new_status.as_str().to_string();
+
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let n = match new_status {
+                BookStatus::Reading => db.execute(
+                    "UPDATE reading_log
+                     SET status = ?1,
+                         started_at = COALESCE(started_at, ?2),
+                         finished_at = NULL,
+                         rating_1_5 = COALESCE(?3, rating_1_5),
+                         updated_at = ?2
+                     WHERE book_id = ?4",
+                    params![status_str, now, rating_1_5.map(|r| r as i32), id],
+                )?,
+                BookStatus::Finished | BookStatus::Abandoned => db.execute(
+                    "UPDATE reading_log
+                     SET status = ?1,
+                         finished_at = ?2,
+                         rating_1_5 = COALESCE(?3, rating_1_5),
+                         updated_at = ?2
+                     WHERE book_id = ?4",
+                    params![status_str, now, rating_1_5.map(|r| r as i32), id],
+                )?,
+                BookStatus::Wishlist => db.execute(
+                    "UPDATE reading_log
+                     SET status = ?1,
+                         started_at = NULL,
+                         finished_at = NULL,
+                         rating_1_5 = COALESCE(?3, rating_1_5),
+                         updated_at = ?2
+                     WHERE book_id = ?4",
+                    params![status_str, now, rating_1_5.map(|r| r as i32), id],
+                )?,
+            };
+            Ok(n)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// List books, optionally filtered by status.
+    pub async fn list_books(&self, status: Option<BookStatus>) -> Result<Vec<Book>> {
+        let db_path = self.db_path.clone();
+        let filter = status.map(|s| s.as_str().to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT book_id, title, author, isbn, status, rating_1_5,
+                        started_at, finished_at, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM reading_log",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE status = ?1");
+            }
+            sql.push_str(" ORDER BY updated_at DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<BookRaw> {
+                Ok(BookRaw {
+                    book_id: row.get(0)?,
+                    title: row.get(1)?,
+                    author: row.get(2)?,
+                    isbn: row.get(3)?,
+                    status: row.get(4)?,
+                    rating_1_5: row.get(5)?,
+                    started_at: row.get(6)?,
+                    finished_at: row.get(7)?,
+                    notes_nonce_b64: row.get(8)?,
+                    notes_ciphertext_b64: row.get(9)?,
+                    source_entry_id: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
+                })
+            };
+            let raws: Vec<BookRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Book {
+                book_id: r.book_id,
+                title: r.title,
+                author: r.author,
+                isbn: r.isbn,
+                status: BookStatus::parse(&r.status).unwrap_or(BookStatus::Wishlist),
+                rating_1_5: r.rating_1_5.map(|n| n as u8),
+                started_at: r.started_at.as_deref().map(parse_utc),
+                finished_at: r.finished_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Habits
+    // -----------------------------------------------------------------------
+
+    /// Create a new habit.
+    pub async fn add_habit(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        frequency: &str,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Habit> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        let frequency = normalize_non_empty(frequency).context("frequency required")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let habit_id = format!("habit-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let habit_id_clone = habit_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let frequency_clone = frequency.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO habits
+                 (habit_id, name, description, frequency, started_at, active,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?5, ?5)",
+                params![
+                    habit_id_clone,
+                    name_clone,
+                    description_clone,
+                    frequency_clone,
+                    now_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Habit {
+            habit_id,
+            name,
+            description,
+            frequency,
+            started_at: now,
+            active: true,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark a habit as inactive (the user gave it up). Returns true if
+    /// the row was active and is now closed.
+    pub async fn deactivate_habit(&self, habit_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = habit_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE habits SET active = 0, updated_at = ?1
+                 WHERE habit_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// Record (or overwrite) a habit check-in for a specific date.
+    /// `logged_for_date` is `YYYY-MM-DD` in the user's local timezone —
+    /// the caller is responsible for picking the right date.
+    pub async fn log_habit_checkin(
+        &self,
+        habit_id: &str,
+        completed: bool,
+        logged_for_date: &str,
+        notes: Option<&str>,
+    ) -> Result<HabitCheckIn> {
+        let habit_id = normalize_non_empty(habit_id).context("habit_id required")?;
+        let logged_for_date =
+            normalize_non_empty(logged_for_date).context("logged_for_date required")?;
+        let notes_owned = notes.and_then(normalize_non_empty);
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let log_id = format!("hlog-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let log_id_clone = log_id.clone();
+        let habit_id_clone = habit_id.clone();
+        let date_clone = logged_for_date.clone();
+        let notes_clone = notes_owned.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            // INSERT OR REPLACE on the (habit_id, logged_for_date)
+            // unique constraint — checking in twice the same day just
+            // overwrites the latest value.
+            db.execute(
+                "INSERT INTO habit_log
+                 (log_id, habit_id, completed, logged_for_date, notes, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(habit_id, logged_for_date) DO UPDATE SET
+                     completed = excluded.completed,
+                     notes = excluded.notes,
+                     created_at = excluded.created_at",
+                params![
+                    log_id_clone,
+                    habit_id_clone,
+                    completed as i32,
+                    date_clone,
+                    notes_clone,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(HabitCheckIn {
+            log_id,
+            habit_id,
+            completed,
+            logged_for_date,
+            notes: notes_owned,
+            created_at: now,
+        })
+    }
+
+    /// All habits, optionally filtered to active-only.
+    pub async fn list_habits(&self, active_only: bool) -> Result<Vec<Habit>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT habit_id, name, description, frequency, started_at, active,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM habits WHERE active = 1 ORDER BY created_at DESC"
+            } else {
+                "SELECT habit_id, name, description, frequency, started_at, active,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM habits ORDER BY created_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<HabitRaw> = stmt
+                .query_map([], |row| {
+                    Ok(HabitRaw {
+                        habit_id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        frequency: row.get(3)?,
+                        started_at: row.get(4)?,
+                        active: row.get::<_, i32>(5)? != 0,
+                        notes_nonce_b64: row.get(6)?,
+                        notes_ciphertext_b64: row.get(7)?,
+                        source_entry_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Habit {
+                habit_id: r.habit_id,
+                name: r.name,
+                description: r.description,
+                frequency: r.frequency,
+                started_at: parse_utc(&r.started_at),
+                active: r.active,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    /// Compute completion stats for an active habit over the last N days.
+    /// Counts the number of `completed = 1` rows over the window
+    /// `[today - days + 1, today]` in **lexicographic** order on
+    /// `logged_for_date`. Caller passes `today` as a `YYYY-MM-DD`
+    /// string in their local timezone.
+    pub async fn get_habit_streak(
+        &self,
+        habit_id: &str,
+        today: &str,
+        days: u32,
+    ) -> Result<HabitStreak> {
+        if days == 0 {
+            anyhow::bail!("days must be >= 1");
+        }
+        let db_path = self.db_path.clone();
+        let id = habit_id.to_string();
+        // Compute the start date by subtracting (days-1) days from `today`.
+        // We do it in Rust because SQLite date arithmetic on text dates
+        // is brittle and we want the caller's local date semantics.
+        let today_date = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d")
+            .with_context(|| format!("invalid today date '{}'", today))?;
+        let start_date = today_date
+            .checked_sub_signed(chrono::Duration::days((days - 1) as i64))
+            .context("date underflow")?
+            .format("%Y-%m-%d")
+            .to_string();
+        let today_owned = today.to_string();
+        let id_for_query = id.clone();
+
+        let (habit_name, completed): (String, u32) =
+            tokio::task::spawn_blocking(move || -> Result<(String, u32)> {
+                let db = Self::open_db(&db_path)?;
+                let name: String = db.query_row(
+                    "SELECT name FROM habits WHERE habit_id = ?1",
+                    params![id_for_query],
+                    |r| r.get(0),
+                )?;
+                let count: i64 = db.query_row(
+                    "SELECT COUNT(*) FROM habit_log
+                     WHERE habit_id = ?1 AND completed = 1
+                       AND logged_for_date BETWEEN ?2 AND ?3",
+                    params![id, start_date, today_owned],
+                    |r| r.get(0),
+                )?;
+                Ok((name, count.max(0) as u32))
+            })
+            .await??;
+
+        Ok(HabitStreak {
+            habit_id: habit_id.to_string(),
+            habit_name,
+            completed_days: completed,
+            total_days: days,
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // Growth goals
+    // -----------------------------------------------------------------------
+
+    pub async fn add_growth_goal(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        deadline: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<GrowthGoal> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        let deadline = deadline.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let goal_id = format!("goal-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let goal_id_clone = goal_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let deadline_clone = deadline.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO growth_goals
+                 (goal_id, name, description, deadline, progress_pct, status,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 0, 'active', ?5, ?6, ?7, ?8, ?8)",
+                params![
+                    goal_id_clone,
+                    name_clone,
+                    description_clone,
+                    deadline_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(GrowthGoal {
+            goal_id,
+            name,
+            description,
+            deadline,
+            progress_pct: 0,
+            status: GoalStatus::Active,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update progress + optionally status of a goal. Progress is
+    /// clamped to 0..=100. Setting progress to 100 also flips status
+    /// to `Achieved` automatically (unless the caller specifies a
+    /// different one).
+    pub async fn update_growth_goal_progress(
+        &self,
+        goal_id: &str,
+        progress_pct: u8,
+        new_status: Option<GoalStatus>,
+    ) -> Result<bool> {
+        let progress_pct = progress_pct.min(100);
+        let auto_status = if progress_pct >= 100 {
+            GoalStatus::Achieved
+        } else {
+            GoalStatus::Active
+        };
+        let effective_status = new_status.unwrap_or(auto_status);
+        let db_path = self.db_path.clone();
+        let id = goal_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let status_str = effective_status.as_str().to_string();
+
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE growth_goals
+                 SET progress_pct = ?1, status = ?2, updated_at = ?3
+                 WHERE goal_id = ?4",
+                params![progress_pct as i32, status_str, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// List growth goals, optionally filtered by status.
+    pub async fn list_growth_goals(
+        &self,
+        status: Option<GoalStatus>,
+    ) -> Result<Vec<GrowthGoal>> {
+        let db_path = self.db_path.clone();
+        let filter = status.map(|s| s.as_str().to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT goal_id, name, description, deadline, progress_pct, status,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM growth_goals",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE status = ?1");
+            }
+            sql.push_str(" ORDER BY updated_at DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<GrowthGoalRaw> {
+                Ok(GrowthGoalRaw {
+                    goal_id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    deadline: row.get(3)?,
+                    progress_pct: row.get(4)?,
+                    status: row.get(5)?,
+                    notes_nonce_b64: row.get(6)?,
+                    notes_ciphertext_b64: row.get(7)?,
+                    source_entry_id: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                })
+            };
+            let raws: Vec<GrowthGoalRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| GrowthGoal {
+                goal_id: r.goal_id,
+                name: r.name,
+                description: r.description,
+                deadline: r.deadline,
+                progress_pct: r.progress_pct.clamp(0, 100) as u8,
+                status: GoalStatus::parse(&r.status).unwrap_or(GoalStatus::Active),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Growth summary aggregator
+    // -----------------------------------------------------------------------
+
+    /// Aggregate growth snapshot. Used by `growth_summary` Telegram
+    /// tool and the future BI.8 narrative coaching layer.
+    pub async fn get_growth_summary(
+        &self,
+        recent_finished_limit: usize,
+        streak_today: &str,
+        streak_window_days: u32,
+    ) -> Result<GrowthSummary> {
+        let currently_reading = self.list_books(Some(BookStatus::Reading)).await?;
+        let mut recently_finished = self.list_books(Some(BookStatus::Finished)).await?;
+        recently_finished.truncate(recent_finished_limit);
+
+        let active_habits = self.list_habits(true).await?;
+        let mut habit_streak_30d = Vec::with_capacity(active_habits.len());
+        for h in &active_habits {
+            // Best-effort — if streak fails for one habit we still
+            // return the rest of the summary.
+            if let Ok(streak) = self
+                .get_habit_streak(&h.habit_id, streak_today, streak_window_days)
+                .await
+            {
+                habit_streak_30d.push(streak);
+            }
+        }
+
+        let active_goals = self.list_growth_goals(Some(GoalStatus::Active)).await?;
+
+        Ok(GrowthSummary {
+            currently_reading,
+            recently_finished,
+            active_habits,
+            habit_streak_30d,
+            active_goals,
+            generated_at: Utc::now(),
+        })
+    }
+}
+
+// -- Private raw row types for BI.7 -------------------------------------------
+
+struct BookRaw {
+    book_id: String,
+    title: String,
+    author: Option<String>,
+    isbn: Option<String>,
+    status: String,
+    rating_1_5: Option<i32>,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct HabitRaw {
+    habit_id: String,
+    name: String,
+    description: Option<String>,
+    frequency: String,
+    started_at: String,
+    active: bool,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct GrowthGoalRaw {
+    goal_id: String,
+    name: String,
+    description: Option<String>,
+    deadline: Option<String>,
+    progress_pct: i32,
+    status: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
 fn parse_utc(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
@@ -6140,6 +7115,381 @@ mod tests {
         // Recent vitals: 3 glucose readings (only one type registered).
         assert_eq!(summary.recent_vitals.len(), 3);
         assert_eq!(summary.recent_labs.len(), 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.7: Crecimiento personal ----------------------------------------
+
+    #[tokio::test]
+    async fn test_book_add_and_status_lifecycle() {
+        let dir = temp_dir("memory-plane-books-lifecycle");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let book = mgr
+            .add_book(
+                "Atomic Habits",
+                Some("James Clear"),
+                None,
+                BookStatus::Reading,
+                None,
+                "Capitulo 4 me hizo click",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(book.status, BookStatus::Reading);
+        assert!(book.started_at.is_some());
+        assert!(book.finished_at.is_none());
+        // Notes encrypted + decrypted roundtrip.
+        assert_eq!(book.notes, "Capitulo 4 me hizo click");
+
+        // Mark finished with rating 5.
+        let updated = mgr
+            .update_book_status(&book.book_id, BookStatus::Finished, Some(5))
+            .await
+            .unwrap();
+        assert!(updated);
+
+        let after = mgr.list_books(None).await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].status, BookStatus::Finished);
+        assert_eq!(after[0].rating_1_5, Some(5));
+        assert!(after[0].finished_at.is_some());
+        assert!(after[0].started_at.is_some(), "started_at must be preserved");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_book_filter_by_status() {
+        let dir = temp_dir("memory-plane-books-filter");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_book("A", None, None, BookStatus::Wishlist, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_book("B", None, None, BookStatus::Reading, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_book("C", None, None, BookStatus::Reading, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_book("D", None, None, BookStatus::Finished, Some(4), "", None)
+            .await
+            .unwrap();
+
+        let reading = mgr.list_books(Some(BookStatus::Reading)).await.unwrap();
+        assert_eq!(reading.len(), 2);
+        let wishlist = mgr.list_books(Some(BookStatus::Wishlist)).await.unwrap();
+        assert_eq!(wishlist.len(), 1);
+        let finished = mgr.list_books(Some(BookStatus::Finished)).await.unwrap();
+        assert_eq!(finished.len(), 1);
+        let all = mgr.list_books(None).await.unwrap();
+        assert_eq!(all.len(), 4);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_book_invalid_rating_rejected() {
+        let dir = temp_dir("memory-plane-books-bad-rating");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let result = mgr
+            .add_book(
+                "X",
+                None,
+                None,
+                BookStatus::Finished,
+                Some(7),
+                "",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_habit_add_and_deactivate() {
+        let dir = temp_dir("memory-plane-habit-lifecycle");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h = mgr
+            .add_habit("Meditar 10 min", Some("Por la mañana"), "daily", "", None)
+            .await
+            .unwrap();
+        assert!(h.active);
+
+        let active_before = mgr.list_habits(true).await.unwrap();
+        assert_eq!(active_before.len(), 1);
+
+        let deact = mgr.deactivate_habit(&h.habit_id).await.unwrap();
+        assert!(deact);
+        // Idempotent: second deactivate is a no-op.
+        let deact2 = mgr.deactivate_habit(&h.habit_id).await.unwrap();
+        assert!(!deact2);
+
+        let active_after = mgr.list_habits(true).await.unwrap();
+        assert_eq!(active_after.len(), 0);
+        let all = mgr.list_habits(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(!all[0].active);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_habit_checkin_idempotent_per_day() {
+        let dir = temp_dir("memory-plane-habit-checkin");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h = mgr
+            .add_habit("Leer 15 min", None, "daily", "", None)
+            .await
+            .unwrap();
+
+        // Two check-ins for the same date — second one wins (sets to false).
+        mgr.log_habit_checkin(&h.habit_id, true, "2026-04-06", Some("Mañana"))
+            .await
+            .unwrap();
+        mgr.log_habit_checkin(&h.habit_id, false, "2026-04-06", Some("Olvide"))
+            .await
+            .unwrap();
+
+        // The streak query should reflect the latest value (not completed).
+        let streak = mgr
+            .get_habit_streak(&h.habit_id, "2026-04-06", 1)
+            .await
+            .unwrap();
+        assert_eq!(streak.completed_days, 0);
+        assert_eq!(streak.total_days, 1);
+
+        // Now complete it cleanly. Streak should pick it up.
+        mgr.log_habit_checkin(&h.habit_id, true, "2026-04-06", None)
+            .await
+            .unwrap();
+        let streak2 = mgr
+            .get_habit_streak(&h.habit_id, "2026-04-06", 1)
+            .await
+            .unwrap();
+        assert_eq!(streak2.completed_days, 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_habit_streak_window() {
+        let dir = temp_dir("memory-plane-habit-streak");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h = mgr
+            .add_habit("Run", None, "daily", "", None)
+            .await
+            .unwrap();
+        // Mark 5 days completed in a 7-day window ending 2026-04-07.
+        for d in [
+            "2026-04-01",
+            "2026-04-02",
+            "2026-04-03",
+            "2026-04-05",
+            "2026-04-07",
+        ] {
+            mgr.log_habit_checkin(&h.habit_id, true, d, None)
+                .await
+                .unwrap();
+        }
+        // Two more days NOT completed within the window.
+        mgr.log_habit_checkin(&h.habit_id, false, "2026-04-04", None)
+            .await
+            .unwrap();
+        mgr.log_habit_checkin(&h.habit_id, false, "2026-04-06", None)
+            .await
+            .unwrap();
+
+        let streak = mgr
+            .get_habit_streak(&h.habit_id, "2026-04-07", 7)
+            .await
+            .unwrap();
+        assert_eq!(streak.total_days, 7);
+        assert_eq!(streak.completed_days, 5);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_growth_goal_progress_auto_achieves_at_100() {
+        let dir = temp_dir("memory-plane-goal-auto-achieve");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let g = mgr
+            .add_growth_goal(
+                "Aprender Rust",
+                Some("Contribuir a un proyecto open source"),
+                Some("2026-12-31"),
+                "Primer objetivo del año",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(g.progress_pct, 0);
+        assert_eq!(g.status, GoalStatus::Active);
+
+        // Advance to 60%.
+        let updated = mgr
+            .update_growth_goal_progress(&g.goal_id, 60, None)
+            .await
+            .unwrap();
+        assert!(updated);
+
+        // Push to 100 — must auto-flip to Achieved.
+        mgr.update_growth_goal_progress(&g.goal_id, 100, None)
+            .await
+            .unwrap();
+        let after = mgr
+            .list_growth_goals(Some(GoalStatus::Achieved))
+            .await
+            .unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].progress_pct, 100);
+        assert_eq!(after[0].status, GoalStatus::Achieved);
+
+        // Notes survived encryption.
+        assert_eq!(after[0].notes, "Primer objetivo del año");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_growth_goal_progress_clamps_above_100() {
+        let dir = temp_dir("memory-plane-goal-clamp");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let g = mgr
+            .add_growth_goal("X", None, None, "", None)
+            .await
+            .unwrap();
+
+        // 200 should be clamped to 100 and auto-achieve.
+        mgr.update_growth_goal_progress(&g.goal_id, 200, None)
+            .await
+            .unwrap();
+        let after = mgr.list_growth_goals(None).await.unwrap();
+        assert_eq!(after[0].progress_pct, 100);
+        assert_eq!(after[0].status, GoalStatus::Achieved);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_growth_summary_aggregates_everything() {
+        let dir = temp_dir("memory-plane-growth-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 1 reading + 2 finished + 1 wishlist
+        mgr.add_book("Read1", None, None, BookStatus::Reading, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_book(
+            "Done1",
+            None,
+            None,
+            BookStatus::Finished,
+            Some(5),
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_book(
+            "Done2",
+            None,
+            None,
+            BookStatus::Finished,
+            Some(4),
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_book("Wish1", None, None, BookStatus::Wishlist, None, "", None)
+            .await
+            .unwrap();
+
+        // 2 active habits + 1 deactivated
+        let h1 = mgr
+            .add_habit("Meditar", None, "daily", "", None)
+            .await
+            .unwrap();
+        let h2 = mgr
+            .add_habit("Leer", None, "daily", "", None)
+            .await
+            .unwrap();
+        let h3 = mgr
+            .add_habit("Correr", None, "weekly:3", "", None)
+            .await
+            .unwrap();
+        mgr.deactivate_habit(&h3.habit_id).await.unwrap();
+
+        // Some check-ins for h1 in the last 30 days ending 2026-04-30.
+        for d in ["2026-04-25", "2026-04-26", "2026-04-28", "2026-04-30"] {
+            mgr.log_habit_checkin(&h1.habit_id, true, d, None)
+                .await
+                .unwrap();
+        }
+        // None for h2.
+        let _ = h2;
+
+        // 1 active goal + 1 achieved
+        mgr.add_growth_goal("ActiveGoal", None, None, "", None)
+            .await
+            .unwrap();
+        let achieved = mgr
+            .add_growth_goal("AchievedGoal", None, None, "", None)
+            .await
+            .unwrap();
+        mgr.update_growth_goal_progress(&achieved.goal_id, 100, None)
+            .await
+            .unwrap();
+
+        let summary = mgr
+            .get_growth_summary(10, "2026-04-30", 30)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.currently_reading.len(), 1);
+        assert_eq!(summary.recently_finished.len(), 2);
+        assert_eq!(summary.active_habits.len(), 2);
+        assert_eq!(summary.habit_streak_30d.len(), 2);
+        // h1 has 4 completed days; h2 has 0.
+        let h1_streak = summary
+            .habit_streak_30d
+            .iter()
+            .find(|s| s.habit_id == h1.habit_id)
+            .unwrap();
+        assert_eq!(h1_streak.completed_days, 4);
+        assert_eq!(h1_streak.total_days, 30);
+        let h2_streak = summary
+            .habit_streak_30d
+            .iter()
+            .find(|s| s.habit_id == h2.habit_id)
+            .unwrap();
+        assert_eq!(h2_streak.completed_days, 0);
+
+        // Active goals = 1 (the achieved one is filtered out).
+        assert_eq!(summary.active_goals.len(), 1);
+        assert_eq!(summary.active_goals[0].name, "ActiveGoal");
 
         std::fs::remove_dir_all(dir).ok();
     }
