@@ -472,6 +472,19 @@ REGLAS FIRMES:
 15e. **vault_reset** — RESET DESTRUCTIVO. Borra los metadatos del vault. Tras esto, todo lo que estaba cifrado bajo el vault queda IRRECUPERABLE. Solo usalo despues de confirmar dos veces con el usuario.
     args: {}
 
+15f. **pin_set** — Configura el PIN local de segunda capa. OPT-IN, 4-16 chars, contador de intentos fallidos con auto-lock del vault como kill-switch (default 5 intentos). Modelo de amenaza: defiende contra alguien que toma tu laptop con el daemon corriendo.
+    args: {"pin": "1234", "max_failures": 5, "auto_lock_vault_on_max_failures": true}
+    REGLAS: ADVIERTE al usuario sobre el riesgo del canal Telegram para enviar PINs. Sugiere usar la API local cuando sea posible.
+
+15g. **pin_validate** — Valida un PIN. En exito resetea el contador de fallidos. En fallo incrementa el contador; si llega a max_failures con auto_lock activo, lockea el vault automaticamente como kill-switch.
+    args: {"pin": "1234"}
+
+15h. **pin_status** — Devuelve estado: configured, failed_attempts, max_failures, auto_lock_vault_on_max_failures, last_validated_at.
+    args: {}
+
+15i. **pin_clear** — Borra el PIN local. Idempotente. NO toca el vault.
+    args: {}
+
 16. **Vida Plena — Salud mental + diario emocional (BI.4)**
 
 Esta es la fase más sensible del pillar. Reglas absolutas:
@@ -1827,6 +1840,10 @@ REGLAS FIRMES:
             "vault_unlock" => execute_vault_unlock(&call.args, ctx).await,
             "vault_lock" => execute_vault_lock(ctx).await,
             "vault_reset" => execute_vault_reset(ctx).await,
+            "pin_set" => execute_pin_set(&call.args, ctx).await,
+            "pin_validate" => execute_pin_validate(&call.args, ctx).await,
+            "pin_status" => execute_pin_status(ctx).await,
+            "pin_clear" => execute_pin_clear(ctx).await,
             "mood_log" => execute_mood_log(&call.args, ctx).await,
             "mood_history" => execute_mood_history(&call.args, ctx).await,
             "journal_add" => execute_journal_add(&call.args, ctx).await,
@@ -5645,6 +5662,62 @@ REGLAS FIRMES:
         let mem = require_memory(ctx).await?;
         mem.reset_reinforced_passphrase().await?;
         Ok("Vault reseteado. Toda la metadata fue borrada — cualquier dato sensible previamente cifrado bajo este vault quedo INRECUPERABLE.".to_string())
+    }
+
+    // -- Local PIN (segunda capa sobre el vault) ----------------------------
+
+    async fn execute_pin_set(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let pin = args["pin"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'pin'"))?;
+        let max_failures = args["max_failures"].as_u64().map(|n| n as u32);
+        let auto_lock = args["auto_lock_vault_on_max_failures"].as_bool();
+        mem.set_local_pin(pin, max_failures, auto_lock).await?;
+        Ok("PIN local configurado. RECUERDA que la passphrase del vault sigue siendo la llave principal — el PIN es solo una capa rapida adicional que activa kill-switch en intentos fallidos.".to_string())
+    }
+
+    async fn execute_pin_validate(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let pin = args["pin"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'pin'"))?;
+        let result = mem.validate_local_pin(pin).await?;
+        if result.ok {
+            Ok("✓ PIN correcto.".to_string())
+        } else if result.vault_locked_as_kill_switch {
+            Ok("✗ PIN incorrecto. **Vault auto-lockeado como kill-switch** — para volver a acceder hay que usar `vault_unlock` con la passphrase principal.".to_string())
+        } else {
+            Ok(format!(
+                "✗ PIN incorrecto. {} intento(s) restantes antes de auto-lock del vault.",
+                result.attempts_remaining
+            ))
+        }
+    }
+
+    async fn execute_pin_status(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let s = mem.local_pin_status().await?;
+        if !s.configured {
+            return Ok("PIN local: NO configurado. Usa `pin_set` para activarlo.".to_string());
+        }
+        let last = s
+            .last_validated_at
+            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "nunca".to_string());
+        Ok(format!(
+            "# PIN local\n\nConfigurado: si\nIntentos fallidos: {}/{}\nAuto-lock vault: {}\nUltima validacion exitosa: {}",
+            s.failed_attempts,
+            s.max_failures,
+            if s.auto_lock_vault_on_max_failures { "si" } else { "no" },
+            last
+        ))
+    }
+
+    async fn execute_pin_clear(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        mem.clear_local_pin().await?;
+        Ok("PIN local borrado. El vault sigue intacto.".to_string())
     }
 
     // -- BI.4: salud mental + diario emocional ------------------------------

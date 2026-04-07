@@ -52,6 +52,22 @@ const REINFORCED_VERIFIER_MAGIC: &[u8] = b"lifeos-reinforced-vault-v1";
 const REINFORCED_DEFAULT_IDLE_SECS: u64 = 15 * 60;
 const REINFORCED_MIN_PASSPHRASE_LEN: usize = 8;
 
+// -- Local PIN (BI cifrado reforzado, segunda capa) ------------------------
+//
+// PIN parameters intentionally lighter than the vault passphrase: the
+// PIN is meant to be entered frequently, so the KDF cost should be
+// ~10ms instead of ~50ms. The trade-off is that brute-force attempts
+// are less expensive — but the failed_attempts counter + auto-lock
+// kill-switch keep that bounded.
+const LOCAL_PIN_MIN_LEN: usize = 4;
+const LOCAL_PIN_MAX_LEN: usize = 16;
+const LOCAL_PIN_KDF_M_COST: u32 = 4_096; // 4 MiB
+const LOCAL_PIN_KDF_T_COST: u32 = 1;
+const LOCAL_PIN_KDF_P_COST: u32 = 1;
+const LOCAL_PIN_HASH_LEN: usize = 32;
+const LOCAL_PIN_SALT_LEN: usize = 16;
+const LOCAL_PIN_DEFAULT_MAX_FAILURES: u32 = 5;
+
 const SCHEMA: &str = r#"
 -- Metadata table for encrypted entries
 CREATE TABLE IF NOT EXISTS memory_entries (
@@ -1074,6 +1090,39 @@ CREATE TABLE IF NOT EXISTS shopping_lists (
 );
 CREATE INDEX IF NOT EXISTS idx_shopping_lists_status
     ON shopping_lists(status);
+
+-- ----------------------------------------------------------------------
+-- BI cifrado reforzado — PIN local de segunda capa
+--
+-- Capa de defensa OPT-IN y RAPIDA sobre el vault. Modelo de amenaza
+-- distinto al de la passphrase del vault:
+--
+--   Vault passphrase  → defiende contra acceso al disco. KDF lenta
+--                       (~50ms), se ingresa pocas veces.
+--   PIN local         → defiende contra "alguien tomo mi laptop con
+--                       el daemon corriendo". KDF rapida (~10ms),
+--                       se ingresa frecuentemente. Tiene contador de
+--                       intentos fallidos y, si pasa max_failures,
+--                       lockea el vault automaticamente como
+--                       kill-switch.
+--
+-- El PIN NUNCA reemplaza la passphrase del vault — son dos llaves
+-- distintas. Si el atacante conoce la passphrase puede ignorar el PIN
+-- y usar `unlock_reinforced_vault` directamente. El PIN es para los
+-- escenarios donde el daemon ya esta corriendo y el atacante solo
+-- puede llamar a la API local.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS local_pin_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    salt_b64 TEXT NOT NULL,
+    pin_hash_b64 TEXT NOT NULL,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    max_failures INTEGER NOT NULL DEFAULT 5,
+    auto_lock_vault_on_max_failures INTEGER NOT NULL DEFAULT 1,
+    last_validated_at TEXT,
+    configured_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS reinforced_vault_meta (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -4239,6 +4288,297 @@ fn derive_reinforced_key(
         .hash_password_into(passphrase, salt, &mut out)
         .map_err(|e| anyhow::anyhow!("argon2id derive failed: {}", e))?;
     Ok(out)
+}
+
+// ============================================================================
+// BI cifrado reforzado — PIN local de segunda capa
+// ============================================================================
+
+/// Public status of the local PIN. Safe to serialize and send to
+/// clients (no key material). `failed_attempts` counts losses since
+/// the last successful validation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalPinStatus {
+    pub configured: bool,
+    pub failed_attempts: u32,
+    pub max_failures: u32,
+    pub auto_lock_vault_on_max_failures: bool,
+    pub last_validated_at: Option<DateTime<Utc>>,
+}
+
+/// Result of a `validate_local_pin` call. `vault_locked_as_kill_switch`
+/// is true when the PIN was wrong AND we hit `max_failures`, which
+/// triggered an automatic vault lock as a defense-in-depth response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalPinValidation {
+    pub ok: bool,
+    pub failed_attempts: u32,
+    pub attempts_remaining: u32,
+    pub vault_locked_as_kill_switch: bool,
+}
+
+impl MemoryPlaneManager {
+    fn read_local_pin_meta(db: &Connection) -> Result<Option<LocalPinMetaRow>> {
+        let mut stmt = db.prepare(
+            "SELECT salt_b64, pin_hash_b64, failed_attempts, max_failures,
+                    auto_lock_vault_on_max_failures, last_validated_at,
+                    configured_at, updated_at
+             FROM local_pin_meta WHERE id = 1",
+        )?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(LocalPinMetaRow {
+                salt_b64: row.get(0)?,
+                pin_hash_b64: row.get(1)?,
+                failed_attempts: row.get::<_, i64>(2)?.max(0) as u32,
+                max_failures: row.get::<_, i64>(3)?.max(1) as u32,
+                auto_lock_vault_on_max_failures: row.get::<_, i32>(4)? != 0,
+                last_validated_at: row.get(5)?,
+                configured_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn is_local_pin_set(&self) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path)?;
+            Ok(Self::read_local_pin_meta(&db)?.is_some())
+        })
+        .await?
+    }
+
+    /// Configure the local PIN for the first time. Fails if a PIN is
+    /// already set — call `clear_local_pin` first to reset.
+    ///
+    /// `max_failures` defaults to 5. `auto_lock_vault_on_max_failures`
+    /// defaults to true (recommended).
+    pub async fn set_local_pin(
+        &self,
+        pin: &str,
+        max_failures: Option<u32>,
+        auto_lock_vault_on_max_failures: Option<bool>,
+    ) -> Result<()> {
+        validate_pin(pin)?;
+        if self.is_local_pin_set().await? {
+            anyhow::bail!("local PIN already configured — call clear_local_pin first to reset");
+        }
+        let max_failures = max_failures
+            .unwrap_or(LOCAL_PIN_DEFAULT_MAX_FAILURES)
+            .clamp(1, 100);
+        let auto_lock = auto_lock_vault_on_max_failures.unwrap_or(true);
+
+        let pin_owned = pin.to_string();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            let mut salt = [0u8; LOCAL_PIN_SALT_LEN];
+            rand::thread_rng().fill_bytes(&mut salt);
+            let hash = derive_local_pin_hash(pin_owned.as_bytes(), &salt)?;
+            let now = Utc::now().to_rfc3339();
+            db.execute(
+                "INSERT INTO local_pin_meta
+                 (id, salt_b64, pin_hash_b64, failed_attempts, max_failures,
+                  auto_lock_vault_on_max_failures, last_validated_at,
+                  configured_at, updated_at)
+                 VALUES (1, ?1, ?2, 0, ?3, ?4, NULL, ?5, ?5)",
+                params![
+                    B64.encode(salt),
+                    B64.encode(hash),
+                    max_failures as i64,
+                    auto_lock as i32,
+                    now,
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    /// Validate a PIN attempt. On success: resets `failed_attempts`
+    /// to 0 and updates `last_validated_at`. On failure: increments
+    /// `failed_attempts`. If failures hit `max_failures` AND
+    /// auto_lock_vault is enabled, the vault is locked immediately
+    /// as a kill-switch and the counter is reset (so the next attempt
+    /// after lockdown starts fresh — the vault is the actual barrier
+    /// at that point).
+    pub async fn validate_local_pin(&self, pin: &str) -> Result<LocalPinValidation> {
+        let pin_owned = pin.to_string();
+        let db_path = self.db_path.clone();
+
+        // Compute the hash + read meta in one blocking task. This
+        // returns the validation result + a flag for whether the
+        // vault should be auto-locked.
+        let (mut result, should_auto_lock) =
+            tokio::task::spawn_blocking(move || -> Result<(LocalPinValidation, bool)> {
+                let db = Self::open_db(&db_path)?;
+                let meta = Self::read_local_pin_meta(&db)?
+                    .ok_or_else(|| anyhow::anyhow!("local PIN not configured"))?;
+
+                let salt = B64
+                    .decode(meta.salt_b64.as_bytes())
+                    .context("invalid PIN salt b64")?;
+                let stored_hash = B64
+                    .decode(meta.pin_hash_b64.as_bytes())
+                    .context("invalid PIN hash b64")?;
+                let candidate = derive_local_pin_hash(pin_owned.as_bytes(), &salt)?;
+                let ok = constant_time_eq_slice(&candidate, &stored_hash);
+
+                let now = Utc::now().to_rfc3339();
+                let mut should_auto_lock = false;
+                if ok {
+                    db.execute(
+                        "UPDATE local_pin_meta
+                         SET failed_attempts = 0,
+                             last_validated_at = ?1,
+                             updated_at = ?1
+                         WHERE id = 1",
+                        params![now],
+                    )?;
+                    let result = LocalPinValidation {
+                        ok: true,
+                        failed_attempts: 0,
+                        attempts_remaining: meta.max_failures,
+                        vault_locked_as_kill_switch: false,
+                    };
+                    Ok((result, false))
+                } else {
+                    let new_failed = meta.failed_attempts + 1;
+                    if new_failed >= meta.max_failures && meta.auto_lock_vault_on_max_failures {
+                        // Reset counter so the next attempt after the
+                        // lockdown starts fresh — the vault is now
+                        // the real barrier.
+                        db.execute(
+                            "UPDATE local_pin_meta
+                             SET failed_attempts = 0, updated_at = ?1
+                             WHERE id = 1",
+                            params![now],
+                        )?;
+                        should_auto_lock = true;
+                    } else {
+                        db.execute(
+                            "UPDATE local_pin_meta
+                             SET failed_attempts = ?1, updated_at = ?2
+                             WHERE id = 1",
+                            params![new_failed as i64, now],
+                        )?;
+                    }
+                    let attempts_remaining = meta.max_failures.saturating_sub(new_failed);
+                    let result = LocalPinValidation {
+                        ok: false,
+                        failed_attempts: if should_auto_lock { 0 } else { new_failed },
+                        attempts_remaining,
+                        vault_locked_as_kill_switch: should_auto_lock,
+                    };
+                    Ok((result, should_auto_lock))
+                }
+            })
+            .await??;
+
+        if should_auto_lock {
+            self.lock_reinforced_vault();
+            // The DB write already reflects the kill-switch. Make sure
+            // the result also carries the flag (paranoid cross-check).
+            result.vault_locked_as_kill_switch = true;
+        }
+        Ok(result)
+    }
+
+    /// Remove the local PIN entirely. Idempotent.
+    pub async fn clear_local_pin(&self) -> Result<()> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute("DELETE FROM local_pin_meta WHERE id = 1", [])?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    pub async fn local_pin_status(&self) -> Result<LocalPinStatus> {
+        let db_path = self.db_path.clone();
+        let row = tokio::task::spawn_blocking(move || -> Result<Option<LocalPinMetaRow>> {
+            let db = Self::open_db(&db_path)?;
+            Self::read_local_pin_meta(&db)
+        })
+        .await??;
+        match row {
+            Some(meta) => Ok(LocalPinStatus {
+                configured: true,
+                failed_attempts: meta.failed_attempts,
+                max_failures: meta.max_failures,
+                auto_lock_vault_on_max_failures: meta.auto_lock_vault_on_max_failures,
+                last_validated_at: meta.last_validated_at.as_deref().map(parse_utc),
+            }),
+            None => Ok(LocalPinStatus {
+                configured: false,
+                failed_attempts: 0,
+                max_failures: LOCAL_PIN_DEFAULT_MAX_FAILURES,
+                auto_lock_vault_on_max_failures: true,
+                last_validated_at: None,
+            }),
+        }
+    }
+}
+
+#[allow(dead_code)]
+struct LocalPinMetaRow {
+    salt_b64: String,
+    pin_hash_b64: String,
+    failed_attempts: u32,
+    max_failures: u32,
+    auto_lock_vault_on_max_failures: bool,
+    last_validated_at: Option<String>,
+    configured_at: String,
+    updated_at: String,
+}
+
+fn validate_pin(pin: &str) -> Result<()> {
+    let len = pin.chars().count();
+    if len < LOCAL_PIN_MIN_LEN {
+        anyhow::bail!("PIN must be at least {} characters", LOCAL_PIN_MIN_LEN);
+    }
+    if len > LOCAL_PIN_MAX_LEN {
+        anyhow::bail!("PIN must be at most {} characters", LOCAL_PIN_MAX_LEN);
+    }
+    if pin.trim().is_empty() {
+        anyhow::bail!("PIN must not be whitespace only");
+    }
+    Ok(())
+}
+
+fn derive_local_pin_hash(pin: &[u8], salt: &[u8]) -> Result<[u8; LOCAL_PIN_HASH_LEN]> {
+    let params = Params::new(
+        LOCAL_PIN_KDF_M_COST,
+        LOCAL_PIN_KDF_T_COST,
+        LOCAL_PIN_KDF_P_COST,
+        Some(LOCAL_PIN_HASH_LEN),
+    )
+    .map_err(|e| anyhow::anyhow!("invalid argon2 params: {}", e))?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut out = [0u8; LOCAL_PIN_HASH_LEN];
+    argon
+        .hash_password_into(pin, salt, &mut out)
+        .map_err(|e| anyhow::anyhow!("argon2id PIN derive failed: {}", e))?;
+    Ok(out)
+}
+
+/// Constant-time slice equality. Used to compare derived hashes so a
+/// timing attacker cannot infer how many leading bytes matched.
+fn constant_time_eq_slice(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 // ============================================================================
@@ -20586,6 +20926,160 @@ mod tests {
         assert!((avg - 6.5).abs() < 0.01);
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI cifrado reforzado — PIN local de segunda capa
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn local_pin_starts_unconfigured() {
+        let dir = temp_dir("memory-plane-pin-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let s = mgr.local_pin_status().await.unwrap();
+        assert!(!s.configured);
+        assert_eq!(s.failed_attempts, 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_set_then_validate_success_resets_counter() {
+        let dir = temp_dir("memory-plane-pin-validate-ok");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_local_pin("1234", None, None).await.unwrap();
+
+        // One bad attempt to bump the counter.
+        let bad = mgr.validate_local_pin("9999").await.unwrap();
+        assert!(!bad.ok);
+        assert_eq!(bad.failed_attempts, 1);
+
+        // Then a good attempt resets to 0.
+        let good = mgr.validate_local_pin("1234").await.unwrap();
+        assert!(good.ok);
+        assert_eq!(good.failed_attempts, 0);
+
+        let s = mgr.local_pin_status().await.unwrap();
+        assert_eq!(s.failed_attempts, 0);
+        assert!(s.last_validated_at.is_some());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_rejects_too_short() {
+        let dir = temp_dir("memory-plane-pin-short");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr.set_local_pin("ab", None, None).await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_rejects_double_init() {
+        let dir = temp_dir("memory-plane-pin-double");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_local_pin("1234", None, None).await.unwrap();
+        let err = mgr.set_local_pin("5678", None, None).await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_max_failures_auto_locks_vault() {
+        let dir = temp_dir("memory-plane-pin-killswitch");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        // Configure vault and unlock it.
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        assert!(mgr.reinforced_vault_status().await.unwrap().unlocked);
+
+        // Configure PIN with low max_failures (3) and auto-lock on.
+        mgr.set_local_pin("1234", Some(3), Some(true))
+            .await
+            .unwrap();
+
+        // Two wrong attempts: still unlocked, counter incrementing.
+        for expected in 1..=2u32 {
+            let r = mgr.validate_local_pin("9999").await.unwrap();
+            assert!(!r.ok);
+            assert_eq!(r.failed_attempts, expected);
+            assert!(!r.vault_locked_as_kill_switch);
+            assert!(mgr.reinforced_vault_status().await.unwrap().unlocked);
+        }
+
+        // Third wrong attempt: hits max_failures → kill-switch.
+        let r = mgr.validate_local_pin("9999").await.unwrap();
+        assert!(!r.ok);
+        assert!(r.vault_locked_as_kill_switch);
+        assert_eq!(r.failed_attempts, 0); // counter reset post-killswitch
+        assert!(!mgr.reinforced_vault_status().await.unwrap().unlocked);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_auto_lock_disabled_does_not_lock_vault() {
+        let dir = temp_dir("memory-plane-pin-no-killswitch");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        // PIN with auto_lock_vault disabled.
+        mgr.set_local_pin("1234", Some(3), Some(false))
+            .await
+            .unwrap();
+
+        // Burn through all attempts.
+        for _ in 0..3 {
+            let r = mgr.validate_local_pin("9999").await.unwrap();
+            assert!(!r.ok);
+            assert!(!r.vault_locked_as_kill_switch);
+        }
+
+        // Counter is at max but vault is still unlocked.
+        let s = mgr.local_pin_status().await.unwrap();
+        assert_eq!(s.failed_attempts, 3);
+        assert!(mgr.reinforced_vault_status().await.unwrap().unlocked);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_clear_removes_meta() {
+        let dir = temp_dir("memory-plane-pin-clear");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_local_pin("1234", None, None).await.unwrap();
+        assert!(mgr.is_local_pin_set().await.unwrap());
+
+        mgr.clear_local_pin().await.unwrap();
+        assert!(!mgr.is_local_pin_set().await.unwrap());
+        // Idempotent.
+        mgr.clear_local_pin().await.unwrap();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_validate_when_unconfigured_errors() {
+        let dir = temp_dir("memory-plane-pin-no-config");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr.validate_local_pin("1234").await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn constant_time_eq_slice_works() {
+        assert!(constant_time_eq_slice(b"hello", b"hello"));
+        assert!(!constant_time_eq_slice(b"hello", b"world"));
+        assert!(!constant_time_eq_slice(b"hello", b"hellos"));
+        assert!(!constant_time_eq_slice(b"", b"x"));
+        assert!(constant_time_eq_slice(b"", b""));
     }
 
     // -----------------------------------------------------------------------

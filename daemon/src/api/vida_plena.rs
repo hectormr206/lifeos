@@ -61,6 +61,11 @@ pub fn vida_plena_routes() -> Router<ApiState> {
         .route("/vault/unlock", post(post_vault_unlock))
         .route("/vault/lock", post(post_vault_lock))
         .route("/vault/reset", post(post_vault_reset))
+        // -- Local PIN (segunda capa sobre el vault) ----------------
+        .route("/pin/status", get(get_pin_status))
+        .route("/pin/set", post(post_pin_set))
+        .route("/pin/validate", post(post_pin_validate))
+        .route("/pin/clear", post(post_pin_clear))
 }
 
 // ----------------------------------------------------------------------
@@ -426,4 +431,89 @@ async fn post_generate_weekly_shopping_list(
         .await
         .map_err(err_to_http)?;
     Ok(Json(serde_json::json!({ "plan": plan })))
+}
+
+// ----------------------------------------------------------------------
+// Local PIN (segunda capa sobre el vault)
+// ----------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct PinSetPayload {
+    pub pin: String,
+    #[serde(default)]
+    pub max_failures: Option<u32>,
+    #[serde(default)]
+    pub auto_lock_vault_on_max_failures: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PinValidatePayload {
+    pub pin: String,
+}
+
+async fn get_pin_status(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let s = mgr.local_pin_status().await.map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "pin": s })))
+}
+
+async fn post_pin_set(
+    State(state): State<ApiState>,
+    Json(payload): Json<PinSetPayload>,
+) -> Result<Json<VaultActionResponse>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    mgr.set_local_pin(
+        &payload.pin,
+        payload.max_failures,
+        payload.auto_lock_vault_on_max_failures,
+    )
+    .await
+    .map_err(err_to_http)?;
+    Ok(Json(VaultActionResponse {
+        status: "configured",
+    }))
+}
+
+async fn post_pin_validate(
+    State(state): State<ApiState>,
+    Json(payload): Json<PinValidatePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let result = mgr
+        .validate_local_pin(&payload.pin)
+        .await
+        .map_err(err_to_http)?;
+    let status = if result.ok {
+        StatusCode::OK
+    } else {
+        StatusCode::FORBIDDEN
+    };
+    if status == StatusCode::FORBIDDEN {
+        return Err((
+            status,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: if result.vault_locked_as_kill_switch {
+                    "PIN incorrect — vault auto-locked as kill-switch".to_string()
+                } else {
+                    format!(
+                        "PIN incorrect — {} attempts remaining",
+                        result.attempts_remaining
+                    )
+                },
+                code: 403,
+            }),
+        ));
+    }
+    Ok(Json(serde_json::json!({ "validation": result })))
+}
+
+async fn post_pin_clear(
+    State(state): State<ApiState>,
+) -> Result<Json<VaultActionResponse>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    mgr.clear_local_pin().await.map_err(err_to_http)?;
+    Ok(Json(VaultActionResponse { status: "cleared" }))
 }
