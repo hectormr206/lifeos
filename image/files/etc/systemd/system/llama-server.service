@@ -18,8 +18,9 @@ ExecStartPre=/bin/sh -c 'for i in $(seq 1 15); do if /usr/sbin/llama-server --li
 # Flag groups (in order):
 #   1. Model + I/O — paths, host, port, alias.
 #   2. Capacity   — context, threads, GPU layers, parallel slots, batch sizes.
-#   3. Performance — flash attention + KV-cache quantisation. flash-attn cuts
-#      attention memory and speeds up prefill/decode on CUDA, Vulkan, Metal,
+#   3. Performance — flash attention + KV-cache quantisation. flash-attn auto
+#      enables when supported and falls back cleanly when not.
+#      It cuts attention memory and speeds up prefill/decode on CUDA, Vulkan, Metal,
 #      and recent CPU builds; if a build does not support it llama-server
 #      logs a warning and falls back. q8_0 KV cache halves the per-token
 #      memory cost for the same context size at ~no quality loss.
@@ -46,7 +47,7 @@ ExecStart=/usr/sbin/llama-server \
     --batch-size ${LIFEOS_AI_BATCH_SIZE} \
     --ubatch-size ${LIFEOS_AI_UBATCH_SIZE} \
     --n-predict 2048 \
-    --flash-attn \
+    --flash-attn auto \
     --cache-type-k q8_0 \
     --cache-type-v q8_0 \
     -sm none \

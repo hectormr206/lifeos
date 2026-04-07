@@ -4057,13 +4057,9 @@ fn resolve_catalog_model(
 }
 
 async fn restart_llama_server() -> anyhow::Result<()> {
-    let status = Command::new("systemctl")
-        .args(["restart", "llama-server"])
-        .status()
-        .await?;
-    if !status.success() {
-        anyhow::bail!("systemctl restart llama-server failed");
-    }
+    tokio::task::spawn_blocking(crate::ai_runtime_profile::restart_llama_server_sync)
+        .await
+        .map_err(|error| anyhow::anyhow!("llama-server restart task failed: {error}"))??;
     Ok(())
 }
 

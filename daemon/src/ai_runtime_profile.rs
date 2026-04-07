@@ -19,6 +19,22 @@ const DEFAULT_CTX_SIZE: u32 = 16384;
 const DEFAULT_GPU_LAYERS: i32 = 99;
 const DEFAULT_GAME_GUARD_VRAM_THRESHOLD_MB: u64 = 500;
 const RUNTIME_ENV_DROPIN_NAME: &str = "99-lifeos-runtime-envs.conf";
+const USER_LLAMA_UNIT_NAME: &str = "llama-server.service";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LlamaServiceScope {
+    System,
+    User,
+}
+
+impl LlamaServiceScope {
+    fn label(self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::User => "user",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeSettings {
@@ -239,21 +255,50 @@ pub fn write_game_guard_override(profile: &RuntimeSettings) -> Result<()> {
 }
 
 pub fn restart_llama_server_sync() -> Result<()> {
-    if let Err(error) = ensure_llama_service_runtime_env_files() {
-        warn!("[ai_runtime] failed to refresh llama-server env compatibility: {error}");
+    let scope = match ensure_llama_service_runtime_env_files() {
+        Ok(scope) => scope,
+        Err(error) => {
+            warn!("[ai_runtime] failed to refresh llama-server env compatibility: {error}");
+            LlamaServiceScope::System
+        }
+    };
+
+    match scope {
+        LlamaServiceScope::System => stop_user_llama_service_if_present(),
+        LlamaServiceScope::User => stop_system_llama_service_if_active(),
     }
 
-    let _ = Command::new("systemctl")
-        .args(["reset-failed", "llama-server.service"])
+    let _ = systemctl_command(scope)
+        .args(["reset-failed", USER_LLAMA_UNIT_NAME])
         .output();
 
-    let status = Command::new("systemctl")
-        .args(["restart", "llama-server.service"])
+    let action = if llama_service_is_active(scope).unwrap_or(false) {
+        "restart"
+    } else {
+        "start"
+    };
+    let status = systemctl_command(scope)
+        .args([action, USER_LLAMA_UNIT_NAME])
         .status()
-        .context("failed to restart llama-server.service")?;
+        .with_context(|| {
+            format!(
+                "failed to {action} {} {}",
+                scope.label(),
+                USER_LLAMA_UNIT_NAME
+            )
+        })?;
 
     if !status.success() {
-        anyhow::bail!("systemctl restart llama-server.service failed");
+        anyhow::bail!(
+            "systemctl {}{} {} failed",
+            if matches!(scope, LlamaServiceScope::User) {
+                "--user "
+            } else {
+                ""
+            },
+            action,
+            USER_LLAMA_UNIT_NAME
+        );
     }
 
     Ok(())
@@ -683,7 +728,7 @@ fn apply_runtime_env(settings: &RuntimeSettings) -> Result<bool> {
     )
 }
 
-fn ensure_llama_service_runtime_env_files() -> Result<()> {
+fn ensure_llama_service_runtime_env_files() -> Result<LlamaServiceScope> {
     let runtime_path = runtime_override_env_path();
     let guard_path = game_guard_override_env_path();
     let loaded = llama_service_environment_files()?;
@@ -691,9 +736,25 @@ fn ensure_llama_service_runtime_env_files() -> Result<()> {
     let runtime_loaded = loaded.iter().any(|path| path == &runtime_path);
     let guard_loaded = loaded.iter().any(|path| path == &guard_path);
     if runtime_loaded && guard_loaded {
-        return Ok(());
+        return Ok(LlamaServiceScope::System);
     }
 
+    match install_llama_runtime_dropin() {
+        Ok(()) => {
+            stop_user_llama_service_if_present();
+            Ok(LlamaServiceScope::System)
+        }
+        Err(system_error) => {
+            warn!(
+                "[ai_runtime] system llama-server cannot load runtime envs, falling back to user service: {system_error}"
+            );
+            ensure_user_llama_service()?;
+            Ok(LlamaServiceScope::User)
+        }
+    }
+}
+
+fn install_llama_runtime_dropin() -> Result<()> {
     let content = llama_runtime_env_dropin_content();
     let mut child = Command::new("systemctl")
         .args([
@@ -703,7 +764,7 @@ fn ensure_llama_service_runtime_env_files() -> Result<()> {
             "--drop-in",
             RUNTIME_ENV_DROPIN_NAME,
             "--stdin",
-            "llama-server.service",
+            USER_LLAMA_UNIT_NAME,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -729,7 +790,10 @@ fn ensure_llama_service_runtime_env_files() -> Result<()> {
     }
 
     let _ = Command::new("systemctl").arg("daemon-reload").output();
-    info!("[ai_runtime] installed runtime env compatibility drop-in for llama-server.service");
+    info!(
+        "[ai_runtime] installed runtime env compatibility drop-in for {}",
+        USER_LLAMA_UNIT_NAME
+    );
     Ok(())
 }
 
@@ -745,6 +809,78 @@ fn write_override_env(path: &Path, settings: &RuntimeSettings, header: &str) -> 
     }
     fs::write(path, content).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(true)
+}
+
+fn systemctl_command(scope: LlamaServiceScope) -> Command {
+    let mut command = Command::new("systemctl");
+    if matches!(scope, LlamaServiceScope::User) {
+        command.arg("--user");
+    }
+    command
+}
+
+fn llama_service_is_active(scope: LlamaServiceScope) -> Result<bool> {
+    let status = systemctl_command(scope)
+        .args(["is-active", "--quiet", USER_LLAMA_UNIT_NAME])
+        .status()
+        .with_context(|| format!("failed to inspect {} llama-server service", scope.label()))?;
+    Ok(status.success())
+}
+
+fn llama_user_unit_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("LIFEOS_LLAMA_USER_UNIT_PATH") {
+        return Ok(PathBuf::from(path));
+    }
+    let home = std::env::var_os("HOME").context("HOME is not set for user llama-server unit")?;
+    Ok(PathBuf::from(home).join(".config/systemd/user/llama-server.service"))
+}
+
+fn ensure_user_llama_service() -> Result<()> {
+    let unit_path = llama_user_unit_path()?;
+    let content = llama_user_service_content();
+    if let Some(parent) = unit_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let existing = fs::read_to_string(&unit_path).unwrap_or_default();
+    if existing != content {
+        fs::write(&unit_path, content)
+            .with_context(|| format!("failed to write {}", unit_path.display()))?;
+    }
+
+    let status = systemctl_command(LlamaServiceScope::User)
+        .arg("daemon-reload")
+        .status()
+        .context("failed to reload user systemd daemon")?;
+    if !status.success() {
+        anyhow::bail!("systemctl --user daemon-reload failed");
+    }
+
+    info!(
+        "[ai_runtime] prepared user fallback for {} at {}",
+        USER_LLAMA_UNIT_NAME,
+        unit_path.display()
+    );
+    Ok(())
+}
+
+fn stop_user_llama_service_if_present() {
+    let unit_path = match llama_user_unit_path() {
+        Ok(path) => path,
+        Err(_) => return,
+    };
+    if !unit_path.exists() {
+        return;
+    }
+    let _ = systemctl_command(LlamaServiceScope::User)
+        .args(["stop", USER_LLAMA_UNIT_NAME])
+        .status();
+}
+
+fn stop_system_llama_service_if_active() {
+    let _ = Command::new("systemctl")
+        .args(["stop", USER_LLAMA_UNIT_NAME])
+        .status();
 }
 
 fn llama_service_environment_files() -> Result<Vec<PathBuf>> {
@@ -788,6 +924,42 @@ fn parse_environment_files_output(output: &str) -> Vec<PathBuf> {
 fn llama_runtime_env_dropin_content() -> String {
     format!(
         "[Service]\nEnvironmentFile=-{}\nEnvironmentFile=-{}\n",
+        runtime_override_env_path().display(),
+        game_guard_override_env_path().display()
+    )
+}
+
+fn llama_user_service_content() -> String {
+    format!(
+        "\
+[Unit]
+Description=LifeOS AI Inference Server (llama.cpp) [user fallback]
+Documentation=https://github.com/ggml-org/llama.cpp
+After=default.target
+ConditionPathExists={}
+
+[Service]
+Type=simple
+EnvironmentFile=-{}
+EnvironmentFile=-{}
+EnvironmentFile=-{}
+Environment=VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+Environment=__NV_PRIME_RENDER_OFFLOAD=1
+Environment=__VK_LAYER_NV_optimus=NVIDIA_only
+ExecStart=/usr/sbin/llama-server \\\n    --model /var/lib/lifeos/models/${{LIFEOS_AI_MODEL}} \\\n    --mmproj /var/lib/lifeos/models/${{LIFEOS_AI_MMPROJ}} \\\n    --alias ${{LIFEOS_AI_ALIAS}} \\\n    --host ${{LIFEOS_AI_HOST}} \\\n    --port ${{LIFEOS_AI_PORT}} \\\n    --ctx-size ${{LIFEOS_AI_CTX_SIZE}} \\\n    --threads ${{LIFEOS_AI_THREADS}} \\\n    --n-gpu-layers ${{LIFEOS_AI_GPU_LAYERS}} \\\n    --parallel ${{LIFEOS_AI_PARALLEL}} \\\n    --batch-size ${{LIFEOS_AI_BATCH_SIZE}} \\\n    --ubatch-size ${{LIFEOS_AI_UBATCH_SIZE}} \\\n    --n-predict 2048 \\\n    --flash-attn auto \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    -sm none \\\n    -mg 0 \\\n    --temp 0.6 \\\n    --top-p 0.95 \\\n    --top-k 20 \\\n    --min-p 0.0 \\\n    --presence-penalty 0.0 \\\n    --repeat-penalty 1.0 \\\n    --reasoning-budget 0 \\\n    --jinja
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=llama-server
+
+[Install]
+WantedBy=default.target
+",
+        llama_env_path().display(),
+        llama_env_path().display(),
         runtime_override_env_path().display(),
         game_guard_override_env_path().display()
     )
@@ -1328,5 +1500,17 @@ EnvironmentFiles=/var/lib/lifeos/llama-server-game-guard.env (ignore_errors=yes)
             content.contains("EnvironmentFile=-/var/lib/lifeos/llama-server-runtime-profile.env")
         );
         assert!(content.contains("EnvironmentFile=-/var/lib/lifeos/llama-server-game-guard.env"));
+    }
+
+    #[test]
+    fn user_service_content_points_to_runtime_and_guard_envs() {
+        let content = llama_user_service_content();
+        assert!(content.contains("EnvironmentFile=-/etc/lifeos/llama-server.env"));
+        assert!(
+            content.contains("EnvironmentFile=-/var/lib/lifeos/llama-server-runtime-profile.env")
+        );
+        assert!(content.contains("EnvironmentFile=-/var/lib/lifeos/llama-server-game-guard.env"));
+        assert!(content.contains("--n-gpu-layers ${LIFEOS_AI_GPU_LAYERS}"));
+        assert!(content.contains("Environment=__NV_PRIME_RENDER_OFFLOAD=1"));
     }
 }
