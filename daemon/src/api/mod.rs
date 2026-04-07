@@ -10518,6 +10518,7 @@ async fn get_game_guard_status(
         let guard = gg.read().await;
         let gs = guard.state().await;
         Ok(Json(serde_json::json!({
+            "supported": gs.supported,
             "guard_enabled": gs.guard_enabled,
             "assistant_enabled": gs.assistant_enabled,
             "llm_mode": effective_llm_mode,
@@ -10531,16 +10532,10 @@ async fn get_game_guard_status(
         })))
     } else {
         // Fallback: read from env vars
-        let enabled = std::env::var("LIFEOS_AI_GAME_GUARD")
-            .map(|v| v != "false" && v != "0")
-            .unwrap_or(true);
-        let assistant_enabled = std::env::var("LIFEOS_AI_GAME_ASSISTANT")
-            .map(|v| v != "false" && v != "0")
-            .unwrap_or(true);
-
         Ok(Json(serde_json::json!({
-            "guard_enabled": enabled,
-            "assistant_enabled": assistant_enabled,
+            "supported": false,
+            "guard_enabled": false,
+            "assistant_enabled": false,
             "llm_mode": effective_llm_mode,
             "gpu_layers": effective_gpu_layers,
             "game_detected": false,

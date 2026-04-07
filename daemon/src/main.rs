@@ -21,6 +21,7 @@ mod accessibility;
 mod agent_roles;
 mod agent_runtime;
 mod ai;
+mod ai_runtime_profile;
 mod api;
 mod async_workers;
 mod atspi_layer;
@@ -598,6 +599,38 @@ async fn main() -> anyhow::Result<()> {
     // --- Safe mode: detect repeated crashes before spawning background tasks ---
     let in_safe_mode = safe_mode::init(&data_dir).await.unwrap_or(false);
 
+    let runtime_profile_bootstrap = match ai_runtime_profile::bootstrap_runtime_profile(&data_dir) {
+        Ok(outcome) => {
+            if outcome.profile_changed || outcome.env_changed {
+                if let Err(e) = ai_runtime_profile::restart_llama_server_sync() {
+                    warn!(
+                        "[ai_runtime] failed to restart llama-server after bootstrap: {}",
+                        e
+                    );
+                }
+            }
+            Some(outcome)
+        }
+        Err(e) => {
+            warn!("[ai_runtime] failed to bootstrap runtime profile: {}", e);
+            None
+        }
+    };
+
+    let game_guard_requested = std::env::var("LIFEOS_AI_GAME_GUARD")
+        .map(|value| value != "false" && value != "0")
+        .unwrap_or(true);
+    let game_assistant_requested = std::env::var("LIFEOS_AI_GAME_ASSISTANT")
+        .map(|value| value != "false" && value != "0")
+        .unwrap_or(true);
+    let game_guard_supported = runtime_profile_bootstrap
+        .as_ref()
+        .map(|outcome| outcome.profile.supports_game_guard())
+        .unwrap_or(false);
+    let game_guard_cpu_fallback = runtime_profile_bootstrap
+        .as_ref()
+        .and_then(|outcome| outcome.profile.profiles.game_guard_cpu_fallback.clone());
+
     // Shared instances for supervisor integration
     let shared_privacy = Arc::new(privacy_filter::PrivacyFilter::new(
         privacy_filter::PrivacyLevel::default(),
@@ -714,7 +747,15 @@ async fn main() -> anyhow::Result<()> {
         event_bus: event_tx,
         session_store: shared_session_store,
         game_guard: Some(Arc::new(RwLock::new(game_guard::GameGuard::new(
-            game_guard::GameGuardConfig::default(),
+            game_guard::GameGuardConfig {
+                enabled: game_guard_requested,
+                supported: game_guard_supported,
+                poll_interval_secs: game_guard::GameGuardConfig::default().poll_interval_secs,
+                game_assistant_enabled: game_assistant_requested,
+                vram_threshold_mb: game_guard::GameGuardConfig::default().vram_threshold_mb,
+                llama_server_env_path: game_guard::GameGuardConfig::default().llama_server_env_path,
+                cpu_fallback_profile: game_guard_cpu_fallback,
+            },
         )))),
         skill_registry_v2: Arc::new(skill_registry::SkillRegistry::from_defaults()),
         config_store: Arc::new(config_store::ConfigStore::new(&data_dir)),
@@ -984,6 +1025,21 @@ async fn main() -> anyhow::Result<()> {
             sensory_memory::run_sensory_memory_listener(sensory_rx, sensory_mem).await;
         });
         info!("Sensory memory listener started");
+    }
+
+    {
+        let runtime_profile_data_dir = data_dir.clone();
+        let runtime_profile_game_guard = state.game_guard.clone();
+        let runtime_profile_event_tx = state.event_bus.clone();
+        tokio::spawn(async move {
+            ai_runtime_profile::run_runtime_profile_manager(
+                runtime_profile_data_dir,
+                runtime_profile_game_guard,
+                runtime_profile_event_tx,
+            )
+            .await;
+        });
+        info!("AI runtime profile manager started");
     }
 
     let health_handle = tokio::spawn(run_health_checks(state.clone()));
@@ -2242,17 +2298,6 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
 
             // Skip voice detection entirely during a meeting.
             if !meeting.active {
-                let cycle = AlwaysOnCycle {
-                    ai_manager: &ai_manager,
-                    overlay: &overlay_manager,
-                    screen_capture: &screen_capture,
-                    memory_plane: &memory_plane_manager,
-                    telemetry: &telemetry_manager,
-                    wake_word: always_on.wake_word.as_str(),
-                    screen_enabled: runtime.screen_enabled,
-                    wake_word_detector: state.wake_word_detector.as_ref().map(|d| d.as_ref()),
-                };
-
                 // Dispatch: rustpotter (streaming) or legacy whisper-based detection.
                 let rustpotter_detected = match state.wake_word_detector {
                     Some(ref d) => d.take_detection().await.is_some(),
@@ -2263,6 +2308,17 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     let _ = state.event_bus.send(events::DaemonEvent::WakeWordDetected {
                         word: always_on.wake_word.clone(),
                     });
+                    let cycle = AlwaysOnCycle {
+                        ai_manager: &ai_manager,
+                        overlay: &overlay_manager,
+                        screen_capture: &screen_capture,
+                        memory_plane: &memory_plane_manager,
+                        telemetry: &telemetry_manager,
+                        wake_word: always_on.wake_word.as_str(),
+                        hotword_triggered: true,
+                        screen_enabled: runtime.screen_enabled,
+                        wake_word_detector: state.wake_word_detector.as_ref().map(|d| d.as_ref()),
+                    };
                     match sensory_manager.run_post_wakeword_cycle(cycle).await {
                         Ok(Some(_)) => continue,
                         Ok(None) => {}
@@ -2272,6 +2328,20 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     // Rustpotter active but no wake word — check continuous conversation window.
                     let in_continuous = sensory_manager.is_continuous_listen_active().await;
                     if in_continuous {
+                        let cycle = AlwaysOnCycle {
+                            ai_manager: &ai_manager,
+                            overlay: &overlay_manager,
+                            screen_capture: &screen_capture,
+                            memory_plane: &memory_plane_manager,
+                            telemetry: &telemetry_manager,
+                            wake_word: always_on.wake_word.as_str(),
+                            hotword_triggered: false,
+                            screen_enabled: runtime.screen_enabled,
+                            wake_word_detector: state
+                                .wake_word_detector
+                                .as_ref()
+                                .map(|d| d.as_ref()),
+                        };
                         match sensory_manager.run_post_wakeword_cycle(cycle).await {
                             Ok(Some(_)) => continue,
                             Ok(None) => {}
@@ -2281,6 +2351,17 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     // Otherwise rustpotter is listening, do nothing.
                 } else {
                     // No rustpotter — fall back to legacy capture-transcribe-match.
+                    let cycle = AlwaysOnCycle {
+                        ai_manager: &ai_manager,
+                        overlay: &overlay_manager,
+                        screen_capture: &screen_capture,
+                        memory_plane: &memory_plane_manager,
+                        telemetry: &telemetry_manager,
+                        wake_word: always_on.wake_word.as_str(),
+                        hotword_triggered: false,
+                        screen_enabled: runtime.screen_enabled,
+                        wake_word_detector: state.wake_word_detector.as_ref().map(|d| d.as_ref()),
+                    };
                     match sensory_manager.run_always_on_cycle(cycle).await {
                         Ok(Some(_)) => continue,
                         Ok(None) => {}

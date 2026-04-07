@@ -1590,9 +1590,8 @@ Herramientas:
                             if let Err(e) = m.add_entity_typed(&name, etype).await {
                                 warn!("[memory_plane] Failed to add entity: {}", e);
                             }
-                            if let Err(e) = m
-                                .add_triple("user", "mentioned", &name, 1.0, None)
-                                .await
+                            if let Err(e) =
+                                m.add_triple("user", "mentioned", &name, 1.0, None).await
                             {
                                 warn!("[memory_plane] Failed to add user→mentioned triple: {}", e);
                             }
@@ -1601,9 +1600,7 @@ Herramientas:
                             if let Err(e) = m.add_entity_typed(&name, etype).await {
                                 warn!("[memory_plane] Failed to add entity: {}", e);
                             }
-                            if let Err(e) = m
-                                .add_triple("axi", "mentioned", &name, 1.0, None)
-                                .await
+                            if let Err(e) = m.add_triple("axi", "mentioned", &name, 1.0, None).await
                             {
                                 warn!("[memory_plane] Failed to add axi→mentioned triple: {}", e);
                             }

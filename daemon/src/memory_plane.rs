@@ -371,12 +371,11 @@ impl MemoryPlaneManager {
             Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
             Err(_) => Vec::new(),
         };
-        let relations: Vec<serde_json::Value> = match tokio::fs::read_to_string(&relations_path)
-            .await
-        {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-            Err(_) => Vec::new(),
-        };
+        let relations: Vec<serde_json::Value> =
+            match tokio::fs::read_to_string(&relations_path).await {
+                Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
 
         // Build id -> name lookup so we can resolve `from_id` / `to_id`
         // in the relation file back to entity names.
@@ -1996,8 +1995,7 @@ impl MemoryPlaneManager {
                     // some weird ingest path produced a huge link count.
                     let bonus = (link_count.min(10) as f64) * 2.0;
 
-                    let new_importance =
-                        (decayed + bonus).clamp(0.0, 100.0).round() as i32;
+                    let new_importance = (decayed + bonus).clamp(0.0, 100.0).round() as i32;
 
                     if new_importance != importance {
                         out.push((entry_id, new_importance));
@@ -2611,7 +2609,10 @@ impl MemoryPlaneManager {
             // We do this in one transaction.
             let archived = self
                 .archive_entries_by_id(
-                    entries.iter().map(|e| e.entry_id.clone()).collect::<Vec<_>>(),
+                    entries
+                        .iter()
+                        .map(|e| e.entry_id.clone())
+                        .collect::<Vec<_>>(),
                 )
                 .await
                 .unwrap_or(0);
@@ -3114,7 +3115,14 @@ pub fn extract_entities_from_text(text: &str) -> Vec<(String, &'static str)> {
     }
 
     let days = [
-        "lunes", "martes", "miercoles", "miércoles", "jueves", "viernes", "sabado", "sábado",
+        "lunes",
+        "martes",
+        "miercoles",
+        "miércoles",
+        "jueves",
+        "viernes",
+        "sabado",
+        "sábado",
         "domingo",
     ];
     for word in text.split_whitespace() {

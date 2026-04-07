@@ -169,6 +169,33 @@
           </div>
         </div>
 
+        <!-- Habla / TTS -->
+        <div class="control-card" data-sensor="tts">
+          <div class="control-header clickable">
+            <span class="control-icon">&#128264;</span>
+            <span class="control-name">Habla</span>
+            <span class="diag-dot" id="dot-tts"></span>
+            <span class="expand-chevron">&#9660;</span>
+          </div>
+          <p id="tts-status" class="control-status">—</p>
+          <label class="toggle" onclick="event.stopPropagation()">
+            <input type="checkbox" id="toggle-tts">
+            <span class="slider"></span>
+          </label>
+          <div class="diagnostic-panel" id="diag-tts">
+            <div class="diag-details">
+              <div class="diag-row"><span class="diag-label">Backend TTS</span><span class="diag-value" id="d-tts-binary">—</span></div>
+              <div class="diag-row"><span class="diag-label">Modelo</span><span class="diag-value" id="d-tts-model">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultimo motor</span><span class="diag-value" id="d-tts-engine">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultimo reproductor</span><span class="diag-value" id="d-tts-backend">—</span></div>
+              <div class="diag-row"><span class="diag-label">Estado</span><span class="diag-value" id="d-tts-enabled">—</span></div>
+              <div class="diag-row"><span class="diag-label">Ultima respuesta</span><span class="diag-value diag-value-long" id="d-tts-last">—</span></div>
+            </div>
+            <button class="diag-test-btn" data-test="tts">&#128264; Probar Habla</button>
+            <p class="diag-test-result" id="test-result-tts"></p>
+          </div>
+        </div>
+
         <!-- Escritorio -->
         <div class="control-card" data-sensor="screen">
           <div class="control-header clickable">

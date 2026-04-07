@@ -3,7 +3,7 @@
 //! Shows Axi as an icon in the system tray (top panel) with:
 //! - Color-changing icon based on Axi state (green=idle, cyan=listening, etc.)
 //! - Right-click menu with status info, sensor toggles, dashboard link
-//! - Sensor controls: mic, camera, screen capture, kill switch
+//! - Sensor controls: always-on, mic, TTS, camera, screen capture, kill switch
 //!
 //! Uses the freedesktop StatusNotifierItem protocol via `ksni` crate.
 //! Works with COSMIC, KDE Plasma, GNOME (with AppIndicator extension).
@@ -295,13 +295,13 @@ pub mod inner {
                     checked: self.tts,
                     activate: Box::new(move |this: &mut Self| {
                         this.tts = !this.tts;
-                        // TTS doesn't have its own API field yet — toggle is local-only for now.
-                        // When a TTS-specific endpoint is added, wire it here.
                         call_api(
                             &api_tts,
                             &tok_tts,
                             "/runtime/sensory",
-                            serde_json::json!({}),
+                            serde_json::json!({
+                                "tts_enabled": this.tts
+                            }),
                         );
                     }),
                     ..Default::default()
@@ -458,12 +458,20 @@ pub mod inner {
                         mic,
                         camera,
                         screen,
+                        always_on,
+                        tts,
                         kill_switch,
                     }) => {
                         handle.update(|tray: &mut AxiTray| {
                             tray.mic = mic;
                             tray.camera = camera;
                             tray.screen = screen;
+                            if let Some(always_on) = always_on {
+                                tray.always_on = always_on;
+                            }
+                            if let Some(tts) = tts {
+                                tray.tts = tts;
+                            }
                             tray.kill_switch = kill_switch;
                         });
                     }

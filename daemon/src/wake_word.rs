@@ -47,6 +47,7 @@ pub fn resolve_model_path() -> Option<std::path::PathBuf> {
 
 #[cfg(feature = "wake-word")]
 mod inner {
+    use crate::audio_frontend::{preprocess_frame_i16le, AudioFilterState};
     use anyhow::{Context, Result};
     use chrono::{DateTime, Utc};
     use log::{info, warn};
@@ -215,6 +216,12 @@ mod inner {
 
             // Read a snapshot of source_rx to detect changes.
             let mut last_source = source;
+            let mut filter_state = AudioFilterState::default();
+            let mut rolling_noise_floor = None;
+            let wake_gain_db: f64 = std::env::var("LIFEOS_WAKE_WORD_GAIN_DB")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(4.0);
 
             let mut buf = vec![0u8; bytes_per_frame];
             let mut wav_header_skipped = false;
@@ -276,8 +283,28 @@ mod inner {
                     continue;
                 }
 
+                let processed = preprocess_frame_i16le(
+                    &buf,
+                    SAMPLE_RATE as u32,
+                    wake_gain_db,
+                    rolling_noise_floor,
+                    &mut filter_state,
+                );
+                if processed.pcm_le.is_empty() {
+                    continue;
+                }
+                if processed.stats.rms > 0.0 {
+                    rolling_noise_floor = Some(match rolling_noise_floor {
+                        Some(prev) if processed.stats.rms <= prev * 2.5 => {
+                            (prev * 0.96) + (processed.stats.rms * 0.04)
+                        }
+                        Some(prev) => prev,
+                        None => processed.stats.rms,
+                    });
+                }
+
                 // Feed rustpotter
-                if let Some(detection) = rp.process_bytes(&buf) {
+                if let Some(detection) = rp.process_bytes(&processed.pcm_le) {
                     info!(
                         "Wake word detected: name={}, score={:.3}, avg_score={:.3}",
                         detection.name, detection.score, detection.avg_score

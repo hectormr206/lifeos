@@ -138,6 +138,8 @@ function buildSummaryText() {
 
   const activeSensors = [];
   if (runtime.audio_enabled) activeSensors.push('audio');
+  if (dashboardState.alwaysOn?.enabled) activeSensors.push('always-on');
+  if (runtime.tts_enabled) activeSensors.push('habla');
   if (runtime.screen_enabled) activeSensors.push('pantalla');
   if (runtime.camera_enabled) activeSensors.push('camara');
   if (activeSensors.length) parts.push(`Sensores activos: ${activeSensors.join(', ')}.`);
@@ -186,11 +188,17 @@ function renderHero() {
   const voice = dashboardState.voice || {};
   const stt = diagCache.stt || {};
 
-  const activeSensors = [runtime.audio_enabled, runtime.screen_enabled, runtime.camera_enabled].filter(Boolean).length;
+  const activeSensors = [
+    runtime.audio_enabled,
+    dashboardState.alwaysOn?.enabled,
+    runtime.tts_enabled,
+    runtime.screen_enabled,
+    runtime.camera_enabled,
+  ].filter(Boolean).length;
   const sensorText = activeSensors
     ? `${activeSensors} activo${activeSensors === 1 ? '' : 's'}`
     : 'Sin sensores activos';
-  const sensorState = activeSensors ? (activeSensors === 3 ? 'chip-ok' : 'chip-warn') : 'chip-error';
+  const sensorState = activeSensors ? (activeSensors === 5 ? 'chip-ok' : 'chip-warn') : 'chip-error';
   setHeroChip(heroChipState, formatStateLabel(dashboardState.axiState), {
     offline: 'chip-error',
     error: 'chip-error',
@@ -304,11 +312,14 @@ function updateOverlayDetails(overlay) {
 function updateSensoryToggles(runtime) {
   dashboardState.runtime = runtime;
   $('#toggle-audio').checked = runtime.audio_enabled;
+  $('#toggle-tts').checked = runtime.tts_enabled;
   $('#toggle-screen').checked = runtime.screen_enabled;
   $('#toggle-camera').checked = runtime.camera_enabled;
   $('#audio-status').textContent = runtime.audio_enabled ? 'Activo' : 'Inactivo';
+  $('#tts-status').textContent = runtime.tts_enabled ? 'Activo' : 'Inactivo';
   $('#screen-status').textContent = runtime.screen_enabled ? 'Activo' : 'Inactivo';
   $('#camera-status').textContent = runtime.camera_enabled ? 'Activo' : 'Inactivo';
+  updateKillSwitchUi(runtime.kill_switch_active);
   renderHero();
 }
 
@@ -318,6 +329,13 @@ function updateAlwaysOn(ao) {
   $('#always-on-status').textContent = ao.enabled ? 'Activo' : 'Inactivo';
   if (ao.wake_word) $('#wake-word-input').value = ao.wake_word;
   renderHero();
+}
+
+function updateKillSwitchUi(active) {
+  const btn = $('#kill-switch');
+  if (!btn) return;
+  btn.dataset.active = active ? 'true' : 'false';
+  btn.textContent = active ? 'REACTIVAR SENTIDOS' : 'KILL SWITCH';
 }
 
 function updateContext(ctx) {
@@ -483,20 +501,35 @@ function handleEvent(event) {
       addFeedItem('&#9679;', `Axi → ${event.data.state}`);
       break;
     case 'sensor_changed':
+      const wasKillSwitchActive = !!dashboardState.runtime?.kill_switch_active;
       dashboardState.runtime = {
         ...(dashboardState.runtime || {}),
         audio_enabled: event.data.mic,
         screen_enabled: event.data.screen,
         camera_enabled: event.data.camera,
+        ...(event.data.tts != null ? { tts_enabled: event.data.tts } : {}),
+        kill_switch_active: !!event.data.kill_switch,
       };
+      if (event.data.always_on != null) {
+        dashboardState.alwaysOn = {
+          ...(dashboardState.alwaysOn || {}),
+          enabled: !!event.data.always_on,
+        };
+        $('#toggle-always-on').checked = !!event.data.always_on;
+        $('#always-on-status').textContent = event.data.always_on ? 'Activo' : 'Inactivo';
+      }
       $('#toggle-audio').checked = event.data.mic;
+      if (event.data.tts != null) $('#toggle-tts').checked = event.data.tts;
       $('#toggle-screen').checked = event.data.screen;
       $('#toggle-camera').checked = event.data.camera;
       $('#audio-status').textContent = event.data.mic ? 'Activo' : 'Inactivo';
+      if (event.data.tts != null) $('#tts-status').textContent = event.data.tts ? 'Activo' : 'Inactivo';
       $('#screen-status').textContent = event.data.screen ? 'Activo' : 'Inactivo';
       $('#camera-status').textContent = event.data.camera ? 'Activo' : 'Inactivo';
+      updateKillSwitchUi(event.data.kill_switch);
       renderHero();
       if (event.data.kill_switch) addFeedItem('&#9888;', 'Kill switch activado');
+      else if (wasKillSwitchActive) addFeedItem('&#9989;', 'Kill switch liberado');
       break;
     case 'feedback_update':
       dashboardState.lastSignal = `Feedback ${event.data.stage || 'actualizado'}`;
@@ -692,6 +725,25 @@ function populateAlwaysOnDiag(sensory) {
   if (hint) hint.textContent = voice.wake_word || 'axi';
 }
 
+function populateTtsDiag(sensory) {
+  const cap = sensory?.capabilities || {};
+  const voice = sensory?.voice || {};
+  const runtime = dashboardState.runtime || {};
+
+  const ttsReady = !!cap.tts_binary;
+  const enabled = runtime.tts_enabled !== false;
+  if (enabled && ttsReady) setDot('dot-tts', 'ok');
+  else if (ttsReady) setDot('dot-tts', 'warn');
+  else setDot('dot-tts', 'error');
+
+  setVal('d-tts-binary', cap.tts_binary || 'No encontrado', cap.tts_binary ? '' : 'val-error');
+  setVal('d-tts-model', cap.tts_model || 'Sin modelo explicito', cap.tts_model ? 'val-ok' : 'val-warn');
+  setVal('d-tts-engine', voice.last_tts_engine || '—');
+  setVal('d-tts-backend', voice.last_playback_backend || '—');
+  setVal('d-tts-enabled', enabled ? 'Activo' : 'Inactivo', enabled ? 'val-ok' : 'val-warn');
+  setVal('d-tts-last', voice.last_response ? voice.last_response.substring(0, 200) : '(sin datos)');
+}
+
 function populateScreenDiag(sensory) {
   const cap = sensory?.capabilities || {};
   const vision = sensory?.vision || {};
@@ -762,6 +814,7 @@ async function refreshDiagPanel(sensor) {
   switch (sensor) {
     case 'audio': populateAudioDiag(sensory, stt); break;
     case 'always-on': populateAlwaysOnDiag(sensory); break;
+    case 'tts': populateTtsDiag(sensory); break;
     case 'screen': populateScreenDiag(sensory); break;
     case 'camera': populateCameraDiag(sensory); break;
   }
@@ -852,6 +905,11 @@ async function runSensorTest(sensor) {
       return await api('POST', '/runtime/sensory/snapshot', { include_screen: true });
     case 'camera':
       return await api('POST', '/runtime/sensory/snapshot', {});
+    case 'tts':
+      return await api('POST', '/sensory/tts/speak', {
+        text: 'Hola, soy Axi. Esta es una prueba de voz local.',
+        playback: true,
+      });
     default:
       throw new Error('No hay prueba para este sensor');
   }
@@ -869,11 +927,17 @@ document.querySelectorAll('.diag-test-btn').forEach(btn => {
 
     try {
       const result = await runSensorTest(sensor);
+      if (sensor === 'tts') {
+        const degraded = result.tts?.degraded_modes || [];
+        if (degraded.includes('tts_disabled')) throw new Error('Habla esta desactivada');
+        if (degraded.includes('tts_unavailable')) throw new Error('TTS local no disponible');
+      }
       btn.textContent = 'OK';
       btn.classList.add('test-ok');
       if (resultEl) {
         if (result.snapshot?.transcript) resultEl.textContent = 'Texto: ' + result.snapshot.transcript;
         else if (result.snapshot?.screen_path) resultEl.textContent = 'Captura: ' + result.snapshot.screen_path;
+        else if (result.tts) resultEl.textContent = result.tts.playback_started ? 'Voz reproducida correctamente' : 'TTS disponible pero sin reproduccion';
         else resultEl.textContent = 'Prueba completada';
       }
       addFeedItem('&#9989;', `Prueba ${sensor}: OK`);
@@ -887,7 +951,12 @@ document.querySelectorAll('.diag-test-btn').forEach(btn => {
     } finally {
       btn.disabled = false;
       setTimeout(() => {
-        const labels = { audio: '\u25B6 Probar Oido', screen: '\uD83D\uDCF7 Capturar Pantalla', camera: '\uD83D\uDCF7 Capturar Camara' };
+        const labels = {
+          audio: '\u25B6 Probar Oido',
+          tts: '\uD83D\uDD08 Probar Habla',
+          screen: '\uD83D\uDCF7 Capturar Pantalla',
+          camera: '\uD83D\uDCF7 Capturar Camara',
+        };
         btn.textContent = labels[sensor] || 'Probar';
         btn.className = 'diag-test-btn';
       }, 4000);
@@ -909,12 +978,13 @@ async function toggleSensory(field, value, elId) {
     const body = {
       enabled: current.enabled !== false,
       audio_enabled: current.audio_enabled,
+      tts_enabled: current.tts_enabled,
       screen_enabled: current.screen_enabled,
       camera_enabled: current.camera_enabled,
     };
     body[field] = value;
     // If enabling any sensor, ensure the master enabled flag is on
-    if (value && field !== 'capture_interval_seconds') body.enabled = true;
+    if (value && field !== 'capture_interval_seconds' && field !== 'tts_enabled') body.enabled = true;
     await api('POST', '/runtime/sensory', body);
     
     // Refresh panel immediately if expanded to show state
@@ -930,6 +1000,7 @@ async function toggleSensory(field, value, elId) {
 }
 
 $('#toggle-audio').addEventListener('change', (e) => toggleSensory('audio_enabled', e.target.checked, 'toggle-audio'));
+$('#toggle-tts').addEventListener('change', (e) => toggleSensory('tts_enabled', e.target.checked, 'toggle-tts'));
 $('#toggle-screen').addEventListener('change', (e) => toggleSensory('screen_enabled', e.target.checked, 'toggle-screen'));
 $('#toggle-camera').addEventListener('change', (e) => toggleSensory('camera_enabled', e.target.checked, 'toggle-camera'));
 
@@ -952,9 +1023,10 @@ $('#toggle-widget').addEventListener('change', async (e) => {
 });
 
 $('#kill-switch').addEventListener('click', async () => {
-  if (!confirm('Desactivar TODOS los sentidos?')) return;
+  const killActive = $('#kill-switch')?.dataset.active === 'true';
+  if (!confirm(killActive ? 'Reactivar los sentidos con el estado anterior?' : 'Desactivar TODOS los sentidos?')) return;
   await api('POST', '/sensory/kill-switch', { actor: 'dashboard' });
-  addFeedItem('&#9888;', 'KILL SWITCH activado desde el dashboard');
+  addFeedItem('&#9888;', killActive ? 'Kill switch liberado desde el dashboard' : 'KILL SWITCH activado desde el dashboard');
 });
 
 $('#wake-word-save').addEventListener('click', async (e) => {

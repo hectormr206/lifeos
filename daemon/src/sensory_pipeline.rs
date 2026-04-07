@@ -7,6 +7,10 @@
 //! - GPU-aware routing and graceful degradation
 
 use crate::ai::{AiChatResponse, AiManager};
+use crate::audio_frontend::{
+    looks_like_voice, looks_like_voice_with_profile, preprocess_frame_i16le, AudioFilterState,
+    VoiceActivityProfile,
+};
 use crate::follow_along::FollowAlongManager;
 use crate::memory_plane::MemoryPlaneManager;
 use crate::overlay::{AxiState, OverlayManager};
@@ -14,20 +18,31 @@ use crate::screen_capture::ScreenCapture;
 use crate::telemetry::{MetricCategory, TelemetryManager};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Timelike, Utc};
-use image::{GenericImageView, Pixel};
+use image::{DynamicImage, GenericImageView, Pixel};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 
 const STATE_FILE: &str = "sensory_pipeline_state.json";
 const BENCHMARK_FILE: &str = "sensory_benchmark.json";
 const DEFAULT_SCREEN_INTERVAL_SECONDS: u64 = 10;
 const ALWAYS_ON_CAPTURE_SECONDS: u64 = 4;
 const DEFAULT_WAKE_WORD: &str = "axi";
+fn default_tts_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SttProfile {
+    HotwordProbe,
+    Command,
+}
+
 const MAX_RELEVANT_LINES: usize = 8;
 const MAX_MEMORY_BYTES: usize = 6 * 1024;
 const MIN_AUDIO_SIGNAL_BYTES: usize = 4096;
@@ -49,12 +64,42 @@ const UTTERANCE_PRE_SPEECH_TIMEOUT_SECS: f64 = 6.0;
 /// How long of silence after speech to consider the utterance complete (seconds).
 /// Set to 2.5 s to tolerate natural thinking pauses (~1-2 s) without cutting off.
 const UTTERANCE_SILENCE_AFTER_SPEECH_SECS: f64 = 2.5;
+const UTTERANCE_MEDIUM_END_SILENCE_SECS: f64 = 1.45;
+const UTTERANCE_FAST_END_SILENCE_SECS: f64 = 1.05;
+const UTTERANCE_MEDIUM_END_MIN_SPEECH_WINDOWS: usize = 4;
+const UTTERANCE_FAST_END_MIN_SPEECH_WINDOWS: usize = 5;
+const UTTERANCE_MEDIUM_END_MIN_STREAK_WINDOWS: usize = 3;
+const UTTERANCE_FAST_END_MIN_STREAK_WINDOWS: usize = 4;
+const UTTERANCE_PREROLL_SECS: f64 = 0.18;
+const UTTERANCE_POSTROLL_SECS: f64 = 0.22;
 /// Absolute maximum recording time to prevent infinite capture (seconds).
 const UTTERANCE_MAX_DURATION_SECS: f64 = 30.0;
 /// Size of each analysis window for streaming VAD (seconds).
 const UTTERANCE_WINDOW_SECS: f64 = 0.25;
 /// Sample rate for all audio capture.
 const AUDIO_SAMPLE_RATE: u32 = 16000;
+const AUDIO_BYTES_PER_SECOND: usize = AUDIO_SAMPLE_RATE as usize * 2;
+const BARGE_IN_CAPTURE_MILLIS: u64 = 650;
+const BARGE_IN_ECHO_SIMILARITY_THRESHOLD: f64 = 0.92;
+const BARGE_IN_ENVELOPE_FRAME_SAMPLES: usize = (AUDIO_SAMPLE_RATE as usize * 20) / 1000;
+const BARGE_IN_MIN_ENVELOPE_FRAMES: usize = 6;
+const STT_FAST_PATH_MAX_DURATION_MS: u64 = 5_500;
+const STT_HOTWORD_FAST_PATH_MAX_DURATION_MS: u64 = 4_300;
+const STT_FAST_BEAM_SIZE: &str = "3";
+const STT_FAST_BEST_OF: &str = "3";
+const STT_FAST_MAX_LEN: &str = "96";
+const STT_HOTWORD_BEAM_SIZE: &str = "2";
+const STT_HOTWORD_BEST_OF: &str = "2";
+const STT_HOTWORD_MAX_LEN: &str = "40";
+const STT_STREAM_STEP_MS: &str = "400";
+const STT_STREAM_LENGTH_MS: &str = "2800";
+const STT_STREAM_KEEP_MS: &str = "200";
+const STT_STREAM_MAX_TOKENS: &str = "24";
+const STT_STREAM_VAD_THRESHOLD: &str = "0.60";
+const STT_STREAM_FREQ_THRESHOLD: &str = "120";
+const STT_STREAM_TIMEOUT_MS: u64 = 8_500;
+const STT_STREAM_STABLE_MS: u64 = 1_250;
+const STT_STREAM_MIN_LISTEN_MS: u64 = 900;
 
 /// Read the VAD RMS threshold from environment, calibration cache, or default.
 ///
@@ -113,6 +158,15 @@ const OCR_SIMILARITY_SKIP_THRESHOLD: f32 = 0.92;
 const RELEVANT_SIMILARITY_SKIP_THRESHOLD: f32 = 0.60;
 const OCR_LENGTH_DELTA_TRIGGER: usize = 320;
 const TTS_CHUNK_MAX_CHARS: usize = 260;
+const CAMERA_CAPTURE_TIMEOUT_SECS: u64 = 3;
+const CAMERA_STALE_CAPTURE_SECS: u64 = 15;
+const CAMERA_CAPTURE_PREFERRED_SIZE: &str = "1280x720";
+const CAMERA_CAPTURE_FALLBACK_SIZE: &str = "640x480";
+const CAMERA_FRAME_DARK_THRESHOLD: f64 = 62.0;
+const CAMERA_FRAME_TARGET_BRIGHTNESS: f64 = 96.0;
+const CAMERA_FRAME_MAX_BRIGHTEN: i32 = 52;
+const CAMERA_FRAME_CONTRAST_BOOST: f32 = 20.0;
+const CAMERA_FRAME_VERY_DARK_CONTRAST_BOOST: f32 = 30.0;
 /// How long after a voice response to keep listening without requiring
 /// the wake word again (continuous conversation window).
 const CONTINUOUS_CONVERSATION_SECS: i64 = 30;
@@ -258,6 +312,8 @@ impl Default for GpuOffloadStatus {
 pub struct VoiceSessionRuntime {
     pub active: bool,
     pub always_on_active: bool,
+    #[serde(default = "default_tts_enabled")]
+    pub tts_enabled: bool,
     pub session_id: Option<String>,
     pub last_transcript: Option<String>,
     pub last_response: Option<String>,
@@ -283,6 +339,7 @@ impl Default for VoiceSessionRuntime {
         Self {
             active: false,
             always_on_active: false,
+            tts_enabled: true,
             session_id: None,
             last_transcript: None,
             last_response: None,
@@ -552,10 +609,22 @@ struct ScreenContextResult {
     multimodal_used: bool,
 }
 
+struct StreamingVoiceChatResult {
+    chat: AiChatResponse,
+    llm_duration_ms: u64,
+    spoken_prefix: Option<String>,
+    audio_path: Option<String>,
+    tts_engine: Option<String>,
+    playback_backend: Option<String>,
+    playback_started: bool,
+    interrupted: bool,
+}
+
 pub struct SensoryRuntimeSync<'a> {
     pub audio_enabled: bool,
     pub screen_enabled: bool,
     pub camera_enabled: bool,
+    pub tts_enabled: bool,
     pub kill_switch_active: bool,
     pub capture_interval_seconds: u64,
     pub always_on_active: bool,
@@ -569,6 +638,7 @@ pub struct AlwaysOnCycle<'a> {
     pub memory_plane: &'a MemoryPlaneManager,
     pub telemetry: &'a TelemetryManager,
     pub wake_word: &'a str,
+    pub hotword_triggered: bool,
     pub screen_enabled: bool,
     /// Optional reference to the wake word detector for auto-refinement.
     pub wake_word_detector: Option<&'a crate::wake_word::WakeWordDetector>,
@@ -665,6 +735,7 @@ impl SensoryPipelineManager {
         state.presence.camera_active = runtime.camera_enabled && !runtime.kill_switch_active;
         state.voice.always_on_active =
             runtime.always_on_active && runtime.audio_enabled && !runtime.kill_switch_active;
+        state.voice.tts_enabled = runtime.tts_enabled && !runtime.kill_switch_active;
         state.voice.wake_word = runtime
             .wake_word
             .map(str::trim)
@@ -826,7 +897,8 @@ impl SensoryPipelineManager {
         Ok(snapshot)
     }
 
-    /// Release the sensory kill switch — re-enable all senses.
+    /// Release the sensory kill switch. Sensor preferences are restored by the
+    /// runtime sync path, not by blindly enabling everything here.
     pub async fn release_kill_switch(
         &self,
         overlay: &OverlayManager,
@@ -834,21 +906,21 @@ impl SensoryPipelineManager {
         let mut state = self.state.write().await;
         state.kill_switch_active = false;
         state.leds = SensorLeds {
-            mic_active: true,
-            camera_active: true,
-            screen_active: true,
+            mic_active: false,
+            camera_active: false,
+            screen_active: false,
             kill_switch_active: false,
         };
-        state.voice.active = true;
-        state.voice.always_on_active = true;
-        state.presence.camera_active = true;
-        state.vision.enabled = true;
+        state.voice.active = false;
+        state.voice.always_on_active = false;
+        state.presence.camera_active = false;
+        state.vision.enabled = false;
         state.axi_state = AxiState::Idle;
         state.last_updated_at = Some(Utc::now());
         let snapshot = state.clone();
         drop(state);
         overlay
-            .set_sensor_indicators(true, true, true, false)
+            .set_sensor_indicators(false, false, false, false)
             .await?;
         overlay
             .set_axi_state(AxiState::Idle, Some("kill-switch-released"))
@@ -897,6 +969,19 @@ impl SensoryPipelineManager {
         let state = self.state.read().await.clone();
         if state.kill_switch_active {
             anyhow::bail!("sensory kill switch is active");
+        }
+        if request.playback && !state.voice.tts_enabled {
+            overlay
+                .set_axi_state(AxiState::Idle, Some("tts-disabled"))
+                .await?;
+            return Ok(TtsResult {
+                text: request.text,
+                audio_path: None,
+                tts_engine: None,
+                playback_backend: None,
+                playback_started: false,
+                degraded_modes: vec!["tts_disabled".to_string()],
+            });
         }
 
         overlay
@@ -1019,10 +1104,11 @@ impl SensoryPipelineManager {
             return Ok(None);
         }
 
-        let (transcript, _binary) = match transcribe_audio(&audio_path, None).await {
-            Ok(result) => result,
-            Err(_) => return Ok(None),
-        };
+        let (transcript, _binary) =
+            match transcribe_audio(&audio_path, None, SttProfile::HotwordProbe).await {
+                Ok(result) => result,
+                Err(_) => return Ok(None),
+            };
         let transcript = normalize_whitespace(&transcript);
         if transcript.is_empty() {
             return Ok(None);
@@ -1142,25 +1228,106 @@ impl SensoryPipelineManager {
 
         {
             let mut st = self.state.write().await;
-            st.voice.last_hotword_at = Some(Utc::now());
+            if cycle.hotword_triggered {
+                st.voice.last_hotword_at = Some(Utc::now());
+            }
             st.voice.wake_word = normalized_wake_word(cycle.wake_word);
             st.last_updated_at = Some(Utc::now());
         }
         self.save_state().await?;
 
-        cycle
-            .telemetry
-            .record_event(
-                MetricCategory::AiRuntime,
-                "wake_word_rustpotter_detected",
-                serde_json::json!({ "wake_word": cycle.wake_word }),
-                None,
-            )
-            .await
-            .ok();
+        if cycle.hotword_triggered {
+            cycle
+                .telemetry
+                .record_event(
+                    MetricCategory::AiRuntime,
+                    "wake_word_rustpotter_detected",
+                    serde_json::json!({ "wake_word": cycle.wake_word }),
+                    None,
+                )
+                .await
+                .ok();
 
-        // ── Auditory feedback: chime on rustpotter wake word detection ──
-        tokio::spawn(async { play_wake_word_chime().await });
+            // ── Auditory feedback: chime on rustpotter wake word detection ──
+            tokio::spawn(async { play_wake_word_chime().await });
+        }
+
+        if local_streaming_stt_available().await {
+            cycle
+                .overlay
+                .set_axi_state(AxiState::Listening, Some("stt-stream"))
+                .await?;
+            match transcribe_local_command_streaming(None).await {
+                Ok(Some((transcript, _binary))) => {
+                    let transcript = normalize_whitespace(&transcript);
+                    if !transcript.is_empty() {
+                        {
+                            let mut st = self.state.write().await;
+                            st.voice.last_listen_at = Some(Utc::now());
+                            st.voice.last_audio_path = None;
+                            st.voice.last_transcript = Some(transcript.clone());
+                            st.last_updated_at = Some(Utc::now());
+                        }
+                        self.save_state().await?;
+
+                        let hotword = normalized_wake_word(cycle.wake_word);
+                        let prompt = strip_wake_word(&transcript, &hotword)
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or(transcript);
+                        let include_screen =
+                            cycle.screen_enabled && should_include_screen_for_prompt(&prompt);
+                        let result = self
+                            .run_voice_loop(
+                                cycle.ai_manager,
+                                cycle.overlay,
+                                cycle.screen_capture,
+                                cycle.memory_plane,
+                                cycle.telemetry,
+                                VoiceLoopRequest {
+                                    audio_file: None,
+                                    prompt: Some(prompt),
+                                    include_screen,
+                                    screen_source: None,
+                                    language: Some("es".to_string()),
+                                    voice_model: None,
+                                    playback: true,
+                                },
+                            )
+                            .await?;
+                        return Ok(Some(result));
+                    }
+                }
+                Ok(None) => {
+                    if !cycle.hotword_triggered {
+                        return Ok(None);
+                    }
+                    let result = self
+                        .run_voice_loop(
+                            cycle.ai_manager,
+                            cycle.overlay,
+                            cycle.screen_capture,
+                            cycle.memory_plane,
+                            cycle.telemetry,
+                            VoiceLoopRequest {
+                                audio_file: None,
+                                prompt: Some(
+                                    "Estoy escuchando. Dime como puedo ayudarte.".to_string(),
+                                ),
+                                include_screen: false,
+                                screen_source: None,
+                                language: Some("es".to_string()),
+                                voice_model: None,
+                                playback: true,
+                            },
+                        )
+                        .await?;
+                    return Ok(Some(result));
+                }
+                Err(error) => {
+                    log::warn!("Streaming STT fallback to batch capture: {error}");
+                }
+            }
+        }
 
         // Capture command audio — listen until the user stops speaking.
         let always_on_source = {
@@ -1183,6 +1350,9 @@ impl SensoryPipelineManager {
 
         // Check if the captured audio actually contains voice
         if !audio_has_voice_activity(Path::new(&audio_path)).await? {
+            if !cycle.hotword_triggered {
+                return Ok(None);
+            }
             // User said "Axi" but didn't follow up — respond with a prompt
             let result = self
                 .run_voice_loop(
@@ -1206,10 +1376,11 @@ impl SensoryPipelineManager {
         }
 
         // Transcribe the command
-        let (transcript, _binary) = match transcribe_audio(&audio_path, None).await {
-            Ok(result) => result,
-            Err(_) => return Ok(None),
-        };
+        let (transcript, _binary) =
+            match transcribe_audio(&audio_path, None, SttProfile::Command).await {
+                Ok(result) => result,
+                Err(_) => return Ok(None),
+            };
         let transcript = normalize_whitespace(&transcript);
         if transcript.is_empty() {
             return Ok(None);
@@ -1273,26 +1444,27 @@ impl SensoryPipelineManager {
 
         let session_id = format!("voice-{}", uuid::Uuid::new_v4());
         let session_started = Instant::now();
-        let transcript =
-            if let Some(prompt) = request.prompt.as_deref().filter(|v| !v.trim().is_empty()) {
-                prompt.trim().to_string()
-            } else if let Some(audio_file) = request
-                .audio_file
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                overlay
-                    .set_axi_state(AxiState::Listening, Some("stt"))
-                    .await?;
-                overlay
-                    .set_processing_feedback(Some("listening"), None, None, Some(0.8))
-                    .await?;
-                let (text, _binary) = transcribe_audio(audio_file, None).await?;
-                text
-            } else {
-                anyhow::bail!("either prompt or audio_file is required for voice session");
-            };
+        let transcript = if let Some(prompt) =
+            request.prompt.as_deref().filter(|v| !v.trim().is_empty())
+        {
+            prompt.trim().to_string()
+        } else if let Some(audio_file) = request
+            .audio_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            overlay
+                .set_axi_state(AxiState::Listening, Some("stt"))
+                .await?;
+            overlay
+                .set_processing_feedback(Some("listening"), None, None, Some(0.8))
+                .await?;
+            let (text, _binary) = transcribe_audio(audio_file, None, SttProfile::Command).await?;
+            text
+        } else {
+            anyhow::bail!("either prompt or audio_file is required for voice session");
+        };
 
         if transcript.trim().is_empty() {
             anyhow::bail!("empty transcript produced by voice session");
@@ -1381,27 +1553,76 @@ impl SensoryPipelineManager {
                 ctx.relevant_text.join("\n")
             )
         });
+        let mut prefetched_prefix = None;
+        let mut prefetched_audio_path = None;
+        let mut prefetched_tts_engine = None;
+        let mut prefetched_playback_backend = None;
+        let mut prefetched_playback_started = false;
+        let mut prefetched_interrupted = false;
         let llm_started = Instant::now();
-        let chat = if let Some(ctx) = screen_context.as_ref() {
-            multimodal_chat_with_fallback(
-                ai_manager,
-                &transcript,
-                &ctx.screen_path,
-                system_context.as_deref(),
-            )
-            .await?
-        } else {
-            ai_manager
-                .chat(
-                    None,
-                    vec![
-                        ("system".to_string(), base_system_prompt),
-                        ("user".to_string(), transcript.clone()),
-                    ],
+        let (chat, llm_duration_ms) = if let Some(ctx) = screen_context.as_ref() {
+            (
+                multimodal_chat_with_fallback(
+                    ai_manager,
+                    &transcript,
+                    &ctx.screen_path,
+                    system_context.as_deref(),
                 )
-                .await?
+                .await?,
+                llm_started.elapsed().as_millis() as u64,
+            )
+        } else if request.playback && state.voice.tts_enabled {
+            match self
+                .stream_text_chat_with_prefetched_tts(
+                    ai_manager,
+                    overlay,
+                    &session_id,
+                    &transcript,
+                    &base_system_prompt,
+                    request.language.as_deref(),
+                    request.voice_model.as_deref(),
+                )
+                .await
+            {
+                Ok(streamed) => {
+                    prefetched_prefix = streamed.spoken_prefix;
+                    prefetched_audio_path = streamed.audio_path;
+                    prefetched_tts_engine = streamed.tts_engine;
+                    prefetched_playback_backend = streamed.playback_backend;
+                    prefetched_playback_started = streamed.playback_started;
+                    prefetched_interrupted = streamed.interrupted;
+                    (streamed.chat, streamed.llm_duration_ms)
+                }
+                Err(error) => {
+                    log::warn!("Streaming voice chat fallback to non-streaming: {error}");
+                    (
+                        ai_manager
+                            .chat(
+                                None,
+                                vec![
+                                    ("system".to_string(), base_system_prompt.clone()),
+                                    ("user".to_string(), transcript.clone()),
+                                ],
+                            )
+                            .await?,
+                        llm_started.elapsed().as_millis() as u64,
+                    )
+                }
+            }
+        } else {
+            (
+                ai_manager
+                    .chat(
+                        None,
+                        vec![
+                            ("system".to_string(), base_system_prompt.clone()),
+                            ("user".to_string(), transcript.clone()),
+                        ],
+                    )
+                    .await?,
+                llm_started.elapsed().as_millis() as u64,
+            )
         };
-        let llm_duration_ms = llm_started.elapsed().as_millis() as u64;
         let tokens_per_second = tokens_per_second(chat.tokens_used, llm_duration_ms);
         let mut response_text = sanitize_assistant_response(&chat.response);
 
@@ -1418,56 +1639,75 @@ impl SensoryPipelineManager {
             )
             .await?;
 
-        let mut audio_path = None;
-        let mut tts_engine = None;
-        let mut playback_backend = None;
-        let mut playback_started = false;
-        if request.playback {
-            overlay
-                .set_axi_state(AxiState::Speaking, Some("tts"))
-                .await?;
-            // Progressive TTS: synthesize + play sentence by sentence, with audio ducking.
-            match self
-                .synthesize_and_play_progressive(
-                    overlay,
-                    &session_id,
-                    &response_text,
-                    request.language.as_deref(),
-                    request.voice_model.as_deref(),
-                )
-                .await
-            {
-                Ok((path, engine, backend, played)) => {
-                    audio_path = path;
-                    tts_engine = engine;
-                    playback_backend = backend;
-                    playback_started = played;
-                }
-                Err(e) => {
-                    log::warn!("Progressive TTS failed, trying single-shot: {}", e);
-                    // Fallback to single-shot TTS if progressive fails.
-                    match synthesize_tts(
-                        &self.data_dir,
-                        &response_text,
+        let mut audio_path = prefetched_audio_path;
+        let mut tts_engine = prefetched_tts_engine;
+        let mut playback_backend = prefetched_playback_backend;
+        let mut playback_started = prefetched_playback_started;
+        if request.playback && state.voice.tts_enabled {
+            let playback_text = prefetched_prefix
+                .as_deref()
+                .map(|prefix| trim_streamed_prefix_from_response(&response_text, prefix))
+                .unwrap_or_else(|| response_text.clone());
+
+            if !prefetched_interrupted && !playback_text.trim().is_empty() {
+                overlay
+                    .set_axi_state(AxiState::Speaking, Some("tts"))
+                    .await?;
+                // Progressive TTS: synthesize + play sentence by sentence, with audio ducking.
+                match self
+                    .synthesize_and_play_progressive(
+                        overlay,
+                        &session_id,
+                        &playback_text,
                         request.language.as_deref(),
                         request.voice_model.as_deref(),
                     )
                     .await
-                    {
-                        Ok((path, engine)) => {
-                            duck_system_audio(true).await;
-                            tts_engine = Some(engine);
-                            audio_path = Some(path.clone());
-                            let playback = self
-                                .spawn_playback(overlay.clone(), session_id.clone(), &path)
-                                .await?;
-                            playback_backend = playback.0;
-                            playback_started = playback.1;
+                {
+                    Ok((path, engine, backend, played)) => {
+                        if audio_path.is_none() {
+                            audio_path = path;
                         }
-                        Err(_) => degraded.push("tts_unavailable".to_string()),
+                        if tts_engine.is_none() {
+                            tts_engine = engine;
+                        }
+                        if playback_backend.is_none() {
+                            playback_backend = backend;
+                        }
+                        playback_started |= played;
+                    }
+                    Err(e) => {
+                        log::warn!("Progressive TTS failed, trying single-shot: {}", e);
+                        // Fallback to single-shot TTS if progressive fails.
+                        match synthesize_tts(
+                            &self.data_dir,
+                            &playback_text,
+                            request.language.as_deref(),
+                            request.voice_model.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok((path, engine)) => {
+                                duck_system_audio(true).await;
+                                tts_engine = Some(engine);
+                                if audio_path.is_none() {
+                                    audio_path = Some(path.clone());
+                                }
+                                let playback = self
+                                    .spawn_playback(overlay.clone(), session_id.clone(), &path)
+                                    .await?;
+                                if playback_backend.is_none() {
+                                    playback_backend = playback.0;
+                                }
+                                playback_started |= playback.1;
+                            }
+                            Err(_) => degraded.push("tts_unavailable".to_string()),
+                        }
                     }
                 }
             }
+        } else if request.playback {
+            degraded.push("tts_disabled".to_string());
         }
 
         let latency_ms = session_started.elapsed().as_millis() as u64;
@@ -1554,6 +1794,112 @@ impl SensoryPipelineManager {
         })
     }
 
+    async fn stream_text_chat_with_prefetched_tts(
+        &self,
+        ai_manager: &AiManager,
+        overlay: &OverlayManager,
+        session_id: &str,
+        transcript: &str,
+        system_prompt: &str,
+        language: Option<&str>,
+        voice_model: Option<&str>,
+    ) -> Result<StreamingVoiceChatResult> {
+        let (partial_tx, mut partial_rx) = mpsc::unbounded_channel();
+        let ai = *ai_manager;
+        let system_prompt = system_prompt.to_string();
+        let transcript = transcript.to_string();
+        let mut chat_task = tokio::spawn(async move {
+            let started = Instant::now();
+            let chat = ai
+                .chat_stream(
+                    None,
+                    vec![
+                        ("system".to_string(), system_prompt),
+                        ("user".to_string(), transcript),
+                    ],
+                    partial_tx,
+                )
+                .await;
+            (chat, started.elapsed().as_millis() as u64)
+        });
+
+        let interrupt_before = self.state.read().await.voice.last_interrupt_at;
+        let mut spoken_prefix = None;
+        let mut audio_path = None;
+        let mut tts_engine = None;
+        let mut playback_backend = None;
+        let mut playback_started = false;
+        let mut attempted_prefix = false;
+
+        while !attempted_prefix {
+            tokio::select! {
+                chat_result = &mut chat_task => {
+                    let (chat, llm_duration_ms) = chat_result.context("streaming chat task join failed")?;
+                    return Ok(StreamingVoiceChatResult {
+                        chat: chat?,
+                        llm_duration_ms,
+                        spoken_prefix,
+                        audio_path,
+                        tts_engine,
+                        playback_backend,
+                        playback_started,
+                        interrupted: false,
+                    });
+                }
+                maybe_partial = partial_rx.recv() => {
+                    let Some(partial) = maybe_partial else {
+                        attempted_prefix = true;
+                        continue;
+                    };
+                    let Some(prefix) = extract_streaming_tts_prefix(&partial) else {
+                        continue;
+                    };
+
+                    attempted_prefix = true;
+                    overlay
+                        .set_axi_state(AxiState::Speaking, Some("tts_stream"))
+                        .await?;
+                    match self
+                        .synthesize_and_play_progressive(
+                            overlay,
+                            session_id,
+                            &prefix,
+                            language,
+                            voice_model,
+                        )
+                        .await
+                    {
+                        Ok((path, engine, backend, played)) => {
+                            if played {
+                                spoken_prefix = Some(prefix);
+                                audio_path = path;
+                                tts_engine = engine;
+                                playback_backend = backend;
+                                playback_started = true;
+                            }
+                        }
+                        Err(error) => {
+                            log::warn!("Streaming TTS prefix fallback to full response: {error}");
+                        }
+                    }
+                }
+            }
+        }
+
+        let (chat, llm_duration_ms) = chat_task.await.context("streaming chat task join failed")?;
+        let interrupt_after = self.state.read().await.voice.last_interrupt_at;
+        Ok(StreamingVoiceChatResult {
+            chat: chat?,
+            llm_duration_ms,
+            spoken_prefix,
+            audio_path,
+            tts_engine,
+            playback_backend,
+            playback_started,
+            interrupted: playback_started && interrupt_after != interrupt_before,
+        })
+    }
+
     pub async fn describe_screen(
         &self,
         ai_manager: &AiManager,
@@ -1618,8 +1964,9 @@ impl SensoryPipelineManager {
         let response_text = sanitize_assistant_response(&response.response);
 
         let mut degraded = degraded_modes(&state.capabilities, &state.gpu);
+        let speech_allowed = request.speak && state.voice.tts_enabled;
         let mut audio_path = None;
-        if request.speak {
+        if speech_allowed {
             match synthesize_tts(
                 &self.data_dir,
                 &response_text,
@@ -1640,7 +1987,10 @@ impl SensoryPipelineManager {
                 }
                 Err(_) => degraded.push("tts_unavailable".to_string()),
             }
+        } else if request.speak {
+            degraded.push("tts_disabled".to_string());
         }
+        let spoke = speech_allowed && audio_path.is_some();
 
         let latency_ms = started.elapsed().as_millis() as u64;
         {
@@ -1652,7 +2002,7 @@ impl SensoryPipelineManager {
             state.vision.last_query_latency_ms = Some(latency_ms);
             state.vision.last_multimodal_success = screen_context.multimodal_used;
             state.vision.last_updated_at = Some(Utc::now());
-            state.axi_state = if request.speak {
+            state.axi_state = if spoke {
                 AxiState::Speaking
             } else {
                 AxiState::Idle
@@ -1663,7 +2013,7 @@ impl SensoryPipelineManager {
         }
         self.save_state().await?;
         overlay.clear_processing_feedback().await?;
-        if !request.speak {
+        if !spoke {
             overlay
                 .set_axi_state(AxiState::Idle, Some("vision-ready"))
                 .await?;
@@ -1921,7 +2271,11 @@ impl SensoryPipelineManager {
                     "camera-heuristic",
                     metrics.frame_path,
                 ),
-                Err(_) => {
+                Err(error) => {
+                    log::warn!(
+                        "[camera] presence capture failed; falling back to activity: {}",
+                        error
+                    );
                     let (p, f, s) = presence_from_activity(follow_along).await;
                     (p, f, s, None)
                 }
@@ -2451,21 +2805,39 @@ impl SensoryPipelineManager {
                 let st = self.state.read().await;
                 st.capabilities.always_on_source.clone()
             };
+            let barge_in_playback_audio = current_audio.clone();
             let monitor_handle = tokio::spawn(async move {
                 // Wait a short moment before starting to monitor, so the
                 // playback audio doesn't feed back into the microphone.
-                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                while let Ok(path) = capture_audio_snippet(
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                while let Ok(path) = capture_audio_snippet_ms(
                     &barge_in_data_dir,
-                    1, // 1-second snippet
+                    BARGE_IN_CAPTURE_MILLIS,
                     barge_in_source.as_deref(),
                 )
                 .await
                 {
-                    if audio_has_voice_activity(Path::new(&path))
-                        .await
-                        .unwrap_or(false)
+                    if audio_has_voice_activity_with_profile(
+                        Path::new(&path),
+                        VoiceActivityProfile::BargeIn,
+                    )
+                    .await
+                    .unwrap_or(false)
                     {
+                        let echo_similarity = playback_echo_similarity(
+                            Path::new(&path),
+                            Path::new(&barge_in_playback_audio),
+                        )
+                        .await
+                        .unwrap_or(0.0);
+                        if echo_similarity >= BARGE_IN_ECHO_SIMILARITY_THRESHOLD {
+                            log::debug!(
+                                "Ignoring probable TTS echo during barge-in detection (similarity={:.3})",
+                                echo_similarity
+                            );
+                            tokio::fs::remove_file(&path).await.ok();
+                            continue;
+                        }
                         log::info!("Barge-in detected during TTS playback");
                         barge_in_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                         // Kill the playback process.
@@ -2559,13 +2931,7 @@ impl SensoryPipelineManager {
             );
             state.kill_switch_active = false;
             state.leds.kill_switch_active = false;
-            state.leds.mic_active = true;
-            state.leds.camera_active = true;
-            state.leds.screen_active = true;
-            state.voice.active = true;
-            state.voice.always_on_active = true;
-            state.presence.camera_active = true;
-            state.vision.enabled = true;
+            state.voice.active = false;
         }
 
         *self.state.write().await = state;
@@ -2847,29 +3213,31 @@ fn degraded_modes(capabilities: &SensoryCapabilities, gpu: &GpuOffloadStatus) ->
     dedupe_strings(degraded)
 }
 
-async fn transcribe_audio(file: &str, model: Option<&str>) -> Result<(String, String)> {
+async fn transcribe_audio(
+    file: &str,
+    model: Option<&str>,
+    profile: SttProfile,
+) -> Result<(String, String)> {
     let binary = resolve_binary("LIFEOS_STT_BIN", &["whisper-cli", "whisper", "whisper-cpp"])
         .await
         .ok_or_else(|| anyhow::anyhow!("no whisper.cpp binary found"))?;
     let resolved_model = resolve_stt_model(model).await;
 
     let mut cmd = Command::new(&binary);
-    if let Some(model) = resolved_model {
-        cmd.arg("-m").arg(model);
-    }
-    // Auto-detect language from system locale for better wake word recognition.
-    let lang = std::env::var("LIFEOS_STT_LANG").unwrap_or_else(|_| {
-        std::env::var("LANG")
-            .unwrap_or_default()
-            .split('_')
-            .next()
-            .unwrap_or("es")
-            .to_string()
-    });
-    if !lang.is_empty() && lang != "C" && lang != "POSIX" {
-        cmd.args(["-l", &lang]);
-    }
-    cmd.args(["-f", file]);
+    let lang = resolve_stt_language();
+    let estimated_duration_ms = estimate_pcm_wav_duration_ms(file);
+    let stt_args = build_interactive_stt_args(
+        file,
+        resolved_model.as_deref(),
+        &lang,
+        estimated_duration_ms,
+        profile,
+    );
+    let fast_path = should_use_fast_stt_profile(estimated_duration_ms, profile);
+    log::debug!(
+        "[stt] profile={profile:?} duration_ms={estimated_duration_ms:?} fast_path={fast_path}"
+    );
+    cmd.args(&stt_args);
     let output = cmd
         .output()
         .await
@@ -2886,6 +3254,357 @@ async fn transcribe_audio(file: &str, model: Option<&str>) -> Result<(String, St
         text = String::from_utf8_lossy(&output.stderr).trim().to_string();
     }
     Ok((text, binary))
+}
+
+fn resolve_stt_language() -> String {
+    std::env::var("LIFEOS_STT_LANG").unwrap_or_else(|_| {
+        std::env::var("LANG")
+            .unwrap_or_default()
+            .split('_')
+            .next()
+            .unwrap_or("es")
+            .to_string()
+    })
+}
+
+fn build_interactive_stt_args(
+    file: &str,
+    model: Option<&str>,
+    lang: &str,
+    estimated_duration_ms: Option<u64>,
+    profile: SttProfile,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(model) = model {
+        args.push("-m".to_string());
+        args.push(model.to_string());
+    }
+
+    let normalized_lang = lang.trim();
+    if !normalized_lang.is_empty() && normalized_lang != "C" && normalized_lang != "POSIX" {
+        args.push("-l".to_string());
+        args.push(normalized_lang.to_string());
+    }
+
+    args.push("-nt".to_string());
+    args.push("-np".to_string());
+    args.push("-sns".to_string());
+    args.push("-mc".to_string());
+    args.push("0".to_string());
+
+    let threads = default_stt_thread_count();
+    args.push("-t".to_string());
+    args.push(threads.to_string());
+
+    if should_use_fast_stt_profile(estimated_duration_ms, profile) {
+        let (beam_size, best_of, max_len) = match profile {
+            SttProfile::HotwordProbe => (
+                STT_HOTWORD_BEAM_SIZE,
+                STT_HOTWORD_BEST_OF,
+                STT_HOTWORD_MAX_LEN,
+            ),
+            SttProfile::Command => (STT_FAST_BEAM_SIZE, STT_FAST_BEST_OF, STT_FAST_MAX_LEN),
+        };
+        args.push("-bs".to_string());
+        args.push(beam_size.to_string());
+        args.push("-bo".to_string());
+        args.push(best_of.to_string());
+        args.push("-ml".to_string());
+        args.push(max_len.to_string());
+        args.push("-sow".to_string());
+    }
+
+    if let Some(prompt) = interactive_stt_prompt(profile) {
+        args.push("--prompt".to_string());
+        args.push(prompt);
+    }
+
+    args.push("-f".to_string());
+    args.push(file.to_string());
+    args
+}
+
+fn default_stt_thread_count() -> usize {
+    if let Some(value) = std::env::var("LIFEOS_STT_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+    {
+        return value;
+    }
+
+    std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get().clamp(4, 6))
+        .unwrap_or(4)
+}
+
+fn interactive_stt_prompt(profile: SttProfile) -> Option<String> {
+    let env_key = match profile {
+        SttProfile::HotwordProbe => "LIFEOS_STT_HOTWORD_PROMPT",
+        SttProfile::Command => "LIFEOS_STT_PROMPT",
+    };
+    if let Ok(value) = std::env::var(env_key) {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        return Some(trimmed.to_string());
+    }
+
+    match profile {
+        SttProfile::HotwordProbe => Some(
+            "Axi. Axi, ayudame. Axi, dime la hora. Axi, abre la terminal. Oxi. Ahsi."
+                .to_string(),
+        ),
+        SttProfile::Command => Some(
+            "Axi, LifeOS, abre, cierra, responde, reproduce, apaga, enciende, pantalla, camara, microfono, Telegram."
+                .to_string(),
+        ),
+    }
+}
+
+fn should_use_fast_stt_profile(estimated_duration_ms: Option<u64>, profile: SttProfile) -> bool {
+    let max_duration_ms = match profile {
+        SttProfile::HotwordProbe => STT_HOTWORD_FAST_PATH_MAX_DURATION_MS,
+        SttProfile::Command => STT_FAST_PATH_MAX_DURATION_MS,
+    };
+    estimated_duration_ms
+        .map(|duration_ms| duration_ms <= max_duration_ms)
+        .unwrap_or(false)
+}
+
+fn estimate_pcm_wav_duration_ms(file: &str) -> Option<u64> {
+    let path = Path::new(file);
+    if !path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+    {
+        return None;
+    }
+
+    let metadata = std::fs::metadata(path).ok()?;
+    let total_bytes = usize::try_from(metadata.len()).ok()?;
+    let pcm_bytes = total_bytes.checked_sub(44)?;
+    if pcm_bytes == 0 {
+        return Some(0);
+    }
+
+    Some(((pcm_bytes as f64 / AUDIO_BYTES_PER_SECOND as f64) * 1000.0).round() as u64)
+}
+
+async fn local_streaming_stt_available() -> bool {
+    if let Ok(value) = std::env::var("LIFEOS_STT_STREAMING") {
+        let normalized = value.trim().to_lowercase();
+        if matches!(normalized.as_str(), "0" | "false" | "off" | "no") {
+            return false;
+        }
+    }
+
+    resolve_binary("LIFEOS_STT_STREAM_BIN", &["whisper-stream"])
+        .await
+        .is_some()
+}
+
+async fn resolve_streaming_stt_model(override_model: Option<&str>) -> Option<String> {
+    if let Some(model) = override_model.and_then(resolve_existing_stt_model) {
+        return Some(model);
+    }
+
+    if let Ok(model) = std::env::var("LIFEOS_STT_STREAM_MODEL") {
+        if let Some(model) = resolve_existing_stt_model(&model) {
+            return Some(model);
+        }
+    }
+
+    [
+        "/var/lib/lifeos/models/whisper/ggml-tiny.bin",
+        "/usr/share/lifeos/models/whisper/ggml-tiny.bin",
+        "/var/lib/lifeos/models/whisper/ggml-base.bin",
+        "/usr/share/lifeos/models/whisper/ggml-base.bin",
+        "/var/lib/lifeos/models/whisper/ggml-base.en.bin",
+        "/usr/share/lifeos/models/whisper/ggml-base.en.bin",
+        "/var/lib/lifeos/models/whisper/ggml-small.bin",
+        "/usr/share/lifeos/models/whisper/ggml-small.bin",
+    ]
+    .iter()
+    .find(|candidate| Path::new(candidate).exists())
+    .map(|candidate| candidate.to_string())
+}
+
+fn build_whisper_stream_args(model: Option<&str>, lang: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(model) = model {
+        args.push("-m".to_string());
+        args.push(model.to_string());
+    }
+
+    let normalized_lang = lang.trim();
+    if !normalized_lang.is_empty() && normalized_lang != "C" && normalized_lang != "POSIX" {
+        args.push("-l".to_string());
+        args.push(normalized_lang.to_string());
+    }
+
+    let threads = default_stt_thread_count();
+    args.push("-t".to_string());
+    args.push(threads.to_string());
+    args.push("--step".to_string());
+    args.push(STT_STREAM_STEP_MS.to_string());
+    args.push("--length".to_string());
+    args.push(STT_STREAM_LENGTH_MS.to_string());
+    args.push("--keep".to_string());
+    args.push(STT_STREAM_KEEP_MS.to_string());
+    args.push("-mt".to_string());
+    args.push(STT_STREAM_MAX_TOKENS.to_string());
+    args.push("-ac".to_string());
+    args.push("0".to_string());
+    args.push("-vth".to_string());
+    args.push(STT_STREAM_VAD_THRESHOLD.to_string());
+    args.push("-fth".to_string());
+    args.push(STT_STREAM_FREQ_THRESHOLD.to_string());
+    args.push("-kc".to_string());
+    args
+}
+
+fn strip_ansi_csi_sequences(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            if matches!(chars.peek(), Some('[')) {
+                let _ = chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        out.push(ch);
+    }
+
+    out
+}
+
+fn extract_latest_whisper_stream_text(raw: &str) -> Option<String> {
+    let sanitized = strip_ansi_csi_sequences(raw);
+    let mut latest = None;
+
+    for line in sanitized.lines() {
+        let visible = line.rsplit('\r').next().unwrap_or(line);
+        let normalized = normalize_whitespace(visible.trim());
+        if normalized.is_empty()
+            || normalized == "[Start speaking]"
+            || normalized.starts_with("### Transcription")
+        {
+            continue;
+        }
+        latest = Some(clean_transcript(&normalized));
+    }
+
+    latest.filter(|text| !text.trim().is_empty())
+}
+
+async fn transcribe_local_command_streaming(
+    model: Option<&str>,
+) -> Result<Option<(String, String)>> {
+    let binary = resolve_binary("LIFEOS_STT_STREAM_BIN", &["whisper-stream"])
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no whisper-stream binary found"))?;
+    let resolved_model = resolve_streaming_stt_model(model).await;
+    let lang = resolve_stt_language();
+
+    let mut cmd = Command::new(&binary);
+    cmd.args(build_whisper_stream_args(resolved_model.as_deref(), &lang));
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("Failed to execute {}", binary))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .context("failed to take whisper-stream stdout")?;
+    let stderr = child.stderr.take();
+    let stderr_task = tokio::spawn(async move {
+        let mut stderr_text = String::new();
+        if let Some(mut stderr) = stderr {
+            let mut buf = Vec::new();
+            let _ = stderr.read_to_end(&mut buf).await;
+            stderr_text = String::from_utf8_lossy(&buf).to_string();
+        }
+        stderr_text
+    });
+
+    let started = Instant::now();
+    let mut raw_output = String::new();
+    let mut latest_text = None;
+    let mut last_change_at = None;
+    let mut buf = [0u8; 2048];
+
+    loop {
+        let read_result =
+            tokio::time::timeout(std::time::Duration::from_millis(150), stdout.read(&mut buf))
+                .await;
+
+        match read_result {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => {
+                raw_output.push_str(&String::from_utf8_lossy(&buf[..n]));
+                if let Some(candidate) = extract_latest_whisper_stream_text(&raw_output) {
+                    let changed = latest_text
+                        .as_deref()
+                        .map(|current| current != candidate)
+                        .unwrap_or(true);
+                    if changed {
+                        latest_text = Some(candidate);
+                        last_change_at = Some(Instant::now());
+                    }
+                }
+            }
+            Ok(Err(err)) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                let stderr_text = stderr_task.await.unwrap_or_default();
+                let stderr_snippet: String = stderr_text.trim().chars().take(240).collect();
+                anyhow::bail!(
+                    "streaming stt read failed: {err}; stderr={}",
+                    stderr_snippet
+                );
+            }
+            Err(_) => {}
+        }
+
+        if started.elapsed().as_millis() as u64 >= STT_STREAM_TIMEOUT_MS {
+            break;
+        }
+
+        if let Some(last_change_at) = last_change_at {
+            let stable_for_ms = last_change_at.elapsed().as_millis() as u64;
+            let listened_for_ms = started.elapsed().as_millis() as u64;
+            if latest_text.is_some()
+                && listened_for_ms >= STT_STREAM_MIN_LISTEN_MS
+                && stable_for_ms >= STT_STREAM_STABLE_MS
+            {
+                break;
+            }
+        }
+    }
+
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+    let stderr_text = stderr_task.await.unwrap_or_default();
+
+    if latest_text.is_none() && !stderr_text.trim().is_empty() {
+        let stderr_snippet: String = stderr_text.trim().chars().take(240).collect();
+        log::debug!("whisper-stream stderr: {}", stderr_snippet);
+    }
+
+    Ok(latest_text.map(|text| (text, binary)))
 }
 
 async fn extract_ocr(source_path: &str, language: Option<&str>) -> Result<String> {
@@ -3364,6 +4083,14 @@ async fn capture_audio_snippet(
     duration_seconds: u64,
     source: Option<&str>,
 ) -> Result<String> {
+    capture_audio_snippet_ms(data_dir, duration_seconds.saturating_mul(1000), source).await
+}
+
+async fn capture_audio_snippet_ms(
+    data_dir: &Path,
+    duration_millis: u64,
+    source: Option<&str>,
+) -> Result<String> {
     let binary = resolve_binary(
         "LIFEOS_AUDIO_CAPTURE_BIN",
         &["ffmpeg", "arecord", "pw-record", "parecord"],
@@ -3382,6 +4109,7 @@ async fn capture_audio_snippet(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(binary.as_str());
+    let duration_arg = format_capture_duration_secs(duration_millis);
 
     let mut cmd = match program {
         "ffmpeg" => {
@@ -3413,7 +4141,7 @@ async fn capture_audio_snippet(
                 "-i",
                 input_source,
                 "-t",
-                &duration_seconds.to_string(),
+                &duration_arg,
                 "-af",
                 &af_filter,
                 "-ac",
@@ -3429,6 +4157,7 @@ async fn capture_audio_snippet(
         }
         "arecord" => {
             let mut cmd = Command::new(&binary);
+            let duration_seconds = duration_millis.div_ceil(1000).max(1);
             cmd.args([
                 "-q",
                 "-d",
@@ -3451,7 +4180,7 @@ async fn capture_audio_snippet(
                 .await
                 .ok_or_else(|| anyhow::anyhow!("timeout utility is required for {}", program))?;
             let mut cmd = Command::new(timeout);
-            cmd.arg(format!("{}s", duration_seconds)).arg(&binary);
+            cmd.arg(format!("{duration_arg}s")).arg(&binary);
             if program == "pw-record" {
                 if let Some(src) = source {
                     cmd.args(["--target", src]);
@@ -3491,6 +4220,190 @@ async fn capture_audio_snippet(
         .await
         .ok();
     Ok(output_path)
+}
+
+fn format_capture_duration_secs(duration_millis: u64) -> String {
+    let secs = (duration_millis.max(100) as f64) / 1000.0;
+    let mut formatted = format!("{secs:.3}");
+    while formatted.contains('.') && formatted.ends_with('0') {
+        formatted.pop();
+    }
+    if formatted.ends_with('.') {
+        formatted.pop();
+    }
+    formatted
+}
+
+async fn playback_echo_similarity(captured_path: &Path, playback_path: &Path) -> Result<f64> {
+    let captured = tokio::fs::read(captured_path)
+        .await
+        .with_context(|| format!("Failed to read captured audio {}", captured_path.display()))?;
+    let playback = tokio::fs::read(playback_path)
+        .await
+        .with_context(|| format!("Failed to read playback audio {}", playback_path.display()))?;
+
+    let captured_env = envelope_from_audio_bytes(&captured);
+    let playback_env = envelope_from_audio_bytes(&playback);
+    Ok(max_envelope_similarity(&captured_env, &playback_env))
+}
+
+fn envelope_from_audio_bytes(bytes: &[u8]) -> Vec<f64> {
+    let pcm = if bytes.starts_with(b"RIFF") && bytes.len() > 44 {
+        &bytes[44..]
+    } else {
+        bytes
+    };
+    if pcm.len() < 2 {
+        return Vec::new();
+    }
+
+    let samples: Vec<i16> = pcm
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect();
+    rms_envelope(&samples, BARGE_IN_ENVELOPE_FRAME_SAMPLES.max(1))
+}
+
+fn rms_envelope(samples: &[i16], frame_samples: usize) -> Vec<f64> {
+    if samples.is_empty() || frame_samples == 0 {
+        return Vec::new();
+    }
+
+    let mut envelope = Vec::new();
+    for chunk in samples.chunks(frame_samples) {
+        if chunk.is_empty() {
+            continue;
+        }
+        let sum_sq: f64 = chunk
+            .iter()
+            .map(|sample| {
+                let value = *sample as f64;
+                value * value
+            })
+            .sum();
+        envelope.push((sum_sq / chunk.len() as f64).sqrt());
+    }
+
+    trim_quiet_envelope(&envelope)
+}
+
+fn trim_quiet_envelope(envelope: &[f64]) -> Vec<f64> {
+    if envelope.is_empty() {
+        return Vec::new();
+    }
+
+    let peak = envelope.iter().copied().fold(0.0, f64::max);
+    if peak <= 0.0 {
+        return Vec::new();
+    }
+    let threshold = peak * 0.18;
+    let start = envelope.iter().position(|value| *value >= threshold);
+    let end = envelope.iter().rposition(|value| *value >= threshold);
+
+    match (start, end) {
+        (Some(start_idx), Some(end_idx)) if end_idx >= start_idx => {
+            envelope[start_idx..=end_idx].to_vec()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn max_envelope_similarity(snippet: &[f64], playback: &[f64]) -> f64 {
+    if snippet.len() < BARGE_IN_MIN_ENVELOPE_FRAMES || playback.len() < BARGE_IN_MIN_ENVELOPE_FRAMES
+    {
+        return 0.0;
+    }
+
+    if snippet.len() >= playback.len() {
+        return cosine_similarity(&snippet[..playback.len()], playback);
+    }
+
+    let mut best = 0.0;
+    for offset in 0..=(playback.len() - snippet.len()) {
+        let similarity = cosine_similarity(snippet, &playback[offset..offset + snippet.len()]);
+        if similarity > best {
+            best = similarity;
+        }
+    }
+    best
+}
+
+fn post_speech_silence_target(
+    field_mode: MicFieldMode,
+    speech_windows: usize,
+    max_voice_streak: usize,
+    speech_bursts: usize,
+) -> f64 {
+    let mut target = if speech_bursts <= 1
+        && speech_windows >= UTTERANCE_FAST_END_MIN_SPEECH_WINDOWS
+        && max_voice_streak >= UTTERANCE_FAST_END_MIN_STREAK_WINDOWS
+    {
+        UTTERANCE_FAST_END_SILENCE_SECS
+    } else if speech_bursts <= 2
+        && speech_windows >= UTTERANCE_MEDIUM_END_MIN_SPEECH_WINDOWS
+        && max_voice_streak >= UTTERANCE_MEDIUM_END_MIN_STREAK_WINDOWS
+    {
+        UTTERANCE_MEDIUM_END_SILENCE_SECS
+    } else {
+        UTTERANCE_SILENCE_AFTER_SPEECH_SECS
+    };
+
+    if matches!(field_mode, MicFieldMode::FarField) {
+        target += 0.15;
+    }
+
+    target.clamp(0.9, UTTERANCE_SILENCE_AFTER_SPEECH_SECS)
+}
+
+fn trim_utterance_pcm_to_speech(
+    pcm: &[u8],
+    speech_start_offset: Option<usize>,
+    last_speech_end_offset: Option<usize>,
+) -> Vec<u8> {
+    let Some(speech_start_offset) = speech_start_offset else {
+        return pcm.to_vec();
+    };
+    let Some(last_speech_end_offset) = last_speech_end_offset else {
+        return pcm.to_vec();
+    };
+    if pcm.is_empty() || last_speech_end_offset <= speech_start_offset {
+        return pcm.to_vec();
+    }
+
+    let preroll_bytes = ((AUDIO_SAMPLE_RATE as f64 * 2.0 * UTTERANCE_PREROLL_SECS) as usize) & !1;
+    let postroll_bytes = ((AUDIO_SAMPLE_RATE as f64 * 2.0 * UTTERANCE_POSTROLL_SECS) as usize) & !1;
+    let start = speech_start_offset
+        .saturating_sub(preroll_bytes)
+        .min(pcm.len());
+    let end = last_speech_end_offset
+        .saturating_add(postroll_bytes)
+        .min(pcm.len());
+
+    if end <= start {
+        pcm.to_vec()
+    } else {
+        pcm[start..end].to_vec()
+    }
+}
+
+fn cosine_similarity(left: &[f64], right: &[f64]) -> f64 {
+    if left.is_empty() || left.len() != right.len() {
+        return 0.0;
+    }
+
+    let mut dot = 0.0;
+    let mut left_norm = 0.0;
+    let mut right_norm = 0.0;
+    for i in 0..left.len() {
+        dot += left[i] * right[i];
+        left_norm += left[i] * left[i];
+        right_norm += right[i] * right[i];
+    }
+    if left_norm <= f64::EPSILON || right_norm <= f64::EPSILON {
+        return 0.0;
+    }
+
+    dot / (left_norm.sqrt() * right_norm.sqrt())
 }
 
 async fn cleanup_dir_by_count(dir: &Path, max_files: usize, label: &str) -> Result<u64> {
@@ -3551,6 +4464,13 @@ async fn cleanup_dir_by_count(dir: &Path, max_files: usize, label: &str) -> Resu
 }
 
 async fn audio_has_voice_activity(path: &Path) -> Result<bool> {
+    audio_has_voice_activity_with_profile(path, VoiceActivityProfile::Normal).await
+}
+
+async fn audio_has_voice_activity_with_profile(
+    path: &Path,
+    profile: VoiceActivityProfile,
+) -> Result<bool> {
     let bytes = tokio::fs::read(path)
         .await
         .with_context(|| format!("Failed to read captured audio {}", path.display()))?;
@@ -3564,20 +4484,10 @@ async fn audio_has_voice_activity(path: &Path) -> Result<bool> {
         &bytes[..]
     };
 
-    let mut samples = 0usize;
-    let mut squared = 0f64;
-    for chunk in pcm.chunks_exact(2) {
-        let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f64;
-        squared += sample * sample;
-        samples += 1;
-    }
-
-    if samples == 0 {
+    if pcm.len() < 2 {
         return Ok(false);
     }
 
-    let rms = (squared / samples as f64).sqrt();
-    // Apply field-mode adjustment to the threshold
     let field_mode = {
         let home = std::env::var("HOME").ok().map(PathBuf::from);
         home.and_then(|h| {
@@ -3588,8 +4498,57 @@ async fn audio_has_voice_activity(path: &Path) -> Result<bool> {
         })
         .unwrap_or(MicFieldMode::FarField)
     };
-    let threshold = apply_field_mode_threshold(vad_rms_threshold(), field_mode);
-    Ok(rms >= threshold)
+    let env_gain_db: f64 = std::env::var("LIFEOS_MIC_GAIN_DB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12.0);
+    let gain_db = env_gain_db + field_mode_extra_gain(field_mode);
+    let mut adaptive_threshold = apply_field_mode_threshold(vad_rms_threshold(), field_mode);
+    let window_bytes = (AUDIO_SAMPLE_RATE as f64 * 2.0 * UTTERANCE_WINDOW_SECS) as usize;
+    let mut filter_state = AudioFilterState::default();
+    let mut noise_floor_sum = 0f64;
+    let mut noise_floor_count = 0usize;
+    let mut noise_floor = None;
+    let mut speech_windows = 0usize;
+    let mut voice_streak = 0usize;
+
+    for frame in pcm.chunks(window_bytes.max(2)) {
+        let processed = preprocess_frame_i16le(
+            frame,
+            AUDIO_SAMPLE_RATE,
+            gain_db,
+            noise_floor,
+            &mut filter_state,
+        );
+        if processed.pcm_le.is_empty() {
+            continue;
+        }
+
+        if noise_floor_count < NOISE_FLOOR_WINDOWS {
+            noise_floor_sum += processed.stats.rms;
+            noise_floor_count += 1;
+            if noise_floor_count == NOISE_FLOOR_WINDOWS {
+                let avg_noise = noise_floor_sum / noise_floor_count as f64;
+                noise_floor = Some(avg_noise);
+                adaptive_threshold = (avg_noise * ADAPTIVE_NOISE_MULTIPLIER)
+                    .max(ADAPTIVE_RMS_FLOOR)
+                    .min(apply_field_mode_threshold(vad_rms_threshold(), field_mode));
+            }
+            continue;
+        }
+
+        if looks_like_voice_with_profile(&processed.stats, adaptive_threshold, profile) {
+            speech_windows += 1;
+            voice_streak += 1;
+            if voice_streak >= 2 || speech_windows >= 3 {
+                return Ok(true);
+            }
+        } else {
+            voice_streak = 0;
+        }
+    }
+
+    Ok(speech_windows >= 1 && pcm.len() <= (window_bytes * 2))
 }
 
 /// Capture audio from the microphone until the user stops speaking.
@@ -3668,6 +4627,13 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
     let start = Instant::now();
     let mut speech_detected = false;
     let mut last_speech_at = Instant::now();
+    let mut speech_windows = 0usize;
+    let mut current_voice_streak = 0usize;
+    let mut max_voice_streak = 0usize;
+    let mut speech_bursts = 0usize;
+    let mut in_speech = false;
+    let mut speech_start_offset = None;
+    let mut last_speech_end_offset = None;
 
     // --- Detect mic field mode and apply threshold/gain adjustments ---
     // This is a sync context wrapper — the actual detection happened or will
@@ -3690,7 +4656,9 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
     let mut noise_floor_sum = 0f64;
     let mut noise_floor_count = 0usize;
     let mut adaptive_threshold = base_threshold;
+    let mut adaptive_noise_floor = None;
     let mut noise_floor_measured = false;
+    let mut filter_state = AudioFilterState::default();
 
     loop {
         let elapsed = start.elapsed().as_secs_f64();
@@ -3712,35 +4680,21 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
             Ok(Err(_)) | Err(_) => break, // EOF or timeout
         }
 
-        // Apply software gain before storing/analyzing. Default 12 dB for quiet speech,
-        // plus field-mode extra gain for far-field (built-in mic) scenarios.
         let env_gain_db: f64 = std::env::var("LIFEOS_MIC_GAIN_DB")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(12.0);
         let gain_db = env_gain_db + field_mode_extra_gain(field_mode);
-        let gain_linear = 10f64.powf(gain_db / 20.0);
-
-        // Amplify samples in-place and store the boosted PCM.
-        let mut amplified = Vec::with_capacity(buf.len());
-        let mut sum_sq = 0f64;
-        let mut count = 0usize;
-        for chunk in buf.chunks_exact(2) {
-            let raw = i16::from_le_bytes([chunk[0], chunk[1]]) as f64;
-            let boosted = (raw * gain_linear).clamp(-32768.0, 32767.0);
-            let sample_i16 = boosted as i16;
-            amplified.extend_from_slice(&sample_i16.to_le_bytes());
-            sum_sq += boosted * boosted;
-            count += 1;
-        }
-        all_pcm.extend_from_slice(&amplified);
-
-        // Compute RMS for this window (on the amplified signal).
-        let rms = if count > 0 {
-            (sum_sq / count as f64).sqrt()
-        } else {
-            0.0
-        };
+        let processed = preprocess_frame_i16le(
+            &buf,
+            AUDIO_SAMPLE_RATE,
+            gain_db,
+            adaptive_noise_floor,
+            &mut filter_state,
+        );
+        let frame_start_offset = all_pcm.len();
+        all_pcm.extend_from_slice(&processed.pcm_le);
+        let rms = processed.stats.rms;
 
         // Adaptive noise floor: use the first N windows to measure ambient noise,
         // then set the threshold to noise_floor * multiplier (min ADAPTIVE_RMS_FLOOR).
@@ -3749,6 +4703,7 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
             noise_floor_count += 1;
             if noise_floor_count >= NOISE_FLOOR_WINDOWS {
                 let avg_noise = noise_floor_sum / noise_floor_count as f64;
+                adaptive_noise_floor = Some(avg_noise);
                 adaptive_threshold = (avg_noise * ADAPTIVE_NOISE_MULTIPLIER)
                     .max(ADAPTIVE_RMS_FLOOR)
                     .min(base_threshold); // never worse than the configured max
@@ -3760,11 +4715,25 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
             continue; // don't count noise floor windows as pre-speech timeout
         }
 
-        let is_speech = rms >= adaptive_threshold;
+        let is_speech = looks_like_voice(&processed.stats, adaptive_threshold);
 
         if is_speech {
+            if !in_speech {
+                speech_bursts += 1;
+                in_speech = true;
+            }
+            if speech_start_offset.is_none() {
+                speech_start_offset = Some(frame_start_offset);
+            }
             speech_detected = true;
             last_speech_at = Instant::now();
+            speech_windows += 1;
+            current_voice_streak += 1;
+            max_voice_streak = max_voice_streak.max(current_voice_streak);
+            last_speech_end_offset = Some(all_pcm.len());
+        } else {
+            current_voice_streak = 0;
+            in_speech = false;
         }
 
         if !speech_detected {
@@ -3775,7 +4744,13 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
         } else {
             // User has spoken — check for end-of-utterance silence.
             let silence_duration = last_speech_at.elapsed().as_secs_f64();
-            if silence_duration >= UTTERANCE_SILENCE_AFTER_SPEECH_SECS {
+            let silence_target = post_speech_silence_target(
+                field_mode,
+                speech_windows,
+                max_voice_streak,
+                speech_bursts,
+            );
+            if silence_duration >= silence_target {
                 break; // Done — user stopped talking.
             }
         }
@@ -3786,6 +4761,11 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
 
     if all_pcm.is_empty() {
         anyhow::bail!("no audio captured");
+    }
+
+    if speech_detected {
+        all_pcm =
+            trim_utterance_pcm_to_speech(&all_pcm, speech_start_offset, last_speech_end_offset);
     }
 
     // Write WAV file (16 kHz, mono, 16-bit PCM).
@@ -4460,6 +5440,94 @@ fn sanitize_assistant_response(raw: &str) -> String {
     }
 }
 
+fn sanitize_streaming_partial_text(raw: &str) -> String {
+    let mut text = strip_think_sections(raw);
+    text = text
+        .replace("<think>", " ")
+        .replace("</think>", " ")
+        .replace("<|im_start|>", " ")
+        .replace("<|im_end|>", " ")
+        .replace("**", "")
+        .replace('*', "");
+
+    let mut cleaned_lines = Vec::new();
+    let mut in_code_fence = false;
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if line.starts_with("```") {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence || line.is_empty() {
+            continue;
+        }
+        if looks_like_internal_reasoning_line(line) {
+            continue;
+        }
+        let line = strip_leading_list_marker(line)
+            .trim_start_matches('#')
+            .trim()
+            .trim_matches('`')
+            .trim();
+        if !line.is_empty() {
+            cleaned_lines.push(line.to_string());
+        }
+    }
+
+    normalize_whitespace(&cleaned_lines.join(" "))
+}
+
+fn extract_streaming_tts_prefix(raw: &str) -> Option<String> {
+    let cleaned = sanitize_streaming_partial_text(raw);
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let sentences = split_spoken_sentences(&cleaned);
+    if sentences.is_empty() {
+        return None;
+    }
+
+    let ends_with_terminal = cleaned
+        .chars()
+        .last()
+        .map(|ch| matches!(ch, '.' | '!' | '?' | ';' | ':'))
+        .unwrap_or(false);
+
+    if ends_with_terminal || sentences.len() >= 2 {
+        Some(sentences[0].clone())
+    } else {
+        None
+    }
+}
+
+fn trim_streamed_prefix_from_response(full_response: &str, spoken_prefix: &str) -> String {
+    let full_clean = sanitize_assistant_response(full_response);
+    let prefix_clean = sanitize_streaming_partial_text(spoken_prefix);
+    if full_clean.is_empty() || prefix_clean.is_empty() {
+        return full_clean;
+    }
+
+    let sentences = split_spoken_sentences(&full_clean);
+    if let Some(first_sentence) = sentences.first() {
+        if text_jaccard_similarity(first_sentence, &prefix_clean) >= 0.82 {
+            return sentences
+                .into_iter()
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join(" ")
+                .trim()
+                .to_string();
+        }
+    }
+
+    if full_clean.starts_with(&prefix_clean) {
+        return full_clean[prefix_clean.len()..].trim().to_string();
+    }
+
+    full_clean
+}
+
 fn strip_think_sections(input: &str) -> String {
     let mut output = String::new();
     let mut rest = input;
@@ -4833,18 +5901,16 @@ pub async fn calibrate_mic_threshold(source: Option<&str>) -> u32 {
             } else {
                 &bytes[..]
             };
-            let mut sum_sq = 0f64;
-            let mut count = 0usize;
-            for chunk in pcm.chunks_exact(2) {
-                let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f64;
-                sum_sq += sample * sample;
-                count += 1;
-            }
-            if count > 0 {
-                (sum_sq / count as f64).sqrt()
-            } else {
-                0.0
-            }
+            let field_mode = detect_mic_field_mode().await;
+            let env_gain_db: f64 = std::env::var("LIFEOS_MIC_GAIN_DB")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(12.0);
+            let gain_db = env_gain_db + field_mode_extra_gain(field_mode);
+            let mut filter_state = AudioFilterState::default();
+            let processed =
+                preprocess_frame_i16le(pcm, AUDIO_SAMPLE_RATE, gain_db, None, &mut filter_state);
+            processed.stats.rms
         }
         _ => {
             log::warn!("[calibration] failed to read calibration audio");
@@ -5277,16 +6343,36 @@ async fn capture_camera_presence(
 
     match program {
         "ffmpeg" => {
-            cmd.args([
-                "-y",
-                "-f",
-                "v4l2",
-                "-i",
-                device,
-                "-frames:v",
-                "1",
-                frame_path.to_string_lossy().as_ref(),
-            ]);
+            if let Err(primary_error) =
+                capture_camera_presence_ffmpeg(binary, device, &frame_path).await
+            {
+                log::warn!(
+                    "[camera] preferred ffmpeg capture failed on {}: {}",
+                    device,
+                    primary_error
+                );
+                tokio::fs::remove_file(&frame_path).await.ok();
+                let mut fallback = Command::new(binary);
+                fallback.args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-nostdin",
+                    "-y",
+                    "-f",
+                    "v4l2",
+                    "-video_size",
+                    CAMERA_CAPTURE_FALLBACK_SIZE,
+                    "-i",
+                    device,
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "2",
+                    frame_path.to_string_lossy().as_ref(),
+                ]);
+                run_camera_capture_command(fallback, binary).await?;
+            }
         }
         "libcamera-still" | "libcamera-jpeg" => {
             cmd.args([
@@ -5302,19 +6388,20 @@ async fn capture_camera_presence(
         _ => anyhow::bail!("unsupported camera capture backend: {}", binary),
     }
 
-    let output = cmd
-        .output()
-        .await
-        .with_context(|| format!("Failed to capture camera frame via {}", binary))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "camera capture failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+    if program != "ffmpeg" {
+        run_camera_capture_command(cmd, binary).await?;
     }
 
     let mut metrics = analyze_camera_frame(&frame_path)?;
     metrics.frame_path = Some(frame_path.to_string_lossy().to_string());
+    log::debug!(
+        "[camera] captured presence frame via {} brightness={:.1} enhanced={} present={} face_near_screen={}",
+        program,
+        metrics.avg_brightness,
+        metrics.enhanced,
+        metrics.present,
+        metrics.face_near_screen
+    );
     Ok(metrics)
 }
 
@@ -5323,10 +6410,39 @@ struct CameraPresenceMetrics {
     present: bool,
     face_near_screen: bool,
     frame_path: Option<String>,
+    avg_brightness: f64,
+    enhanced: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CameraFrameStats {
+    skin_ratio: f64,
+    avg_brightness: f64,
+    avg_edge: f64,
 }
 
 fn analyze_camera_frame(path: &Path) -> Result<CameraPresenceMetrics> {
     let image = image::open(path).context("Failed to open captured camera frame")?;
+    let stats = compute_camera_frame_stats(&image)?;
+    let (image, stats, enhanced) = maybe_enhance_camera_frame(image, &stats);
+    if enhanced {
+        image
+            .save(path)
+            .with_context(|| format!("Failed to save enhanced camera frame {}", path.display()))?;
+    }
+    let present = stats.skin_ratio > 0.03 || (stats.avg_brightness > 35.0 && stats.avg_edge > 12.0);
+    let face_near_screen = stats.skin_ratio > 0.18;
+
+    Ok(CameraPresenceMetrics {
+        present,
+        face_near_screen,
+        frame_path: None,
+        avg_brightness: stats.avg_brightness,
+        enhanced,
+    })
+}
+
+fn compute_camera_frame_stats(image: &DynamicImage) -> Result<CameraFrameStats> {
     let (width, height) = image.dimensions();
     let center_left = width / 4;
     let center_right = (width * 3) / 4;
@@ -5365,17 +6481,126 @@ fn analyze_camera_frame(path: &Path) -> Result<CameraPresenceMetrics> {
         anyhow::bail!("camera frame is empty");
     }
 
-    let skin_ratio = skin_like_pixels as f64 / total_pixels as f64;
-    let avg_brightness = brightness_sum / total_pixels as f64;
-    let avg_edge = edge_sum / total_pixels as f64;
-    let present = skin_ratio > 0.03 || (avg_brightness > 35.0 && avg_edge > 12.0);
-    let face_near_screen = skin_ratio > 0.18;
-
-    Ok(CameraPresenceMetrics {
-        present,
-        face_near_screen,
-        frame_path: None,
+    Ok(CameraFrameStats {
+        skin_ratio: skin_like_pixels as f64 / total_pixels as f64,
+        avg_brightness: brightness_sum / total_pixels as f64,
+        avg_edge: edge_sum / total_pixels as f64,
     })
+}
+
+fn maybe_enhance_camera_frame(
+    image: DynamicImage,
+    stats: &CameraFrameStats,
+) -> (DynamicImage, CameraFrameStats, bool) {
+    if stats.avg_brightness >= CAMERA_FRAME_DARK_THRESHOLD {
+        return (image, stats.clone(), false);
+    }
+
+    let brighten = (CAMERA_FRAME_TARGET_BRIGHTNESS - stats.avg_brightness)
+        .round()
+        .clamp(12.0, CAMERA_FRAME_MAX_BRIGHTEN as f64) as i32;
+    let contrast = if stats.avg_brightness < 45.0 {
+        CAMERA_FRAME_VERY_DARK_CONTRAST_BOOST
+    } else {
+        CAMERA_FRAME_CONTRAST_BOOST
+    };
+    let enhanced = image.brighten(brighten).adjust_contrast(contrast);
+    let enhanced_stats = compute_camera_frame_stats(&enhanced).unwrap_or_else(|_| stats.clone());
+
+    if enhanced_stats.avg_brightness <= stats.avg_brightness + 4.0 {
+        return (image, stats.clone(), false);
+    }
+
+    (enhanced, enhanced_stats, true)
+}
+
+async fn capture_camera_presence_ffmpeg(
+    binary: &str,
+    device: &str,
+    frame_path: &Path,
+) -> Result<()> {
+    let mut cmd = Command::new(binary);
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-f",
+        "v4l2",
+        "-input_format",
+        "mjpeg",
+        "-video_size",
+        CAMERA_CAPTURE_PREFERRED_SIZE,
+        "-framerate",
+        "15",
+        "-i",
+        device,
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        frame_path.to_string_lossy().as_ref(),
+    ]);
+    run_camera_capture_command(cmd, binary).await
+}
+
+async fn run_camera_capture_command(mut cmd: Command, binary: &str) -> Result<()> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("Failed to spawn camera capture via {}", binary))?;
+    let mut stderr_pipe = child.stderr.take();
+
+    let wait_result = tokio::time::timeout(
+        std::time::Duration::from_secs(CAMERA_CAPTURE_TIMEOUT_SECS),
+        child.wait(),
+    )
+    .await;
+
+    let mut stderr_buf = Vec::new();
+    match wait_result {
+        Ok(status_result) => {
+            let status = status_result
+                .with_context(|| format!("Failed waiting for camera capture via {}", binary))?;
+            if let Some(mut pipe) = stderr_pipe.take() {
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut stderr_buf).await;
+            }
+            if !status.success() {
+                let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+                let detail = if stderr.is_empty() {
+                    format!("exit status {}", status)
+                } else {
+                    stderr
+                };
+                anyhow::bail!("camera capture failed via {}: {}", binary, detail);
+            }
+        }
+        Err(_) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            if let Some(mut pipe) = stderr_pipe.take() {
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut pipe, &mut stderr_buf).await;
+            }
+            let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+            let detail = if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", stderr)
+            };
+            anyhow::bail!(
+                "camera capture timed out via {} after {}s{}",
+                binary,
+                CAMERA_CAPTURE_TIMEOUT_SECS,
+                detail
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// AI-powered camera scene analysis result.
@@ -5755,6 +6980,15 @@ async fn refresh_meeting_state(camera_device: Option<&str>) -> MeetingState {
         None
     };
 
+    if let Some(device) = camera_device {
+        if let Ok(true) = reap_stale_presence_capture_processes(device).await {
+            log::warn!(
+                "[camera] reaped a stale camera presence capture on {}; camera availability restored",
+                device
+            );
+        }
+    }
+
     let camera_busy = camera_device.map(is_camera_busy).unwrap_or(false);
     let app = conferencing_app.or(window_app);
 
@@ -5764,6 +6998,48 @@ async fn refresh_meeting_state(camera_device: Option<&str>) -> MeetingState {
         camera_busy,
         last_checked_at: Some(Utc::now()),
     }
+}
+
+async fn reap_stale_presence_capture_processes(device: &str) -> Result<bool> {
+    let output = Command::new("ps")
+        .args(["-eo", "pid=,etimes=,cmd="])
+        .output()
+        .await
+        .context("Failed to inspect process table for stale camera capture")?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+
+    let mut killed = false;
+    let device_lower = device.to_lowercase();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut parts = line.split_whitespace();
+        let pid = parts.next().and_then(|value| value.parse::<u32>().ok());
+        let elapsed = parts.next().and_then(|value| value.parse::<u64>().ok());
+        let cmd = parts.collect::<Vec<_>>().join(" ");
+        let Some(pid) = pid else { continue };
+        let Some(elapsed) = elapsed else { continue };
+        if elapsed < CAMERA_STALE_CAPTURE_SECS {
+            continue;
+        }
+        if !is_stale_presence_capture_process(&cmd, &device_lower) {
+            continue;
+        }
+        kill_pid(pid).await.ok();
+        killed = true;
+    }
+
+    Ok(killed)
+}
+
+fn is_stale_presence_capture_process(cmd: &str, device_lower: &str) -> bool {
+    let lower = cmd.to_lowercase();
+    lower.contains("/camera/presence-")
+        && (lower.contains("ffmpeg")
+            || lower.contains("libcamera-still")
+            || lower.contains("libcamera-jpeg")
+            || lower.contains("fswebcam"))
+        && (lower.contains(device_lower) || !lower.contains("/dev/video"))
 }
 
 async fn presence_from_activity(follow_along: &FollowAlongManager) -> (bool, bool, &'static str) {
@@ -5979,6 +7255,26 @@ mod tests {
     }
 
     #[test]
+    fn wake_word_handles_shouted_axi_with_punctuation() {
+        let transcript = "¡¡AXI!! abre la terminal ahora mismo.";
+        assert!(contains_wake_word(transcript, "axi"));
+        assert_eq!(
+            strip_wake_word(transcript, "axi").as_deref(),
+            Some("abre la terminal ahora mismo")
+        );
+    }
+
+    #[test]
+    fn wake_word_handles_soft_spanish_mishearings() {
+        let transcript = "[00:00:00.000 --> 00:00:03.200]  Ahsi... puedes ayudarme con esto?";
+        assert!(contains_wake_word(transcript, "axi"));
+        assert_eq!(
+            strip_wake_word(transcript, "axi").as_deref(),
+            Some("puedes ayudarme con esto")
+        );
+    }
+
+    #[test]
     fn persist_gpu_layers_updates_env_file() {
         let dir = std::env::temp_dir().join(format!("lifeos-gpu-env-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -6015,6 +7311,45 @@ mod tests {
         assert!(metrics.face_near_screen);
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn camera_frame_analysis_brightens_dark_face_frames() {
+        let dir = std::env::temp_dir().join(format!("lifeos-camera-dark-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("presence.jpg");
+
+        let mut image: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(120, 120, Rgb([8, 8, 8]));
+        for y in 30..90 {
+            for x in 35..85 {
+                image.put_pixel(x, y, Rgb([88, 60, 44]));
+            }
+        }
+        image.save(&path).unwrap();
+
+        let metrics = analyze_camera_frame(&path).unwrap();
+        assert!(metrics.present);
+        assert!(metrics.enhanced);
+        assert!(metrics.avg_brightness >= CAMERA_FRAME_DARK_THRESHOLD);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn stale_presence_capture_detection_matches_only_real_presence_commands() {
+        assert!(is_stale_presence_capture_process(
+            "/usr/bin/ffmpeg -f v4l2 -i /dev/video0 -frames:v 1 /var/lib/lifeos/camera/presence-123.jpg",
+            "/dev/video0",
+        ));
+        assert!(!is_stale_presence_capture_process(
+            "/usr/bin/ffmpeg -f x11grab -i :0.0 screenshot.jpg",
+            "/dev/video0",
+        ));
+        assert!(!is_stale_presence_capture_process(
+            "/usr/bin/ffmpeg -f v4l2 -i /dev/video0 /tmp/other-capture.jpg",
+            "/dev/video0",
+        ));
     }
 
     #[test]
@@ -6114,6 +7449,208 @@ Drafting the description:
         let raw = "Thinking Process: Analyze constraints and draft output.";
         let cleaned = sanitize_assistant_response(raw);
         assert_eq!(cleaned, "Lo siento, no pude generar una respuesta clara.");
+    }
+
+    #[test]
+    fn extract_streaming_tts_prefix_waits_for_complete_sentence() {
+        assert_eq!(
+            extract_streaming_tts_prefix("Hola, estoy revisando eso"),
+            None
+        );
+        assert_eq!(
+            extract_streaming_tts_prefix("Hola, estoy revisando eso. Ahora sigo."),
+            Some("Hola, estoy revisando eso.".to_string())
+        );
+    }
+
+    #[test]
+    fn trim_streamed_prefix_from_response_removes_matching_first_sentence() {
+        let remaining = trim_streamed_prefix_from_response(
+            "Claro, ya revise tu pedido. Todo se ve correcto.",
+            "Claro, ya revise tu pedido.",
+        );
+        assert_eq!(remaining, "Todo se ve correcto.");
+    }
+
+    #[test]
+    fn envelope_similarity_detects_shifted_playback_echo_shape() {
+        let snippet = vec![0.2, 0.8, 1.0, 0.75, 0.35, 0.15];
+        let playback = vec![0.05, 0.09, 0.2, 0.8, 1.0, 0.75, 0.35, 0.15, 0.04];
+        let similarity = max_envelope_similarity(&snippet, &playback);
+        assert!(similarity > 0.98, "similarity was {similarity}");
+    }
+
+    #[test]
+    fn envelope_similarity_rejects_different_phrase_shape() {
+        let snippet = vec![0.2, 0.8, 1.0, 0.75, 0.35, 0.15];
+        let playback = vec![1.0, 0.95, 0.92, 0.9, 0.88, 0.87, 0.86, 0.85];
+        let similarity = max_envelope_similarity(&snippet, &playback);
+        assert!(similarity < 0.93, "similarity was {similarity}");
+    }
+
+    #[test]
+    fn clear_single_burst_uses_fast_endpoint() {
+        let target = post_speech_silence_target(MicFieldMode::NearField, 6, 5, 1);
+        assert!(target <= 1.1, "target was {target}");
+    }
+
+    #[test]
+    fn multi_burst_speech_keeps_longer_pause_budget() {
+        let target = post_speech_silence_target(MicFieldMode::NearField, 8, 4, 3);
+        assert!(
+            (target - UTTERANCE_SILENCE_AFTER_SPEECH_SECS).abs() < f64::EPSILON,
+            "target was {target}"
+        );
+    }
+
+    #[test]
+    fn far_field_adds_small_endpoint_buffer() {
+        let near = post_speech_silence_target(MicFieldMode::NearField, 6, 5, 1);
+        let far = post_speech_silence_target(MicFieldMode::FarField, 6, 5, 1);
+        assert!(far > near, "near={near}, far={far}");
+        assert!(far <= 1.25, "far target was {far}");
+    }
+
+    #[test]
+    fn trim_utterance_pcm_to_speech_removes_leading_and_trailing_padding() {
+        let pcm: Vec<u8> = (0u8..120).collect();
+        let trimmed = trim_utterance_pcm_to_speech(&pcm, Some(20), Some(80));
+        let preroll_bytes =
+            ((AUDIO_SAMPLE_RATE as f64 * 2.0 * UTTERANCE_PREROLL_SECS) as usize) & !1;
+        let postroll_bytes =
+            ((AUDIO_SAMPLE_RATE as f64 * 2.0 * UTTERANCE_POSTROLL_SECS) as usize) & !1;
+        let expected_start = 20usize.saturating_sub(preroll_bytes);
+        let expected_end = (80usize.saturating_add(postroll_bytes)).min(pcm.len());
+        assert_eq!(trimmed, pcm[expected_start..expected_end].to_vec());
+    }
+
+    #[test]
+    fn trim_utterance_pcm_to_speech_is_noop_without_complete_offsets() {
+        let pcm: Vec<u8> = (0u8..48).collect();
+        assert_eq!(trim_utterance_pcm_to_speech(&pcm, None, Some(20)), pcm);
+        assert_eq!(trim_utterance_pcm_to_speech(&pcm, Some(12), None), pcm);
+    }
+
+    #[test]
+    fn trim_utterance_pcm_to_speech_clamps_to_pcm_bounds() {
+        let pcm: Vec<u8> = (0u8..32).collect();
+        let trimmed = trim_utterance_pcm_to_speech(&pcm, Some(2), Some(30));
+        assert_eq!(trimmed, pcm);
+    }
+
+    #[test]
+    fn build_interactive_stt_args_uses_fast_profile_for_short_audio() {
+        let args = build_interactive_stt_args(
+            "/tmp/utterance.wav",
+            Some("/models/stt.gguf"),
+            "es",
+            Some(3_200),
+            SttProfile::Command,
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-m", "/models/stt.gguf"]));
+        assert!(args.windows(2).any(|pair| pair == ["-l", "es"]));
+        assert!(args.contains(&"-sns".to_string()));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-bs", STT_FAST_BEAM_SIZE]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-bo", STT_FAST_BEST_OF]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-ml", STT_FAST_MAX_LEN]));
+        assert!(args.contains(&"-sow".to_string()));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-f", "/tmp/utterance.wav"]));
+    }
+
+    #[test]
+    fn build_interactive_stt_args_uses_tighter_hotword_profile() {
+        let args = build_interactive_stt_args(
+            "/tmp/hotword.wav",
+            None,
+            "es",
+            Some(3_600),
+            SttProfile::HotwordProbe,
+        );
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-bs", STT_HOTWORD_BEAM_SIZE]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-bo", STT_HOTWORD_BEST_OF]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-ml", STT_HOTWORD_MAX_LEN]));
+        assert!(args.windows(2).any(|pair| pair
+            == [
+                "--prompt",
+                "Axi. Axi, ayudame. Axi, dime la hora. Axi, abre la terminal. Oxi. Ahsi."
+            ]));
+    }
+
+    #[test]
+    fn build_interactive_stt_args_skips_fast_profile_for_long_audio() {
+        let args = build_interactive_stt_args(
+            "/tmp/lecture.wav",
+            None,
+            "es",
+            Some(8_500),
+            SttProfile::Command,
+        );
+        assert!(!args.contains(&"-sow".to_string()));
+        assert!(!args
+            .windows(2)
+            .any(|pair| pair == ["-bs", STT_FAST_BEAM_SIZE]));
+        assert!(!args
+            .windows(2)
+            .any(|pair| pair == ["-bo", STT_FAST_BEST_OF]));
+        assert!(!args
+            .windows(2)
+            .any(|pair| pair == ["-ml", STT_FAST_MAX_LEN]));
+    }
+
+    #[test]
+    fn build_whisper_stream_args_include_streaming_controls() {
+        let args = build_whisper_stream_args(Some("/models/ggml-tiny.bin"), "es");
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["-m", "/models/ggml-tiny.bin"]));
+        assert!(args.windows(2).any(|pair| pair == ["-l", "es"]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--step", STT_STREAM_STEP_MS]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--length", STT_STREAM_LENGTH_MS]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--keep", STT_STREAM_KEEP_MS]));
+        assert!(args.contains(&"-kc".to_string()));
+    }
+
+    #[test]
+    fn extract_latest_whisper_stream_text_ignores_ansi_and_start_banner() {
+        let raw = "[Start speaking]\n\x1b[2K\rhola\x1b[2K\rhola axi abre terminal";
+        assert_eq!(
+            extract_latest_whisper_stream_text(raw).as_deref(),
+            Some("hola axi abre terminal")
+        );
+    }
+
+    #[test]
+    fn estimate_pcm_wav_duration_ms_matches_mono_pcm_layout() {
+        let temp =
+            std::env::temp_dir().join(format!("lifeos-stt-duration-{}.wav", uuid::Uuid::new_v4()));
+        let pcm_len = AUDIO_BYTES_PER_SECOND * 2;
+        let wav_len = 44 + pcm_len;
+        std::fs::write(&temp, vec![0u8; wav_len]).unwrap();
+        let duration_ms = estimate_pcm_wav_duration_ms(temp.to_str().unwrap());
+        assert_eq!(duration_ms, Some(2_000));
+        std::fs::remove_file(temp).ok();
     }
 
     #[test]
