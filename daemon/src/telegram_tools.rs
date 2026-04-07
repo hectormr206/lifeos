@@ -692,6 +692,15 @@ REGLAS FIRMES:
     - Si el usuario tiene alergias serias, AVISALE SIEMPRE de las exclusiones que se hicieron y dile que vuelva a verificar la lista antes de comprar. Las alergias son responsabilidad del usuario, no del LLM.
     - Si la lista resulta vacia (todas las recetas fueron excluidas), sugiere que registre mas recetas con `nutrition_recipe_add` o que revise sus preferencias.
 
+22b. **food_lookup_off** — Busca un codigo de barras en Open Food Facts (API publica). Devuelve los datos nutricionales si el producto existe en su base. NO persiste nada — si los datos te parecen confiables, puedes llamar a `food_add` despues con source="openfoodfacts" para guardarlo en el catalogo local del usuario.
+    args: {"barcode": "7501020100094"}
+
+    REGLAS DE PRIVACIDAD (CRITICAS):
+    - Esta es UNA DE LAS POCAS llamadas de red que el daemon hace con datos del usuario. El barcode viaja en claro via HTTPS a un servidor tercero (world.openfoodfacts.org).
+    - SIEMPRE menciona esto al usuario ANTES de llamar la herramienta. Pregunta: "voy a consultar este codigo en Open Food Facts (API publica), eso manda el codigo al servidor de OFF. ¿Procedemos?"
+    - Si el usuario prefiere mantener todo local, no uses la herramienta. Sugiere agregar el alimento manualmente con `food_add`.
+    - Si Open Food Facts NO encuentra el producto (`found: false`), no es un error — solo significa que ese codigo no esta en su catalogo. Sugiere agregarlo manualmente.
+
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
 
@@ -1893,6 +1902,7 @@ REGLAS FIRMES:
             "shopping_list_generate_weekly" => {
                 execute_shopping_list_generate_weekly(&call.args, ctx).await
             }
+            "food_lookup_off" => execute_food_lookup_off(&call.args).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -7152,6 +7162,53 @@ REGLAS FIRMES:
             "\n_Las alergias son tu responsabilidad. Vuelve a verificar la lista antes de comprar._\n",
         );
 
+        Ok(out)
+    }
+
+    // -- Open Food Facts barcode lookup -------------------------------------
+
+    async fn execute_food_lookup_off(args: &serde_json::Value) -> Result<String> {
+        let barcode = args["barcode"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'barcode'"))?;
+        let r = crate::food_lookup::lookup_off(barcode).await?;
+        if !r.found {
+            return Ok(format!(
+                "Codigo de barras {} no esta en Open Food Facts. Si quieres lo agregamos manualmente con `food_add` (source = 'user').",
+                r.barcode
+            ));
+        }
+        let mut out = format!("# Encontrado en Open Food Facts\n\nCodigo: {}\n", r.barcode);
+        if let Some(n) = &r.name {
+            out.push_str(&format!("Nombre: {}\n", n));
+        }
+        if let Some(b) = &r.brand {
+            out.push_str(&format!("Marca: {}\n", b));
+        }
+        if let Some(c) = &r.category {
+            out.push_str(&format!("Categoria: {}\n", c));
+        }
+        if let Some(k) = r.kcal_per_100g {
+            out.push_str(&format!("kcal/100g: {:.0}\n", k));
+        }
+        if let Some(p) = r.protein_g_per_100g {
+            out.push_str(&format!("Proteina/100g: {:.1}g\n", p));
+        }
+        if let Some(c) = r.carbs_g_per_100g {
+            out.push_str(&format!("Carbs/100g: {:.1}g\n", c));
+        }
+        if let Some(f) = r.fat_g_per_100g {
+            out.push_str(&format!("Grasa/100g: {:.1}g\n", f));
+        }
+        if let Some(f) = r.fiber_g_per_100g {
+            out.push_str(&format!("Fibra/100g: {:.1}g\n", f));
+        }
+        if let Some(s) = r.serving_size_g {
+            out.push_str(&format!("Porcion: {:.0}g\n", s));
+        }
+        out.push_str(
+            "\nSi quieres guardarlo en tu catalogo local, dime y llamo `food_add` con source='openfoodfacts'.\n",
+        );
         Ok(out)
     }
 

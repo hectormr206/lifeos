@@ -70,6 +70,8 @@ pub fn vida_plena_routes() -> Router<ApiState> {
         .route("/food", post(post_add_food))
         .route("/food/search", get(get_food_search))
         .route("/food/by-barcode", get(get_food_by_barcode))
+        // -- BI.3.1: Open Food Facts barcode lookup -----------------
+        .route("/food/lookup-off", get(get_food_lookup_off))
 }
 
 // ----------------------------------------------------------------------
@@ -613,4 +615,16 @@ async fn get_food_by_barcode(
         .await
         .map_err(err_to_http)?;
     Ok(Json(serde_json::json!({ "food": food })))
+}
+
+/// Look up a barcode against Open Food Facts. Does NOT persist —
+/// the dashboard or LLM is expected to inspect the result and
+/// optionally POST it to /food separately if the user confirms.
+async fn get_food_lookup_off(
+    Query(q): Query<BarcodeQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let result = crate::food_lookup::lookup_off(&q.barcode)
+        .await
+        .map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "lookup": result })))
 }

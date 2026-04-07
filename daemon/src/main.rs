@@ -44,6 +44,7 @@ mod exec_whitelist;
 mod experience_modes;
 mod eye_health;
 mod follow_along;
+mod food_lookup;
 mod game_guard;
 mod git_workflow;
 mod health;

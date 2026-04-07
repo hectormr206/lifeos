@@ -1,6 +1,6 @@
 [package]
 name = "lifeosd"
-version = "0.3.32"
+version = "0.3.33"
 edition = "2021"
 description = "LifeOS System Daemon"
 authors = ["Héctor Martínez <hector@hectormr.com>"]
