@@ -7626,6 +7626,67 @@ pub struct ShoppingItemMatch {
     pub total_matches: usize,
 }
 
+/// Quick "what's left to buy" snapshot of a single shopping list.
+/// Cheap to compute (no extra DB roundtrips beyond fetching the
+/// list itself) and meant for the UX flow "¿cuanto me falta?"
+/// while the user is in the store.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShoppingListSummary {
+    pub list_id: String,
+    pub name: String,
+    pub status: String,
+    pub total_items: usize,
+    pub checked_items: usize,
+    pub remaining_items: usize,
+    /// 0..=100. 0 if `total_items == 0` so callers don't have to
+    /// special-case the empty list to avoid div-by-zero.
+    pub percent_complete: u8,
+    pub target_store_id: Option<String>,
+    pub last_updated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Compute a `ShoppingListSummary` for the given list. Returns
+    /// `None` if the list doesn't exist. Pure derived data — no
+    /// writes — so the caller can poll this safely while shopping.
+    pub async fn get_shopping_list_summary(
+        &self,
+        list_id: &str,
+    ) -> Result<Option<ShoppingListSummary>> {
+        let list = match self.get_shopping_list(list_id).await? {
+            Some(l) => l,
+            None => return Ok(None),
+        };
+        Ok(Some(shopping_list_to_summary(&list)))
+    }
+}
+
+/// Pure derivation. Public so unit tests can hit it without going
+/// through the DB layer.
+pub fn shopping_list_to_summary(list: &ShoppingList) -> ShoppingListSummary {
+    let total = list.items.len();
+    let checked = list.items.iter().filter(|i| i.checked).count();
+    let remaining = total.saturating_sub(checked);
+    let percent = if total == 0 {
+        0u8
+    } else {
+        // Round to nearest, clamp 0..=100.
+        let pct = (checked as f64 / total as f64) * 100.0;
+        pct.round().clamp(0.0, 100.0) as u8
+    };
+    ShoppingListSummary {
+        list_id: list.list_id.clone(),
+        name: list.name.clone(),
+        status: list.status.clone(),
+        total_items: total,
+        checked_items: checked,
+        remaining_items: remaining,
+        percent_complete: percent,
+        target_store_id: list.target_store_id.clone(),
+        last_updated_at: list.updated_at,
+    }
+}
+
 // -- Private raw rows + mappers for BI.3.1 ----------------------------------
 
 struct FoodRaw {
@@ -20485,6 +20546,165 @@ mod tests {
             .await
             .unwrap();
         assert!(m.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn shopping_list_to_summary_pure_derivation() {
+        let now = Utc::now();
+        let list = ShoppingList {
+            list_id: "shop-test".to_string(),
+            name: "Test".to_string(),
+            target_store_id: Some("store-1".to_string()),
+            status: "active".to_string(),
+            items: vec![
+                ShoppingListItem {
+                    name: "A".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "B".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "C".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: false,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "D".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: false,
+                    notes: None,
+                },
+            ],
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let s = shopping_list_to_summary(&list);
+        assert_eq!(s.list_id, "shop-test");
+        assert_eq!(s.total_items, 4);
+        assert_eq!(s.checked_items, 2);
+        assert_eq!(s.remaining_items, 2);
+        assert_eq!(s.percent_complete, 50);
+        assert_eq!(s.target_store_id.as_deref(), Some("store-1"));
+    }
+
+    #[test]
+    fn shopping_list_to_summary_handles_empty_list() {
+        let now = Utc::now();
+        let list = ShoppingList {
+            list_id: "shop-empty".to_string(),
+            name: "Empty".to_string(),
+            target_store_id: None,
+            status: "active".to_string(),
+            items: vec![],
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let s = shopping_list_to_summary(&list);
+        assert_eq!(s.total_items, 0);
+        assert_eq!(s.checked_items, 0);
+        assert_eq!(s.remaining_items, 0);
+        // No div-by-zero — empty list reports 0%, not NaN.
+        assert_eq!(s.percent_complete, 0);
+    }
+
+    #[test]
+    fn shopping_list_to_summary_all_checked_is_100_percent() {
+        let now = Utc::now();
+        let list = ShoppingList {
+            list_id: "shop-done".to_string(),
+            name: "Done".to_string(),
+            target_store_id: None,
+            status: "active".to_string(),
+            items: vec![
+                ShoppingListItem {
+                    name: "A".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "B".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "C".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+            ],
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let s = shopping_list_to_summary(&list);
+        assert_eq!(s.percent_complete, 100);
+        assert_eq!(s.remaining_items, 0);
+    }
+
+    #[tokio::test]
+    async fn get_shopping_list_summary_round_trip() {
+        let dir = temp_dir("memory-plane-shop-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await; // 3 items, none checked
+
+        let s = mgr
+            .get_shopping_list_summary(&l.list_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.total_items, 3);
+        assert_eq!(s.checked_items, 0);
+        assert_eq!(s.percent_complete, 0);
+
+        // Check one item and re-summary.
+        mgr.check_shopping_list_item(&l.list_id, 0, true)
+            .await
+            .unwrap();
+        let s2 = mgr
+            .get_shopping_list_summary(&l.list_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(s2.checked_items, 1);
+        assert_eq!(s2.remaining_items, 2);
+        // 1/3 → 33.33% rounds to 33.
+        assert_eq!(s2.percent_complete, 33);
+
+        // Unknown list → None.
+        let none = mgr
+            .get_shopping_list_summary("shop-doesnt-exist")
+            .await
+            .unwrap();
+        assert!(none.is_none());
+
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -673,6 +673,9 @@ Cierra la sub-fase de nutricion (BI.3 sprint 2). Foundation NO sensible: catalog
     - Si total_matches > 1, AVISA al usuario sobre la ambiguedad: "marque 'leche entera' pero tambien encontre 'leche deslactosada'. ¿Querias esa otra?"
     - Si total_matches == 0, dile que no encontraste el item y sugiere `shopping_list_get` para que vea los nombres exactos.
 
+20t. **shopping_list_summary** — Snapshot rapido de "que falta" para una lista: total_items, checked_items, remaining_items, percent_complete, fecha de ultima actualizacion. Util cuando el usuario en la tienda pregunta "cuanto me falta" sin querer leer la lista entera. Si no pasas list_id, usa la lista activa mas reciente automaticamente.
+    args: {"list_id": "shop-..."}  o  {}  (default = lista activa)
+
 21. **Vida Plena — Modo panico (/wipe-*) y predictor menstrual**
 
 CRITICO. El modo panico borra TODAS las filas de las side-tables sensibles destructivamente. Es para casos donde el usuario esta en peligro fisico (familia abusiva, disputa legal, custodia, control sanitario). NO toca el vault — el vault sigue configurado, solo desaparecen los datos. Es IRRECUPERABLE.
@@ -1916,6 +1919,7 @@ REGLAS FIRMES:
             "shopping_list_check_by_name" => {
                 execute_shopping_list_check_by_name(&call.args, ctx).await
             }
+            "shopping_list_summary" => execute_shopping_list_summary(&call.args, ctx).await,
             "wipe_mental_health" => execute_wipe_mental_health(&call.args, ctx).await,
             "wipe_menstrual" => execute_wipe_menstrual(&call.args, ctx).await,
             "wipe_sexual_health" => execute_wipe_sexual_health(&call.args, ctx).await,
@@ -7073,6 +7077,64 @@ REGLAS FIRMES:
                 item_index
             ))
         }
+    }
+
+    async fn execute_shopping_list_summary(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        // If no list_id is passed, default to the active list. This
+        // makes "Axi, cuanto me falta?" work as a one-shot query.
+        let list_id_arg = args["list_id"].as_str().map(|s| s.to_string());
+        let list_id = match list_id_arg {
+            Some(id) => id,
+            None => match mem.get_active_shopping_list().await? {
+                Some(l) => l.list_id,
+                None => {
+                    return Ok(
+                        "No tienes ninguna lista de compras activa. Crea una con `shopping_list_create` o genera una semanal con `shopping_list_generate_weekly`."
+                            .to_string(),
+                    );
+                }
+            },
+        };
+        let s = match mem.get_shopping_list_summary(&list_id).await? {
+            Some(s) => s,
+            None => return Ok(format!("No encontre lista con id {}.", list_id)),
+        };
+
+        // Pretty progress bar (10 cells, hash-filled).
+        let filled = (s.percent_complete as usize) / 10;
+        let bar: String = "█".repeat(filled) + &"░".repeat(10 - filled);
+
+        let mut out = format!(
+            "# {} ({})\n\n[{}] {}%\n\n{}/{} items checados, {} faltan\n",
+            s.name,
+            s.status,
+            bar,
+            s.percent_complete,
+            s.checked_items,
+            s.total_items,
+            s.remaining_items
+        );
+        if let Some(store) = &s.target_store_id {
+            out.push_str(&format!("Tienda objetivo: {}\n", store));
+        }
+        out.push_str(&format!(
+            "Ultima actualizacion: {}\n",
+            s.last_updated_at.format("%Y-%m-%d %H:%M")
+        ));
+        if s.total_items == 0 {
+            out.push_str(
+                "\n_Esta lista no tiene items aun. Usa `shopping_list_add_item` para empezar._\n",
+            );
+        } else if s.remaining_items == 0 {
+            out.push_str(
+                "\n¡Todo listo! Cuando regreses puedes usar `shopping_list_complete` para cerrarla.\n",
+            );
+        }
+        Ok(out)
     }
 
     async fn execute_shopping_list_check_by_name(

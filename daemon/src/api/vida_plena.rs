@@ -86,6 +86,10 @@ pub fn vida_plena_routes() -> Router<ApiState> {
             "/shopping/lists/:list_id/check-by-name",
             post(post_check_shopping_list_item_by_name),
         )
+        .route(
+            "/shopping/lists/:list_id/summary",
+            get(get_shopping_list_summary),
+        )
 }
 
 // ----------------------------------------------------------------------
@@ -717,4 +721,26 @@ async fn post_check_shopping_list_item_by_name(
         .await
         .map_err(err_to_http)?;
     Ok(Json(serde_json::json!({ "match": m })))
+}
+
+async fn get_shopping_list_summary(
+    State(state): State<ApiState>,
+    Path(list_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let s = mgr
+        .get_shopping_list_summary(&list_id)
+        .await
+        .map_err(err_to_http)?;
+    match s {
+        Some(s) => Ok(Json(serde_json::json!({ "summary": s }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("no shopping list with id {}", list_id),
+                code: 404,
+            }),
+        )),
+    }
 }
