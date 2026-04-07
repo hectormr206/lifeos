@@ -272,6 +272,78 @@ CREATE TABLE IF NOT EXISTS growth_goals (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_growth_goals_status ON growth_goals(status);
+
+-- ============================================================================
+-- Fase BI.5 — Ejercicio (Vida Plena)
+-- ============================================================================
+-- Hardware-aware exercise tracking. Three side-tables:
+--   * exercise_inventory: lo que el usuario tiene a la mano (mancuernas,
+--     ligas, banca, gym membership, etc.). Driving constraint para
+--     proponer rutinas que el usuario PUEDA ejecutar.
+--   * exercise_plans: rutinas guardadas (de Axi, de un entrenador, de
+--     YouTube). Cada plan tiene una secuencia JSON de ejercicios.
+--   * exercise_log: sesiones realizadas con tipo, duración, intensidad
+--     percibida (RPE 1-10) y notas.
+--
+-- Las tres son auto-permanentes via la auto-permanencia BI.1 del kind
+-- `exercise_*` en memory_entries. Notes y physical_limitations cifrados
+-- con la clave default.
+
+CREATE TABLE IF NOT EXISTS exercise_inventory (
+    item_id TEXT PRIMARY KEY,
+    item_name TEXT NOT NULL,         -- 'mancuerna ajustable 5-25kg'
+    item_category TEXT NOT NULL,     -- 'free_weights', 'cardio', 'bands',
+                                     -- 'machine', 'gym_access', 'space'
+    quantity INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,                      -- libre: marca, peso máximo, estado
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_inv_category
+    ON exercise_inventory(item_category);
+CREATE INDEX IF NOT EXISTS idx_exercise_inv_active
+    ON exercise_inventory(active);
+
+CREATE TABLE IF NOT EXISTS exercise_plans (
+    plan_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    goal TEXT,                       -- 'fuerza', 'cardio', 'flexibilidad',
+                                     -- 'rehab', 'pérdida de peso', etc.
+    sessions_per_week INTEGER,
+    minutes_per_session INTEGER,
+    exercises_json TEXT NOT NULL,    -- ver Rust ExercisePlanItem
+    source TEXT,                     -- 'axi', 'usuario', 'entrenador:Pedro'
+    active INTEGER NOT NULL DEFAULT 1,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_plans_active
+    ON exercise_plans(active);
+
+CREATE TABLE IF NOT EXISTS exercise_log (
+    session_id TEXT PRIMARY KEY,
+    plan_id TEXT,                    -- FK opcional a exercise_plans
+    session_type TEXT NOT NULL,      -- 'strength', 'cardio', 'flexibility',
+                                     -- 'sport', 'mixed'
+    description TEXT NOT NULL,       -- libre: 'press de banca + remo + curl'
+    duration_min INTEGER NOT NULL,
+    rpe_1_10 INTEGER,                -- intensidad percibida 1-10
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    completed_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_log_completed
+    ON exercise_log(completed_at);
+CREATE INDEX IF NOT EXISTS idx_exercise_log_type
+    ON exercise_log(session_type);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4957,6 +5029,661 @@ struct GrowthGoalRaw {
     updated_at: String,
 }
 
+// ============================================================================
+// Fase BI.5 — Ejercicio (Vida Plena)
+// ============================================================================
+
+/// One piece of equipment (or environment) the user has access to.
+///
+/// Used by the routine generator to constrain proposed exercises to
+/// what the user can actually execute. Examples: mancuernas
+/// ajustables 5-25kg, banca plana, liga de resistencia media, acceso
+/// a gimnasio (con todo), 4m² de espacio libre en casa.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExerciseInventoryItem {
+    pub item_id: String,
+    pub item_name: String,
+    /// Categoría libre. Convención sugerida: `free_weights`, `cardio`,
+    /// `bands`, `machine`, `gym_access`, `space`, `other`.
+    pub item_category: String,
+    pub quantity: u32,
+    pub notes: Option<String>,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One exercise inside an `ExercisePlan`. The plan stores a JSON
+/// array of these as `exercises_json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExercisePlanItem {
+    /// Free text: "press de banca con mancuernas".
+    pub name: String,
+    /// Optional sets × reps spec. We keep it as text so the plan can
+    /// also describe time-based exercises ("plancha 60s").
+    pub sets_reps: Option<String>,
+    /// Optional rest in seconds.
+    pub rest_secs: Option<u32>,
+    pub notes: Option<String>,
+}
+
+/// A saved exercise routine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExercisePlan {
+    pub plan_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Free text: 'fuerza', 'cardio', 'flexibilidad', 'rehab', etc.
+    pub goal: Option<String>,
+    pub sessions_per_week: Option<u32>,
+    pub minutes_per_session: Option<u32>,
+    pub exercises: Vec<ExercisePlanItem>,
+    pub source: Option<String>,
+    pub active: bool,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One completed exercise session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExerciseSession {
+    pub session_id: String,
+    pub plan_id: Option<String>,
+    /// Convención: `strength`, `cardio`, `flexibility`, `sport`, `mixed`.
+    pub session_type: String,
+    pub description: String,
+    pub duration_min: u32,
+    /// Rate of Perceived Exertion 1-10. Optional because not every
+    /// session is rated.
+    pub rpe_1_10: Option<u8>,
+    pub notes: String,
+    pub completed_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `get_exercise_summary`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExerciseSummary {
+    pub inventory: Vec<ExerciseInventoryItem>,
+    pub active_plans: Vec<ExercisePlan>,
+    pub recent_sessions: Vec<ExerciseSession>,
+    pub sessions_last_7_days: u32,
+    pub sessions_last_30_days: u32,
+    pub total_minutes_last_30_days: u32,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Exercise inventory
+    // -----------------------------------------------------------------------
+
+    pub async fn add_exercise_inventory_item(
+        &self,
+        item_name: &str,
+        item_category: &str,
+        quantity: u32,
+        notes: Option<&str>,
+        source_entry_id: Option<&str>,
+    ) -> Result<ExerciseInventoryItem> {
+        let item_name = normalize_non_empty(item_name).context("item_name required")?;
+        let item_category =
+            normalize_non_empty(item_category).context("item_category required")?;
+        let notes = notes.and_then(normalize_non_empty);
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let item_id = format!("einv-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let item_id_clone = item_id.clone();
+        let item_name_clone = item_name.clone();
+        let item_category_clone = item_category.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO exercise_inventory
+                 (item_id, item_name, item_category, quantity, notes, active,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?7)",
+                params![
+                    item_id_clone,
+                    item_name_clone,
+                    item_category_clone,
+                    quantity as i32,
+                    notes_clone,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ExerciseInventoryItem {
+            item_id,
+            item_name,
+            item_category,
+            quantity,
+            notes,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark an inventory item as no longer available (vendido, roto,
+    /// regalado). Returns true if the row was active.
+    pub async fn deactivate_inventory_item(&self, item_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = item_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE exercise_inventory SET active = 0, updated_at = ?1
+                 WHERE item_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// List inventory items. `active_only` filters out deactivated rows.
+    pub async fn list_exercise_inventory(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<ExerciseInventoryItem>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT item_id, item_name, item_category, quantity, notes,
+                        active, source_entry_id, created_at, updated_at
+                 FROM exercise_inventory WHERE active = 1
+                 ORDER BY item_category, item_name"
+            } else {
+                "SELECT item_id, item_name, item_category, quantity, notes,
+                        active, source_entry_id, created_at, updated_at
+                 FROM exercise_inventory
+                 ORDER BY item_category, item_name"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<ExerciseInventoryRaw> = stmt
+                .query_map([], |row| {
+                    Ok(ExerciseInventoryRaw {
+                        item_id: row.get(0)?,
+                        item_name: row.get(1)?,
+                        item_category: row.get(2)?,
+                        quantity: row.get(3)?,
+                        notes: row.get(4)?,
+                        active: row.get::<_, i32>(5)? != 0,
+                        source_entry_id: row.get(6)?,
+                        created_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ExerciseInventoryItem {
+                item_id: r.item_id,
+                item_name: r.item_name,
+                item_category: r.item_category,
+                quantity: r.quantity.max(0) as u32,
+                notes: r.notes,
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Exercise plans
+    // -----------------------------------------------------------------------
+
+    /// Create a new exercise plan with the given exercises.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_exercise_plan(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        goal: Option<&str>,
+        sessions_per_week: Option<u32>,
+        minutes_per_session: Option<u32>,
+        exercises: Vec<ExercisePlanItem>,
+        source: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<ExercisePlan> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        let goal = goal.and_then(normalize_non_empty);
+        let source = source.and_then(normalize_non_empty);
+        if exercises.is_empty() {
+            anyhow::bail!("plan must contain at least one exercise");
+        }
+        let exercises_json = serde_json::to_string(&exercises)
+            .context("failed to serialise plan exercises")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let plan_id = format!("eplan-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let plan_id_clone = plan_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let goal_clone = goal.clone();
+        let source_clone = source.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO exercise_plans
+                 (plan_id, name, description, goal, sessions_per_week,
+                  minutes_per_session, exercises_json, source, active,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?12)",
+                params![
+                    plan_id_clone,
+                    name_clone,
+                    description_clone,
+                    goal_clone,
+                    sessions_per_week.map(|n| n as i32),
+                    minutes_per_session.map(|n| n as i32),
+                    exercises_json,
+                    source_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ExercisePlan {
+            plan_id,
+            name,
+            description,
+            goal,
+            sessions_per_week,
+            minutes_per_session,
+            exercises,
+            source,
+            active: true,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark a plan as inactive (the user moved on or it was a one-off).
+    pub async fn deactivate_exercise_plan(&self, plan_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = plan_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE exercise_plans SET active = 0, updated_at = ?1
+                 WHERE plan_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_exercise_plans(&self, active_only: bool) -> Result<Vec<ExercisePlan>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT plan_id, name, description, goal, sessions_per_week,
+                        minutes_per_session, exercises_json, source, active,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM exercise_plans WHERE active = 1
+                 ORDER BY created_at DESC"
+            } else {
+                "SELECT plan_id, name, description, goal, sessions_per_week,
+                        minutes_per_session, exercises_json, source, active,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM exercise_plans
+                 ORDER BY created_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<ExercisePlanRaw> = stmt
+                .query_map([], |row| {
+                    Ok(ExercisePlanRaw {
+                        plan_id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        goal: row.get(3)?,
+                        sessions_per_week: row.get(4)?,
+                        minutes_per_session: row.get(5)?,
+                        exercises_json: row.get(6)?,
+                        source: row.get(7)?,
+                        active: row.get::<_, i32>(8)? != 0,
+                        notes_nonce_b64: row.get(9)?,
+                        notes_ciphertext_b64: row.get(10)?,
+                        source_entry_id: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ExercisePlan {
+                plan_id: r.plan_id,
+                name: r.name,
+                description: r.description,
+                goal: r.goal,
+                sessions_per_week: r.sessions_per_week.map(|n| n.max(0) as u32),
+                minutes_per_session: r.minutes_per_session.map(|n| n.max(0) as u32),
+                exercises: serde_json::from_str(&r.exercises_json).unwrap_or_default(),
+                source: r.source,
+                active: r.active,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Exercise log
+    // -----------------------------------------------------------------------
+
+    /// Record a completed exercise session.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_exercise_session(
+        &self,
+        plan_id: Option<&str>,
+        session_type: &str,
+        description: &str,
+        duration_min: u32,
+        rpe_1_10: Option<u8>,
+        completed_at: Option<DateTime<Utc>>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<ExerciseSession> {
+        let session_type = normalize_non_empty(session_type).context("session_type required")?;
+        let description = normalize_non_empty(description).context("description required")?;
+        if duration_min == 0 {
+            anyhow::bail!("duration_min must be > 0");
+        }
+        if let Some(r) = rpe_1_10 {
+            if !(1..=10).contains(&r) {
+                anyhow::bail!("rpe_1_10 must be in 1..=10");
+            }
+        }
+        let plan_id = plan_id.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let completed = completed_at.unwrap_or_else(Utc::now);
+        let completed_rfc = completed.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let session_id = format!("esess-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let session_id_clone = session_id.clone();
+        let plan_id_clone = plan_id.clone();
+        let session_type_clone = session_type.clone();
+        let description_clone = description.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO exercise_log
+                 (session_id, plan_id, session_type, description, duration_min,
+                  rpe_1_10, notes_nonce_b64, notes_ciphertext_b64, completed_at,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    session_id_clone,
+                    plan_id_clone,
+                    session_type_clone,
+                    description_clone,
+                    duration_min as i32,
+                    rpe_1_10.map(|r| r as i32),
+                    notes_nonce,
+                    notes_cipher,
+                    completed_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ExerciseSession {
+            session_id,
+            plan_id,
+            session_type,
+            description,
+            duration_min,
+            rpe_1_10,
+            notes: notes_owned,
+            completed_at: completed,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// Recent exercise sessions, newest first.
+    pub async fn list_exercise_sessions(&self, limit: usize) -> Result<Vec<ExerciseSession>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT session_id, plan_id, session_type, description,
+                        duration_min, rpe_1_10, notes_nonce_b64, notes_ciphertext_b64,
+                        completed_at, source_entry_id, created_at
+                 FROM exercise_log
+                 ORDER BY completed_at DESC
+                 LIMIT ?1",
+            )?;
+            let raws: Vec<ExerciseSessionRaw> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(ExerciseSessionRaw {
+                        session_id: row.get(0)?,
+                        plan_id: row.get(1)?,
+                        session_type: row.get(2)?,
+                        description: row.get(3)?,
+                        duration_min: row.get(4)?,
+                        rpe_1_10: row.get(5)?,
+                        notes_nonce_b64: row.get(6)?,
+                        notes_ciphertext_b64: row.get(7)?,
+                        completed_at: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ExerciseSession {
+                session_id: r.session_id,
+                plan_id: r.plan_id,
+                session_type: r.session_type,
+                description: r.description,
+                duration_min: r.duration_min.max(0) as u32,
+                rpe_1_10: r.rpe_1_10.map(|n| n.clamp(0, 10) as u8),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                completed_at: parse_utc(&r.completed_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Exercise summary aggregator
+    // -----------------------------------------------------------------------
+
+    /// Aggregate exercise snapshot for the user.
+    ///
+    /// Combines: full active inventory, all active plans, the last
+    /// `recent_sessions_limit` sessions, and the count + total
+    /// duration over the last 7 / 30 days. The day windows are
+    /// computed against `now_utc` so the caller does not have to
+    /// thread a clock through the test.
+    pub async fn get_exercise_summary(
+        &self,
+        recent_sessions_limit: usize,
+    ) -> Result<ExerciseSummary> {
+        let inventory = self.list_exercise_inventory(true).await?;
+        let active_plans = self.list_exercise_plans(true).await?;
+        let recent_sessions = self.list_exercise_sessions(recent_sessions_limit).await?;
+
+        let now_utc = Utc::now();
+        let cutoff_7 = now_utc - chrono::Duration::days(7);
+        let cutoff_30 = now_utc - chrono::Duration::days(30);
+
+        // Pull the rolling-window counts via SQL so we don't bring
+        // every session into RAM just to count.
+        let db_path = self.db_path.clone();
+        let cutoff_7_str = cutoff_7.to_rfc3339();
+        let cutoff_30_str = cutoff_30.to_rfc3339();
+        let (sessions_7, sessions_30, minutes_30) =
+            tokio::task::spawn_blocking(move || -> Result<(u32, u32, u32)> {
+                let db = Self::open_db(&db_path)?;
+                let s7: i64 = db.query_row(
+                    "SELECT COUNT(*) FROM exercise_log WHERE completed_at >= ?1",
+                    params![cutoff_7_str],
+                    |r| r.get(0),
+                )?;
+                let s30: i64 = db.query_row(
+                    "SELECT COUNT(*) FROM exercise_log WHERE completed_at >= ?1",
+                    params![cutoff_30_str],
+                    |r| r.get(0),
+                )?;
+                let m30: i64 = db
+                    .query_row(
+                        "SELECT COALESCE(SUM(duration_min), 0)
+                         FROM exercise_log
+                         WHERE completed_at >= ?1",
+                        params![cutoff_30_str],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                Ok((s7.max(0) as u32, s30.max(0) as u32, m30.max(0) as u32))
+            })
+            .await??;
+
+        Ok(ExerciseSummary {
+            inventory,
+            active_plans,
+            recent_sessions,
+            sessions_last_7_days: sessions_7,
+            sessions_last_30_days: sessions_30,
+            total_minutes_last_30_days: minutes_30,
+            generated_at: now_utc,
+        })
+    }
+}
+
+// -- Private raw row types for BI.5 -------------------------------------------
+
+struct ExerciseInventoryRaw {
+    item_id: String,
+    item_name: String,
+    item_category: String,
+    quantity: i32,
+    notes: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct ExercisePlanRaw {
+    plan_id: String,
+    name: String,
+    description: Option<String>,
+    goal: Option<String>,
+    sessions_per_week: Option<i32>,
+    minutes_per_session: Option<i32>,
+    exercises_json: String,
+    source: Option<String>,
+    active: bool,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct ExerciseSessionRaw {
+    session_id: String,
+    plan_id: Option<String>,
+    session_type: String,
+    description: String,
+    duration_min: i32,
+    rpe_1_10: Option<i32>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    completed_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
 fn parse_utc(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
@@ -7490,6 +8217,333 @@ mod tests {
         // Active goals = 1 (the achieved one is filtered out).
         assert_eq!(summary.active_goals.len(), 1);
         assert_eq!(summary.active_goals[0].name, "ActiveGoal");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.5: Ejercicio ---------------------------------------------------
+
+    #[tokio::test]
+    async fn test_exercise_inventory_lifecycle() {
+        let dir = temp_dir("memory-plane-exercise-inventory");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let item = mgr
+            .add_exercise_inventory_item(
+                "mancuernas ajustables 5-25kg",
+                "free_weights",
+                2,
+                Some("Marca PowerBlock"),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(item.active);
+        assert_eq!(item.quantity, 2);
+
+        // Add a second item.
+        mgr.add_exercise_inventory_item("liga media", "bands", 1, None, None)
+            .await
+            .unwrap();
+
+        let active = mgr.list_exercise_inventory(true).await.unwrap();
+        assert_eq!(active.len(), 2);
+
+        // Deactivate one and verify filtering.
+        let deact = mgr.deactivate_inventory_item(&item.item_id).await.unwrap();
+        assert!(deact);
+        // Idempotent: second deactivate is no-op.
+        let deact2 = mgr.deactivate_inventory_item(&item.item_id).await.unwrap();
+        assert!(!deact2);
+
+        let after_active = mgr.list_exercise_inventory(true).await.unwrap();
+        assert_eq!(after_active.len(), 1);
+        let after_all = mgr.list_exercise_inventory(false).await.unwrap();
+        assert_eq!(after_all.len(), 2);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_plan_with_exercises_json_roundtrip() {
+        let dir = temp_dir("memory-plane-exercise-plan");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let exercises = vec![
+            ExercisePlanItem {
+                name: "Press de banca con mancuernas".into(),
+                sets_reps: Some("4x10".into()),
+                rest_secs: Some(90),
+                notes: Some("forma controlada".into()),
+            },
+            ExercisePlanItem {
+                name: "Remo con mancuerna a 1 brazo".into(),
+                sets_reps: Some("3x12".into()),
+                rest_secs: Some(60),
+                notes: None,
+            },
+            ExercisePlanItem {
+                name: "Plancha".into(),
+                sets_reps: Some("60s".into()),
+                rest_secs: Some(45),
+                notes: None,
+            },
+        ];
+
+        let plan = mgr
+            .add_exercise_plan(
+                "Empuje + core",
+                Some("Sesion de tren superior con core al final"),
+                Some("fuerza"),
+                Some(3),
+                Some(45),
+                exercises.clone(),
+                Some("axi"),
+                "Hecho a la medida del inventario",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(plan.active);
+        assert_eq!(plan.exercises.len(), 3);
+        assert_eq!(plan.exercises[0].name, "Press de banca con mancuernas");
+        assert_eq!(plan.exercises[2].sets_reps.as_deref(), Some("60s"));
+        assert_eq!(plan.notes, "Hecho a la medida del inventario");
+
+        // Roundtrip via list_exercise_plans (decodes the JSON column).
+        let plans = mgr.list_exercise_plans(true).await.unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].exercises.len(), 3);
+        assert_eq!(plans[0].exercises[1].rest_secs, Some(60));
+        // Notes survived encryption.
+        assert_eq!(plans[0].notes, "Hecho a la medida del inventario");
+
+        // Deactivate and verify filtering.
+        mgr.deactivate_exercise_plan(&plan.plan_id).await.unwrap();
+        let active = mgr.list_exercise_plans(true).await.unwrap();
+        assert_eq!(active.len(), 0);
+        let all = mgr.list_exercise_plans(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(!all[0].active);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_plan_requires_at_least_one_exercise() {
+        let dir = temp_dir("memory-plane-exercise-plan-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let result = mgr
+            .add_exercise_plan(
+                "X",
+                None,
+                None,
+                None,
+                None,
+                vec![],
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_log_session_validation() {
+        let dir = temp_dir("memory-plane-exercise-log-validation");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // duration_min = 0 must error.
+        let result = mgr
+            .log_exercise_session(
+                None,
+                "strength",
+                "test",
+                0,
+                Some(7),
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        // rpe out of range must error.
+        let result = mgr
+            .log_exercise_session(
+                None,
+                "strength",
+                "test",
+                30,
+                Some(15),
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        // Valid call succeeds.
+        let session = mgr
+            .log_exercise_session(
+                None,
+                "strength",
+                "test",
+                45,
+                Some(7),
+                None,
+                "Buen dia",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.duration_min, 45);
+        assert_eq!(session.rpe_1_10, Some(7));
+        assert_eq!(session.notes, "Buen dia");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_log_recent_sessions_ordering() {
+        let dir = temp_dir("memory-plane-exercise-log-order");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert 3 sessions with explicit timestamps to control order.
+        let t1 = Utc::now() - chrono::Duration::days(3);
+        let t2 = Utc::now() - chrono::Duration::days(1);
+        let t3 = Utc::now();
+
+        for (t, desc) in [(t1, "oldest"), (t2, "middle"), (t3, "newest")] {
+            mgr.log_exercise_session(
+                None,
+                "cardio",
+                desc,
+                30,
+                None,
+                Some(t),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let sessions = mgr.list_exercise_sessions(50).await.unwrap();
+        assert_eq!(sessions.len(), 3);
+        // Newest first.
+        assert_eq!(sessions[0].description, "newest");
+        assert_eq!(sessions[1].description, "middle");
+        assert_eq!(sessions[2].description, "oldest");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_summary_aggregates_everything() {
+        let dir = temp_dir("memory-plane-exercise-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 2 inventory items + 1 deactivated.
+        mgr.add_exercise_inventory_item("mancuernas", "free_weights", 2, None, None)
+            .await
+            .unwrap();
+        mgr.add_exercise_inventory_item("banca", "free_weights", 1, None, None)
+            .await
+            .unwrap();
+        let dead = mgr
+            .add_exercise_inventory_item("liga rota", "bands", 1, None, None)
+            .await
+            .unwrap();
+        mgr.deactivate_inventory_item(&dead.item_id).await.unwrap();
+
+        // 1 active plan + 1 deactivated.
+        mgr.add_exercise_plan(
+            "Plan A",
+            None,
+            Some("fuerza"),
+            Some(3),
+            Some(45),
+            vec![ExercisePlanItem {
+                name: "Press".into(),
+                sets_reps: Some("4x10".into()),
+                rest_secs: Some(90),
+                notes: None,
+            }],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        let dead_plan = mgr
+            .add_exercise_plan(
+                "Plan viejo",
+                None,
+                None,
+                None,
+                None,
+                vec![ExercisePlanItem {
+                    name: "Algo".into(),
+                    sets_reps: None,
+                    rest_secs: None,
+                    notes: None,
+                }],
+                None,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        mgr.deactivate_exercise_plan(&dead_plan.plan_id).await.unwrap();
+
+        // Sessions: 2 within last 7 days, 1 more within last 30 days,
+        // 1 older than 30 days.
+        let now = Utc::now();
+        let in_7d_a = now - chrono::Duration::days(2);
+        let in_7d_b = now - chrono::Duration::days(5);
+        let in_30d = now - chrono::Duration::days(20);
+        let old = now - chrono::Duration::days(40);
+
+        for (t, mins) in [
+            (in_7d_a, 45_u32),
+            (in_7d_b, 30),
+            (in_30d, 60),
+            (old, 90),
+        ] {
+            mgr.log_exercise_session(
+                None,
+                "strength",
+                "session",
+                mins,
+                Some(7),
+                Some(t),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let summary = mgr.get_exercise_summary(50).await.unwrap();
+
+        assert_eq!(summary.inventory.len(), 2);
+        assert_eq!(summary.active_plans.len(), 1);
+        // 4 sessions stored, all returned (limit 50).
+        assert_eq!(summary.recent_sessions.len(), 4);
+        assert_eq!(summary.sessions_last_7_days, 2);
+        assert_eq!(summary.sessions_last_30_days, 3);
+        assert_eq!(summary.total_minutes_last_30_days, 45 + 30 + 60);
 
         std::fs::remove_dir_all(dir).ok();
     }

@@ -25,7 +25,7 @@ pub mod inner {
     use crate::computer_use::{ComputerUseAction, ComputerUseManager};
     use crate::llm_router::{ChatMessage, LlmRouter, RouterRequest, TaskComplexity};
     use crate::memory_plane::{
-        extract_entities_from_text, BookStatus, GoalStatus, MemoryPlaneManager,
+        extract_entities_from_text, BookStatus, ExercisePlanItem, GoalStatus, MemoryPlaneManager,
     };
     use crate::proactive;
     use crate::session_store::{SessionKey, SessionStore, TranscriptTurn};
@@ -220,6 +220,28 @@ LifeOS lleva el registro de lectura, habitos y metas a largo plazo del usuario. 
 
 10t. **growth_summary** — Devuelve el resumen completo de crecimiento personal: libros que esta leyendo + libros recien terminados + habitos activos con su streak de los ultimos 30 dias + metas activas. Usalo cuando el usuario te pida revisar como va con sus metas o cuando quiera reflexionar sobre su progreso.
     args: {"today": "2026-04-06"}
+
+## Ejercicio (Vida Plena BI.5)
+
+LifeOS lleva el inventario de equipo del usuario, sus rutinas guardadas, y el log de sesiones realizadas. **Reglas:** las rutinas que propones deben respetar el inventario (no propongas press de banca con barra olimpica si solo tiene mancuernas). NO eres entrenador certificado: para lesiones o rehabilitacion, recomienda profesional.
+
+10u. **exercise_inventory_add** — Registra un equipo o recurso disponible (mancuernas, banca, liga, gym membership, m² de espacio). Categorias sugeridas: free_weights, cardio, bands, machine, gym_access, space, other.
+    args: {"item_name": "mancuernas ajustables 5-25kg", "item_category": "free_weights", "quantity": 2, "notes": "Marca PowerBlock"}
+
+10v. **exercise_inventory_list** — Lista el inventario activo del usuario.
+    args: {}
+
+10w. **exercise_plan_add** — Crea una rutina con una lista de ejercicios. Cada ejercicio tiene name, opcional sets_reps (texto: "4x10" o "60s"), opcional rest_secs y notes. Antes de proponer ejercicios, REVISA el inventario del usuario para no proponer cosas que no puede hacer.
+    args: {"name": "Empuje tren superior", "goal": "fuerza", "sessions_per_week": 3, "minutes_per_session": 45, "exercises": [{"name": "Press de banca con mancuernas", "sets_reps": "4x10", "rest_secs": 90}]}
+
+10x. **exercise_plan_list** — Lista las rutinas activas del usuario.
+    args: {}
+
+10y. **exercise_log_session** — Registra una sesion completada. session_type: strength, cardio, flexibility, sport, mixed. rpe_1_10 es la intensidad percibida (Rate of Perceived Exertion).
+    args: {"session_type": "strength", "description": "Press de banca + remo + curl", "duration_min": 45, "rpe_1_10": 7, "plan_id": "eplan-..."}
+
+10z. **exercise_summary** — Devuelve resumen completo: inventario activo + rutinas activas + sesiones recientes + conteos de los ultimos 7 y 30 dias + minutos totales de los ultimos 30 dias.
+    args: {}
 
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
@@ -1301,6 +1323,13 @@ LifeOS lleva el registro de lectura, habitos y metas a largo plazo del usuario. 
             "goal_add" => execute_goal_add(&call.args, ctx).await,
             "goal_progress" => execute_goal_progress(&call.args, ctx).await,
             "growth_summary" => execute_growth_summary(&call.args, ctx).await,
+            // BI.5 — Ejercicio
+            "exercise_inventory_add" => execute_exercise_inventory_add(&call.args, ctx).await,
+            "exercise_inventory_list" => execute_exercise_inventory_list(ctx).await,
+            "exercise_plan_add" => execute_exercise_plan_add(&call.args, ctx).await,
+            "exercise_plan_list" => execute_exercise_plan_list(ctx).await,
+            "exercise_log_session" => execute_exercise_log_session(&call.args, ctx).await,
+            "exercise_summary" => execute_exercise_summary(ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -2947,6 +2976,245 @@ LifeOS lleva el registro de lectura, habitos y metas a largo plazo del usuario. 
             out.push_str(
                 "Aun no hay datos de crecimiento personal registrados. \
                  Empieza con `book_add`, `habit_add` o `goal_add`.\n",
+            );
+        }
+
+        Ok(out)
+    }
+
+    // ========================================================================
+    // Fase BI.5 — Ejercicio (Vida Plena)
+    // ========================================================================
+
+    async fn execute_exercise_inventory_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let item_name = args["item_name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'item_name'"))?;
+        let item_category = args["item_category"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'item_category'"))?;
+        let quantity = args["quantity"].as_u64().unwrap_or(1) as u32;
+        let notes = args["notes"].as_str();
+        let mem = require_memory(ctx).await?;
+        let item = mem
+            .add_exercise_inventory_item(item_name, item_category, quantity, notes, None)
+            .await?;
+        Ok(format!(
+            "Equipo registrado (id: {}): {} ×{} [{}]",
+            item.item_id, item.item_name, item.quantity, item.item_category
+        ))
+    }
+
+    async fn execute_exercise_inventory_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let items = mem.list_exercise_inventory(true).await?;
+        if items.is_empty() {
+            return Ok("Sin equipo registrado.".into());
+        }
+        let lines: Vec<String> = items
+            .iter()
+            .map(|i| {
+                let notes = i
+                    .notes
+                    .as_deref()
+                    .map(|n| format!(" — {}", n))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] [{}] {} ×{}{}",
+                    i.item_id, i.item_category, i.item_name, i.quantity, notes
+                )
+            })
+            .collect();
+        Ok(format!("Inventario:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_exercise_plan_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let description = args["description"].as_str();
+        let goal = args["goal"].as_str();
+        let sessions_per_week = args["sessions_per_week"].as_u64().map(|n| n as u32);
+        let minutes_per_session = args["minutes_per_session"].as_u64().map(|n| n as u32);
+        let source = args["source"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+
+        // exercises is REQUIRED — parse from a JSON array of objects
+        // with name + optional sets_reps/rest_secs/notes.
+        let exercises_value = args
+            .get("exercises")
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'exercises'"))?;
+        let exercises: Vec<ExercisePlanItem> = serde_json::from_value(exercises_value.clone())
+            .map_err(|e| anyhow::anyhow!("'exercises' invalido: {}", e))?;
+        if exercises.is_empty() {
+            return Err(anyhow::anyhow!(
+                "El plan debe contener al menos un ejercicio"
+            ));
+        }
+
+        let mem = require_memory(ctx).await?;
+        let plan = mem
+            .add_exercise_plan(
+                name,
+                description,
+                goal,
+                sessions_per_week,
+                minutes_per_session,
+                exercises,
+                source,
+                notes,
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Rutina creada (id: {}): \"{}\" — {} ejercicios",
+            plan.plan_id,
+            plan.name,
+            plan.exercises.len()
+        ))
+    }
+
+    async fn execute_exercise_plan_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let plans = mem.list_exercise_plans(true).await?;
+        if plans.is_empty() {
+            return Ok("Sin rutinas activas.".into());
+        }
+        let lines: Vec<String> = plans
+            .iter()
+            .map(|p| {
+                let goal = p
+                    .goal
+                    .as_deref()
+                    .map(|g| format!(" — {}", g))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] \"{}\"{} ({} ejercicios)",
+                    p.plan_id,
+                    p.name,
+                    goal,
+                    p.exercises.len()
+                )
+            })
+            .collect();
+        Ok(format!("Rutinas activas:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_exercise_log_session(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let session_type = args["session_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'session_type'"))?;
+        let description = args["description"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'description'"))?;
+        let duration_min = args["duration_min"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'duration_min'"))?
+            as u32;
+        let rpe = args["rpe_1_10"].as_u64().map(|n| n as u8);
+        let plan_id = args["plan_id"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let session = mem
+            .log_exercise_session(
+                plan_id,
+                session_type,
+                description,
+                duration_min,
+                rpe,
+                None,
+                notes,
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Sesion registrada (id: {}): {} — {} min{}",
+            session.session_id,
+            session.session_type,
+            session.duration_min,
+            session
+                .rpe_1_10
+                .map(|r| format!(" — RPE {}/10", r))
+                .unwrap_or_default()
+        ))
+    }
+
+    async fn execute_exercise_summary(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let summary = mem.get_exercise_summary(10).await?;
+        let mut out = String::from("# Resumen de ejercicio\n\n");
+
+        out.push_str(&format!(
+            "## Actividad reciente\n- Últimos 7 días: {} sesiones\n- Últimos 30 días: {} sesiones, {} minutos totales\n\n",
+            summary.sessions_last_7_days,
+            summary.sessions_last_30_days,
+            summary.total_minutes_last_30_days
+        ));
+
+        if !summary.inventory.is_empty() {
+            out.push_str("## Equipo disponible\n");
+            for i in &summary.inventory {
+                out.push_str(&format!(
+                    "- [{}] {} ×{}\n",
+                    i.item_category, i.item_name, i.quantity
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !summary.active_plans.is_empty() {
+            out.push_str("## Rutinas activas\n");
+            for p in &summary.active_plans {
+                let goal = p
+                    .goal
+                    .as_deref()
+                    .map(|g| format!(" — {}", g))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- {}{} ({} ejercicios)\n",
+                    p.name,
+                    goal,
+                    p.exercises.len()
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !summary.recent_sessions.is_empty() {
+            out.push_str("## Sesiones recientes\n");
+            for s in summary.recent_sessions.iter().take(10) {
+                let rpe = s
+                    .rpe_1_10
+                    .map(|r| format!(" — RPE {}/10", r))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "- [{}] {} — {} min{}\n",
+                    s.completed_at.format("%Y-%m-%d"),
+                    s.description,
+                    s.duration_min,
+                    rpe
+                ));
+            }
+            out.push('\n');
+        }
+
+        if summary.inventory.is_empty()
+            && summary.active_plans.is_empty()
+            && summary.recent_sessions.is_empty()
+        {
+            out.push_str(
+                "Aun no hay datos de ejercicio. Empieza registrando tu equipo \
+                 con `exercise_inventory_add` o una sesion con \
+                 `exercise_log_session`.\n",
             );
         }
 
