@@ -90,6 +90,18 @@ pub fn vida_plena_routes() -> Router<ApiState> {
             "/shopping/lists/:list_id/summary",
             get(get_shopping_list_summary),
         )
+        .route(
+            "/shopping/lists/:list_id/clear-completed",
+            post(post_shopping_list_clear_completed),
+        )
+        // -- Vida Plena refinements de cierre -----------------------
+        .route("/mood-streak", get(get_mood_streak))
+        .route(
+            "/habits/:habit_id/current-streak",
+            get(get_habit_current_streak),
+        )
+        .route("/habits/due-today", get(get_habits_due_today_endpoint))
+        .route("/relationships/stale", get(get_stale_relationships))
 }
 
 // ----------------------------------------------------------------------
@@ -743,4 +755,100 @@ async fn get_shopping_list_summary(
             }),
         )),
     }
+}
+
+async fn post_shopping_list_clear_completed(
+    State(state): State<ApiState>,
+    Path(list_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let removed = mgr
+        .shopping_list_clear_completed(&list_id)
+        .await
+        .map_err(err_to_http)?;
+    match removed {
+        Some(n) => Ok(Json(serde_json::json!({ "removed": n }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("no shopping list with id {}", list_id),
+                code: 404,
+            }),
+        )),
+    }
+}
+
+// ----------------------------------------------------------------------
+// Vida Plena refinements de cierre
+// ----------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct StaleRelationshipsQuery {
+    #[serde(default = "default_min_importance")]
+    pub min_importance: u8,
+    #[serde(default = "default_days_threshold")]
+    pub days_threshold: i64,
+}
+
+fn default_min_importance() -> u8 {
+    7
+}
+fn default_days_threshold() -> i64 {
+    30
+}
+
+async fn get_mood_streak(
+    State(state): State<ApiState>,
+    Query(q): Query<TodayQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let today = today_or_local(q.today_local.as_deref());
+    let mgr = state.memory_plane_manager.read().await;
+    let s = mgr.get_mood_log_streak(&today).await.map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "streak": s })))
+}
+
+async fn get_habit_current_streak(
+    State(state): State<ApiState>,
+    Path(habit_id): Path<String>,
+    Query(q): Query<TodayQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let today = today_or_local(q.today_local.as_deref());
+    let mgr = state.memory_plane_manager.read().await;
+    let s = mgr
+        .get_habit_current_streak(&habit_id, &today)
+        .await
+        .map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({ "streak": s })))
+}
+
+async fn get_habits_due_today_endpoint(
+    State(state): State<ApiState>,
+    Query(q): Query<TodayQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let today = today_or_local(q.today_local.as_deref());
+    let mgr = state.memory_plane_manager.read().await;
+    let due = mgr
+        .get_habits_due_today(&today)
+        .await
+        .map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({
+        "habits": due,
+        "count": due.len(),
+    })))
+}
+
+async fn get_stale_relationships(
+    State(state): State<ApiState>,
+    Query(q): Query<StaleRelationshipsQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let stale = mgr
+        .get_stale_relationships(q.min_importance, q.days_threshold)
+        .await
+        .map_err(err_to_http)?;
+    Ok(Json(serde_json::json!({
+        "relationships": stale,
+        "count": stale.len(),
+    })))
 }

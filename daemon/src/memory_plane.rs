@@ -7687,6 +7687,339 @@ pub fn shopping_list_to_summary(list: &ShoppingList) -> ShoppingListSummary {
     }
 }
 
+// ============================================================================
+// Vida Plena — Refinements de cierre
+// ============================================================================
+//
+// Conjunto de helpers pequeños que cierran loops de UX en varios
+// pillars. Todos son DERIVED queries sobre tablas existentes — sin
+// schema changes, sin estado nuevo. La intencion es que estos
+// metodos esten disponibles para que el dashboard / Telegram bot
+// puedan responder preguntas tipo "qué me falta hoy" sin tener que
+// computar logica en el cliente.
+
+/// Streak de mood logs (BI.4). Cuenta dias consecutivos hacia
+/// atras desde `today` donde el usuario hizo al menos un
+/// `mood_log_checkin`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MoodLogStreak {
+    /// Dias consecutivos desde `today` (inclusive si hoy ya hay
+    /// log) hacia atras hasta encontrar el primer hueco.
+    pub current_streak_days: u32,
+    /// Streak mas larga jamas registrada.
+    pub longest_streak_days: u32,
+    /// Total de dias unicos con al menos un log (no checkins
+    /// totales — un dia con 5 mood logs cuenta como 1).
+    pub total_log_days: u32,
+    /// Fecha del ultimo dia con log (YYYY-MM-DD).
+    pub last_log_date: Option<String>,
+}
+
+/// Streak actual de un habito especifico (BI.7). Distinto del
+/// `get_habit_streak` existente: este cuenta dias CONSECUTIVOS
+/// hacia atras desde hoy, no dias-marcados-en-ventana.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HabitCurrentStreak {
+    pub habit_id: String,
+    pub habit_name: String,
+    pub current_streak_days: u32,
+    pub longest_streak_days: u32,
+    pub last_completed_date: Option<String>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.3.1: shopping list — bulk-clear checked items
+    // -----------------------------------------------------------------------
+
+    /// Quita TODOS los items checked de una lista de un solo golpe.
+    /// Util al regresar de la tienda para reusar la lista plantilla
+    /// sin tener que removerlos uno por uno. Devuelve cuantos items
+    /// se quitaron, o `None` si la lista no existe.
+    pub async fn shopping_list_clear_completed(&self, list_id: &str) -> Result<Option<u32>> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let removed = tokio::task::spawn_blocking(move || -> Result<Option<u32>> {
+            let db = Self::open_db(&db_path)?;
+            let json: String = match db.query_row(
+                "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                params![id],
+                |r| r.get(0),
+            ) {
+                Ok(s) => s,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
+            let items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            let before = items.len();
+            let kept: Vec<ShoppingListItem> = items.into_iter().filter(|i| !i.checked).collect();
+            let removed = (before - kept.len()) as u32;
+            if removed == 0 {
+                return Ok(Some(0));
+            }
+            let new_json = serde_json::to_string(&kept)?;
+            db.execute(
+                "UPDATE shopping_lists SET items_json = ?1, updated_at = ?2
+                 WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            Ok(Some(removed))
+        })
+        .await??;
+        Ok(removed)
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.4: mood log streak
+    // -----------------------------------------------------------------------
+
+    /// Compute the user's mood-log streak as of `today_local`.
+    /// `today_local` is `YYYY-MM-DD` interpretado como la fecha
+    /// local del usuario. Strategy:
+    ///
+    ///   1. Pull all mood checkins ordered DESC by logged_at.
+    ///   2. Project each `logged_at` to its local day (lossy: we
+    ///      use the date portion of the RFC3339 stored, which IS
+    ///      the day in UTC — for true local-day grouping the
+    ///      caller must pass timestamps already in local time, but
+    ///      the day-bucketing is the same operation either way).
+    ///   3. Build a sorted descending Vec of unique day strings.
+    ///   4. Walk forward from `today` counting consecutive days
+    ///      that appear in the set; stop at the first gap.
+    ///   5. Compute longest streak across all days for fairness.
+    pub async fn get_mood_log_streak(&self, today_local: &str) -> Result<MoodLogStreak> {
+        let today = chrono::NaiveDate::parse_from_str(today_local, "%Y-%m-%d")
+            .with_context(|| format!("invalid today_local '{}'", today_local))?;
+
+        let db_path = self.db_path.clone();
+        let raw_dates = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT logged_at FROM mental_health_mood_log
+                 ORDER BY logged_at DESC",
+            )?;
+            let rows: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+
+        // Project to unique day strings (the date prefix of the
+        // RFC3339 timestamp).
+        let mut day_set = std::collections::BTreeSet::new();
+        for ts in &raw_dates {
+            if let Some(date_part) = ts.get(..10) {
+                day_set.insert(date_part.to_string());
+            }
+        }
+        let total_log_days = day_set.len() as u32;
+        let last_log_date = day_set.iter().next_back().cloned();
+
+        // Current streak: walk back from `today` checking
+        // membership in the set.
+        let mut current_streak: u32 = 0;
+        let mut cursor = today;
+        while day_set.contains(&cursor.format("%Y-%m-%d").to_string()) {
+            current_streak += 1;
+            cursor = match cursor.checked_sub_signed(chrono::Duration::days(1)) {
+                Some(d) => d,
+                None => break,
+            };
+        }
+
+        // Longest streak: scan the sorted set, counting consecutive
+        // days. We materialize as Vec<NaiveDate> for arithmetic.
+        let mut sorted_days: Vec<chrono::NaiveDate> = day_set
+            .iter()
+            .filter_map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+            .collect();
+        sorted_days.sort();
+        let mut longest: u32 = 0;
+        let mut run: u32 = 0;
+        let mut prev: Option<chrono::NaiveDate> = None;
+        for d in &sorted_days {
+            run = match prev {
+                Some(p) if (*d - p).num_days() == 1 => run + 1,
+                Some(p) if p == *d => run, // same day shouldn't happen but be safe
+                _ => 1,
+            };
+            if run > longest {
+                longest = run;
+            }
+            prev = Some(*d);
+        }
+
+        Ok(MoodLogStreak {
+            current_streak_days: current_streak,
+            longest_streak_days: longest,
+            total_log_days,
+            last_log_date,
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.7: current habit streak (consecutive days from today backwards)
+    // -----------------------------------------------------------------------
+
+    /// Compute the consecutive-day streak of a habit ending at
+    /// `today_local`. Distinct from `get_habit_streak` (which
+    /// counts marked days in a fixed N-day window).
+    ///
+    /// `current_streak_days` = consecutive days ending at today
+    ///   where the habit has at least one `completed = 1` check-in.
+    /// `longest_streak_days` = longest consecutive run anywhere in
+    ///   the user's history of this habit.
+    pub async fn get_habit_current_streak(
+        &self,
+        habit_id: &str,
+        today_local: &str,
+    ) -> Result<HabitCurrentStreak> {
+        let today = chrono::NaiveDate::parse_from_str(today_local, "%Y-%m-%d")
+            .with_context(|| format!("invalid today_local '{}'", today_local))?;
+        let id = habit_id.to_string();
+        let db_path = self.db_path.clone();
+
+        let (habit_name, completed_dates) =
+            tokio::task::spawn_blocking(move || -> Result<(String, Vec<String>)> {
+                let db = Self::open_db(&db_path)?;
+                let name: String = db.query_row(
+                    "SELECT name FROM habits WHERE habit_id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )?;
+                let mut stmt = db.prepare(
+                    "SELECT logged_for_date FROM habit_log
+                     WHERE habit_id = ?1 AND completed = 1
+                     ORDER BY logged_for_date ASC",
+                )?;
+                let dates: Vec<String> = stmt
+                    .query_map(params![id], |r| r.get::<_, String>(0))?
+                    .flatten()
+                    .collect();
+                Ok((name, dates))
+            })
+            .await??;
+
+        // Dedup into a sorted set.
+        let mut day_set = std::collections::BTreeSet::new();
+        for d in &completed_dates {
+            day_set.insert(d.clone());
+        }
+        let last_completed_date = day_set.iter().next_back().cloned();
+
+        // Current streak: walk back from today.
+        let mut current: u32 = 0;
+        let mut cursor = today;
+        while day_set.contains(&cursor.format("%Y-%m-%d").to_string()) {
+            current += 1;
+            cursor = match cursor.checked_sub_signed(chrono::Duration::days(1)) {
+                Some(d) => d,
+                None => break,
+            };
+        }
+
+        // Longest streak: scan sorted dates.
+        let mut sorted_days: Vec<chrono::NaiveDate> = day_set
+            .iter()
+            .filter_map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+            .collect();
+        sorted_days.sort();
+        let mut longest: u32 = 0;
+        let mut run: u32 = 0;
+        let mut prev: Option<chrono::NaiveDate> = None;
+        for d in &sorted_days {
+            run = match prev {
+                Some(p) if (*d - p).num_days() == 1 => run + 1,
+                _ => 1,
+            };
+            if run > longest {
+                longest = run;
+            }
+            prev = Some(*d);
+        }
+
+        Ok(HabitCurrentStreak {
+            habit_id: habit_id.to_string(),
+            habit_name,
+            current_streak_days: current,
+            longest_streak_days: longest,
+            last_completed_date,
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.7: habits due today (no check-in for `today_local`)
+    // -----------------------------------------------------------------------
+
+    /// Returns active habits that have NOT been checked off (or
+    /// recorded as skipped) for `today_local`. The dashboard /
+    /// Telegram bot can use this to ask the user which ones they
+    /// did. Frequency awareness ("solo lunes") is intentionally
+    /// NOT enforced here — the field is free-form and a smart
+    /// reminder layer would parse it. This API just answers "qué
+    /// hábitos activos no tienen log de hoy".
+    pub async fn get_habits_due_today(&self, today_local: &str) -> Result<Vec<Habit>> {
+        // Validate format eagerly.
+        chrono::NaiveDate::parse_from_str(today_local, "%Y-%m-%d")
+            .with_context(|| format!("invalid today_local '{}'", today_local))?;
+        let active_habits = self.list_habits(true).await?;
+        let today_owned = today_local.to_string();
+        let db_path = self.db_path.clone();
+
+        let logged_today: std::collections::HashSet<String> =
+            tokio::task::spawn_blocking(move || -> Result<std::collections::HashSet<String>> {
+                let db = Self::open_db(&db_path)?;
+                let mut stmt = db.prepare(
+                    "SELECT habit_id FROM habit_log
+                     WHERE logged_for_date = ?1 AND completed = 1",
+                )?;
+                let ids: std::collections::HashSet<String> = stmt
+                    .query_map(params![today_owned], |r| r.get::<_, String>(0))?
+                    .flatten()
+                    .collect();
+                Ok(ids)
+            })
+            .await??;
+
+        Ok(active_habits
+            .into_iter()
+            .filter(|h| !logged_today.contains(&h.habit_id))
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9: stale relationships (custom thresholds)
+    // -----------------------------------------------------------------------
+
+    /// List active relationships with `importance_1_10 >= min_importance`
+    /// that have not been contacted in `days_threshold` days. Generaliza
+    /// la deteccion que ya hace `forgetting_check` con thresholds fijos
+    /// — el caller puede usar 7 dias para "amistades cercanas" o 30
+    /// dias para "familia", etc.
+    pub async fn get_stale_relationships(
+        &self,
+        min_importance: u8,
+        days_threshold: i64,
+    ) -> Result<Vec<Relationship>> {
+        let now = Utc::now();
+        let active = self.list_relationships(true).await?;
+        Ok(active
+            .into_iter()
+            .filter(|r| r.importance_1_10 >= min_importance)
+            .filter(|r| {
+                let elapsed = match r.last_contact_at {
+                    Some(t) => (now - t).num_days(),
+                    None => (now - r.created_at).num_days(),
+                };
+                elapsed >= days_threshold
+            })
+            .collect())
+    }
+}
+
 // -- Private raw rows + mappers for BI.3.1 ----------------------------------
 
 struct FoodRaw {
@@ -20546,6 +20879,254 @@ mod tests {
             .await
             .unwrap();
         assert!(m.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // Vida Plena refinements de cierre
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn shopping_list_clear_completed_removes_only_checked() {
+        let dir = temp_dir("memory-plane-shop-clear");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await; // 3 items, none checked
+
+        // Check 2 of 3 items.
+        mgr.check_shopping_list_item(&l.list_id, 0, true)
+            .await
+            .unwrap();
+        mgr.check_shopping_list_item(&l.list_id, 2, true)
+            .await
+            .unwrap();
+
+        let removed = mgr
+            .shopping_list_clear_completed(&l.list_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(removed, 2);
+
+        let fetched = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(fetched.items.len(), 1);
+        assert_eq!(fetched.items[0].name, "Pan integral"); // the unchecked one survived
+
+        // Idempotent — second call removes nothing.
+        let again = mgr
+            .shopping_list_clear_completed(&l.list_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(again, 0);
+
+        // Unknown list → None.
+        let none = mgr
+            .shopping_list_clear_completed("shop-doesnt-exist")
+            .await
+            .unwrap();
+        assert!(none.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn mood_log_streak_empty_returns_zeros() {
+        let dir = temp_dir("memory-plane-mood-streak-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let s = mgr.get_mood_log_streak("2026-04-08").await.unwrap();
+        assert_eq!(s.current_streak_days, 0);
+        assert_eq!(s.longest_streak_days, 0);
+        assert_eq!(s.total_log_days, 0);
+        assert!(s.last_log_date.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn mood_log_streak_counts_consecutive_days_back_from_today() {
+        let dir = temp_dir("memory-plane-mood-streak-3");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert mood logs at specific UTC dates so the day-bucket
+        // grouping is deterministic regardless of host timezone.
+        let dates = ["2026-04-08", "2026-04-07", "2026-04-06", "2026-04-04"];
+        for d in dates {
+            let ts = format!("{}T12:00:00Z", d);
+            let parsed: DateTime<Utc> = chrono::DateTime::parse_from_rfc3339(&ts)
+                .unwrap()
+                .with_timezone(&Utc);
+            mgr.log_mood_checkin(7, None, None, "", Some(parsed), None)
+                .await
+                .unwrap();
+        }
+        // 2x logs on the same day shouldn't double-count.
+        let same_day_extra: DateTime<Utc> =
+            chrono::DateTime::parse_from_rfc3339("2026-04-08T20:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc);
+        mgr.log_mood_checkin(8, None, None, "", Some(same_day_extra), None)
+            .await
+            .unwrap();
+
+        // From today=2026-04-08: 08, 07, 06 are consecutive → 3.
+        // 04 is a gap (05 missing), so streak stops at 3.
+        let s = mgr.get_mood_log_streak("2026-04-08").await.unwrap();
+        assert_eq!(s.current_streak_days, 3, "got {:?}", s);
+        assert_eq!(s.total_log_days, 4); // 04, 06, 07, 08 — same-day extra dedup'd
+                                         // Longest streak should also be 3 (06,07,08).
+        assert_eq!(s.longest_streak_days, 3);
+        assert_eq!(s.last_log_date.as_deref(), Some("2026-04-08"));
+
+        // From a later day where today doesn't have a log → current=0.
+        let s2 = mgr.get_mood_log_streak("2026-04-10").await.unwrap();
+        assert_eq!(s2.current_streak_days, 0);
+        assert_eq!(s2.longest_streak_days, 3);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn habit_current_streak_consecutive_days_back() {
+        let dir = temp_dir("memory-plane-habit-streak-current");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h = mgr
+            .add_habit("Meditar", None, "daily", "", None)
+            .await
+            .unwrap();
+        // Check-ins for 2026-04-06, 07, 08 (consecutive ending today).
+        for d in ["2026-04-06", "2026-04-07", "2026-04-08"] {
+            mgr.log_habit_checkin(&h.habit_id, true, d, None)
+                .await
+                .unwrap();
+        }
+        // Older streak: 2026-04-01, 02, 03 (3 days), gap, then the 3 above.
+        for d in ["2026-04-01", "2026-04-02", "2026-04-03"] {
+            mgr.log_habit_checkin(&h.habit_id, true, d, None)
+                .await
+                .unwrap();
+        }
+
+        let s = mgr
+            .get_habit_current_streak(&h.habit_id, "2026-04-08")
+            .await
+            .unwrap();
+        assert_eq!(s.current_streak_days, 3);
+        assert_eq!(s.longest_streak_days, 3); // tied
+        assert_eq!(s.last_completed_date.as_deref(), Some("2026-04-08"));
+        assert_eq!(s.habit_name, "Meditar");
+
+        // Today not checked → current=0, longest still 3.
+        let s2 = mgr
+            .get_habit_current_streak(&h.habit_id, "2026-04-10")
+            .await
+            .unwrap();
+        assert_eq!(s2.current_streak_days, 0);
+        assert_eq!(s2.longest_streak_days, 3);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn habits_due_today_excludes_logged_ones() {
+        let dir = temp_dir("memory-plane-habits-due");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h1 = mgr
+            .add_habit("Meditar", None, "daily", "", None)
+            .await
+            .unwrap();
+        let h2 = mgr
+            .add_habit("Leer", None, "daily", "", None)
+            .await
+            .unwrap();
+        let h3 = mgr
+            .add_habit("Correr", None, "daily", "", None)
+            .await
+            .unwrap();
+
+        // Mark h1 as done today.
+        mgr.log_habit_checkin(&h1.habit_id, true, "2026-04-08", None)
+            .await
+            .unwrap();
+        // Mark h2 as INCOMPLETE today (completed=false). Should still
+        // count as "due" since the active filter expects completed=1.
+        mgr.log_habit_checkin(&h2.habit_id, false, "2026-04-08", None)
+            .await
+            .unwrap();
+
+        let due = mgr.get_habits_due_today("2026-04-08").await.unwrap();
+        let names: Vec<String> = due.iter().map(|h| h.name.clone()).collect();
+        assert!(names.contains(&"Leer".to_string()));
+        assert!(names.contains(&"Correr".to_string()));
+        assert!(!names.contains(&"Meditar".to_string()));
+
+        // Inactive habits don't appear at all.
+        mgr.deactivate_habit(&h3.habit_id).await.unwrap();
+        let due2 = mgr.get_habits_due_today("2026-04-08").await.unwrap();
+        let names2: Vec<String> = due2.iter().map(|h| h.name.clone()).collect();
+        assert!(!names2.contains(&"Correr".to_string()));
+        assert_eq!(due2.len(), 1); // only Leer
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn stale_relationships_filters_by_importance_and_threshold() {
+        let dir = temp_dir("memory-plane-stale-rels");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let r_high = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        let _r_low = mgr
+            .add_relationship("Bob", "acquaintance", None, 3, None, None, None, "", None)
+            .await
+            .unwrap();
+        let r_mid = mgr
+            .add_relationship("Pedro", "friend", None, 7, None, None, None, "", None)
+            .await
+            .unwrap();
+
+        // Backdate Maria to 60 days ago, Pedro to 10 days ago.
+        let db_path = mgr.db_path.clone();
+        let maria_id = r_high.relationship_id.clone();
+        let pedro_id = r_mid.relationship_id.clone();
+        let backdate_60 = (Utc::now() - chrono::Duration::days(60)).to_rfc3339();
+        let backdate_10 = (Utc::now() - chrono::Duration::days(10)).to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = MemoryPlaneManager::open_db(&db_path).unwrap();
+            db.execute(
+                "UPDATE relationships SET created_at = ?1 WHERE relationship_id = ?2",
+                rusqlite::params![backdate_60, maria_id],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE relationships SET created_at = ?1 WHERE relationship_id = ?2",
+                rusqlite::params![backdate_10, pedro_id],
+            )
+            .unwrap();
+        })
+        .await
+        .unwrap();
+
+        // min_importance=7, days_threshold=30 → only Maria (10/10 + 60d ago).
+        // Pedro is 7/10 but only 10d old.
+        // Bob is 3/10 → filtered by importance.
+        let stale = mgr.get_stale_relationships(7, 30).await.unwrap();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].name, "Maria");
+
+        // Lower threshold to 7 days → both Maria + Pedro.
+        let stale2 = mgr.get_stale_relationships(7, 7).await.unwrap();
+        assert_eq!(stale2.len(), 2);
+
+        // Lower importance to 1 with threshold 30 → still only Maria
+        // (because Pedro and Bob are both < 30 days).
+        let stale3 = mgr.get_stale_relationships(1, 30).await.unwrap();
+        assert_eq!(stale3.len(), 1);
         std::fs::remove_dir_all(dir).ok();
     }
 

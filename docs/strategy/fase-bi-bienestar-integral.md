@@ -330,9 +330,13 @@ etapa están, qué ha pasado, qué le importa.
   `relationship_add`, `relationship_stage`, `relationship_contact`,
   `relationship_list`, `family_member_add`, `family_list`,
   `child_milestone_log`, `child_milestones_list`,
-  `relationships_summary`. Pendiente: `relationship_event_log` +
-  `relationship_advice` (esperan a Argon2id y a curaduría de
-  literatura).
+  `relationships_summary`. Pendiente: `relationship_advice` (espera
+  a curaduría de literatura). `relationship_event_log` ya entregado
+  en BI.9.2.
+- [x] **(sprint 3)** `stale_relationships(min_importance, days_threshold)`
+  — generaliza el detector de forgetting_check con thresholds
+  configurables. Telegram tool 23d, HTTP endpoint
+  `/relationships/stale`.
 - [x] **(sprint 1)** BI.8 wired: `LifeSummary.relationships`
   agregado, patrón cruzado `relationships_stale_contacts` (contactos
   >=7 sin movimiento en 30d), `forgetting_check` surface

@@ -676,6 +676,25 @@ Cierra la sub-fase de nutricion (BI.3 sprint 2). Foundation NO sensible: catalog
 20t. **shopping_list_summary** — Snapshot rapido de "que falta" para una lista: total_items, checked_items, remaining_items, percent_complete, fecha de ultima actualizacion. Util cuando el usuario en la tienda pregunta "cuanto me falta" sin querer leer la lista entera. Si no pasas list_id, usa la lista activa mas reciente automaticamente.
     args: {"list_id": "shop-..."}  o  {}  (default = lista activa)
 
+20u. **shopping_list_clear_completed** — Quita TODOS los items checked de una lista de un solo golpe. Util al regresar de la tienda para reusar la lista plantilla la siguiente semana sin removerlos uno por uno. Devuelve cuantos items se quitaron.
+    args: {"list_id": "shop-..."}
+
+23. **Vida Plena — Refinements de cierre (streaks + due-today + stale)**
+
+23a. **mood_streak** — Devuelve la racha de mood logs del usuario: dias consecutivos hacia atras desde hoy con al menos un log, longest_streak_days, total_log_days, last_log_date. Sirve para responder "Axi, llevo cuantos dias seguidos registrando mi animo" — motivacional y suave.
+    args: {"today_local": "2026-04-08"}
+
+23b. **habit_current_streak** — Racha actual consecutiva de UN habito (dias seguidos hacia atras desde hoy con check-in completed). Distinto del existente `get_habit_streak` que cuenta marcado-en-ventana fija.
+    args: {"habit_id": "habit-...", "today_local": "2026-04-08"}
+
+23c. **habits_due_today** — Lista los habitos activos que NO tienen check-in para hoy. Util para "Axi, qué me falta hoy" o como base de un reminder al final del dia. NO enforza la frequency del habito ("solo lunes") — devuelve TODOS los activos sin log de hoy.
+    args: {"today_local": "2026-04-08"}
+
+23d. **stale_relationships** — Lista relaciones activas con importance_1_10 >= min_importance que no se han contactado en >= days_threshold dias. Generaliza el detector de forgetting_check con thresholds configurables. Ejemplos:
+    - {"min_importance": 8, "days_threshold": 7} → amistades cercanas sin contactar en una semana
+    - {"min_importance": 5, "days_threshold": 30} → cualquier relacion que importe sin contactar en un mes
+    args: {"min_importance": 7, "days_threshold": 30}
+
 21. **Vida Plena — Modo panico (/wipe-*) y predictor menstrual**
 
 CRITICO. El modo panico borra TODAS las filas de las side-tables sensibles destructivamente. Es para casos donde el usuario esta en peligro fisico (familia abusiva, disputa legal, custodia, control sanitario). NO toca el vault — el vault sigue configurado, solo desaparecen los datos. Es IRRECUPERABLE.
@@ -1920,6 +1939,13 @@ REGLAS FIRMES:
                 execute_shopping_list_check_by_name(&call.args, ctx).await
             }
             "shopping_list_summary" => execute_shopping_list_summary(&call.args, ctx).await,
+            "shopping_list_clear_completed" => {
+                execute_shopping_list_clear_completed(&call.args, ctx).await
+            }
+            "mood_streak" => execute_mood_streak(&call.args, ctx).await,
+            "habit_current_streak" => execute_habit_current_streak(&call.args, ctx).await,
+            "habits_due_today" => execute_habits_due_today(&call.args, ctx).await,
+            "stale_relationships" => execute_stale_relationships(&call.args, ctx).await,
             "wipe_mental_health" => execute_wipe_mental_health(&call.args, ctx).await,
             "wipe_menstrual" => execute_wipe_menstrual(&call.args, ctx).await,
             "wipe_sexual_health" => execute_wipe_sexual_health(&call.args, ctx).await,
@@ -7134,6 +7160,138 @@ REGLAS FIRMES:
                 "\n¡Todo listo! Cuando regreses puedes usar `shopping_list_complete` para cerrarla.\n",
             );
         }
+        Ok(out)
+    }
+
+    async fn execute_shopping_list_clear_completed(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let list_id = args["list_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'list_id'"))?;
+        match mem.shopping_list_clear_completed(list_id).await? {
+            Some(0) => Ok("No habia items checked en esa lista. Nada que limpiar.".to_string()),
+            Some(n) => Ok(format!(
+                "✓ {} item(s) checked removidos. La lista esta lista para reusar.",
+                n
+            )),
+            None => Ok(format!("No encontre lista con id {}.", list_id)),
+        }
+    }
+
+    // -- Vida Plena refinements de cierre -----------------------------------
+
+    async fn execute_mood_streak(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let today = today_local_arg(args);
+        let s = mem.get_mood_log_streak(&today).await?;
+        let mut out = String::from("# Mood log streak\n\n");
+        out.push_str(&format!(
+            "Racha actual: **{} dias**\n",
+            s.current_streak_days
+        ));
+        out.push_str(&format!(
+            "Racha mas larga: {} dias\n",
+            s.longest_streak_days
+        ));
+        out.push_str(&format!("Total de dias con log: {}\n", s.total_log_days));
+        if let Some(last) = s.last_log_date {
+            out.push_str(&format!("Ultimo registro: {}\n", last));
+        }
+        if s.current_streak_days == 0 && s.total_log_days > 0 {
+            out.push_str(
+                "\n_Hoy no has registrado tu mood. Si quieres, registra uno con `mood_log`._\n",
+            );
+        } else if s.total_log_days == 0 {
+            out.push_str("\n_Aun no tienes mood logs. Empieza con `mood_log` cuando quieras._\n");
+        }
+        Ok(out)
+    }
+
+    async fn execute_habit_current_streak(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let habit_id = args["habit_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'habit_id'"))?;
+        let today = today_local_arg(args);
+        let s = mem.get_habit_current_streak(habit_id, &today).await?;
+        let mut out = format!("# Streak: {}\n\n", s.habit_name);
+        out.push_str(&format!(
+            "Racha actual: **{} dias**\n",
+            s.current_streak_days
+        ));
+        out.push_str(&format!(
+            "Racha mas larga: {} dias\n",
+            s.longest_streak_days
+        ));
+        if let Some(last) = s.last_completed_date {
+            out.push_str(&format!("Ultimo check-in: {}\n", last));
+        } else {
+            out.push_str("\n_Sin check-ins todavia._\n");
+        }
+        Ok(out)
+    }
+
+    async fn execute_habits_due_today(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let today = today_local_arg(args);
+        let due = mem.get_habits_due_today(&today).await?;
+        if due.is_empty() {
+            return Ok(format!(
+                "✓ Hoy ({}) ya tienes todos tus habitos activos con check-in. Bien.",
+                today
+            ));
+        }
+        let mut out = format!("# Habitos pendientes para {}\n\n", today);
+        for h in due {
+            out.push_str(&format!("- {} ({})\n", h.name, h.frequency));
+        }
+        out.push_str("\n_Marca los que ya hiciste con `habit_checkin`._\n");
+        Ok(out)
+    }
+
+    async fn execute_stale_relationships(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let min_importance = args["min_importance"].as_u64().unwrap_or(7) as u8;
+        let days_threshold = args["days_threshold"].as_i64().unwrap_or(30);
+        let stale = mem
+            .get_stale_relationships(min_importance, days_threshold)
+            .await?;
+        if stale.is_empty() {
+            return Ok(format!(
+                "✓ Ninguna relacion con importancia >= {} esta sin contactar en {} dias o mas. Tu mapa relacional esta al dia.",
+                min_importance, days_threshold
+            ));
+        }
+        let mut out = format!(
+            "# Relaciones sin contactar (importancia >= {}, {}+ dias)\n\n",
+            min_importance, days_threshold
+        );
+        let now = chrono::Utc::now();
+        for r in stale {
+            let elapsed = match r.last_contact_at {
+                Some(t) => format!("hace {}d", (now - t).num_days()),
+                None => "sin contacto registrado".to_string(),
+            };
+            out.push_str(&format!(
+                "- [{}/10] {} ({}) — {}\n",
+                r.importance_1_10, r.name, r.relationship_type, elapsed
+            ));
+        }
+        out.push_str(
+            "\n_Si contactas a alguien, marcalo con `relationship_contact` para resetear el contador._\n",
+        );
         Ok(out)
     }
 
