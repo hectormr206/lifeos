@@ -144,6 +144,38 @@ impl MemorySearchMode {
     }
 }
 
+/// BI.1: routing flag for the archived tier.
+///
+/// `ExcludeArchived` (default for live search): rows with `archived = 1`
+/// are filtered out of the result. `OnlyArchived` (used by
+/// `search_archived`): only rows with `archived = 1` come back. We use
+/// an enum instead of a bare `bool` so callers can never confuse the
+/// two paths at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchivedFilter {
+    ExcludeArchived,
+    OnlyArchived,
+}
+
+impl ArchivedFilter {
+    /// Returns the SQL WHERE fragment for this filter, ready to AND
+    /// with the rest of the conditions. Always wrapped in parentheses
+    /// so it composes safely.
+    fn sql_clause(self, table_alias: &str) -> String {
+        let prefix = if table_alias.is_empty() {
+            "".to_string()
+        } else {
+            format!("{}.", table_alias)
+        };
+        match self {
+            Self::ExcludeArchived => {
+                format!("({}archived IS NULL OR {}archived = 0)", prefix, prefix)
+            }
+            Self::OnlyArchived => format!("({}archived = 1)", prefix),
+        }
+    }
+}
+
 /// Result of a [`MemoryPlaneManager::apply_decay`] pass.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct DecayReport {
@@ -249,6 +281,23 @@ impl MemoryPlaneManager {
         if !has_column("memory_entries", "permanent") {
             db.execute_batch(
                 "ALTER TABLE memory_entries ADD COLUMN permanent INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        // BI.1 (Fase Bienestar Integral): the `archived` column lets us
+        // soft-archive entries instead of deleting them. The default search
+        // path filters them out, but `search_archived` (and the
+        // `recall_archived` Telegram tool) can still bring them back. This
+        // is the "never lose anything" guarantee that unblocks every
+        // wellness sub-fase.
+        if !has_column("memory_entries", "archived") {
+            db.execute_batch(
+                "ALTER TABLE memory_entries ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
+            )?;
+            // Index speeds up the WHERE archived=0 filter that every
+            // search/list call now adds. Cheap to create even on large
+            // tables because the column is bool-ish.
+            db.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_memory_archived ON memory_entries(archived);",
             )?;
         }
 
@@ -517,6 +566,13 @@ impl MemoryPlaneManager {
 
         let (embedding, embedding_source) = self.generate_embedding(content).await;
 
+        // BI.1: kinds in the wellness pillar are auto-permanent. Health
+        // events, medications, vitals, lab results, mental journal,
+        // relationship logs, etc. ALL skip decay/GC/dedup automatically.
+        // The user does not have to remember to mark them — the kind
+        // namespace is the contract.
+        let auto_permanent = is_wellness_kind(&kind);
+
         let db_path = self.db_path.clone();
         let entry_id_clone = entry_id.clone();
         let kind_clone = kind.clone();
@@ -531,10 +587,10 @@ impl MemoryPlaneManager {
             let tx = db.unchecked_transaction()?;
 
             tx.execute(
-                "INSERT INTO memory_entries 
-                 (entry_id, created_at, updated_at, kind, scope, tags, source, importance, 
-                  nonce_b64, ciphertext_b64, plaintext_sha256, embedding_source)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO memory_entries
+                 (entry_id, created_at, updated_at, kind, scope, tags, source, importance,
+                  nonce_b64, ciphertext_b64, plaintext_sha256, embedding_source, permanent)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     entry_id_clone,
                     now_rfc3339,
@@ -548,6 +604,7 @@ impl MemoryPlaneManager {
                     ciphertext_b64,
                     plaintext_sha256,
                     embedding_source,
+                    if auto_permanent { 1 } else { 0 },
                 ],
             )?;
 
@@ -612,11 +669,14 @@ impl MemoryPlaneManager {
         let entries = tokio::task::spawn_blocking(move || {
             let db = Self::open_db(&db_path)?;
 
-            let mut sql = "SELECT entry_id, created_at, updated_at, kind, scope, tags, source, 
-                                  importance, nonce_b64, ciphertext_b64, plaintext_sha256 
+            let mut sql = "SELECT entry_id, created_at, updated_at, kind, scope, tags, source,
+                                  importance, nonce_b64, ciphertext_b64, plaintext_sha256
                            FROM memory_entries"
                 .to_string();
-            let mut conditions = Vec::new();
+            // BI.1: archived rows are excluded from the default list
+            // path. They live on disk but only appear via
+            // `search_archived` / `recall_archived`.
+            let mut conditions: Vec<&str> = vec!["(archived IS NULL OR archived = 0)"];
             let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
             if let Some(ref s) = scope {
@@ -624,10 +684,8 @@ impl MemoryPlaneManager {
                 params_vec.push(Box::new(s.clone()));
             }
 
-            if !conditions.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&conditions.join(" AND "));
-            }
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
 
             sql.push_str(" ORDER BY created_at DESC");
             sql.push_str(&format!(" LIMIT {}", limit));
@@ -754,12 +812,51 @@ impl MemoryPlaneManager {
             .await
     }
 
+    /// BI.1: search the archived tier.
+    ///
+    /// Same hybrid (lexical + semantic) ranking as `search_entries`,
+    /// but the archive filter is **inverted** — only entries flagged
+    /// `archived = 1` are considered. Embeddings are preserved on
+    /// archive so semantic recall over the archive works exactly the
+    /// same as the live tier. Powers the `recall_archived` Telegram
+    /// tool: *"tenía una idea genial pero ya no recuerdo qué era"*.
+    pub async fn search_archived(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: Option<&str>,
+    ) -> Result<Vec<MemorySearchResult>> {
+        self.search_entries_inner(
+            query,
+            limit,
+            scope,
+            MemorySearchMode::Hybrid,
+            ArchivedFilter::OnlyArchived,
+        )
+        .await
+    }
+
     pub async fn search_entries_with_mode(
         &self,
         query: &str,
         limit: usize,
         scope: Option<&str>,
         mode: MemorySearchMode,
+    ) -> Result<Vec<MemorySearchResult>> {
+        self.search_entries_inner(query, limit, scope, mode, ArchivedFilter::ExcludeArchived)
+            .await
+    }
+
+    /// Inner implementation; the public wrappers fix the
+    /// `archived_filter` so callers cannot accidentally surface
+    /// archived entries from the live search path.
+    async fn search_entries_inner(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: Option<&str>,
+        mode: MemorySearchMode,
+        archived_filter: ArchivedFilter,
     ) -> Result<Vec<MemorySearchResult>> {
         let query = normalize_non_empty(query).context("query is required")?;
         let query_lc = query.to_lowercase();
@@ -791,8 +888,8 @@ impl MemoryPlaneManager {
             match mode {
                 MemorySearchMode::Semantic => {
                     let mut sql = r#"
-                        SELECT me.entry_id, me.created_at, me.updated_at, me.kind, me.scope, 
-                               me.tags, me.source, me.importance, me.nonce_b64, me.ciphertext_b64, 
+                        SELECT me.entry_id, me.created_at, me.updated_at, me.kind, me.scope,
+                               me.tags, me.source, me.importance, me.nonce_b64, me.ciphertext_b64,
                                me.plaintext_sha256, vec_distance_cosine(em.embedding, vec_f32(?)) as score
                         FROM memory_entries me
                         JOIN memory_embeddings em ON me.entry_id = em.entry_id
@@ -800,12 +897,16 @@ impl MemoryPlaneManager {
 
                     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
                         vec![Box::new(query_embedding_bytes.clone())];
+                    let mut where_parts: Vec<String> =
+                        vec![archived_filter.sql_clause("me")];
 
                     if let Some(ref s) = scope {
-                        sql.push_str(" WHERE me.scope = ?");
+                        where_parts.push("me.scope = ?".to_string());
                         params_vec.push(Box::new(s.clone()));
                     }
 
+                    sql.push_str(" WHERE ");
+                    sql.push_str(&where_parts.join(" AND "));
                     sql.push_str(" ORDER BY score ASC LIMIT ?");
                     params_vec.push(Box::new(limit as i32));
 
@@ -849,11 +950,13 @@ impl MemoryPlaneManager {
                 }
 
                 MemorySearchMode::Lexical => {
-                    let mut sql = "SELECT entry_id, created_at, updated_at, kind, scope, tags, source, 
-                                          importance, nonce_b64, ciphertext_b64, plaintext_sha256 
+                    let mut sql = "SELECT entry_id, created_at, updated_at, kind, scope, tags, source,
+                                          importance, nonce_b64, ciphertext_b64, plaintext_sha256
                                    FROM memory_entries"
                         .to_string();
-                    let mut conditions = vec!["ciphertext_b64 LIKE ?"];
+                    let archived_clause = archived_filter.sql_clause("");
+                    let mut conditions: Vec<&str> =
+                        vec!["ciphertext_b64 LIKE ?", archived_clause.as_str()];
                     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
                         vec![Box::new(format!("%{}%", query_lc))];
 
@@ -911,8 +1014,8 @@ impl MemoryPlaneManager {
 
                 MemorySearchMode::Hybrid => {
                     let mut sql = r#"
-                        SELECT me.entry_id, me.created_at, me.updated_at, me.kind, me.scope, 
-                               me.tags, me.source, me.importance, me.nonce_b64, me.ciphertext_b64, 
+                        SELECT me.entry_id, me.created_at, me.updated_at, me.kind, me.scope,
+                               me.tags, me.source, me.importance, me.nonce_b64, me.ciphertext_b64,
                                me.plaintext_sha256, vec_distance_cosine(em.embedding, vec_f32(?)) as semantic_score
                         FROM memory_entries me
                         JOIN memory_embeddings em ON me.entry_id = em.entry_id
@@ -920,12 +1023,16 @@ impl MemoryPlaneManager {
 
                     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
                         vec![Box::new(query_embedding_bytes.clone())];
+                    let mut where_parts: Vec<String> =
+                        vec![archived_filter.sql_clause("me")];
 
                     if let Some(ref s) = scope {
-                        sql.push_str(" WHERE me.scope = ?");
+                        where_parts.push("me.scope = ?".to_string());
                         params_vec.push(Box::new(s.clone()));
                     }
 
+                    sql.push_str(" WHERE ");
+                    sql.push_str(&where_parts.join(" AND "));
                     sql.push_str(" ORDER BY semantic_score ASC LIMIT ?");
                     params_vec.push(Box::new((limit * 3) as i32));
 
@@ -2012,43 +2119,47 @@ impl MemoryPlaneManager {
                 )?;
             }
 
-            // -- Phase 2: garbage-collect low-importance + old entries.
+            // -- Phase 2: ARCHIVE low-importance old entries.
+            //
+            // BI.1 — "nunca perder nada" — what was previously a hard
+            // DELETE is now a soft archive: we set `archived = 1` on
+            // entries that hit the GC thresholds. They drop out of
+            // normal search, free space in the search ranking for
+            // fresh stuff, but stay recoverable via `search_archived`
+            // and the `recall_archived` Telegram tool. Embeddings are
+            // intentionally PRESERVED so semantic recall over the
+            // archive still works ("tenía una idea genial pero no
+            // recuerdo cuál era").
+            //
+            // The thresholds are unchanged (importance<10 + 90d, or
+            // importance<30 + 180d). The only change is the verb:
+            // archive instead of delete.
+            //
+            // Already-archived entries (archived = 1) are skipped so
+            // we don't double-count them in the report.
             let cutoff_90 = (now_utc - chrono::Duration::days(90)).to_rfc3339();
             let cutoff_180 = (now_utc - chrono::Duration::days(180)).to_rfc3339();
 
-            // Collect ids first so we can also clean memory_embeddings.
-            let mut to_delete: Vec<String> = Vec::new();
-            {
-                let mut stmt = tx.prepare(
-                    "SELECT entry_id FROM memory_entries
-                     WHERE (permanent IS NULL OR permanent = 0)
-                       AND (
-                           (importance < 10 AND COALESCE(last_accessed, updated_at) < ?1)
-                           OR (importance < 30 AND COALESCE(last_accessed, updated_at) < ?2)
-                       )",
-                )?;
-                let rows = stmt.query_map(params![cutoff_90, cutoff_180], |row| {
-                    row.get::<_, String>(0)
-                })?;
-                for row in rows.flatten() {
-                    to_delete.push(row);
-                }
-            }
-
-            let deleted = to_delete.len();
-            for entry_id in &to_delete {
-                tx.execute(
-                    "DELETE FROM memory_entries WHERE entry_id = ?1",
-                    params![entry_id],
-                )?;
-                tx.execute(
-                    "DELETE FROM memory_embeddings WHERE entry_id = ?1",
-                    params![entry_id],
-                )?;
-            }
+            let archived = tx.execute(
+                "UPDATE memory_entries
+                 SET archived = 1
+                 WHERE (permanent IS NULL OR permanent = 0)
+                   AND (archived IS NULL OR archived = 0)
+                   AND (
+                       (importance < 10 AND COALESCE(last_accessed, updated_at) < ?1)
+                       OR (importance < 30 AND COALESCE(last_accessed, updated_at) < ?2)
+                   )",
+                params![cutoff_90, cutoff_180],
+            )?;
 
             tx.commit()?;
-            Ok::<_, anyhow::Error>(DecayReport { decayed, deleted })
+            // The `deleted` field now means "newly archived this pass".
+            // We keep the field name for backward compatibility with
+            // existing logging / dashboards that already read it.
+            Ok::<_, anyhow::Error>(DecayReport {
+                decayed,
+                deleted: archived,
+            })
         })
         .await?
     }
@@ -2154,21 +2265,40 @@ impl MemoryPlaneManager {
                     continue;
                 }
 
-                // Compare importance to decide which to keep
-                let imp_a: i32 = tx
-                    .query_row(
-                        "SELECT importance FROM memory_entries WHERE entry_id = ?1",
-                        params![id_a],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                let imp_b: i32 = tx
-                    .query_row(
-                        "SELECT importance FROM memory_entries WHERE entry_id = ?1",
-                        params![id_b],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
+                // BI.1: never fuse permanent entries OR wellness-pillar
+                // entries. Two doses of the same medication are SEPARATE
+                // events even if the text is identical — fusing them
+                // would lose the second dose. We pull importance, kind,
+                // and permanent in a single query per row to avoid
+                // doing 6 queries per pair.
+                let row_a: rusqlite::Result<(i32, String, i32)> = tx.query_row(
+                    "SELECT importance, kind, COALESCE(permanent, 0) FROM memory_entries WHERE entry_id = ?1",
+                    params![id_a],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                );
+                let row_b: rusqlite::Result<(i32, String, i32)> = tx.query_row(
+                    "SELECT importance, kind, COALESCE(permanent, 0) FROM memory_entries WHERE entry_id = ?1",
+                    params![id_b],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                );
+
+                let (imp_a, kind_a, perm_a) = match row_a {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let (imp_b, kind_b, perm_b) = match row_b {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+
+                // Skip pair entirely if EITHER side is protected.
+                if perm_a != 0
+                    || perm_b != 0
+                    || is_wellness_kind(&kind_a)
+                    || is_wellness_kind(&kind_b)
+                {
+                    continue;
+                }
 
                 let to_delete = if imp_a >= imp_b { id_b } else { id_a };
 
@@ -2464,9 +2594,14 @@ impl MemoryPlaneManager {
             let db = Self::open_db(&db_path)?;
             let cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
 
+            // BI.1: skip permanent + archived rows from the candidate
+            // count. Permanent entries (which include all wellness
+            // kinds) must NEVER be summarised away.
             let mut stmt = db.prepare(
                 "SELECT tags, COUNT(*) as cnt FROM memory_entries
                  WHERE updated_at < ?1
+                   AND (permanent IS NULL OR permanent = 0)
+                   AND (archived IS NULL OR archived = 0)
                  GROUP BY tags HAVING cnt >= 10
                  ORDER BY cnt DESC LIMIT 10",
             )?;
@@ -2515,9 +2650,18 @@ impl MemoryPlaneManager {
             // group because the cluster is keyed by the FULL tags JSON,
             // so every member shares all tags including this one.
             let primary_tag = tags[0].clone();
-            let entries = self
+            let raw_entries = self
                 .list_entries(max_entries_per_cluster, None, Some(&primary_tag))
                 .await?;
+
+            // BI.1: defensively skip wellness-kind entries even if a
+            // future bug ever lets one through `get_cluster_candidates`.
+            // This is the second line of defence; the first is the
+            // permanent filter on the candidate query above.
+            let entries: Vec<MemoryEntry> = raw_entries
+                .into_iter()
+                .filter(|e| !is_wellness_kind(&e.kind))
+                .collect();
             if entries.len() < 5 {
                 // Below the floor — not enough to summarise meaningfully.
                 continue;
@@ -2634,11 +2778,20 @@ impl MemoryPlaneManager {
         })
     }
 
-    /// Move a specific list of entry IDs into `memory_archive` and
-    /// delete them from `memory_entries`.
+    /// Soft-archive a specific list of entry IDs.
     ///
     /// Used by `summarize_clusters_with_router` after the LLM produces
-    /// the consolidated narrative entry. Skips permanent entries.
+    /// the consolidated narrative entry. Skips permanent entries
+    /// AND wellness-pillar entries (defense in depth — the caller
+    /// should already filter, but boundary checks are cheap).
+    ///
+    /// **BI.1 change:** previously this method moved entries to a
+    /// separate `memory_archive` metadata-only table and deleted the
+    /// originals (losing the encrypted content forever). Now it sets
+    /// `archived = 1` on the row, preserving content + embeddings so
+    /// `search_archived` can recover them later. The legacy
+    /// `memory_archive` table is no longer written to but stays in the
+    /// schema for any pre-existing data.
     pub async fn archive_entries_by_id(&self, ids: Vec<String>) -> Result<usize> {
         if ids.is_empty() {
             return Ok(0);
@@ -2646,67 +2799,33 @@ impl MemoryPlaneManager {
         let db_path = self.db_path.clone();
         tokio::task::spawn_blocking(move || {
             let db = Self::open_db(&db_path)?;
-
-            // Make sure the archive table exists (mirrors the layout used
-            // by `archive_old_entries`).
-            db.execute(
-                "CREATE TABLE IF NOT EXISTS memory_archive (
-                    entry_id TEXT PRIMARY KEY,
-                    created_at TEXT NOT NULL,
-                    kind TEXT NOT NULL,
-                    scope TEXT NOT NULL,
-                    tags TEXT NOT NULL,
-                    importance INTEGER NOT NULL,
-                    archived_at TEXT NOT NULL
-                )",
-                [],
-            )?;
-
-            let has_permanent: bool = db
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('memory_entries') WHERE name = 'permanent'",
-                )
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false);
-
             let tx = db.unchecked_transaction()?;
-            let now_str = chrono::Utc::now().to_rfc3339();
             let mut moved = 0usize;
 
             for id in &ids {
-                // Skip permanent entries (defensive — caller should have
-                // already filtered, but we double-check at the boundary).
-                if has_permanent {
-                    let is_permanent: bool = tx
-                        .query_row(
-                            "SELECT permanent FROM memory_entries WHERE entry_id = ?1",
-                            params![id],
-                            |r| r.get::<_, Option<i32>>(0).map(|v| v.unwrap_or(0) != 0),
-                        )
-                        .unwrap_or(false);
-                    if is_permanent {
-                        continue;
-                    }
+                // Skip permanent + wellness entries defensively.
+                let row: rusqlite::Result<(i32, String)> = tx.query_row(
+                    "SELECT COALESCE(permanent, 0), kind
+                     FROM memory_entries WHERE entry_id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                );
+                let (perm, kind) = match row {
+                    Ok(t) => t,
+                    Err(_) => continue, // entry does not exist anymore
+                };
+                if perm != 0 || is_wellness_kind(&kind) {
+                    continue;
                 }
-                let inserted = tx.execute(
-                    "INSERT OR IGNORE INTO memory_archive
-                         (entry_id, created_at, kind, scope, tags, importance, archived_at)
-                     SELECT entry_id, created_at, kind, scope, tags, importance, ?1
-                     FROM memory_entries
-                     WHERE entry_id = ?2",
-                    params![now_str, id],
+
+                let n = tx.execute(
+                    "UPDATE memory_entries
+                     SET archived = 1
+                     WHERE entry_id = ?1
+                       AND (archived IS NULL OR archived = 0)",
+                    params![id],
                 )?;
-                if inserted > 0 {
-                    tx.execute(
-                        "DELETE FROM memory_entries WHERE entry_id = ?1",
-                        params![id],
-                    )?;
-                    tx.execute(
-                        "DELETE FROM memory_embeddings WHERE entry_id = ?1",
-                        params![id],
-                    )?;
-                    moved += 1;
-                }
+                moved += n;
             }
 
             tx.commit()?;
@@ -2730,6 +2849,39 @@ fn normalize_non_empty(input: &str) -> Option<String> {
     } else {
         Some(value.to_string())
     }
+}
+
+/// True if the entry `kind` belongs to the Fase BI "Vida Plena" pillar.
+///
+/// Wellness kinds skip decay, GC, dedup, and cluster summarisation —
+/// they are auto-marked permanent at insert time so the user does not
+/// have to remember to flag them. The contract is the kind namespace:
+/// any kind starting with `health_`, `wellness_`, `mental_`,
+/// `nutrition_`, `exercise_`, `sleep_`, `relationship_`, `family_`,
+/// `child_`, `spiritual_`, `financial_`, `sexual_`, or `community_` is
+/// considered wellness data and gets the protection.
+///
+/// This list is the single source of truth for the auto-permanent
+/// behaviour. Add a new prefix here when introducing a new wellness
+/// sub-fase (BI.X) so its data is automatically protected.
+pub fn is_wellness_kind(kind: &str) -> bool {
+    const WELLNESS_PREFIXES: &[&str] = &[
+        "health_",
+        "wellness_",
+        "mental_",
+        "nutrition_",
+        "exercise_",
+        "sleep_",
+        "relationship_",
+        "family_",
+        "child_",
+        "spiritual_",
+        "financial_",
+        "sexual_",
+        "community_",
+    ];
+    let lower = kind.trim().to_lowercase();
+    WELLNESS_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
 fn normalize_tags(tags: &[String]) -> Vec<String> {
@@ -3688,12 +3840,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_apply_decay_deletes_low_importance_old() {
-        let dir = temp_dir("memory-plane-decay-delete");
+    async fn test_apply_decay_archives_low_importance_old() {
+        let dir = temp_dir("memory-plane-decay-archive");
         let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
         mgr.initialize().await.unwrap();
 
-        // Low importance + > 90 days old => deleted by the <10/90d rule.
+        // Low importance + > 90 days old => archived by the <10/90d rule.
+        // BI.1: this used to DELETE the entry; now it sets archived=1.
         let entry = mgr
             .add_entry("note", "user", &[], None, 5, "Old trivial entry.")
             .await
@@ -3701,13 +3854,27 @@ mod tests {
         backdate(&dir, &entry.entry_id, 100);
 
         let report = mgr.apply_decay().await.unwrap();
-        assert!(report.deleted >= 1, "Should delete at least one entry");
+        // `deleted` is the field name (kept for back-compat) but the
+        // semantics are now "newly archived this pass".
+        assert!(report.deleted >= 1, "Should archive at least one entry");
 
+        // Live view must hide it.
         let entries = mgr.list_entries(50, None, None).await.unwrap();
         assert!(
             entries.iter().all(|e| e.entry_id != entry.entry_id),
-            "Stale low-importance entry should be deleted"
+            "Stale low-importance entry should drop out of live list"
         );
+
+        // But it must STILL be on disk with archived=1 (the BI.1 contract).
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let archived: i32 = db
+            .query_row(
+                "SELECT archived FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived, 1, "Entry must be flagged archived, not deleted");
 
         std::fs::remove_dir_all(dir).ok();
     }
@@ -4003,28 +4170,33 @@ mod tests {
             .archive_entries_by_id(vec![e1.entry_id.clone(), e2.entry_id.clone()])
             .await
             .unwrap();
-        assert_eq!(moved, 2, "Both targeted entries should move");
+        assert_eq!(moved, 2, "Both targeted entries should be archived");
 
-        // Originals must be gone from memory_entries.
-        let entries = mgr.list_entries(50, None, None).await.unwrap();
-        let remaining_ids: Vec<&str> = entries.iter().map(|e| e.entry_id.as_str()).collect();
-        assert!(!remaining_ids.contains(&e1.entry_id.as_str()));
-        assert!(!remaining_ids.contains(&e2.entry_id.as_str()));
-        // Unrelated entry must survive.
-        assert!(remaining_ids.contains(&e3.entry_id.as_str()));
+        // BI.1 update: archive is now a soft flag, not a move. Originals
+        // must be GONE from the default `list_entries` view (which
+        // filters archived) but STILL PRESENT in the underlying table
+        // with `archived = 1`.
+        let live_entries = mgr.list_entries(50, None, None).await.unwrap();
+        let live_ids: Vec<&str> = live_entries.iter().map(|e| e.entry_id.as_str()).collect();
+        assert!(!live_ids.contains(&e1.entry_id.as_str()));
+        assert!(!live_ids.contains(&e2.entry_id.as_str()));
+        // Unrelated entry must survive in the live view.
+        assert!(live_ids.contains(&e3.entry_id.as_str()));
 
-        // And they must live in memory_archive.
+        // The archived rows still live in memory_entries with the flag set.
         let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
-        let archive_count: i64 = db
+        let archived_count: i64 = db
             .query_row(
-                "SELECT COUNT(*) FROM memory_archive WHERE entry_id IN (?1, ?2)",
+                "SELECT COUNT(*) FROM memory_entries
+                 WHERE entry_id IN (?1, ?2) AND archived = 1",
                 params![e1.entry_id, e2.entry_id],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(archive_count, 2);
+        assert_eq!(archived_count, 2, "Both entries should be flagged archived=1");
 
-        // Embeddings must be cleaned too.
+        // Embeddings are PRESERVED on archive so search_archived can find
+        // them via semantic recall (the BI.1 "never lose anything" rule).
         let embed_count: i64 = db
             .query_row(
                 "SELECT COUNT(*) FROM memory_embeddings WHERE entry_id IN (?1, ?2)",
@@ -4032,7 +4204,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(embed_count, 0);
+        assert_eq!(embed_count, 2, "Embeddings must be preserved on archive");
 
         std::fs::remove_dir_all(dir).ok();
     }
@@ -4269,6 +4441,245 @@ mod tests {
         );
         let (_tags, count) = &candidates[0];
         assert!(*count >= 10, "Cluster size should meet the 10+ floor");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.1: Sprint 1 — "nunca perder nada" -------------------------------
+
+    #[test]
+    fn test_is_wellness_kind_recognises_pillar_prefixes() {
+        // Positive cases — every wellness pillar prefix.
+        assert!(is_wellness_kind("health_event"));
+        assert!(is_wellness_kind("health_medication"));
+        assert!(is_wellness_kind("wellness_check_in"));
+        assert!(is_wellness_kind("mental_journal"));
+        assert!(is_wellness_kind("nutrition_log"));
+        assert!(is_wellness_kind("exercise_session"));
+        assert!(is_wellness_kind("sleep_log"));
+        assert!(is_wellness_kind("relationship_event"));
+        assert!(is_wellness_kind("family_milestone"));
+        assert!(is_wellness_kind("child_milestone"));
+        assert!(is_wellness_kind("spiritual_practice"));
+        assert!(is_wellness_kind("financial_expense"));
+        assert!(is_wellness_kind("sexual_health"));
+        assert!(is_wellness_kind("community_activity"));
+        // Case-insensitive + leading whitespace tolerant.
+        assert!(is_wellness_kind("HEALTH_event"));
+        assert!(is_wellness_kind("  mental_log  "));
+
+        // Negative cases — non-wellness kinds must NOT auto-permanent.
+        assert!(!is_wellness_kind("note"));
+        assert!(!is_wellness_kind("decision"));
+        assert!(!is_wellness_kind("bugfix"));
+        assert!(!is_wellness_kind("cluster_summary"));
+        assert!(!is_wellness_kind("preference"));
+        assert!(!is_wellness_kind(""));
+    }
+
+    #[tokio::test]
+    async fn test_health_kind_auto_permanent() {
+        let dir = temp_dir("memory-plane-health-permanent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Health entry — should be auto-permanent.
+        let health = mgr
+            .add_entry(
+                "health_event",
+                "user",
+                &["gripa".into()],
+                None,
+                40,
+                "Hoy me siento con tos y dolor de garganta",
+            )
+            .await
+            .unwrap();
+        // Plain note — should NOT be permanent.
+        let note = mgr
+            .add_entry("note", "user", &[], None, 40, "una nota cualquiera")
+            .await
+            .unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let health_perm: i32 = db
+            .query_row(
+                "SELECT permanent FROM memory_entries WHERE entry_id = ?1",
+                params![health.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(health_perm, 1, "health_event must be auto-permanent");
+
+        let note_perm: i32 = db
+            .query_row(
+                "SELECT permanent FROM memory_entries WHERE entry_id = ?1",
+                params![note.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(note_perm, 0, "plain note must NOT be auto-permanent");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_health_entries_survive_decay_indefinitely() {
+        let dir = temp_dir("memory-plane-health-survives-decay");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Low importance + 365 days old — would normally hit BOTH GC
+        // thresholds. But because it's a health_ kind, it auto-marks
+        // permanent and skips every decay/GC stage.
+        let entry = mgr
+            .add_entry(
+                "health_vital",
+                "user",
+                &[],
+                None,
+                5,
+                "presion 130/85 hace un año",
+            )
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 365);
+
+        let _ = mgr.apply_decay().await.unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let row: (i32, i32, i32) = db
+            .query_row(
+                "SELECT importance, COALESCE(archived,0), COALESCE(permanent,0)
+                 FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, 5, "importance must NOT decay");
+        assert_eq!(row.1, 0, "must NOT be archived");
+        assert_eq!(row.2, 1, "must remain permanent");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_dedup_skips_health_pairs() {
+        let dir = temp_dir("memory-plane-dedup-skips-health");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Two near-identical health events — they MUST stay separate.
+        // Two doses of the same medication are distinct events even if
+        // the text is the same.
+        let dose1 = mgr
+            .add_entry(
+                "health_medication",
+                "user",
+                &[],
+                None,
+                60,
+                "Tomé metformina 500mg con el desayuno",
+            )
+            .await
+            .unwrap();
+        let dose2 = mgr
+            .add_entry(
+                "health_medication",
+                "user",
+                &[],
+                None,
+                60,
+                "Tomé metformina 500mg con el desayuno",
+            )
+            .await
+            .unwrap();
+
+        // Aggressive dedup threshold — would normally fuse identical text.
+        let merged = mgr.dedup_similar(0.5).await.unwrap();
+
+        // Both must survive.
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM memory_entries WHERE entry_id IN (?1, ?2)",
+                params![dose1.entry_id, dose2.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2, "Both health doses must survive dedup");
+        assert_eq!(
+            merged, 0,
+            "dedup must report 0 merges when only health pairs are eligible"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_search_archived_finds_archived_entries() {
+        let dir = temp_dir("memory-plane-search-archived");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert two entries with the same topic.
+        let live = mgr
+            .add_entry(
+                "note",
+                "user",
+                &[],
+                None,
+                40,
+                "Idea fresca: hacer una app de listas de mercado",
+            )
+            .await
+            .unwrap();
+        let old = mgr
+            .add_entry(
+                "note",
+                "user",
+                &[],
+                None,
+                5,
+                "Idea vieja: hacer una app de listas de mercado",
+            )
+            .await
+            .unwrap();
+        // Force the old one to be archived via decay.
+        backdate(&dir, &old.entry_id, 100);
+        let _ = mgr.apply_decay().await.unwrap();
+
+        // Live search must NOT return the archived entry.
+        let live_results = mgr
+            .search_entries("listas de mercado", 10, None)
+            .await
+            .unwrap();
+        let live_ids: Vec<&str> = live_results
+            .iter()
+            .map(|r| r.entry.entry_id.as_str())
+            .collect();
+        assert!(live_ids.contains(&live.entry_id.as_str()));
+        assert!(
+            !live_ids.contains(&old.entry_id.as_str()),
+            "Live search must exclude archived entry"
+        );
+
+        // Archive search MUST return it.
+        let archived_results = mgr
+            .search_archived("listas de mercado", 10, None)
+            .await
+            .unwrap();
+        let arch_ids: Vec<&str> = archived_results
+            .iter()
+            .map(|r| r.entry.entry_id.as_str())
+            .collect();
+        assert!(
+            arch_ids.contains(&old.entry_id.as_str()),
+            "Archive search must return the archived entry, got {:?}",
+            arch_ids
+        );
+        // And the live entry must NOT show up in the archive search.
+        assert!(!arch_ids.contains(&live.entry_id.as_str()));
 
         std::fs::remove_dir_all(dir).ok();
     }

@@ -148,8 +148,11 @@ Herramientas:
    args: {"type": "preference", "topic": "usuario:gustos", "title": "Cafe sin azucar", "content": "What: prefiere cafe sin azucar. Why: lo menciono en conversacion. Learned: recordar siempre.", "tags": "preferencias,comida"}
    Tipos: bugfix, decision, architecture, discovery, pattern, config, preference
 
-10. **recall** — Busca en memoria persistente.
+10. **recall** — Busca en memoria persistente (la memoria activa, lo que esta vivo).
     args: {"query": "preferencias del usuario"}
+
+10b. **recall_archived** — Busca en el ARCHIVO de memoria. El sistema mueve automaticamente al archivo las memorias que dejaron de ser relevantes (poco accedidas + importancia baja + viejas), para que la busqueda activa quede limpia. Pero esas memorias NO se borran: viven en el archivo y se pueden recuperar con esta herramienta. Usala cuando el usuario diga frases como "tenia una idea pero ya no recuerdo cual era", "que paso con aquel proyecto que pause hace meses", "creo que te conte algo importante hace tiempo, ¿que era?", o cuando `recall` no encuentre nada y sospeches que el dato es viejo. Si encuentras algo aqui, MENCIONA explicitamente que es del archivo para que el usuario sepa que es algo que se habia "enfriado".
+    args: {"query": "proyecto pausado o idea olvidada"}
 
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
@@ -1210,6 +1213,7 @@ Herramientas:
             "open_url" => execute_open_url(&call.args).await,
             "remember" => execute_remember(&call.args, ctx).await,
             "recall" => execute_recall(&call.args, ctx).await,
+            "recall_archived" => execute_recall_archived(&call.args, ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -2141,6 +2145,61 @@ Herramientas:
                 }
                 Err(_) => Ok("No tengo memorias guardadas aun.".into()),
             }
+        }
+    }
+
+    /// BI.1 — recall_archived: search the archive tier.
+    ///
+    /// Same hybrid lexical+semantic search as `recall`, but inverted to
+    /// only return entries flagged `archived = 1`. The archive tier is
+    /// where memories that fell below the daily decay GC threshold go
+    /// — they are out of the live search ranking but still recoverable
+    /// when the user says *"tenía una idea pero ya no recuerdo qué era"*
+    /// or *"qué pasó con aquel proyecto que pausé hace meses?"*.
+    ///
+    /// Embeddings are preserved on archive so semantic recall over the
+    /// archive works exactly the same as the live tier.
+    async fn execute_recall_archived(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let query = args["query"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'query'"))?;
+
+        let memory = match &ctx.memory {
+            Some(m) => m,
+            None => return Ok("La memoria persistente no esta disponible.".into()),
+        };
+        let mem = memory.read().await;
+        match mem.search_archived(query, 5, None).await {
+            Ok(results) => {
+                if results.is_empty() {
+                    Ok("No encontre nada en el archivo de memoria. Recuerda que el archivo solo contiene memorias que el sistema marco como menos relevantes y movio fuera de la busqueda activa — si lo que buscas es reciente, usa `recall`.".into())
+                } else {
+                    let formatted: Vec<String> = results
+                        .iter()
+                        .map(|r| {
+                            let snippet = if r.entry.content.len() > 500 {
+                                format!("{}...", &r.entry.content[..500])
+                            } else {
+                                r.entry.content.clone()
+                            };
+                            format!(
+                                "- [archivado] [{}] ({}): {}",
+                                r.entry.kind,
+                                r.entry.created_at.format("%Y-%m-%d %H:%M"),
+                                snippet
+                            )
+                        })
+                        .collect();
+                    Ok(format!(
+                        "Recuerdos del archivo (cosas que dejaste de mencionar hace tiempo):\n{}",
+                        formatted.join("\n")
+                    ))
+                }
+            }
+            Err(e) => Ok(format!("Error buscando en el archivo: {}", e)),
         }
     }
 
