@@ -313,6 +313,71 @@ El sueño es una de las palancas mas poderosas para todas las demas dimensiones 
 11s. **sleep_summary** — Devuelve resumen completo: ultimas entradas + promedio de duracion en los ultimos 7 dias + promedio de calidad + cantidad de noches registradas en los ultimos 7 dias.
     args: {}
 
+## Espiritualidad (Vida Plena BI.10)
+
+LifeOS lleva el registro de practicas espirituales del usuario, sus reflexiones y sus valores fundamentales — con o sin religion. **Reglas absolutas:** NO promuevas ninguna religion especifica, NO descalifiques las creencias del usuario, NO empujes hacia o lejos de practicas. Solo acompañas la reflexion. Si el usuario es religioso, respeta. Si es ateo, respeta. Si esta en busqueda, acompaña la busqueda sin dirigirla. Las reflexiones se guardan SIEMPRE cifradas.
+
+12a. **spiritual_practice_add** — Registra una practica del usuario. tradition es libre (budismo, cristianismo, secular, agnostico, sin etiqueta).
+    args: {"practice_name": "Meditacion mindfulness", "tradition": "secular", "frequency": "diaria", "duration_min": 15}
+
+12b. **spiritual_practice_mark** — Marca que el usuario practico hoy (o en una fecha especifica). Actualiza last_practiced.
+    args: {"practice_id": "spirit-..."}
+
+12c. **spiritual_practice_list** — Lista las practicas activas del usuario.
+    args: {}
+
+12d. **spiritual_reflection_add** — Guarda una reflexion (siempre cifrada). topic es libre: "sentido de vida", "duda", "gratitud", "sufrimiento", "mortalidad", "proposito".
+    args: {"topic": "gratitud", "content": "Hoy estuve agradecido por..."}
+
+12e. **spiritual_reflection_list** — Lista reflexiones recientes, opcionalmente filtradas por topic.
+    args: {"topic": "gratitud", "limit": 10}
+
+12f. **core_value_add** — Define un valor fundamental del usuario con su importancia 1-10.
+    args: {"name": "familia", "importance_1_10": 10, "notes": "Lo mas importante en mi vida"}
+
+12g. **core_value_list** — Lista los valores del usuario, mas importantes primero.
+    args: {}
+
+12h. **spiritual_summary** — Devuelve resumen completo: practicas activas + reflexiones recientes + valores + dias desde la ultima practica.
+    args: {}
+
+## Salud financiera (Vida Plena BI.11)
+
+LifeOS lleva las cuentas, gastos, ingresos y metas financieras del usuario como **wellness, no como contabilidad**. El estres financiero es la fuente #1 de estres cronico (APA, Gallup) y afecta TODAS las demas dimensiones — por eso vive en el pillar Vida Plena. **Reglas absolutas:** Axi NO es asesor financiero certificado. NO recomienda inversiones especificas, NO predice mercados, NO maneja dinero del usuario. Puede explicar conceptos basicos (interes compuesto, fondo emergencia, priorizacion de deudas) y recomendar lecturas (Ramit Sethi, Sofia Macias "Pequeño cerdo capitalista", Bogleheads). Las alertas son suaves, sin juzgar.
+
+12i. **financial_account_add** — Registra una cuenta del usuario. account_type: checking, savings, investment, credit_card, loan, cash.
+    args: {"name": "BBVA debito", "account_type": "checking", "institution": "BBVA Mexico", "balance_last_known": 15000, "balance_currency": "MXN"}
+
+12j. **financial_account_balance** — Actualiza el balance conocido de una cuenta. Sets balance_updated_at a ahora.
+    args: {"account_id": "facct-...", "new_balance": 18500}
+
+12k. **financial_account_list** — Lista las cuentas activas del usuario.
+    args: {}
+
+12l. **expense_log** — Registra un gasto. category: comida, transporte, vivienda, salud, entretenimiento, ropa, etc.
+    args: {"amount": 450, "currency": "MXN", "category": "comida", "description": "Super semanal", "payment_method": "BBVA debito"}
+
+12m. **expense_list** — Lista gastos recientes, opcionalmente filtrados por categoria.
+    args: {"category": "comida", "limit": 30}
+
+12n. **income_log** — Registra un ingreso. source: salario, freelance, renta, venta, etc.
+    args: {"amount": 25000, "currency": "MXN", "source": "salario", "recurring": true}
+
+12o. **income_list** — Lista los ingresos recientes.
+    args: {"limit": 20}
+
+12p. **financial_goal_add** — Crea una meta financiera. Empieza con current_amount 0 y status active.
+    args: {"name": "Fondo emergencia 6 meses", "target_amount": 90000, "target_currency": "MXN", "target_date": "2026-12-31"}
+
+12q. **financial_goal_progress** — Actualiza el current_amount de una meta. Auto-flips a achieved cuando current_amount >= target_amount.
+    args: {"goal_id": "fgoal-...", "current_amount": 30000}
+
+12r. **financial_goal_list** — Lista metas activas.
+    args: {}
+
+12s. **financial_summary** — Devuelve resumen completo: cuentas activas + gastos recientes + ingresos recientes + metas activas + totales rolling de 30 dias (gastos, ingresos, neto). Usalo cuando el usuario te pida revisar como va con sus finanzas o quiera reflexionar sobre su mes.
+    args: {}
+
 11. **computer_type** — Escribe texto con el teclado virtual (como si el usuario tecleara).
     args: {"text": "Hola mundo"}
 
@@ -1422,6 +1487,27 @@ El sueño es una de las palancas mas poderosas para todas las demas dimensiones 
             "sleep_environment_add" => execute_sleep_environment_add(&call.args, ctx).await,
             "sleep_history" => execute_sleep_history(&call.args, ctx).await,
             "sleep_summary" => execute_sleep_summary(ctx).await,
+            // BI.10 — Espiritualidad
+            "spiritual_practice_add" => execute_spiritual_practice_add(&call.args, ctx).await,
+            "spiritual_practice_mark" => execute_spiritual_practice_mark(&call.args, ctx).await,
+            "spiritual_practice_list" => execute_spiritual_practice_list(ctx).await,
+            "spiritual_reflection_add" => execute_spiritual_reflection_add(&call.args, ctx).await,
+            "spiritual_reflection_list" => execute_spiritual_reflection_list(&call.args, ctx).await,
+            "core_value_add" => execute_core_value_add(&call.args, ctx).await,
+            "core_value_list" => execute_core_value_list(ctx).await,
+            "spiritual_summary" => execute_spiritual_summary(ctx).await,
+            // BI.11 — Salud financiera
+            "financial_account_add" => execute_financial_account_add(&call.args, ctx).await,
+            "financial_account_balance" => execute_financial_account_balance(&call.args, ctx).await,
+            "financial_account_list" => execute_financial_account_list(ctx).await,
+            "expense_log" => execute_expense_log(&call.args, ctx).await,
+            "expense_list" => execute_expense_list(&call.args, ctx).await,
+            "income_log" => execute_income_log(&call.args, ctx).await,
+            "income_list" => execute_income_list(&call.args, ctx).await,
+            "financial_goal_add" => execute_financial_goal_add(&call.args, ctx).await,
+            "financial_goal_progress" => execute_financial_goal_progress(&call.args, ctx).await,
+            "financial_goal_list" => execute_financial_goal_list(ctx).await,
+            "financial_summary" => execute_financial_summary(ctx).await,
             "computer_type" => execute_computer_type(&call.args).await,
             "computer_key" => execute_computer_key(&call.args).await,
             "computer_click" => execute_computer_click(&call.args).await,
@@ -3991,6 +4077,569 @@ El sueño es una de las palancas mas poderosas para todas las demas dimensiones 
         if summary.recent_entries.is_empty() {
             out.push_str(
                 "Aun no hay registros de sueño. Empieza con `sleep_log` despues de despertar.\n",
+            );
+        }
+
+        Ok(out)
+    }
+
+    // ========================================================================
+    // Fase BI.10 — Espiritualidad (Vida Plena)
+    // ========================================================================
+
+    async fn execute_spiritual_practice_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let practice_name = args["practice_name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'practice_name'"))?;
+        let tradition = args["tradition"].as_str();
+        let frequency = args["frequency"].as_str();
+        let duration_min = args["duration_min"].as_u64().map(|n| n as u32);
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let p = mem
+            .add_spiritual_practice(practice_name, tradition, frequency, duration_min, notes, None)
+            .await?;
+        Ok(format!(
+            "Practica registrada (id: {}): \"{}\"",
+            p.practice_id, p.practice_name
+        ))
+    }
+
+    async fn execute_spiritual_practice_mark(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let practice_id = args["practice_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'practice_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let updated = mem.mark_spiritual_practice(practice_id, None).await?;
+        if updated {
+            Ok(format!("Practica marcada para {}.", practice_id))
+        } else {
+            Ok(format!("No se encontro practica con id {}.", practice_id))
+        }
+    }
+
+    async fn execute_spiritual_practice_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let practices = mem.list_spiritual_practices(true).await?;
+        if practices.is_empty() {
+            return Ok("Sin practicas espirituales registradas.".into());
+        }
+        let lines: Vec<String> = practices
+            .iter()
+            .map(|p| {
+                let last = p
+                    .last_practiced
+                    .map(|d| format!(" (ultima: {})", d.format("%Y-%m-%d")))
+                    .unwrap_or_default();
+                let trad = p
+                    .tradition
+                    .as_deref()
+                    .map(|t| format!(" [{}]", t))
+                    .unwrap_or_default();
+                format!("- [{}] {}{}{}", p.practice_id, p.practice_name, trad, last)
+            })
+            .collect();
+        Ok(format!("Practicas activas:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_spiritual_reflection_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let topic = args["topic"].as_str();
+        let content = args["content"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'content'"))?;
+        let mem = require_memory(ctx).await?;
+        let r = mem
+            .add_spiritual_reflection(topic, content, None, None)
+            .await?;
+        Ok(format!(
+            "Reflexion guardada (id: {}, cifrada).",
+            r.reflection_id
+        ))
+    }
+
+    async fn execute_spiritual_reflection_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let topic = args["topic"].as_str();
+        let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+        let mem = require_memory(ctx).await?;
+        let refs = mem.list_spiritual_reflections(topic, limit).await?;
+        if refs.is_empty() {
+            return Ok("Sin reflexiones registradas.".into());
+        }
+        let lines: Vec<String> = refs
+            .iter()
+            .map(|r| {
+                let topic_str = r
+                    .topic
+                    .as_deref()
+                    .map(|t| format!("[{}] ", t))
+                    .unwrap_or_default();
+                let snippet: String = r.content.chars().take(200).collect();
+                format!(
+                    "- [{}] {}{}",
+                    r.occurred_at.format("%Y-%m-%d"),
+                    topic_str,
+                    snippet
+                )
+            })
+            .collect();
+        Ok(format!("Reflexiones recientes:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_core_value_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let importance = args["importance_1_10"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'importance_1_10'"))?
+            as u8;
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let v = mem.add_core_value(name, importance, notes, None).await?;
+        Ok(format!(
+            "Valor agregado (id: {}): {} — importancia {}/10",
+            v.value_id, v.name, v.importance_1_10
+        ))
+    }
+
+    async fn execute_core_value_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let values = mem.list_core_values().await?;
+        if values.is_empty() {
+            return Ok("Sin valores definidos.".into());
+        }
+        let lines: Vec<String> = values
+            .iter()
+            .map(|v| format!("- {}/10 — {}", v.importance_1_10, v.name))
+            .collect();
+        Ok(format!("Valores fundamentales:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_spiritual_summary(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let summary = mem.get_spiritual_summary(10).await?;
+        let mut out = String::from("# Resumen espiritual\n\n");
+
+        if let Some(days) = summary.days_since_last_practice {
+            out.push_str(&format!(
+                "## Ultima practica\nHace {} dias\n\n",
+                days
+            ));
+        }
+
+        if !summary.values.is_empty() {
+            out.push_str("## Valores fundamentales\n");
+            for v in &summary.values {
+                out.push_str(&format!("- {}/10 — {}\n", v.importance_1_10, v.name));
+            }
+            out.push('\n');
+        }
+
+        if !summary.active_practices.is_empty() {
+            out.push_str("## Practicas activas\n");
+            for p in &summary.active_practices {
+                let trad = p
+                    .tradition
+                    .as_deref()
+                    .map(|t| format!(" [{}]", t))
+                    .unwrap_or_default();
+                out.push_str(&format!("- {}{}\n", p.practice_name, trad));
+            }
+            out.push('\n');
+        }
+
+        if !summary.recent_reflections.is_empty() {
+            out.push_str("## Reflexiones recientes\n");
+            for r in summary.recent_reflections.iter().take(5) {
+                let topic_str = r
+                    .topic
+                    .as_deref()
+                    .map(|t| format!("[{}] ", t))
+                    .unwrap_or_default();
+                let snippet: String = r.content.chars().take(120).collect();
+                out.push_str(&format!(
+                    "- [{}] {}{}\n",
+                    r.occurred_at.format("%Y-%m-%d"),
+                    topic_str,
+                    snippet
+                ));
+            }
+            out.push('\n');
+        }
+
+        if summary.active_practices.is_empty()
+            && summary.recent_reflections.is_empty()
+            && summary.values.is_empty()
+        {
+            out.push_str(
+                "Aun no hay datos espirituales registrados. Empieza con \
+                 `spiritual_practice_add`, `spiritual_reflection_add` o \
+                 `core_value_add`.\n",
+            );
+        }
+
+        Ok(out)
+    }
+
+    // ========================================================================
+    // Fase BI.11 — Salud financiera (Vida Plena)
+    // ========================================================================
+
+    async fn execute_financial_account_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let account_type = args["account_type"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'account_type'"))?;
+        let institution = args["institution"].as_str();
+        let balance_last_known = args["balance_last_known"].as_f64();
+        let balance_currency = args["balance_currency"].as_str().unwrap_or("MXN");
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let a = mem
+            .add_financial_account(
+                name,
+                account_type,
+                institution,
+                balance_last_known,
+                balance_currency,
+                notes,
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Cuenta agregada (id: {}): {} [{}]",
+            a.account_id, a.name, a.account_type
+        ))
+    }
+
+    async fn execute_financial_account_balance(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let account_id = args["account_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'account_id'"))?;
+        let new_balance = args["new_balance"]
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'new_balance'"))?;
+        let mem = require_memory(ctx).await?;
+        let updated = mem.update_account_balance(account_id, new_balance).await?;
+        if updated {
+            Ok(format!(
+                "Balance actualizado a {:.2} para {}.",
+                new_balance, account_id
+            ))
+        } else {
+            Ok(format!("No se encontro cuenta con id {}.", account_id))
+        }
+    }
+
+    async fn execute_financial_account_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let accounts = mem.list_financial_accounts(true).await?;
+        if accounts.is_empty() {
+            return Ok("Sin cuentas registradas.".into());
+        }
+        let lines: Vec<String> = accounts
+            .iter()
+            .map(|a| {
+                let bal = a
+                    .balance_last_known
+                    .map(|b| format!(" — {:.2} {}", b, a.balance_currency))
+                    .unwrap_or_default();
+                format!("- [{}] [{}] {}{}", a.account_id, a.account_type, a.name, bal)
+            })
+            .collect();
+        Ok(format!("Cuentas activas:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_expense_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let amount = args["amount"]
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'amount'"))?;
+        let currency = args["currency"].as_str().unwrap_or("MXN");
+        let category = args["category"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'category'"))?;
+        let description = args["description"].as_str();
+        let payment_method = args["payment_method"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let e = mem
+            .log_expense(
+                amount,
+                currency,
+                category,
+                description,
+                payment_method,
+                None,
+                notes,
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Gasto registrado (id: {}): {:.2} {} en {}",
+            e.expense_id, e.amount, e.currency, e.category
+        ))
+    }
+
+    async fn execute_expense_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let category = args["category"].as_str();
+        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let mem = require_memory(ctx).await?;
+        let expenses = mem.list_expenses(category, limit).await?;
+        if expenses.is_empty() {
+            return Ok("Sin gastos registrados.".into());
+        }
+        let lines: Vec<String> = expenses
+            .iter()
+            .map(|e| {
+                let desc = e
+                    .description
+                    .as_deref()
+                    .map(|d| format!(" — {}", d))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] {} {} ({}){}",
+                    e.occurred_at.format("%Y-%m-%d"),
+                    e.amount,
+                    e.currency,
+                    e.category,
+                    desc
+                )
+            })
+            .collect();
+        Ok(format!("Gastos recientes:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_income_log(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let amount = args["amount"]
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'amount'"))?;
+        let currency = args["currency"].as_str().unwrap_or("MXN");
+        let source = args["source"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'source'"))?;
+        let description = args["description"].as_str();
+        let recurring = args["recurring"].as_bool().unwrap_or(false);
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let i = mem
+            .log_income(
+                amount,
+                currency,
+                source,
+                description,
+                None,
+                recurring,
+                notes,
+                None,
+            )
+            .await?;
+        Ok(format!(
+            "Ingreso registrado (id: {}): {:.2} {} de {}",
+            i.income_id, i.amount, i.currency, i.source
+        ))
+    }
+
+    async fn execute_income_list(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let limit = args["limit"].as_u64().unwrap_or(20) as usize;
+        let mem = require_memory(ctx).await?;
+        let income = mem.list_income(limit).await?;
+        if income.is_empty() {
+            return Ok("Sin ingresos registrados.".into());
+        }
+        let lines: Vec<String> = income
+            .iter()
+            .map(|i| {
+                let rec = if i.recurring { " (recurrente)" } else { "" };
+                format!(
+                    "- [{}] {} {} de {}{}",
+                    i.received_at.format("%Y-%m-%d"),
+                    i.amount,
+                    i.currency,
+                    i.source,
+                    rec
+                )
+            })
+            .collect();
+        Ok(format!("Ingresos recientes:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_financial_goal_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'name'"))?;
+        let target_amount = args["target_amount"]
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'target_amount'"))?;
+        let target_currency = args["target_currency"].as_str().unwrap_or("MXN");
+        let target_date = args["target_date"].as_str();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let g = mem
+            .add_financial_goal(name, target_amount, target_currency, target_date, notes, None)
+            .await?;
+        Ok(format!(
+            "Meta financiera creada (id: {}): {} — target {:.2} {}",
+            g.goal_id, g.name, g.target_amount, g.target_currency
+        ))
+    }
+
+    async fn execute_financial_goal_progress(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let goal_id = args["goal_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'goal_id'"))?;
+        let current_amount = args["current_amount"]
+            .as_f64()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'current_amount'"))?;
+        let mem = require_memory(ctx).await?;
+        let updated = mem
+            .update_financial_goal_progress(goal_id, current_amount)
+            .await?;
+        if updated {
+            Ok(format!(
+                "Progreso actualizado a {:.2} para {}.",
+                current_amount, goal_id
+            ))
+        } else {
+            Ok(format!("No se encontro meta con id {}.", goal_id))
+        }
+    }
+
+    async fn execute_financial_goal_list(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let goals = mem.list_financial_goals(true).await?;
+        if goals.is_empty() {
+            return Ok("Sin metas activas.".into());
+        }
+        let lines: Vec<String> = goals
+            .iter()
+            .map(|g| {
+                let pct = if g.target_amount > 0.0 {
+                    format!(" — {:.0}%", (g.current_amount / g.target_amount) * 100.0)
+                } else {
+                    String::new()
+                };
+                let deadline = g
+                    .target_date
+                    .as_deref()
+                    .map(|d| format!(" (deadline: {})", d))
+                    .unwrap_or_default();
+                format!(
+                    "- [{}] {} — {:.2}/{:.2} {}{}{}",
+                    g.goal_id,
+                    g.name,
+                    g.current_amount,
+                    g.target_amount,
+                    g.target_currency,
+                    pct,
+                    deadline
+                )
+            })
+            .collect();
+        Ok(format!("Metas activas:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_financial_summary(ctx: &ToolContext) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let summary = mem.get_financial_summary(15, 15).await?;
+        let mut out = String::from("# Resumen financiero\n\n");
+
+        out.push_str(&format!(
+            "## Ultimos 30 dias\n- Ingresos: {:.2}\n- Gastos: {:.2}\n- Neto: {:.2}\n\n",
+            summary.income_total_last_30_days,
+            summary.expenses_total_last_30_days,
+            summary.net_last_30_days
+        ));
+
+        if !summary.active_accounts.is_empty() {
+            out.push_str("## Cuentas activas\n");
+            for a in &summary.active_accounts {
+                let bal = a
+                    .balance_last_known
+                    .map(|b| format!(" — {:.2} {}", b, a.balance_currency))
+                    .unwrap_or_default();
+                out.push_str(&format!("- [{}] {}{}\n", a.account_type, a.name, bal));
+            }
+            out.push('\n');
+        }
+
+        if !summary.active_goals.is_empty() {
+            out.push_str("## Metas activas\n");
+            for g in &summary.active_goals {
+                let pct = if g.target_amount > 0.0 {
+                    format!(" — {:.0}%", (g.current_amount / g.target_amount) * 100.0)
+                } else {
+                    String::new()
+                };
+                out.push_str(&format!(
+                    "- {} — {:.2}/{:.2} {}{}\n",
+                    g.name, g.current_amount, g.target_amount, g.target_currency, pct
+                ));
+            }
+            out.push('\n');
+        }
+
+        if !summary.recent_expenses.is_empty() {
+            out.push_str("## Gastos recientes\n");
+            for e in summary.recent_expenses.iter().take(10) {
+                out.push_str(&format!(
+                    "- [{}] {} {} ({})\n",
+                    e.occurred_at.format("%Y-%m-%d"),
+                    e.amount,
+                    e.currency,
+                    e.category
+                ));
+            }
+            out.push('\n');
+        }
+
+        if summary.active_accounts.is_empty()
+            && summary.recent_expenses.is_empty()
+            && summary.active_goals.is_empty()
+        {
+            out.push_str(
+                "Aun no hay datos financieros. Empieza con `financial_account_add`, \
+                 `expense_log` o `financial_goal_add`.\n",
             );
         }
 

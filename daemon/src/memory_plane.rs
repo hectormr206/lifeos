@@ -549,6 +549,156 @@ CREATE TABLE IF NOT EXISTS sleep_environment (
 );
 CREATE INDEX IF NOT EXISTS idx_sleep_env_sleep_id
     ON sleep_environment(sleep_id);
+
+-- ============================================================================
+-- Fase BI.10 — Espiritualidad (Vida Plena)
+-- ============================================================================
+-- Tracks the user's spiritual practices, reflections and personal
+-- values — with or without religion. Three side-tables:
+--   * spiritual_practices: meditacion, oracion, lectura, naturaleza,
+--     etc. con frecuencia y ultima vez practicada.
+--   * spiritual_reflections: entradas narrativas sobre preguntas
+--     existenciales, gratitud, propósito. Notas cifradas.
+--   * values_compass: 5-10 valores fundamentales del usuario con
+--     importancia 1-10 y notas.
+--
+-- Auto-permanente via la BI.1 wellness-kind contract para `spiritual_*`.
+-- Sin disclaimers de proselitismo en codigo: la regla vive en el
+-- system prompt de Axi (no juzgar, no promover, no descalificar).
+
+CREATE TABLE IF NOT EXISTS spiritual_practices (
+    practice_id TEXT PRIMARY KEY,
+    practice_name TEXT NOT NULL,     -- 'meditacion', 'oracion', 'caminata bosque',
+                                     -- 'yoga', 'journaling reflexivo', 'silencio'
+    tradition TEXT,                  -- libre: 'budismo', 'cristianismo', 'secular',
+                                     -- 'agnostico', 'sin etiqueta'
+    frequency TEXT,                  -- libre: 'diaria', 'semanal:3', 'cuando lo siento'
+    duration_min INTEGER,
+    last_practiced TEXT,             -- ISO-8601 opcional
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_spiritual_practices_active
+    ON spiritual_practices(active);
+
+CREATE TABLE IF NOT EXISTS spiritual_reflections (
+    reflection_id TEXT PRIMARY KEY,
+    topic TEXT,                      -- 'sentido de vida', 'duda', 'gratitud',
+                                     -- 'sufrimiento', 'mortalidad', 'proposito'
+    content_nonce_b64 TEXT NOT NULL,
+    content_ciphertext_b64 TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_spiritual_reflections_occurred
+    ON spiritual_reflections(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_spiritual_reflections_topic
+    ON spiritual_reflections(topic);
+
+CREATE TABLE IF NOT EXISTS values_compass (
+    value_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,              -- 'familia', 'libertad', 'creatividad',
+                                     -- 'servicio', 'honestidad', 'justicia'
+    importance_1_10 INTEGER NOT NULL,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    defined_at TEXT NOT NULL,
+    last_reviewed TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- ============================================================================
+-- Fase BI.11 — Salud financiera (Vida Plena)
+-- ============================================================================
+-- Personal finance tracking treated as wellness, not as accounting.
+-- Stress financiero es la fuente #1 de estres cronico (APA, Gallup),
+-- y afecta TODAS las demas dimensiones — por eso vive aqui y NO en
+-- un modulo aparte de "finanzas".
+--
+-- 4 side-tables. Notas cifradas. AUTO-PERMANENTE via BI.1 (`financial_*`).
+-- NO conectamos a APIs bancarias (Plaid/Belvo/Tink) en V1 — el usuario
+-- registra todo manualmente. Eso evita PCI-DSS y proteje la privacidad.
+
+CREATE TABLE IF NOT EXISTS financial_accounts (
+    account_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,              -- 'BBVA debito', 'efectivo', 'CETES'
+    account_type TEXT NOT NULL,      -- 'checking', 'savings', 'investment',
+                                     -- 'credit_card', 'loan', 'cash'
+    institution TEXT,                -- libre
+    balance_last_known REAL,         -- usuario actualiza manualmente
+    balance_currency TEXT NOT NULL DEFAULT 'MXN',
+    balance_updated_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_financial_accounts_active
+    ON financial_accounts(active);
+CREATE INDEX IF NOT EXISTS idx_financial_accounts_type
+    ON financial_accounts(account_type);
+
+CREATE TABLE IF NOT EXISTS financial_expenses (
+    expense_id TEXT PRIMARY KEY,
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'MXN',
+    category TEXT NOT NULL,          -- 'comida', 'transporte', 'vivienda',
+                                     -- 'salud', 'entretenimiento', 'ropa', etc.
+    description TEXT,
+    payment_method TEXT,             -- FK opcional a financial_accounts
+    occurred_at TEXT NOT NULL,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_financial_expenses_occurred
+    ON financial_expenses(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_financial_expenses_category
+    ON financial_expenses(category);
+
+CREATE TABLE IF NOT EXISTS financial_income (
+    income_id TEXT PRIMARY KEY,
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'MXN',
+    source TEXT NOT NULL,            -- 'salario', 'freelance', 'renta', 'venta'
+    description TEXT,
+    received_at TEXT NOT NULL,
+    recurring INTEGER NOT NULL DEFAULT 0,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_financial_income_received
+    ON financial_income(received_at);
+
+CREATE TABLE IF NOT EXISTS financial_goals (
+    goal_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,              -- 'fondo emergencia 6 meses', 'pagar tarjeta',
+                                     -- 'enganche casa', 'viaje Japon'
+    target_amount REAL NOT NULL,
+    target_currency TEXT NOT NULL DEFAULT 'MXN',
+    target_date TEXT,
+    current_amount REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',  -- 'active', 'achieved', 'paused', 'abandoned'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_financial_goals_status
+    ON financial_goals(status);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -7705,6 +7855,1395 @@ struct SleepEntryRaw {
     created_at: String,
 }
 
+// ============================================================================
+// Fase BI.10 — Espiritualidad (Vida Plena)
+// ============================================================================
+
+/// One spiritual practice the user does (or wants to do).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpiritualPractice {
+    pub practice_id: String,
+    pub practice_name: String,
+    /// Free text — `budismo`, `cristianismo`, `secular`, `agnostico`,
+    /// `sin etiqueta`, etc. Axi must NOT promote any one of these.
+    pub tradition: Option<String>,
+    pub frequency: Option<String>,
+    pub duration_min: Option<u32>,
+    pub last_practiced: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One spiritual reflection / journal entry. Always encrypted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpiritualReflection {
+    pub reflection_id: String,
+    pub topic: Option<String>,
+    pub content: String,
+    pub occurred_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One core value the user identifies as theirs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoreValue {
+    pub value_id: String,
+    pub name: String,
+    pub importance_1_10: u8,
+    pub notes: String,
+    pub defined_at: DateTime<Utc>,
+    pub last_reviewed: Option<DateTime<Utc>>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the spiritual pillar.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SpiritualSummary {
+    pub active_practices: Vec<SpiritualPractice>,
+    pub recent_reflections: Vec<SpiritualReflection>,
+    pub values: Vec<CoreValue>,
+    pub days_since_last_practice: Option<i64>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.10: Spiritual practices
+    // -----------------------------------------------------------------------
+
+    pub async fn add_spiritual_practice(
+        &self,
+        practice_name: &str,
+        tradition: Option<&str>,
+        frequency: Option<&str>,
+        duration_min: Option<u32>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<SpiritualPractice> {
+        let practice_name =
+            normalize_non_empty(practice_name).context("practice_name required")?;
+        let tradition = tradition.and_then(normalize_non_empty);
+        let frequency = frequency.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let practice_id = format!("spirit-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = practice_id.clone();
+        let name_clone = practice_name.clone();
+        let tradition_clone = tradition.clone();
+        let freq_clone = frequency.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO spiritual_practices
+                 (practice_id, practice_name, tradition, frequency, duration_min,
+                  last_practiced, notes_nonce_b64, notes_ciphertext_b64, active,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, 1, ?8, ?9, ?9)",
+                params![
+                    id_clone,
+                    name_clone,
+                    tradition_clone,
+                    freq_clone,
+                    duration_min.map(|n| n as i32),
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(SpiritualPractice {
+            practice_id,
+            practice_name,
+            tradition,
+            frequency,
+            duration_min,
+            last_practiced: None,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark that the user practiced today (or at a specific time).
+    pub async fn mark_spiritual_practice(
+        &self,
+        practice_id: &str,
+        practiced_at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let when = practiced_at.unwrap_or_else(Utc::now).to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = practice_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE spiritual_practices
+                 SET last_practiced = ?1, updated_at = ?2
+                 WHERE practice_id = ?3",
+                params![when, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn deactivate_spiritual_practice(&self, practice_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = practice_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE spiritual_practices
+                 SET active = 0, updated_at = ?1
+                 WHERE practice_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_spiritual_practices(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<SpiritualPractice>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT practice_id, practice_name, tradition, frequency, duration_min,
+                        last_practiced, notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM spiritual_practices WHERE active = 1
+                 ORDER BY practice_name"
+            } else {
+                "SELECT practice_id, practice_name, tradition, frequency, duration_min,
+                        last_practiced, notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM spiritual_practices
+                 ORDER BY practice_name"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<SpiritualPracticeRaw> = stmt
+                .query_map([], |row| {
+                    Ok(SpiritualPracticeRaw {
+                        practice_id: row.get(0)?,
+                        practice_name: row.get(1)?,
+                        tradition: row.get(2)?,
+                        frequency: row.get(3)?,
+                        duration_min: row.get(4)?,
+                        last_practiced: row.get(5)?,
+                        notes_nonce_b64: row.get(6)?,
+                        notes_ciphertext_b64: row.get(7)?,
+                        active: row.get::<_, i32>(8)? != 0,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                        updated_at: row.get(11)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| SpiritualPractice {
+                practice_id: r.practice_id,
+                practice_name: r.practice_name,
+                tradition: r.tradition,
+                frequency: r.frequency,
+                duration_min: r.duration_min.map(|n| n.max(0) as u32),
+                last_practiced: r.last_practiced.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.10: Spiritual reflections
+    // -----------------------------------------------------------------------
+
+    /// Add a reflection — content is REQUIRED and ALWAYS encrypted.
+    /// Spiritual entries are personal even when they look mundane;
+    /// the encryption is non-negotiable.
+    pub async fn add_spiritual_reflection(
+        &self,
+        topic: Option<&str>,
+        content: &str,
+        occurred_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<SpiritualReflection> {
+        let content_owned = content.trim().to_string();
+        if content_owned.is_empty() {
+            anyhow::bail!("content required");
+        }
+        let topic = topic.and_then(normalize_non_empty);
+        let (content_nonce, content_cipher, _) = encrypt_content(&content_owned)?;
+
+        let occurred = occurred_at.unwrap_or_else(Utc::now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let reflection_id = format!("reflect-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = reflection_id.clone();
+        let topic_clone = topic.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO spiritual_reflections
+                 (reflection_id, topic, content_nonce_b64, content_ciphertext_b64,
+                  occurred_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    id_clone,
+                    topic_clone,
+                    content_nonce,
+                    content_cipher,
+                    occurred_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(SpiritualReflection {
+            reflection_id,
+            topic,
+            content: content_owned,
+            occurred_at: occurred,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_spiritual_reflections(
+        &self,
+        topic: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SpiritualReflection>> {
+        let db_path = self.db_path.clone();
+        let topic_filter = topic.map(|s| s.to_string());
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT reflection_id, topic, content_nonce_b64, content_ciphertext_b64,
+                        occurred_at, source_entry_id, created_at
+                 FROM spiritual_reflections",
+            );
+            if topic_filter.is_some() {
+                sql.push_str(" WHERE topic = ?1 ORDER BY occurred_at DESC LIMIT ?2");
+            } else {
+                sql.push_str(" ORDER BY occurred_at DESC LIMIT ?1");
+            }
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<SpiritualReflectionRaw> {
+                Ok(SpiritualReflectionRaw {
+                    reflection_id: row.get(0)?,
+                    topic: row.get(1)?,
+                    content_nonce_b64: row.get(2)?,
+                    content_ciphertext_b64: row.get(3)?,
+                    occurred_at: row.get(4)?,
+                    source_entry_id: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            };
+            let raws: Vec<SpiritualReflectionRaw> = if let Some(t) = topic_filter {
+                stmt.query_map(params![t, limit], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map(params![limit], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| SpiritualReflection {
+                reflection_id: r.reflection_id,
+                topic: r.topic,
+                content: decrypt_to_string(&r.content_nonce_b64, &r.content_ciphertext_b64)
+                    .unwrap_or_default(),
+                occurred_at: parse_utc(&r.occurred_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.10: Values compass
+    // -----------------------------------------------------------------------
+
+    pub async fn add_core_value(
+        &self,
+        name: &str,
+        importance_1_10: u8,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<CoreValue> {
+        let name = normalize_non_empty(name).context("name required")?;
+        if !(1..=10).contains(&importance_1_10) {
+            anyhow::bail!("importance_1_10 must be in 1..=10");
+        }
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let value_id = format!("val-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = value_id.clone();
+        let name_clone = name.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO values_compass
+                 (value_id, name, importance_1_10, notes_nonce_b64, notes_ciphertext_b64,
+                  defined_at, last_reviewed, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?6, ?6)",
+                params![
+                    id_clone,
+                    name_clone,
+                    importance_1_10 as i32,
+                    notes_nonce,
+                    notes_cipher,
+                    now_rfc,
+                    source_owned,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CoreValue {
+            value_id,
+            name,
+            importance_1_10,
+            notes: notes_owned,
+            defined_at: now,
+            last_reviewed: None,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_core_values(&self) -> Result<Vec<CoreValue>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT value_id, name, importance_1_10, notes_nonce_b64, notes_ciphertext_b64,
+                        defined_at, last_reviewed, source_entry_id, created_at, updated_at
+                 FROM values_compass
+                 ORDER BY importance_1_10 DESC, name",
+            )?;
+            let raws: Vec<CoreValueRaw> = stmt
+                .query_map([], |row| {
+                    Ok(CoreValueRaw {
+                        value_id: row.get(0)?,
+                        name: row.get(1)?,
+                        importance_1_10: row.get(2)?,
+                        notes_nonce_b64: row.get(3)?,
+                        notes_ciphertext_b64: row.get(4)?,
+                        defined_at: row.get(5)?,
+                        last_reviewed: row.get(6)?,
+                        source_entry_id: row.get(7)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| CoreValue {
+                value_id: r.value_id,
+                name: r.name,
+                importance_1_10: r.importance_1_10.clamp(0, 10) as u8,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                defined_at: parse_utc(&r.defined_at),
+                last_reviewed: r.last_reviewed.as_deref().map(parse_utc),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    pub async fn get_spiritual_summary(
+        &self,
+        recent_reflection_limit: usize,
+    ) -> Result<SpiritualSummary> {
+        let active_practices = self.list_spiritual_practices(true).await?;
+        let recent_reflections = self
+            .list_spiritual_reflections(None, recent_reflection_limit)
+            .await?;
+        let values = self.list_core_values().await?;
+
+        let now = Utc::now();
+        let days_since_last_practice = active_practices
+            .iter()
+            .filter_map(|p| p.last_practiced)
+            .max()
+            .map(|last| (now - last).num_days());
+
+        Ok(SpiritualSummary {
+            active_practices,
+            recent_reflections,
+            values,
+            days_since_last_practice,
+            generated_at: now,
+        })
+    }
+}
+
+// ============================================================================
+// Fase BI.11 — Salud financiera (Vida Plena)
+// ============================================================================
+
+/// One financial account the user manually tracks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinancialAccount {
+    pub account_id: String,
+    pub name: String,
+    /// `checking`, `savings`, `investment`, `credit_card`, `loan`, `cash`.
+    pub account_type: String,
+    pub institution: Option<String>,
+    pub balance_last_known: Option<f64>,
+    pub balance_currency: String,
+    pub balance_updated_at: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One expense entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Expense {
+    pub expense_id: String,
+    pub amount: f64,
+    pub currency: String,
+    pub category: String,
+    pub description: Option<String>,
+    pub payment_method: Option<String>,
+    pub occurred_at: DateTime<Utc>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One income entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Income {
+    pub income_id: String,
+    pub amount: f64,
+    pub currency: String,
+    pub source: String,
+    pub description: Option<String>,
+    pub received_at: DateTime<Utc>,
+    pub recurring: bool,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One financial goal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinancialGoal {
+    pub goal_id: String,
+    pub name: String,
+    pub target_amount: f64,
+    pub target_currency: String,
+    pub target_date: Option<String>,
+    pub current_amount: f64,
+    /// `active`, `achieved`, `paused`, `abandoned`.
+    pub status: String,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the financial pillar.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FinancialSummary {
+    pub active_accounts: Vec<FinancialAccount>,
+    pub recent_expenses: Vec<Expense>,
+    pub recent_income: Vec<Income>,
+    pub active_goals: Vec<FinancialGoal>,
+    /// Sum of expenses in the last 30 days, in the user's primary
+    /// currency (taken as the most-frequent currency in those rows).
+    pub expenses_total_last_30_days: f64,
+    pub income_total_last_30_days: f64,
+    pub net_last_30_days: f64,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.11: Financial accounts
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_financial_account(
+        &self,
+        name: &str,
+        account_type: &str,
+        institution: Option<&str>,
+        balance_last_known: Option<f64>,
+        balance_currency: &str,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<FinancialAccount> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let account_type = normalize_non_empty(account_type).context("account_type required")?;
+        let institution = institution.and_then(normalize_non_empty);
+        let currency = normalize_non_empty(balance_currency).unwrap_or_else(|| "MXN".to_string());
+        if let Some(b) = balance_last_known {
+            if !b.is_finite() {
+                anyhow::bail!("balance must be finite");
+            }
+        }
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let account_id = format!("facct-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+        let balance_updated_at = if balance_last_known.is_some() {
+            Some(now_rfc.clone())
+        } else {
+            None
+        };
+
+        let db_path = self.db_path.clone();
+        let id_clone = account_id.clone();
+        let name_clone = name.clone();
+        let type_clone = account_type.clone();
+        let inst_clone = institution.clone();
+        let curr_clone = currency.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO financial_accounts
+                 (account_id, name, account_type, institution, balance_last_known,
+                  balance_currency, balance_updated_at, notes_nonce_b64,
+                  notes_ciphertext_b64, active, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?11, ?11)",
+                params![
+                    id_clone,
+                    name_clone,
+                    type_clone,
+                    inst_clone,
+                    balance_last_known,
+                    curr_clone,
+                    balance_updated_at,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(FinancialAccount {
+            account_id,
+            name,
+            account_type,
+            institution,
+            balance_last_known,
+            balance_currency: currency,
+            balance_updated_at: if balance_last_known.is_some() {
+                Some(now)
+            } else {
+                None
+            },
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update the balance of an account. Sets `balance_updated_at` to now.
+    pub async fn update_account_balance(
+        &self,
+        account_id: &str,
+        new_balance: f64,
+    ) -> Result<bool> {
+        if !new_balance.is_finite() {
+            anyhow::bail!("balance must be finite");
+        }
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = account_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE financial_accounts
+                 SET balance_last_known = ?1,
+                     balance_updated_at = ?2,
+                     updated_at = ?2
+                 WHERE account_id = ?3",
+                params![new_balance, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_financial_accounts(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<FinancialAccount>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT account_id, name, account_type, institution, balance_last_known,
+                        balance_currency, balance_updated_at, notes_nonce_b64,
+                        notes_ciphertext_b64, active, source_entry_id, created_at, updated_at
+                 FROM financial_accounts WHERE active = 1
+                 ORDER BY name"
+            } else {
+                "SELECT account_id, name, account_type, institution, balance_last_known,
+                        balance_currency, balance_updated_at, notes_nonce_b64,
+                        notes_ciphertext_b64, active, source_entry_id, created_at, updated_at
+                 FROM financial_accounts
+                 ORDER BY name"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<FinancialAccountRaw> = stmt
+                .query_map([], |row| {
+                    Ok(FinancialAccountRaw {
+                        account_id: row.get(0)?,
+                        name: row.get(1)?,
+                        account_type: row.get(2)?,
+                        institution: row.get(3)?,
+                        balance_last_known: row.get(4)?,
+                        balance_currency: row.get(5)?,
+                        balance_updated_at: row.get(6)?,
+                        notes_nonce_b64: row.get(7)?,
+                        notes_ciphertext_b64: row.get(8)?,
+                        active: row.get::<_, i32>(9)? != 0,
+                        source_entry_id: row.get(10)?,
+                        created_at: row.get(11)?,
+                        updated_at: row.get(12)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| FinancialAccount {
+                account_id: r.account_id,
+                name: r.name,
+                account_type: r.account_type,
+                institution: r.institution,
+                balance_last_known: r.balance_last_known,
+                balance_currency: r.balance_currency,
+                balance_updated_at: r.balance_updated_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.11: Expenses
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_expense(
+        &self,
+        amount: f64,
+        currency: &str,
+        category: &str,
+        description: Option<&str>,
+        payment_method: Option<&str>,
+        occurred_at: Option<DateTime<Utc>>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Expense> {
+        if amount < 0.0 || !amount.is_finite() {
+            anyhow::bail!("amount must be a non-negative finite number");
+        }
+        let category = normalize_non_empty(category).context("category required")?;
+        let currency = normalize_non_empty(currency).unwrap_or_else(|| "MXN".to_string());
+        let description = description.and_then(normalize_non_empty);
+        let payment_method = payment_method.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let occurred = occurred_at.unwrap_or_else(Utc::now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let expense_id = format!("exp-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = expense_id.clone();
+        let category_clone = category.clone();
+        let currency_clone = currency.clone();
+        let description_clone = description.clone();
+        let pm_clone = payment_method.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO financial_expenses
+                 (expense_id, amount, currency, category, description, payment_method,
+                  occurred_at, notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id_clone,
+                    amount,
+                    currency_clone,
+                    category_clone,
+                    description_clone,
+                    pm_clone,
+                    occurred_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Expense {
+            expense_id,
+            amount,
+            currency,
+            category,
+            description,
+            payment_method,
+            occurred_at: occurred,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_expenses(
+        &self,
+        category: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Expense>> {
+        let db_path = self.db_path.clone();
+        let filter = category.map(|s| s.to_string());
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT expense_id, amount, currency, category, description,
+                        payment_method, occurred_at, notes_nonce_b64,
+                        notes_ciphertext_b64, source_entry_id, created_at
+                 FROM financial_expenses",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE category = ?1 ORDER BY occurred_at DESC LIMIT ?2");
+            } else {
+                sql.push_str(" ORDER BY occurred_at DESC LIMIT ?1");
+            }
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<ExpenseRaw> {
+                Ok(ExpenseRaw {
+                    expense_id: row.get(0)?,
+                    amount: row.get(1)?,
+                    currency: row.get(2)?,
+                    category: row.get(3)?,
+                    description: row.get(4)?,
+                    payment_method: row.get(5)?,
+                    occurred_at: row.get(6)?,
+                    notes_nonce_b64: row.get(7)?,
+                    notes_ciphertext_b64: row.get(8)?,
+                    source_entry_id: row.get(9)?,
+                    created_at: row.get(10)?,
+                })
+            };
+            let raws: Vec<ExpenseRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f, limit], map_row)?
+                    .flatten()
+                    .collect()
+            } else {
+                stmt.query_map(params![limit], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Expense {
+                expense_id: r.expense_id,
+                amount: r.amount,
+                currency: r.currency,
+                category: r.category,
+                description: r.description,
+                payment_method: r.payment_method,
+                occurred_at: parse_utc(&r.occurred_at),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.11: Income
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_income(
+        &self,
+        amount: f64,
+        currency: &str,
+        source: &str,
+        description: Option<&str>,
+        received_at: Option<DateTime<Utc>>,
+        recurring: bool,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Income> {
+        if amount < 0.0 || !amount.is_finite() {
+            anyhow::bail!("amount must be a non-negative finite number");
+        }
+        let source = normalize_non_empty(source).context("source required")?;
+        let currency = normalize_non_empty(currency).unwrap_or_else(|| "MXN".to_string());
+        let description = description.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let received = received_at.unwrap_or_else(Utc::now);
+        let received_rfc = received.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let income_id = format!("inc-{}", Uuid::new_v4());
+        let source_entry_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = income_id.clone();
+        let source_clone = source.clone();
+        let currency_clone = currency.clone();
+        let description_clone = description.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO financial_income
+                 (income_id, amount, currency, source, description, received_at,
+                  recurring, notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id_clone,
+                    amount,
+                    currency_clone,
+                    source_clone,
+                    description_clone,
+                    received_rfc,
+                    recurring as i32,
+                    notes_nonce,
+                    notes_cipher,
+                    source_entry_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Income {
+            income_id,
+            amount,
+            currency,
+            source,
+            description,
+            received_at: received,
+            recurring,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_income(&self, limit: usize) -> Result<Vec<Income>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT income_id, amount, currency, source, description, received_at,
+                        recurring, notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at
+                 FROM financial_income
+                 ORDER BY received_at DESC
+                 LIMIT ?1",
+            )?;
+            let raws: Vec<IncomeRaw> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(IncomeRaw {
+                        income_id: row.get(0)?,
+                        amount: row.get(1)?,
+                        currency: row.get(2)?,
+                        source: row.get(3)?,
+                        description: row.get(4)?,
+                        received_at: row.get(5)?,
+                        recurring: row.get::<_, i32>(6)? != 0,
+                        notes_nonce_b64: row.get(7)?,
+                        notes_ciphertext_b64: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Income {
+                income_id: r.income_id,
+                amount: r.amount,
+                currency: r.currency,
+                source: r.source,
+                description: r.description,
+                received_at: parse_utc(&r.received_at),
+                recurring: r.recurring,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.11: Financial goals
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_financial_goal(
+        &self,
+        name: &str,
+        target_amount: f64,
+        target_currency: &str,
+        target_date: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<FinancialGoal> {
+        let name = normalize_non_empty(name).context("name required")?;
+        if target_amount < 0.0 || !target_amount.is_finite() {
+            anyhow::bail!("target_amount must be non-negative finite");
+        }
+        let currency = normalize_non_empty(target_currency).unwrap_or_else(|| "MXN".to_string());
+        let target_date = target_date.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let goal_id = format!("fgoal-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = goal_id.clone();
+        let name_clone = name.clone();
+        let currency_clone = currency.clone();
+        let target_date_clone = target_date.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO financial_goals
+                 (goal_id, name, target_amount, target_currency, target_date,
+                  current_amount, status, notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'active', ?6, ?7, ?8, ?9, ?9)",
+                params![
+                    id_clone,
+                    name_clone,
+                    target_amount,
+                    currency_clone,
+                    target_date_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(FinancialGoal {
+            goal_id,
+            name,
+            target_amount,
+            target_currency: currency,
+            target_date,
+            current_amount: 0.0,
+            status: "active".into(),
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update progress on a financial goal. Auto-flips status to
+    /// `achieved` when current >= target.
+    pub async fn update_financial_goal_progress(
+        &self,
+        goal_id: &str,
+        current_amount: f64,
+    ) -> Result<bool> {
+        if current_amount < 0.0 || !current_amount.is_finite() {
+            anyhow::bail!("current_amount must be non-negative finite");
+        }
+        let db_path = self.db_path.clone();
+        let id = goal_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            // Read target_amount first to know whether to auto-achieve.
+            let target: Option<f64> = db
+                .query_row(
+                    "SELECT target_amount FROM financial_goals WHERE goal_id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .ok();
+            let new_status = match target {
+                Some(t) if current_amount >= t => "achieved",
+                _ => "active",
+            };
+            Ok(db.execute(
+                "UPDATE financial_goals
+                 SET current_amount = ?1, status = ?2, updated_at = ?3
+                 WHERE goal_id = ?4",
+                params![current_amount, new_status, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_financial_goals(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<FinancialGoal>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT goal_id, name, target_amount, target_currency, target_date,
+                        current_amount, status, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM financial_goals WHERE status = 'active'
+                 ORDER BY created_at DESC"
+            } else {
+                "SELECT goal_id, name, target_amount, target_currency, target_date,
+                        current_amount, status, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM financial_goals
+                 ORDER BY created_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<FinancialGoalRaw> = stmt
+                .query_map([], |row| {
+                    Ok(FinancialGoalRaw {
+                        goal_id: row.get(0)?,
+                        name: row.get(1)?,
+                        target_amount: row.get(2)?,
+                        target_currency: row.get(3)?,
+                        target_date: row.get(4)?,
+                        current_amount: row.get(5)?,
+                        status: row.get(6)?,
+                        notes_nonce_b64: row.get(7)?,
+                        notes_ciphertext_b64: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                        updated_at: row.get(11)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| FinancialGoal {
+                goal_id: r.goal_id,
+                name: r.name,
+                target_amount: r.target_amount,
+                target_currency: r.target_currency,
+                target_date: r.target_date,
+                current_amount: r.current_amount,
+                status: r.status,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    /// Aggregate snapshot for the financial pillar. The 30-day totals
+    /// are computed via single SQL aggregations so we don't pull
+    /// rows just to count.
+    pub async fn get_financial_summary(
+        &self,
+        recent_expenses_limit: usize,
+        recent_income_limit: usize,
+    ) -> Result<FinancialSummary> {
+        let active_accounts = self.list_financial_accounts(true).await?;
+        let recent_expenses = self.list_expenses(None, recent_expenses_limit).await?;
+        let recent_income = self.list_income(recent_income_limit).await?;
+        let active_goals = self.list_financial_goals(true).await?;
+
+        let now_utc = Utc::now();
+        let cutoff_30 = (now_utc - chrono::Duration::days(30)).to_rfc3339();
+        let db_path = self.db_path.clone();
+        let cutoff_clone = cutoff_30.clone();
+        let (expenses_30, income_30) = tokio::task::spawn_blocking(move || -> Result<(f64, f64)> {
+            let db = Self::open_db(&db_path)?;
+            let exp: f64 = db
+                .query_row(
+                    "SELECT COALESCE(SUM(amount), 0) FROM financial_expenses
+                     WHERE occurred_at >= ?1",
+                    params![cutoff_clone],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0.0);
+            let inc: f64 = db
+                .query_row(
+                    "SELECT COALESCE(SUM(amount), 0) FROM financial_income
+                     WHERE received_at >= ?1",
+                    params![cutoff_clone],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0.0);
+            Ok((exp, inc))
+        })
+        .await??;
+
+        Ok(FinancialSummary {
+            active_accounts,
+            recent_expenses,
+            recent_income,
+            active_goals,
+            expenses_total_last_30_days: expenses_30,
+            income_total_last_30_days: income_30,
+            net_last_30_days: income_30 - expenses_30,
+            generated_at: now_utc,
+        })
+    }
+}
+
+// -- Private raw row types for BI.10 + BI.11 ---------------------------------
+
+struct SpiritualPracticeRaw {
+    practice_id: String,
+    practice_name: String,
+    tradition: Option<String>,
+    frequency: Option<String>,
+    duration_min: Option<i32>,
+    last_practiced: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct SpiritualReflectionRaw {
+    reflection_id: String,
+    topic: Option<String>,
+    content_nonce_b64: String,
+    content_ciphertext_b64: String,
+    occurred_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct CoreValueRaw {
+    value_id: String,
+    name: String,
+    importance_1_10: i32,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    defined_at: String,
+    last_reviewed: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct FinancialAccountRaw {
+    account_id: String,
+    name: String,
+    account_type: String,
+    institution: Option<String>,
+    balance_last_known: Option<f64>,
+    balance_currency: String,
+    balance_updated_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct ExpenseRaw {
+    expense_id: String,
+    amount: f64,
+    currency: String,
+    category: String,
+    description: Option<String>,
+    payment_method: Option<String>,
+    occurred_at: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct IncomeRaw {
+    income_id: String,
+    amount: f64,
+    currency: String,
+    source: String,
+    description: Option<String>,
+    received_at: String,
+    recurring: bool,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct FinancialGoalRaw {
+    goal_id: String,
+    name: String,
+    target_amount: f64,
+    target_currency: String,
+    target_date: Option<String>,
+    current_amount: f64,
+    status: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
 fn parse_utc(s: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
@@ -11303,6 +12842,374 @@ mod tests {
             (avg_q - 7.0).abs() < 0.05,
             "avg quality should be ~7.0, got {}",
             avg_q
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.10: Espiritualidad ---------------------------------------------
+
+    #[tokio::test]
+    async fn test_spiritual_practice_lifecycle() {
+        let dir = temp_dir("memory-plane-spiritual-practice");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let p = mgr
+            .add_spiritual_practice(
+                "Meditacion mindfulness",
+                Some("secular"),
+                Some("diaria"),
+                Some(15),
+                "10 min en la manana",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(p.active);
+        assert!(p.last_practiced.is_none());
+        assert_eq!(p.notes, "10 min en la manana");
+
+        // Mark practiced.
+        let when = Utc::now() - chrono::Duration::days(2);
+        mgr.mark_spiritual_practice(&p.practice_id, Some(when))
+            .await
+            .unwrap();
+        let after = mgr.list_spiritual_practices(true).await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0].last_practiced.is_some());
+
+        // Deactivate.
+        mgr.deactivate_spiritual_practice(&p.practice_id)
+            .await
+            .unwrap();
+        let active_after = mgr.list_spiritual_practices(true).await.unwrap();
+        assert_eq!(active_after.len(), 0);
+        let all = mgr.list_spiritual_practices(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_spiritual_reflection_required_and_encrypted() {
+        let dir = temp_dir("memory-plane-spiritual-reflection");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Empty content must error.
+        let bad = mgr
+            .add_spiritual_reflection(Some("gratitud"), "", None, None)
+            .await;
+        assert!(bad.is_err());
+
+        // Valid call: content roundtrips through encryption.
+        let r = mgr
+            .add_spiritual_reflection(
+                Some("gratitud"),
+                "Hoy estuve agradecido por mi familia y por la salud",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!r.content.is_empty());
+
+        let listed = mgr.list_spiritual_reflections(None, 10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed[0].content,
+            "Hoy estuve agradecido por mi familia y por la salud"
+        );
+
+        // Filter by topic.
+        let by_topic = mgr
+            .list_spiritual_reflections(Some("gratitud"), 10)
+            .await
+            .unwrap();
+        assert_eq!(by_topic.len(), 1);
+        let by_other = mgr
+            .list_spiritual_reflections(Some("duda"), 10)
+            .await
+            .unwrap();
+        assert_eq!(by_other.len(), 0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_core_values_sorted_by_importance() {
+        let dir = temp_dir("memory-plane-core-values");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Out-of-range importance must error.
+        let bad = mgr.add_core_value("X", 11, "", None).await;
+        assert!(bad.is_err());
+
+        mgr.add_core_value("creatividad", 7, "", None).await.unwrap();
+        mgr.add_core_value("familia", 10, "Lo mas importante", None)
+            .await
+            .unwrap();
+        mgr.add_core_value("libertad", 9, "", None).await.unwrap();
+
+        let values = mgr.list_core_values().await.unwrap();
+        assert_eq!(values.len(), 3);
+        // Sorted by importance DESC.
+        assert_eq!(values[0].name, "familia");
+        assert_eq!(values[0].importance_1_10, 10);
+        assert_eq!(values[1].name, "libertad");
+        assert_eq!(values[2].name, "creatividad");
+        // Notes encryption roundtrip.
+        assert_eq!(values[0].notes, "Lo mas importante");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_spiritual_summary_aggregates() {
+        let dir = temp_dir("memory-plane-spiritual-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let p1 = mgr
+            .add_spiritual_practice("Meditar", Some("secular"), Some("diaria"), Some(15), "", None)
+            .await
+            .unwrap();
+        mgr.add_spiritual_practice("Caminata bosque", None, Some("semanal"), None, "", None)
+            .await
+            .unwrap();
+        mgr.mark_spiritual_practice(
+            &p1.practice_id,
+            Some(Utc::now() - chrono::Duration::days(5)),
+        )
+        .await
+        .unwrap();
+
+        mgr.add_spiritual_reflection(Some("gratitud"), "Hoy hubo un buen dia", None, None)
+            .await
+            .unwrap();
+        mgr.add_core_value("familia", 10, "", None).await.unwrap();
+        mgr.add_core_value("creatividad", 8, "", None).await.unwrap();
+
+        let summary = mgr.get_spiritual_summary(10).await.unwrap();
+        assert_eq!(summary.active_practices.len(), 2);
+        assert_eq!(summary.recent_reflections.len(), 1);
+        assert_eq!(summary.values.len(), 2);
+        let days = summary.days_since_last_practice.unwrap();
+        assert!(
+            (4..=6).contains(&days),
+            "days_since_last_practice should be ~5, got {}",
+            days
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.11: Salud financiera -------------------------------------------
+
+    #[tokio::test]
+    async fn test_financial_account_lifecycle() {
+        let dir = temp_dir("memory-plane-fin-account");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let a = mgr
+            .add_financial_account(
+                "BBVA debito",
+                "checking",
+                Some("BBVA Mexico"),
+                Some(15000.0),
+                "MXN",
+                "Cuenta principal",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(a.active);
+        assert_eq!(a.balance_last_known, Some(15000.0));
+        assert!(a.balance_updated_at.is_some());
+        assert_eq!(a.notes, "Cuenta principal");
+
+        // NaN balance must error.
+        let bad = mgr
+            .add_financial_account("X", "cash", None, Some(f64::NAN), "MXN", "", None)
+            .await;
+        assert!(bad.is_err());
+
+        // Update balance.
+        let updated = mgr.update_account_balance(&a.account_id, 18500.0).await.unwrap();
+        assert!(updated);
+        let after = mgr.list_financial_accounts(true).await.unwrap();
+        assert_eq!(after[0].balance_last_known, Some(18500.0));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_expense_log_validation_and_filter() {
+        let dir = temp_dir("memory-plane-expense");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Negative amount errors.
+        let bad = mgr
+            .log_expense(-100.0, "MXN", "comida", None, None, None, "", None)
+            .await;
+        assert!(bad.is_err());
+
+        // Empty category errors.
+        let bad2 = mgr
+            .log_expense(100.0, "MXN", "", None, None, None, "", None)
+            .await;
+        assert!(bad2.is_err());
+
+        // Valid: 4 expenses across 3 categories.
+        for (amt, cat) in [
+            (450.0, "comida"),
+            (60.0, "transporte"),
+            (300.0, "comida"),
+            (1200.0, "vivienda"),
+        ] {
+            mgr.log_expense(amt, "MXN", cat, None, None, None, "", None)
+                .await
+                .unwrap();
+        }
+
+        let comida = mgr.list_expenses(Some("comida"), 50).await.unwrap();
+        assert_eq!(comida.len(), 2);
+        let all = mgr.list_expenses(None, 50).await.unwrap();
+        assert_eq!(all.len(), 4);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_income_and_financial_goal_auto_achieve() {
+        let dir = temp_dir("memory-plane-income-goal");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Income.
+        mgr.log_income(25000.0, "MXN", "salario", None, None, true, "", None)
+            .await
+            .unwrap();
+        let income = mgr.list_income(10).await.unwrap();
+        assert_eq!(income.len(), 1);
+        assert!(income[0].recurring);
+
+        // Goal — start at 0, advance to 30000, then to 90000 to auto-achieve.
+        let g = mgr
+            .add_financial_goal(
+                "Fondo emergencia 6 meses",
+                90000.0,
+                "MXN",
+                Some("2026-12-31"),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(g.current_amount, 0.0);
+        assert_eq!(g.status, "active");
+
+        mgr.update_financial_goal_progress(&g.goal_id, 30000.0)
+            .await
+            .unwrap();
+        let half = mgr.list_financial_goals(true).await.unwrap();
+        assert_eq!(half[0].current_amount, 30000.0);
+        assert_eq!(half[0].status, "active");
+
+        mgr.update_financial_goal_progress(&g.goal_id, 90000.0)
+            .await
+            .unwrap();
+        let active_after = mgr.list_financial_goals(true).await.unwrap();
+        // Now in achieved status, no longer in active list.
+        assert_eq!(active_after.len(), 0);
+        let all = mgr.list_financial_goals(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].status, "achieved");
+        assert_eq!(all[0].current_amount, 90000.0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_financial_summary_rolling_30_days() {
+        let dir = temp_dir("memory-plane-fin-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 1 active account.
+        mgr.add_financial_account(
+            "BBVA",
+            "checking",
+            None,
+            Some(20000.0),
+            "MXN",
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // 1 active goal.
+        mgr.add_financial_goal("Viaje", 15000.0, "MXN", None, "", None)
+            .await
+            .unwrap();
+
+        // Insert 4 expenses: 3 within last 30 days, 1 older.
+        let now = Utc::now();
+        let in_30 = [
+            (now - chrono::Duration::days(2), 500.0_f64),
+            (now - chrono::Duration::days(10), 1200.0),
+            (now - chrono::Duration::days(28), 800.0),
+        ];
+        for (when, amt) in in_30 {
+            mgr.log_expense(amt, "MXN", "comida", None, None, Some(when), "", None)
+                .await
+                .unwrap();
+        }
+        mgr.log_expense(
+            999.0,
+            "MXN",
+            "comida",
+            None,
+            None,
+            Some(now - chrono::Duration::days(40)),
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Insert 2 income entries: both within last 30 days.
+        for when in [now - chrono::Duration::days(5), now - chrono::Duration::days(25)] {
+            mgr.log_income(25000.0, "MXN", "salario", None, Some(when), false, "", None)
+                .await
+                .unwrap();
+        }
+
+        let summary = mgr.get_financial_summary(50, 50).await.unwrap();
+        assert_eq!(summary.active_accounts.len(), 1);
+        assert_eq!(summary.active_goals.len(), 1);
+        // Recent_expenses has all 4; the rolling totals should NOT
+        // include the 999 from 40 days ago.
+        assert_eq!(summary.recent_expenses.len(), 4);
+        assert!(
+            (summary.expenses_total_last_30_days - 2500.0).abs() < 0.01,
+            "expenses_total_last_30_days should be 2500, got {}",
+            summary.expenses_total_last_30_days
+        );
+        assert!(
+            (summary.income_total_last_30_days - 50000.0).abs() < 0.01,
+            "income_total_last_30_days should be 50000, got {}",
+            summary.income_total_last_30_days
+        );
+        assert!(
+            (summary.net_last_30_days - 47500.0).abs() < 0.01,
+            "net_last_30_days should be 47500, got {}",
+            summary.net_last_30_days
         );
 
         std::fs::remove_dir_all(dir).ok();
