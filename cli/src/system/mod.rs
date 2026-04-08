@@ -201,8 +201,8 @@ fn parse_bootc_status(json: serde_json::Value) -> anyhow::Result<BootcStatus> {
         .get("booted")
         .ok_or_else(|| anyhow::anyhow!("Missing booted field"))?;
 
-    let booted_slot = parse_image_reference(booted.get("image"))
-        .unwrap_or_else(|| "unknown".to_string());
+    let booted_slot =
+        parse_image_reference(booted.get("image")).unwrap_or_else(|| "unknown".to_string());
 
     let slots = vec![BootcSlot {
         name: "booted".to_string(),
@@ -341,8 +341,13 @@ fn restart_unit(args: &[&str]) -> bool {
 }
 
 fn is_lifeosd_running() -> bool {
-    systemd_unit_is_active(&["systemctl", "--user", "is-active", "--quiet", "lifeosd.service"])
-        || systemd_unit_is_active(&["systemctl", "is-active", "--quiet", "lifeosd.service"])
+    systemd_unit_is_active(&[
+        "systemctl",
+        "--user",
+        "is-active",
+        "--quiet",
+        "lifeosd.service",
+    ]) || systemd_unit_is_active(&["systemctl", "is-active", "--quiet", "lifeosd.service"])
 }
 
 fn lifeosd_status_message(is_running: bool) -> String {
@@ -377,7 +382,9 @@ fn check_ai_service_issue() -> Option<String> {
 
     let mut candidate_paths = vec!["/var/lib/lifeos/llama-server-preflight.reason".to_string()];
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        candidate_paths.push(format!("{runtime_dir}/lifeos/llama-server-preflight.reason"));
+        candidate_paths.push(format!(
+            "{runtime_dir}/lifeos/llama-server-preflight.reason"
+        ));
     }
 
     for path in candidate_paths {

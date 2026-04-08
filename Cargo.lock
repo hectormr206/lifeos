@@ -2802,7 +2802,7 @@ dependencies = [
 
 [[package]]
 name = "life"
-version = "0.3.5"
+version = "0.3.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2828,7 +2828,7 @@ dependencies = [
 
 [[package]]
 name = "lifeos-integration-tests"
-version = "0.1.0"
+version = "0.3.36"
 dependencies = [
  "life",
  "serde_json",

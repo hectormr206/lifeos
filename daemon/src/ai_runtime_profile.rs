@@ -978,10 +978,12 @@ WantedBy=default.target
 fn llama_binary_has_sigill_guard() -> bool {
     let mut candidate_paths = vec![PathBuf::from(LLAMA_PREFLIGHT_REASON_PATH)];
     if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-        candidate_paths.push(PathBuf::from(runtime_dir).join("lifeos/llama-server-preflight.reason"));
+        candidate_paths
+            .push(PathBuf::from(runtime_dir).join("lifeos/llama-server-preflight.reason"));
     }
     if let Some(home_dir) = std::env::var_os("HOME") {
-        candidate_paths.push(PathBuf::from(home_dir).join(".cache/lifeos/llama-server-preflight.reason"));
+        candidate_paths
+            .push(PathBuf::from(home_dir).join(".cache/lifeos/llama-server-preflight.reason"));
     }
 
     candidate_paths.into_iter().any(|path| {
