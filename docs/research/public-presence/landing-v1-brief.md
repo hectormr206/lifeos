@@ -175,11 +175,11 @@ Tres columnas o cards:
 ### 3. What Works Today
 
 Solo lo real y defendible:
-- local inference
-- encrypted local memory
-- desktop control plane
-- Telegram remote loop
-- voice / vision / automation foundations
+- local inference (`validated on host`)
+- encrypted local memory foundations (`integrated in repo`)
+- desktop control plane foundations (`integrated in repo`)
+- Telegram remote loop (`validated on host`)
+- voice / vision / automation foundations (`experimental`)
 
 ### 4. Why This Matters
 
@@ -229,7 +229,7 @@ Un bloque muy claro:
 
 **Subheadline**
 
-`LifeOS is an AI-native Linux distribution where your assistant runs on your own machine, remembers locally, and helps across your desktop without sending your life to the cloud.`
+`LifeOS is an AI-native Linux distribution exploring a local-first assistant that runs on your own machine, keeps core data local, and is being hardened across desktop control and remote interaction.`
 
 **Primary CTA**
 
@@ -261,7 +261,7 @@ Un bloque muy claro:
 
 Suggested intro:
 
-`LifeOS is already more than a concept. The current system includes local inference, encrypted local memory, desktop control tools, Telegram remote interaction, and the foundations for voice, vision, and automation.`
+`LifeOS is already more than a concept. The current system includes host-validated local inference and Telegram interaction, plus repo-integrated foundations for encrypted memory, desktop control, and voice/vision/automation work that is still being hardened.`
 
 ### Section: Why This Matters
 
@@ -360,6 +360,8 @@ No pongas claims como:
 - “works everywhere” si todavia no esta validado
 - “your AI for everything” si no quieres sonar vaporware
 - comparativas exageradas o hype estilo startup vacia
+
+Si una capability no esta validada en host, integrada en repo, o shipped por default de forma clara, no debe sonar como algo plenamente disponible hoy.
 
 La fuerza de LifeOS debe venir de:
 

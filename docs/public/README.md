@@ -6,6 +6,17 @@ These files are not a replacement for the technical strategy docs. They are a cu
 
 Public messaging should keep the project's Mexican origin visible without presenting LifeOS as region-exclusive or as folkloric branding.
 
+## Public maturity taxonomy
+
+Public-facing copy should classify claims with this taxonomy whenever a feature's maturity matters:
+
+- **validated on host** - integrated and recently observed working on real hardware
+- **integrated in repo** - wired in code/runtime, but not recently re-validated on a real host
+- **experimental** - promising or partially wired, but not yet a stable end-to-end product path
+- **shipped disabled / feature-gated** - present in repo, but not enabled in the default image/runtime path
+
+Rule of thumb: do not let `repo capability`, `default shipped behavior`, and `host validation` collapse into the same sentence.
+
 ## Files
 
 - [roadmap.md](roadmap.md) - Public roadmap in English

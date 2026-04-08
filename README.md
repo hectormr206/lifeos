@@ -2,28 +2,35 @@
 
 **AI-native Linux distribution built on Fedora bootc (immutable) with COSMIC Desktop.**
 
-Your personal AI assistant **Axi** lives at the OS level with local inference, encrypted memory, voice, vision, and privacy-first defaults.
+LifeOS is building toward an OS-level assistant named **Axi** with local inference, encrypted memory, desktop control, and privacy-first defaults.
+
+Public docs use a simple maturity taxonomy so repo capabilities are not confused with default shipped behavior:
+
+- **Validated on host** - integrated and observed working on a real machine recently
+- **Integrated in repo** - wired in code and runtime, but not recently re-validated on a real host
+- **Experimental / partial** - foundation exists, but the end-to-end product path is still incomplete
+- **Shipped disabled / feature-gated** - present in repo, but not compiled or enabled by default in the standard image
 
 LifeOS is built in Mexico and developed in the open for users, contributors, and supporters anywhere.
 
 ## What Makes LifeOS Different
 
-- **IS the OS** — not an app inside an OS. Full access to kernel, systemd, GPU, hardware
-- **Local AI first** — Qwen3.5-4B via llama.cpp, runs on consumer GPUs (4GB+ VRAM) or CPU-only
-- **Privacy by default** — AES-GCM-SIV encrypted memory, machine-derived keys, data never leaves the device
-- **Immutable + rollback** — bootc atomic updates, if AI breaks something, rollback in seconds
-- **MCP + desktop control** — the repo includes local tools for windows, apps, clipboard, browser, LibreOffice, COSMIC desktop, and accessibility trees
-- **Provider routing** — multiple LLM providers are wired in the repo with privacy-aware selection policies
-- **Shipped interaction surfaces** — Telegram, local voice, and desktop surfaces are the primary documented paths; other integrations may be repo-only or feature-gated
-- **Self-healing** — 5-layer reliability: watchdog, sentinel, circuit breaker, safe mode, config rollback
-- **Zero-config security** — CIS Benchmark-level hardening: firewalld, auditd, DNS-over-TLS, SSH, AIDE, kernel hardening
-- **GPU Game Guard** — auto-offloads AI from GPU when gaming, restores when done
+- **OS-level architecture** - not just an app inside another OS; the project targets kernel, systemd, GPU, hardware, and desktop surfaces directly
+- **Local AI first** (`validated on host`) - local inference via llama.cpp is part of the current real product path
+- **Encrypted local memory foundations** (`integrated in repo`) - encrypted memory is a core design pillar, with public docs kept conservative about what is fully validated end-to-end today
+- **Immutable + rollback base** (`integrated in repo`) - bootc-style atomic updates and rollback shape the platform direction, while install/update validation is still an active focus
+- **Desktop control tooling** (`integrated in repo`) - the repo includes tools for windows, apps, clipboard, browser, LibreOffice, COSMIC desktop, and accessibility trees
+- **Provider routing** (`integrated in repo`) - multiple LLM providers are wired with privacy-aware routing policies
+- **Interaction surfaces** - Telegram is the clearest current remote path; local voice and broader desktop surfaces exist, but some remain experimental or are still being re-validated
+- **Reliability layers** (`integrated in repo`) - watchdog, sentinel, circuit breaker, safe mode, and config rollback exist, but not every repair flow is equally mature
+- **Security baseline** (`shipped by default`) - the image ships firewalld, auditd, DNS-over-TLS, SSH hardening, and related guardrails; broader hardening claims should be read as a baseline, not as a finished benchmark story
+- **GPU Game Guard** (`validated on host, under watch`) - GPU offload policy exists and recent false positives were fixed, but it stays under ongoing validation after daemon/runtime changes
 
 ## Quick Start
 
 ```bash
 make build      # Build CLI + daemon (Rust)
-make test       # Run 341 tests
+make test       # Run repository test suite
 make lint       # Clippy + fmt
 ```
 
