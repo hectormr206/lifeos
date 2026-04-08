@@ -7,12 +7,22 @@
 set -eu
 
 THEME_DIR="/usr/share/lifeos/themes"
+VERSION_METADATA_ENV="/usr/share/lifeos/version-metadata.env"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"
 MARKER="$STATE_DIR/theme-applied-version"
-CURRENT_VERSION="0.3.5"
-MARKER_VERSION="${CURRENT_VERSION}-cosmic-v2"
 FORCE=false
 WALLPAPER_STATE_SYNC="/usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh"
+
+# Theme rollout markers follow the formal package release metadata, not the
+# booted bootc/channel version, so edge builds do not force re-application.
+if [ -f "$VERSION_METADATA_ENV" ]; then
+    # shellcheck disable=SC1090,SC1091
+    . "$VERSION_METADATA_ENV"
+fi
+
+CURRENT_VERSION="${LIFEOS_PACKAGE_VERSION:-unknown}"
+THEME_MARKER_EPOCH="${LIFEOS_THEME_MARKER_EPOCH:-cosmic-v2}"
+MARKER_VERSION="${CURRENT_VERSION}-${THEME_MARKER_EPOCH}"
 
 for arg in "$@"; do
     case "$arg" in

@@ -1,5 +1,6 @@
 //! System health and bootc integration module
 use serde::Serialize;
+use std::fs;
 use std::process::Command;
 
 #[cfg(test)]
@@ -58,6 +59,76 @@ pub struct BootcStatus {
     pub staged: Option<BootcSlot>,
 }
 
+fn parse_image_reference(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?;
+    value
+        .get("image")
+        .and_then(|v| v.as_str())
+        .or_else(|| value.get("reference").and_then(|v| v.as_str()))
+        .or_else(|| value.as_str())
+        .map(|s| s.to_string())
+}
+
+fn parse_bootc_status_text(output: &str) -> anyhow::Result<BootcStatus> {
+    let mut booted_image = None;
+    let mut booted_version = None;
+    let mut rollback_image = None;
+    let mut rollback_version = None;
+    let mut current = "";
+
+    for raw_line in output.lines() {
+        let line = raw_line.trim();
+
+        if let Some(value) = line.strip_prefix("Booted image:") {
+            booted_image = Some(value.trim().to_string());
+            current = "booted";
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("Rollback image:") {
+            rollback_image = Some(value.trim().to_string());
+            current = "rollback";
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("Version:") {
+            match current {
+                "booted" => booted_version = Some(value.trim().to_string()),
+                "rollback" => rollback_version = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    let booted_image = booted_image.ok_or_else(|| anyhow::anyhow!("Missing booted image"))?;
+    let booted_version = booted_version.unwrap_or_else(|| "unknown".to_string());
+
+    let mut slots = vec![BootcSlot {
+        name: "booted".to_string(),
+        version: booted_version,
+        image: Some(booted_image.clone()),
+        booted: true,
+        rollback: false,
+    }];
+
+    if let Some(image) = rollback_image.clone() {
+        slots.push(BootcSlot {
+            name: "rollback".to_string(),
+            version: rollback_version.unwrap_or_else(|| "unknown".to_string()),
+            image: Some(image),
+            booted: false,
+            rollback: true,
+        });
+    }
+
+    Ok(BootcStatus {
+        slots,
+        booted_slot: booted_image,
+        rollback_slot: rollback_image,
+        staged: None,
+    })
+}
+
 /// Check if bootc is available on the system
 pub fn is_bootc_available() -> bool {
     Command::new("bootc")
@@ -94,14 +165,30 @@ pub fn get_bootc_status() -> anyhow::Result<BootcStatus> {
     };
 
     if !output.status.success() {
-        anyhow::bail!(
-            "bootc status failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let text_output = if is_root() {
+            Command::new("bootc").arg("status").output()?
+        } else {
+            run_with_sudo_fallback("bootc", &["status"])?
+        };
+
+        if !text_output.status.success() {
+            anyhow::bail!(
+                "bootc status failed: {}",
+                String::from_utf8_lossy(&text_output.stderr)
+            );
+        }
+
+        let stdout = String::from_utf8(text_output.stdout)?;
+        return parse_bootc_status_text(&stdout);
     }
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    parse_bootc_status(json)
+    match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+        Ok(json) => parse_bootc_status(json),
+        Err(_) => {
+            let stdout = String::from_utf8(output.stdout)?;
+            parse_bootc_status_text(&stdout)
+        }
+    }
 }
 
 /// Parse bootc status from JSON
@@ -114,11 +201,7 @@ fn parse_bootc_status(json: serde_json::Value) -> anyhow::Result<BootcStatus> {
         .get("booted")
         .ok_or_else(|| anyhow::anyhow!("Missing booted field"))?;
 
-    let booted_slot = booted
-        .get("image")
-        .and_then(|i| i.get("image"))
-        .and_then(|i| i.as_str())
-        .map(|s| s.to_string())
+    let booted_slot = parse_image_reference(booted.get("image"))
         .unwrap_or_else(|| "unknown".to_string());
 
     let slots = vec![BootcSlot {
@@ -126,23 +209,22 @@ fn parse_bootc_status(json: serde_json::Value) -> anyhow::Result<BootcStatus> {
         version: booted
             .get("version")
             .and_then(|v| v.as_str())
+            .or_else(|| {
+                booted
+                    .get("image")
+                    .and_then(|i| i.get("version"))
+                    .and_then(|v| v.as_str())
+            })
             .map(|s| s.to_string())
             .unwrap_or_else(|| "unknown".to_string()),
-        image: booted
-            .get("image")
-            .and_then(|i| i.get("image"))
-            .and_then(|i| i.as_str())
-            .map(|s| s.to_string()),
+        image: parse_image_reference(booted.get("image")),
         booted: true,
         rollback: false,
     }];
 
     let rollback_slot = status
         .get("rollback")
-        .and_then(|r| r.get("image"))
-        .and_then(|i| i.get("image"))
-        .and_then(|i| i.as_str())
-        .map(|s| s.to_string());
+        .and_then(|r| parse_image_reference(r.get("image")));
 
     Ok(BootcStatus {
         slots,
@@ -172,8 +254,8 @@ pub fn check_health() -> HealthStatus {
         issues.push("no network default route".to_string());
     }
 
-    if !check_ai_service() {
-        issues.push("llama-server not running".to_string());
+    if let Some(ai_issue) = check_ai_service_issue() {
+        issues.push(ai_issue);
     }
 
     if issues.is_empty() {
@@ -242,13 +324,72 @@ fn check_network() -> bool {
         .unwrap_or(false)
 }
 
-/// Check if the AI service (llama-server) is running.
-fn check_ai_service() -> bool {
-    Command::new("systemctl")
-        .args(["is-active", "--quiet", "llama-server.service"])
+fn systemd_unit_is_active(args: &[&str]) -> bool {
+    Command::new(args[0])
+        .args(&args[1..])
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+fn restart_unit(args: &[&str]) -> bool {
+    Command::new(args[0])
+        .args(&args[1..])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+fn is_lifeosd_running() -> bool {
+    systemd_unit_is_active(&["systemctl", "--user", "is-active", "--quiet", "lifeosd.service"])
+        || systemd_unit_is_active(&["systemctl", "is-active", "--quiet", "lifeosd.service"])
+}
+
+fn lifeosd_status_message(is_running: bool) -> String {
+    if is_running {
+        "lifeosd is running".to_string()
+    } else if systemd_unit_is_active(&[
+        "systemctl",
+        "--user",
+        "is-enabled",
+        "--quiet",
+        "lifeosd.service",
+    ]) {
+        "lifeosd user service is enabled but not running".to_string()
+    } else {
+        "lifeosd is not running".to_string()
+    }
+}
+
+/// Check the AI service state and return a human-readable issue when degraded.
+fn check_ai_service_issue() -> Option<String> {
+    if systemd_unit_is_active(&["systemctl", "is-active", "--quiet", "llama-server.service"])
+        || systemd_unit_is_active(&[
+            "systemctl",
+            "--user",
+            "is-active",
+            "--quiet",
+            "llama-server.service",
+        ])
+    {
+        return None;
+    }
+
+    let mut candidate_paths = vec!["/var/lib/lifeos/llama-server-preflight.reason".to_string()];
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        candidate_paths.push(format!("{runtime_dir}/lifeos/llama-server-preflight.reason"));
+    }
+
+    for path in candidate_paths {
+        if let Ok(reason) = fs::read_to_string(path) {
+            let reason = reason.trim();
+            if !reason.is_empty() {
+                return Some(reason.to_string());
+            }
+        }
+    }
+
+    Some("llama-server not running".to_string())
 }
 
 /// Check for available updates via bootc.
@@ -453,41 +594,37 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     });
 
     // 5. Check lifeosd daemon
-    let daemon_running = Command::new("systemctl")
-        .args(["is-active", "--quiet", "lifeosd.service"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let daemon_running = is_lifeosd_running();
     report.checks.push(HealthCheck {
         name: "lifeosd".to_string(),
         passed: daemon_running,
-        message: if daemon_running {
-            "lifeosd is running".to_string()
-        } else {
-            "lifeosd is not running".to_string()
-        },
+        message: lifeosd_status_message(daemon_running),
     });
 
     // --- Repair actions for failed services ---
-    let services_to_repair = [
-        ("ai-service", "llama-server.service", ai_running),
-        ("lifeosd", "lifeosd.service", daemon_running),
-    ];
+    if !ai_running {
+        if restart_unit(&["systemctl", "restart", "llama-server.service"]) {
+            report.repairs.push("Restarted ai-service".to_string());
+        } else {
+            report.repairs.push(
+                "Failed to restart ai-service (try: sudo systemctl restart llama-server.service)"
+                    .to_string(),
+            );
+        }
+    }
 
-    for (name, unit, running) in &services_to_repair {
-        if !running {
-            let restart = Command::new("systemctl").args(["restart", unit]).output();
-            match restart {
-                Ok(out) if out.status.success() => {
-                    report.repairs.push(format!("Restarted {}", name));
-                }
-                _ => {
-                    report.repairs.push(format!(
-                        "Failed to restart {} (try: sudo systemctl restart {})",
-                        name, unit
-                    ));
-                }
-            }
+    if !daemon_running {
+        if restart_unit(&["systemctl", "--user", "restart", "lifeosd.service"])
+            || restart_unit(&["systemctl", "--user", "start", "lifeosd.service"])
+        {
+            report.repairs.push("Restarted lifeosd".to_string());
+        } else if restart_unit(&["systemctl", "restart", "lifeosd.service"]) {
+            report.repairs.push("Restarted lifeosd".to_string());
+        } else {
+            report.repairs.push(
+                "Failed to restart lifeosd (try: systemctl --user restart lifeosd.service)"
+                    .to_string(),
+            );
         }
     }
 

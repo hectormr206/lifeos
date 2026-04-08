@@ -18,7 +18,7 @@ use commands::{
 #[derive(Parser)]
 #[command(name = "life")]
 #[command(about = "LifeOS - First-IA System CLI")]
-#[command(version = "0.1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     /// Show Axi the Axolotl ASCII art with a motivational message
     #[clap(long = "axi", global = true)]

@@ -50,6 +50,54 @@ mod system_module_tests {
     }
 
     #[test]
+    fn test_bootc_status_parsing_nested_version() {
+        let json = serde_json::json!({
+            "status": {
+                "booted": {
+                    "image": {
+                        "reference": "ghcr.io/hectormr206/lifeos:edge",
+                        "version": "edge-20260408-f6f80ec"
+                    }
+                },
+                "rollback": {
+                    "image": {
+                        "reference": "ghcr.io/hectormr206/lifeos:previous"
+                    }
+                }
+            }
+        });
+
+        let status = parse_bootc_status(json).unwrap();
+        assert_eq!(status.booted_slot, "ghcr.io/hectormr206/lifeos:edge");
+        assert_eq!(status.slots[0].version, "edge-20260408-f6f80ec");
+        assert_eq!(
+            status.rollback_slot,
+            Some("ghcr.io/hectormr206/lifeos:previous".to_string())
+        );
+    }
+
+    #[test]
+    fn test_bootc_status_text_parsing() {
+        let text = r#"
+● Booted image: ghcr.io/hectormr206/lifeos:edge
+        Digest: sha256:abc123
+        Version: edge-20260408-f6f80ec
+
+Rollback image: ghcr.io/hectormr206/lifeos:edge-20260403-b369513
+        Digest: sha256:def456
+        Version: edge-20260403-b369513
+"#;
+
+        let status = parse_bootc_status_text(text).unwrap();
+        assert_eq!(status.booted_slot, "ghcr.io/hectormr206/lifeos:edge");
+        assert_eq!(status.slots[0].version, "edge-20260408-f6f80ec");
+        assert_eq!(
+            status.rollback_slot,
+            Some("ghcr.io/hectormr206/lifeos:edge-20260403-b369513".to_string())
+        );
+    }
+
+    #[test]
     fn test_bootc_status_parsing_missing_booted() {
         let json = serde_json::json!({
             "status": {
