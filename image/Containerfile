@@ -547,9 +547,19 @@ COPY Cargo.toml /tmp/lifeos-workspace.Cargo.toml
 
 RUN set -eux && \
     mkdir -p /usr/share/lifeos && \
-    package_version="$(awk '\''BEGIN { section = "" } /^\[/ { section = $0 } section == "[workspace.package]" && $1 == "version" { gsub(/"/, "", $3); print $3; exit }'\'' /tmp/lifeos-workspace.Cargo.toml)" && \
-    codename="$(awk '\''BEGIN { section = "" } /^\[/ { section = $0 } section == "[workspace.metadata.lifeos]" && $1 == "codename" { gsub(/"/, "", $3); print $3; exit }'\'' /tmp/lifeos-workspace.Cargo.toml)" && \
-    theme_marker_epoch="$(awk '\''BEGIN { section = "" } /^\[/ { section = $0 } section == "[workspace.metadata.lifeos]" && $1 == "theme_marker_epoch" { gsub(/"/, "", $3); print $3; exit }'\'' /tmp/lifeos-workspace.Cargo.toml)" && \
+    eval "$(python3 - <<'PY'
+import tomllib
+from pathlib import Path
+
+data = tomllib.loads(Path('/tmp/lifeos-workspace.Cargo.toml').read_text())
+workspace = data['workspace']
+lifeos = workspace['metadata']['lifeos']
+
+print(f"package_version={workspace['package']['version']!r}")
+print(f"codename={lifeos['codename']!r}")
+print(f"theme_marker_epoch={lifeos['theme_marker_epoch']!r}")
+PY
+)" && \
     test -n "${package_version}" && \
     test -n "${codename}" && \
     test -n "${theme_marker_epoch}" && \
