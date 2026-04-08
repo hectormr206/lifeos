@@ -238,6 +238,52 @@ fn test_containerfile_exists() {
 }
 
 #[test]
+fn test_terminal_tooling_defaults_are_baked_into_image() {
+    let root = project_root();
+    let containerfile_path = root.join("image/Containerfile");
+    let content =
+        std::fs::read_to_string(&containerfile_path).expect("Failed to read Containerfile");
+
+    for pkg in [
+        "zoxide",
+        "fzf",
+        "eza",
+        "atuin",
+        "direnv",
+        "tmux",
+        "btop",
+        "neovim",
+        "cascadia-code-nf-fonts",
+    ] {
+        assert!(
+            content.contains(pkg),
+            "Containerfile should install terminal package: {}",
+            pkg
+        );
+    }
+
+    let bash_defaults = root.join("image/files/etc/profile.d/lifeos-terminal.sh");
+    let fish_defaults = root.join("image/files/etc/fish/conf.d/lifeos-terminal.fish");
+
+    assert!(bash_defaults.exists(), "Missing bash defaults: {:?}", bash_defaults);
+    assert!(fish_defaults.exists(), "Missing fish defaults: {:?}", fish_defaults);
+
+    let bash_content =
+        std::fs::read_to_string(&bash_defaults).expect("Failed to read bash terminal defaults");
+    assert!(bash_content.contains("zoxide init bash"));
+    assert!(bash_content.contains("atuin init bash"));
+    assert!(bash_content.contains("direnv hook bash"));
+    assert!(bash_content.contains("fzf --bash"));
+
+    let fish_content =
+        std::fs::read_to_string(&fish_defaults).expect("Failed to read fish terminal defaults");
+    assert!(fish_content.contains("zoxide init fish"));
+    assert!(fish_content.contains("atuin init fish"));
+    assert!(fish_content.contains("direnv hook fish"));
+    assert!(fish_content.contains("fzf --fish"));
+}
+
+#[test]
 fn test_phase2_contract_schemas_exist_and_parse() {
     let root = project_root();
     let schema_paths = [

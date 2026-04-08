@@ -396,7 +396,8 @@ RUN dnf -y install \
     virt-install virt-viewer virt-manager edk2-ovmf swtpm spice-vdagent \
     fuse-overlayfs slirp4netns \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git gh wget \
-    rsms-inter-fonts jetbrains-mono-fonts \
+    zoxide fzf eza atuin direnv tmux btop neovim \
+    rsms-inter-fonts jetbrains-mono-fonts cascadia-code-nf-fonts \
     pkgconf-pkg-config \
     gcc gcc-c++ make cmake \
     openssl-devel \
@@ -581,6 +582,8 @@ COPY image/files/etc/profile.d/lifeos-ensure-daemon.sh /etc/profile.d/lifeos-ens
 COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland.sh
 COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
 COPY image/files/etc/profile.d/lifeos-firefox-profile.sh /etc/profile.d/lifeos-firefox-profile.sh
+COPY image/files/etc/profile.d/lifeos-terminal.sh /etc/profile.d/lifeos-terminal.sh
+COPY image/files/etc/fish/conf.d/lifeos-terminal.fish /etc/fish/conf.d/lifeos-terminal.fish
 COPY image/files/etc/containers/containers.conf /etc/containers/containers.conf
 COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
 COPY image/files/usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml
@@ -1009,6 +1012,14 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/local/bin/lifeos-security-baseline-check.sh && \
     test -x /usr/bin/podman && \
     test -x /usr/bin/docker && \
+    test -x /usr/bin/fzf && \
+    test -x /usr/bin/zoxide && \
+    test -x /usr/bin/eza && \
+    test -x /usr/bin/atuin && \
+    test -x /usr/bin/direnv && \
+    test -x /usr/bin/tmux && \
+    test -x /usr/bin/btop && \
+    test -x /usr/bin/nvim && \
     cargo fmt --version >/dev/null && \
     cargo clippy --version >/dev/null && \
     cargo audit --version >/dev/null && \
@@ -1032,6 +1043,8 @@ RUN test -x /usr/bin/mpv && \
     test -f /etc/skel/.mozilla/firefox/lifeos.default/user.js && \
     test -f /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css && \
     test -f /etc/profile.d/firefox-wayland.sh && \
+    test -f /etc/profile.d/lifeos-terminal.sh && \
+    test -f /etc/fish/conf.d/lifeos-terminal.fish && \
     test -f /usr/share/applications/firefox-lifeos.desktop && \
     test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1
 

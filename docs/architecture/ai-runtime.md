@@ -2256,6 +2256,7 @@ RUN dnf -y install steam steam-devices && dnf clean all
 # --- Herramientas del sistema ---
 RUN dnf -y install toolbox btrfs-progs podman buildah flatpak \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git gh wget curl \
+    zoxide fzf eza atuin direnv tmux btop neovim \
     wlsunset gammastep && dnf clean all
 
 # --- AI Runtime (llama-server via llama.cpp) ---
