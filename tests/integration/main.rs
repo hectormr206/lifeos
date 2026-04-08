@@ -265,8 +265,16 @@ fn test_terminal_tooling_defaults_are_baked_into_image() {
     let bash_defaults = root.join("image/files/etc/profile.d/lifeos-terminal.sh");
     let fish_defaults = root.join("image/files/etc/fish/conf.d/lifeos-terminal.fish");
 
-    assert!(bash_defaults.exists(), "Missing bash defaults: {:?}", bash_defaults);
-    assert!(fish_defaults.exists(), "Missing fish defaults: {:?}", fish_defaults);
+    assert!(
+        bash_defaults.exists(),
+        "Missing bash defaults: {:?}",
+        bash_defaults
+    );
+    assert!(
+        fish_defaults.exists(),
+        "Missing fish defaults: {:?}",
+        fish_defaults
+    );
 
     let bash_content =
         std::fs::read_to_string(&bash_defaults).expect("Failed to read bash terminal defaults");
