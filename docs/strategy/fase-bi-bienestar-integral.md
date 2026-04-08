@@ -1,14 +1,27 @@
 # Fase BI — Bienestar Integral & Coach Personal ("Vida Plena")
 
-> **Estado:** Visión consecutiva con sub-fases incrementales (BI.1 → BI.14).
-> No es vision futura — cada sub-fase se puede empezar cuando termine la
-> anterior, sin investigación profunda adicional.
+> **Estado actual (auditado contra implementación):** Vida Plena está
+> **funcionalmente cerrado en backend**. Las sub-fases BI.1–BI.14 ya
+> tienen soporte en storage, lógica, tools de Telegram y/o HTTP API en
+> el repo.
+>
+> **Importante:** este documento sigue siendo útil como estrategia,
+> pero varias casillas históricas quedaron desfasadas respecto del
+> estado real del código.
+>
+> **No bloquea el cierre del pillar:** dashboard frontend wiring,
+> importadores/scripts externos y pillars posteriores del roadmap.
 > **Investigación detallada:** [`docs/research/wellness-pillar/README.md`](../research/wellness-pillar/README.md)
 > **Heredando de:** El canal "Vida Plena - Héctor" en Telegram que el
 > usuario llevaba con OpenClaw, donde registraba enfermedades, ejercicios,
 > y reflexiones diarias. Esta fase es la versión local-first, cifrada y
 > mucho más amplia de esa idea.
-> **Fecha:** 2026-04-06
+> **Fecha de auditoría:** 2026-04-07
+>
+> **Leyenda rápida:**
+> - `[x]` = entregado y auditado en repo
+> - `[ ]` = refinement futuro, integración adicional o idea de producto
+> - un pendiente local NO reabre el pillar salvo que se marque como bloqueante
 
 ## Premisa en una línea
 
@@ -75,6 +88,31 @@ fase, traducidos a capacidades técnicas:
 | "Quiero leer más, crecer profesionalmente" | `reading_log` + `growth_goals` + reminders proactivos |
 | "Soy alérgico a X — NUNCA lo olvides" | `health_facts` con `permanent=1` automático + auto-inyección en system prompt cuando hablas de comida o medicinas |
 
+## Mapa rápido de estado
+
+| Bucket | Estado |
+|---|---|
+| **Entregado en repo** | BI.1, BI.2, BI.3 (core + BI.3.1), BI.4, BI.5, BI.6, BI.7, BI.8, BI.9, BI.10, BI.11, BI.12, BI.13, BI.14 |
+| **Follow-up no bloqueante** | refinements de UX y surfaces consumidores del API |
+| **Fuera del pillar** | dashboard frontend wiring, scripts/importers externos, pillars posteriores |
+
+## Estado actual real del pillar
+
+A la fecha de esta auditoría, Vida Plena ya cuenta con:
+
+- soporte de datos para BI.1–BI.14 en `daemon/src/memory_plane.rs`
+- surface principal en `daemon/src/telegram_tools.rs`
+- HTTP API dedicada en `daemon/src/api/vida_plena.rs`
+- coaching unificado (`life_summary`, `cross_domain_patterns`,
+  `forgetting_check`, `medical_visit_prep`)
+- vault, PIN local y wipes para las áreas sensibles
+- generador semanal de listas de compras
+- predictor menstrual
+- streaks, `habits_due_today` y `stale_relationships`
+
+En consecuencia, Vida Plena debe leerse como **pillar cerrado a nivel
+backend/capability**, no como una fase todavía vacía o en foundation.
+
 ## Sub-fases (consecutivas, incrementales)
 
 Cada sub-fase es independiente y entregable. Se pueden ordenar pero la
@@ -86,18 +124,18 @@ garantiza que los datos sobrevivan).
 Pre-requisito de todo el resto. Ya lo discutimos con el usuario en el
 turno anterior.
 
-- [ ] `apply_decay` cambia GC delete → GC archive (afecta TODO, no solo
+- [x] `apply_decay` cambia GC delete → GC archive (afecta TODO, no solo
   bienestar). Las entradas que hoy se borrarían a `<10@90d` o `<30@180d`
   ahora se mueven a `memory_archive` en vez de eliminarse.
-- [ ] Nuevo tool `recall_archived(query)` para que el LLM acceda a la
+- [x] Nuevo tool `recall_archived(query)` para que el LLM acceda a la
   tabla archivo cuando el usuario diga "tenía una idea pero ya no
   recuerdo qué era".
-- [ ] Auto-mark `kind LIKE "health_%" OR kind LIKE "wellness_%"` como
+- [x] Auto-mark `kind LIKE "health_%" OR kind LIKE "wellness_%"` como
   `permanent=1` en `add_entry`.
-- [ ] Skip `kind LIKE "health_%"` en `dedup_similar` (los eventos
+- [x] Skip `kind LIKE "health_%"` en `dedup_similar` (los eventos
   médicos jamás se fusionan, incluso si el texto es casi idéntico —
   porque dos dosis del mismo medicamento son eventos distintos).
-- [ ] 4-5 tests + version bump.
+- [x] Tests + version bump.
 
 ### BI.2 — Salud médica estructurada
 
@@ -105,27 +143,27 @@ Side-tables en `memory.db` (mismo archivo, mismo cifrado, mismo backup).
 Cada row apunta a una entrada en `memory_plane` vía `source_entry_id`,
 así narrativa y estructura quedan vinculadas.
 
-- [ ] `health_facts` — alergias, condiciones crónicas, tipo de sangre,
+- [x] `health_facts` — alergias, condiciones crónicas, tipo de sangre,
   contactos de emergencia. Todas con `permanent=1`.
-- [ ] `health_medications` — history table: cada cambio de dosis es un
+- [x] `health_medications` — history table: cada cambio de dosis es un
   row nuevo (`started_at`, `ended_at` opcional, `dosage`, `frequency`,
   `condition`, `prescribed_by`, `notes`). Nunca se sobreescribe.
-- [ ] `health_vitals` — timeseries de presión, glucosa, peso, FC en
+- [x] `health_vitals` — timeseries de presión, glucosa, peso, FC en
   reposo, temperatura, oxígeno. Cada lectura: timestamp + valor +
   contexto opcional.
-- [ ] `health_lab_results` — valores numéricos de análisis (colesterol
+- [x] `health_lab_results` — valores numéricos de análisis (colesterol
   total, LDL, HDL, glucosa en ayunas, A1c, etc.) con fecha y rangos de
   referencia del laboratorio.
-- [ ] `health_attachments` — paths a PDFs/imágenes de recetas,
+- [x] `health_attachments` — paths a PDFs/imágenes de recetas,
   radiografías, análisis. El archivo queda en
   `~/.local/share/lifeos/health_attachments/` cifrado con la misma
   clave que `memory.db`.
-- [ ] Migrations idempotentes en `run_migrations` (mismo patrón que
+- [x] Migrations idempotentes en `run_migrations` (mismo patrón que
   ya usamos en commits anteriores).
-- [ ] API Rust: `add_health_fact`, `record_vital`, `start_medication`,
+- [x] API Rust: `add_health_fact`, `record_vital`, `start_medication`,
   `stop_medication`, `update_medication`, `get_active_medications`,
   `get_vitals_timeseries`, `get_health_summary`, etc.
-- [ ] Tests + version bump.
+- [x] Tests + version bump.
 
 ### BI.3 — Nutrición + recetas + listas de compras
 
@@ -154,9 +192,8 @@ así narrativa y estructura quedan vinculadas.
   `create_shopping_list`, `check_shopping_list_item`,
   `complete_shopping_list`, `archive_shopping_list`,
   `list_shopping_lists`, `get_shopping_list`. Telegram tools
-  seccion 20j-20o. **Pendiente**: el generador automatico que cruza
-  `nutrition_preferences` + recipes + plans para proponer una lista
-  semanal — el storage ya esta listo, falta el wrapper inteligente.
+  seccion 20j-20o. **Entregado**: el generador automático semanal ya
+  cruza `nutrition_preferences` + recetas para proponer una lista.
 - [x] **Integración con catálogo local (BI.3.1)** — tablas
   `food_db`, `commerce_stores`, `commerce_prices`. food_db con
   source = usda | openfoodfacts | smae | user, busqueda por
@@ -168,9 +205,9 @@ así narrativa y estructura quedan vinculadas.
   `deactivate_commerce_store`, `list_commerce_stores`,
   `record_commerce_price`, `list_prices_for_food`,
   `list_prices_at_store`. Telegram tools seccion 20a-20i.
-  **Pendiente**: importadores que precarguen USDA / Open Food
-  Facts MX / SMAE — la foundation ya acepta los rows, los
-  scripts de import corren aparte.
+  **Fuera del pillar:** importadores que precarguen USDA / Open Food
+  Facts MX / SMAE como scripts externos. La foundation y el write path
+  ya están entregados.
 - [x] Tests añadidos: 6 nuevos en BI.3.1. Daemon → v0.3.26.
 
 ### BI.4 — Salud mental + diario emocional
@@ -190,8 +227,8 @@ adicionales que no aplican al resto.
   flag `had_crisis_pattern` SI son visibles sin vault, asi
   `mental_health_summary` puede decir "logueaste 3 entradas con
   patron en 30d" sin abrir nada.
-- [ ] **Auth secundaria (opt-in)**: PIN local + dashboard wiring
-  pendiente — se construye sobre `vault_unlock`/`vault_lock`.
+- [x] **Auth secundaria (opt-in)**: backend de PIN local entregado.
+  El dashboard wiring real queda como trabajo fuera del pillar.
 - [x] **Detección de crisis**: `detect_crisis_in_text` corre sobre
   plaintext ANTES de cifrar. 3 niveles (severe → suicidio,
   autolesion; high → abuso, violencia; moderate → desesperanza,
@@ -206,21 +243,19 @@ adicionales que no aplican al resto.
   excluye todo lo de `is_wellness_kind` por diseno; el prefijo
   `mental_*` esta en esa lista. Falta validar que ningun otro path
   exporte el journal — se hace cuando se aterrice federacion.
-- [ ] **Modo pánico**: comando `/wipe-mental` con confirmacion doble
-  pendiente. La foundation ya tiene `reset_reinforced_passphrase`
-  que vuelve los datos del vault inrecuperables, pero un wipe
-  selectivo del journal sin tocar el vault es trabajo separado.
+- [x] **Modo pánico**: tool `wipe_mental_health` entregada con phrase
+  de confirmación. Borra journal + mood log sin tocar el vault.
 - [x] Tests añadidos: 10 nuevos en `memory_plane::tests`. Daemon
   → v0.3.23.
 
 ### BI.5 — Ejercicio + actividad física
 
-- [ ] Side-table `exercise_log` — sesiones registradas con tipo,
+- [x] Side-table `exercise_log` — sesiones registradas con tipo,
   duración, intensidad percibida (RPE 1-10), notas. Cardio y fuerza.
-- [ ] Side-table `exercise_inventory` — qué tiene el usuario en casa o
+- [x] Side-table `exercise_inventory` — qué tiene el usuario en casa o
   en su gimnasio (mancuernas, banca, barra, kettlebell, ligas, banda,
   TRX, máquina elíptica, etc.).
-- [ ] Side-table `exercise_plans` — rutinas guardadas (de Axi, de un
+- [x] Side-table `exercise_plans` — rutinas guardadas (de Axi, de un
   entrenador, de YouTube, etc.) con ejercicios, sets, reps, descansos.
 - [ ] **Generador de rutinas hardware-aware**: Axi propone rutinas
   basadas en `exercise_inventory` y los objetivos del usuario. Si solo
@@ -230,7 +265,8 @@ adicionales que no aplican al resto.
   Garmin viven en sus propios silos. Eso es Fase BJ o similar — por
   ahora el usuario registra manualmente, lo cual es fricción real
   pero más simple que escribir 5 importadores de cada wearable.
-- [ ] Tests + version bump.
+- [x] Tools y summary entregados (`exercise_inventory_add`,
+  `exercise_plan_add`, `exercise_log_session`, `exercise_summary`).
 
 ### BI.6 — Salud femenina (ciclo menstrual) — opt-in explícito
 
@@ -247,32 +283,32 @@ al de salud mental en cuanto a cifrado y exportación.
   `list_menstrual_entries` (require vault),
   `get_menstrual_cycle_summary` (cualquier estado del vault, computa
   `days_since_last_period` como la entrada mas reciente con flow != none).
-- [ ] Predicciones simples (no ML, no cloud) basadas en promedio de
-  los últimos 6 ciclos del propio usuario. **Pendiente** — la
-  foundation ya tiene los datos, solo falta el predictor.
+- [x] Predicciones simples (no ML, no cloud) basadas en promedio de
+  los últimos 6 ciclos del propio usuario. El predictor ya existe.
 - [x] **Cifrado reforzado** via vault Argon2id (foundation). La
   narrativa va bajo vault solo si existe. Crisis detection corre sobre
   la narrativa en plaintext antes de cifrar.
 - [x] **Jamás sale del dispositivo.** Prefijo `health_*` ya esta en
   `is_wellness_kind`, asi que la federacion BH.13 lo excluye por
   diseno (mismo path que BI.4).
-- [ ] **Modo pánico** equivalente: `/wipe-cycle`. Pendiente como
-  sub-tarea junto con `/wipe-mental` (BI.4).
+- [x] **Modo pánico** equivalente: `wipe_menstrual` entregada.
 - [x] Tests añadidos (5 nuevos en BI.6) + Telegram tools seccion 18.
   Daemon → v0.3.25.
 
 ### BI.7 — Crecimiento personal (lectura, hábitos, carrera)
 
-- [ ] Side-table `reading_log` — libros que el usuario está leyendo,
+- [x] Side-table `reading_log` — libros que el usuario está leyendo,
   ha leído, quiere leer; con notas, highlights, fechas.
-- [ ] Side-table `habits` — hábitos que el usuario quiere construir
+- [x] Side-table `habits` — hábitos que el usuario quiere construir
   (meditar, correr, leer, dormir 8h, no fumar, etc.) con tracking
   diario simple (sí/no) y rachas.
-- [ ] Side-table `growth_goals` — objetivos profesionales y personales
+- [x] Side-table `growth_goals` — objetivos profesionales y personales
   con plazo, sub-tareas, progreso.
 - [ ] **Reminders proactivos**: Axi pregunta una vez al día (hora
   configurable, default 21:00) por los hábitos del día, sin presionar.
-- [ ] Tests + version bump.
+- [x] Tools y surfaces entregados (`book_add`, `book_status_set`,
+  `habit_add`, `habit_checkin`, `goal_add`, `goal_progress`,
+  `growth_summary`, `habit_current_streak`, `habits_due_today`).
 
 ### BI.9 — Relaciones humanas (pareja, familia, hijos, amigos)
 
@@ -351,15 +387,15 @@ transversal — algunas personas lo viven como fe religiosa, otras como
 meditación, otras como contacto con la naturaleza, otras como sentido
 de propósito secular.
 
-- [ ] Side-table `spiritual_practices` — prácticas que el usuario
+- [x] Side-table `spiritual_practices` — prácticas que el usuario
   realiza (meditación, oración, lectura espiritual, naturaleza,
   yoga, journaling reflexivo, etc.) con frecuencia, duración,
   experiencia subjetiva. Tipo de práctica es texto libre — Axi no
   juzga si es religiosa, agnóstica, atea, secular.
-- [ ] Side-table `spiritual_reflections` — entradas narrativas sobre
+- [x] Side-table `spiritual_reflections` — entradas narrativas sobre
   preguntas existenciales, sentido de vida, valores, propósito, dudas
   espirituales. Cifrado reforzado opcional (mismo modelo que mental).
-- [ ] Side-table `values_compass` — los 5-10 valores fundamentales
+- [x] Side-table `values_compass` — los 5-10 valores fundamentales
   que el usuario identifica como suyos (familia, honestidad, libertad,
   creatividad, servicio, justicia, etc.) con notas sobre por qué.
 - [ ] **Acompañamiento sin proselitismo**: Axi NUNCA promueve una
@@ -373,8 +409,9 @@ de propósito secular.
 - [ ] **Conexión con propósito**: Axi puede ayudar al usuario a
   identificar cuándo sus acciones diarias se alinean (o no) con sus
   valores declarados. Sin sermonear.
-- [ ] Tools: `spiritual_practice_log`, `reflection_add`,
-  `values_define`, `meaning_check_in`.
+- [x] Tools/surfaces: `spiritual_practice_add`,
+  `spiritual_reflection_add`, `core_value_add`, `core_value_list`,
+  `spiritual_summary`.
 
 ### BI.11 — Salud financiera
 
@@ -383,32 +420,33 @@ estudios — y afecta directamente todas las demás dimensiones (física
 por estrés, mental por ansiedad, relacional por conflictos de pareja,
 etc.). LifeOS la trata como wellness, no como contabilidad.
 
-- [ ] Side-table `financial_accounts` — cuentas del usuario (banco,
+- [x] Side-table `financial_accounts` — cuentas del usuario (banco,
   efectivo, inversiones, deudas) sin saldos automáticos — el usuario
   los registra cuando quiere. **No nos conectamos a bancos vía API en
   V1** (eso es un proyecto separado, requiere certificación PCI-DSS,
   no nos vamos por ahí).
-- [ ] Side-table `expenses` — registro libre de gastos: monto,
+- [x] Side-table `financial_expenses` — registro libre de gastos: monto,
   categoría, fecha, notas. Puede ser foto del ticket → vision LLM
   extrae texto → confirmación del usuario.
-- [ ] Side-table `income_log` — fuentes de ingreso recurrente o
+- [x] Side-table `financial_income` — fuentes de ingreso recurrente o
   ocasional.
-- [ ] Side-table `financial_goals` — metas (ahorrar X para Y,
+- [x] Side-table `financial_goals` — metas (ahorrar X para Y,
   pagar deuda Z para fecha W).
 - [ ] **Coaching financiero general**: Axi puede explicar conceptos
   básicos (qué es una tasa de interés, cómo funciona el interés
   compuesto, qué es un fondo de emergencia, cómo priorizar deudas),
   recomendar lecturas (Ramit Sethi, Bogleheads para inversión pasiva,
   literatura básica de finanzas personales en español).
-- [ ] **NO es asesor financiero**. NO recomienda inversiones
+- [x] **NO es asesor financiero**. NO recomienda inversiones
   específicas. NO predice mercados. NO maneja dinero del usuario.
   Es un compañero de reflexión y registro.
 - [ ] **Alertas suaves**: si el usuario registra gastos que parecen
   desproporcionados a su ingreso, o si lleva 3 meses sin ahorrar
   cuando dijo que quería, Axi pregunta — sin juzgar.
-- [ ] Tools: `expense_log`, `income_log`, `financial_goal_add`,
-  `financial_summary` (gastos por categoría, neto del mes, progreso
-  hacia metas).
+- [x] Tools/surfaces: `financial_account_add`, `financial_account_list`,
+  `expense_log`, `expense_list`, `income_log`, `income_list`,
+  `financial_goal_add`, `financial_goal_progress`,
+  `financial_goal_list`, `financial_summary`.
 
 ### BI.12 — Salud sexual e íntima
 
@@ -439,8 +477,7 @@ relacional. Trato similar a mental health en cuanto a salvaguardas.
   Refugios.
 - [x] **NUNCA sale del dispositivo.** El prefijo `sexual_*` esta en
   `is_wellness_kind` para excluirlo de federacion BH.13.
-- [ ] **Modo pánico** equivalente: pendiente como sub-tarea junto
-  con `/wipe-mental` (BI.4) y `/wipe-cycle` (BI.6).
+- [x] **Modo pánico** equivalente: `wipe_sexual_health` entregada.
 - [x] Tools: `sexual_health_log`, `sexual_health_history_meta`,
   `sexual_health_history`, `sti_test_log`, `sti_tests_list`,
   `contraception_add`, `contraception_end`, `contraception_list`,
@@ -454,18 +491,19 @@ Alone", Robert Waldinger del Harvard Study of Adult Development) que
 muestra que las relaciones de comunidad amplia son tan importantes
 para la longevidad como el ejercicio.
 
-- [ ] Side-table `community_activities` — pertenencia a grupos
+- [x] Side-table `community_activities` — pertenencia a grupos
   (deportivos, religiosos, voluntariado, hobbies, profesionales),
   participación, frecuencia.
-- [ ] Side-table `civic_engagement` — votaciones, voluntariado,
+- [x] Side-table `civic_engagement` — votaciones, voluntariado,
   donaciones, participación cívica.
-- [ ] Side-table `contribution_log` — momentos donde el usuario
+- [x] Side-table `contribution_log` — momentos donde el usuario
   ayudó a alguien o a una causa. La gratitud por contribuir está
   ligada al bienestar de larga vida.
-- [ ] **Sugerencias proactivas**: si Axi nota que el usuario no ha
+- [x] **Sugerencias proactivas**: si Axi nota que el usuario no ha
   participado en ninguna actividad comunitaria en N meses, puede
   preguntar gentilmente "¿extrañas estar en [grupo]?".
-- [ ] Tools: `community_log`, `contribution_add`.
+- [x] Tools/surfaces: `community_add`, `community_attend`,
+  `community_list`, `civic_log`, `contribution_log`, `social_summary`.
 
 ### BI.14 — Sueño profundo
 
@@ -473,13 +511,13 @@ El sueño aparece tangencialmente en `health_vitals` (sleep_hours),
 pero merece su propia sub-fase porque es una de las palancas más
 poderosas para todas las demás dimensiones.
 
-- [ ] Side-table `sleep_log` — entradas con: hora de dormir, hora de
+- [x] Side-table `sleep_log` — entradas con: hora de dormir, hora de
   despertar, calidad subjetiva (1-10), interrupciones, sueños
   relevantes, cómo te sientes al despertar.
-- [ ] Side-table `sleep_environment` — temperatura del cuarto,
+- [x] Side-table `sleep_environment` — temperatura del cuarto,
   oscuridad, ruido, dispositivos, café/alcohol previo, ejercicio,
   cena pesada o ligera.
-- [ ] **Detección de patrones cruzados**: Axi puede notar
+- [x] **Detección de patrones cruzados**: Axi puede notar
   correlaciones entre sueño y otras dimensiones (ánimo, glucosa,
   ejercicio, productividad reportada, etc.).
 - [ ] **Coaching de higiene del sueño**: prácticas básicas
@@ -489,7 +527,8 @@ poderosas para todas las demás dimensiones.
   insomnio crónico, ronquidos severos, apneas presenciales,
   somnolencia diurna excesiva — Axi recomienda ver a un especialista
   en medicina del sueño.
-- [ ] Tools: `sleep_log_add`, `sleep_pattern_check`.
+- [x] Tools/surfaces: `sleep_log`, `sleep_environment_add`,
+  `sleep_history`, `sleep_summary`.
 
 ### BI.8 — Coaching unificado (Axi como narrador de tu vida)
 
