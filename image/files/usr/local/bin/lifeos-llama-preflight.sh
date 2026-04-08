@@ -7,13 +7,20 @@ set -euo pipefail
 LLAMA_BIN="${1:-/usr/sbin/llama-server}"
 STATE_DIR="/var/lib/lifeos"
 REASON_FILE="${STATE_DIR}/llama-server-preflight.reason"
+USER_REASON_FILE="${XDG_RUNTIME_DIR:-${HOME:-/tmp}}/lifeos/llama-server-preflight.reason"
 
-mkdir -p "$STATE_DIR"
+mkdir -p "$(dirname "$USER_REASON_FILE")" 2>/dev/null || true
+
+mkdir -p "$STATE_DIR" 2>/dev/null || true
 
 write_reason() {
     local message="$1"
 
-    printf '%s\n' "$message" | tee "$REASON_FILE" >&2
+    if [ -w "$STATE_DIR" ] || [ -w "$REASON_FILE" ]; then
+        printf '%s\n' "$message" | tee "$REASON_FILE" >&2
+    else
+        printf '%s\n' "$message" | tee "$USER_REASON_FILE" >&2
+    fi
 }
 
 if [ ! -x "$LLAMA_BIN" ]; then
@@ -29,6 +36,7 @@ set -e
 case "$status" in
     0)
         rm -f "$REASON_FILE"
+        rm -f "$USER_REASON_FILE"
         exit 0
         ;;
     132)

@@ -20,6 +20,7 @@ const DEFAULT_GPU_LAYERS: i32 = 99;
 const DEFAULT_GAME_GUARD_VRAM_THRESHOLD_MB: u64 = 500;
 const RUNTIME_ENV_DROPIN_NAME: &str = "99-lifeos-runtime-envs.conf";
 const USER_LLAMA_UNIT_NAME: &str = "llama-server.service";
+const LLAMA_PREFLIGHT_REASON_PATH: &str = "/var/lib/lifeos/llama-server-preflight.reason";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LlamaServiceScope {
@@ -609,6 +610,10 @@ fn read_total_ram_mb() -> Option<u64> {
 }
 
 fn detect_accelerator() -> Option<AcceleratorInfo> {
+    if llama_binary_has_sigill_guard() {
+        return None;
+    }
+
     let output = Command::new("llama-server")
         .arg("--list-devices")
         .output()
@@ -701,6 +706,10 @@ fn detect_nvidia_driver_version() -> Option<String> {
 }
 
 fn detect_llama_server_version() -> Option<String> {
+    if llama_binary_has_sigill_guard() {
+        return None;
+    }
+
     let output = Command::new("llama-server")
         .arg("--version")
         .output()
@@ -947,6 +956,7 @@ Environment=VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
 Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
 Environment=__NV_PRIME_RENDER_OFFLOAD=1
 Environment=__VK_LAYER_NV_optimus=NVIDIA_only
+ExecCondition=/usr/local/bin/lifeos-llama-preflight.sh
 ExecStart=/usr/sbin/llama-server \\\n    --model /var/lib/lifeos/models/${{LIFEOS_AI_MODEL}} \\\n    --mmproj /var/lib/lifeos/models/${{LIFEOS_AI_MMPROJ}} \\\n    --alias ${{LIFEOS_AI_ALIAS}} \\\n    --host ${{LIFEOS_AI_HOST}} \\\n    --port ${{LIFEOS_AI_PORT}} \\\n    --ctx-size ${{LIFEOS_AI_CTX_SIZE}} \\\n    --threads ${{LIFEOS_AI_THREADS}} \\\n    --n-gpu-layers ${{LIFEOS_AI_GPU_LAYERS}} \\\n    --parallel ${{LIFEOS_AI_PARALLEL}} \\\n    --batch-size ${{LIFEOS_AI_BATCH_SIZE}} \\\n    --ubatch-size ${{LIFEOS_AI_UBATCH_SIZE}} \\\n    --n-predict 2048 \\\n    --flash-attn auto \\\n    --cache-type-k q8_0 \\\n    --cache-type-v q8_0 \\\n    -sm none \\\n    -mg 0 \\\n    --temp 0.6 \\\n    --top-p 0.95 \\\n    --top-k 20 \\\n    --min-p 0.0 \\\n    --presence-penalty 0.0 \\\n    --repeat-penalty 1.0 \\\n    --reasoning-budget 0 \\\n    --jinja
 Restart=always
 RestartSec=10
@@ -965,7 +975,29 @@ WantedBy=default.target
     )
 }
 
+fn llama_binary_has_sigill_guard() -> bool {
+    let mut candidate_paths = vec![PathBuf::from(LLAMA_PREFLIGHT_REASON_PATH)];
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        candidate_paths.push(PathBuf::from(runtime_dir).join("lifeos/llama-server-preflight.reason"));
+    }
+    if let Some(home_dir) = std::env::var_os("HOME") {
+        candidate_paths.push(PathBuf::from(home_dir).join(".cache/lifeos/llama-server-preflight.reason"));
+    }
+
+    candidate_paths.into_iter().any(|path| {
+        fs::read_to_string(path)
+            .map(|reason| {
+                reason.contains("SIGILL") || reason.contains("unsupported by this machine")
+            })
+            .unwrap_or(false)
+    })
+}
+
 fn benchmark_can_run(profile: &RuntimeProfile) -> bool {
+    if llama_binary_has_sigill_guard() {
+        return false;
+    }
+
     let model_path = Path::new("/var/lib/lifeos/models").join(&profile.inputs.model);
     if !model_path.exists() {
         return false;

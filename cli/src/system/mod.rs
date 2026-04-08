@@ -375,10 +375,17 @@ fn check_ai_service_issue() -> Option<String> {
         return None;
     }
 
-    if let Ok(reason) = fs::read_to_string("/var/lib/lifeos/llama-server-preflight.reason") {
-        let reason = reason.trim();
-        if !reason.is_empty() {
-            return Some(reason.to_string());
+    let mut candidate_paths = vec!["/var/lib/lifeos/llama-server-preflight.reason".to_string()];
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        candidate_paths.push(format!("{runtime_dir}/lifeos/llama-server-preflight.reason"));
+    }
+
+    for path in candidate_paths {
+        if let Ok(reason) = fs::read_to_string(path) {
+            let reason = reason.trim();
+            if !reason.is_empty() {
+                return Some(reason.to_string());
+            }
         }
     }
 
