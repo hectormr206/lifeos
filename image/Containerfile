@@ -547,27 +547,8 @@ COPY Cargo.toml /tmp/lifeos-workspace.Cargo.toml
 
 RUN set -eux && \
     mkdir -p /usr/share/lifeos && \
-    eval "$(python3 - <<'PY'
-import tomllib
-from pathlib import Path
-
-data = tomllib.loads(Path('/tmp/lifeos-workspace.Cargo.toml').read_text())
-workspace = data['workspace']
-lifeos = workspace['metadata']['lifeos']
-
-print(f"package_version={workspace['package']['version']!r}")
-print(f"codename={lifeos['codename']!r}")
-print(f"theme_marker_epoch={lifeos['theme_marker_epoch']!r}")
-PY
-)" && \
-    test -n "${package_version}" && \
-    test -n "${codename}" && \
-    test -n "${theme_marker_epoch}" && \
-    printf '%s\n' \
-    "LIFEOS_PACKAGE_VERSION=${package_version}" \
-    "LIFEOS_CODENAME=${codename}" \
-    "LIFEOS_THEME_MARKER_EPOCH=${theme_marker_epoch}" \
-    > /usr/share/lifeos/version-metadata.env && \
+    python3 -c "import tomllib, pathlib; data = tomllib.loads(pathlib.Path('/tmp/lifeos-workspace.Cargo.toml').read_text()); workspace = data['workspace']; lifeos = workspace['metadata']['lifeos']; print(f'LIFEOS_PACKAGE_VERSION={workspace[\"package\"][\"version\"]}'); print(f'LIFEOS_CODENAME={lifeos[\"codename\"]}'); print(f'LIFEOS_THEME_MARKER_EPOCH={lifeos[\"theme_marker_epoch\"]}')" > /usr/share/lifeos/version-metadata.env && \
+    test -s /usr/share/lifeos/version-metadata.env && \
     rm -f /tmp/lifeos-workspace.Cargo.toml
 
 RUN echo "LIFEOS_CHANNEL=${LIFEOS_CHANNEL}" > /etc/lifeos/channel && \
