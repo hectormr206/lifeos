@@ -4,7 +4,7 @@
 .PHONY: all build build-cli build-daemon test test-cli test-daemon test-integration \
         lint lint-cli lint-daemon fmt fmt-check audit audit-workspace audit-cli audit-daemon \
         docker docker-build docker-lint docker-push clean install dev-setup help \
-        check-daemon-prereqs phase3-hardening phase45-lifecycle
+        check-daemon-prereqs phase3-hardening phase45-lifecycle truth-alignment
 
 # =============================================================================
 # Default Target
@@ -75,6 +75,11 @@ phase3-hardening:
 phase45-lifecycle:
 	@echo "🧭 Running Phase 4.5 model lifecycle checks..."
 	bash verify-phase45.sh
+
+## Run Truth Alignment guardrails
+truth-alignment:
+	@echo "🛡️  Running truth alignment guardrails..."
+	bash verify-truth-alignment.sh
 
 ## Run all tests with coverage
 test-coverage:

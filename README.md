@@ -23,8 +23,8 @@ LifeOS is built in Mexico and developed in the open for users, contributors, and
 - **Provider routing** (`integrated in repo`) - multiple LLM providers are wired with privacy-aware routing policies
 - **Interaction surfaces** - Telegram is the clearest current remote path; local voice and broader desktop surfaces exist, but some remain experimental or are still being re-validated
 - **Reliability layers** (`integrated in repo`) - watchdog, sentinel, circuit breaker, safe mode, and config rollback exist, but not every repair flow is equally mature
-- **Security baseline** (`shipped by default`) - the image ships firewalld, auditd, DNS-over-TLS, SSH hardening, and related guardrails; broader hardening claims should be read as a baseline, not as a finished benchmark story
-- **GPU Game Guard** (`validated on host, under watch`) - GPU offload policy exists and recent false positives were fixed, but it stays under ongoing validation after daemon/runtime changes
+- **Security baseline** (`integrated in repo`) - the image ships firewalld, auditd, DNS-over-TLS, SSH hardening, and related guardrails; broader hardening claims should be read as a baseline, not as a finished benchmark story
+- **GPU Game Guard** (`validated on host`) - GPU offload policy exists and recent false positives were fixed, but it stays under ongoing validation after daemon/runtime changes
 
 ## Quick Start
 
