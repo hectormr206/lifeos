@@ -332,6 +332,35 @@ fn systemd_unit_is_active(args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+fn restart_unit(args: &[&str]) -> bool {
+    Command::new(args[0])
+        .args(&args[1..])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+}
+
+fn is_lifeosd_running() -> bool {
+    systemd_unit_is_active(&["systemctl", "--user", "is-active", "--quiet", "lifeosd.service"])
+        || systemd_unit_is_active(&["systemctl", "is-active", "--quiet", "lifeosd.service"])
+}
+
+fn lifeosd_status_message(is_running: bool) -> String {
+    if is_running {
+        "lifeosd is running".to_string()
+    } else if systemd_unit_is_active(&[
+        "systemctl",
+        "--user",
+        "is-enabled",
+        "--quiet",
+        "lifeosd.service",
+    ]) {
+        "lifeosd user service is enabled but not running".to_string()
+    } else {
+        "lifeosd is not running".to_string()
+    }
+}
+
 /// Check the AI service state and return a human-readable issue when degraded.
 fn check_ai_service_issue() -> Option<String> {
     if systemd_unit_is_active(&["systemctl", "is-active", "--quiet", "llama-server.service"])
@@ -558,41 +587,37 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     });
 
     // 5. Check lifeosd daemon
-    let daemon_running = Command::new("systemctl")
-        .args(["is-active", "--quiet", "lifeosd.service"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let daemon_running = is_lifeosd_running();
     report.checks.push(HealthCheck {
         name: "lifeosd".to_string(),
         passed: daemon_running,
-        message: if daemon_running {
-            "lifeosd is running".to_string()
-        } else {
-            "lifeosd is not running".to_string()
-        },
+        message: lifeosd_status_message(daemon_running),
     });
 
     // --- Repair actions for failed services ---
-    let services_to_repair = [
-        ("ai-service", "llama-server.service", ai_running),
-        ("lifeosd", "lifeosd.service", daemon_running),
-    ];
+    if !ai_running {
+        if restart_unit(&["systemctl", "restart", "llama-server.service"]) {
+            report.repairs.push("Restarted ai-service".to_string());
+        } else {
+            report.repairs.push(
+                "Failed to restart ai-service (try: sudo systemctl restart llama-server.service)"
+                    .to_string(),
+            );
+        }
+    }
 
-    for (name, unit, running) in &services_to_repair {
-        if !running {
-            let restart = Command::new("systemctl").args(["restart", unit]).output();
-            match restart {
-                Ok(out) if out.status.success() => {
-                    report.repairs.push(format!("Restarted {}", name));
-                }
-                _ => {
-                    report.repairs.push(format!(
-                        "Failed to restart {} (try: sudo systemctl restart {})",
-                        name, unit
-                    ));
-                }
-            }
+    if !daemon_running {
+        if restart_unit(&["systemctl", "--user", "restart", "lifeosd.service"])
+            || restart_unit(&["systemctl", "--user", "start", "lifeosd.service"])
+        {
+            report.repairs.push("Restarted lifeosd".to_string());
+        } else if restart_unit(&["systemctl", "restart", "lifeosd.service"]) {
+            report.repairs.push("Restarted lifeosd".to_string());
+        } else {
+            report.repairs.push(
+                "Failed to restart lifeosd (try: systemctl --user restart lifeosd.service)"
+                    .to_string(),
+            );
         }
     }
 
