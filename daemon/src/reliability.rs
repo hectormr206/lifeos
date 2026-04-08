@@ -4,6 +4,8 @@
 //! failure patterns, MTBF, and trend analysis.  Provides recovery suggestions
 //! for common error categories.
 
+#![allow(dead_code)]
+
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};

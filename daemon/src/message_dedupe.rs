@@ -3,6 +3,8 @@
 //! Uses a time-bounded cache keyed by (channel, peer_id, message_id).
 //! Messages seen within the TTL window are silently dropped.
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;

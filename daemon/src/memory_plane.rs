@@ -16480,6 +16480,7 @@ fn tokenize(input: &str) -> HashSet<String> {
 ///
 /// Replaces the equivalent helper from the deleted `knowledge_graph`
 /// module.
+#[allow(dead_code)]
 pub fn extract_entities_from_text(text: &str) -> Vec<(String, &'static str)> {
     use std::collections::HashSet;
     let mut found: Vec<(String, &'static str)> = Vec::new();
