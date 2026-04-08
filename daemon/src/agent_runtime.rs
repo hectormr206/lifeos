@@ -200,6 +200,10 @@ impl Default for ResourceRuntimeState {
     }
 }
 
+fn default_tts_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlwaysOnRuntimeState {
     pub enabled: bool,
@@ -207,6 +211,8 @@ pub struct AlwaysOnRuntimeState {
     pub hotword_enabled: bool,
     pub intent_classifier_enabled: bool,
     pub wake_word: String,
+    #[serde(default)]
+    pub restore_enabled_after_kill_switch: Option<bool>,
     pub last_inference_at: Option<DateTime<Utc>>,
     pub last_inference_label: Option<String>,
     pub updated_at: Option<DateTime<Utc>>,
@@ -220,6 +226,7 @@ impl Default for AlwaysOnRuntimeState {
             hotword_enabled: true,
             intent_classifier_enabled: true,
             wake_word: DEFAULT_WAKE_WORD.to_string(),
+            restore_enabled_after_kill_switch: None,
             last_inference_at: None,
             last_inference_label: None,
             updated_at: None,
@@ -234,8 +241,20 @@ pub struct SensoryCaptureRuntimeState {
     pub audio_enabled: bool,
     pub screen_enabled: bool,
     pub camera_enabled: bool,
+    #[serde(default = "default_tts_enabled")]
+    pub tts_enabled: bool,
     pub running: bool,
     pub kill_switch_active: bool,
+    #[serde(default)]
+    pub restore_enabled_after_kill_switch: Option<bool>,
+    #[serde(default)]
+    pub restore_audio_enabled_after_kill_switch: Option<bool>,
+    #[serde(default)]
+    pub restore_screen_enabled_after_kill_switch: Option<bool>,
+    #[serde(default)]
+    pub restore_camera_enabled_after_kill_switch: Option<bool>,
+    #[serde(default)]
+    pub restore_tts_enabled_after_kill_switch: Option<bool>,
     pub capture_interval_seconds: u64,
     pub last_snapshot_at: Option<DateTime<Utc>>,
     pub last_screen_path: Option<String>,
@@ -250,8 +269,14 @@ impl Default for SensoryCaptureRuntimeState {
             audio_enabled: false,
             screen_enabled: false,
             camera_enabled: false,
+            tts_enabled: true,
             running: false,
             kill_switch_active: false,
+            restore_enabled_after_kill_switch: None,
+            restore_audio_enabled_after_kill_switch: None,
+            restore_screen_enabled_after_kill_switch: None,
+            restore_camera_enabled_after_kill_switch: None,
+            restore_tts_enabled_after_kill_switch: None,
             capture_interval_seconds: 10,
             last_snapshot_at: None,
             last_screen_path: None,
@@ -1170,11 +1195,20 @@ impl AgentRuntimeManager {
             .to_lowercase();
 
         let mut state = self.state.write().await;
-        state.always_on_runtime.enabled = enabled;
-        state.always_on_runtime.vad_enabled = enabled;
-        state.always_on_runtime.hotword_enabled = enabled;
-        state.always_on_runtime.intent_classifier_enabled = enabled;
         state.always_on_runtime.wake_word = wake_word.clone();
+        if state.sensory_capture_runtime.kill_switch_active {
+            state.always_on_runtime.restore_enabled_after_kill_switch = Some(enabled);
+            state.always_on_runtime.enabled = false;
+            state.always_on_runtime.vad_enabled = false;
+            state.always_on_runtime.hotword_enabled = false;
+            state.always_on_runtime.intent_classifier_enabled = false;
+        } else {
+            state.always_on_runtime.restore_enabled_after_kill_switch = None;
+            state.always_on_runtime.enabled = enabled;
+            state.always_on_runtime.vad_enabled = enabled;
+            state.always_on_runtime.hotword_enabled = enabled;
+            state.always_on_runtime.intent_classifier_enabled = enabled;
+        }
         state.always_on_runtime.updated_at = Some(Utc::now());
 
         append_ledger(
@@ -1223,12 +1257,14 @@ impl AgentRuntimeManager {
         state.sensory_capture_runtime.clone()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn set_sensory_capture_runtime(
         &self,
         enabled: bool,
         audio_enabled: bool,
         screen_enabled: bool,
         camera_enabled: bool,
+        tts_enabled: bool,
         capture_interval_seconds: Option<u64>,
         actor: Option<&str>,
     ) -> Result<SensoryCaptureRuntimeState> {
@@ -1238,15 +1274,33 @@ impl AgentRuntimeManager {
         state.sensory_capture_runtime.audio_enabled = enabled && audio_enabled;
         state.sensory_capture_runtime.screen_enabled = enabled && screen_enabled;
         state.sensory_capture_runtime.camera_enabled = enabled && camera_enabled;
+        state.sensory_capture_runtime.tts_enabled = tts_enabled;
         state.sensory_capture_runtime.running =
             enabled && (audio_enabled || screen_enabled || camera_enabled);
         state.sensory_capture_runtime.kill_switch_active = false;
+        state
+            .sensory_capture_runtime
+            .restore_enabled_after_kill_switch = None;
+        state
+            .sensory_capture_runtime
+            .restore_audio_enabled_after_kill_switch = None;
+        state
+            .sensory_capture_runtime
+            .restore_screen_enabled_after_kill_switch = None;
+        state
+            .sensory_capture_runtime
+            .restore_camera_enabled_after_kill_switch = None;
+        state
+            .sensory_capture_runtime
+            .restore_tts_enabled_after_kill_switch = None;
+        state.always_on_runtime.restore_enabled_after_kill_switch = None;
         state.sensory_capture_runtime.capture_interval_seconds =
             capture_interval_seconds.unwrap_or(10).clamp(5, 30);
         state.sensory_capture_runtime.updated_at = Some(Utc::now());
         let effective_audio_enabled = state.sensory_capture_runtime.audio_enabled;
         let effective_screen_enabled = state.sensory_capture_runtime.screen_enabled;
         let effective_camera_enabled = state.sensory_capture_runtime.camera_enabled;
+        let effective_tts_enabled = state.sensory_capture_runtime.tts_enabled;
         let effective_interval = state.sensory_capture_runtime.capture_interval_seconds;
 
         append_ledger(
@@ -1264,6 +1318,7 @@ impl AgentRuntimeManager {
                 "audio_enabled": effective_audio_enabled,
                 "screen_enabled": effective_screen_enabled,
                 "camera_enabled": effective_camera_enabled,
+                "tts_enabled": effective_tts_enabled,
                 "capture_interval_seconds": effective_interval,
             }),
         );
@@ -1280,13 +1335,40 @@ impl AgentRuntimeManager {
     ) -> Result<SensoryCaptureRuntimeState> {
         let actor = actor.unwrap_or("user://local/default");
         let mut state = self.state.write().await;
+        state
+            .sensory_capture_runtime
+            .restore_enabled_after_kill_switch = Some(state.sensory_capture_runtime.enabled);
+        state
+            .sensory_capture_runtime
+            .restore_audio_enabled_after_kill_switch =
+            Some(state.sensory_capture_runtime.audio_enabled);
+        state
+            .sensory_capture_runtime
+            .restore_screen_enabled_after_kill_switch =
+            Some(state.sensory_capture_runtime.screen_enabled);
+        state
+            .sensory_capture_runtime
+            .restore_camera_enabled_after_kill_switch =
+            Some(state.sensory_capture_runtime.camera_enabled);
+        state
+            .sensory_capture_runtime
+            .restore_tts_enabled_after_kill_switch =
+            Some(state.sensory_capture_runtime.tts_enabled);
+        state.always_on_runtime.restore_enabled_after_kill_switch =
+            Some(state.always_on_runtime.enabled);
         state.sensory_capture_runtime.enabled = false;
         state.sensory_capture_runtime.audio_enabled = false;
         state.sensory_capture_runtime.screen_enabled = false;
         state.sensory_capture_runtime.camera_enabled = false;
+        state.sensory_capture_runtime.tts_enabled = false;
         state.sensory_capture_runtime.running = false;
         state.sensory_capture_runtime.kill_switch_active = true;
         state.sensory_capture_runtime.updated_at = Some(Utc::now());
+        state.always_on_runtime.enabled = false;
+        state.always_on_runtime.vad_enabled = false;
+        state.always_on_runtime.hotword_enabled = false;
+        state.always_on_runtime.intent_classifier_enabled = false;
+        state.always_on_runtime.updated_at = Some(Utc::now());
 
         append_ledger(
             &mut state,
@@ -1299,6 +1381,8 @@ impl AgentRuntimeManager {
                 "audio_enabled": false,
                 "screen_enabled": false,
                 "camera_enabled": false,
+                "tts_enabled": false,
+                "always_on_enabled": false,
                 "kill_switch_active": true,
             }),
         );
@@ -1318,20 +1402,22 @@ impl AgentRuntimeManager {
             .kill_switch_active
     }
 
-    /// Release the sensory kill switch — re-enable all senses.
+    /// Release the sensory kill switch — restore the user's previous settings.
     pub async fn release_sensory_kill_switch(
         &self,
         actor: Option<&str>,
     ) -> Result<SensoryCaptureRuntimeState> {
         let actor = actor.unwrap_or("user://local/default");
         let mut state = self.state.write().await;
-        state.sensory_capture_runtime.enabled = true;
-        state.sensory_capture_runtime.audio_enabled = true;
-        state.sensory_capture_runtime.screen_enabled = true;
-        state.sensory_capture_runtime.camera_enabled = true;
-        state.sensory_capture_runtime.running = true;
+        restore_sensory_after_kill_switch(&mut state);
         state.sensory_capture_runtime.kill_switch_active = false;
         state.sensory_capture_runtime.updated_at = Some(Utc::now());
+        let restored_enabled = state.sensory_capture_runtime.enabled;
+        let restored_audio_enabled = state.sensory_capture_runtime.audio_enabled;
+        let restored_screen_enabled = state.sensory_capture_runtime.screen_enabled;
+        let restored_camera_enabled = state.sensory_capture_runtime.camera_enabled;
+        let restored_tts_enabled = state.sensory_capture_runtime.tts_enabled;
+        let restored_always_on_enabled = state.always_on_runtime.enabled;
 
         append_ledger(
             &mut state,
@@ -1340,10 +1426,12 @@ impl AgentRuntimeManager {
             "super-escape",
             serde_json::json!({
                 "actor": actor,
-                "enabled": true,
-                "audio_enabled": true,
-                "screen_enabled": true,
-                "camera_enabled": true,
+                "enabled": restored_enabled,
+                "audio_enabled": restored_audio_enabled,
+                "screen_enabled": restored_screen_enabled,
+                "camera_enabled": restored_camera_enabled,
+                "tts_enabled": restored_tts_enabled,
+                "always_on_enabled": restored_always_on_enabled,
                 "kill_switch_active": false,
             }),
         );
@@ -1950,12 +2038,8 @@ impl AgentRuntimeManager {
         // safety mechanism that must not persist across restarts.
         if parsed.sensory_capture_runtime.kill_switch_active {
             log::info!("[agent_runtime] Releasing stale sensory kill switch from previous session");
+            restore_sensory_after_kill_switch(&mut parsed);
             parsed.sensory_capture_runtime.kill_switch_active = false;
-            parsed.sensory_capture_runtime.enabled = true;
-            parsed.sensory_capture_runtime.audio_enabled = true;
-            parsed.sensory_capture_runtime.screen_enabled = true;
-            parsed.sensory_capture_runtime.camera_enabled = true;
-            parsed.sensory_capture_runtime.running = true;
         }
 
         *self.state.write().await = parsed;
@@ -1997,6 +2081,7 @@ impl AgentRuntimeManager {
             && !state.sensory_capture_runtime.audio_enabled
             && !state.sensory_capture_runtime.screen_enabled
             && !state.sensory_capture_runtime.camera_enabled
+            && state.sensory_capture_runtime.tts_enabled
             && !state.sensory_capture_runtime.running
             && !state.sensory_capture_runtime.kill_switch_active
         {
@@ -2004,6 +2089,7 @@ impl AgentRuntimeManager {
             state.sensory_capture_runtime.audio_enabled = true;
             state.sensory_capture_runtime.screen_enabled = true;
             state.sensory_capture_runtime.camera_enabled = true;
+            state.sensory_capture_runtime.tts_enabled = true;
             state.sensory_capture_runtime.running = true;
             state.sensory_capture_runtime.capture_interval_seconds =
                 DEFAULT_SENSORY_CAPTURE_INTERVAL_SECONDS;
@@ -2016,6 +2102,7 @@ impl AgentRuntimeManager {
                     "audio_enabled": true,
                     "screen_enabled": true,
                     "camera_enabled": true,
+                    "tts_enabled": true,
                     "capture_interval_seconds": DEFAULT_SENSORY_CAPTURE_INTERVAL_SECONDS,
                 }),
             );
@@ -2081,6 +2168,12 @@ impl AgentRuntimeManager {
             changed = true;
         }
 
+        // v1 was about Bluetooth AUDIO CAPTURE conflicts. tts_enabled
+        // is an OUTPUT path (speakers), not capture, so it must not be
+        // part of the trigger nor of the disable body — otherwise the
+        // default `tts_enabled = true` causes v1 to fire on a freshly
+        // user-disabled state, falsely marking v1 as applied and
+        // triggering v2's re-enable.
         if state.sensory_capture_runtime.enabled
             || state.sensory_capture_runtime.audio_enabled
             || state.sensory_capture_runtime.running
@@ -2161,12 +2254,13 @@ impl AgentRuntimeManager {
         {
             detail.insert(
                 "sensory_before".to_string(),
-                serde_json::json!({"enabled": false, "audio_enabled": false}),
+                serde_json::json!({"enabled": false, "audio_enabled": false, "tts_enabled": state.sensory_capture_runtime.tts_enabled}),
             );
             state.sensory_capture_runtime.enabled = true;
             state.sensory_capture_runtime.audio_enabled = true;
             state.sensory_capture_runtime.screen_enabled = true;
             state.sensory_capture_runtime.camera_enabled = true;
+            state.sensory_capture_runtime.tts_enabled = true;
             state.sensory_capture_runtime.running = true;
             state.sensory_capture_runtime.updated_at = Some(Utc::now());
             changed = true;
@@ -2260,6 +2354,55 @@ impl AgentRuntimeManager {
     fn state_file(&self) -> PathBuf {
         self.data_dir.join("agent_runtime_state.json")
     }
+}
+
+fn restore_sensory_after_kill_switch(state: &mut AgentRuntimeState) {
+    let restore_enabled = state
+        .sensory_capture_runtime
+        .restore_enabled_after_kill_switch
+        .take()
+        .unwrap_or(state.sensory_capture_runtime.enabled);
+    let restore_audio_enabled = state
+        .sensory_capture_runtime
+        .restore_audio_enabled_after_kill_switch
+        .take()
+        .unwrap_or(state.sensory_capture_runtime.audio_enabled);
+    let restore_screen_enabled = state
+        .sensory_capture_runtime
+        .restore_screen_enabled_after_kill_switch
+        .take()
+        .unwrap_or(state.sensory_capture_runtime.screen_enabled);
+    let restore_camera_enabled = state
+        .sensory_capture_runtime
+        .restore_camera_enabled_after_kill_switch
+        .take()
+        .unwrap_or(state.sensory_capture_runtime.camera_enabled);
+    let restore_tts_enabled = state
+        .sensory_capture_runtime
+        .restore_tts_enabled_after_kill_switch
+        .take()
+        .unwrap_or(state.sensory_capture_runtime.tts_enabled);
+    let restore_always_on_enabled = state
+        .always_on_runtime
+        .restore_enabled_after_kill_switch
+        .take()
+        .unwrap_or(state.always_on_runtime.enabled);
+
+    state.sensory_capture_runtime.enabled = restore_enabled;
+    state.sensory_capture_runtime.audio_enabled = restore_enabled && restore_audio_enabled;
+    state.sensory_capture_runtime.screen_enabled = restore_enabled && restore_screen_enabled;
+    state.sensory_capture_runtime.camera_enabled = restore_enabled && restore_camera_enabled;
+    state.sensory_capture_runtime.tts_enabled = restore_tts_enabled;
+    state.sensory_capture_runtime.running = state.sensory_capture_runtime.enabled
+        && (state.sensory_capture_runtime.audio_enabled
+            || state.sensory_capture_runtime.screen_enabled
+            || state.sensory_capture_runtime.camera_enabled);
+    state.sensory_capture_runtime.kill_switch_active = false;
+
+    state.always_on_runtime.enabled = restore_always_on_enabled;
+    state.always_on_runtime.vad_enabled = restore_always_on_enabled;
+    state.always_on_runtime.hotword_enabled = restore_always_on_enabled;
+    state.always_on_runtime.intent_classifier_enabled = restore_always_on_enabled;
 }
 
 async fn write_atomic(path: &PathBuf, contents: &str) -> Result<()> {
@@ -2974,6 +3117,7 @@ mod tests {
         assert!(sensory.audio_enabled);
         assert!(sensory.screen_enabled);
         assert!(sensory.camera_enabled);
+        assert!(sensory.tts_enabled);
         assert!(sensory.running);
         assert_eq!(sensory.capture_interval_seconds, 10);
 
@@ -3070,6 +3214,7 @@ mod tests {
             "v2 should re-enable sensory after v1 disabled it"
         );
         assert!(sensory.audio_enabled);
+        assert!(sensory.tts_enabled);
         assert!(sensory.running);
 
         // Both migrations should be in the ledger
@@ -3163,6 +3308,7 @@ mod tests {
                 true,
                 true,
                 false,
+                true,
                 Some(10),
                 Some("user://local/admin"),
             )
@@ -3172,6 +3318,7 @@ mod tests {
         assert!(state.audio_enabled);
         assert!(state.screen_enabled);
         assert!(!state.camera_enabled);
+        assert!(state.tts_enabled);
 
         let updated = mgr
             .record_sensory_snapshot(Some("/tmp/frame.png"), Some("hello world"))
@@ -3180,6 +3327,56 @@ mod tests {
         assert!(updated.last_snapshot_at.is_some());
         assert_eq!(updated.last_screen_path.as_deref(), Some("/tmp/frame.png"));
         assert_eq!(updated.last_transcript_chars, 11);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn stale_kill_switch_restores_previous_preferences_on_initialize() {
+        let dir = temp_dir("agent-runtime-kill-switch-restore");
+        let mgr = AgentRuntimeManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.set_always_on_runtime(true, Some("axi"), Some("user://local/admin"))
+            .await
+            .unwrap();
+        mgr.set_sensory_capture_runtime(
+            true,
+            true,
+            false,
+            true,
+            false,
+            Some(12),
+            Some("user://local/admin"),
+        )
+        .await
+        .unwrap();
+
+        let killed = mgr
+            .trigger_sensory_kill_switch(Some("user://local/admin"))
+            .await
+            .unwrap();
+        assert!(killed.kill_switch_active);
+        assert!(!killed.audio_enabled);
+        assert!(!killed.camera_enabled);
+        assert!(!killed.tts_enabled);
+
+        let mgr2 = AgentRuntimeManager::new(dir.clone()).unwrap();
+        mgr2.initialize().await.unwrap();
+
+        let restored_sensory = mgr2.sensory_capture_runtime().await;
+        assert!(restored_sensory.enabled);
+        assert!(restored_sensory.audio_enabled);
+        assert!(!restored_sensory.screen_enabled);
+        assert!(restored_sensory.camera_enabled);
+        assert!(!restored_sensory.tts_enabled);
+        assert!(!restored_sensory.kill_switch_active);
+        assert_eq!(restored_sensory.capture_interval_seconds, 12);
+
+        let restored_always_on = mgr2.always_on_runtime().await;
+        assert!(restored_always_on.enabled);
+        assert!(restored_always_on.vad_enabled);
+        assert!(restored_always_on.hotword_enabled);
 
         std::fs::remove_dir_all(dir).ok();
     }

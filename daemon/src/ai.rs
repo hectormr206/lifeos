@@ -4,6 +4,7 @@
 use anyhow::Context;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use futures_util::StreamExt;
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
 use image::{GenericImageView, ImageReader};
@@ -13,7 +14,7 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
-use tokio::sync::Semaphore;
+use tokio::sync::{mpsc::UnboundedSender, Semaphore};
 
 /// AI service status
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -261,6 +262,43 @@ impl AiManager {
         self.chat_with_payload(payload).await
     }
 
+    /// Send a streaming chat completion request and emit accumulated text
+    /// snapshots as they arrive. The final response is returned in the same
+    /// format as `chat()`.
+    pub async fn chat_stream(
+        &self,
+        model: Option<&str>,
+        messages: Vec<(String, String)>,
+        partial_sender: UnboundedSender<String>,
+    ) -> anyhow::Result<AiChatResponse> {
+        if messages.is_empty() {
+            anyhow::bail!("No chat messages provided");
+        }
+
+        let model_name = if let Some(m) = model {
+            m.to_string()
+        } else {
+            self.active_model()
+                .await
+                .unwrap_or_else(|| "Qwen3.5-4B-Q4_K_M.gguf".to_string())
+        };
+
+        let payload_messages: Vec<serde_json::Value> = messages
+            .into_iter()
+            .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
+            .collect();
+
+        let payload = serde_json::json!({
+            "model": model_name,
+            "messages": payload_messages,
+            "stream": true,
+            "stream_options": { "include_usage": true },
+        });
+
+        self.chat_with_payload_streaming(payload, partial_sender)
+            .await
+    }
+
     /// Send a multimodal chat completion request using an image payload.
     pub async fn chat_multimodal(
         &self,
@@ -366,47 +404,160 @@ impl AiManager {
         })
     }
 
-    /// Generate embeddings using llama-server's OpenAI-compatible API
-    /// Falls back to hash-based embeddings if llama-server is unavailable
-    pub async fn embed(&self, text: &str) -> anyhow::Result<EmbeddingResponse> {
-        const EMBEDDING_DIM: usize = 768;
+    async fn chat_with_payload_streaming(
+        &self,
+        payload: serde_json::Value,
+        partial_sender: UnboundedSender<String>,
+    ) -> anyhow::Result<AiChatResponse> {
+        let _permit = chat_request_semaphore()
+            .acquire()
+            .await
+            .map_err(|_| anyhow::anyhow!("AI request limiter is unavailable"))?;
+        let request_model = payload
+            .get("model")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_string();
 
-        if self.is_running().await {
-            let payload = serde_json::json!({
-                "model": "nomic-embed-text-v1.5.f16.gguf",
-                "input": text
-            });
+        let response = reqwest::Client::new()
+            .post("http://127.0.0.1:8082/v1/chat/completions")
+            .json(&payload)
+            .send()
+            .await?;
 
-            match reqwest::Client::new()
-                .post("http://127.0.0.1:8082/v1/embeddings")
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(30))
-                .send()
-                .await
-            {
-                Ok(response) if response.status().is_success() => {
-                    if let Ok(body) = response.json::<serde_json::Value>().await {
-                        if let Some(embedding) = body["data"][0]["embedding"].as_array() {
-                            let vec: Vec<f32> = embedding
-                                .iter()
-                                .filter_map(|v| v.as_f64().map(|f| f as f32))
-                                .collect();
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let detail = truncate_error(&body);
+            if detail.is_empty() {
+                anyhow::bail!("llama-server returned {}", status);
+            }
+            anyhow::bail!("llama-server returned {}: {}", status, detail);
+        }
 
-                            if vec.len() == EMBEDDING_DIM {
-                                return Ok(EmbeddingResponse {
-                                    embedding: vec,
-                                    model: "nomic-embed-text".to_string(),
-                                    dimensions: EMBEDDING_DIM,
-                                });
-                            }
-                        }
-                    }
+        let mut response_model = request_model;
+        let mut tokens_used = None;
+        let mut accumulated = String::new();
+        let mut line_buffer = String::new();
+        let mut done = false;
+        let mut stream = response.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            line_buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(newline_idx) = line_buffer.find('\n') {
+                let line = line_buffer[..newline_idx].trim().to_string();
+                line_buffer.drain(..=newline_idx);
+                if consume_stream_sse_line(
+                    &line,
+                    &mut accumulated,
+                    &mut response_model,
+                    &mut tokens_used,
+                    &partial_sender,
+                ) {
+                    done = true;
+                    break;
                 }
-                _ => {}
+            }
+
+            if done {
+                break;
             }
         }
 
-        log::warn!("llama-server embeddings unavailable, using hash-based fallback");
+        if !done && !line_buffer.trim().is_empty() {
+            let _ = consume_stream_sse_line(
+                line_buffer.trim(),
+                &mut accumulated,
+                &mut response_model,
+                &mut tokens_used,
+                &partial_sender,
+            );
+        }
+
+        let response_text = sanitize_generated_response(&accumulated);
+        Ok(AiChatResponse {
+            response: if response_text.is_empty() {
+                "Lo siento, no pude generar una respuesta clara.".to_string()
+            } else {
+                response_text
+            },
+            model: response_model,
+            tokens_used,
+        })
+    }
+
+    /// Generate embeddings.
+    ///
+    /// Resolution order (best → worst quality):
+    /// 1. **Dedicated nomic-embed-text server on `127.0.0.1:8083`** — started
+    ///    by `llama-embeddings.service`. Returns 768-dim semantic
+    ///    embeddings. This is the path the dashboard, MemoryPlane and
+    ///    Telegram `recall` use in production.
+    /// 2. **Hash-based fallback** — deterministic trigram hashing into a
+    ///    768-dim sparse vector. Lossy and *not* semantic, but stable
+    ///    enough for keyword-overlap recall when the embeddings server is
+    ///    not available (offline boot, model still downloading, etc.).
+    ///
+    /// We do **not** call the chat-model server on `:8082` here even though
+    /// it can technically serve `/v1/embeddings`: its embeddings have a
+    /// different dimension than the SQLite schema's `FLOAT[768]`, so any
+    /// mixing would silently corrupt the vec0 index.
+    pub async fn embed(&self, text: &str) -> anyhow::Result<EmbeddingResponse> {
+        const EMBEDDING_DIM: usize = 768;
+        const EMBED_URL: &str = "http://127.0.0.1:8083/v1/embeddings";
+
+        // -- 1. Dedicated semantic embeddings server (nomic-embed-text) --
+        let payload = serde_json::json!({
+            "model": "lifeos-embeddings",
+            "input": text,
+        });
+
+        match reqwest::Client::new()
+            .post(EMBED_URL)
+            .json(&payload)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                if let Ok(body) = response.json::<serde_json::Value>().await {
+                    if let Some(embedding) = body["data"][0]["embedding"].as_array() {
+                        let vec: Vec<f32> = embedding
+                            .iter()
+                            .filter_map(|v| v.as_f64().map(|f| f as f32))
+                            .collect();
+                        if vec.len() == EMBEDDING_DIM {
+                            return Ok(EmbeddingResponse {
+                                embedding: vec,
+                                model: "nomic-embed-text-v1.5".to_string(),
+                                dimensions: EMBEDDING_DIM,
+                            });
+                        } else if !vec.is_empty() {
+                            // Wrong dimension — log once and fall through to
+                            // the hash fallback so we never poison the index.
+                            log::warn!(
+                                "embeddings server returned {} dims, expected {}; falling back",
+                                vec.len(),
+                                EMBEDDING_DIM
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(response) => {
+                log::debug!(
+                    "embeddings server returned {} — falling back to hash",
+                    response.status()
+                );
+            }
+            Err(e) => {
+                log::debug!("embeddings server unreachable ({e}) — falling back to hash");
+            }
+        }
+
+        // -- 2. Hash-based fallback --
         let hash_embedding = self.hash_based_embedding(text);
         let mut padded = vec![0.0f32; EMBEDDING_DIM];
         for (i, &v) in hash_embedding.iter().enumerate() {
@@ -500,6 +651,51 @@ fn truncate_error(body: &str) -> String {
     format!("{}...", &cleaned[..200])
 }
 
+fn consume_stream_sse_line(
+    line: &str,
+    accumulated: &mut String,
+    response_model: &mut String,
+    tokens_used: &mut Option<u32>,
+    partial_sender: &UnboundedSender<String>,
+) -> bool {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with(':') {
+        return false;
+    }
+
+    let Some(data) = line.strip_prefix("data:") else {
+        return false;
+    };
+    let data = data.trim();
+    if data == "[DONE]" {
+        return true;
+    }
+
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+
+    if let Some(model) = body.get("model").and_then(|value| value.as_str()) {
+        *response_model = model.to_string();
+    }
+    if let Some(total_tokens) = body
+        .get("usage")
+        .and_then(|usage| usage.get("total_tokens"))
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+    {
+        *tokens_used = Some(total_tokens);
+    }
+
+    let delta_text = extract_chat_stream_delta_text(&body);
+    if !delta_text.is_empty() {
+        accumulated.push_str(&delta_text);
+        let _ = partial_sender.send(accumulated.clone());
+    }
+
+    false
+}
+
 fn extract_chat_response_text(body: &serde_json::Value) -> String {
     let message = body
         .get("choices")
@@ -558,6 +754,43 @@ fn extract_chat_response_text(body: &serde_json::Value) -> String {
     }
 
     "Lo siento, no pude generar una respuesta clara.".to_string()
+}
+
+fn extract_chat_stream_delta_text(body: &serde_json::Value) -> String {
+    let choice = body
+        .get("choices")
+        .and_then(|value| value.as_array())
+        .and_then(|choices| choices.first());
+
+    if let Some(delta) = choice.and_then(|choice| choice.get("delta")) {
+        if let Some(content) = delta.get("content") {
+            let parsed = extract_text_from_content_value(content);
+            if !parsed.is_empty() {
+                return parsed;
+            }
+        }
+
+        for key in ["text", "response", "output_text", "reasoning_content"] {
+            if let Some(text) = delta.get(key).and_then(|value| value.as_str()) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return trimmed.to_string();
+                }
+            }
+        }
+    }
+
+    if let Some(text) = choice
+        .and_then(|choice| choice.get("text"))
+        .and_then(|value| value.as_str())
+    {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    String::new()
 }
 
 fn extract_text_from_content_value(content: &serde_json::Value) -> String {
@@ -784,7 +1017,10 @@ fn is_primary_model_candidate(model: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_chat_response_text;
+    use super::{
+        consume_stream_sse_line, extract_chat_response_text, extract_chat_stream_delta_text,
+    };
+    use tokio::sync::mpsc;
 
     #[test]
     fn extract_chat_response_handles_string_content() {
@@ -848,5 +1084,56 @@ mod tests {
             extract_chat_response_text(&body),
             "Lo siento, no pude generar una respuesta clara."
         );
+    }
+
+    #[test]
+    fn extract_chat_stream_delta_handles_string_content() {
+        let body = serde_json::json!({
+            "choices": [
+                { "delta": { "content": "Hola parcial" } }
+            ]
+        });
+
+        assert_eq!(extract_chat_stream_delta_text(&body), "Hola parcial");
+    }
+
+    #[test]
+    fn extract_chat_stream_delta_handles_array_content() {
+        let body = serde_json::json!({
+            "choices": [
+                {
+                    "delta": {
+                        "content": [
+                            { "type": "text", "text": "Linea" },
+                            { "type": "output_text", "text": { "value": "dos" } }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        assert_eq!(extract_chat_stream_delta_text(&body), "Linea\ndos");
+    }
+
+    #[test]
+    fn consume_stream_sse_line_accumulates_partial_text() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let mut accumulated = String::new();
+        let mut model = "unknown".to_string();
+        let mut tokens = None;
+
+        let done = consume_stream_sse_line(
+            r#"data: {"model":"qwen","choices":[{"delta":{"content":"Hola"}}]}"#,
+            &mut accumulated,
+            &mut model,
+            &mut tokens,
+            &sender,
+        );
+
+        assert!(!done);
+        assert_eq!(model, "qwen");
+        assert_eq!(accumulated, "Hola");
+        assert_eq!(receiver.try_recv().unwrap(), "Hola");
+        assert_eq!(tokens, None);
     }
 }

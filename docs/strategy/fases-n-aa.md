@@ -543,20 +543,20 @@ Como un organismo vivo, LifeOS tiene un sistema inmunologico que monitorea, dete
 
 ### Fase U — Self-Improving OS (El Loop de Karpathy)
 
-**Objetivo:** LifeOS se optimiza a si mismo continuamente — configs del sistema, workflows del usuario, modelos locales, prompts del supervisor. Como el autoresearch de Karpathy que corrio 700 experimentos en 2 dias y encontro 20 optimizaciones.
+**Objetivo:** LifeOS mejora continuamente algunas partes de si mismo — configs del sistema, observabilidad de prompts y aprendizaje de workflows del usuario. No incluye todavia un loop completo tipo GEPA ni entrenamiento autonomo de modelos locales en produccion.
 
 **Referencia:** [Karpathy autoresearch](https://github.com/karpathy/autoresearch) — 630 lineas de Python, corre ML experiments autonomamente. Shopify CEO: 37 experimentos overnight, 19% performance gain.
 
 **Por que es headline:** "Este Linux se optimiza solo mientras duermes"
 
 - [x] **System config optimizer:** `SystemTuner` — lee/escribe sysctl, benchmark I/O (dd) y memoria, optimiza vm.swappiness/dirty_ratio/sched_migration_cost_ns, persiste historial de resultados
-- [x] **Prompt evolution:** El supervisor graba resultados de cada tarea. Periodicamente, un meta-agente analiza patrones de exito/fracaso y propone mejoras a los system prompts. A/B testing automatico de prompts
-- [x] **Model fine-tuning local:** `should_fine_tune_now()` verifica GPU idle + usuario ausente + hora nocturna. `run_fine_tune_cycle()` recolecta interacciones exitosas y formatea como JSONL training data
+- [x] **Prompt evolution (observacional):** El supervisor graba resultados de cada tarea. Periodicamente, un meta-proceso analiza patrones de exito/fracaso y **sugiere** mejoras a prompts. No aplica cambios solo, no hace A/B testing continuo y no equivale a un optimizador tipo GEPA
+- [ ] **Model fine-tuning local:** sigue diferido a `Fase AR`. El loop actual no despliega fine-tuning autonomo ni debe hacerlo antes de cerrar `BJ` + `AQ`
 - [x] **Workflow learning:** Detectar patrones repetitivos del usuario (abre terminal → git pull → cargo build → cargo test) y generar skills automaticamente sin que el usuario pida
 - [x] **Resource prediction:** `ResourcePredictor` — samples CPU/mem/GPU por hora+dia, predice carga, recomienda power profile y si pre-cargar modelo LLM
-- [x] **Nightly optimization daemon:** Proceso que corre entre 2-5 AM (configurable) cuando el usuario duerme. Ejecuta: cleanup, config tuning, model optimization, skill generation, security audit
+- [x] **Nightly optimization daemon:** Proceso que corre entre 2-5 AM (configurable) cuando el usuario duerme. Ejecuta: cleanup, config tuning, skill suggestions, housekeeping y analisis. La optimizacion de modelos queda fuera por ahora
 - [x] **Metrics dashboard:** `get_tuning_metrics()` — total optimizaciones, boot time saved, memory saved, skills generados, prompts mejorados. Dashboard-ready
-- [ ] **HITO FASE U:** Hay piezas fuertes (SystemTuner, ResourcePredictor, scheduler nocturno y metricas), pero el claim de OS que ya se optimiza solo de extremo a extremo sigue parcial y necesita validacion runtime mas dura
+- [ ] **HITO FASE U:** Hay piezas fuertes (SystemTuner, ResourcePredictor, scheduler nocturno, prompt evolution observacional y metricas), pero el claim de OS que ya se optimiza solo de extremo a extremo sigue parcial y necesita validacion runtime mas dura. Prompt adaptation avanzada y training autonomo quedan diferidos
 
 ### Fase V — Knowledge Graph Personal Local (Memoria Total)
 

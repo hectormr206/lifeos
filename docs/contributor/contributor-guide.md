@@ -11,6 +11,18 @@ make check-daemon-prereqs
 make phase3-hardening
 ```
 
+4. Open a pull request with a concise summary once local checks pass.
+
+## Issue and PR Policy
+
+LifeOS does **not** require an issue for every single change.
+
+- **Small fixes, maintenance, or obvious cleanup** -> branch + PR is enough; no issue required.
+- **Medium features or important changes** -> issue is optional, but recommended for traceability.
+- **Large, architectural, or sensitive changes** -> open an issue first and ship it through a PR.
+
+Use the heavier workflow when the value is clarity, discussion, or historical context — not bureaucracy for its own sake.
+
 ## Required Quality Gates
 
 - `cargo fmt --all -- --check`

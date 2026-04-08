@@ -7,16 +7,13 @@
 //! system integrity, brute-force attempts, USB threats, and privilege escalation.
 
 use chrono::{DateTime, Utc};
-use log::{error, info, warn};
+use log::warn;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::process::Command;
-use tokio::sync::broadcast;
 use uuid::Uuid;
-
-use crate::events::DaemonEvent;
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -24,9 +21,6 @@ use crate::events::DaemonEvent;
 
 /// Main AI security monitor that holds state across scan cycles.
 pub struct SecurityAiDaemon {
-    alert_history: Vec<SecurityAlert>,
-    blocked_pids: Vec<u32>,
-    rules: Vec<DetectionRule>,
     /// Per-process high-CPU tracking: pid -> consecutive detection count.
     high_cpu_tracker: HashMap<u32, u32>,
 }
@@ -103,17 +97,6 @@ impl fmt::Display for AlertType {
 }
 
 // ---------------------------------------------------------------------------
-// Detection rule engine
-// ---------------------------------------------------------------------------
-
-/// A detection rule that runs on a configurable interval.
-pub struct DetectionRule {
-    pub name: String,
-    pub check: fn() -> Option<SecurityAlert>,
-    pub interval_secs: u64,
-}
-
-// ---------------------------------------------------------------------------
 // Known-bad indicators
 // ---------------------------------------------------------------------------
 
@@ -173,31 +156,8 @@ impl SecurityAiDaemon {
     /// Create a new security AI daemon with default rules.
     pub fn new() -> Self {
         Self {
-            alert_history: Vec::new(),
-            blocked_pids: Vec::new(),
-            rules: Vec::new(),
             high_cpu_tracker: HashMap::new(),
         }
-    }
-
-    /// Return a read-only view of past alerts.
-    pub fn alert_history(&self) -> &[SecurityAlert] {
-        &self.alert_history
-    }
-
-    /// Return a list of currently blocked PIDs.
-    pub fn blocked_pids(&self) -> &[u32] {
-        &self.blocked_pids
-    }
-
-    /// Return the registered detection rules.
-    pub fn rules(&self) -> &[DetectionRule] {
-        &self.rules
-    }
-
-    /// Register a custom detection rule.
-    pub fn add_rule(&mut self, rule: DetectionRule) {
-        self.rules.push(rule);
     }
 
     // -----------------------------------------------------------------------
@@ -651,376 +611,6 @@ impl SecurityAiDaemon {
 
         alerts
     }
-
-    // -----------------------------------------------------------------------
-    // 5. Response actions
-    // -----------------------------------------------------------------------
-
-    /// Suspend a process by sending SIGSTOP.
-    pub async fn isolate_process(&mut self, pid: u32) -> Result<String, String> {
-        // Verify the process exists.
-        if !std::path::Path::new(&format!("/proc/{}", pid)).exists() {
-            return Err(format!("Process {} does not exist", pid));
-        }
-
-        let proc_name = read_proc_name(pid).unwrap_or_else(|| "(unknown)".to_string());
-
-        // Send SIGSTOP.
-        let result = Command::new("kill")
-            .args(["-STOP", &pid.to_string()])
-            .output();
-
-        match result {
-            Ok(out) if out.status.success() => {
-                self.blocked_pids.push(pid);
-                let msg = format!(
-                    "Process '{}' (pid {}) suspended with SIGSTOP",
-                    proc_name, pid
-                );
-                info!("security_ai: {}", msg);
-                Ok(msg)
-            }
-            Ok(out) => {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                let msg = format!(
-                    "Failed to suspend '{}' (pid {}): {}",
-                    proc_name,
-                    pid,
-                    stderr.trim()
-                );
-                error!("security_ai: {}", msg);
-                Err(msg)
-            }
-            Err(e) => {
-                let msg = format!("Cannot execute kill for pid {}: {}", pid, e);
-                error!("security_ai: {}", msg);
-                Err(msg)
-            }
-        }
-    }
-
-    /// Block a remote IP address using nftables (or iptables fallback).
-    pub async fn block_connection(remote_addr: &str) -> Result<String, String> {
-        // Validate the address looks like an IP.
-        if remote_addr.is_empty()
-            || remote_addr.contains(';')
-            || remote_addr.contains('&')
-            || remote_addr.contains('|')
-        {
-            return Err(format!("Invalid address: {}", remote_addr));
-        }
-
-        // Try nftables first.
-        let nft_result = Command::new("nft")
-            .args([
-                "add",
-                "rule",
-                "inet",
-                "filter",
-                "input",
-                "ip",
-                "saddr",
-                remote_addr,
-                "drop",
-            ])
-            .output();
-
-        let nft_ok = matches!(&nft_result, Ok(out) if out.status.success());
-
-        if nft_ok {
-            let msg = format!("Blocked {} via nftables", remote_addr);
-            info!("security_ai: {}", msg);
-            Ok(msg)
-        } else {
-            // Fallback to iptables.
-            let ipt_result = Command::new("iptables")
-                .args(["-A", "INPUT", "-s", remote_addr, "-j", "DROP"])
-                .output();
-
-            match ipt_result {
-                Ok(out) if out.status.success() => {
-                    let msg = format!("Blocked {} via iptables", remote_addr);
-                    info!("security_ai: {}", msg);
-                    Ok(msg)
-                }
-                Ok(out) => {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    let msg = format!(
-                        "Failed to block {} via iptables: {}",
-                        remote_addr,
-                        stderr.trim()
-                    );
-                    error!("security_ai: {}", msg);
-                    Err(msg)
-                }
-                Err(e) => {
-                    let msg = format!("Cannot execute iptables to block {}: {}", remote_addr, e);
-                    error!("security_ai: {}", msg);
-                    Err(msg)
-                }
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // 6. Monitoring loop
-    // -----------------------------------------------------------------------
-
-    /// Run the security monitor loop (every 30 seconds).
-    ///
-    /// 1. Runs all detection checks.
-    /// 2. For Critical/Emergency alerts: takes immediate action (isolate/block).
-    /// 3. Emits events for all alerts via the event bus.
-    /// 4. Stores alert history.
-    pub async fn run_security_monitor(event_bus: broadcast::Sender<DaemonEvent>) {
-        let mut daemon = SecurityAiDaemon::new();
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-
-        info!("security_ai: monitoring loop started (30s interval)");
-
-        loop {
-            interval.tick().await;
-
-            let mut all_alerts = Vec::new();
-
-            // Run detection checks sequentially.
-            // check_anomalous_processes requires &mut self, so we cannot
-            // use tokio::join! for all checks simultaneously.
-            let conn_alerts = daemon.check_suspicious_connections().await;
-            let proc_alerts = daemon.check_anomalous_processes().await;
-            let file_alerts = daemon.check_unauthorized_file_access().await;
-            let integrity_alerts = daemon.check_system_integrity().await;
-
-            all_alerts.extend(conn_alerts);
-            all_alerts.extend(proc_alerts);
-            all_alerts.extend(file_alerts);
-            all_alerts.extend(integrity_alerts);
-
-            // Process each alert.
-            for alert in &mut all_alerts {
-                // For Critical/Emergency: take automatic action.
-                if alert.severity >= AlertSeverity::Critical {
-                    // Isolate suspicious processes.
-                    if let Some(pid) = alert.process_pid {
-                        if !daemon.blocked_pids.contains(&pid) {
-                            match daemon.isolate_process(pid).await {
-                                Ok(msg) => alert.action_taken = msg,
-                                Err(msg) => {
-                                    alert.action_taken =
-                                        format!("Isolation attempted but failed: {}", msg)
-                                }
-                            }
-                        }
-                    }
-
-                    // Block suspicious remote addresses.
-                    if let Some(ref addr) = alert.remote_addr {
-                        match Self::block_connection(addr).await {
-                            Ok(msg) => {
-                                if !alert.action_taken.is_empty() {
-                                    alert.action_taken.push_str("; ");
-                                }
-                                alert.action_taken.push_str(&msg);
-                            }
-                            Err(msg) => {
-                                if !alert.action_taken.is_empty() {
-                                    alert.action_taken.push_str("; ");
-                                }
-                                alert
-                                    .action_taken
-                                    .push_str(&format!("Block attempted but failed: {}", msg));
-                            }
-                        }
-                    }
-                }
-
-                // Emit notification via event bus.
-                let priority = match alert.severity {
-                    AlertSeverity::Info => "low",
-                    AlertSeverity::Warning => "medium",
-                    AlertSeverity::Critical => "high",
-                    AlertSeverity::Emergency => "urgent",
-                };
-
-                let message = format!(
-                    "[{}] {}: {}{}",
-                    alert.severity,
-                    alert.alert_type,
-                    alert.description,
-                    if alert.action_taken.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" | Action: {}", alert.action_taken)
-                    }
-                );
-
-                let _ = event_bus.send(DaemonEvent::Notification {
-                    priority: priority.to_string(),
-                    message,
-                });
-            }
-
-            if !all_alerts.is_empty() {
-                info!(
-                    "security_ai: scan complete -- {} alert(s) detected",
-                    all_alerts.len()
-                );
-            }
-
-            // Store in history (keep last 1000 alerts).
-            daemon.alert_history.extend(all_alerts);
-            if daemon.alert_history.len() > 1000 {
-                let excess = daemon.alert_history.len() - 1000;
-                daemon.alert_history.drain(0..excess);
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // 7. Forensic report
-    // -----------------------------------------------------------------------
-
-    /// Generate a detailed forensic report for a security alert.
-    pub fn generate_forensic_report(alert: &SecurityAlert) -> String {
-        let mut report = String::new();
-
-        report.push_str("====================================\n");
-        report.push_str("  LifeOS Security Forensic Report\n");
-        report.push_str("====================================\n\n");
-
-        // Header.
-        report.push_str(&format!("Alert ID:    {}\n", alert.id));
-        report.push_str(&format!(
-            "Timestamp:   {}\n",
-            alert.timestamp.format("%Y-%m-%d %H:%M:%S UTC")
-        ));
-        report.push_str(&format!("Severity:    {}\n", alert.severity));
-        report.push_str(&format!("Type:        {}\n", alert.alert_type));
-        report.push_str(&format!("Description: {}\n\n", alert.description));
-
-        // Process info.
-        report.push_str("--- Process Information ---\n");
-        if let Some(ref name) = alert.process_name {
-            report.push_str(&format!("  Name: {}\n", name));
-        } else {
-            report.push_str("  Name: (unknown)\n");
-        }
-        if let Some(pid) = alert.process_pid {
-            report.push_str(&format!("  PID:  {}\n", pid));
-
-            // Gather live process info if still running.
-            if let Some(cmdline) = read_proc_cmdline(pid) {
-                report.push_str(&format!("  Cmdline: {}\n", cmdline));
-            }
-            if let Some(exe) = read_proc_exe(pid) {
-                report.push_str(&format!("  Executable: {}\n", exe));
-            }
-            if let Some(user) = read_proc_user(pid) {
-                report.push_str(&format!("  User: {}\n", user));
-            }
-            if let Some(start) = read_proc_start_time(pid) {
-                report.push_str(&format!("  Start time: {}\n", start));
-            }
-        } else {
-            report.push_str("  PID:  (not available)\n");
-        }
-
-        // Network info.
-        report.push_str("\n--- Network Information ---\n");
-        if let Some(ref addr) = alert.remote_addr {
-            report.push_str(&format!("  Remote address: {}\n", addr));
-
-            // Gather connection details for this address.
-            if let Some(pid) = alert.process_pid {
-                let connections = get_process_connections(pid);
-                if !connections.is_empty() {
-                    report.push_str("  Active connections:\n");
-                    for conn in &connections {
-                        report.push_str(&format!("    {}\n", conn));
-                    }
-                }
-            }
-        } else {
-            report.push_str("  Remote address: (not applicable)\n");
-        }
-
-        // Evidence.
-        report.push_str("\n--- Evidence Collected ---\n");
-        if alert.evidence.is_empty() {
-            report.push_str("  (none)\n");
-        } else {
-            for (i, item) in alert.evidence.iter().enumerate() {
-                report.push_str(&format!("  [{}] {}\n", i + 1, item));
-            }
-        }
-
-        // Action taken.
-        report.push_str("\n--- Action Taken ---\n");
-        if alert.action_taken.is_empty() {
-            report.push_str("  No automatic action taken.\n");
-        } else {
-            report.push_str(&format!("  {}\n", alert.action_taken));
-        }
-
-        // Recommended actions.
-        report.push_str("\n--- Recommended Actions ---\n");
-        match alert.alert_type {
-            AlertType::SuspiciousConnection => {
-                report.push_str("  1. Investigate the destination IP/port\n");
-                report.push_str("  2. Check if the process is legitimate\n");
-                report.push_str("  3. Block the remote IP if confirmed malicious\n");
-                report.push_str("  4. Run a full malware scan\n");
-            }
-            AlertType::DataExfiltration => {
-                report.push_str("  1. Isolate the process immediately\n");
-                report.push_str("  2. Capture network traffic for analysis\n");
-                report.push_str("  3. Check what data may have been sent\n");
-                report.push_str("  4. Rotate any potentially exposed credentials\n");
-            }
-            AlertType::PrivilegeEscalation => {
-                report.push_str("  1. Kill the offending process\n");
-                report.push_str("  2. Audit sudo/setuid configuration\n");
-                report.push_str("  3. Check for unauthorized cron jobs\n");
-                report.push_str("  4. Review /var/log/auth.log\n");
-            }
-            AlertType::UnauthorizedFileAccess => {
-                report.push_str("  1. Kill the process accessing sensitive files\n");
-                report.push_str("  2. Rotate any exposed keys or tokens\n");
-                report.push_str("  3. Audit file permissions\n");
-                report.push_str("  4. Enable audit logging (auditd)\n");
-            }
-            AlertType::AnomalousProcess => {
-                report.push_str("  1. Investigate the process origin\n");
-                report.push_str("  2. Check if it is a known miner\n");
-                report.push_str("  3. Kill the process if unauthorized\n");
-                report.push_str("  4. Scan the executable with antivirus\n");
-            }
-            AlertType::BruteForce => {
-                report.push_str("  1. Block the source IP\n");
-                report.push_str("  2. Review authentication logs\n");
-                report.push_str("  3. Ensure SSH key-only auth is enabled\n");
-                report.push_str("  4. Consider fail2ban or similar\n");
-            }
-            AlertType::UsbThreat => {
-                report.push_str("  1. Disconnect the USB device\n");
-                report.push_str("  2. Check dmesg for device details\n");
-                report.push_str("  3. Verify no HID injection occurred\n");
-                report.push_str("  4. Update USB device whitelist\n");
-            }
-            AlertType::IntegrityViolation => {
-                report.push_str("  1. Compare modified files against known-good copies\n");
-                report.push_str("  2. Reinstall affected packages (rpm -V, rpm --restore)\n");
-                report.push_str("  3. Check for rootkit presence (rkhunter, chkrootkit)\n");
-                report.push_str("  4. Reboot into a known-good bootc image\n");
-            }
-        }
-
-        report.push_str("\n====================================\n");
-        report.push_str("  End of Forensic Report\n");
-        report.push_str("====================================\n");
-
-        report
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1057,57 +647,6 @@ fn read_proc_exe(pid: u32) -> Option<String> {
     fs::read_link(&path)
         .ok()
         .map(|p| p.to_string_lossy().to_string())
-}
-
-/// Read the UID of a process and resolve to username.
-fn read_proc_user(pid: u32) -> Option<String> {
-    let path = format!("/proc/{}/status", pid);
-    let contents = fs::read_to_string(&path).ok()?;
-    for line in contents.lines() {
-        if line.starts_with("Uid:") {
-            let uid_str = line.split_whitespace().nth(1)?;
-            let uid: u32 = uid_str.parse().ok()?;
-            // Try to resolve via /etc/passwd.
-            if let Ok(passwd) = fs::read_to_string("/etc/passwd") {
-                for pline in passwd.lines() {
-                    let fields: Vec<&str> = pline.split(':').collect();
-                    if fields.len() > 2 {
-                        if let Ok(puid) = fields[2].parse::<u32>() {
-                            if puid == uid {
-                                return Some(fields[0].to_string());
-                            }
-                        }
-                    }
-                }
-            }
-            return Some(format!("uid={}", uid));
-        }
-    }
-    None
-}
-
-/// Read approximate process start time from /proc/<pid>/stat.
-fn read_proc_start_time(pid: u32) -> Option<String> {
-    let stat = fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
-    let fields: Vec<&str> = stat.split_whitespace().collect();
-    if fields.len() <= 21 {
-        return None;
-    }
-
-    let start_ticks: f64 = fields[21].parse().ok()?;
-    let ticks_per_sec: f64 = 100.0; // sysconf(_SC_CLK_TCK) default
-    let uptime_str = fs::read_to_string("/proc/uptime").ok()?;
-    let uptime: f64 = uptime_str.split_whitespace().next()?.parse().ok()?;
-
-    let process_start_secs = start_ticks / ticks_per_sec;
-    let age_secs = uptime - process_start_secs;
-
-    if age_secs < 0.0 {
-        return None;
-    }
-
-    let boot_time = Utc::now() - chrono::Duration::seconds(age_secs as i64);
-    Some(boot_time.format("%Y-%m-%d %H:%M:%S UTC").to_string())
 }
 
 /// Estimate CPU usage percentage for a process (single-sample heuristic).
@@ -1223,24 +762,6 @@ fn extract_ip(addr: &str) -> Option<String> {
     }
 }
 
-/// Get active network connections for a given PID.
-fn get_process_connections(pid: u32) -> Vec<String> {
-    let output = match Command::new("ss").args(["-tnp"]).output() {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let pid_pattern = format!("pid={}", pid);
-
-    stdout
-        .lines()
-        .skip(1)
-        .filter(|line| line.contains(&pid_pattern))
-        .map(|line| line.to_string())
-        .collect()
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1252,9 +773,6 @@ mod tests {
     #[test]
     fn test_new_daemon() {
         let daemon = SecurityAiDaemon::new();
-        assert!(daemon.alert_history.is_empty());
-        assert!(daemon.blocked_pids.is_empty());
-        assert!(daemon.rules.is_empty());
         assert!(daemon.high_cpu_tracker.is_empty());
     }
 
@@ -1340,56 +858,6 @@ mod tests {
     #[test]
     fn test_read_proc_name_nonexistent() {
         assert!(read_proc_name(999_999_999).is_none());
-    }
-
-    #[test]
-    fn test_forensic_report_format() {
-        let alert = SecurityAlert {
-            id: "test-id-123".to_string(),
-            severity: AlertSeverity::Critical,
-            alert_type: AlertType::AnomalousProcess,
-            description: "Test anomalous process".to_string(),
-            process_name: Some("test_proc".to_string()),
-            process_pid: Some(99999),
-            remote_addr: None,
-            evidence: vec!["evidence-1".to_string(), "evidence-2".to_string()],
-            action_taken: "Process suspended".to_string(),
-            timestamp: Utc::now(),
-        };
-
-        let report = SecurityAiDaemon::generate_forensic_report(&alert);
-        assert!(report.contains("test-id-123"));
-        assert!(report.contains("CRITICAL"));
-        assert!(report.contains("Anomalous Process"));
-        assert!(report.contains("test_proc"));
-        assert!(report.contains("evidence-1"));
-        assert!(report.contains("Process suspended"));
-        assert!(report.contains("Recommended Actions"));
-    }
-
-    #[test]
-    fn test_block_connection_rejects_invalid() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(SecurityAiDaemon::block_connection(";rm -rf /"));
-        assert!(result.is_err());
-
-        let result = rt.block_on(SecurityAiDaemon::block_connection(""));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_add_rule() {
-        let mut daemon = SecurityAiDaemon::new();
-        assert!(daemon.rules().is_empty());
-
-        daemon.add_rule(DetectionRule {
-            name: "test_rule".to_string(),
-            check: || None,
-            interval_secs: 60,
-        });
-
-        assert_eq!(daemon.rules().len(), 1);
-        assert_eq!(daemon.rules()[0].name, "test_rule");
     }
 
     #[tokio::test]

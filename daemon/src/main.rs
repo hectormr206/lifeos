@@ -21,82 +21,44 @@ mod accessibility;
 mod agent_roles;
 mod agent_runtime;
 mod ai;
+mod ai_runtime_profile;
 mod api;
-#[allow(dead_code)]
-mod app_contracts;
 mod async_workers;
 mod atspi_layer;
-#[allow(dead_code)]
+mod audio_frontend;
 mod autonomous_agent;
 mod axi_tray;
-#[allow(dead_code)]
 mod backup_monitor;
-#[allow(dead_code)]
 mod battery_manager;
-#[allow(dead_code)]
 mod browser_automation;
-#[allow(dead_code)]
 mod calendar;
-#[allow(dead_code)]
-mod cdp_client;
 mod circuit_breaker;
-#[allow(dead_code)]
-mod comm_bridges;
 mod computer_use;
 mod config_store;
-#[allow(dead_code)]
-mod config_validator;
-#[allow(dead_code)]
-mod connector_registry;
 mod context_policies;
 mod control_layers;
-#[allow(dead_code)]
-mod cosmic_control;
-#[allow(dead_code)]
 mod desktop_operator;
-#[allow(dead_code)]
-mod discord_bridge;
 mod email_bridge;
-#[allow(dead_code)]
-mod ergonomics;
 mod events;
-#[allow(dead_code)]
 mod exec_whitelist;
 mod experience_modes;
-#[allow(dead_code)]
 mod eye_health;
 mod follow_along;
-#[allow(dead_code)]
-mod game_assistant;
+mod food_lookup;
 mod game_guard;
-#[allow(dead_code)]
-mod gaming_agent;
-#[allow(dead_code)]
 mod git_workflow;
 mod health;
-#[allow(dead_code)]
 mod health_tracking;
-#[allow(dead_code)]
+#[cfg(feature = "homeassistant")]
 mod home_assistant;
-#[allow(dead_code)]
-mod intent_parser;
-#[cfg(feature = "ui-overlay")]
-#[allow(dead_code)]
-mod keyboard_shortcut;
-#[allow(dead_code)]
-mod knowledge_graph;
 mod lab;
 mod llm_router;
-#[allow(dead_code)]
-mod matrix_bridge;
-#[allow(dead_code)]
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
 mod meeting_archive;
 #[allow(dead_code)] // Used via Telegram tools + event bus + main loop
 mod meeting_assistant;
 mod memory_plane;
-#[allow(dead_code)]
 mod message_dedupe;
 #[cfg(feature = "ui-overlay")]
 mod mini_widget;
@@ -108,60 +70,38 @@ mod permissions;
 #[cfg(feature = "dbus")]
 mod portal;
 mod privacy_filter;
-#[allow(dead_code)]
 mod privacy_hygiene;
-#[allow(dead_code)]
 mod proactive;
-#[allow(dead_code)]
-mod prompt_tuner;
-#[allow(dead_code)]
 mod reliability;
 mod safe_mode;
-#[allow(dead_code)]
 mod scheduled_tasks;
 mod screen_capture;
-#[allow(dead_code)]
 mod security_ai;
-#[allow(dead_code)]
-mod security_daemon;
 mod self_improving;
 mod sensory_memory;
 mod sensory_pipeline;
 mod session_store;
-#[allow(dead_code)]
-mod signal_bridge;
-#[allow(dead_code)]
 mod skill_generator;
 mod skill_registry;
-#[allow(dead_code)]
-mod slack_bridge;
-#[allow(dead_code)]
 mod speaker_id;
-#[allow(dead_code)]
 mod sqlite_protection;
 mod storage_housekeeping;
 mod supervisor;
 mod system;
-#[allow(dead_code)]
 mod system_tuner;
 mod task_queue;
 mod telegram_bridge;
 mod telegram_tools;
 mod telemetry;
 mod time_context;
-#[allow(dead_code)]
 mod translation;
 mod tuf;
 mod update_scheduler;
 mod updates;
-#[allow(dead_code)]
-mod usb_guard;
 #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
 mod user_model;
 mod visual_comfort;
 mod wake_word;
-#[allow(dead_code)]
-mod whatsapp_bridge;
 #[cfg(feature = "http-api")]
 mod ws_gateway;
 
@@ -474,7 +414,6 @@ LIFEOS_HA_TOKEN=
 }
 
 #[cfg(feature = "ui-overlay")]
-#[allow(dead_code)]
 fn ensure_graphical_environment() {
     if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
         return;
@@ -503,7 +442,6 @@ fn ensure_graphical_environment() {
 }
 
 /// Daemon state shared across tasks
-#[allow(dead_code)]
 pub struct DaemonState {
     pub config: DaemonConfig,
     pub system_monitor: Arc<RwLock<SystemMonitor>>,
@@ -530,6 +468,7 @@ pub struct DaemonState {
     pub scheduled_tasks: Arc<scheduled_tasks::ScheduledTaskManager>,
     pub health_tracker: Arc<tokio::sync::Mutex<health_tracking::HealthTracker>>,
     pub calendar: Arc<calendar::CalendarManager>,
+    pub meeting_archive: Arc<meeting_archive::MeetingArchive>,
     pub bootstrap_token: Option<String>,
     pub last_health_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
@@ -566,6 +505,17 @@ fn notify_ready() {
     }
 }
 
+/// Notify systemd that the daemon is stopping.
+fn notify_stopping() {
+    if let Ok(socket_path) = std::env::var("NOTIFY_SOCKET") {
+        use std::os::unix::net::UnixDatagram;
+        let sock = UnixDatagram::unbound().ok();
+        if let Some(s) = sock {
+            let _ = s.send_to(b"STOPPING=1", &socket_path);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize logging
@@ -585,6 +535,9 @@ async fn main() -> anyhow::Result<()> {
     // This ensures keys are available even when systemd EnvironmentFile didn't load
     // (e.g. first boot before the file existed, or when running outside systemd).
     ensure_llm_provider_env();
+
+    #[cfg(feature = "ui-overlay")]
+    ensure_graphical_environment();
 
     // Load configuration
     let config = load_config().await?;
@@ -649,6 +602,38 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Safe mode: detect repeated crashes before spawning background tasks ---
     let in_safe_mode = safe_mode::init(&data_dir).await.unwrap_or(false);
+
+    let runtime_profile_bootstrap = match ai_runtime_profile::bootstrap_runtime_profile(&data_dir) {
+        Ok(outcome) => {
+            if outcome.profile_changed || outcome.env_changed {
+                if let Err(e) = ai_runtime_profile::restart_llama_server_sync() {
+                    warn!(
+                        "[ai_runtime] failed to restart llama-server after bootstrap: {}",
+                        e
+                    );
+                }
+            }
+            Some(outcome)
+        }
+        Err(e) => {
+            warn!("[ai_runtime] failed to bootstrap runtime profile: {}", e);
+            None
+        }
+    };
+
+    let game_guard_requested = std::env::var("LIFEOS_AI_GAME_GUARD")
+        .map(|value| value != "false" && value != "0")
+        .unwrap_or(true);
+    let game_assistant_requested = std::env::var("LIFEOS_AI_GAME_ASSISTANT")
+        .map(|value| value != "false" && value != "0")
+        .unwrap_or(true);
+    let game_guard_supported = runtime_profile_bootstrap
+        .as_ref()
+        .map(|outcome| outcome.profile.supports_game_guard())
+        .unwrap_or(false);
+    let game_guard_cpu_fallback = runtime_profile_bootstrap
+        .as_ref()
+        .and_then(|outcome| outcome.profile.profiles.game_guard_cpu_fallback.clone());
 
     // Shared instances for supervisor integration
     let shared_privacy = Arc::new(privacy_filter::PrivacyFilter::new(
@@ -757,6 +742,7 @@ async fn main() -> anyhow::Result<()> {
                 calendar::CalendarManager::new(&std::env::temp_dir()).unwrap()
             }),
         ),
+        meeting_archive: Arc::new(meeting_archive::MeetingArchive::new(&data_dir)),
         bootstrap_token,
         last_health_check: RwLock::new(None),
         last_update_check: RwLock::new(None),
@@ -765,7 +751,15 @@ async fn main() -> anyhow::Result<()> {
         event_bus: event_tx,
         session_store: shared_session_store,
         game_guard: Some(Arc::new(RwLock::new(game_guard::GameGuard::new(
-            game_guard::GameGuardConfig::default(),
+            game_guard::GameGuardConfig {
+                enabled: game_guard_requested,
+                supported: game_guard_supported,
+                poll_interval_secs: game_guard::GameGuardConfig::default().poll_interval_secs,
+                game_assistant_enabled: game_assistant_requested,
+                vram_threshold_mb: game_guard::GameGuardConfig::default().vram_threshold_mb,
+                llama_server_env_path: game_guard::GameGuardConfig::default().llama_server_env_path,
+                cpu_fallback_profile: game_guard_cpu_fallback,
+            },
         )))),
         skill_registry_v2: Arc::new(skill_registry::SkillRegistry::from_defaults()),
         config_store: Arc::new(config_store::ConfigStore::new(&data_dir)),
@@ -897,10 +891,13 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Start wake word detector if available.
-    if let Some(ref detector) = state.wake_word_detector {
-        detector.run();
+    let wake_word_handle = if let Some(ref detector) = state.wake_word_detector {
+        let handle = detector.run();
         info!("Rustpotter wake word listener started");
-    }
+        Some(handle)
+    } else {
+        None
+    };
 
     // Mini-widget: floating GTK4 orb ("Eye of Axi").
     // Controlled by overlay config `mini_widget_visible`. Defaults to hidden.
@@ -1003,7 +1000,7 @@ async fn main() -> anyhow::Result<()> {
                         camera: runtime.camera_enabled,
                         screen: runtime.screen_enabled,
                         always_on: always_on.enabled,
-                        tts: runtime.audio_enabled, // TTS follows mic setting
+                        tts: runtime.tts_enabled,
                     }
                 };
                 let tray_rx = tray_state.event_bus.subscribe();
@@ -1032,6 +1029,21 @@ async fn main() -> anyhow::Result<()> {
             sensory_memory::run_sensory_memory_listener(sensory_rx, sensory_mem).await;
         });
         info!("Sensory memory listener started");
+    }
+
+    {
+        let runtime_profile_data_dir = data_dir.clone();
+        let runtime_profile_game_guard = state.game_guard.clone();
+        let runtime_profile_event_tx = state.event_bus.clone();
+        tokio::spawn(async move {
+            ai_runtime_profile::run_runtime_profile_manager(
+                runtime_profile_data_dir,
+                runtime_profile_game_guard,
+                runtime_profile_event_tx,
+            )
+            .await;
+        });
+        info!("AI runtime profile manager started");
     }
 
     let health_handle = tokio::spawn(run_health_checks(state.clone()));
@@ -1150,8 +1162,10 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Meeting archive — structured SQLite storage for meeting records
-    let meeting_archive = std::sync::Arc::new(meeting_archive::MeetingArchive::new(&data_dir));
+    // Meeting archive — structured SQLite storage for meeting records.
+    // Constructed inside DaemonState above so the API server (which receives
+    // an Arc<DaemonState>) can expose it via /meetings/* endpoints.
+    let meeting_archive = state.meeting_archive.clone();
 
     // Meeting assistant — check for active meetings every 15s
     let meeting_data_dir = data_dir.clone();
@@ -1166,6 +1180,10 @@ async fn main() -> anyhow::Result<()> {
             Some(meeting_memory),
         );
         assistant.set_archive(meeting_archive.clone());
+        // Share the speaker identification manager with the sensory pipeline so
+        // meetings and live voice interactions resolve against the same profiles.
+        let shared_speaker_id = state.sensory_pipeline_manager.read().await.speaker_id();
+        assistant.set_speaker_id(shared_speaker_id);
         std::sync::Arc::new(tokio::sync::RwLock::new(assistant))
     };
     let meeting_loop_assistant = shared_meeting_assistant.clone();
@@ -1366,18 +1384,95 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Storage housekeeping: enforce file limits + purge old data (every 6h) ---
     let housekeeping_data_dir = data_dir.clone();
+    let housekeeping_memory = state.memory_plane_manager.clone();
+    let housekeeping_router = state.llm_router.clone();
     let _housekeeping_handle = tokio::spawn(async move {
         // Wait 5 minutes after boot before first housekeeping run
         tokio::time::sleep(Duration::from_secs(300)).await;
         let mut interval = tokio::time::interval(Duration::from_secs(6 * 3600)); // 6 hours
+                                                                                 // Memory decay runs once per day; throttle by counting ticks (4 * 6h = 24h).
+        let mut decay_tick: u32 = 0;
         loop {
             interval.tick().await;
             storage_housekeeping::run_housekeeping(&housekeeping_data_dir).await;
             sqlite_protection::backup_all_databases(&housekeeping_data_dir).await;
             sqlite_protection::check_all_databases(&housekeeping_data_dir).await;
+
+            // Memory hygiene runs once per day (every 4th tick of the 6h
+            // loop). Three-stage pipeline:
+            //
+            //   1. filter_garbage: drop entries with <30 ciphertext bytes
+            //      (proxy for plaintext < ~10 chars: "ok", "gracias",
+            //      etc.) and entries tagged/sourced as filler.
+            //   2. apply_decay: Ebbinghaus exponential curve + connection
+            //      bonus, plus garbage-collect of low-importance old
+            //      entries. See `MemoryPlaneManager::apply_decay`.
+            //   3. dedup_similar(0.92): merge memory pairs whose
+            //      embeddings are within cosine 0.08 of each other,
+            //      keeping the higher-importance one. The 0.92 threshold
+            //      is conservative — it only fuses near-duplicates
+            //      ("recordame X" / "recuérdame X") and leaves
+            //      distinct-but-related memories alone.
+            //
+            // The same three functions are also exposed via the
+            // `/memory_cleanup` Telegram tool for manual runs.
+            decay_tick = decay_tick.wrapping_add(1);
+            if decay_tick % 4 == 0 {
+                let mem = housekeeping_memory.read().await;
+
+                let garbage = mem.filter_garbage().await.unwrap_or(0);
+                if garbage > 0 {
+                    info!("memory_plane: filter_garbage removed {} entries", garbage);
+                }
+
+                match mem.apply_decay().await {
+                    Ok(report) => info!(
+                        "memory_plane: decay pass complete (decayed={}, deleted={})",
+                        report.decayed, report.deleted
+                    ),
+                    Err(e) => warn!("memory_plane: apply_decay failed: {}", e),
+                }
+
+                match mem.dedup_similar(0.92).await {
+                    Ok(merged) if merged > 0 => info!(
+                        "memory_plane: dedup_similar merged {} near-duplicate entries",
+                        merged
+                    ),
+                    Ok(_) => {}
+                    Err(e) => warn!("memory_plane: dedup_similar failed: {}", e),
+                }
+
+                // Cluster summarization runs in a tighter window (only
+                // when the local hour is 02:00-04:59) so the LLM is not
+                // burning cycles while the user is active. We also gate
+                // it behind the daily decay tick — so it runs at most
+                // once per day, and only on days where the housekeeping
+                // tick lands inside the night window.
+                //
+                // Local time is intentional: bedtime is local, not UTC.
+                use chrono::Timelike;
+                let hour = chrono::Local::now().hour();
+                if (2..5).contains(&hour) {
+                    // Hold the read guard a bit longer for the LLM call.
+                    // Cluster summarisation is bounded: max 3 clusters
+                    // per pass, max 30 entries per cluster — keeps the
+                    // nightly window predictable even on busy DBs.
+                    let router = housekeeping_router.read().await;
+                    match mem.summarize_clusters_with_router(&router, 3, 30).await {
+                        Ok(report) if report.clusters_processed > 0 => info!(
+                            "memory_plane: cluster summary pass complete (clusters={}, originals_archived={})",
+                            report.clusters_processed, report.originals_archived
+                        ),
+                        Ok(_) => {}
+                        Err(e) => {
+                            warn!("memory_plane: summarize_clusters_with_router failed: {}", e)
+                        }
+                    }
+                }
+            }
         }
     });
-    info!("Storage housekeeping started (every 6h, 120-file limit per dir)");
+    info!("Storage housekeeping started (every 6h, 120-file limit per dir, daily memory hygiene: garbage+decay+dedup, nightly LLM cluster summary 02-05h)");
 
     // --- Self-improvement loop (Fase U): tick every 6 hours ---
     {
@@ -1694,13 +1789,6 @@ async fn main() -> anyhow::Result<()> {
             let notify_rx = state.supervisor.subscribe();
             let ss = Some(state.session_store.clone());
             let eb = Some(state.event_bus.clone());
-            let kg = {
-                let data_dir = std::path::PathBuf::from(
-                    std::env::var("LIFEOS_DATA_DIR").unwrap_or_else(|_| "/var/lib/lifeos".into()),
-                )
-                .join("knowledge_graph");
-                Arc::new(RwLock::new(knowledge_graph::KnowledgeGraph::new(data_dir)))
-            };
             // Load user model for personalization (Fase AQ)
             let um = {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
@@ -1717,7 +1805,6 @@ async fn main() -> anyhow::Result<()> {
                     tq,
                     router,
                     memory,
-                    Some(kg),
                     notify_rx,
                     ss,
                     eb,
@@ -1736,96 +1823,6 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "telegram"))]
     let telegram_handle: Option<tokio::task::JoinHandle<()>> = None;
 
-    // Start WhatsApp bridge if configured
-    #[cfg(feature = "whatsapp")]
-    let whatsapp_handle = {
-        if let Some(wa_config) = whatsapp_bridge::WhatsAppConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                whatsapp_bridge::run_whatsapp_bridge(wa_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("WhatsApp bridge: LIFEOS_WHATSAPP_TOKEN not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "whatsapp"))]
-    let whatsapp_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Matrix bridge if configured
-    #[cfg(feature = "matrix")]
-    let matrix_handle = {
-        if let Some(mx_config) = matrix_bridge::MatrixConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                matrix_bridge::run_matrix_bridge(mx_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("Matrix bridge: LIFEOS_MATRIX_ACCESS_TOKEN not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "matrix"))]
-    let matrix_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Signal bridge if configured
-    #[cfg(feature = "signal")]
-    let signal_handle = {
-        if let Some(sig_config) = signal_bridge::SignalConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                signal_bridge::run_signal_bridge(sig_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("Signal bridge: LIFEOS_SIGNAL_PHONE not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "signal"))]
-    let signal_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Slack bridge if configured
-    #[cfg(feature = "slack")]
-    let slack_handle = {
-        if let Some(slack_config) = slack_bridge::SlackConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                slack_bridge::run_slack_bridge(slack_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("Slack bridge: LIFEOS_SLACK_BOT_TOKEN not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "slack"))]
-    let slack_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Discord bridge if configured
-    #[cfg(feature = "discord")]
-    let discord_handle = {
-        if let Some(discord_config) = discord_bridge::DiscordConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let notify_rx = state.supervisor.subscribe();
-            Some(tokio::spawn(async move {
-                discord_bridge::run_discord_bridge(discord_config, tq, router, notify_rx).await;
-            }))
-        } else {
-            info!("Discord bridge: LIFEOS_DISCORD_BOT_TOKEN not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "discord"))]
-    let discord_handle: Option<tokio::task::JoinHandle<()>> = None;
-
     // Start conversational email bridge if configured (requires telegram feature
     // because it reuses the agentic chat infrastructure from telegram_tools).
     #[cfg(feature = "telegram")]
@@ -1834,22 +1831,8 @@ async fn main() -> anyhow::Result<()> {
             let tq = state.task_queue.clone();
             let router = state.llm_router.clone();
             let memory = Some(state.memory_plane_manager.clone());
-            let kg = {
-                let data_dir = std::path::PathBuf::from(
-                    std::env::var("LIFEOS_DATA_DIR").unwrap_or_else(|_| "/var/lib/lifeos".into()),
-                )
-                .join("knowledge_graph");
-                Arc::new(RwLock::new(knowledge_graph::KnowledgeGraph::new(data_dir)))
-            };
             Some(tokio::spawn(async move {
-                email_bridge::run_conversational_email_loop(
-                    email_config,
-                    tq,
-                    router,
-                    memory,
-                    Some(kg),
-                )
-                .await;
+                email_bridge::run_conversational_email_loop(email_config, tq, router, memory).await;
             }))
         } else {
             info!("Email bridge: LIFEOS_EMAIL_CONVERSATIONAL not enabled, skipping");
@@ -1906,6 +1889,11 @@ async fn main() -> anyhow::Result<()> {
 
     // Graceful shutdown
     info!("Stopping background tasks...");
+    notify_stopping();
+
+    if let Some(ref detector) = state.wake_word_detector {
+        detector.stop();
+    }
 
     // Cancel all tasks
     health_handle.abort();
@@ -1920,21 +1908,6 @@ async fn main() -> anyhow::Result<()> {
     if let Some(h) = telegram_handle {
         h.abort();
     }
-    if let Some(h) = whatsapp_handle {
-        h.abort();
-    }
-    if let Some(h) = matrix_handle {
-        h.abort();
-    }
-    if let Some(h) = signal_handle {
-        h.abort();
-    }
-    if let Some(h) = slack_handle {
-        h.abort();
-    }
-    if let Some(h) = discord_handle {
-        h.abort();
-    }
     dbus_handle.abort();
     portal_handle.abort();
 
@@ -1942,8 +1915,16 @@ async fn main() -> anyhow::Result<()> {
         handle.abort();
     }
 
+    if let Some(handle) = wake_word_handle {
+        match tokio::time::timeout(Duration::from_secs(5), handle).await {
+            Ok(Ok(())) => info!("Wake word detector stopped cleanly"),
+            Ok(Err(e)) => warn!("Wake word detector task ended with join error: {}", e),
+            Err(_) => warn!("Wake word detector did not stop within 5 seconds"),
+        }
+    }
+
     info!("Daemon stopped.");
-    Ok(())
+    std::process::exit(0)
 }
 
 /// Start REST API server
@@ -1972,6 +1953,7 @@ async fn start_api_server(state: Arc<DaemonState>) {
         scheduled_tasks: state.scheduled_tasks.clone(),
         health_tracker: state.health_tracker.clone(),
         calendar: state.calendar.clone(),
+        meeting_archive: state.meeting_archive.clone(),
         event_bus: state.event_bus.clone(),
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,
@@ -2271,6 +2253,7 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     audio_enabled: runtime.audio_enabled,
                     screen_enabled: runtime.screen_enabled,
                     camera_enabled: runtime.camera_enabled,
+                    tts_enabled: runtime.tts_enabled,
                     kill_switch_active: runtime.kill_switch_active,
                     capture_interval_seconds: runtime.capture_interval_seconds,
                     always_on_active: always_on.enabled,
@@ -2319,17 +2302,6 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
 
             // Skip voice detection entirely during a meeting.
             if !meeting.active {
-                let cycle = AlwaysOnCycle {
-                    ai_manager: &ai_manager,
-                    overlay: &overlay_manager,
-                    screen_capture: &screen_capture,
-                    memory_plane: &memory_plane_manager,
-                    telemetry: &telemetry_manager,
-                    wake_word: always_on.wake_word.as_str(),
-                    screen_enabled: runtime.screen_enabled,
-                    wake_word_detector: state.wake_word_detector.as_ref().map(|d| d.as_ref()),
-                };
-
                 // Dispatch: rustpotter (streaming) or legacy whisper-based detection.
                 let rustpotter_detected = match state.wake_word_detector {
                     Some(ref d) => d.take_detection().await.is_some(),
@@ -2340,6 +2312,17 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     let _ = state.event_bus.send(events::DaemonEvent::WakeWordDetected {
                         word: always_on.wake_word.clone(),
                     });
+                    let cycle = AlwaysOnCycle {
+                        ai_manager: &ai_manager,
+                        overlay: &overlay_manager,
+                        screen_capture: &screen_capture,
+                        memory_plane: &memory_plane_manager,
+                        telemetry: &telemetry_manager,
+                        wake_word: always_on.wake_word.as_str(),
+                        hotword_triggered: true,
+                        screen_enabled: runtime.screen_enabled,
+                        wake_word_detector: state.wake_word_detector.as_ref().map(|d| d.as_ref()),
+                    };
                     match sensory_manager.run_post_wakeword_cycle(cycle).await {
                         Ok(Some(_)) => continue,
                         Ok(None) => {}
@@ -2349,6 +2332,20 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     // Rustpotter active but no wake word — check continuous conversation window.
                     let in_continuous = sensory_manager.is_continuous_listen_active().await;
                     if in_continuous {
+                        let cycle = AlwaysOnCycle {
+                            ai_manager: &ai_manager,
+                            overlay: &overlay_manager,
+                            screen_capture: &screen_capture,
+                            memory_plane: &memory_plane_manager,
+                            telemetry: &telemetry_manager,
+                            wake_word: always_on.wake_word.as_str(),
+                            hotword_triggered: false,
+                            screen_enabled: runtime.screen_enabled,
+                            wake_word_detector: state
+                                .wake_word_detector
+                                .as_ref()
+                                .map(|d| d.as_ref()),
+                        };
                         match sensory_manager.run_post_wakeword_cycle(cycle).await {
                             Ok(Some(_)) => continue,
                             Ok(None) => {}
@@ -2358,6 +2355,17 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     // Otherwise rustpotter is listening, do nothing.
                 } else {
                     // No rustpotter — fall back to legacy capture-transcribe-match.
+                    let cycle = AlwaysOnCycle {
+                        ai_manager: &ai_manager,
+                        overlay: &overlay_manager,
+                        screen_capture: &screen_capture,
+                        memory_plane: &memory_plane_manager,
+                        telemetry: &telemetry_manager,
+                        wake_word: always_on.wake_word.as_str(),
+                        hotword_triggered: false,
+                        screen_enabled: runtime.screen_enabled,
+                        wake_word_detector: state.wake_word_detector.as_ref().map(|d| d.as_ref()),
+                    };
                     match sensory_manager.run_always_on_cycle(cycle).await {
                         Ok(Some(_)) => continue,
                         Ok(None) => {}

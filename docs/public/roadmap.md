@@ -12,6 +12,8 @@ This roadmap is the public, readable version of where the project stands today a
 
 It is intentionally simpler than the technical strategy docs, but it follows the same source of truth.
 
+LifeOS is built in Mexico and published for a global open-source audience. That origin is part of the project's identity, not a limit on who the project is for.
+
 ---
 
 ## What is real today

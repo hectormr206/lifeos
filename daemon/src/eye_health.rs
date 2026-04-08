@@ -26,17 +26,6 @@ pub async fn enable_night_mode(temp_day: u32, temp_night: u32) -> Result<()> {
     Ok(())
 }
 
-/// Disable night mode by killing wlsunset.
-pub async fn disable_night_mode() -> Result<()> {
-    Command::new("pkill")
-        .arg("wlsunset")
-        .output()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to stop wlsunset: {}", e))?;
-    info!("[eye_health] Night mode disabled");
-    Ok(())
-}
-
 /// Check if it's after sunset (simple heuristic: after 19:00 local time).
 pub fn is_evening() -> bool {
     let hour = chrono::Local::now().hour();

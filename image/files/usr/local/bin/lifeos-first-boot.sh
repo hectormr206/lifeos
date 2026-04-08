@@ -4,7 +4,6 @@
 
 set -euo pipefail
 
-LIFEOS_CONFIG_DIR="/etc/lifeos"
 FIRST_BOOT_MARKER="/var/lib/lifeos/.first-boot-complete"
 LOG_FILE="/var/log/lifeos-first-boot.log"
 
@@ -113,9 +112,11 @@ enforce_password_change() {
             # If we can verify it is the default, or this is the very first boot, force change.
             if [[ -z "$shadow_hash" ]] || \
                python3 -c "import crypt; import sys; sys.exit(0 if crypt.crypt('lifeos','${shadow_hash}')=='${shadow_hash}' else 1)" 2>/dev/null; then
-                chage -d 0 lifeos 2>/dev/null && \
-                    log_success "Forced password change on next login for user lifeos" || \
+                if chage -d 0 lifeos 2>/dev/null; then
+                    log_success "Forced password change on next login for user lifeos"
+                else
                     log_warn "Could not enforce password change (non-fatal)"
+                fi
             else
                 log "User lifeos has a non-default password — skipping forced change"
             fi
@@ -189,6 +190,25 @@ ENVEOF
     fi
 
     log_success "System directories created"
+}
+
+# Apply default LifeOS desktop layout (wallpaper, panel, dock).
+#
+# IMPORTANT: This function only runs on the very first boot of a fresh
+# install, because main() is gated by check_first_boot which exits early
+# when /var/lib/lifeos/.first-boot-complete already exists. On updates
+# the marker is already present and this function never runs — that is
+# precisely the "do not touch the user's customisations on update"
+# guarantee. The helper script also respects per-file existence so even
+# on a fresh install we never overwrite anything the user already had.
+apply_default_desktop_layout() {
+    log "Applying default LifeOS desktop layout..."
+    if [ -x /usr/local/bin/lifeos-apply-default-layout.sh ]; then
+        /usr/local/bin/lifeos-apply-default-layout.sh || \
+            log_warn "Default layout apply had non-fatal issues"
+    else
+        log_warn "lifeos-apply-default-layout.sh not found, skipping"
+    fi
 }
 
 # Configure GPU if present and update llama-server env
@@ -294,6 +314,55 @@ configure_gpu() {
         sed -i "s/^LIFEOS_AI_GPU_LAYERS=.*/LIFEOS_AI_GPU_LAYERS=$gpu_layers/" "$env_file"
         log_success "GPU acceleration enabled (gpu_layers=$gpu_layers)"
     fi
+
+    # Auto-detect a sane CPU thread count for llama-server.
+    #
+    # Heuristic:
+    #   * Use the number of physical cores when available (avoids
+    #     hyperthread contention which actively hurts llama.cpp throughput).
+    #   * Cap at 8 — past that, scaling on the small models we ship is
+    #     marginal and the extra threads steal cycles from the rest of the
+    #     desktop.
+    #   * Floor at 2 so 1-core VMs still work.
+    #
+    # We only write the value when the user has not already overridden it
+    # to a non-default. The image ships LIFEOS_AI_THREADS=4 as the
+    # placeholder; if it has been changed away from 4, we leave it alone.
+    if [ -f "$env_file" ]; then
+        local current_threads physical_cores cpu_threads
+        current_threads="$(grep -oP '^LIFEOS_AI_THREADS=\K.*' "$env_file" 2>/dev/null || echo 4)"
+        if [ "$current_threads" = "4" ]; then
+            physical_cores=""
+            if command -v lscpu &>/dev/null; then
+                # Cores per socket × sockets = physical cores. Avoids HT.
+                local cores_per_socket sockets
+                cores_per_socket="$(lscpu -p=CORE 2>/dev/null | grep -v '^#' | sort -u | wc -l || echo 0)"
+                sockets="$(lscpu -p=SOCKET 2>/dev/null | grep -v '^#' | sort -u | wc -l || echo 0)"
+                if [ "$cores_per_socket" -gt 0 ] && [ "$sockets" -gt 0 ]; then
+                    physical_cores="$cores_per_socket"
+                fi
+            fi
+            if [ -z "$physical_cores" ] || [ "$physical_cores" -lt 1 ]; then
+                # Fallback: nproc returns logical CPUs; halve to approximate
+                # physical cores on HT systems.
+                physical_cores="$(nproc 2>/dev/null || echo 2)"
+                if [ "$physical_cores" -gt 2 ]; then
+                    physical_cores=$((physical_cores / 2))
+                fi
+            fi
+            if [ "$physical_cores" -lt 2 ]; then
+                cpu_threads=2
+            elif [ "$physical_cores" -gt 8 ]; then
+                cpu_threads=8
+            else
+                cpu_threads=$physical_cores
+            fi
+            sed -i "s/^LIFEOS_AI_THREADS=.*/LIFEOS_AI_THREADS=$cpu_threads/" "$env_file"
+            log_success "Auto-tuned LIFEOS_AI_THREADS=$cpu_threads (physical cores: $physical_cores)"
+        else
+            log "LIFEOS_AI_THREADS already customised ($current_threads), leaving as-is"
+        fi
+    fi
 }
 
 # Set up AI runtime (llama-server)
@@ -318,7 +387,11 @@ start_services() {
     # Start llama-server if installed
     if systemctl is-enabled llama-server.service &>/dev/null; then
         log "Starting llama-server service..."
-        systemctl start llama-server.service && log_success "llama-server started" || log_warn "Failed to start llama-server"
+        if systemctl start llama-server.service; then
+            log_success "llama-server started"
+        else
+            log_warn "Failed to start llama-server"
+        fi
     fi
 }
 
@@ -388,7 +461,8 @@ verify_installation() {
 
 # Mark first boot as complete
 mark_complete() {
-    local timestamp=$(date -Iseconds)
+    local timestamp
+    timestamp=$(date -Iseconds)
     echo "First boot completed: $timestamp" > "$FIRST_BOOT_MARKER"
     log_success "First boot setup marked complete"
 }
@@ -420,6 +494,7 @@ main() {
 
     enforce_password_change
     system_setup
+    apply_default_desktop_layout
     configure_gpu
     setup_ai
     start_services

@@ -247,7 +247,7 @@ async fn run_repair(client: &reqwest::Client, base: &str, json_mode: bool) -> an
             sub_results.push("stuck-tasks: cleared".into());
         }
         // Disable safe mode
-        if try_post(client, base, "/api/v1/runtime/safe-mode/disable").await {
+        if try_post(client, base, "/api/v1/safe-mode/exit").await {
             sub_results.push("safe-mode: disabled".into());
         }
 

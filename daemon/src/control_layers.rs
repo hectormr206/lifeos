@@ -6,6 +6,8 @@
 //! 3. Accessibility tree (AT-SPI2, UIAutomation)
 //! 4. Vision + input (screenshot + OCR + mouse/keyboard — last resort)
 
+#![allow(dead_code)]
+
 use log::{info, warn};
 
 #[derive(Debug, Clone, PartialEq)]

@@ -11,6 +11,8 @@
 //! apps have partial support. Falls back to Layer 4 (Vision+Input) when
 //! AT-SPI2 is unavailable.
 
+#![allow(dead_code)]
+
 #[cfg(feature = "dbus")]
 mod inner {
     use anyhow::{anyhow, Context, Result};

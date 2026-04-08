@@ -16,6 +16,8 @@ pub enum DaemonEvent {
         mic: bool,
         camera: bool,
         screen: bool,
+        always_on: Option<bool>,
+        tts: Option<bool>,
         kill_switch: bool,
     },
     FeedbackUpdate {

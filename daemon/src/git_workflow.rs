@@ -161,16 +161,6 @@ pub async fn checkout_main(work_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Get current branch name.
-pub async fn current_branch(work_dir: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(work_dir)
-        .output()
-        .await?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
 /// Generate a semantic commit message from a task objective.
 fn generate_commit_message(objective: &str) -> String {
     let lower = objective.to_lowercase();

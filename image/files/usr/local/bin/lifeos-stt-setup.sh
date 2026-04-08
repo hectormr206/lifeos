@@ -3,9 +3,17 @@
 set -euo pipefail
 
 STT_BIN=""
+STREAM_BIN=""
 for candidate in /usr/bin/whisper-cli /usr/local/bin/whisper-cli /usr/bin/whisper /usr/bin/whisper-cpp; do
     if [ -x "$candidate" ]; then
         STT_BIN="$candidate"
+        break
+    fi
+done
+
+for candidate in /usr/bin/whisper-stream /usr/local/bin/whisper-stream; do
+    if [ -x "$candidate" ]; then
+        STREAM_BIN="$candidate"
         break
     fi
 done
@@ -21,12 +29,18 @@ DEFAULT_MODEL="ggml-base.bin"
 
 mkdir -p "$MODEL_DIR"
 
-if [ ! -f "$MODEL_DIR/$DEFAULT_MODEL" ] && [ -f "$PRELOAD_DIR/$DEFAULT_MODEL" ]; then
-    cp -n "$PRELOAD_DIR/$DEFAULT_MODEL" "$MODEL_DIR/$DEFAULT_MODEL"
-    echo "Seeded STT model from image payload: $DEFAULT_MODEL"
+if [ -d "$PRELOAD_DIR" ]; then
+    find "$PRELOAD_DIR" -maxdepth 1 -type f -name 'ggml-*.bin' -print0 | while IFS= read -r -d '' model; do
+        cp -n "$model" "$MODEL_DIR/"
+    done
 fi
 
 echo "whisper binary ready: $STT_BIN"
+if [ -n "$STREAM_BIN" ]; then
+    echo "whisper stream binary ready: $STREAM_BIN"
+else
+    echo "WARNING: whisper-stream binary not found"
+fi
 if [ -f "$MODEL_DIR/$DEFAULT_MODEL" ]; then
     echo "stt model ready: $MODEL_DIR/$DEFAULT_MODEL"
 else

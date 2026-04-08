@@ -1,6 +1,6 @@
 [package]
 name = "lifeosd"
-version = "0.3.5"
+version = "0.3.36"
 edition = "2021"
 description = "LifeOS System Daemon"
 authors = ["Héctor Martínez <hector@hectormr.com>"]
@@ -17,6 +17,10 @@ name = "lifeos-train-wakeword"
 path = "src/bin/train_wakeword.rs"
 required-features = ["wake-word"]
 
+[[bin]]
+name = "lifeos-food-importer"
+path = "src/bin/food_importer.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full", "signal"] }
 serde = { version = "1", features = ["derive"] }
@@ -28,7 +32,7 @@ env_logger = "0.11"
 chrono = { version = "0.4", features = ["clock", "serde"] }
 iana-time-zone = "0.1"
 notify-rust = { version = "=4.12.0", default-features = false, features = ["d"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 url = "2"
 axum = { version = "0.7", features = ["tokio", "ws"], optional = true }
 tower-http = { version = "0.6", features = ["fs", "cors"], optional = true }
@@ -50,11 +54,19 @@ adw = { version = "0.7", package = "libadwaita", optional = true }
 # Screen capture dependencies
 image = "0.25"
 base64 = "0.22"
+shell-words = "1"
 libc = "0.2"
 uuid = { version = "1", features = ["v4", "serde"] }
 aes-gcm-siv = "0.11"
 sha2 = "0.10"
 rand = "0.8"
+# Reinforced encryption (BI.4/6/9.2/12) — passphrase-derived key with KDF.
+# Argon2id is the OWASP-recommended password hash; zeroize wipes derived
+# key material from memory on lock.
+argon2 = "0.5"
+zeroize = { version = "1", features = ["derive"] }
+# CSV parsing for the food_db importer (lifeos-food-importer binary).
+csv = "1.3"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 sqlite-vec = "0.1"
 zerocopy = "0.8"
@@ -86,10 +98,5 @@ wake-word = ["rustpotter"]
 speaker-id = []
 # mcp-client = ["rust-mcp-sdk"]  # disabled until rustc 1.88+ in CI
 telegram = ["teloxide"]
-whatsapp = []
-matrix = []
-signal = []
-slack = []
-discord = []
 homeassistant = []
 tray = ["ksni"]

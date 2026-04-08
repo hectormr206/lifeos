@@ -13,7 +13,7 @@ llama.cpp (MIT License)
 Whisper.cpp (MIT License)
   https://github.com/ggerganov/whisper.cpp
   Copyright (c) 2022-2026 Georgi Gerganov
-  Speech-to-text engine (whisper-cli binary).
+  Speech-to-text engine (whisper-cli and whisper-stream binaries).
 
 Piper TTS (MIT License)
   https://github.com/rhasspy/piper

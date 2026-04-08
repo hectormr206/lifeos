@@ -1,0 +1,11 @@
+name,brand,category,kcal_per_100g,protein_g_per_100g,carbs_g_per_100g,fat_g_per_100g,fiber_g_per_100g,serving_size_g,barcode,tags
+Avena Quaker,Quaker,grain,380,13,67,7,10,40,7501234567890,"desayuno,integral"
+Manzana roja,,fruit,52,0.3,14,0.2,2.4,182,,fresca
+Pollo pechuga,,meat,165,31,0,3.6,0,100,,proteina
+Frijol negro cocido,,legume,132,8.9,23.7,0.5,8.7,86,,leguminosa
+Tortilla de maiz,,grain,218,5.7,44.6,2.9,6.3,30,,carbohidrato
+Aguacate Hass,,fruit,160,2,8.5,14.7,6.7,68,,grasa-saludable
+Leche entera,Lala,dairy,61,3.2,4.8,3.3,0,240,7501020100094,"lacteo,desayuno"
+Arroz blanco cocido,,grain,130,2.7,28,0.3,0.4,158,,carbohidrato
+Huevo entero,,protein,155,13,1.1,11,0,50,,desayuno
+Brocoli crudo,,vegetable,34,2.8,7,0.4,2.6,91,,verdura

@@ -12,6 +12,8 @@ Esta hoja de ruta es la version publica y entendible del estado actual del proye
 
 Es intencionalmente mas simple que la estrategia tecnica, pero sigue la misma fuente de verdad.
 
+LifeOS esta hecho en Mexico y se publica para una audiencia global de codigo abierto. Ese origen forma parte de la identidad del proyecto, pero no limita a quien va dirigido.
+
 ---
 
 ## Que ya es real hoy

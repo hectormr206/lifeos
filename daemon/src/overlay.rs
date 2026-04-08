@@ -517,6 +517,8 @@ impl OverlayManager {
             mic: mic_active,
             camera: camera_active,
             screen: screen_active,
+            always_on: None,
+            tts: None,
             kill_switch: kill_switch_active,
         });
         Ok(())

@@ -6,7 +6,6 @@
 //! - Backup size trends (sudden changes indicate problems)
 
 use anyhow::Result;
-use log::info;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
@@ -110,31 +109,4 @@ async fn check_borg() -> Result<BackupStatus> {
         last_check_ok: None,
         total_snapshots: archives,
     })
-}
-
-/// Run a backup integrity check (restic check --read-data-subset=5%).
-pub async fn verify_backup_integrity() -> Result<String> {
-    if std::env::var("RESTIC_REPOSITORY").is_ok() {
-        let output = Command::new("restic")
-            .args(["check", "--read-data-subset=5%"])
-            .output()
-            .await?;
-        let text = String::from_utf8_lossy(&output.stdout);
-        if output.status.success() {
-            info!("[backup] Integrity check passed");
-            Ok(format!("Restic check OK: {}", text.trim()))
-        } else {
-            let err = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Restic check failed: {}", err)
-        }
-    } else if std::env::var("BORG_REPO").is_ok() {
-        let output = Command::new("borg").args(["check"]).output().await?;
-        if output.status.success() {
-            Ok("Borg check OK".into())
-        } else {
-            anyhow::bail!("Borg check failed")
-        }
-    } else {
-        anyhow::bail!("No backup tool configured")
-    }
 }

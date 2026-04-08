@@ -34,6 +34,7 @@ El ajolote no debe usarse como adorno arbitrario.
 Debe funcionar como una extension natural de lo que LifeOS quiere representar:
 
 - identidad mexicana real
+- origen claro sin exclusividad geografica
 - tecnologia cercana y no intimidante
 - inteligencia local y resiliente
 - rareza valiosa y dificil de reemplazar
@@ -96,6 +97,7 @@ Axi es la manifestacion mas personal del mismo sistema visual.
 - construir una estetica elegante, tecnica y calmada
 - conservar el tono dark-first de LifeOS
 - usar referencias mexicanas con respeto y fundamento
+- dejar claro que LifeOS esta hecho en Mexico y abierto a una comunidad global
 - preferir simbolos, texturas, patrones y siluetas antes que disfraces literales
 
 ### NO HACER
@@ -106,6 +108,7 @@ Axi es la manifestacion mas personal del mismo sistema visual.
 - romper las proporciones o personalidad de Axi
 - rediseñar a Axi desde cero en cada pieza
 - usar referencias culturales superficiales o estereotipadas
+- presentar la identidad mexicana como limite de a quien pertenece el proyecto
 
 ---
 
@@ -438,4 +441,3 @@ Estas fuentes sostienen la direccion cultural y de producto, y sirven como base 
   - https://developer.android.com/distribute/marketing-tools/brand-guidelines.html
 - Canonical / Ubuntu como referencia de wallpapers y lenguaje de release art:
   - https://canonical.com/blog/the-coronation-of-a-new-mascot-noble-numbat
-

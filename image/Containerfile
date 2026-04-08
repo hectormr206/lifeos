@@ -105,30 +105,38 @@ RUN set -eux && \
     rm -rf /tmp/llama.cpp
 
 # ============================================================================
-# Stage 3: Build whisper-cli + ship a default STT model
+# Stage 3: Build whisper.cpp STT tools + ship default STT models
 # ============================================================================
 FROM fedora:${FEDORA_MAJOR} AS whisper-builder
 
-RUN dnf install -y cmake make gcc-c++ git openssl-devel curl && \
+RUN dnf install -y cmake make gcc-c++ git openssl-devel curl SDL2-devel && \
     dnf clean all
 
 RUN set -eux && \
-    echo ">>> Building whisper-cli from source..." && \
+    echo ">>> Building whisper.cpp STT tools from source..." && \
     git clone --depth=1 https://github.com/ggml-org/whisper.cpp /tmp/whisper.cpp && \
     cmake -S /tmp/whisper.cpp -B /tmp/whisper.cpp/build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
         -DWHISPER_BUILD_TESTS=OFF \
+        -DWHISPER_SDL2=ON \
         -DWHISPER_BUILD_EXAMPLES=ON && \
-    cmake --build /tmp/whisper.cpp/build -j"$(nproc)" --target whisper-cli && \
-    BUILD_BIN="$(find /tmp/whisper.cpp/build -name 'whisper-cli' -type f | head -1)" && \
-    echo ">>> Binary found at: ${BUILD_BIN}" && \
+    cmake --build /tmp/whisper.cpp/build -j"$(nproc)" --target whisper-cli whisper-stream && \
+    CLI_BIN="$(find /tmp/whisper.cpp/build -name 'whisper-cli' -type f | head -1)" && \
+    STREAM_BIN="$(find /tmp/whisper.cpp/build -name 'whisper-stream' -type f | head -1)" && \
+    echo ">>> whisper-cli found at: ${CLI_BIN}" && \
+    echo ">>> whisper-stream found at: ${STREAM_BIN}" && \
     mkdir -p /out/models/whisper && \
-    install -m 0755 "${BUILD_BIN}" /out/whisper-cli && \
+    install -m 0755 "${CLI_BIN}" /out/whisper-cli && \
+    install -m 0755 "${STREAM_BIN}" /out/whisper-stream && \
     curl -fSL --retry 3 --connect-timeout 60 \
       -o /out/models/whisper/ggml-base.bin \
       https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin && \
+    curl -fSL --retry 3 --connect-timeout 60 \
+      -o /out/models/whisper/ggml-tiny.bin \
+      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin && \
     test -s /out/models/whisper/ggml-base.bin && \
+    test -s /out/models/whisper/ggml-tiny.bin && \
     rm -rf /tmp/whisper.cpp
 
 # ============================================================================
@@ -388,7 +396,8 @@ RUN dnf -y install \
     virt-install virt-viewer virt-manager edk2-ovmf swtpm spice-vdagent \
     fuse-overlayfs slirp4netns \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git gh wget \
-    rsms-inter-fonts jetbrains-mono-fonts \
+    zoxide fzf eza atuin direnv tmux btop neovim \
+    rsms-inter-fonts jetbrains-mono-fonts cascadia-code-nf-fonts \
     pkgconf-pkg-config \
     gcc gcc-c++ make cmake \
     openssl-devel \
@@ -452,14 +461,17 @@ RUN chmod +x /usr/bin/life /usr/bin/lifeosd /usr/local/bin/lifeos-train-wakeword
 # Built in isolated stage to avoid pulling/removing toolchains in the final image.
 COPY --from=llama-builder /out/llama-server /usr/sbin/llama-server
 COPY --from=whisper-builder /out/whisper-cli /usr/bin/whisper-cli
+COPY --from=whisper-builder /out/whisper-stream /usr/bin/whisper-stream
 RUN set -eux && \
     ln -f /usr/sbin/llama-server /usr/bin/llama-server 2>/dev/null || true && \
     ln -f /usr/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null || true && \
+    ln -f /usr/bin/whisper-stream /usr/local/bin/whisper-stream 2>/dev/null || true && \
     echo ">>> Verifying AI runtime binaries..." && \
     /usr/sbin/llama-server --version && \
     /usr/bin/whisper-cli -h >/dev/null && \
+    /usr/bin/whisper-stream -h >/dev/null && \
     echo ">>> llama-server installed at /usr/sbin and /usr/bin" && \
-    ls -la /usr/sbin/llama-server /usr/bin/llama-server /usr/bin/whisper-cli
+    ls -la /usr/sbin/llama-server /usr/bin/llama-server /usr/bin/whisper-cli /usr/bin/whisper-stream
 
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
@@ -570,6 +582,8 @@ COPY image/files/etc/profile.d/lifeos-ensure-daemon.sh /etc/profile.d/lifeos-ens
 COPY image/files/etc/profile.d/firefox-wayland.sh /etc/profile.d/firefox-wayland.sh
 COPY image/files/etc/profile.d/docker-compat.sh /etc/profile.d/docker-compat.sh
 COPY image/files/etc/profile.d/lifeos-firefox-profile.sh /etc/profile.d/lifeos-firefox-profile.sh
+COPY image/files/etc/profile.d/lifeos-terminal.sh /etc/profile.d/lifeos-terminal.sh
+COPY image/files/etc/fish/conf.d/lifeos-terminal.fish /etc/fish/conf.d/lifeos-terminal.fish
 COPY image/files/etc/containers/containers.conf /etc/containers/containers.conf
 COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
 COPY image/files/usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml
@@ -583,7 +597,11 @@ RUN find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' !
 
 # Scripts de LifeOS
 COPY image/files/usr/local/bin/lifeos-first-boot.sh       /usr/local/bin/lifeos-first-boot.sh
+COPY image/files/usr/local/bin/lifeos-apply-default-layout.sh /usr/local/bin/lifeos-apply-default-layout.sh
+COPY image/files/usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh /usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh
+COPY image/files/usr/local/bin/lifeos-sync-greeter-wallpaper.sh /usr/local/bin/lifeos-sync-greeter-wallpaper.sh
 COPY image/files/usr/local/bin/lifeos-ai-setup.sh          /usr/local/bin/lifeos-ai-setup.sh
+COPY image/files/usr/local/bin/lifeos-embeddings-setup.sh  /usr/local/bin/lifeos-embeddings-setup.sh
 COPY image/files/usr/local/bin/lifeos-stt-setup.sh         /usr/local/bin/lifeos-stt-setup.sh
 COPY image/files/usr/local/bin/llama-server-health-check.sh /usr/local/bin/llama-server-health-check.sh
 COPY image/files/usr/local/bin/lifeos-btrfs-snapshot.sh    /usr/local/bin/lifeos-btrfs-snapshot.sh
@@ -599,7 +617,11 @@ COPY image/files/usr/local/bin/lifeos-speaker-embedding.py     /usr/local/bin/li
 COPY image/files/usr/local/bin/lifeos-diarize.py               /usr/local/bin/lifeos-diarize.py
 COPY image/files/usr/local/bin/lifeos-sentinel.sh              /usr/local/bin/lifeos-sentinel.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
+             /usr/local/bin/lifeos-apply-default-layout.sh \
+             /usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh \
+             /usr/local/bin/lifeos-sync-greeter-wallpaper.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
+             /usr/local/bin/lifeos-embeddings-setup.sh \
              /usr/local/bin/lifeos-stt-setup.sh \
              /usr/local/bin/llama-server-health-check.sh \
              /usr/local/bin/lifeos-btrfs-snapshot.sh \
@@ -709,8 +731,10 @@ RUN ln -sf /usr/lib/systemd/system/cosmic-greeter.service /etc/systemd/system/di
 # --- Servicios systemd ---
 # Copiar unit files desde el repo
 COPY image/files/etc/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/lifeos-first-boot.service
+COPY image/files/etc/systemd/system/lifeos-cosmic-greeter-branding.service /usr/lib/systemd/system/lifeos-cosmic-greeter-branding.service
 COPY image/files/etc/systemd/system/llama-server.service       /usr/lib/systemd/system/llama-server.service
 COPY image/files/etc/systemd/system/llama-server.service.d/10-fast-kill.conf /etc/systemd/system/llama-server.service.d/10-fast-kill.conf
+COPY image/files/etc/systemd/system/llama-embeddings.service   /usr/lib/systemd/system/llama-embeddings.service
 COPY image/files/etc/systemd/system/whisper-stt.service       /usr/lib/systemd/system/whisper-stt.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.service /usr/lib/systemd/system/lifeos-btrfs-snapshot.service
 COPY image/files/etc/systemd/system/lifeos-btrfs-snapshot.timer   /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer
@@ -766,12 +790,14 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
     ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
+    ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer /usr/lib/systemd/system/timers.target.wants/lifeos-maintenance-cleanup.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-aide-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-cosmic-greeter-branding.service /usr/lib/systemd/system/graphical.target.wants/lifeos-cosmic-greeter-branding.service && \
     ln -sf /usr/lib/systemd/system/bluetooth.service      /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \
     ln -sf /usr/lib/systemd/system/NetworkManager.service /usr/lib/systemd/system/multi-user.target.wants/NetworkManager.service && \
     if [ -f /usr/lib/systemd/system/supergfxd.service ]; then \
@@ -905,9 +931,10 @@ RUN set -eux && \
             echo ">>> Linked to $dest"; \
         fi; \
     done && \
-    ls -la /usr/bin/llama-server /usr/sbin/llama-server /usr/bin/whisper-cli && \
+    ls -la /usr/bin/llama-server /usr/sbin/llama-server /usr/bin/whisper-cli /usr/bin/whisper-stream && \
     /usr/sbin/llama-server --version && \
-    /usr/bin/whisper-cli -h >/dev/null
+    /usr/bin/whisper-cli -h >/dev/null && \
+    /usr/bin/whisper-stream -h >/dev/null
 
 # --- Verificación final ---
 RUN test -x /usr/bin/mpv && \
@@ -918,6 +945,7 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/local/bin/cargo-audit && \
     test -x /usr/bin/llama-server && \
     test -x /usr/bin/whisper-cli && \
+    test -x /usr/bin/whisper-stream && \
     test -x /usr/bin/grim && \
     test -x /usr/bin/wl-copy && \
     test -x /usr/bin/tesseract && \
@@ -962,6 +990,7 @@ RUN test -x /usr/bin/mpv && \
     (test -x /usr/bin/protonup-qt || flatpak info --system net.davidotek.pupgui2 >/dev/null 2>&1) && \
     test -f /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml && \
     test -f /usr/share/lifeos/models/whisper/ggml-base.bin && \
+    test -f /usr/share/lifeos/models/whisper/ggml-tiny.bin && \
     test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx && \
     test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx.json && \
     test -f /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx && \
@@ -983,6 +1012,14 @@ RUN test -x /usr/bin/mpv && \
     test -x /usr/local/bin/lifeos-security-baseline-check.sh && \
     test -x /usr/bin/podman && \
     test -x /usr/bin/docker && \
+    test -x /usr/bin/fzf && \
+    test -x /usr/bin/zoxide && \
+    test -x /usr/bin/eza && \
+    test -x /usr/bin/atuin && \
+    test -x /usr/bin/direnv && \
+    test -x /usr/bin/tmux && \
+    test -x /usr/bin/btop && \
+    test -x /usr/bin/nvim && \
     cargo fmt --version >/dev/null && \
     cargo clippy --version >/dev/null && \
     cargo audit --version >/dev/null && \
@@ -1006,6 +1043,8 @@ RUN test -x /usr/bin/mpv && \
     test -f /etc/skel/.mozilla/firefox/lifeos.default/user.js && \
     test -f /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css && \
     test -f /etc/profile.d/firefox-wayland.sh && \
+    test -f /etc/profile.d/lifeos-terminal.sh && \
+    test -f /etc/fish/conf.d/lifeos-terminal.fish && \
     test -f /usr/share/applications/firefox-lifeos.desktop && \
     test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1
 

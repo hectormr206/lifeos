@@ -393,9 +393,6 @@ pub async fn run_conversational_email_loop(
     task_queue: std::sync::Arc<crate::task_queue::TaskQueue>,
     router: std::sync::Arc<tokio::sync::RwLock<crate::llm_router::LlmRouter>>,
     memory: Option<std::sync::Arc<tokio::sync::RwLock<crate::memory_plane::MemoryPlaneManager>>>,
-    knowledge_graph: Option<
-        std::sync::Arc<tokio::sync::RwLock<crate::knowledge_graph::KnowledgeGraph>>,
-    >,
 ) {
     use crate::telegram_tools::{self, ConversationHistory, CronStore, SddStore, ToolContext};
     use std::sync::Arc;
@@ -410,7 +407,6 @@ pub async fn run_conversational_email_loop(
         router,
         task_queue,
         memory,
-        knowledge_graph,
         history: Arc::new(ConversationHistory::new()),
         cron_store: Arc::new(CronStore::new()),
         sdd_store: Arc::new(SddStore::new()),

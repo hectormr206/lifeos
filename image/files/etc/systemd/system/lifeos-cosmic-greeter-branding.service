@@ -1,0 +1,19 @@
+[Unit]
+Description=LifeOS COSMIC Greeter Branding Sync
+DefaultDependencies=no
+Before=display-manager.service
+Before=cosmic-greeter.service
+After=local-fs.target systemd-tmpfiles-setup.service
+Wants=local-fs.target
+ConditionPathExists=/usr/share/backgrounds/lifeos/lifeos-lock.png
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lifeos-sync-greeter-wallpaper.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeos-cosmic-greeter-branding
+
+[Install]
+WantedBy=graphical.target

@@ -204,6 +204,18 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_doctor_repair_with_json() {
+        let cli = Cli::parse_from(["life", "doctor", "--repair", "--json"]);
+        match cli.command.expect("Expected command") {
+            Commands::Doctor(args) => {
+                assert!(args.repair);
+                assert!(args.json);
+            }
+            _ => panic!("Expected Doctor command"),
+        }
+    }
+
+    #[test]
     fn test_cli_parses_focus_command() {
         let cli = Cli::parse_from(["life", "focus"]);
         match cli.command.expect("Expected command") {

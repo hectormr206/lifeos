@@ -2,6 +2,33 @@
 //!
 //! Stores events locally in SQLite. Future: sync with CalDAV/Google Calendar.
 //! For now, provides local-only event tracking that the supervisor can use.
+//!
+//! # Recurring events — semantics and known limitations
+//!
+//! The `recurrence_matches` function operates on dates only (`NaiveDate`), not
+//! on full datetimes. This has the following implications:
+//!
+//! * **DST transitions:** Because matching is date-level, daylight-saving
+//!   transitions never cause a recurring event's date to be missed. The
+//!   *time-of-day* of the original event is stored as UTC in `start_time`;
+//!   callers that re-display it in a local timezone must perform their own
+//!   UTC→local conversion (see `time_context`). A "weekly Monday 9am" event
+//!   created in `Europe/Madrid` in January will still expand to every Monday
+//!   after the spring-forward transition; the wall-clock display in the user's
+//!   timezone is the responsibility of the rendering layer.
+//! * **Monthly on the 29/30/31st:** When the original event is on a day that
+//!   does not exist in the target month (e.g. Feb has no 30th/31st), the
+//!   matcher falls back to the **last day of that month**. This means a
+//!   "monthly on the 31st" event fires on Feb 28 (or Feb 29 in leap years),
+//!   Apr 30, etc. To skip rather than clamp, mark those occurrences via
+//!   `skip_occurrence`.
+//! * **`custom:` weekday list:** Tokens are matched case-sensitively as
+//!   exactly two-letter ISO-style abbreviations (`MO,TU,WE,TH,FR,SA,SU`).
+//!   Whitespace around tokens is trimmed.
+//! * **No COUNT/UNTIL/INTERVAL beyond biweekly:** Recurring events expand
+//!   indefinitely from `start_time` forward; there is no end date. This is
+//!   intentional for the v0.x local-only calendar and will be revisited when
+//!   CalDAV import lands.
 
 use anyhow::Result;
 use chrono::{Datelike, Local, NaiveDate, Utc};
@@ -29,6 +56,23 @@ pub struct CalendarEvent {
 
 pub struct CalendarManager {
     db: Mutex<Connection>,
+}
+
+/// Return the last day-of-month (28-31) for the given year/month.
+///
+/// Used by the `monthly` recurrence matcher to clamp day-of-month overflow
+/// (e.g. "monthly on the 31st" → Feb 28 / Feb 29 / Apr 30, etc.).
+fn last_day_of_month(year: i32, month: u32) -> u32 {
+    // First day of next month minus one day = last day of this month.
+    let (next_y, next_m) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    NaiveDate::from_ymd_opt(next_y, next_m, 1)
+        .and_then(|d| d.pred_opt())
+        .map(|d| d.day())
+        .unwrap_or(28)
 }
 
 /// Check whether a recurring event's pattern matches a target date.
@@ -68,7 +112,15 @@ fn recurrence_matches(start_time: &str, recurrence: &str, target_date: &str) -> 
             let weeks = (target - start).num_weeks();
             weeks % 2 == 0
         }
-        "monthly" => target.day() == start.day(),
+        "monthly" => {
+            // Match the same day-of-month as the start date. If the start day
+            // does not exist in the target month (e.g. start=31, target month
+            // has 30 days, or Feb), clamp to the last day of the target month.
+            let start_day = start.day();
+            let last_day_of_target = last_day_of_month(target.year(), target.month());
+            let effective_day = start_day.min(last_day_of_target);
+            target.day() == effective_day
+        }
         other if other.starts_with("custom:") => {
             let days_str = &other["custom:".len()..];
             let target_abbrev = match target.weekday() {
@@ -678,6 +730,210 @@ mod tests {
         assert_eq!(today_reminders.len(), 1);
         assert_eq!(today_reminders[0].0, "Reminder test");
         assert_eq!(today_reminders[0].2, "telegram");
+    }
+
+    // ───────────────────────── Recurring edge cases ─────────────────
+    //
+    // The following tests exercise `recurrence_matches` directly with fixed
+    // RFC-3339 / date strings so they are deterministic regardless of when
+    // the test suite runs.
+
+    #[test]
+    fn last_day_of_month_helper() {
+        assert_eq!(last_day_of_month(2024, 1), 31);
+        assert_eq!(last_day_of_month(2024, 2), 29); // leap
+        assert_eq!(last_day_of_month(2025, 2), 28); // non-leap
+        assert_eq!(last_day_of_month(2024, 4), 30);
+        assert_eq!(last_day_of_month(2024, 12), 31);
+    }
+
+    // ── DST: weekly Monday across EU fall-back (Europe/Madrid, last Sun of Oct)
+    #[test]
+    fn weekly_monday_across_eu_fall_back_dst() {
+        // 2024-10-27 = last Sunday of October (Europe/Madrid CEST→CET).
+        // The Mondays bracketing this transition are 2024-10-21 and 2024-10-28.
+        // Stored as UTC RFC-3339 (Madrid is UTC+2 in CEST → 09:00 local = 07:00Z).
+        let start = "2024-10-21T07:00:00+00:00";
+        assert!(recurrence_matches(start, "weekly", "2024-10-21"));
+        assert!(recurrence_matches(start, "weekly", "2024-10-28")); // post fall-back
+        assert!(recurrence_matches(start, "weekly", "2024-11-04"));
+        // Sunday in between is not a Monday → no match.
+        assert!(!recurrence_matches(start, "weekly", "2024-10-27"));
+    }
+
+    // ── DST: weekly Monday across US fall-back (America/New_York, first Sun of Nov)
+    #[test]
+    fn weekly_monday_across_us_fall_back_dst() {
+        // 2024-11-03 = first Sunday of November (US DST ends).
+        // Mondays around it: 2024-10-28, 2024-11-04, 2024-11-11.
+        let start = "2024-10-28T13:00:00+00:00"; // 09:00 EDT
+        assert!(recurrence_matches(start, "weekly", "2024-10-28"));
+        assert!(recurrence_matches(start, "weekly", "2024-11-04"));
+        assert!(recurrence_matches(start, "weekly", "2024-11-11"));
+    }
+
+    // ── DST: weekly Monday across spring-forward (Europe/Madrid, last Sun of Mar)
+    #[test]
+    fn weekly_monday_across_spring_forward_dst() {
+        // 2024-03-31 = last Sunday of March (CET→CEST).
+        // Mondays: 2024-03-25 (CET), 2024-04-01 (CEST), 2024-04-08.
+        let start = "2024-03-25T08:00:00+00:00"; // 09:00 CET
+        assert!(recurrence_matches(start, "weekly", "2024-03-25"));
+        assert!(recurrence_matches(start, "weekly", "2024-04-01"));
+        assert!(recurrence_matches(start, "weekly", "2024-04-08"));
+    }
+
+    // ── Monthly on the 31st: clamps to last day of shorter months
+    #[test]
+    fn monthly_31st_clamps_to_last_day_of_month() {
+        let start = "2024-01-31T09:00:00+00:00";
+        assert!(recurrence_matches(start, "monthly", "2024-01-31"));
+        // Feb 2024 (leap year) has 29 days → clamp to Feb 29.
+        assert!(recurrence_matches(start, "monthly", "2024-02-29"));
+        assert!(!recurrence_matches(start, "monthly", "2024-02-28"));
+        // March has 31 days → exact match.
+        assert!(recurrence_matches(start, "monthly", "2024-03-31"));
+        // April has 30 days → clamp to Apr 30.
+        assert!(recurrence_matches(start, "monthly", "2024-04-30"));
+        assert!(!recurrence_matches(start, "monthly", "2024-04-29"));
+        // 2025 (non-leap): Feb clamps to Feb 28.
+        assert!(recurrence_matches(start, "monthly", "2025-02-28"));
+    }
+
+    // ── Monthly on the 29th: leap-year edge
+    #[test]
+    fn monthly_29th_handles_leap_february() {
+        let start = "2024-01-29T09:00:00+00:00";
+        // 2024 is a leap year → Feb 29 exists, exact match.
+        assert!(recurrence_matches(start, "monthly", "2024-02-29"));
+        assert!(!recurrence_matches(start, "monthly", "2024-02-28"));
+        // 2025 non-leap → Feb has 28 days → clamp to Feb 28.
+        assert!(recurrence_matches(start, "monthly", "2025-02-28"));
+        // April has 30 days → 29th exists, exact match.
+        assert!(recurrence_matches(start, "monthly", "2024-04-29"));
+    }
+
+    // ── Monthly: never matches a day before the start date
+    #[test]
+    fn monthly_does_not_match_before_start() {
+        let start = "2024-06-15T09:00:00+00:00";
+        assert!(!recurrence_matches(start, "monthly", "2024-05-15"));
+        assert!(recurrence_matches(start, "monthly", "2024-06-15"));
+        assert!(recurrence_matches(start, "monthly", "2024-07-15"));
+    }
+
+    // ── Year boundary: weekly recurring Dec 28 → into January
+    #[test]
+    fn weekly_crosses_year_boundary() {
+        // 2024-12-28 was a Saturday.
+        let start = "2024-12-28T09:00:00+00:00";
+        assert!(recurrence_matches(start, "weekly", "2024-12-28"));
+        assert!(recurrence_matches(start, "weekly", "2025-01-04"));
+        assert!(recurrence_matches(start, "weekly", "2025-01-11"));
+        // A Sunday/Friday in between is not a Saturday → no match.
+        assert!(!recurrence_matches(start, "weekly", "2025-01-03"));
+        assert!(!recurrence_matches(start, "weekly", "2025-01-05"));
+    }
+
+    // ── Daily across year boundary
+    #[test]
+    fn daily_crosses_year_boundary() {
+        let start = "2024-12-30T09:00:00+00:00";
+        assert!(recurrence_matches(start, "daily", "2024-12-31"));
+        assert!(recurrence_matches(start, "daily", "2025-01-01"));
+        assert!(recurrence_matches(start, "daily", "2025-01-02"));
+    }
+
+    // ── Custom: MO,WE,FR
+    #[test]
+    fn custom_mwf_matches_three_weekdays() {
+        // Use a known week. 2024-06-03 = Monday, 2024-06-04 = Tuesday, …
+        let start = "2024-06-03T09:00:00+00:00";
+        assert!(recurrence_matches(start, "custom:MO,WE,FR", "2024-06-03")); // Mon
+        assert!(!recurrence_matches(start, "custom:MO,WE,FR", "2024-06-04")); // Tue
+        assert!(recurrence_matches(start, "custom:MO,WE,FR", "2024-06-05")); // Wed
+        assert!(!recurrence_matches(start, "custom:MO,WE,FR", "2024-06-06")); // Thu
+        assert!(recurrence_matches(start, "custom:MO,WE,FR", "2024-06-07")); // Fri
+        assert!(!recurrence_matches(start, "custom:MO,WE,FR", "2024-06-08")); // Sat
+        assert!(!recurrence_matches(start, "custom:MO,WE,FR", "2024-06-09")); // Sun
+    }
+
+    // ── Custom: tolerates whitespace around tokens
+    #[test]
+    fn custom_tolerates_whitespace() {
+        let start = "2024-06-03T09:00:00+00:00";
+        assert!(recurrence_matches(
+            start,
+            "custom:MO, WE , FR",
+            "2024-06-05"
+        ));
+    }
+
+    // ── Biweekly: skips alternate weeks, no drift over months
+    #[test]
+    fn biweekly_skips_alternate_weeks() {
+        // 2024-01-01 = Monday.
+        let start = "2024-01-01T09:00:00+00:00";
+        assert!(recurrence_matches(start, "biweekly", "2024-01-01")); // wk 0
+        assert!(!recurrence_matches(start, "biweekly", "2024-01-08")); // wk 1
+        assert!(recurrence_matches(start, "biweekly", "2024-01-15")); // wk 2
+        assert!(!recurrence_matches(start, "biweekly", "2024-01-22")); // wk 3
+        assert!(recurrence_matches(start, "biweekly", "2024-01-29")); // wk 4
+    }
+
+    #[test]
+    fn biweekly_no_drift_over_six_months() {
+        // 2024-01-01 = Monday. 26 weeks later = 2024-07-01 (also a Monday, even week).
+        let start = "2024-01-01T09:00:00+00:00";
+        assert!(recurrence_matches(start, "biweekly", "2024-07-01")); // wk 26
+        assert!(!recurrence_matches(start, "biweekly", "2024-07-08")); // wk 27
+        assert!(recurrence_matches(start, "biweekly", "2024-07-15")); // wk 28
+                                                                      // Wrong weekday should never match even if "week parity" is right.
+        assert!(!recurrence_matches(start, "biweekly", "2024-07-02"));
+    }
+
+    // ── Weekdays: only Mon-Fri
+    #[test]
+    fn weekdays_only_match_mon_fri() {
+        let start = "2024-06-03T09:00:00+00:00"; // Monday
+        assert!(recurrence_matches(start, "weekdays", "2024-06-03"));
+        assert!(recurrence_matches(start, "weekdays", "2024-06-07"));
+        assert!(!recurrence_matches(start, "weekdays", "2024-06-08")); // Sat
+        assert!(!recurrence_matches(start, "weekdays", "2024-06-09")); // Sun
+    }
+
+    // ── Skip exception: only the skipped date is suppressed
+    #[test]
+    fn skip_exception_only_affects_one_date() {
+        let cal = tmp_cal();
+        // Use today's date so we can call cal.today() to verify skipping.
+        let today = chrono::Local::now().format("%Y-%m-%dT07:00:00").to_string();
+        let ev = cal
+            .add_recurring_event("Daily yoga", &today, "daily", "", None, None)
+            .unwrap();
+
+        // Verify the matcher itself agrees both dates would normally match.
+        let today_str = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let tomorrow_str = (chrono::Local::now() + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+        assert!(recurrence_matches(&ev.start_time, "daily", &today_str));
+        assert!(recurrence_matches(&ev.start_time, "daily", &tomorrow_str));
+
+        // Skip TODAY only.
+        cal.skip_occurrence(&ev.id, &today_str).unwrap();
+
+        // today() must NOT include the skipped event.
+        let today_events = cal.today().unwrap();
+        assert!(!today_events.iter().any(|e| e.title == "Daily yoga"));
+
+        // upcoming() should still include it for future days, because the
+        // exception was only applied to today's date. We check via the
+        // recurring helper directly to avoid coupling to upcoming()'s shape.
+        let db = cal.db.lock().unwrap();
+        let tomorrow_recurring =
+            CalendarManager::recurring_events_for_date(&db, &tomorrow_str).unwrap();
+        assert!(tomorrow_recurring.iter().any(|e| e.title == "Daily yoga"));
     }
 
     #[test]

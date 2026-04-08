@@ -6,6 +6,20 @@
 
 **Investigacion (2026-03-30):** Analisis de viabilidad tecnica de LoRA/QLoRA en hardware del usuario (RTX 5070 Ti, 16GB VRAM), herramientas actuales (Unsloth, llama.cpp), alternativas sin entrenamiento (RAG, procedural memory, skills), y riesgos de self-modification.
 
+## Estado
+
+**Investigacion futura. No es camino critico actual.**
+
+Decision operativa (2026-04-07):
+
+- AR no se trabaja antes de cerrar `BJ` (prompting/contexto/routing para el `4B`)
+- AR no se trabaja antes de cerrar `AQ` (personalizacion de tono y User Model)
+- distillation, DPO y modelos especializados fine-tuned quedan explicitamente diferidos
+
+La razon es simple: hoy LifeOS todavia gana mucho mas con mejor prompting,
+mejor contexto, mejor routing y mejor politica local-first que con tocar pesos
+del modelo.
+
 ---
 
 ## 1. Hardware del Usuario: Que es Posible
@@ -52,6 +66,15 @@ Lo que **NO** pueden hacer:
 - Aprender patrones complejos que requieren cambios en los pesos del modelo
 - Clasificar datos con precision superior a prompting (intent classification, sentiment)
 - Generar output en un dominio muy especifico donde el modelo base falla
+
+## 2.1 Lo que NO pertenece a AR
+
+Para evitar mezclar problemas distintos:
+
+- `prompt packs`, `output schemas` y budgets de contexto pertenecen a `BJ`
+- evaluacion de prompts y release gates del `4B` pertenecen a `BJ`
+- `prompt evolution` observacional pertenece a `U`
+- AR empieza solo cuando ya se demostro que prompting/contexto/routing dejaron de ser el cuello de botella principal
 
 ---
 
@@ -135,6 +158,8 @@ lifeosd (Rust) → lanza proceso Python → Unsloth fine-tune → exporta GGUF �
 
 ## 5. Knowledge Distillation: Comprimir Inteligencia de Modelos Grandes
 
+**Estado:** futuro. No trabajar ahora.
+
 Una estrategia especialmente prometedora para LifeOS:
 
 1. Enviar las preguntas dificiles a Cerebras (Qwen3-235B, gratis)
@@ -152,9 +177,9 @@ Esto es exactamente lo que Apple hace con Apple Intelligence (modelo grande en n
 
 ---
 
-## 6. Lo Que Falta Construir (Propuesta de Fase)
+## 6. Lo Que Falta Construir (cuando AR se reactive)
 
-### AR.1 — Dataset Pipeline (P0)
+### AR.1 — Dataset Pipeline (futuro cercano, despues de BJ + AQ)
 
 - [ ] `TrainingDataCollector` struct: recopila datos de memory_plane, audit logs, Telegram
 - [ ] Conversor a formato instruction-tuning (Alpaca/ShareGPT)
@@ -163,7 +188,7 @@ Esto es exactamente lo que Apple hace con Apple Intelligence (modelo grande en n
 - [ ] CLI: `life train prepare --source telegram --min-examples 200`
 - [ ] Tests unitarios
 
-### AR.2 — Unsloth Integration (P0)
+### AR.2 — Unsloth Integration (futuro cercano, despues de BJ + AQ)
 
 - [ ] Script Python embebido: `/var/lib/lifeos/training/train_lora.py`
 - [ ] Parametros configurables via TOML: rank, alpha, epochs, learning_rate, model
@@ -172,7 +197,7 @@ Esto es exactamente lo que Apple hace con Apple Intelligence (modelo grande en n
 - [ ] Merge + quantize automatico a GGUF
 - [ ] API: `POST /api/v1/training/start`, `GET /api/v1/training/status`
 
-### AR.3 — Evaluacion y Rollback (P0)
+### AR.3 — Evaluacion y Rollback (futuro cercano, despues de BJ + AQ)
 
 - [ ] Benchmark automatico: set de validacion con N preguntas + respuestas esperadas
 - [ ] Comparar perplexity y task accuracy antes/despues
@@ -181,7 +206,7 @@ Esto es exactamente lo que Apple hace con Apple Intelligence (modelo grande en n
 - [ ] Integracion con PromptEvolution para monitoreo continuo post-deploy
 - [ ] Notificacion via Telegram: "Entrene un modelo nuevo. Accuracy: 87% (antes: 82%). Desplegado"
 
-### AR.4 — Knowledge Distillation Pipeline (P1)
+### AR.4 — Knowledge Distillation Pipeline (futuro, no prioritario ahora)
 
 - [ ] Guardar respuestas de providers cloud (Cerebras, OpenRouter) con sus preguntas
 - [ ] Filtrar por calidad: solo respuestas que el supervisor evaluo como "ok"
@@ -189,21 +214,21 @@ Esto es exactamente lo que Apple hace con Apple Intelligence (modelo grande en n
 - [ ] Trigger automatico: cuando hay N+ ejemplos nuevos, sugerir re-entrenamiento
 - [ ] Metricas: cuantas preguntas que antes iban a cloud ahora se resuelven local
 
-### AR.5 — DPO para Preferencias del Usuario (P1)
+### AR.5 — DPO para Preferencias del Usuario (futuro, no prioritario ahora)
 
 - [ ] Recopilar pares de preferencia: cuando el usuario dice "no, asi no" → respuesta mala; cuando acepta → respuesta buena
 - [ ] Formato DPO: (prompt, chosen, rejected)
 - [ ] Entrenamiento DPO via Unsloth (2 copias del modelo, cabe en 16GB con QLoRA)
 - [ ] Trigger: acumular 50+ pares de preferencia → sugerir DPO run
 
-### AR.6 — Modelos Especializados Pequenos (P2)
+### AR.6 — Modelos Especializados Pequenos (futuro, no prioritario ahora)
 
 - [ ] Intent classifier fine-tuned (~100M params, no LLM): clasificar intenciones del usuario
 - [ ] Sentiment/frustration detector: modelo BERT-tiny fine-tuned en mensajes del usuario
 - [ ] Embedding model personalizado: fine-tune de nomic-embed o similar con documentos del usuario
 - [ ] Estos modelos son pequenos (<500MB), rapidos de entrenar (<5 min), y complementan al LLM
 
-### AR.7 — Dashboard de Entrenamiento (P2)
+### AR.7 — Dashboard de Entrenamiento (futuro, no prioritario ahora)
 
 - [ ] Visualizar: datasets disponibles, entrenamientos pasados, metricas comparativas
 - [ ] Grafico: success_rate over time, antes/despues de cada fine-tune
@@ -229,25 +254,27 @@ La sensacion de "vivo e inteligente" viene de **5 cosas**, ordenadas por impacto
 ### Recomendacion
 
 **Prioridad 1 (hacer AHORA, sin training):**
+- Completar Fase BJ: prompting estructurado, budgets de contexto, routing directo, release gates del `4B`
 - Completar Fase AQ (personalizacion): User Model, adaptacion de tono via prompt engineering, prediccion proactiva
 - Esto da el 70% de la sensacion de "Axi se siente vivo" sin tocar pesos del modelo
 
-**Prioridad 2 (hacer cuando AQ este completo):**
+**Prioridad 2 (hacer despues de BJ + AQ):**
 - AR.1-AR.3: Pipeline de datos + integracion Unsloth + evaluacion
 - Permite fine-tuning de estilo y dominio, el 30% restante
 
-**Prioridad 3 (optimizacion):**
+**Prioridad 3 (optimizacion futura):**
 - AR.4-AR.7: Knowledge distillation, DPO, modelos especializados, dashboard
 - Mejora continua una vez que la base funciona
 
 ### El Camino Incremental
 
 ```
-Hoy:          RAG + Skills + Procedural Memory = "Axi recuerda y aprende trucos"
-+AQ:          + User Model + Tone Adaptation    = "Axi me conoce y habla como yo quiero"
-+AR.1-AR.3:   + Fine-tuned Qwen3.5-4B           = "Axi ES diferente para mi, no es generico"
-+AR.4-AR.5:   + Distillation + DPO              = "Axi es experto en MIS temas y mejora con el uso"
-+AR.6:        + Modelos especializados           = "Axi clasifica mis intenciones al instante"
+Hoy:            RAG + Skills + Procedural Memory = "Axi recuerda y aprende trucos"
++BJ:            + Prompting/Context/Routing      = "Axi falla menos con el 4B y se siente mas rapido"
++AQ:            + User Model + Tone Adaptation   = "Axi me conoce y habla como yo quiero"
++AR.1-AR.3:     + Fine-tuned Qwen3.5-4B          = "Axi ES diferente para mi, no es generico"
++AR.4-AR.5:     + Distillation + DPO             = "Axi es experto en MIS temas y mejora con el uso"
++AR.6:          + Modelos especializados         = "Axi clasifica mis intenciones al instante"
 ```
 
 ---
@@ -280,6 +307,7 @@ Para LifeOS, el equivalente seria:
 
 ```
 Requiere completar primero:
+  Fase BJ — para cerrar prompting, contexto, routing y release gates del `4B`
   Fase AQ.1 (User Model) — para saber QUE personalizar
   Fase AQ.2 (Comunicacion) — para definir metricas de estilo
 
@@ -292,12 +320,12 @@ Dependencias tecnicas:
 ## Prioridades
 
 ```
-P0 (sin esto no hay training):
+Ahora:
+  No abrir AR. Resolver primero BJ + AQ.
+
+Cuando AR se reactive:
   AR.1 Dataset Pipeline → AR.2 Unsloth Integration → AR.3 Evaluacion/Rollback
 
-P1 (diferenciadores):
-  AR.4 Knowledge Distillation → AR.5 DPO Preferencias
-
-P2 (mejora la experiencia):
-  AR.6 Modelos Especializados → AR.7 Dashboard
+Futuro:
+  AR.4 Knowledge Distillation → AR.5 DPO Preferencias → AR.6 Modelos Especializados → AR.7 Dashboard
 ```

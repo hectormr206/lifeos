@@ -4,10 +4,7 @@
 //! it asks for approval. If approved, the command pattern is saved to the
 //! whitelist so it auto-approves next time.
 
-use anyhow::Result;
-use log::info;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use tokio::fs;
 
 const WHITELIST_FILE: &str = "exec-whitelist.json";
@@ -21,7 +18,6 @@ pub struct ExecWhitelist {
 }
 
 pub struct ExecWhitelistManager {
-    path: PathBuf,
     whitelist: ExecWhitelist,
 }
 
@@ -34,7 +30,7 @@ impl ExecWhitelistManager {
             ExecWhitelist::default()
         };
 
-        Self { path, whitelist }
+        Self { whitelist }
     }
 
     /// Check if a command is pre-approved.
@@ -53,44 +49,5 @@ impl ExecWhitelistManager {
             .denied_patterns
             .iter()
             .any(|p| lower.contains(&p.to_lowercase()))
-    }
-
-    /// Add a command pattern to the approved list.
-    pub async fn approve(&mut self, pattern: &str) -> Result<()> {
-        if !self
-            .whitelist
-            .approved_patterns
-            .contains(&pattern.to_string())
-        {
-            self.whitelist.approved_patterns.push(pattern.to_string());
-            info!("[whitelist] Approved pattern: {}", pattern);
-            self.save().await?;
-        }
-        Ok(())
-    }
-
-    /// Add a command pattern to the denied list.
-    pub async fn deny(&mut self, pattern: &str) -> Result<()> {
-        if !self
-            .whitelist
-            .denied_patterns
-            .contains(&pattern.to_string())
-        {
-            self.whitelist.denied_patterns.push(pattern.to_string());
-            info!("[whitelist] Denied pattern: {}", pattern);
-            self.save().await?;
-        }
-        Ok(())
-    }
-
-    /// List all approved patterns.
-    pub fn list_approved(&self) -> &[String] {
-        &self.whitelist.approved_patterns
-    }
-
-    async fn save(&self) -> Result<()> {
-        let json = serde_json::to_string_pretty(&self.whitelist)?;
-        fs::write(&self.path, json).await?;
-        Ok(())
     }
 }

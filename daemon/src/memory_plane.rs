@@ -9,6 +9,7 @@ use crate::ai::AiManager;
 use aes_gcm_siv::aead::{Aead, KeyInit};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce};
 use anyhow::{Context, Result};
+use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use chrono::{DateTime, Utc};
@@ -20,13 +21,52 @@ use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use uuid::Uuid;
+use zeroize::Zeroize;
 
 const STATE_FILE: &str = "memory_plane_state.json";
 const DEFAULT_MEMORY_KEY: &str = "lifeos-memory-local-key";
 const MAX_CONTENT_BYTES: usize = 64 * 1024;
 const DB_FILE: &str = "memory.db";
 const EMBEDDING_DIM: usize = 768;
+
+// -- Reinforced encryption (BI.4/6/9.2/12 foundation) ----------------------
+//
+// Argon2id parameters. Defaults follow the OWASP "interactive" profile
+// (m=19 MiB, t=2, p=1) which gives ~50 ms on a modern laptop and is
+// strong enough that brute force on a derived key takes years per try.
+// We pin the algorithm name in the DB so future versions can detect a
+// migration is needed.
+const REINFORCED_KDF_ALGO: &str = "argon2id";
+const REINFORCED_KDF_M_COST: u32 = 19_456; // KiB
+const REINFORCED_KDF_T_COST: u32 = 2;
+const REINFORCED_KDF_P_COST: u32 = 1;
+const REINFORCED_KEY_LEN: usize = 32;
+const REINFORCED_SALT_LEN: usize = 16;
+/// Magic bytes encrypted under the derived key — used by `unlock_reinforced`
+/// to verify the passphrase BEFORE returning a key. If decrypting these
+/// fails, the passphrase is wrong and we never expose a usable cipher.
+const REINFORCED_VERIFIER_MAGIC: &[u8] = b"lifeos-reinforced-vault-v1";
+/// Default idle relock window: 15 minutes.
+const REINFORCED_DEFAULT_IDLE_SECS: u64 = 15 * 60;
+const REINFORCED_MIN_PASSPHRASE_LEN: usize = 8;
+
+// -- Local PIN (BI cifrado reforzado, segunda capa) ------------------------
+//
+// PIN parameters intentionally lighter than the vault passphrase: the
+// PIN is meant to be entered frequently, so the KDF cost should be
+// ~10ms instead of ~50ms. The trade-off is that brute-force attempts
+// are less expensive — but the failed_attempts counter + auto-lock
+// kill-switch keep that bounded.
+const LOCAL_PIN_MIN_LEN: usize = 4;
+const LOCAL_PIN_MAX_LEN: usize = 16;
+const LOCAL_PIN_KDF_M_COST: u32 = 4_096; // 4 MiB
+const LOCAL_PIN_KDF_T_COST: u32 = 1;
+const LOCAL_PIN_KDF_P_COST: u32 = 1;
+const LOCAL_PIN_HASH_LEN: usize = 32;
+const LOCAL_PIN_SALT_LEN: usize = 16;
+const LOCAL_PIN_DEFAULT_MAX_FAILURES: u32 = 5;
 
 const SCHEMA: &str = r#"
 -- Metadata table for encrypted entries
@@ -102,6 +142,1001 @@ CREATE TABLE IF NOT EXISTS memory_links (
 );
 CREATE INDEX IF NOT EXISTS idx_links_from ON memory_links(from_entry);
 CREATE INDEX IF NOT EXISTS idx_links_to ON memory_links(to_entry);
+
+-- ============================================================================
+-- Fase BI.2 — Salud médica estructurada (Vida Plena)
+-- ============================================================================
+-- All five tables below live in the same memory.db file as memory_entries,
+-- share the same encryption key for sensitive fields, share the same
+-- backup, and link to memory_entries via `source_entry_id` so the narrative
+-- and the structured fact stay coupled. Every row is auto-permanent at the
+-- application level by virtue of the `health_*` kind being inserted into
+-- memory_entries when the user records a health event.
+
+-- Permanent facts: alergias, condiciones, tipo de sangre, contactos.
+CREATE TABLE IF NOT EXISTS health_facts (
+    fact_id TEXT PRIMARY KEY,
+    fact_type TEXT NOT NULL,
+    label TEXT NOT NULL,
+    severity TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_facts_type ON health_facts(fact_type);
+
+-- Medications as a HISTORY TABLE: every dose change is a new row.
+CREATE TABLE IF NOT EXISTS health_medications (
+    med_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    dosage TEXT NOT NULL,
+    frequency TEXT NOT NULL,
+    condition TEXT,
+    prescribed_by TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_meds_name ON health_medications(name);
+CREATE INDEX IF NOT EXISTS idx_health_meds_active ON health_medications(ended_at);
+
+-- Vital signs timeseries (presión, glucosa, peso, FC, etc.).
+CREATE TABLE IF NOT EXISTS health_vitals (
+    vital_id TEXT PRIMARY KEY,
+    vital_type TEXT NOT NULL,
+    value_numeric REAL,
+    value_text TEXT,
+    unit TEXT NOT NULL,
+    measured_at TEXT NOT NULL,
+    context TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_vitals_type_time
+    ON health_vitals(vital_type, measured_at);
+
+-- Resultados de laboratorio con rangos de referencia.
+CREATE TABLE IF NOT EXISTS health_lab_results (
+    lab_id TEXT PRIMARY KEY,
+    test_name TEXT NOT NULL,
+    value_numeric REAL NOT NULL,
+    unit TEXT NOT NULL,
+    reference_low REAL,
+    reference_high REAL,
+    measured_at TEXT NOT NULL,
+    lab_name TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    attachment_id TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_labs_name_time
+    ON health_lab_results(test_name, measured_at);
+
+-- Adjuntos cifrados (recetas, radiografías, PDFs de análisis).
+-- El archivo binario vive en ~/.local/share/lifeos/health_attachments/
+-- cifrado con AES-GCM-SIV; este row solo guarda la metadata.
+CREATE TABLE IF NOT EXISTS health_attachments (
+    attachment_id TEXT PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    description TEXT,
+    related_event TEXT,
+    sha256 TEXT NOT NULL,
+    nonce_b64 TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_health_attachments_type
+    ON health_attachments(file_type);
+
+-- ============================================================================
+-- Fase BI.7 — Crecimiento personal (Vida Plena)
+-- ============================================================================
+-- Reading log + habits + growth goals. No reinforced encryption — these
+-- are not sensitive categories like mental health or sexual health. Notes
+-- and reflections are still encrypted at rest using the same default key
+-- as the rest of memory.db.
+--
+-- All inserts via the BI.7 API also create a `growth_*` kind entry in
+-- memory_entries (see telegram_tools.rs / API), which means BI.1's
+-- auto-permanent contract makes these rows survive decay forever even if
+-- the user doesn't access them for years.
+
+CREATE TABLE IF NOT EXISTS reading_log (
+    book_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    author TEXT,
+    isbn TEXT,
+    status TEXT NOT NULL,            -- 'wishlist', 'reading', 'finished', 'abandoned'
+    rating_1_5 INTEGER,
+    started_at TEXT,
+    finished_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reading_status ON reading_log(status);
+CREATE INDEX IF NOT EXISTS idx_reading_author ON reading_log(author);
+
+CREATE TABLE IF NOT EXISTS habits (
+    habit_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    frequency TEXT NOT NULL,         -- 'daily', 'weekly:N', 'custom:MO,WE,FR'
+    started_at TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_habits_active ON habits(active);
+
+-- Per-day check-in log for habits. One row per (habit_id, date) — the
+-- UNIQUE constraint enforces idempotency: marking the same habit twice
+-- on the same day is a no-op via INSERT OR REPLACE.
+CREATE TABLE IF NOT EXISTS habit_log (
+    log_id TEXT PRIMARY KEY,
+    habit_id TEXT NOT NULL,
+    completed INTEGER NOT NULL,      -- 0 or 1
+    logged_for_date TEXT NOT NULL,   -- YYYY-MM-DD
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(habit_id, logged_for_date)
+);
+CREATE INDEX IF NOT EXISTS idx_habit_log_habit_date
+    ON habit_log(habit_id, logged_for_date);
+
+CREATE TABLE IF NOT EXISTS growth_goals (
+    goal_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    deadline TEXT,                   -- optional ISO-8601
+    progress_pct INTEGER NOT NULL DEFAULT 0,  -- 0..100
+    status TEXT NOT NULL,            -- 'active', 'paused', 'achieved', 'abandoned'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_growth_goals_status ON growth_goals(status);
+
+-- ============================================================================
+-- Fase BI.5 — Ejercicio (Vida Plena)
+-- ============================================================================
+-- Hardware-aware exercise tracking. Three side-tables:
+--   * exercise_inventory: lo que el usuario tiene a la mano (mancuernas,
+--     ligas, banca, gym membership, etc.). Driving constraint para
+--     proponer rutinas que el usuario PUEDA ejecutar.
+--   * exercise_plans: rutinas guardadas (de Axi, de un entrenador, de
+--     YouTube). Cada plan tiene una secuencia JSON de ejercicios.
+--   * exercise_log: sesiones realizadas con tipo, duración, intensidad
+--     percibida (RPE 1-10) y notas.
+--
+-- Las tres son auto-permanentes via la auto-permanencia BI.1 del kind
+-- `exercise_*` en memory_entries. Notes y physical_limitations cifrados
+-- con la clave default.
+
+CREATE TABLE IF NOT EXISTS exercise_inventory (
+    item_id TEXT PRIMARY KEY,
+    item_name TEXT NOT NULL,         -- 'mancuerna ajustable 5-25kg'
+    item_category TEXT NOT NULL,     -- 'free_weights', 'cardio', 'bands',
+                                     -- 'machine', 'gym_access', 'space'
+    quantity INTEGER NOT NULL DEFAULT 1,
+    notes TEXT,                      -- libre: marca, peso máximo, estado
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_inv_category
+    ON exercise_inventory(item_category);
+CREATE INDEX IF NOT EXISTS idx_exercise_inv_active
+    ON exercise_inventory(active);
+
+CREATE TABLE IF NOT EXISTS exercise_plans (
+    plan_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    goal TEXT,                       -- 'fuerza', 'cardio', 'flexibilidad',
+                                     -- 'rehab', 'pérdida de peso', etc.
+    sessions_per_week INTEGER,
+    minutes_per_session INTEGER,
+    exercises_json TEXT NOT NULL,    -- ver Rust ExercisePlanItem
+    source TEXT,                     -- 'axi', 'usuario', 'entrenador:Pedro'
+    active INTEGER NOT NULL DEFAULT 1,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_plans_active
+    ON exercise_plans(active);
+
+CREATE TABLE IF NOT EXISTS exercise_log (
+    session_id TEXT PRIMARY KEY,
+    plan_id TEXT,                    -- FK opcional a exercise_plans
+    session_type TEXT NOT NULL,      -- 'strength', 'cardio', 'flexibility',
+                                     -- 'sport', 'mixed'
+    description TEXT NOT NULL,       -- libre: 'press de banca + remo + curl'
+    duration_min INTEGER NOT NULL,
+    rpe_1_10 INTEGER,                -- intensidad percibida 1-10
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    completed_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_log_completed
+    ON exercise_log(completed_at);
+CREATE INDEX IF NOT EXISTS idx_exercise_log_type
+    ON exercise_log(session_type);
+
+-- ============================================================================
+-- Fase BI.3 sprint 1 — Nutricion (Vida Plena)
+-- ============================================================================
+-- Four side-tables for the food/nutrition layer:
+--   * nutrition_preferences: alergias, intolerancias, dietas, gustos.
+--     Auto-permanent via the nutrition_ kind contract.
+--   * nutrition_log: cada comida/snack registrada por el usuario, con
+--     descripcion libre + opcional foto/voz + macros estimados.
+--   * nutrition_recipes: recetas guardadas con ingredientes + pasos
+--     en JSON. Pueden venir de Axi, del usuario, o de un nutriologo.
+--   * nutrition_plans: planes de alimentacion activos (de Axi o
+--     subidos por el usuario).
+--
+-- Sprint 2 (BI.3.1) agregara nutrition_food_db precargada (USDA +
+-- Open Food Facts MX + SMAE) y local_commerce_products / _stores
+-- para las listas de compras filtradas por catalogo local. Esta
+-- iteracion deja todo el storage layer + tools listos.
+
+CREATE TABLE IF NOT EXISTS nutrition_preferences (
+    pref_id TEXT PRIMARY KEY,
+    pref_type TEXT NOT NULL,         -- 'allergy', 'intolerance', 'diet',
+                                     -- 'like', 'dislike', 'goal'
+    label TEXT NOT NULL,             -- 'mariscos', 'lactosa', 'mediterránea',
+                                     -- 'aguacate', 'cilantro', 'bajar 5kg'
+    severity TEXT,                   -- only relevant for allergy:
+                                     -- 'mild', 'moderate', 'severe', 'life_threatening'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_pref_type
+    ON nutrition_preferences(pref_type);
+CREATE INDEX IF NOT EXISTS idx_nutrition_pref_active
+    ON nutrition_preferences(active);
+
+CREATE TABLE IF NOT EXISTS nutrition_log (
+    log_id TEXT PRIMARY KEY,
+    meal_type TEXT NOT NULL,         -- 'breakfast', 'lunch', 'dinner',
+                                     -- 'snack', 'drink', 'craving'
+    description TEXT NOT NULL,       -- texto libre o resultado de vision LLM
+    photo_attachment_id TEXT,        -- FK opcional a health_attachments
+    voice_attachment_id TEXT,        -- FK opcional a health_attachments
+    macros_kcal REAL,                -- estimacion opcional
+    macros_protein_g REAL,
+    macros_carbs_g REAL,
+    macros_fat_g REAL,
+    consumed_at TEXT NOT NULL,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_log_consumed
+    ON nutrition_log(consumed_at);
+CREATE INDEX IF NOT EXISTS idx_nutrition_log_meal_type
+    ON nutrition_log(meal_type);
+
+CREATE TABLE IF NOT EXISTS nutrition_recipes (
+    recipe_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    ingredients_json TEXT NOT NULL,  -- ver Rust RecipeIngredient
+    steps_json TEXT NOT NULL,        -- Vec<String>
+    prep_time_min INTEGER,
+    cook_time_min INTEGER,
+    servings INTEGER,
+    tags TEXT NOT NULL,              -- JSON: ["desayuno","alto_proteina"]
+    source TEXT,                     -- 'axi', 'usuario', 'nutriologo:Juan'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_recipes_name
+    ON nutrition_recipes(name);
+
+CREATE TABLE IF NOT EXISTS nutrition_plans (
+    plan_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    goal TEXT,                       -- 'control glucosa', 'bajar peso',
+                                     -- 'ganar masa', 'mantener'
+    duration_days INTEGER,
+    daily_kcal_target REAL,
+    daily_protein_g_target REAL,
+    daily_carbs_g_target REAL,
+    daily_fat_g_target REAL,
+    source TEXT,                     -- 'axi', 'nutriologo:Maria'
+    active INTEGER NOT NULL DEFAULT 1,
+    started_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_nutrition_plans_active
+    ON nutrition_plans(active);
+
+-- ============================================================================
+-- Fase BI.13 — Salud social y comunitaria (Vida Plena)
+-- ============================================================================
+-- The Harvard Study of Adult Development + Holt-Lunstad meta-analysis
+-- (2010) document that broad community connections — beyond the inner
+-- circle of family and close friends — are as important to longevity
+-- as exercise. LifeOS tracks the user's communities, civic engagement
+-- and contributions so the BI.8 coaching layer can notice when the
+-- user has been disconnected for too long.
+--
+-- Three side-tables. All free-text notes encrypted. Auto-permanent
+-- via the BI.1 wellness-kind contract for `community_*` kind entries.
+
+CREATE TABLE IF NOT EXISTS community_activities (
+    activity_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,              -- 'club de lectura', 'parroquia',
+                                     -- 'liga de futbol', 'voluntariado X'
+    activity_type TEXT NOT NULL,     -- 'religious', 'sport', 'volunteer',
+                                     -- 'hobby', 'professional', 'educational',
+                                     -- 'civic', 'other'
+    frequency TEXT,                  -- 'semanal', 'mensual', 'irregular'
+    last_attended TEXT,              -- ISO-8601 opcional
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_community_activities_active
+    ON community_activities(active);
+CREATE INDEX IF NOT EXISTS idx_community_activities_type
+    ON community_activities(activity_type);
+
+CREATE TABLE IF NOT EXISTS civic_engagement (
+    engagement_id TEXT PRIMARY KEY,
+    engagement_type TEXT NOT NULL,   -- 'vote', 'volunteer', 'donation',
+                                     -- 'protest', 'town_hall',
+                                     -- 'community_meeting', 'other'
+    description TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_civic_engagement_occurred
+    ON civic_engagement(occurred_at);
+
+CREATE TABLE IF NOT EXISTS contribution_log (
+    contribution_id TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    beneficiary TEXT,
+    occurred_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contribution_log_occurred
+    ON contribution_log(occurred_at);
+
+-- ============================================================================
+-- Fase BI.14 — Sueño profundo (Vida Plena)
+-- ============================================================================
+-- Matthew Walker ("Why We Sleep") synthesises decades of evidence
+-- that sleep is one of the most powerful levers for every other
+-- wellness dimension. LifeOS treats it as its own pillar with two
+-- linked tables: the sleep entry itself, and the environment +
+-- behaviour context that explains the quality.
+
+CREATE TABLE IF NOT EXISTS sleep_log (
+    sleep_id TEXT PRIMARY KEY,
+    bedtime TEXT NOT NULL,           -- ISO-8601 (when the user went to bed)
+    wake_time TEXT NOT NULL,         -- ISO-8601 (when the user got up)
+    duration_hours REAL NOT NULL,    -- denormalised for fast queries
+    quality_1_10 INTEGER,
+    interruptions INTEGER NOT NULL DEFAULT 0,
+    feeling_on_wake TEXT,            -- 'descansado', 'cansado', 'irritable'
+    dreams_notes_nonce_b64 TEXT,
+    dreams_notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sleep_log_bedtime
+    ON sleep_log(bedtime);
+
+CREATE TABLE IF NOT EXISTS sleep_environment (
+    env_id TEXT PRIMARY KEY,
+    sleep_id TEXT NOT NULL,          -- FK to sleep_log
+    room_temperature_c REAL,
+    darkness_1_10 INTEGER,
+    noise_1_10 INTEGER,
+    screen_use_min_before_bed INTEGER,
+    caffeine_after_2pm INTEGER NOT NULL DEFAULT 0,
+    alcohol INTEGER NOT NULL DEFAULT 0,
+    heavy_dinner INTEGER NOT NULL DEFAULT 0,
+    exercise_intensity_today TEXT,   -- 'none', 'light', 'moderate', 'intense'
+    notes TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sleep_env_sleep_id
+    ON sleep_environment(sleep_id);
+
+-- ============================================================================
+-- Fase BI.10 — Espiritualidad (Vida Plena)
+-- ============================================================================
+-- Tracks the user's spiritual practices, reflections and personal
+-- values — with or without religion. Three side-tables:
+--   * spiritual_practices: meditacion, oracion, lectura, naturaleza,
+--     etc. con frecuencia y ultima vez practicada.
+--   * spiritual_reflections: entradas narrativas sobre preguntas
+--     existenciales, gratitud, propósito. Notas cifradas.
+--   * values_compass: 5-10 valores fundamentales del usuario con
+--     importancia 1-10 y notas.
+--
+-- Auto-permanente via la BI.1 wellness-kind contract para `spiritual_*`.
+-- Sin disclaimers de proselitismo en codigo: la regla vive en el
+-- system prompt de Axi (no juzgar, no promover, no descalificar).
+
+CREATE TABLE IF NOT EXISTS spiritual_practices (
+    practice_id TEXT PRIMARY KEY,
+    practice_name TEXT NOT NULL,     -- 'meditacion', 'oracion', 'caminata bosque',
+                                     -- 'yoga', 'journaling reflexivo', 'silencio'
+    tradition TEXT,                  -- libre: 'budismo', 'cristianismo', 'secular',
+                                     -- 'agnostico', 'sin etiqueta'
+    frequency TEXT,                  -- libre: 'diaria', 'semanal:3', 'cuando lo siento'
+    duration_min INTEGER,
+    last_practiced TEXT,             -- ISO-8601 opcional
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_spiritual_practices_active
+    ON spiritual_practices(active);
+
+CREATE TABLE IF NOT EXISTS spiritual_reflections (
+    reflection_id TEXT PRIMARY KEY,
+    topic TEXT,                      -- 'sentido de vida', 'duda', 'gratitud',
+                                     -- 'sufrimiento', 'mortalidad', 'proposito'
+    content_nonce_b64 TEXT NOT NULL,
+    content_ciphertext_b64 TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_spiritual_reflections_occurred
+    ON spiritual_reflections(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_spiritual_reflections_topic
+    ON spiritual_reflections(topic);
+
+CREATE TABLE IF NOT EXISTS values_compass (
+    value_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,              -- 'familia', 'libertad', 'creatividad',
+                                     -- 'servicio', 'honestidad', 'justicia'
+    importance_1_10 INTEGER NOT NULL,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    defined_at TEXT NOT NULL,
+    last_reviewed TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- ============================================================================
+-- Fase BI.11 — Salud financiera (Vida Plena)
+-- ============================================================================
+-- Personal finance tracking treated as wellness, not as accounting.
+-- Stress financiero es la fuente #1 de estres cronico (APA, Gallup),
+-- y afecta TODAS las demas dimensiones — por eso vive aqui y NO en
+-- un modulo aparte de "finanzas".
+--
+-- 4 side-tables. Notas cifradas. AUTO-PERMANENTE via BI.1 (`financial_*`).
+-- NO conectamos a APIs bancarias (Plaid/Belvo/Tink) en V1 — el usuario
+-- registra todo manualmente. Eso evita PCI-DSS y proteje la privacidad.
+
+CREATE TABLE IF NOT EXISTS financial_accounts (
+    account_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,              -- 'BBVA debito', 'efectivo', 'CETES'
+    account_type TEXT NOT NULL,      -- 'checking', 'savings', 'investment',
+                                     -- 'credit_card', 'loan', 'cash'
+    institution TEXT,                -- libre
+    balance_last_known REAL,         -- usuario actualiza manualmente
+    balance_currency TEXT NOT NULL DEFAULT 'MXN',
+    balance_updated_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_financial_accounts_active
+    ON financial_accounts(active);
+CREATE INDEX IF NOT EXISTS idx_financial_accounts_type
+    ON financial_accounts(account_type);
+
+CREATE TABLE IF NOT EXISTS financial_expenses (
+    expense_id TEXT PRIMARY KEY,
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'MXN',
+    category TEXT NOT NULL,          -- 'comida', 'transporte', 'vivienda',
+                                     -- 'salud', 'entretenimiento', 'ropa', etc.
+    description TEXT,
+    payment_method TEXT,             -- FK opcional a financial_accounts
+    occurred_at TEXT NOT NULL,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_financial_expenses_occurred
+    ON financial_expenses(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_financial_expenses_category
+    ON financial_expenses(category);
+
+CREATE TABLE IF NOT EXISTS financial_income (
+    income_id TEXT PRIMARY KEY,
+    amount REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'MXN',
+    source TEXT NOT NULL,            -- 'salario', 'freelance', 'renta', 'venta'
+    description TEXT,
+    received_at TEXT NOT NULL,
+    recurring INTEGER NOT NULL DEFAULT 0,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_financial_income_received
+    ON financial_income(received_at);
+
+CREATE TABLE IF NOT EXISTS financial_goals (
+    goal_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,              -- 'fondo emergencia 6 meses', 'pagar tarjeta',
+                                     -- 'enganche casa', 'viaje Japon'
+    target_amount REAL NOT NULL,
+    target_currency TEXT NOT NULL DEFAULT 'MXN',
+    target_date TEXT,
+    current_amount REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',  -- 'active', 'achieved', 'paused', 'abandoned'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_financial_goals_status
+    ON financial_goals(status);
+
+-- ----------------------------------------------------------------------
+-- BI.9 sprint 1 — Relaciones humanas (no sensible: perfil + familia + hijos)
+--
+-- Las side-tables sensibles (`relationship_events` con narrativa de
+-- conflictos, infidelidad, abuso) NO viven aqui — esperan a la fase
+-- de cifrado reforzado (Argon2id) que tambien desbloquea BI.4/6/12.
+--
+-- Convención de `kind` en `memory_entries` ligados a estas tablas:
+--   * relationship_*  → perfil de pareja, amistades, jefes
+--   * family_*        → familiares directos
+--   * child_*         → hijos del usuario
+-- Todos auto-permanentes via `is_wellness_kind`.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS relationships (
+    relationship_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,                  -- nombre de la persona
+    relationship_type TEXT NOT NULL,     -- 'partner', 'spouse', 'ex_partner',
+                                         -- 'friend', 'best_friend', 'colleague',
+                                         -- 'boss', 'mentor', 'mentee', 'neighbor',
+                                         -- 'acquaintance', 'other'
+    stage TEXT,                          -- libre: 'dating', 'engaged', 'married',
+                                         -- 'separated', 'divorced', 'distanced',
+                                         -- 'close', 'casual', 'reconnecting'
+    importance_1_10 INTEGER NOT NULL DEFAULT 5,  -- ranking subjetivo
+    started_on TEXT,                     -- ISO date opcional ('YYYY-MM-DD')
+    birthday TEXT,                       -- 'MM-DD' o 'YYYY-MM-DD'
+    anniversary TEXT,                    -- 'MM-DD' o 'YYYY-MM-DD'
+    last_contact_at TEXT,                -- ISO-8601 opcional
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relationships_type
+    ON relationships(relationship_type);
+CREATE INDEX IF NOT EXISTS idx_relationships_active
+    ON relationships(active);
+
+CREATE TABLE IF NOT EXISTS family_members (
+    member_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kinship TEXT NOT NULL,               -- 'mother', 'father', 'sibling', 'grandparent',
+                                         -- 'aunt_uncle', 'cousin', 'in_law', 'other'
+    side TEXT,                           -- libre: 'maternal', 'paternal', 'spouse_side'
+    birth_date TEXT,                     -- 'YYYY-MM-DD' o 'MM-DD' o 'YYYY'
+    death_date TEXT,                     -- ISO opcional
+    health_conditions_known TEXT,        -- texto plano resumen (ej "diabetes a los 50, hipertension")
+                                         -- usado por BI.8 para alertas hereditarias
+    contact_preferred TEXT,              -- libre: 'whatsapp', 'llamada', 'visita'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_family_members_kinship
+    ON family_members(kinship);
+
+CREATE TABLE IF NOT EXISTS children_milestones (
+    milestone_id TEXT PRIMARY KEY,
+    child_name TEXT NOT NULL,
+    milestone_type TEXT NOT NULL,        -- 'first_word', 'first_step', 'tooth',
+                                         -- 'school_start', 'achievement', 'concern',
+                                         -- 'vaccine', 'medical', 'other'
+    description TEXT NOT NULL,
+    occurred_on TEXT NOT NULL,           -- ISO date 'YYYY-MM-DD'
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_children_milestones_child
+    ON children_milestones(child_name);
+CREATE INDEX IF NOT EXISTS idx_children_milestones_when
+    ON children_milestones(occurred_on);
+
+-- ----------------------------------------------------------------------
+-- BI reinforced encryption foundation (unblocks BI.4/6/9.2/12).
+--
+-- Single-row table that stores Argon2id parameters + a small encrypted
+-- "verifier" blob used to detect a wrong passphrase BEFORE letting any
+-- sensitive read return garbage. The derived key itself is NEVER stored
+-- on disk — it lives only in `MemoryPlaneManager.reinforced_vault` while
+-- the user has the vault unlocked.
+--
+-- Lifecycle:
+--   * `set_reinforced_passphrase` writes a row here (or fails if one
+--     already exists, unless force_reset is true).
+--   * `unlock_reinforced` derives the key from the passphrase + stored
+--     salt, decrypts the verifier, and only on success caches the key.
+--   * `lock_reinforced` zeros the cached key.
+--   * Auto-relock after `idle_timeout_secs` of inactivity.
+-- ----------------------------------------------------------------------
+-- ----------------------------------------------------------------------
+-- BI.4 — Salud mental + diario emocional (Vida Plena, sensible)
+--
+-- DOS niveles de sensibilidad:
+--
+--   * `mental_health_mood_log` — quick check-ins (mood + energia +
+--     ansiedad + nota corta opcional). NO requiere vault. La nota usa
+--     el cifrado por defecto del memory_plane (la misma capa que ya
+--     protege todo lo demas).
+--
+--   * `mental_health_journal` — entradas narrativas largas. La
+--     narrativa SIEMPRE va cifrada bajo el VAULT REFORZADO (Argon2id).
+--     Si la vault esta locked, no se puede escribir ni leer la
+--     narrativa. Los campos numericos (mood/energia/ansiedad) y el
+--     flag `had_crisis_pattern` SI son visibles sin vault, para que
+--     el resumen pueda decir "logueaste 3 entradas con patron de
+--     crisis en los ultimos 7 dias" sin tener que decifrar nada.
+--
+-- Crisis detection corre en plaintext ANTES de cifrar y solo el bool
+-- queda en el row. NUNCA almacenamos las palabras gatillo en claro.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mental_health_mood_log (
+    checkin_id TEXT PRIMARY KEY,
+    mood_1_10 INTEGER NOT NULL,
+    energy_1_10 INTEGER,
+    anxiety_1_10 INTEGER,
+    note_nonce_b64 TEXT,
+    note_ciphertext_b64 TEXT,
+    logged_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mh_mood_logged
+    ON mental_health_mood_log(logged_at);
+
+CREATE TABLE IF NOT EXISTS mental_health_journal (
+    entry_id TEXT PRIMARY KEY,
+    mood_1_10 INTEGER,
+    energy_1_10 INTEGER,
+    anxiety_1_10 INTEGER,
+    narrative_nonce_b64 TEXT NOT NULL,
+    narrative_cipher_b64 TEXT NOT NULL,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    triggers_json TEXT NOT NULL DEFAULT '[]',
+    had_crisis_pattern INTEGER NOT NULL DEFAULT 0,
+    logged_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mh_journal_logged
+    ON mental_health_journal(logged_at);
+CREATE INDEX IF NOT EXISTS idx_mh_journal_crisis
+    ON mental_health_journal(had_crisis_pattern);
+
+-- ----------------------------------------------------------------------
+-- BI.9.2 — Relationship events (narrativa intima, sensible)
+--
+-- Eventos significativos en una relacion: discusiones, reconciliaciones,
+-- momentos importantes. Categoria sensible (puede haber abuso,
+-- infidelidad, conflictos legales) — la narrativa SIEMPRE va cifrada
+-- bajo el vault Argon2id. Sin vault_unlock no se puede leer ni escribir.
+--
+-- Los campos publicos (event_type, intensity_1_10, sentiment, fecha,
+-- had_crisis_pattern) son visibles sin vault — diseno intencional para
+-- que la timeline pueda decir "tres discusiones intensas en 7 dias"
+-- sin abrir nada.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS relationship_events (
+    event_id TEXT PRIMARY KEY,
+    relationship_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,        -- 'argument', 'reconciliation',
+                                     -- 'milestone', 'achievement', 'concern',
+                                     -- 'distance', 'closeness', 'support',
+                                     -- 'conflict', 'breakthrough', 'other'
+    intensity_1_10 INTEGER,
+    sentiment TEXT,                  -- 'positive', 'neutral', 'mixed', 'negative'
+    narrative_nonce_b64 TEXT NOT NULL,
+    narrative_cipher_b64 TEXT NOT NULL,
+    had_crisis_pattern INTEGER NOT NULL DEFAULT 0,
+    occurred_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rel_events_rel
+    ON relationship_events(relationship_id);
+CREATE INDEX IF NOT EXISTS idx_rel_events_when
+    ON relationship_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_rel_events_crisis
+    ON relationship_events(had_crisis_pattern);
+
+-- ----------------------------------------------------------------------
+-- BI.6 — Salud femenina / ciclo menstrual (sensible, opt-in)
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS menstrual_cycle_log (
+    entry_id TEXT PRIMARY KEY,
+    cycle_day INTEGER,
+    flow_intensity TEXT,                -- 'none','spotting','light','medium','heavy'
+    symptoms_json TEXT NOT NULL DEFAULT '[]',
+    mood_1_10 INTEGER,
+    energy_1_10 INTEGER,
+    pain_1_10 INTEGER,
+    narrative_nonce_b64 TEXT,
+    narrative_cipher_b64 TEXT,
+    had_crisis_pattern INTEGER NOT NULL DEFAULT 0,
+    logged_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_menstrual_logged
+    ON menstrual_cycle_log(logged_at);
+
+-- ----------------------------------------------------------------------
+-- BI.12 — Salud sexual (sensible, opt-in)
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS sexual_health_log (
+    entry_id TEXT PRIMARY KEY,
+    encounter_type TEXT NOT NULL,       -- 'solo','partner','multiple','other'
+    partner_relationship_id TEXT,
+    protection_used INTEGER,
+    satisfaction_1_10 INTEGER,
+    consent_clear INTEGER NOT NULL DEFAULT 1,
+    narrative_nonce_b64 TEXT NOT NULL,
+    narrative_cipher_b64 TEXT NOT NULL,
+    had_crisis_pattern INTEGER NOT NULL DEFAULT 0,
+    occurred_at TEXT NOT NULL,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sexual_health_when
+    ON sexual_health_log(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_sexual_health_consent
+    ON sexual_health_log(consent_clear);
+CREATE INDEX IF NOT EXISTS idx_sexual_health_crisis
+    ON sexual_health_log(had_crisis_pattern);
+
+CREATE TABLE IF NOT EXISTS sti_tests (
+    test_id TEXT PRIMARY KEY,
+    test_name TEXT NOT NULL,
+    result TEXT NOT NULL,               -- 'negative','positive','pending','inconclusive'
+    tested_at TEXT NOT NULL,
+    lab_name TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sti_tests_when
+    ON sti_tests(tested_at);
+
+CREATE TABLE IF NOT EXISTS contraception_methods (
+    method_id TEXT PRIMARY KEY,
+    method_name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    notes_nonce_b64 TEXT,
+    notes_ciphertext_b64 TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contraception_active
+    ON contraception_methods(ended_at);
+
+-- ----------------------------------------------------------------------
+-- BI.3.1 — food_db + comercio local + listas de compras (no sensible)
+--
+-- Tres capas:
+--
+--   * food_db: catalogo de alimentos con macros (kcal, prot, carbs,
+--     grasa). Source identifica de donde viene cada row: 'usda',
+--     'openfoodfacts', 'smae' (catalogo mexicano), o 'user'. Esta
+--     foundation NO precarga datos — los importadores corren aparte.
+--     El barcode permite lookups por foto de codigo de barras.
+--
+--   * commerce_stores + commerce_prices: tiendas que el usuario
+--     frecuenta (Walmart, Soriana, mercado local) y precios
+--     observados. Sirve para sugerir donde es mas barato comprar
+--     algo y para detectar inflacion personal.
+--
+--   * shopping_lists: listas de compras con items en JSON. Cada item
+--     puede referenciar un food_id (si esta en el catalogo) o ser
+--     texto libre. Los items tienen quantity, unit, checked, notes.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS food_db (
+    food_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    brand TEXT,
+    category TEXT,                   -- libre: fruit, vegetable, meat,
+                                     -- dairy, grain, snack, beverage, ...
+    kcal_per_100g REAL,
+    protein_g_per_100g REAL,
+    carbs_g_per_100g REAL,
+    fat_g_per_100g REAL,
+    fiber_g_per_100g REAL,
+    serving_size_g REAL,
+    source TEXT NOT NULL,            -- 'usda', 'openfoodfacts', 'smae', 'user'
+    barcode TEXT,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_food_db_name
+    ON food_db(name);
+CREATE INDEX IF NOT EXISTS idx_food_db_barcode
+    ON food_db(barcode);
+CREATE INDEX IF NOT EXISTS idx_food_db_source
+    ON food_db(source);
+
+CREATE TABLE IF NOT EXISTS commerce_stores (
+    store_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    store_type TEXT,                 -- 'supermarket', 'mercado', 'farmacia',
+                                     -- 'tienda', 'online', 'other'
+    location TEXT,
+    notes TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_commerce_stores_active
+    ON commerce_stores(active);
+
+CREATE TABLE IF NOT EXISTS commerce_prices (
+    price_id TEXT PRIMARY KEY,
+    store_id TEXT NOT NULL,
+    food_id TEXT,                    -- opcional FK textual a food_db
+    product_name TEXT NOT NULL,      -- usado cuando food_id es NULL
+    price REAL NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'MXN',
+    unit TEXT,                       -- 'kg', 'l', 'unit', 'pack', etc.
+    observed_at TEXT NOT NULL,
+    notes TEXT,
+    source_entry_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_commerce_prices_store
+    ON commerce_prices(store_id);
+CREATE INDEX IF NOT EXISTS idx_commerce_prices_food
+    ON commerce_prices(food_id);
+CREATE INDEX IF NOT EXISTS idx_commerce_prices_when
+    ON commerce_prices(observed_at);
+
+CREATE TABLE IF NOT EXISTS shopping_lists (
+    list_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    target_store_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',  -- 'active','completed','archived'
+    items_json TEXT NOT NULL DEFAULT '[]',
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_shopping_lists_status
+    ON shopping_lists(status);
+
+-- ----------------------------------------------------------------------
+-- BI cifrado reforzado — PIN local de segunda capa
+--
+-- Capa de defensa OPT-IN y RAPIDA sobre el vault. Modelo de amenaza
+-- distinto al de la passphrase del vault:
+--
+--   Vault passphrase  → defiende contra acceso al disco. KDF lenta
+--                       (~50ms), se ingresa pocas veces.
+--   PIN local         → defiende contra "alguien tomo mi laptop con
+--                       el daemon corriendo". KDF rapida (~10ms),
+--                       se ingresa frecuentemente. Tiene contador de
+--                       intentos fallidos y, si pasa max_failures,
+--                       lockea el vault automaticamente como
+--                       kill-switch.
+--
+-- El PIN NUNCA reemplaza la passphrase del vault — son dos llaves
+-- distintas. Si el atacante conoce la passphrase puede ignorar el PIN
+-- y usar `unlock_reinforced_vault` directamente. El PIN es para los
+-- escenarios donde el daemon ya esta corriendo y el atacante solo
+-- puede llamar a la API local.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS local_pin_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    salt_b64 TEXT NOT NULL,
+    pin_hash_b64 TEXT NOT NULL,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    max_failures INTEGER NOT NULL DEFAULT 5,
+    auto_lock_vault_on_max_failures INTEGER NOT NULL DEFAULT 1,
+    last_validated_at TEXT,
+    configured_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reinforced_vault_meta (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    salt_b64 TEXT NOT NULL,
+    kdf_algo TEXT NOT NULL,        -- 'argon2id'
+    kdf_m_cost INTEGER NOT NULL,   -- KiB of RAM (e.g. 19456 = 19 MiB)
+    kdf_t_cost INTEGER NOT NULL,   -- iterations
+    kdf_p_cost INTEGER NOT NULL,   -- parallelism lanes
+    verifier_nonce_b64 TEXT NOT NULL,
+    verifier_cipher_b64 TEXT NOT NULL,
+    idle_timeout_secs INTEGER NOT NULL DEFAULT 900,
+    configured_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +1179,47 @@ impl MemorySearchMode {
     }
 }
 
+/// BI.1: routing flag for the archived tier.
+///
+/// `ExcludeArchived` (default for live search): rows with `archived = 1`
+/// are filtered out of the result. `OnlyArchived` (used by
+/// `search_archived`): only rows with `archived = 1` come back. We use
+/// an enum instead of a bare `bool` so callers can never confuse the
+/// two paths at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchivedFilter {
+    ExcludeArchived,
+    OnlyArchived,
+}
+
+impl ArchivedFilter {
+    /// Returns the SQL WHERE fragment for this filter, ready to AND
+    /// with the rest of the conditions. Always wrapped in parentheses
+    /// so it composes safely.
+    fn sql_clause(self, table_alias: &str) -> String {
+        let prefix = if table_alias.is_empty() {
+            "".to_string()
+        } else {
+            format!("{}.", table_alias)
+        };
+        match self {
+            Self::ExcludeArchived => {
+                format!("({}archived IS NULL OR {}archived = 0)", prefix, prefix)
+            }
+            Self::OnlyArchived => format!("({}archived = 1)", prefix),
+        }
+    }
+}
+
+/// Result of a [`MemoryPlaneManager::apply_decay`] pass.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct DecayReport {
+    /// Number of entries whose importance was lowered by this pass.
+    pub decayed: usize,
+    /// Number of entries deleted because they fell below retention thresholds.
+    pub deleted: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MemoryStats {
     pub total_entries: usize,
@@ -177,6 +1253,36 @@ pub struct MemoryPlaneManager {
     data_dir: PathBuf,
     db_path: PathBuf,
     ai_manager: Option<Arc<AiManager>>,
+    /// In-memory state for the reinforced vault (Fase BI cifrado
+    /// reforzado). `None` when locked. Wrapped in a parking-lot–free
+    /// std `Mutex` so callers from blocking `spawn_blocking` workers
+    /// can grab it without an async runtime.
+    reinforced_vault: Arc<std::sync::Mutex<Option<ReinforcedVaultState>>>,
+}
+
+/// In-memory unlocked vault state. Holds the derived key and the
+/// timestamp of the last successful access. The key bytes are zeroed
+/// on drop via `Zeroize`.
+struct ReinforcedVaultState {
+    key: [u8; REINFORCED_KEY_LEN],
+    last_used: Instant,
+    idle_timeout_secs: u64,
+}
+
+impl Drop for ReinforcedVaultState {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+/// Public status of the reinforced vault — safe to serialize and send
+/// to clients (no key material).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReinforcedVaultStatus {
+    pub configured: bool,
+    pub unlocked: bool,
+    pub idle_timeout_secs: u64,
+    pub seconds_until_relock: Option<u64>,
 }
 
 impl MemoryPlaneManager {
@@ -200,6 +1306,7 @@ impl MemoryPlaneManager {
             data_dir,
             db_path,
             ai_manager,
+            reinforced_vault: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
@@ -237,6 +1344,28 @@ impl MemoryPlaneManager {
         if !has_column("memory_entries", "mood") {
             db.execute_batch("ALTER TABLE memory_entries ADD COLUMN mood TEXT;")?;
         }
+        if !has_column("memory_entries", "permanent") {
+            db.execute_batch(
+                "ALTER TABLE memory_entries ADD COLUMN permanent INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        // BI.1 (Fase Bienestar Integral): the `archived` column lets us
+        // soft-archive entries instead of deleting them. The default search
+        // path filters them out, but `search_archived` (and the
+        // `recall_archived` Telegram tool) can still bring them back. This
+        // is the "never lose anything" guarantee that unblocks every
+        // wellness sub-fase.
+        if !has_column("memory_entries", "archived") {
+            db.execute_batch(
+                "ALTER TABLE memory_entries ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
+            )?;
+            // Index speeds up the WHERE archived=0 filter that every
+            // search/list call now adds. Cheap to create even on large
+            // tables because the column is bool-ish.
+            db.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_memory_archived ON memory_entries(archived);",
+            )?;
+        }
 
         // -- knowledge_graph migrations --
         if !has_column("knowledge_graph", "confidence") {
@@ -270,7 +1399,205 @@ impl MemoryPlaneManager {
     }
 
     pub async fn initialize(&self) -> Result<()> {
-        self.migrate_from_json().await
+        // Legacy migrations run in this order on every startup. Each one
+        // is idempotent and cheap when there is nothing to migrate.
+        //
+        //   1. memory_plane_state.json  -> SQLite memory_entries
+        //      (the very first storage backend, pre-SQLite)
+        //   2. knowledge_graph/*.json   -> SQLite knowledge_graph triples
+        //      (the JSON-backed graph removed in commit 2940422)
+        //
+        // Both migrations also auto-backup `memory.db` to a timestamped
+        // file the first time they run, so a corrupted import never
+        // costs the user their existing data.
+        self.migrate_from_json().await?;
+        self.migrate_legacy_knowledge_graph().await?;
+        Ok(())
+    }
+
+    /// One-shot migration of the JSON-backed knowledge graph (removed in
+    /// commit 2940422) into the SQLite triple store.
+    ///
+    /// Reads `<data_dir>/knowledge_graph/kg_entities.json` and
+    /// `kg_relations.json` if they exist, converts each entity to a
+    /// `(name, "is_a", entity_type)` triple, and each relation to a
+    /// `(from_name, relation_type, to_name)` triple. Source files are
+    /// renamed to `*.migrated-YYYYMMDD-HHMMSS` so subsequent startups
+    /// no-op without losing the original data.
+    ///
+    /// Idempotent: if the source files do not exist, returns immediately.
+    /// Auto-backs-up `memory.db` to
+    /// `memory.db.pre-kg-migration-YYYYMMDD-HHMMSS.bak` before touching
+    /// anything, but only the first time (subsequent migrations skip the
+    /// backup if any `memory.db.pre-kg-migration-*.bak` is already present).
+    async fn migrate_legacy_knowledge_graph(&self) -> Result<()> {
+        let kg_dir = self.data_dir.join("knowledge_graph");
+        let entities_path = kg_dir.join("kg_entities.json");
+        let relations_path = kg_dir.join("kg_relations.json");
+
+        if !entities_path.exists() && !relations_path.exists() {
+            return Ok(()); // nothing to migrate
+        }
+
+        log::info!(
+            "memory_plane: detected legacy knowledge_graph JSON files at {} — running one-time migration",
+            kg_dir.display()
+        );
+
+        // -- Auto-backup memory.db before mutating anything. ---------------
+        // We only back up if no prior `pre-kg-migration` backup exists, so
+        // a partially-completed migration does not get its safety net
+        // overwritten on the next startup.
+        if self.db_path.exists() {
+            let backup_already_present = std::fs::read_dir(&self.data_dir)
+                .map(|rd| {
+                    rd.flatten().any(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with("memory.db.pre-kg-migration-")
+                    })
+                })
+                .unwrap_or(false);
+            if !backup_already_present {
+                let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+                let backup = self
+                    .data_dir
+                    .join(format!("memory.db.pre-kg-migration-{}.bak", stamp));
+                match tokio::fs::copy(&self.db_path, &backup).await {
+                    Ok(bytes) => log::info!(
+                        "memory_plane: pre-migration backup written to {} ({} bytes)",
+                        backup.display(),
+                        bytes
+                    ),
+                    Err(e) => log::warn!(
+                        "memory_plane: failed to back up memory.db before KG migration: {} (continuing anyway)",
+                        e
+                    ),
+                }
+            }
+        }
+
+        // -- Parse the two JSON files. We do NOT depend on the deleted
+        // KnowledgeGraph structs — generic serde_json::Value is fine and
+        // future-proof against minor schema drift in the source files.
+        let entities: Vec<serde_json::Value> = match tokio::fs::read_to_string(&entities_path).await
+        {
+            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        let relations: Vec<serde_json::Value> =
+            match tokio::fs::read_to_string(&relations_path).await {
+                Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+
+        // Build id -> name lookup so we can resolve `from_id` / `to_id`
+        // in the relation file back to entity names.
+        let mut id_to_name: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let mut entity_count = 0usize;
+        for ent in &entities {
+            let id = ent
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let name = ent
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            // Entity type was an enum variant in the deleted module:
+            // `"Person"`, `"Project"`, etc. We accept both an enum-like
+            // string and an object with a `"type"` field for resilience.
+            let etype = ent
+                .get("entity_type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_lowercase())
+                .or_else(|| {
+                    ent.get("entity_type")
+                        .and_then(|v| v.get("type"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_lowercase())
+                })
+                .unwrap_or_else(|| "topic".to_string());
+            if id.is_empty() || name.is_empty() {
+                continue;
+            }
+            id_to_name.insert(id, name.clone());
+            if let Err(e) = self.add_triple(&name, "is_a", &etype, 1.0, None).await {
+                log::warn!(
+                    "memory_plane: failed to migrate entity '{}': {} (skipping)",
+                    name,
+                    e
+                );
+            } else {
+                entity_count += 1;
+            }
+        }
+
+        let mut relation_count = 0usize;
+        for rel in &relations {
+            let from_id = rel.get("from_id").and_then(|v| v.as_str()).unwrap_or("");
+            let to_id = rel.get("to_id").and_then(|v| v.as_str()).unwrap_or("");
+            let rel_type = rel
+                .get("relation_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("related_to");
+            let confidence = rel
+                .get("confidence")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0);
+            let from_name = id_to_name.get(from_id);
+            let to_name = id_to_name.get(to_id);
+            if let (Some(f), Some(t)) = (from_name, to_name) {
+                if let Err(e) = self.add_triple(f, rel_type, t, confidence, None).await {
+                    log::warn!(
+                        "memory_plane: failed to migrate relation '{}' --[{}]-> '{}': {} (skipping)",
+                        f, rel_type, t, e
+                    );
+                } else {
+                    relation_count += 1;
+                }
+            }
+        }
+
+        // -- Rename source files so we never re-run on next startup, but
+        // keep them on disk as `*.migrated-*` evidence the user can
+        // inspect or delete manually if they want.
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+        if entities_path.exists() {
+            let migrated = kg_dir.join(format!("kg_entities.json.migrated-{}", stamp));
+            if let Err(e) = tokio::fs::rename(&entities_path, &migrated).await {
+                log::warn!(
+                    "memory_plane: failed to rename {} to {}: {} (migration will re-run on next startup unless this is fixed)",
+                    entities_path.display(),
+                    migrated.display(),
+                    e
+                );
+            }
+        }
+        if relations_path.exists() {
+            let migrated = kg_dir.join(format!("kg_relations.json.migrated-{}", stamp));
+            if let Err(e) = tokio::fs::rename(&relations_path, &migrated).await {
+                log::warn!(
+                    "memory_plane: failed to rename {} to {}: {}",
+                    relations_path.display(),
+                    migrated.display(),
+                    e
+                );
+            }
+        }
+
+        log::info!(
+            "memory_plane: legacy KG migration complete — {} entities + {} relations imported as SQLite triples",
+            entity_count,
+            relation_count
+        );
+        Ok(())
     }
 
     pub async fn add_entry(
@@ -305,6 +1632,13 @@ impl MemoryPlaneManager {
 
         let (embedding, embedding_source) = self.generate_embedding(content).await;
 
+        // BI.1: kinds in the wellness pillar are auto-permanent. Health
+        // events, medications, vitals, lab results, mental journal,
+        // relationship logs, etc. ALL skip decay/GC/dedup automatically.
+        // The user does not have to remember to mark them — the kind
+        // namespace is the contract.
+        let auto_permanent = is_wellness_kind(&kind);
+
         let db_path = self.db_path.clone();
         let entry_id_clone = entry_id.clone();
         let kind_clone = kind.clone();
@@ -319,10 +1653,10 @@ impl MemoryPlaneManager {
             let tx = db.unchecked_transaction()?;
 
             tx.execute(
-                "INSERT INTO memory_entries 
-                 (entry_id, created_at, updated_at, kind, scope, tags, source, importance, 
-                  nonce_b64, ciphertext_b64, plaintext_sha256, embedding_source)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO memory_entries
+                 (entry_id, created_at, updated_at, kind, scope, tags, source, importance,
+                  nonce_b64, ciphertext_b64, plaintext_sha256, embedding_source, permanent)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     entry_id_clone,
                     now_rfc3339,
@@ -336,6 +1670,7 @@ impl MemoryPlaneManager {
                     ciphertext_b64,
                     plaintext_sha256,
                     embedding_source,
+                    if auto_permanent { 1 } else { 0 },
                 ],
             )?;
 
@@ -400,11 +1735,14 @@ impl MemoryPlaneManager {
         let entries = tokio::task::spawn_blocking(move || {
             let db = Self::open_db(&db_path)?;
 
-            let mut sql = "SELECT entry_id, created_at, updated_at, kind, scope, tags, source, 
-                                  importance, nonce_b64, ciphertext_b64, plaintext_sha256 
+            let mut sql = "SELECT entry_id, created_at, updated_at, kind, scope, tags, source,
+                                  importance, nonce_b64, ciphertext_b64, plaintext_sha256
                            FROM memory_entries"
                 .to_string();
-            let mut conditions = Vec::new();
+            // BI.1: archived rows are excluded from the default list
+            // path. They live on disk but only appear via
+            // `search_archived` / `recall_archived`.
+            let mut conditions: Vec<&str> = vec!["(archived IS NULL OR archived = 0)"];
             let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
             if let Some(ref s) = scope {
@@ -412,10 +1750,8 @@ impl MemoryPlaneManager {
                 params_vec.push(Box::new(s.clone()));
             }
 
-            if !conditions.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&conditions.join(" AND "));
-            }
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
 
             sql.push_str(" ORDER BY created_at DESC");
             sql.push_str(&format!(" LIMIT {}", limit));
@@ -542,12 +1878,51 @@ impl MemoryPlaneManager {
             .await
     }
 
+    /// BI.1: search the archived tier.
+    ///
+    /// Same hybrid (lexical + semantic) ranking as `search_entries`,
+    /// but the archive filter is **inverted** — only entries flagged
+    /// `archived = 1` are considered. Embeddings are preserved on
+    /// archive so semantic recall over the archive works exactly the
+    /// same as the live tier. Powers the `recall_archived` Telegram
+    /// tool: *"tenía una idea genial pero ya no recuerdo qué era"*.
+    pub async fn search_archived(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: Option<&str>,
+    ) -> Result<Vec<MemorySearchResult>> {
+        self.search_entries_inner(
+            query,
+            limit,
+            scope,
+            MemorySearchMode::Hybrid,
+            ArchivedFilter::OnlyArchived,
+        )
+        .await
+    }
+
     pub async fn search_entries_with_mode(
         &self,
         query: &str,
         limit: usize,
         scope: Option<&str>,
         mode: MemorySearchMode,
+    ) -> Result<Vec<MemorySearchResult>> {
+        self.search_entries_inner(query, limit, scope, mode, ArchivedFilter::ExcludeArchived)
+            .await
+    }
+
+    /// Inner implementation; the public wrappers fix the
+    /// `archived_filter` so callers cannot accidentally surface
+    /// archived entries from the live search path.
+    async fn search_entries_inner(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: Option<&str>,
+        mode: MemorySearchMode,
+        archived_filter: ArchivedFilter,
     ) -> Result<Vec<MemorySearchResult>> {
         let query = normalize_non_empty(query).context("query is required")?;
         let query_lc = query.to_lowercase();
@@ -579,8 +1954,8 @@ impl MemoryPlaneManager {
             match mode {
                 MemorySearchMode::Semantic => {
                     let mut sql = r#"
-                        SELECT me.entry_id, me.created_at, me.updated_at, me.kind, me.scope, 
-                               me.tags, me.source, me.importance, me.nonce_b64, me.ciphertext_b64, 
+                        SELECT me.entry_id, me.created_at, me.updated_at, me.kind, me.scope,
+                               me.tags, me.source, me.importance, me.nonce_b64, me.ciphertext_b64,
                                me.plaintext_sha256, vec_distance_cosine(em.embedding, vec_f32(?)) as score
                         FROM memory_entries me
                         JOIN memory_embeddings em ON me.entry_id = em.entry_id
@@ -588,12 +1963,16 @@ impl MemoryPlaneManager {
 
                     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
                         vec![Box::new(query_embedding_bytes.clone())];
+                    let mut where_parts: Vec<String> =
+                        vec![archived_filter.sql_clause("me")];
 
                     if let Some(ref s) = scope {
-                        sql.push_str(" WHERE me.scope = ?");
+                        where_parts.push("me.scope = ?".to_string());
                         params_vec.push(Box::new(s.clone()));
                     }
 
+                    sql.push_str(" WHERE ");
+                    sql.push_str(&where_parts.join(" AND "));
                     sql.push_str(" ORDER BY score ASC LIMIT ?");
                     params_vec.push(Box::new(limit as i32));
 
@@ -637,11 +2016,13 @@ impl MemoryPlaneManager {
                 }
 
                 MemorySearchMode::Lexical => {
-                    let mut sql = "SELECT entry_id, created_at, updated_at, kind, scope, tags, source, 
-                                          importance, nonce_b64, ciphertext_b64, plaintext_sha256 
+                    let mut sql = "SELECT entry_id, created_at, updated_at, kind, scope, tags, source,
+                                          importance, nonce_b64, ciphertext_b64, plaintext_sha256
                                    FROM memory_entries"
                         .to_string();
-                    let mut conditions = vec!["ciphertext_b64 LIKE ?"];
+                    let archived_clause = archived_filter.sql_clause("");
+                    let mut conditions: Vec<&str> =
+                        vec!["ciphertext_b64 LIKE ?", archived_clause.as_str()];
                     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
                         vec![Box::new(format!("%{}%", query_lc))];
 
@@ -699,8 +2080,8 @@ impl MemoryPlaneManager {
 
                 MemorySearchMode::Hybrid => {
                     let mut sql = r#"
-                        SELECT me.entry_id, me.created_at, me.updated_at, me.kind, me.scope, 
-                               me.tags, me.source, me.importance, me.nonce_b64, me.ciphertext_b64, 
+                        SELECT me.entry_id, me.created_at, me.updated_at, me.kind, me.scope,
+                               me.tags, me.source, me.importance, me.nonce_b64, me.ciphertext_b64,
                                me.plaintext_sha256, vec_distance_cosine(em.embedding, vec_f32(?)) as semantic_score
                         FROM memory_entries me
                         JOIN memory_embeddings em ON me.entry_id = em.entry_id
@@ -708,12 +2089,16 @@ impl MemoryPlaneManager {
 
                     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
                         vec![Box::new(query_embedding_bytes.clone())];
+                    let mut where_parts: Vec<String> =
+                        vec![archived_filter.sql_clause("me")];
 
                     if let Some(ref s) = scope {
-                        sql.push_str(" WHERE me.scope = ?");
+                        where_parts.push("me.scope = ?".to_string());
                         params_vec.push(Box::new(s.clone()));
                     }
 
+                    sql.push_str(" WHERE ");
+                    sql.push_str(&where_parts.join(" AND "));
                     sql.push_str(" ORDER BY semantic_score ASC LIMIT ?");
                     params_vec.push(Box::new((limit * 3) as i32));
 
@@ -790,6 +2175,16 @@ impl MemoryPlaneManager {
         }
 
         results.truncate(limit);
+
+        // Boost importance + last_accessed for any entries returned to a caller.
+        // This is the "recall reinforces memory" half of the decay system.
+        let hit_ids: Vec<String> = results.iter().map(|r| r.entry.entry_id.clone()).collect();
+        if !hit_ids.is_empty() {
+            if let Err(e) = self.boost_on_access(&hit_ids).await {
+                log::warn!("memory_plane: boost_on_access failed: {}", e);
+            }
+        }
+
         Ok(results)
     }
 
@@ -1174,6 +2569,88 @@ impl MemoryPlaneManager {
             Ok(rows)
         })
         .await?
+    }
+
+    /// Convenience wrapper: register an entity by name and type as a triple
+    /// `(name, "is_a", type)`.
+    ///
+    /// Replaces the standalone `KnowledgeGraph::add_entity` API. Storing
+    /// entities as `is_a` triples lets us reuse the same indexed table
+    /// (`knowledge_graph` in this DB) instead of maintaining a parallel
+    /// JSON-backed graph that did a full file rewrite on every insert.
+    ///
+    /// Entity names and types are normalised to lowercase to match the
+    /// rest of the triple store.
+    pub async fn add_entity_typed(&self, name: &str, entity_type: &str) -> Result<()> {
+        let name = name.trim();
+        let entity_type = entity_type.trim();
+        if name.is_empty() || entity_type.is_empty() {
+            return Ok(());
+        }
+        self.add_triple(name, "is_a", entity_type, 1.0, None).await
+    }
+
+    /// Export the entire `knowledge_graph` triple table as a JSON value.
+    ///
+    /// Used by `/api/v1/knowledge-graph/export`. Returns
+    /// `{ "triples": [{ subject, predicate, object, confidence, created_at, updated_at }, ...] }`.
+    /// Does not include encrypted memory entries — only the public triple
+    /// store, which is plaintext metadata by design.
+    pub async fn export_graph(&self) -> Result<serde_json::Value> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT subject, predicate, object, confidence, created_at, updated_at
+                 FROM knowledge_graph
+                 ORDER BY created_at ASC",
+            )?;
+            let rows: Vec<serde_json::Value> = stmt
+                .query_map([], |row| {
+                    Ok(serde_json::json!({
+                        "subject": row.get::<_, String>(0)?,
+                        "predicate": row.get::<_, String>(1)?,
+                        "object": row.get::<_, String>(2)?,
+                        "confidence": row.get::<_, f64>(3)?,
+                        "created_at": row.get::<_, String>(4)?,
+                        "updated_at": row.get::<_, String>(5)?,
+                    }))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok::<_, anyhow::Error>(serde_json::json!({
+                "triples": rows,
+                "count": stmt.column_count(),
+            }))
+        })
+        .await?
+    }
+
+    /// Import a JSON document produced by [`export_graph`].
+    ///
+    /// Expected shape: `{ "triples": [{ "subject": ..., "predicate": ..., "object": ..., "confidence": optional }, ...] }`.
+    /// Returns the number of triples inserted (after dedup via the unique
+    /// `(subject, predicate, object)` constraint).
+    pub async fn import_graph(&self, value: &serde_json::Value) -> Result<usize> {
+        let triples = value
+            .get("triples")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut imported = 0usize;
+        for t in triples {
+            let subject = t.get("subject").and_then(|v| v.as_str()).unwrap_or("");
+            let predicate = t.get("predicate").and_then(|v| v.as_str()).unwrap_or("");
+            let object = t.get("object").and_then(|v| v.as_str()).unwrap_or("");
+            let confidence = t.get("confidence").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            if subject.is_empty() || predicate.is_empty() || object.is_empty() {
+                continue;
+            }
+            self.add_triple(subject, predicate, object, confidence, None)
+                .await?;
+            imported += 1;
+        }
+        Ok(imported)
     }
 
     // -----------------------------------------------------------------------
@@ -1578,47 +3055,216 @@ impl MemoryPlaneManager {
         .await?
     }
 
-    /// Apply exponential decay to importance of infrequently accessed entries.
+    /// Apply Ebbinghaus-inspired decay + connection bonus to memory entries.
     ///
-    /// For entries with access_count < 2 and importance > 10:
-    ///   new_importance = importance * 0.85^(days_since_update / 30)
-    /// Skips entries marked as permanent (if the column exists).
-    pub async fn apply_exponential_decay(&self) -> Result<usize> {
+    /// This is the canonical decay function and runs daily from the
+    /// `lifeosd` housekeeping loop. It replaces both the older linear
+    /// `-5/30d` curve and the standalone `apply_exponential_decay`
+    /// helper that depended on SQLite's optional `power()` extension.
+    ///
+    /// # Curve
+    ///
+    /// For each non-permanent entry with `importance < 70`:
+    ///
+    /// 1. **Frequently-recalled (access_count >= 2):** the curve is
+    ///    flat. Recall is its own reinforcement so we do not apply the
+    ///    decay term — these entries are only candidates for the
+    ///    connection bonus below.
+    /// 2. **Otherwise:** `decayed = importance * 0.85^(days_since/30)`.
+    ///    Half-life ≈ 128 days. Faster than linear in the 1-6 month
+    ///    window (where most noise lives) and gentler in the long
+    ///    tail (a 2-year-old fact still has a faint signal instead of
+    ///    being clamped to 0).
+    /// 3. **Connection bonus:** `bonus = min(links * 2, 20)` where
+    ///    `links` is the count of incoming + outgoing edges in the
+    ///    `memory_links` table. Densely-connected memories resist
+    ///    forgetting — this is the structural counterpart to the
+    ///    importance/recall reinforcement.
+    /// 4. Final importance is clamped to `[0, 100]`.
+    ///
+    /// # Garbage collection
+    ///
+    /// After the decay/bonus pass, entries that satisfy any of the
+    /// following are deleted (along with their embeddings and links):
+    ///
+    /// - `importance < 10` AND older than 90 days
+    /// - `importance < 30` AND older than 180 days
+    ///
+    /// Permanent entries (`permanent = 1`) are skipped entirely at every
+    /// stage. Entries with `importance >= 70` are kept indefinitely and
+    /// not touched by the decay term, but they CAN still receive the
+    /// connection bonus.
+    ///
+    /// # Performance
+    ///
+    /// All math runs in Rust over a single `SELECT` to avoid depending
+    /// on SQLite's optional `power()` extension. Updates are batched
+    /// inside one transaction. Cost is O(N) over non-permanent entries,
+    /// fine for the daily cadence even at hundreds of thousands of
+    /// rows.
+    pub async fn apply_decay(&self) -> Result<DecayReport> {
         let db_path = self.db_path.clone();
         tokio::task::spawn_blocking(move || {
             let db = Self::open_db(&db_path)?;
+            let tx = db.unchecked_transaction()?;
+            let now_utc = chrono::Utc::now();
 
-            // Check if the permanent column exists
-            let has_permanent: bool = db
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('memory_entries') WHERE name = 'permanent'",
-                )
-                .and_then(|mut stmt| stmt.exists([]))
-                .unwrap_or(false);
+            // -- Phase 1: collect all candidate rows in one SELECT.
+            //
+            // We pull the link count via a correlated subquery so the
+            // result already carries everything needed to compute the
+            // new importance in Rust. The query also includes
+            // importance >= 70 entries because they CAN still receive
+            // the connection bonus (just not the decay term).
+            let updates: Vec<(String, i32)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT
+                        e.entry_id,
+                        e.importance,
+                        COALESCE(e.last_accessed, e.updated_at) AS ts,
+                        e.access_count,
+                        (
+                            SELECT COUNT(*) FROM memory_links l
+                            WHERE l.from_entry = e.entry_id
+                               OR l.to_entry = e.entry_id
+                        ) AS link_count
+                     FROM memory_entries e
+                     WHERE (e.permanent IS NULL OR e.permanent = 0)",
+                )?;
 
-            let permanent_filter = if has_permanent {
-                "AND (permanent IS NULL OR permanent != 1)"
-            } else {
-                ""
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i32>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                })?;
+
+                let mut out: Vec<(String, i32)> = Vec::new();
+                for row in rows {
+                    let (entry_id, importance, ts, access_count, link_count) = row?;
+
+                    // Parse timestamp; skip on parse error to stay safe.
+                    let parsed = match chrono::DateTime::parse_from_rfc3339(&ts) {
+                        Ok(t) => t.with_timezone(&chrono::Utc),
+                        Err(_) => continue,
+                    };
+                    let days_since = (now_utc - parsed).num_days().max(0) as f64;
+
+                    // Decay term: skipped for the >= 70 floor and for
+                    // frequently-recalled entries.
+                    let decayed: f64 = if importance >= 70 || access_count >= 2 {
+                        importance as f64
+                    } else {
+                        let factor = 0.85_f64.powf(days_since / 30.0);
+                        (importance as f64 * factor).round()
+                    };
+
+                    // Connection bonus: 2 importance per link, capped at 20.
+                    // `link_count.min(10) * 2` is the same as
+                    // `min(link_count * 2, 20)` but avoids overflow if
+                    // some weird ingest path produced a huge link count.
+                    let bonus = (link_count.min(10) as f64) * 2.0;
+
+                    let new_importance = (decayed + bonus).clamp(0.0, 100.0).round() as i32;
+
+                    if new_importance != importance {
+                        out.push((entry_id, new_importance));
+                    }
+                }
+                out
             };
 
-            let query = format!(
-                "UPDATE memory_entries SET importance = CAST(
-                    importance * power(0.85, (julianday('now') - julianday(updated_at)) / 30.0)
-                 AS INTEGER)
-                 WHERE access_count < 2
-                   AND importance > 10
-                   AND CAST(
-                       importance * power(0.85, (julianday('now') - julianday(updated_at)) / 30.0)
-                   AS INTEGER) < importance
-                   {}",
-                permanent_filter
-            );
+            let decayed = updates.len();
+            for (id, new_imp) in &updates {
+                tx.execute(
+                    "UPDATE memory_entries SET importance = ?1 WHERE entry_id = ?2",
+                    params![new_imp, id],
+                )?;
+            }
 
-            let updated = db.execute(&query, [])?;
-            Ok(updated)
+            // -- Phase 2: ARCHIVE low-importance old entries.
+            //
+            // BI.1 — "nunca perder nada" — what was previously a hard
+            // DELETE is now a soft archive: we set `archived = 1` on
+            // entries that hit the GC thresholds. They drop out of
+            // normal search, free space in the search ranking for
+            // fresh stuff, but stay recoverable via `search_archived`
+            // and the `recall_archived` Telegram tool. Embeddings are
+            // intentionally PRESERVED so semantic recall over the
+            // archive still works ("tenía una idea genial pero no
+            // recuerdo cuál era").
+            //
+            // The thresholds are unchanged (importance<10 + 90d, or
+            // importance<30 + 180d). The only change is the verb:
+            // archive instead of delete.
+            //
+            // Already-archived entries (archived = 1) are skipped so
+            // we don't double-count them in the report.
+            let cutoff_90 = (now_utc - chrono::Duration::days(90)).to_rfc3339();
+            let cutoff_180 = (now_utc - chrono::Duration::days(180)).to_rfc3339();
+
+            let archived = tx.execute(
+                "UPDATE memory_entries
+                 SET archived = 1
+                 WHERE (permanent IS NULL OR permanent = 0)
+                   AND (archived IS NULL OR archived = 0)
+                   AND (
+                       (importance < 10 AND COALESCE(last_accessed, updated_at) < ?1)
+                       OR (importance < 30 AND COALESCE(last_accessed, updated_at) < ?2)
+                   )",
+                params![cutoff_90, cutoff_180],
+            )?;
+
+            tx.commit()?;
+            // The `deleted` field now means "newly archived this pass".
+            // We keep the field name for backward compatibility with
+            // existing logging / dashboards that already read it.
+            Ok::<_, anyhow::Error>(DecayReport {
+                decayed,
+                deleted: archived,
+            })
         })
         .await?
+    }
+
+    /// Boost importance for entries that were just accessed (recall/search hit).
+    ///
+    /// For each `entry_id`:
+    /// - importance += 2 (capped at 100)
+    /// - last_accessed = now
+    /// - access_count += 1
+    ///
+    /// Permanent entries are still tracked (last_accessed/access_count) but
+    /// their importance value is left untouched since it has no effect on
+    /// retention.
+    pub async fn boost_on_access(&self, entry_ids: &[String]) -> Result<()> {
+        if entry_ids.is_empty() {
+            return Ok(());
+        }
+        let ids: Vec<String> = entry_ids.to_vec();
+        let db_path = self.db_path.clone();
+        let now = Utc::now().to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let tx = db.unchecked_transaction()?;
+            for id in &ids {
+                tx.execute(
+                    "UPDATE memory_entries
+                     SET importance = MIN(100, importance + 2),
+                         last_accessed = ?1,
+                         access_count = access_count + 1
+                     WHERE entry_id = ?2",
+                    params![now, id],
+                )?;
+            }
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        Ok(())
     }
 
     /// Mark a memory entry as permanent (exempt from decay and garbage collection).
@@ -1685,21 +3331,40 @@ impl MemoryPlaneManager {
                     continue;
                 }
 
-                // Compare importance to decide which to keep
-                let imp_a: i32 = tx
-                    .query_row(
-                        "SELECT importance FROM memory_entries WHERE entry_id = ?1",
-                        params![id_a],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                let imp_b: i32 = tx
-                    .query_row(
-                        "SELECT importance FROM memory_entries WHERE entry_id = ?1",
-                        params![id_b],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
+                // BI.1: never fuse permanent entries OR wellness-pillar
+                // entries. Two doses of the same medication are SEPARATE
+                // events even if the text is identical — fusing them
+                // would lose the second dose. We pull importance, kind,
+                // and permanent in a single query per row to avoid
+                // doing 6 queries per pair.
+                let row_a: rusqlite::Result<(i32, String, i32)> = tx.query_row(
+                    "SELECT importance, kind, COALESCE(permanent, 0) FROM memory_entries WHERE entry_id = ?1",
+                    params![id_a],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                );
+                let row_b: rusqlite::Result<(i32, String, i32)> = tx.query_row(
+                    "SELECT importance, kind, COALESCE(permanent, 0) FROM memory_entries WHERE entry_id = ?1",
+                    params![id_b],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                );
+
+                let (imp_a, kind_a, perm_a) = match row_a {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let (imp_b, kind_b, perm_b) = match row_b {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+
+                // Skip pair entirely if EITHER side is protected.
+                if perm_a != 0
+                    || perm_b != 0
+                    || is_wellness_kind(&kind_a)
+                    || is_wellness_kind(&kind_b)
+                {
+                    continue;
+                }
 
                 let to_delete = if imp_a >= imp_b { id_b } else { id_a };
 
@@ -1995,9 +3660,14 @@ impl MemoryPlaneManager {
             let db = Self::open_db(&db_path)?;
             let cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
 
+            // BI.1: skip permanent + archived rows from the candidate
+            // count. Permanent entries (which include all wellness
+            // kinds) must NEVER be summarised away.
             let mut stmt = db.prepare(
                 "SELECT tags, COUNT(*) as cnt FROM memory_entries
                  WHERE updated_at < ?1
+                   AND (permanent IS NULL OR permanent = 0)
+                   AND (archived IS NULL OR archived = 0)
                  GROUP BY tags HAVING cnt >= 10
                  ORDER BY cnt DESC LIMIT 10",
             )?;
@@ -2011,6 +3681,12410 @@ impl MemoryPlaneManager {
         })
         .await?
     }
+
+    /// Result of a [`MemoryPlaneManager::summarize_clusters`] pass.
+    ///
+    /// `clusters_processed` is the number of tag-clusters that received a
+    /// summary entry; `originals_archived` is the total number of source
+    /// entries moved to `memory_archive`.
+    pub async fn summarize_clusters_with_router(
+        &self,
+        router: &crate::llm_router::LlmRouter,
+        max_clusters: usize,
+        max_entries_per_cluster: usize,
+    ) -> Result<ClusterSummaryReport> {
+        use crate::llm_router::{ChatMessage, RouterRequest, TaskComplexity};
+
+        let candidates = self.get_cluster_candidates().await?;
+        let mut clusters_processed = 0usize;
+        let mut originals_archived = 0usize;
+
+        // Process at most `max_clusters` clusters per pass to keep the
+        // nightly window predictable.
+        for (tags_json, count) in candidates.into_iter().take(max_clusters) {
+            // The grouping key from get_cluster_candidates is the raw
+            // `tags` JSON column. Decode it to a Vec<String> so we can
+            // pass real tags into list_entries / the new summary entry.
+            let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+            if tags.is_empty() {
+                continue;
+            }
+
+            // Pull every entry that lives in this cluster (capped).
+            // We use the first tag as the filter — list_entries only
+            // accepts a single tag and that is enough to enclose the
+            // group because the cluster is keyed by the FULL tags JSON,
+            // so every member shares all tags including this one.
+            let primary_tag = tags[0].clone();
+            let raw_entries = self
+                .list_entries(max_entries_per_cluster, None, Some(&primary_tag))
+                .await?;
+
+            // BI.1: defensively skip wellness-kind entries even if a
+            // future bug ever lets one through `get_cluster_candidates`.
+            // This is the second line of defence; the first is the
+            // permanent filter on the candidate query above.
+            let entries: Vec<MemoryEntry> = raw_entries
+                .into_iter()
+                .filter(|e| !is_wellness_kind(&e.kind))
+                .collect();
+            if entries.len() < 5 {
+                // Below the floor — not enough to summarise meaningfully.
+                continue;
+            }
+
+            // Build a compact prompt. We give the LLM the cluster's
+            // tags + the chronological list of entries (truncated). The
+            // model is asked to return ONE short paragraph in Spanish.
+            let mut bullet_list = String::new();
+            for e in &entries {
+                let snippet: String = e.content.chars().take(220).collect();
+                bullet_list.push_str(&format!(
+                    "- [{}] {}\n",
+                    e.created_at.format("%Y-%m-%d"),
+                    snippet
+                ));
+            }
+
+            let user_prompt = format!(
+                "Tengo {} memorias antiguas con las etiquetas {:?}. \
+                 Resúmelas en UN SOLO párrafo corto en español (máx 4 oraciones), \
+                 conservando hechos clave, decisiones y nombres propios. \
+                 No inventes nada. No uses markdown. Aquí están las memorias:\n\n{}",
+                count, tags, bullet_list
+            );
+
+            let req = RouterRequest {
+                messages: vec![ChatMessage {
+                    role: "user".into(),
+                    content: serde_json::Value::String(user_prompt),
+                }],
+                complexity: Some(TaskComplexity::Simple),
+                sensitivity: None,
+                preferred_provider: None,
+                max_tokens: Some(400),
+            };
+
+            let summary_text = match router.chat(&req).await {
+                Ok(resp) => resp.text.trim().to_string(),
+                Err(e) => {
+                    log::warn!(
+                        "memory_plane: LLM summarization failed for cluster {:?}: {}",
+                        tags,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            if summary_text.is_empty() {
+                continue;
+            }
+
+            // Save the summary as a new memory entry. We mark it with
+            // its own kind ("cluster_summary") and the original tags
+            // so future searches still find it. Importance starts at 80
+            // so the new entry survives decay long enough to actually
+            // serve as the "narrative replacement" for the originals.
+            let mut summary_tags = tags.clone();
+            summary_tags.push("cluster_summary".to_string());
+            let summary_content = format!(
+                "Resumen de {} memorias del cluster {:?}:\n{}",
+                count, tags, summary_text
+            );
+            let summary_entry = match self
+                .add_entry(
+                    "cluster_summary",
+                    "user",
+                    &summary_tags,
+                    Some("memory_plane://summarize_clusters"),
+                    80,
+                    &summary_content,
+                )
+                .await
+            {
+                Ok(e) => e,
+                Err(e) => {
+                    log::warn!(
+                        "memory_plane: failed to persist cluster summary for {:?}: {}",
+                        tags,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            // Archive the originals so they no longer appear in normal
+            // search but remain recoverable from `memory_archive`.
+            // We do this in one transaction.
+            let archived = self
+                .archive_entries_by_id(
+                    entries
+                        .iter()
+                        .map(|e| e.entry_id.clone())
+                        .collect::<Vec<_>>(),
+                )
+                .await
+                .unwrap_or(0);
+            originals_archived += archived;
+            clusters_processed += 1;
+
+            log::info!(
+                "memory_plane: summarised cluster {:?} ({} entries -> {}) and archived {} originals",
+                tags,
+                entries.len(),
+                summary_entry.entry_id,
+                archived
+            );
+        }
+
+        Ok(ClusterSummaryReport {
+            clusters_processed,
+            originals_archived,
+        })
+    }
+
+    /// Soft-archive a specific list of entry IDs.
+    ///
+    /// Used by `summarize_clusters_with_router` after the LLM produces
+    /// the consolidated narrative entry. Skips permanent entries
+    /// AND wellness-pillar entries (defense in depth — the caller
+    /// should already filter, but boundary checks are cheap).
+    ///
+    /// **BI.1 change:** previously this method moved entries to a
+    /// separate `memory_archive` metadata-only table and deleted the
+    /// originals (losing the encrypted content forever). Now it sets
+    /// `archived = 1` on the row, preserving content + embeddings so
+    /// `search_archived` can recover them later. The legacy
+    /// `memory_archive` table is no longer written to but stays in the
+    /// schema for any pre-existing data.
+    pub async fn archive_entries_by_id(&self, ids: Vec<String>) -> Result<usize> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let tx = db.unchecked_transaction()?;
+            let mut moved = 0usize;
+
+            for id in &ids {
+                // Skip permanent + wellness entries defensively.
+                let row: rusqlite::Result<(i32, String)> = tx.query_row(
+                    "SELECT COALESCE(permanent, 0), kind
+                     FROM memory_entries WHERE entry_id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                );
+                let (perm, kind) = match row {
+                    Ok(t) => t,
+                    Err(_) => continue, // entry does not exist anymore
+                };
+                if perm != 0 || is_wellness_kind(&kind) {
+                    continue;
+                }
+
+                let n = tx.execute(
+                    "UPDATE memory_entries
+                     SET archived = 1
+                     WHERE entry_id = ?1
+                       AND (archived IS NULL OR archived = 0)",
+                    params![id],
+                )?;
+                moved += n;
+            }
+
+            tx.commit()?;
+            Ok::<_, anyhow::Error>(moved)
+        })
+        .await?
+    }
+}
+
+/// Result of a [`MemoryPlaneManager::summarize_clusters_with_router`] pass.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct ClusterSummaryReport {
+    pub clusters_processed: usize,
+    pub originals_archived: usize,
+}
+
+// ============================================================================
+// Fase BI cifrado reforzado (foundation) — Argon2id + AES-GCM-SIV
+// ============================================================================
+//
+// Esta capa NO reemplaza el cifrado por defecto del memory_plane (que usa
+// una llave derivada del machine-id y protege todo el resto de los datos).
+// Es una segunda capa, OPT-IN, para datos extra-sensibles que necesitan
+// proteccion contra "alguien con acceso fisico a tu disco mientras la
+// computadora esta apagada o bloqueada":
+//
+//   * BI.4  — diario emocional / mental health
+//   * BI.6  — ciclo menstrual / salud femenina
+//   * BI.9.2 — relationship_events (narrativa intima de conflictos)
+//   * BI.12 — salud sexual e intima
+//
+// Modelo de amenaza explicito:
+//   - Defiende contra: lectura del disco crudo, snapshots de respaldo,
+//     reads del DB cuando el daemon esta corriendo pero el vault locked,
+//     curiosidad de cualquier proceso que tenga el archivo memory.db.
+//   - NO defiende contra: el daemon corriendo CON la passphrase desbloqueada
+//     en RAM (entonces los datos estan accesibles, eso es el punto), un
+//     keylogger en el host, un atacante con root que vuelque la RAM.
+//
+// Diseno:
+//   1. La passphrase NO se persiste en disco. Solo persistimos los
+//      parametros de Argon2id (m,t,p) + el salt + un "verifier" cifrado
+//      con la llave derivada. Si la passphrase es la correcta, podemos
+//      decifrar el verifier y obtenemos los magic bytes esperados.
+//   2. La llave derivada vive solo en `MemoryPlaneManager.reinforced_vault`
+//      mientras el vault esta unlocked. Se borra (zeroize) al hacer lock,
+//      al timeout, o al drop del manager.
+//   3. Cada `encrypt_reinforced` / `decrypt_reinforced` checa el timeout
+//      ANTES de cualquier operacion criptografica — si paso, hace lock
+//      automatico y devuelve un error claro.
+//   4. Cambiar passphrase requiere re-encriptar todos los datos sensibles;
+//      eso es trabajo de las sub-fases que consuman esta API. La foundation
+//      solo implementa "set inicial" y "reset destructivo".
+//
+// El flujo del usuario es: vault_set_passphrase una vez → vault_unlock
+// cuando quiere acceder/escribir datos sensibles → vault_lock manual o
+// auto-relock por idle.
+
+impl MemoryPlaneManager {
+    /// Returns the persisted vault metadata if a passphrase has been
+    /// set. Internal helper.
+    fn read_vault_meta(db: &Connection) -> Result<Option<ReinforcedVaultMetaRow>> {
+        let mut stmt = db.prepare(
+            "SELECT salt_b64, kdf_algo, kdf_m_cost, kdf_t_cost, kdf_p_cost,
+                    verifier_nonce_b64, verifier_cipher_b64, idle_timeout_secs,
+                    configured_at, updated_at
+             FROM reinforced_vault_meta WHERE id = 1",
+        )?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(ReinforcedVaultMetaRow {
+                salt_b64: row.get(0)?,
+                kdf_algo: row.get(1)?,
+                kdf_m_cost: row.get(2)?,
+                kdf_t_cost: row.get(3)?,
+                kdf_p_cost: row.get(4)?,
+                verifier_nonce_b64: row.get(5)?,
+                verifier_cipher_b64: row.get(6)?,
+                idle_timeout_secs: row.get::<_, i64>(7)?.max(60) as u64,
+                configured_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Whether the user has configured a reinforced passphrase. Cheap
+    /// — just checks for the meta row.
+    pub async fn is_reinforced_vault_configured(&self) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path)?;
+            Ok(Self::read_vault_meta(&db)?.is_some())
+        })
+        .await?
+    }
+
+    /// Set the reinforced passphrase for the first time.
+    ///
+    /// Fails (without overwriting anything) if a passphrase is already
+    /// configured. Use `reset_reinforced_passphrase` if the user
+    /// explicitly wants to wipe + reconfigure (which destroys access
+    /// to anything previously encrypted).
+    ///
+    /// `idle_timeout_secs` is clamped to `[60, 24*3600]`.
+    pub async fn set_reinforced_passphrase(
+        &self,
+        passphrase: &str,
+        idle_timeout_secs: Option<u64>,
+    ) -> Result<()> {
+        validate_passphrase(passphrase)?;
+        let idle = idle_timeout_secs
+            .unwrap_or(REINFORCED_DEFAULT_IDLE_SECS)
+            .clamp(60, 24 * 3600);
+
+        let pass_owned = passphrase.to_string();
+        let db_path = self.db_path.clone();
+
+        // Reject if already configured.
+        if self.is_reinforced_vault_configured().await? {
+            anyhow::bail!(
+                "reinforced vault already configured — use reset_reinforced_passphrase to wipe and reconfigure"
+            );
+        }
+
+        let result = tokio::task::spawn_blocking(move || -> Result<[u8; REINFORCED_KEY_LEN]> {
+            let db = Self::open_db(&db_path)?;
+
+            let mut salt = [0u8; REINFORCED_SALT_LEN];
+            rand::thread_rng().fill_bytes(&mut salt);
+            let key = derive_reinforced_key(
+                pass_owned.as_bytes(),
+                &salt,
+                REINFORCED_KDF_M_COST,
+                REINFORCED_KDF_T_COST,
+                REINFORCED_KDF_P_COST,
+            )?;
+
+            let cipher = Aes256GcmSiv::new_from_slice(&key)
+                .map_err(|e| anyhow::anyhow!("invalid derived key: {}", e))?;
+            let mut verifier_nonce = [0u8; 12];
+            rand::thread_rng().fill_bytes(&mut verifier_nonce);
+            let verifier_cipher = cipher
+                .encrypt(
+                    Nonce::from_slice(&verifier_nonce),
+                    REINFORCED_VERIFIER_MAGIC,
+                )
+                .map_err(|e| anyhow::anyhow!("verifier encrypt failed: {}", e))?;
+
+            let now = Utc::now().to_rfc3339();
+            db.execute(
+                "INSERT INTO reinforced_vault_meta
+                 (id, salt_b64, kdf_algo, kdf_m_cost, kdf_t_cost, kdf_p_cost,
+                  verifier_nonce_b64, verifier_cipher_b64, idle_timeout_secs,
+                  configured_at, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                params![
+                    B64.encode(salt),
+                    REINFORCED_KDF_ALGO,
+                    REINFORCED_KDF_M_COST as i64,
+                    REINFORCED_KDF_T_COST as i64,
+                    REINFORCED_KDF_P_COST as i64,
+                    B64.encode(verifier_nonce),
+                    B64.encode(verifier_cipher),
+                    idle as i64,
+                    now,
+                ],
+            )?;
+            Ok(key)
+        })
+        .await??;
+
+        // Cache key in memory so the caller can use the vault right
+        // away without a separate unlock call.
+        let mut guard = self.reinforced_vault.lock().unwrap();
+        *guard = Some(ReinforcedVaultState {
+            key: result,
+            last_used: Instant::now(),
+            idle_timeout_secs: idle,
+        });
+        Ok(())
+    }
+
+    /// Destructive reset — wipes the meta row + locks the in-memory
+    /// vault. Anything already encrypted under the previous
+    /// passphrase becomes UNRECOVERABLE. Caller is responsible for
+    /// confirming with the user.
+    pub async fn reset_reinforced_passphrase(&self) -> Result<()> {
+        // Lock first so no in-flight operation can use a stale key
+        // after the meta row is gone.
+        self.lock_reinforced_vault();
+
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute("DELETE FROM reinforced_vault_meta WHERE id = 1", [])?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    /// Unlock the vault with the given passphrase.
+    ///
+    /// On success, derives the key, verifies it via the stored
+    /// verifier blob, and caches the key in memory. On wrong
+    /// passphrase, returns an error WITHOUT exposing the cipher.
+    pub async fn unlock_reinforced_vault(&self, passphrase: &str) -> Result<()> {
+        let pass_owned = passphrase.to_string();
+        let db_path = self.db_path.clone();
+
+        let (key, idle) =
+            tokio::task::spawn_blocking(move || -> Result<([u8; REINFORCED_KEY_LEN], u64)> {
+                let db = Self::open_db(&db_path)?;
+                let meta = Self::read_vault_meta(&db)?
+                    .ok_or_else(|| anyhow::anyhow!("vault not configured"))?;
+
+                if meta.kdf_algo != REINFORCED_KDF_ALGO {
+                    anyhow::bail!("unsupported kdf algorithm: {}", meta.kdf_algo);
+                }
+                let salt = B64
+                    .decode(meta.salt_b64.as_bytes())
+                    .context("invalid salt b64")?;
+                let key = derive_reinforced_key(
+                    pass_owned.as_bytes(),
+                    &salt,
+                    meta.kdf_m_cost,
+                    meta.kdf_t_cost,
+                    meta.kdf_p_cost,
+                )?;
+
+                // Verify by decrypting the magic bytes.
+                let cipher = Aes256GcmSiv::new_from_slice(&key)
+                    .map_err(|e| anyhow::anyhow!("invalid derived key: {}", e))?;
+                let nonce_bytes = B64
+                    .decode(meta.verifier_nonce_b64.as_bytes())
+                    .context("invalid verifier nonce")?;
+                let cipher_bytes = B64
+                    .decode(meta.verifier_cipher_b64.as_bytes())
+                    .context("invalid verifier ciphertext")?;
+                let plain = cipher
+                    .decrypt(Nonce::from_slice(&nonce_bytes), cipher_bytes.as_ref())
+                    .map_err(|_| anyhow::anyhow!("wrong passphrase"))?;
+                if plain != REINFORCED_VERIFIER_MAGIC {
+                    anyhow::bail!("verifier mismatch");
+                }
+                Ok((key, meta.idle_timeout_secs))
+            })
+            .await??;
+
+        let mut guard = self.reinforced_vault.lock().unwrap();
+        *guard = Some(ReinforcedVaultState {
+            key,
+            last_used: Instant::now(),
+            idle_timeout_secs: idle,
+        });
+        Ok(())
+    }
+
+    /// Manually lock the vault. Idempotent.
+    pub fn lock_reinforced_vault(&self) {
+        let mut guard = self.reinforced_vault.lock().unwrap();
+        *guard = None; // Drop runs `Zeroize` on the key.
+    }
+
+    /// Status snapshot of the vault — safe to expose to clients.
+    /// Side effect: if the idle timer has expired, this will lock
+    /// the vault before returning, which is the desired UX.
+    pub async fn reinforced_vault_status(&self) -> Result<ReinforcedVaultStatus> {
+        let configured = self.is_reinforced_vault_configured().await?;
+        let mut guard = self.reinforced_vault.lock().unwrap();
+
+        if let Some(state) = guard.as_ref() {
+            let elapsed = state.last_used.elapsed().as_secs();
+            if elapsed >= state.idle_timeout_secs {
+                *guard = None;
+                return Ok(ReinforcedVaultStatus {
+                    configured,
+                    unlocked: false,
+                    idle_timeout_secs: REINFORCED_DEFAULT_IDLE_SECS,
+                    seconds_until_relock: None,
+                });
+            }
+            let remaining = state.idle_timeout_secs - elapsed;
+            return Ok(ReinforcedVaultStatus {
+                configured,
+                unlocked: true,
+                idle_timeout_secs: state.idle_timeout_secs,
+                seconds_until_relock: Some(remaining),
+            });
+        }
+
+        Ok(ReinforcedVaultStatus {
+            configured,
+            unlocked: false,
+            idle_timeout_secs: REINFORCED_DEFAULT_IDLE_SECS,
+            seconds_until_relock: None,
+        })
+    }
+
+    /// Encrypt plaintext under the reinforced key. Refreshes the
+    /// idle timer on success. Errors if the vault is locked or has
+    /// auto-relocked due to timeout.
+    pub fn encrypt_reinforced(&self, plaintext: &str) -> Result<(String, String)> {
+        let mut guard = self.reinforced_vault.lock().unwrap();
+        let state = guard.as_mut().context("reinforced vault is locked")?;
+        if state.last_used.elapsed().as_secs() >= state.idle_timeout_secs {
+            *guard = None;
+            anyhow::bail!("reinforced vault auto-relocked (idle timeout)");
+        }
+        let cipher = Aes256GcmSiv::new_from_slice(&state.key)
+            .map_err(|e| anyhow::anyhow!("invalid derived key: {}", e))?;
+        let mut nonce = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce);
+        let ct = cipher
+            .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
+            .map_err(|e| anyhow::anyhow!("reinforced encrypt failed: {}", e))?;
+        state.last_used = Instant::now();
+        Ok((B64.encode(nonce), B64.encode(ct)))
+    }
+
+    /// Decrypt a ciphertext that was previously written via
+    /// `encrypt_reinforced`. Refreshes the idle timer on success.
+    pub fn decrypt_reinforced(&self, nonce_b64: &str, cipher_b64: &str) -> Result<String> {
+        let mut guard = self.reinforced_vault.lock().unwrap();
+        let state = guard.as_mut().context("reinforced vault is locked")?;
+        if state.last_used.elapsed().as_secs() >= state.idle_timeout_secs {
+            *guard = None;
+            anyhow::bail!("reinforced vault auto-relocked (idle timeout)");
+        }
+        let cipher = Aes256GcmSiv::new_from_slice(&state.key)
+            .map_err(|e| anyhow::anyhow!("invalid derived key: {}", e))?;
+        let nonce_bytes = B64
+            .decode(nonce_b64.as_bytes())
+            .context("invalid reinforced nonce b64")?;
+        if nonce_bytes.len() != 12 {
+            anyhow::bail!("invalid reinforced nonce length");
+        }
+        let cipher_bytes = B64
+            .decode(cipher_b64.as_bytes())
+            .context("invalid reinforced ciphertext b64")?;
+        let plain = cipher
+            .decrypt(Nonce::from_slice(&nonce_bytes), cipher_bytes.as_ref())
+            .map_err(|e| anyhow::anyhow!("reinforced decrypt failed: {}", e))?;
+        let plain = String::from_utf8(plain).context("reinforced plaintext is not utf-8")?;
+        state.last_used = Instant::now();
+        Ok(plain)
+    }
+}
+
+/// Persisted shape of `reinforced_vault_meta`. Internal — never
+/// exposed publicly.
+struct ReinforcedVaultMetaRow {
+    salt_b64: String,
+    kdf_algo: String,
+    kdf_m_cost: u32,
+    kdf_t_cost: u32,
+    kdf_p_cost: u32,
+    verifier_nonce_b64: String,
+    verifier_cipher_b64: String,
+    idle_timeout_secs: u64,
+    #[allow(dead_code)]
+    configured_at: String,
+    #[allow(dead_code)]
+    updated_at: String,
+}
+
+fn validate_passphrase(p: &str) -> Result<()> {
+    if p.len() < REINFORCED_MIN_PASSPHRASE_LEN {
+        anyhow::bail!(
+            "passphrase must be at least {} characters",
+            REINFORCED_MIN_PASSPHRASE_LEN
+        );
+    }
+    if p.trim().is_empty() {
+        anyhow::bail!("passphrase must not be whitespace only");
+    }
+    Ok(())
+}
+
+fn derive_reinforced_key(
+    passphrase: &[u8],
+    salt: &[u8],
+    m_cost: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> Result<[u8; REINFORCED_KEY_LEN]> {
+    let params = Params::new(m_cost, t_cost, p_cost, Some(REINFORCED_KEY_LEN))
+        .map_err(|e| anyhow::anyhow!("invalid argon2 params: {}", e))?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut out = [0u8; REINFORCED_KEY_LEN];
+    argon
+        .hash_password_into(passphrase, salt, &mut out)
+        .map_err(|e| anyhow::anyhow!("argon2id derive failed: {}", e))?;
+    Ok(out)
+}
+
+// ============================================================================
+// BI cifrado reforzado — PIN local de segunda capa
+// ============================================================================
+
+/// Public status of the local PIN. Safe to serialize and send to
+/// clients (no key material). `failed_attempts` counts losses since
+/// the last successful validation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalPinStatus {
+    pub configured: bool,
+    pub failed_attempts: u32,
+    pub max_failures: u32,
+    pub auto_lock_vault_on_max_failures: bool,
+    pub last_validated_at: Option<DateTime<Utc>>,
+}
+
+/// Result of a `validate_local_pin` call. `vault_locked_as_kill_switch`
+/// is true when the PIN was wrong AND we hit `max_failures`, which
+/// triggered an automatic vault lock as a defense-in-depth response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalPinValidation {
+    pub ok: bool,
+    pub failed_attempts: u32,
+    pub attempts_remaining: u32,
+    pub vault_locked_as_kill_switch: bool,
+}
+
+impl MemoryPlaneManager {
+    fn read_local_pin_meta(db: &Connection) -> Result<Option<LocalPinMetaRow>> {
+        let mut stmt = db.prepare(
+            "SELECT salt_b64, pin_hash_b64, failed_attempts, max_failures,
+                    auto_lock_vault_on_max_failures, last_validated_at,
+                    configured_at, updated_at
+             FROM local_pin_meta WHERE id = 1",
+        )?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(LocalPinMetaRow {
+                salt_b64: row.get(0)?,
+                pin_hash_b64: row.get(1)?,
+                failed_attempts: row.get::<_, i64>(2)?.max(0) as u32,
+                max_failures: row.get::<_, i64>(3)?.max(1) as u32,
+                auto_lock_vault_on_max_failures: row.get::<_, i32>(4)? != 0,
+                last_validated_at: row.get(5)?,
+                configured_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn is_local_pin_set(&self) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path)?;
+            Ok(Self::read_local_pin_meta(&db)?.is_some())
+        })
+        .await?
+    }
+
+    /// Configure the local PIN for the first time. Fails if a PIN is
+    /// already set — call `clear_local_pin` first to reset.
+    ///
+    /// `max_failures` defaults to 5. `auto_lock_vault_on_max_failures`
+    /// defaults to true (recommended).
+    pub async fn set_local_pin(
+        &self,
+        pin: &str,
+        max_failures: Option<u32>,
+        auto_lock_vault_on_max_failures: Option<bool>,
+    ) -> Result<()> {
+        validate_pin(pin)?;
+        if self.is_local_pin_set().await? {
+            anyhow::bail!("local PIN already configured — call clear_local_pin first to reset");
+        }
+        let max_failures = max_failures
+            .unwrap_or(LOCAL_PIN_DEFAULT_MAX_FAILURES)
+            .clamp(1, 100);
+        let auto_lock = auto_lock_vault_on_max_failures.unwrap_or(true);
+
+        let pin_owned = pin.to_string();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            let mut salt = [0u8; LOCAL_PIN_SALT_LEN];
+            rand::thread_rng().fill_bytes(&mut salt);
+            let hash = derive_local_pin_hash(pin_owned.as_bytes(), &salt)?;
+            let now = Utc::now().to_rfc3339();
+            db.execute(
+                "INSERT INTO local_pin_meta
+                 (id, salt_b64, pin_hash_b64, failed_attempts, max_failures,
+                  auto_lock_vault_on_max_failures, last_validated_at,
+                  configured_at, updated_at)
+                 VALUES (1, ?1, ?2, 0, ?3, ?4, NULL, ?5, ?5)",
+                params![
+                    B64.encode(salt),
+                    B64.encode(hash),
+                    max_failures as i64,
+                    auto_lock as i32,
+                    now,
+                ],
+            )?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    /// Validate a PIN attempt. On success: resets `failed_attempts`
+    /// to 0 and updates `last_validated_at`. On failure: increments
+    /// `failed_attempts`. If failures hit `max_failures` AND
+    /// auto_lock_vault is enabled, the vault is locked immediately
+    /// as a kill-switch and the counter is reset (so the next attempt
+    /// after lockdown starts fresh — the vault is the actual barrier
+    /// at that point).
+    pub async fn validate_local_pin(&self, pin: &str) -> Result<LocalPinValidation> {
+        let pin_owned = pin.to_string();
+        let db_path = self.db_path.clone();
+
+        // Compute the hash + read meta in one blocking task. This
+        // returns the validation result + a flag for whether the
+        // vault should be auto-locked.
+        let (mut result, should_auto_lock) =
+            tokio::task::spawn_blocking(move || -> Result<(LocalPinValidation, bool)> {
+                let db = Self::open_db(&db_path)?;
+                let meta = Self::read_local_pin_meta(&db)?
+                    .ok_or_else(|| anyhow::anyhow!("local PIN not configured"))?;
+
+                let salt = B64
+                    .decode(meta.salt_b64.as_bytes())
+                    .context("invalid PIN salt b64")?;
+                let stored_hash = B64
+                    .decode(meta.pin_hash_b64.as_bytes())
+                    .context("invalid PIN hash b64")?;
+                let candidate = derive_local_pin_hash(pin_owned.as_bytes(), &salt)?;
+                let ok = constant_time_eq_slice(&candidate, &stored_hash);
+
+                let now = Utc::now().to_rfc3339();
+                let mut should_auto_lock = false;
+                if ok {
+                    db.execute(
+                        "UPDATE local_pin_meta
+                         SET failed_attempts = 0,
+                             last_validated_at = ?1,
+                             updated_at = ?1
+                         WHERE id = 1",
+                        params![now],
+                    )?;
+                    let result = LocalPinValidation {
+                        ok: true,
+                        failed_attempts: 0,
+                        attempts_remaining: meta.max_failures,
+                        vault_locked_as_kill_switch: false,
+                    };
+                    Ok((result, false))
+                } else {
+                    let new_failed = meta.failed_attempts + 1;
+                    if new_failed >= meta.max_failures && meta.auto_lock_vault_on_max_failures {
+                        // Reset counter so the next attempt after the
+                        // lockdown starts fresh — the vault is now
+                        // the real barrier.
+                        db.execute(
+                            "UPDATE local_pin_meta
+                             SET failed_attempts = 0, updated_at = ?1
+                             WHERE id = 1",
+                            params![now],
+                        )?;
+                        should_auto_lock = true;
+                    } else {
+                        db.execute(
+                            "UPDATE local_pin_meta
+                             SET failed_attempts = ?1, updated_at = ?2
+                             WHERE id = 1",
+                            params![new_failed as i64, now],
+                        )?;
+                    }
+                    let attempts_remaining = meta.max_failures.saturating_sub(new_failed);
+                    let result = LocalPinValidation {
+                        ok: false,
+                        failed_attempts: if should_auto_lock { 0 } else { new_failed },
+                        attempts_remaining,
+                        vault_locked_as_kill_switch: should_auto_lock,
+                    };
+                    Ok((result, should_auto_lock))
+                }
+            })
+            .await??;
+
+        if should_auto_lock {
+            self.lock_reinforced_vault();
+            // The DB write already reflects the kill-switch. Make sure
+            // the result also carries the flag (paranoid cross-check).
+            result.vault_locked_as_kill_switch = true;
+        }
+        Ok(result)
+    }
+
+    /// Remove the local PIN entirely. Idempotent.
+    pub async fn clear_local_pin(&self) -> Result<()> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let db = Self::open_db(&db_path)?;
+            db.execute("DELETE FROM local_pin_meta WHERE id = 1", [])?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    pub async fn local_pin_status(&self) -> Result<LocalPinStatus> {
+        let db_path = self.db_path.clone();
+        let row = tokio::task::spawn_blocking(move || -> Result<Option<LocalPinMetaRow>> {
+            let db = Self::open_db(&db_path)?;
+            Self::read_local_pin_meta(&db)
+        })
+        .await??;
+        match row {
+            Some(meta) => Ok(LocalPinStatus {
+                configured: true,
+                failed_attempts: meta.failed_attempts,
+                max_failures: meta.max_failures,
+                auto_lock_vault_on_max_failures: meta.auto_lock_vault_on_max_failures,
+                last_validated_at: meta.last_validated_at.as_deref().map(parse_utc),
+            }),
+            None => Ok(LocalPinStatus {
+                configured: false,
+                failed_attempts: 0,
+                max_failures: LOCAL_PIN_DEFAULT_MAX_FAILURES,
+                auto_lock_vault_on_max_failures: true,
+                last_validated_at: None,
+            }),
+        }
+    }
+}
+
+#[allow(dead_code)]
+struct LocalPinMetaRow {
+    salt_b64: String,
+    pin_hash_b64: String,
+    failed_attempts: u32,
+    max_failures: u32,
+    auto_lock_vault_on_max_failures: bool,
+    last_validated_at: Option<String>,
+    configured_at: String,
+    updated_at: String,
+}
+
+fn validate_pin(pin: &str) -> Result<()> {
+    let len = pin.chars().count();
+    if len < LOCAL_PIN_MIN_LEN {
+        anyhow::bail!("PIN must be at least {} characters", LOCAL_PIN_MIN_LEN);
+    }
+    if len > LOCAL_PIN_MAX_LEN {
+        anyhow::bail!("PIN must be at most {} characters", LOCAL_PIN_MAX_LEN);
+    }
+    if pin.trim().is_empty() {
+        anyhow::bail!("PIN must not be whitespace only");
+    }
+    Ok(())
+}
+
+fn derive_local_pin_hash(pin: &[u8], salt: &[u8]) -> Result<[u8; LOCAL_PIN_HASH_LEN]> {
+    let params = Params::new(
+        LOCAL_PIN_KDF_M_COST,
+        LOCAL_PIN_KDF_T_COST,
+        LOCAL_PIN_KDF_P_COST,
+        Some(LOCAL_PIN_HASH_LEN),
+    )
+    .map_err(|e| anyhow::anyhow!("invalid argon2 params: {}", e))?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut out = [0u8; LOCAL_PIN_HASH_LEN];
+    argon
+        .hash_password_into(pin, salt, &mut out)
+        .map_err(|e| anyhow::anyhow!("argon2id PIN derive failed: {}", e))?;
+    Ok(out)
+}
+
+/// Constant-time slice equality. Used to compare derived hashes so a
+/// timing attacker cannot infer how many leading bytes matched.
+fn constant_time_eq_slice(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+// ============================================================================
+// Fase BI.4 — Salud mental + diario emocional (Vida Plena)
+// ============================================================================
+//
+// Reglas firmes (system prompt enforced):
+//
+//   * Axi NO es terapeuta. NO diagnostica trastornos. NO interpreta
+//     sueños. Solo registra, refleja y recomienda ayuda profesional
+//     cuando aplique.
+//   * El diario narrativo (`mental_health_journal.narrative`) SIEMPRE
+//     va cifrado bajo el VAULT REFORZADO. Sin vault unlocked, no se
+//     puede leer ni escribir.
+//   * Crisis pattern detection corre LOCALMENTE en plaintext ANTES de
+//     cifrar. Solo el bool `had_crisis_pattern` se persiste — nunca
+//     las palabras gatillo en claro.
+//   * NUNCA se manda contenido de mental_health al LLM remoto por
+//     defecto. Activacion explicita por entrada (con preview) — eso
+//     es trabajo de la capa de routing, no de esta foundation.
+//   * En crisis, Axi NUNCA improvisa "aqui estoy para ti" como UNICA
+//     respuesta. SIEMPRE entrega lineas de ayuda + recomienda
+//     contacto con profesional/911. La logica de UI vive en
+//     telegram_tools y referencia `crisis_resources_mx()`.
+
+/// One row in `mental_health_mood_log` — quick mood/energia/ansiedad
+/// check-in. La nota corta usa el cifrado por defecto del
+/// memory_plane (no requiere vault).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MoodCheckIn {
+    pub checkin_id: String,
+    pub mood_1_10: u8,
+    pub energy_1_10: Option<u8>,
+    pub anxiety_1_10: Option<u8>,
+    pub note: String,
+    pub logged_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One full journal entry. La narrativa SIEMPRE viene del vault
+/// reforzado — para crearla o leerla, el caller necesita
+/// `unlock_reinforced_vault` activo. Los campos numericos y
+/// `had_crisis_pattern` se ven sin vault.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MentalHealthJournalEntry {
+    pub entry_id: String,
+    pub mood_1_10: Option<u8>,
+    pub energy_1_10: Option<u8>,
+    pub anxiety_1_10: Option<u8>,
+    /// Plaintext después de decifrar via vault. Empty string si la
+    /// entrada se listo via `list_journal_meta` (la version sin
+    /// narrativa).
+    pub narrative: String,
+    pub tags: Vec<String>,
+    pub triggers: Vec<String>,
+    pub had_crisis_pattern: bool,
+    pub logged_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the mental health pillar. Funciona vault
+/// locked O unlocked — la version locked omite las narrativas pero
+/// devuelve mood log + counts + crisis flags.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MentalHealthSummary {
+    pub recent_mood_checkins: Vec<MoodCheckIn>,
+    pub recent_journal_meta: Vec<MentalHealthJournalEntry>,
+    pub avg_mood_7d: Option<f64>,
+    pub avg_anxiety_7d: Option<f64>,
+    pub journal_entries_last_30d: u32,
+    pub crisis_pattern_count_last_30d: u32,
+    pub vault_unlocked: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// One detected crisis pattern in plaintext. Returned by
+/// `detect_crisis_in_text` — never persisted, just used to decide
+/// whether to surface hotlines and to set the row flag.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CrisisDetection {
+    pub matched_keywords: Vec<String>,
+    pub severity: String,
+}
+
+/// One crisis-resource row. Hardcoded list (no DB) so the user can
+/// always reach a hotline even if their DB is corrupted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrisisResource {
+    pub name: &'static str,
+    pub phone: &'static str,
+    pub coverage: &'static str,
+    /// `general`, `suicide`, `domestic_violence`, `emergency`.
+    pub kind: &'static str,
+}
+
+/// Mexican crisis hotlines. Hardcoded for the user's locale (San Juan
+/// del Río, QRO). Future versions can localize per-locale; for now we
+/// always include `911` as the universal emergency number.
+#[allow(dead_code)]
+pub fn crisis_resources_mx() -> &'static [CrisisResource] {
+    &[
+        CrisisResource {
+            name: "SAPTEL",
+            phone: "55 5259-8121",
+            coverage: "Mexico, 24h, gratuito",
+            kind: "general",
+        },
+        CrisisResource {
+            name: "Linea de la Vida (CONADIC)",
+            phone: "800-911-2000",
+            coverage: "Mexico, 24h, gratuito",
+            kind: "general",
+        },
+        CrisisResource {
+            name: "Locatel",
+            phone: "55 5658-1111",
+            coverage: "CDMX y nacional",
+            kind: "general",
+        },
+        CrisisResource {
+            name: "Red Nacional de Refugios (violencia)",
+            phone: "800-822-4460",
+            coverage: "Mexico, 24h, gratuito",
+            kind: "domestic_violence",
+        },
+        CrisisResource {
+            name: "Emergencias",
+            phone: "911",
+            coverage: "Mexico, emergencias",
+            kind: "emergency",
+        },
+    ]
+}
+
+/// Detect crisis patterns in narrative text. Conservative on
+/// purpose: false positives are fine (we just surface hotlines),
+/// false negatives are NOT (we want every plausible signal to
+/// trigger a recommendation).
+///
+/// Severity tiers:
+///   * `severe`  → suicidio, autolesion, "no quiero vivir", "matarme"
+///   * `high`    → violencia, abuso, golpear, violacion
+///   * `moderate` → ansiedad fuerte recurrente, panico, desesperanza
+///                  ("ya no puedo", "no aguanto")
+pub fn detect_crisis_in_text(text: &str) -> Option<CrisisDetection> {
+    let lower = text.to_lowercase();
+    let severe: &[&str] = &[
+        "suicidio",
+        "suicidarme",
+        "matarme",
+        "quitarme la vida",
+        "no quiero vivir",
+        "no quiero seguir",
+        "acabar con todo",
+        "autolesion",
+        "autolesión",
+        "lastimarme",
+        "hacerme dano",
+        "hacerme daño",
+        "cortarme",
+    ];
+    let high: &[&str] = &[
+        "abuso",
+        "violencia",
+        "golpear",
+        "golpea",
+        "violacion",
+        "violación",
+        "me pega",
+        "me grita",
+        "me amenaza",
+        "no me deja salir",
+    ];
+    let moderate: &[&str] = &[
+        "ya no puedo",
+        "no aguanto",
+        "desesperanza",
+        "panico",
+        "pánico",
+        "ataque de ansiedad",
+        "no sirvo para nada",
+    ];
+
+    let mut matched: Vec<String> = Vec::new();
+    let mut severity = "moderate";
+
+    for k in severe {
+        if lower.contains(k) {
+            matched.push((*k).to_string());
+            severity = "severe";
+        }
+    }
+    if severity != "severe" {
+        for k in high {
+            if lower.contains(k) {
+                matched.push((*k).to_string());
+                severity = "high";
+            }
+        }
+    }
+    if matched.is_empty() {
+        for k in moderate {
+            if lower.contains(k) {
+                matched.push((*k).to_string());
+            }
+        }
+    }
+
+    if matched.is_empty() {
+        None
+    } else {
+        Some(CrisisDetection {
+            matched_keywords: matched,
+            severity: severity.to_string(),
+        })
+    }
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.4: mood log (no vault required)
+    // -----------------------------------------------------------------------
+
+    pub async fn log_mood_checkin(
+        &self,
+        mood_1_10: u8,
+        energy_1_10: Option<u8>,
+        anxiety_1_10: Option<u8>,
+        note: &str,
+        logged_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<MoodCheckIn> {
+        if !(1..=10).contains(&mood_1_10) {
+            anyhow::bail!("mood_1_10 must be in 1..=10");
+        }
+        if let Some(e) = energy_1_10 {
+            if !(1..=10).contains(&e) {
+                anyhow::bail!("energy_1_10 must be in 1..=10");
+            }
+        }
+        if let Some(a) = anxiety_1_10 {
+            if !(1..=10).contains(&a) {
+                anyhow::bail!("anxiety_1_10 must be in 1..=10");
+            }
+        }
+        let note_owned = note.trim().to_string();
+        let (note_nonce, note_cipher) = if note_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&note_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let logged = logged_at.unwrap_or(now);
+        let logged_rfc = logged.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("mood-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO mental_health_mood_log
+                 (checkin_id, mood_1_10, energy_1_10, anxiety_1_10,
+                  note_nonce_b64, note_ciphertext_b64, logged_at,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id_clone,
+                    mood_1_10 as i32,
+                    energy_1_10.map(|e| e as i32),
+                    anxiety_1_10.map(|a| a as i32),
+                    note_nonce,
+                    note_cipher,
+                    logged_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(MoodCheckIn {
+            checkin_id: id,
+            mood_1_10,
+            energy_1_10,
+            anxiety_1_10,
+            note: note_owned,
+            logged_at: logged,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_mood_checkins(&self, limit: usize) -> Result<Vec<MoodCheckIn>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT checkin_id, mood_1_10, energy_1_10, anxiety_1_10,
+                        note_nonce_b64, note_ciphertext_b64, logged_at,
+                        source_entry_id, created_at
+                 FROM mental_health_mood_log
+                 ORDER BY logged_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<MoodCheckInRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(MoodCheckInRaw {
+                        checkin_id: row.get(0)?,
+                        mood_1_10: row.get::<_, i32>(1)? as u8,
+                        energy_1_10: row.get::<_, Option<i32>>(2)?.map(|x| x as u8),
+                        anxiety_1_10: row.get::<_, Option<i32>>(3)?.map(|x| x as u8),
+                        note_nonce_b64: row.get(4)?,
+                        note_ciphertext_b64: row.get(5)?,
+                        logged_at: row.get(6)?,
+                        source_entry_id: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| MoodCheckIn {
+                checkin_id: r.checkin_id,
+                mood_1_10: r.mood_1_10,
+                energy_1_10: r.energy_1_10,
+                anxiety_1_10: r.anxiety_1_10,
+                note: match (r.note_nonce_b64, r.note_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                logged_at: parse_utc(&r.logged_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.4: journal (REQUIRES reinforced vault)
+    // -----------------------------------------------------------------------
+
+    /// Add a full journal entry. **Requires `unlock_reinforced_vault`
+    /// to have been called first** — fails with a clear error
+    /// otherwise. Crisis detection runs on the plaintext BEFORE
+    /// encrypting. Returns the entry along with any detected crisis
+    /// pattern so the caller can surface hotlines immediately.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_journal_entry(
+        &self,
+        mood_1_10: Option<u8>,
+        energy_1_10: Option<u8>,
+        anxiety_1_10: Option<u8>,
+        narrative: &str,
+        tags: &[String],
+        triggers: &[String],
+        logged_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<(MentalHealthJournalEntry, Option<CrisisDetection>)> {
+        let narrative_owned = narrative.trim().to_string();
+        if narrative_owned.is_empty() {
+            anyhow::bail!("journal narrative cannot be empty");
+        }
+        for (label, val) in [
+            ("mood_1_10", mood_1_10),
+            ("energy_1_10", energy_1_10),
+            ("anxiety_1_10", anxiety_1_10),
+        ] {
+            if let Some(v) = val {
+                if !(1..=10).contains(&v) {
+                    anyhow::bail!("{} must be in 1..=10", label);
+                }
+            }
+        }
+
+        // Crisis detection runs on plaintext BEFORE encryption.
+        let detection = detect_crisis_in_text(&narrative_owned);
+        let had_crisis = detection.is_some();
+
+        // Encrypt under the reinforced vault. This is the gate that
+        // forces the caller to have unlocked.
+        let (narrative_nonce, narrative_cipher) = self.encrypt_reinforced(&narrative_owned)?;
+
+        let tags_owned = normalize_tags(tags);
+        let triggers_owned = normalize_tags(triggers);
+        let tags_json = serde_json::to_string(&tags_owned)?;
+        let triggers_json = serde_json::to_string(&triggers_owned)?;
+
+        let now = Utc::now();
+        let logged = logged_at.unwrap_or(now);
+        let logged_rfc = logged.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("mhj-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let tags_clone = tags_json.clone();
+        let trig_clone = triggers_json.clone();
+        let nonce_clone = narrative_nonce.clone();
+        let cipher_clone = narrative_cipher.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO mental_health_journal
+                 (entry_id, mood_1_10, energy_1_10, anxiety_1_10,
+                  narrative_nonce_b64, narrative_cipher_b64,
+                  tags_json, triggers_json, had_crisis_pattern,
+                  logged_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    id_clone,
+                    mood_1_10.map(|m| m as i32),
+                    energy_1_10.map(|e| e as i32),
+                    anxiety_1_10.map(|a| a as i32),
+                    nonce_clone,
+                    cipher_clone,
+                    tags_clone,
+                    trig_clone,
+                    had_crisis as i32,
+                    logged_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        let entry = MentalHealthJournalEntry {
+            entry_id: id,
+            mood_1_10,
+            energy_1_10,
+            anxiety_1_10,
+            narrative: narrative_owned,
+            tags: tags_owned,
+            triggers: triggers_owned,
+            had_crisis_pattern: had_crisis,
+            logged_at: logged,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        };
+        Ok((entry, detection))
+    }
+
+    /// List recent journal entries WITH narratives decrypted.
+    /// **Requires the vault to be unlocked.** Returns an error
+    /// otherwise — does not silently fall back to metadata-only.
+    pub async fn list_journal_entries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<MentalHealthJournalEntry>> {
+        let metas = self.list_journal_meta(limit).await?;
+        let mut out = Vec::with_capacity(metas.len());
+        for m in metas {
+            // Re-fetch the encrypted blob and decrypt under vault.
+            let id = m.entry_id.clone();
+            let db_path = self.db_path.clone();
+            let (nonce, cipher) =
+                tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+                    let db = Self::open_db(&db_path)?;
+                    let row: (String, String) = db.query_row(
+                        "SELECT narrative_nonce_b64, narrative_cipher_b64
+                         FROM mental_health_journal WHERE entry_id = ?1",
+                        params![id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )?;
+                    Ok(row)
+                })
+                .await??;
+            let plaintext = self.decrypt_reinforced(&nonce, &cipher)?;
+            out.push(MentalHealthJournalEntry {
+                narrative: plaintext,
+                ..m
+            });
+        }
+        Ok(out)
+    }
+
+    /// Metadata-only list. Always works (does NOT need the vault).
+    /// Narratives are returned as empty strings.
+    pub async fn list_journal_meta(&self, limit: usize) -> Result<Vec<MentalHealthJournalEntry>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT entry_id, mood_1_10, energy_1_10, anxiety_1_10,
+                        tags_json, triggers_json, had_crisis_pattern,
+                        logged_at, source_entry_id, created_at
+                 FROM mental_health_journal
+                 ORDER BY logged_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<JournalMetaRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(JournalMetaRaw {
+                        entry_id: row.get(0)?,
+                        mood_1_10: row.get::<_, Option<i32>>(1)?.map(|x| x as u8),
+                        energy_1_10: row.get::<_, Option<i32>>(2)?.map(|x| x as u8),
+                        anxiety_1_10: row.get::<_, Option<i32>>(3)?.map(|x| x as u8),
+                        tags_json: row.get(4)?,
+                        triggers_json: row.get(5)?,
+                        had_crisis_pattern: row.get::<_, i32>(6)? != 0,
+                        logged_at: row.get(7)?,
+                        source_entry_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| MentalHealthJournalEntry {
+                entry_id: r.entry_id,
+                mood_1_10: r.mood_1_10,
+                energy_1_10: r.energy_1_10,
+                anxiety_1_10: r.anxiety_1_10,
+                narrative: String::new(),
+                tags: serde_json::from_str(&r.tags_json).unwrap_or_default(),
+                triggers: serde_json::from_str(&r.triggers_json).unwrap_or_default(),
+                had_crisis_pattern: r.had_crisis_pattern,
+                logged_at: parse_utc(&r.logged_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// Aggregate snapshot. Works locked OR unlocked. Locked version
+    /// omits narratives but includes counts, mood timeseries, and
+    /// crisis_pattern_count_last_30d so the caller can decide whether
+    /// to surface hotlines proactively.
+    pub async fn get_mental_health_summary(
+        &self,
+        recent_limit: usize,
+    ) -> Result<MentalHealthSummary> {
+        let recent_mood_checkins = self
+            .list_mood_checkins(recent_limit)
+            .await
+            .unwrap_or_default();
+        let recent_journal_meta = self
+            .list_journal_meta(recent_limit)
+            .await
+            .unwrap_or_default();
+        let vault_unlocked = self.reinforced_vault_status().await?.unlocked;
+
+        let now = Utc::now();
+        let cutoff_7 = now - chrono::Duration::days(7);
+        let cutoff_30 = now - chrono::Duration::days(30);
+
+        let avg_mood_7d = avg_field(
+            recent_mood_checkins
+                .iter()
+                .filter(|c| c.logged_at >= cutoff_7)
+                .map(|c| c.mood_1_10 as f64),
+        );
+        let avg_anxiety_7d = avg_field(
+            recent_mood_checkins
+                .iter()
+                .filter(|c| c.logged_at >= cutoff_7)
+                .filter_map(|c| c.anxiety_1_10.map(|a| a as f64)),
+        );
+
+        let journal_entries_last_30d = recent_journal_meta
+            .iter()
+            .filter(|e| e.logged_at >= cutoff_30)
+            .count() as u32;
+        let crisis_pattern_count_last_30d = recent_journal_meta
+            .iter()
+            .filter(|e| e.logged_at >= cutoff_30 && e.had_crisis_pattern)
+            .count() as u32;
+
+        Ok(MentalHealthSummary {
+            recent_mood_checkins,
+            recent_journal_meta,
+            avg_mood_7d,
+            avg_anxiety_7d,
+            journal_entries_last_30d,
+            crisis_pattern_count_last_30d,
+            vault_unlocked,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw rows for BI.4 ----------------------------------------------
+
+struct MoodCheckInRaw {
+    checkin_id: String,
+    mood_1_10: u8,
+    energy_1_10: Option<u8>,
+    anxiety_1_10: Option<u8>,
+    note_nonce_b64: Option<String>,
+    note_ciphertext_b64: Option<String>,
+    logged_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct JournalMetaRaw {
+    entry_id: String,
+    mood_1_10: Option<u8>,
+    energy_1_10: Option<u8>,
+    anxiety_1_10: Option<u8>,
+    tags_json: String,
+    triggers_json: String,
+    had_crisis_pattern: bool,
+    logged_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+fn avg_field<I: Iterator<Item = f64>>(iter: I) -> Option<f64> {
+    let collected: Vec<f64> = iter.collect();
+    if collected.is_empty() {
+        None
+    } else {
+        Some(collected.iter().sum::<f64>() / collected.len() as f64)
+    }
+}
+
+// ============================================================================
+// Fase BI sensible — Modo panico (/wipe-*) y predictor menstrual
+// ============================================================================
+//
+// Modo panico: borra TODAS las filas de las side-tables sensibles
+// (mental_health_journal/_mood_log, menstrual_cycle_log,
+// sexual_health_log + sti_tests + contraception_methods,
+// relationship_events). Es destructivo e irrecuperable. NO toca el
+// vault — el vault sigue configurado, solo desaparecen los datos.
+// Requiere una `confirmation_phrase` exacta para prevenir triggers
+// accidentales por LLM.
+//
+// El uso esperado es: usuario en peligro fisico (familia abusiva,
+// disputa legal, custodia, frontera de control sanitario) que
+// necesita borrar evidencia rapidamente.
+
+/// La frase exacta que el caller debe pasar para confirmar un wipe
+/// destructivo. Se exige una sola constante para todos los wipes —
+/// la UI puede pedirle al usuario que escriba "BORRAR DEFINITIVAMENTE"
+/// y solo si coincide pasa esta frase a la API.
+pub const PANIC_WIPE_CONFIRMATION: &str = "BORRAR DEFINITIVAMENTE";
+
+/// One row in the menstrual predictor output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MenstrualPrediction {
+    /// Number of period starts detected in the historical data.
+    pub period_starts_detected: u32,
+    /// Average days between consecutive period starts (rolling
+    /// window of up to 6).
+    pub avg_cycle_length_days: Option<f64>,
+    /// Last period start date observed.
+    pub last_period_start: Option<DateTime<Utc>>,
+    /// Predicted next period start = last + avg. None if not enough
+    /// data.
+    pub predicted_next_period: Option<DateTime<Utc>>,
+    /// Days from `now` to the predicted next period (negative means
+    /// already overdue).
+    pub days_until_next: Option<i64>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Validate that the caller passed the exact confirmation phrase.
+    /// Internal helper used by all wipe methods.
+    fn check_wipe_confirmation(confirmation: &str) -> Result<()> {
+        if confirmation.trim() != PANIC_WIPE_CONFIRMATION {
+            anyhow::bail!(
+                "wipe rejected: confirmation_phrase must be exactly '{}'",
+                PANIC_WIPE_CONFIRMATION
+            );
+        }
+        Ok(())
+    }
+
+    /// Wipe ALL mental_health rows. Idempotent. Returns the number of
+    /// rows deleted across both tables (mood log + journal). Does NOT
+    /// touch the vault — the vault stays configured.
+    pub async fn wipe_mental_health_data(&self, confirmation: &str) -> Result<u64> {
+        Self::check_wipe_confirmation(confirmation)?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<u64> {
+            let db = Self::open_db(&db_path)?;
+            let n1 = db.execute("DELETE FROM mental_health_journal", [])? as u64;
+            let n2 = db.execute("DELETE FROM mental_health_mood_log", [])? as u64;
+            Ok(n1 + n2)
+        })
+        .await??;
+        Ok(n)
+    }
+
+    /// Wipe ALL menstrual_cycle_log rows. Idempotent.
+    pub async fn wipe_menstrual_data(&self, confirmation: &str) -> Result<u64> {
+        Self::check_wipe_confirmation(confirmation)?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<u64> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute("DELETE FROM menstrual_cycle_log", [])? as u64)
+        })
+        .await??;
+        Ok(n)
+    }
+
+    /// Wipe ALL sexual health data: sexual_health_log + sti_tests +
+    /// contraception_methods. Idempotent.
+    pub async fn wipe_sexual_health_data(&self, confirmation: &str) -> Result<u64> {
+        Self::check_wipe_confirmation(confirmation)?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<u64> {
+            let db = Self::open_db(&db_path)?;
+            let n1 = db.execute("DELETE FROM sexual_health_log", [])? as u64;
+            let n2 = db.execute("DELETE FROM sti_tests", [])? as u64;
+            let n3 = db.execute("DELETE FROM contraception_methods", [])? as u64;
+            Ok(n1 + n2 + n3)
+        })
+        .await??;
+        Ok(n)
+    }
+
+    /// Wipe ALL relationship_events rows. Does NOT touch the
+    /// `relationships` table — the perfil queda y el usuario decide
+    /// si lo borra aparte.
+    pub async fn wipe_relationship_events_data(&self, confirmation: &str) -> Result<u64> {
+        Self::check_wipe_confirmation(confirmation)?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<u64> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute("DELETE FROM relationship_events", [])? as u64)
+        })
+        .await??;
+        Ok(n)
+    }
+
+    /// BI.6 predictor: estimate the next period date based on the
+    /// average length of the last (up to) 6 cycles.
+    ///
+    /// Detection rule: a "period start" is an entry with
+    /// `flow_intensity != 'none'` whose previous flow entry (within
+    /// 7 days backwards) is also non-none → same period; or no
+    /// previous → new start. We then compute the avg gap between
+    /// consecutive period starts.
+    ///
+    /// Need >=2 starts to predict. Otherwise returns the row with
+    /// only `last_period_start` filled.
+    pub async fn predict_next_period(&self) -> Result<MenstrualPrediction> {
+        // Pull all entries with flow != none, ordered ASC.
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || -> Result<Vec<(String, String)>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT logged_at, flow_intensity FROM menstrual_cycle_log
+                 WHERE flow_intensity IS NOT NULL AND flow_intensity != 'none'
+                 ORDER BY logged_at ASC",
+            )?;
+            let rows: Vec<(String, String)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+
+        let now = Utc::now();
+        let entries: Vec<DateTime<Utc>> = raws.into_iter().map(|(d, _)| parse_utc(&d)).collect();
+
+        // Detect period starts: an entry that is NOT preceded by
+        // another entry within the previous 7 days.
+        let mut starts: Vec<DateTime<Utc>> = Vec::new();
+        let mut prev: Option<DateTime<Utc>> = None;
+        for ts in &entries {
+            let is_start = match prev {
+                Some(p) => (*ts - p).num_days() > 7,
+                None => true,
+            };
+            if is_start {
+                starts.push(*ts);
+            }
+            prev = Some(*ts);
+        }
+
+        let last_period_start = starts.last().copied();
+        if starts.len() < 2 {
+            return Ok(MenstrualPrediction {
+                period_starts_detected: starts.len() as u32,
+                avg_cycle_length_days: None,
+                last_period_start,
+                predicted_next_period: None,
+                days_until_next: None,
+                generated_at: now,
+            });
+        }
+
+        // Compute gaps between consecutive starts, take last (up to)
+        // 6 cycles.
+        let mut gaps: Vec<i64> = starts
+            .windows(2)
+            .map(|w| (w[1] - w[0]).num_days())
+            .collect();
+        if gaps.len() > 6 {
+            let drop = gaps.len() - 6;
+            gaps = gaps.split_off(drop);
+        }
+        let avg = gaps.iter().sum::<i64>() as f64 / gaps.len() as f64;
+
+        let last = last_period_start.unwrap();
+        let predicted = last + chrono::Duration::days(avg.round() as i64);
+        let days_until = (predicted - now).num_days();
+
+        Ok(MenstrualPrediction {
+            period_starts_detected: starts.len() as u32,
+            avg_cycle_length_days: Some(avg),
+            last_period_start,
+            predicted_next_period: Some(predicted),
+            days_until_next: Some(days_until),
+            generated_at: now,
+        })
+    }
+}
+
+// ============================================================================
+// Fase BI.9.2 — Relationship events (narrativa intima, sensible)
+// ============================================================================
+//
+// Construye sobre BI.9 sprint 1 (perfil de relaciones, ya entregado) y
+// el vault reforzado (BI cifrado foundation). Cada evento referencia
+// una `relationships.relationship_id` existente. La narrativa va
+// SIEMPRE cifrada bajo el vault — sin unlock no se puede leer ni
+// escribir. El crisis detector (BI.4) corre en plaintext antes de
+// cifrar y solo el bool persiste.
+
+/// One full relationship event with the narrative decrypted.
+/// `narrative` viene vacio cuando se obtiene via `list_relationship_event_meta`
+/// (la version sin vault).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipEvent {
+    pub event_id: String,
+    pub relationship_id: String,
+    /// `argument`, `reconciliation`, `milestone`, `achievement`,
+    /// `concern`, `distance`, `closeness`, `support`, `conflict`,
+    /// `breakthrough`, `other`.
+    pub event_type: String,
+    pub intensity_1_10: Option<u8>,
+    /// `positive`, `neutral`, `mixed`, `negative`.
+    pub sentiment: Option<String>,
+    pub narrative: String,
+    pub had_crisis_pattern: bool,
+    pub occurred_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate timeline for one relationship. Funciona vault locked O
+/// unlocked — la version locked omite las narrativas pero devuelve
+/// counts por tipo y crisis pattern total.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RelationshipTimeline {
+    pub relationship_id: String,
+    pub recent_events_meta: Vec<RelationshipEvent>,
+    pub events_last_30d: u32,
+    pub crisis_pattern_count_last_30d: u32,
+    pub avg_intensity_30d: Option<f64>,
+    pub negative_sentiment_count_30d: u32,
+    pub vault_unlocked: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Add a relationship event. **REQUIRES `unlock_reinforced_vault`
+    /// to have been called first** — fails with a clear error
+    /// otherwise. Crisis detection runs on plaintext BEFORE encryption.
+    /// Returns the entry plus any detected crisis pattern.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_relationship_event(
+        &self,
+        relationship_id: &str,
+        event_type: &str,
+        intensity_1_10: Option<u8>,
+        sentiment: Option<&str>,
+        narrative: &str,
+        occurred_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<(RelationshipEvent, Option<CrisisDetection>)> {
+        let relationship_id =
+            normalize_non_empty(relationship_id).context("relationship_id required")?;
+        let event_type = normalize_non_empty(event_type).context("event_type required")?;
+        let sentiment = sentiment
+            .and_then(normalize_non_empty)
+            .map(|s| s.to_lowercase());
+        if let Some(ref s) = sentiment {
+            if !matches!(s.as_str(), "positive" | "neutral" | "mixed" | "negative") {
+                anyhow::bail!("sentiment must be one of: positive, neutral, mixed, negative");
+            }
+        }
+        let narrative_owned = narrative.trim().to_string();
+        if narrative_owned.is_empty() {
+            anyhow::bail!("relationship event narrative cannot be empty");
+        }
+        if let Some(i) = intensity_1_10 {
+            if !(1..=10).contains(&i) {
+                anyhow::bail!("intensity_1_10 must be in 1..=10");
+            }
+        }
+
+        // Verify the relationship exists. Sin esto el evento queda
+        // como huérfano sin forma de surgir en la timeline.
+        let id_check = relationship_id.clone();
+        let db_path_check = self.db_path.clone();
+        let exists = tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path_check)?;
+            let count: i64 = db.query_row(
+                "SELECT COUNT(*) FROM relationships WHERE relationship_id = ?1",
+                params![id_check],
+                |r| r.get(0),
+            )?;
+            Ok(count > 0)
+        })
+        .await??;
+        if !exists {
+            anyhow::bail!("no such relationship_id: {}", relationship_id);
+        }
+
+        // Crisis detection runs on plaintext BEFORE encryption.
+        let detection = detect_crisis_in_text(&narrative_owned);
+        let had_crisis = detection.is_some();
+
+        // Encrypt under the reinforced vault. This is the gate.
+        let (narrative_nonce, narrative_cipher) = self.encrypt_reinforced(&narrative_owned)?;
+
+        let now = Utc::now();
+        let occurred = occurred_at.unwrap_or(now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("revt-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let rel_clone = relationship_id.clone();
+        let type_clone = event_type.clone();
+        let sentiment_clone = sentiment.clone();
+        let nonce_clone = narrative_nonce.clone();
+        let cipher_clone = narrative_cipher.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO relationship_events
+                 (event_id, relationship_id, event_type, intensity_1_10,
+                  sentiment, narrative_nonce_b64, narrative_cipher_b64,
+                  had_crisis_pattern, occurred_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id_clone,
+                    rel_clone,
+                    type_clone,
+                    intensity_1_10.map(|i| i as i32),
+                    sentiment_clone,
+                    nonce_clone,
+                    cipher_clone,
+                    had_crisis as i32,
+                    occurred_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        let event = RelationshipEvent {
+            event_id: id,
+            relationship_id,
+            event_type,
+            intensity_1_10,
+            sentiment,
+            narrative: narrative_owned,
+            had_crisis_pattern: had_crisis,
+            occurred_at: occurred,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        };
+        Ok((event, detection))
+    }
+
+    /// List events for one relationship WITH narratives decrypted.
+    /// **Requires the vault to be unlocked.** Errors out otherwise.
+    pub async fn list_relationship_events(
+        &self,
+        relationship_id: &str,
+        limit: usize,
+    ) -> Result<Vec<RelationshipEvent>> {
+        let metas = self
+            .list_relationship_event_meta(Some(relationship_id), limit)
+            .await?;
+        let mut out = Vec::with_capacity(metas.len());
+        for m in metas {
+            let id = m.event_id.clone();
+            let db_path = self.db_path.clone();
+            let (nonce, cipher) =
+                tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+                    let db = Self::open_db(&db_path)?;
+                    let row: (String, String) = db.query_row(
+                        "SELECT narrative_nonce_b64, narrative_cipher_b64
+                         FROM relationship_events WHERE event_id = ?1",
+                        params![id],
+                        |r| Ok((r.get(0)?, r.get(1)?)),
+                    )?;
+                    Ok(row)
+                })
+                .await??;
+            let plaintext = self.decrypt_reinforced(&nonce, &cipher)?;
+            out.push(RelationshipEvent {
+                narrative: plaintext,
+                ..m
+            });
+        }
+        Ok(out)
+    }
+
+    /// Metadata-only list. Always works (does NOT need the vault).
+    /// Narratives are returned as empty strings. If
+    /// `relationship_id` is `None`, returns events across ALL
+    /// relationships ordered by occurred_at DESC.
+    pub async fn list_relationship_event_meta(
+        &self,
+        relationship_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<RelationshipEvent>> {
+        let limit = limit.clamp(1, 500);
+        let filter = relationship_id.map(|s| s.to_string());
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<RelationshipEventMetaRaw> {
+                Ok(RelationshipEventMetaRaw {
+                    event_id: row.get(0)?,
+                    relationship_id: row.get(1)?,
+                    event_type: row.get(2)?,
+                    intensity_1_10: row.get::<_, Option<i32>>(3)?.map(|x| x as u8),
+                    sentiment: row.get(4)?,
+                    had_crisis_pattern: row.get::<_, i32>(5)? != 0,
+                    occurred_at: row.get(6)?,
+                    source_entry_id: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            };
+            let rows: Vec<RelationshipEventMetaRaw> = if let Some(rid) = filter {
+                let mut stmt = db.prepare(
+                    "SELECT event_id, relationship_id, event_type, intensity_1_10,
+                            sentiment, had_crisis_pattern, occurred_at,
+                            source_entry_id, created_at
+                     FROM relationship_events
+                     WHERE relationship_id = ?1
+                     ORDER BY occurred_at DESC
+                     LIMIT ?2",
+                )?;
+                let collected: Vec<RelationshipEventMetaRaw> = stmt
+                    .query_map(params![rid, limit as i64], map_row)?
+                    .flatten()
+                    .collect();
+                collected
+            } else {
+                let mut stmt = db.prepare(
+                    "SELECT event_id, relationship_id, event_type, intensity_1_10,
+                            sentiment, had_crisis_pattern, occurred_at,
+                            source_entry_id, created_at
+                     FROM relationship_events
+                     ORDER BY occurred_at DESC
+                     LIMIT ?1",
+                )?;
+                let collected: Vec<RelationshipEventMetaRaw> = stmt
+                    .query_map(params![limit as i64], map_row)?
+                    .flatten()
+                    .collect();
+                collected
+            };
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| RelationshipEvent {
+                event_id: r.event_id,
+                relationship_id: r.relationship_id,
+                event_type: r.event_type,
+                intensity_1_10: r.intensity_1_10,
+                sentiment: r.sentiment,
+                narrative: String::new(),
+                had_crisis_pattern: r.had_crisis_pattern,
+                occurred_at: parse_utc(&r.occurred_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// Aggregate timeline snapshot for one relationship. Works locked
+    /// OR unlocked. Locked version omits narratives but returns
+    /// counts, intensity averages, and crisis_pattern_count_last_30d
+    /// so the caller can decide to surface hotlines proactively.
+    pub async fn get_relationship_timeline(
+        &self,
+        relationship_id: &str,
+        recent_limit: usize,
+    ) -> Result<RelationshipTimeline> {
+        let metas = self
+            .list_relationship_event_meta(Some(relationship_id), recent_limit)
+            .await?;
+        let vault_unlocked = self.reinforced_vault_status().await?.unlocked;
+
+        let now = Utc::now();
+        let cutoff_30 = now - chrono::Duration::days(30);
+        let in_window: Vec<&RelationshipEvent> = metas
+            .iter()
+            .filter(|e| e.occurred_at >= cutoff_30)
+            .collect();
+        let events_last_30d = in_window.len() as u32;
+        let crisis_pattern_count_last_30d =
+            in_window.iter().filter(|e| e.had_crisis_pattern).count() as u32;
+        let negative_sentiment_count_30d = in_window
+            .iter()
+            .filter(|e| e.sentiment.as_deref() == Some("negative"))
+            .count() as u32;
+        let avg_intensity_30d = avg_field(
+            in_window
+                .iter()
+                .filter_map(|e| e.intensity_1_10.map(|i| i as f64)),
+        );
+
+        Ok(RelationshipTimeline {
+            relationship_id: relationship_id.to_string(),
+            recent_events_meta: metas,
+            events_last_30d,
+            crisis_pattern_count_last_30d,
+            avg_intensity_30d,
+            negative_sentiment_count_30d,
+            vault_unlocked,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw rows for BI.9.2 --------------------------------------------
+
+struct RelationshipEventMetaRaw {
+    event_id: String,
+    relationship_id: String,
+    event_type: String,
+    intensity_1_10: Option<u8>,
+    sentiment: Option<String>,
+    had_crisis_pattern: bool,
+    occurred_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+// ============================================================================
+// Fase BI.6 — Salud femenina / ciclo menstrual (sensible, opt-in)
+// ============================================================================
+//
+// Mismo patron que BI.4: metadata visible sin vault, narrativa
+// opcional cifrada bajo vault Argon2id. La narrativa aqui ES
+// opcional (a diferencia de mental_health_journal donde es
+// obligatoria) — el caso comun es solo trackear flujo + sintomas
+// numericos sin escribir mucho.
+
+/// One menstrual cycle entry. La narrativa es OPCIONAL — si se
+/// proporciona, va cifrada bajo el vault. Los sintomas son free
+/// text en JSON array. Crisis detection corre sobre la narrativa
+/// si existe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MenstrualCycleEntry {
+    pub entry_id: String,
+    pub cycle_day: Option<u32>,
+    /// `none`, `spotting`, `light`, `medium`, `heavy`.
+    pub flow_intensity: Option<String>,
+    pub symptoms: Vec<String>,
+    pub mood_1_10: Option<u8>,
+    pub energy_1_10: Option<u8>,
+    pub pain_1_10: Option<u8>,
+    /// Plaintext después de decifrar via vault. Empty cuando se
+    /// pide via meta o cuando no hay narrativa.
+    pub narrative: String,
+    pub had_crisis_pattern: bool,
+    pub logged_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the menstrual cycle pillar. Funciona
+/// vault locked O unlocked.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MenstrualCycleSummary {
+    pub recent_entries_meta: Vec<MenstrualCycleEntry>,
+    pub entries_last_30d: u32,
+    pub avg_pain_30d: Option<f64>,
+    pub avg_mood_30d: Option<f64>,
+    pub days_since_last_period: Option<i64>,
+    pub vault_unlocked: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Add one menstrual cycle entry. La narrativa es opcional. Si
+    /// se proporciona, **requiere vault unlocked**. Si es vacia, no
+    /// requiere vault. Crisis detection corre solo si hay narrativa.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_menstrual_entry(
+        &self,
+        cycle_day: Option<u32>,
+        flow_intensity: Option<&str>,
+        symptoms: &[String],
+        mood_1_10: Option<u8>,
+        energy_1_10: Option<u8>,
+        pain_1_10: Option<u8>,
+        narrative: &str,
+        logged_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<(MenstrualCycleEntry, Option<CrisisDetection>)> {
+        let flow = flow_intensity
+            .and_then(normalize_non_empty)
+            .map(|s| s.to_lowercase());
+        if let Some(ref f) = flow {
+            if !matches!(
+                f.as_str(),
+                "none" | "spotting" | "light" | "medium" | "heavy"
+            ) {
+                anyhow::bail!(
+                    "flow_intensity must be one of: none, spotting, light, medium, heavy"
+                );
+            }
+        }
+        for (label, val) in [
+            ("mood_1_10", mood_1_10),
+            ("energy_1_10", energy_1_10),
+            ("pain_1_10", pain_1_10),
+        ] {
+            if let Some(v) = val {
+                if !(1..=10).contains(&v) {
+                    anyhow::bail!("{} must be in 1..=10", label);
+                }
+            }
+        }
+        let narrative_owned = narrative.trim().to_string();
+        let detection = if narrative_owned.is_empty() {
+            None
+        } else {
+            detect_crisis_in_text(&narrative_owned)
+        };
+        let had_crisis = detection.is_some();
+
+        let (narrative_nonce, narrative_cipher) = if narrative_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c) = self.encrypt_reinforced(&narrative_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let symptoms_norm = normalize_tags(symptoms);
+        let symptoms_json = serde_json::to_string(&symptoms_norm)?;
+
+        let now = Utc::now();
+        let logged = logged_at.unwrap_or(now);
+        let logged_rfc = logged.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("mens-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let flow_clone = flow.clone();
+        let symptoms_clone = symptoms_json.clone();
+        let n_clone = narrative_nonce.clone();
+        let c_clone = narrative_cipher.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO menstrual_cycle_log
+                 (entry_id, cycle_day, flow_intensity, symptoms_json,
+                  mood_1_10, energy_1_10, pain_1_10,
+                  narrative_nonce_b64, narrative_cipher_b64,
+                  had_crisis_pattern, logged_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    id_clone,
+                    cycle_day.map(|d| d as i32),
+                    flow_clone,
+                    symptoms_clone,
+                    mood_1_10.map(|m| m as i32),
+                    energy_1_10.map(|e| e as i32),
+                    pain_1_10.map(|p| p as i32),
+                    n_clone,
+                    c_clone,
+                    had_crisis as i32,
+                    logged_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        let entry = MenstrualCycleEntry {
+            entry_id: id,
+            cycle_day,
+            flow_intensity: flow,
+            symptoms: symptoms_norm,
+            mood_1_10,
+            energy_1_10,
+            pain_1_10,
+            narrative: narrative_owned,
+            had_crisis_pattern: had_crisis,
+            logged_at: logged,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        };
+        Ok((entry, detection))
+    }
+
+    /// Metadata-only list. NO requiere vault.
+    pub async fn list_menstrual_entries_meta(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<MenstrualCycleEntry>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT entry_id, cycle_day, flow_intensity, symptoms_json,
+                        mood_1_10, energy_1_10, pain_1_10, had_crisis_pattern,
+                        logged_at, source_entry_id, created_at,
+                        narrative_nonce_b64
+                 FROM menstrual_cycle_log
+                 ORDER BY logged_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<MenstrualMetaRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(MenstrualMetaRaw {
+                        entry_id: row.get(0)?,
+                        cycle_day: row.get::<_, Option<i32>>(1)?.map(|x| x as u32),
+                        flow_intensity: row.get(2)?,
+                        symptoms_json: row.get(3)?,
+                        mood_1_10: row.get::<_, Option<i32>>(4)?.map(|x| x as u8),
+                        energy_1_10: row.get::<_, Option<i32>>(5)?.map(|x| x as u8),
+                        pain_1_10: row.get::<_, Option<i32>>(6)?.map(|x| x as u8),
+                        had_crisis_pattern: row.get::<_, i32>(7)? != 0,
+                        logged_at: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                        has_narrative: row.get::<_, Option<String>>(11)?.is_some(),
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| {
+                let _ = r.has_narrative; // keep field used (informational)
+                MenstrualCycleEntry {
+                    entry_id: r.entry_id,
+                    cycle_day: r.cycle_day,
+                    flow_intensity: r.flow_intensity,
+                    symptoms: serde_json::from_str(&r.symptoms_json).unwrap_or_default(),
+                    mood_1_10: r.mood_1_10,
+                    energy_1_10: r.energy_1_10,
+                    pain_1_10: r.pain_1_10,
+                    narrative: String::new(),
+                    had_crisis_pattern: r.had_crisis_pattern,
+                    logged_at: parse_utc(&r.logged_at),
+                    source_entry_id: r.source_entry_id,
+                    created_at: parse_utc(&r.created_at),
+                }
+            })
+            .collect())
+    }
+
+    /// Full list with narratives decrypted (only for entries that
+    /// have one). **Requires vault unlocked.**
+    pub async fn list_menstrual_entries(&self, limit: usize) -> Result<Vec<MenstrualCycleEntry>> {
+        let metas = self.list_menstrual_entries_meta(limit).await?;
+        let mut out = Vec::with_capacity(metas.len());
+        for m in metas {
+            let id = m.entry_id.clone();
+            let db_path = self.db_path.clone();
+            let blobs = tokio::task::spawn_blocking(move || -> Result<Option<(String, String)>> {
+                let db = Self::open_db(&db_path)?;
+                let row: (Option<String>, Option<String>) = db.query_row(
+                    "SELECT narrative_nonce_b64, narrative_cipher_b64
+                         FROM menstrual_cycle_log WHERE entry_id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                Ok(match row {
+                    (Some(n), Some(c)) => Some((n, c)),
+                    _ => None,
+                })
+            })
+            .await??;
+            let plaintext = match blobs {
+                Some((n, c)) => self.decrypt_reinforced(&n, &c)?,
+                None => String::new(),
+            };
+            out.push(MenstrualCycleEntry {
+                narrative: plaintext,
+                ..m
+            });
+        }
+        Ok(out)
+    }
+
+    /// Aggregate snapshot. Funciona en cualquier estado del vault.
+    pub async fn get_menstrual_cycle_summary(
+        &self,
+        recent_limit: usize,
+    ) -> Result<MenstrualCycleSummary> {
+        let metas = self
+            .list_menstrual_entries_meta(recent_limit)
+            .await
+            .unwrap_or_default();
+        let vault_unlocked = self.reinforced_vault_status().await?.unlocked;
+
+        let now = Utc::now();
+        let cutoff_30 = now - chrono::Duration::days(30);
+        let in_window: Vec<&MenstrualCycleEntry> =
+            metas.iter().filter(|e| e.logged_at >= cutoff_30).collect();
+        let entries_last_30d = in_window.len() as u32;
+        let avg_pain_30d = avg_field(
+            in_window
+                .iter()
+                .filter_map(|e| e.pain_1_10.map(|p| p as f64)),
+        );
+        let avg_mood_30d = avg_field(
+            in_window
+                .iter()
+                .filter_map(|e| e.mood_1_10.map(|m| m as f64)),
+        );
+
+        // "Last period" = la entrada mas reciente con flow != "none".
+        let days_since_last_period = metas
+            .iter()
+            .find(|e| {
+                e.flow_intensity
+                    .as_deref()
+                    .map(|f| f != "none")
+                    .unwrap_or(false)
+            })
+            .map(|e| (now - e.logged_at).num_days());
+
+        Ok(MenstrualCycleSummary {
+            recent_entries_meta: metas,
+            entries_last_30d,
+            avg_pain_30d,
+            avg_mood_30d,
+            days_since_last_period,
+            vault_unlocked,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw rows for BI.6 -----------------------------------------------
+
+struct MenstrualMetaRaw {
+    entry_id: String,
+    cycle_day: Option<u32>,
+    flow_intensity: Option<String>,
+    symptoms_json: String,
+    mood_1_10: Option<u8>,
+    energy_1_10: Option<u8>,
+    pain_1_10: Option<u8>,
+    had_crisis_pattern: bool,
+    logged_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+    #[allow(dead_code)]
+    has_narrative: bool,
+}
+
+// ============================================================================
+// Fase BI.12 — Salud sexual (sensible, opt-in)
+// ============================================================================
+//
+// Tres tablas:
+//   * sexual_health_log → encuentros con narrativa cifrada bajo vault
+//   * sti_tests         → resultados de pruebas (sin narrativa, similar a labs)
+//   * contraception_methods → metodo activo + historial
+//
+// Reglas firmes:
+//   * Axi NUNCA hace educacion sexual prescriptiva. Solo registra.
+//   * Para problemas medicos (ITS positivo, dolor cronico, disfuncion)
+//     SIEMPRE recomienda profesional.
+//   * Si consent_clear es false → trato como crisis_pattern, surface
+//     hotlines y recomienda profesional + lineas de violencia.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SexualHealthEntry {
+    pub entry_id: String,
+    /// `solo`, `partner`, `multiple`, `other`.
+    pub encounter_type: String,
+    pub partner_relationship_id: Option<String>,
+    pub protection_used: Option<bool>,
+    pub satisfaction_1_10: Option<u8>,
+    /// Si false, esto es una RED FLAG seria. La logica de crisis
+    /// trata cualquier `consent_clear=false` como pattern obligatorio.
+    pub consent_clear: bool,
+    pub narrative: String,
+    pub had_crisis_pattern: bool,
+    pub occurred_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StiTest {
+    pub test_id: String,
+    pub test_name: String,
+    /// `negative`, `positive`, `pending`, `inconclusive`.
+    pub result: String,
+    pub tested_at: DateTime<Utc>,
+    pub lab_name: Option<String>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContraceptionMethod {
+    pub method_id: String,
+    pub method_name: String,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SexualHealthSummary {
+    pub recent_entries_meta: Vec<SexualHealthEntry>,
+    pub recent_sti_tests: Vec<StiTest>,
+    pub active_contraception: Vec<ContraceptionMethod>,
+    pub entries_last_30d: u32,
+    pub crisis_pattern_count_30d: u32,
+    pub consent_violations_count_30d: u32,
+    pub days_since_last_sti_test: Option<i64>,
+    pub vault_unlocked: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.12: sexual health log (REQUIRES vault for narrative)
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_sexual_health_entry(
+        &self,
+        encounter_type: &str,
+        partner_relationship_id: Option<&str>,
+        protection_used: Option<bool>,
+        satisfaction_1_10: Option<u8>,
+        consent_clear: bool,
+        narrative: &str,
+        occurred_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<(SexualHealthEntry, Option<CrisisDetection>)> {
+        let encounter_type =
+            normalize_non_empty(encounter_type).context("encounter_type required")?;
+        if !matches!(
+            encounter_type.as_str(),
+            "solo" | "partner" | "multiple" | "other"
+        ) {
+            anyhow::bail!("encounter_type must be: solo, partner, multiple, other");
+        }
+        let partner = partner_relationship_id.and_then(normalize_non_empty);
+        if let Some(s) = satisfaction_1_10 {
+            if !(1..=10).contains(&s) {
+                anyhow::bail!("satisfaction_1_10 must be in 1..=10");
+            }
+        }
+        let narrative_owned = narrative.trim().to_string();
+        if narrative_owned.is_empty() {
+            anyhow::bail!("sexual health entry narrative cannot be empty");
+        }
+
+        // Crisis detection runs on plaintext BEFORE encryption.
+        // ALSO: consent_clear=false counts as crisis automatically,
+        // independientemente del contenido de la narrativa. Esto es
+        // critico — un encuentro sin consentimiento siempre debe
+        // surface hotlines.
+        let detection_text = detect_crisis_in_text(&narrative_owned);
+        let detection = if !consent_clear {
+            Some(CrisisDetection {
+                matched_keywords: detection_text
+                    .as_ref()
+                    .map(|d| d.matched_keywords.clone())
+                    .unwrap_or_else(|| vec!["consent_violation".to_string()]),
+                severity: "severe".to_string(),
+            })
+        } else {
+            detection_text
+        };
+        let had_crisis = detection.is_some();
+
+        // Encrypt under the vault. Gate.
+        let (narrative_nonce, narrative_cipher) = self.encrypt_reinforced(&narrative_owned)?;
+
+        let now = Utc::now();
+        let occurred = occurred_at.unwrap_or(now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("sxh-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let type_clone = encounter_type.clone();
+        let partner_clone = partner.clone();
+        let n_clone = narrative_nonce.clone();
+        let c_clone = narrative_cipher.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO sexual_health_log
+                 (entry_id, encounter_type, partner_relationship_id,
+                  protection_used, satisfaction_1_10, consent_clear,
+                  narrative_nonce_b64, narrative_cipher_b64,
+                  had_crisis_pattern, occurred_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    id_clone,
+                    type_clone,
+                    partner_clone,
+                    protection_used.map(|b| b as i32),
+                    satisfaction_1_10.map(|s| s as i32),
+                    consent_clear as i32,
+                    n_clone,
+                    c_clone,
+                    had_crisis as i32,
+                    occurred_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        let entry = SexualHealthEntry {
+            entry_id: id,
+            encounter_type,
+            partner_relationship_id: partner,
+            protection_used,
+            satisfaction_1_10,
+            consent_clear,
+            narrative: narrative_owned,
+            had_crisis_pattern: had_crisis,
+            occurred_at: occurred,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        };
+        Ok((entry, detection))
+    }
+
+    pub async fn list_sexual_health_meta(&self, limit: usize) -> Result<Vec<SexualHealthEntry>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT entry_id, encounter_type, partner_relationship_id,
+                        protection_used, satisfaction_1_10, consent_clear,
+                        had_crisis_pattern, occurred_at, source_entry_id, created_at
+                 FROM sexual_health_log
+                 ORDER BY occurred_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<SexualHealthMetaRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(SexualHealthMetaRaw {
+                        entry_id: row.get(0)?,
+                        encounter_type: row.get(1)?,
+                        partner_relationship_id: row.get(2)?,
+                        protection_used: row.get::<_, Option<i32>>(3)?.map(|x| x != 0),
+                        satisfaction_1_10: row.get::<_, Option<i32>>(4)?.map(|x| x as u8),
+                        consent_clear: row.get::<_, i32>(5)? != 0,
+                        had_crisis_pattern: row.get::<_, i32>(6)? != 0,
+                        occurred_at: row.get(7)?,
+                        source_entry_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| SexualHealthEntry {
+                entry_id: r.entry_id,
+                encounter_type: r.encounter_type,
+                partner_relationship_id: r.partner_relationship_id,
+                protection_used: r.protection_used,
+                satisfaction_1_10: r.satisfaction_1_10,
+                consent_clear: r.consent_clear,
+                narrative: String::new(),
+                had_crisis_pattern: r.had_crisis_pattern,
+                occurred_at: parse_utc(&r.occurred_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// Full list with narratives. **Requires vault unlocked.**
+    pub async fn list_sexual_health_entries(&self, limit: usize) -> Result<Vec<SexualHealthEntry>> {
+        let metas = self.list_sexual_health_meta(limit).await?;
+        let mut out = Vec::with_capacity(metas.len());
+        for m in metas {
+            let id = m.entry_id.clone();
+            let db_path = self.db_path.clone();
+            let (n, c) = tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+                let db = Self::open_db(&db_path)?;
+                let row: (String, String) = db.query_row(
+                    "SELECT narrative_nonce_b64, narrative_cipher_b64
+                         FROM sexual_health_log WHERE entry_id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                Ok(row)
+            })
+            .await??;
+            let plaintext = self.decrypt_reinforced(&n, &c)?;
+            out.push(SexualHealthEntry {
+                narrative: plaintext,
+                ..m
+            });
+        }
+        Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.12: STI tests (no vault required — analogous to lab_results)
+    // -----------------------------------------------------------------------
+
+    pub async fn log_sti_test(
+        &self,
+        test_name: &str,
+        result: &str,
+        tested_at: DateTime<Utc>,
+        lab_name: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<StiTest> {
+        let test_name = normalize_non_empty(test_name).context("test_name required")?;
+        let result = normalize_non_empty(result)
+            .context("result required")?
+            .to_lowercase();
+        if !matches!(
+            result.as_str(),
+            "negative" | "positive" | "pending" | "inconclusive"
+        ) {
+            anyhow::bail!("result must be: negative, positive, pending, inconclusive");
+        }
+        let lab_name = lab_name.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let tested_rfc = tested_at.to_rfc3339();
+        let id = format!("sti-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let test_clone = test_name.clone();
+        let result_clone = result.clone();
+        let lab_clone = lab_name.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO sti_tests
+                 (test_id, test_name, result, tested_at, lab_name,
+                  notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id_clone,
+                    test_clone,
+                    result_clone,
+                    tested_rfc,
+                    lab_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(StiTest {
+            test_id: id,
+            test_name,
+            result,
+            tested_at,
+            lab_name,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_sti_tests(&self, limit: usize) -> Result<Vec<StiTest>> {
+        let limit = limit.clamp(1, 500);
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT test_id, test_name, result, tested_at, lab_name,
+                        notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at
+                 FROM sti_tests
+                 ORDER BY tested_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<StiTestRaw> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok(StiTestRaw {
+                        test_id: row.get(0)?,
+                        test_name: row.get(1)?,
+                        result: row.get(2)?,
+                        tested_at: row.get(3)?,
+                        lab_name: row.get(4)?,
+                        notes_nonce_b64: row.get(5)?,
+                        notes_ciphertext_b64: row.get(6)?,
+                        source_entry_id: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| StiTest {
+                test_id: r.test_id,
+                test_name: r.test_name,
+                result: r.result,
+                tested_at: parse_utc(&r.tested_at),
+                lab_name: r.lab_name,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.12: contraception methods
+    // -----------------------------------------------------------------------
+
+    pub async fn add_contraception_method(
+        &self,
+        method_name: &str,
+        started_at: DateTime<Utc>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<ContraceptionMethod> {
+        let method_name = normalize_non_empty(method_name).context("method_name required")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let started_rfc = started_at.to_rfc3339();
+        let id = format!("ctp-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = method_name.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO contraception_methods
+                 (method_id, method_name, started_at, ended_at,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?7)",
+                params![
+                    id_clone,
+                    name_clone,
+                    started_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ContraceptionMethod {
+            method_id: id,
+            method_name,
+            started_at,
+            ended_at: None,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn end_contraception_method(
+        &self,
+        method_id: &str,
+        ended_at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let when = ended_at.unwrap_or_else(Utc::now).to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let id = method_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE contraception_methods
+                 SET ended_at = ?1, updated_at = ?2
+                 WHERE method_id = ?3 AND ended_at IS NULL",
+                params![when, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_contraception_methods(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<ContraceptionMethod>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT method_id, method_name, started_at, ended_at,
+                        notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM contraception_methods WHERE ended_at IS NULL
+                 ORDER BY started_at DESC"
+            } else {
+                "SELECT method_id, method_name, started_at, ended_at,
+                        notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM contraception_methods
+                 ORDER BY started_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let rows: Vec<ContraceptionMethodRaw> = stmt
+                .query_map([], |row| {
+                    Ok(ContraceptionMethodRaw {
+                        method_id: row.get(0)?,
+                        method_name: row.get(1)?,
+                        started_at: row.get(2)?,
+                        ended_at: row.get(3)?,
+                        notes_nonce_b64: row.get(4)?,
+                        notes_ciphertext_b64: row.get(5)?,
+                        source_entry_id: row.get(6)?,
+                        created_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ContraceptionMethod {
+                method_id: r.method_id,
+                method_name: r.method_name,
+                started_at: parse_utc(&r.started_at),
+                ended_at: r.ended_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    pub async fn get_sexual_health_summary(
+        &self,
+        recent_limit: usize,
+    ) -> Result<SexualHealthSummary> {
+        let metas = self
+            .list_sexual_health_meta(recent_limit)
+            .await
+            .unwrap_or_default();
+        let recent_sti_tests = self.list_sti_tests(recent_limit).await.unwrap_or_default();
+        let active_contraception = self
+            .list_contraception_methods(true)
+            .await
+            .unwrap_or_default();
+        let vault_unlocked = self.reinforced_vault_status().await?.unlocked;
+
+        let now = Utc::now();
+        let cutoff_30 = now - chrono::Duration::days(30);
+        let in_window: Vec<&SexualHealthEntry> = metas
+            .iter()
+            .filter(|e| e.occurred_at >= cutoff_30)
+            .collect();
+        let entries_last_30d = in_window.len() as u32;
+        let crisis_pattern_count_30d =
+            in_window.iter().filter(|e| e.had_crisis_pattern).count() as u32;
+        let consent_violations_count_30d =
+            in_window.iter().filter(|e| !e.consent_clear).count() as u32;
+        let days_since_last_sti_test = recent_sti_tests
+            .first()
+            .map(|t| (now - t.tested_at).num_days());
+
+        Ok(SexualHealthSummary {
+            recent_entries_meta: metas,
+            recent_sti_tests,
+            active_contraception,
+            entries_last_30d,
+            crisis_pattern_count_30d,
+            consent_violations_count_30d,
+            days_since_last_sti_test,
+            vault_unlocked,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw rows for BI.12 ----------------------------------------------
+
+struct SexualHealthMetaRaw {
+    entry_id: String,
+    encounter_type: String,
+    partner_relationship_id: Option<String>,
+    protection_used: Option<bool>,
+    satisfaction_1_10: Option<u8>,
+    consent_clear: bool,
+    had_crisis_pattern: bool,
+    occurred_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct StiTestRaw {
+    test_id: String,
+    test_name: String,
+    result: String,
+    tested_at: String,
+    lab_name: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct ContraceptionMethodRaw {
+    method_id: String,
+    method_name: String,
+    started_at: String,
+    ended_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+// ============================================================================
+// Fase BI.3.1 — food_db + comercio local + listas de compras
+// ============================================================================
+//
+// Sub-fase NO sensible. Cierra el pillar Vida Plena en el dominio de
+// nutricion: catalogo de alimentos con macros, registro de tiendas y
+// precios observados, listas de compras con items que pueden
+// referenciar el catalogo o ser texto libre.
+//
+// Esta foundation NO precarga datos del catalogo (USDA, Open Food
+// Facts, SMAE) — los importadores corren aparte y pueden bombear
+// data via `add_food`. Mantenerlo separado del schema deja la
+// migracion del DB rapida y permite que el usuario empiece a usar
+// shopping_lists con texto libre desde el dia uno.
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Food {
+    pub food_id: String,
+    pub name: String,
+    pub brand: Option<String>,
+    pub category: Option<String>,
+    pub kcal_per_100g: Option<f64>,
+    pub protein_g_per_100g: Option<f64>,
+    pub carbs_g_per_100g: Option<f64>,
+    pub fat_g_per_100g: Option<f64>,
+    pub fiber_g_per_100g: Option<f64>,
+    pub serving_size_g: Option<f64>,
+    /// `usda`, `openfoodfacts`, `smae`, `user`.
+    pub source: String,
+    pub barcode: Option<String>,
+    pub tags: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommerceStore {
+    pub store_id: String,
+    pub name: String,
+    /// `supermarket`, `mercado`, `farmacia`, `tienda`, `online`, `other`.
+    pub store_type: Option<String>,
+    pub location: Option<String>,
+    pub notes: Option<String>,
+    pub active: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommercePrice {
+    pub price_id: String,
+    pub store_id: String,
+    pub food_id: Option<String>,
+    pub product_name: String,
+    pub price: f64,
+    pub currency: String,
+    pub unit: Option<String>,
+    pub observed_at: DateTime<Utc>,
+    pub notes: Option<String>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One item inside a shopping list. Stored as JSON inside the parent
+/// row's `items_json` column. `food_id` is optional — items can be
+/// pure free-text ("pan dulce") without referencing the catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShoppingListItem {
+    pub name: String,
+    pub quantity: Option<f64>,
+    pub unit: Option<String>,
+    pub food_id: Option<String>,
+    pub checked: bool,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShoppingList {
+    pub list_id: String,
+    pub name: String,
+    pub target_store_id: Option<String>,
+    /// `active`, `completed`, `archived`.
+    pub status: String,
+    pub items: Vec<ShoppingListItem>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.3.1: food_db
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_food(
+        &self,
+        name: &str,
+        brand: Option<&str>,
+        category: Option<&str>,
+        kcal_per_100g: Option<f64>,
+        protein_g_per_100g: Option<f64>,
+        carbs_g_per_100g: Option<f64>,
+        fat_g_per_100g: Option<f64>,
+        fiber_g_per_100g: Option<f64>,
+        serving_size_g: Option<f64>,
+        source: &str,
+        barcode: Option<&str>,
+        tags: &[String],
+    ) -> Result<Food> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let brand = brand.and_then(normalize_non_empty);
+        let category = category.and_then(normalize_non_empty);
+        let source = normalize_non_empty(source)
+            .context("source required")?
+            .to_lowercase();
+        if !matches!(source.as_str(), "usda" | "openfoodfacts" | "smae" | "user") {
+            anyhow::bail!("source must be: usda, openfoodfacts, smae, user");
+        }
+        let barcode = barcode.and_then(normalize_non_empty);
+        for (label, val) in [
+            ("kcal_per_100g", kcal_per_100g),
+            ("protein_g_per_100g", protein_g_per_100g),
+            ("carbs_g_per_100g", carbs_g_per_100g),
+            ("fat_g_per_100g", fat_g_per_100g),
+            ("fiber_g_per_100g", fiber_g_per_100g),
+            ("serving_size_g", serving_size_g),
+        ] {
+            if let Some(v) = val {
+                if !v.is_finite() || v < 0.0 {
+                    anyhow::bail!("{} must be a non-negative finite number", label);
+                }
+            }
+        }
+        let tags_norm = normalize_tags(tags);
+        let tags_json = serde_json::to_string(&tags_norm)?;
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("food-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let brand_clone = brand.clone();
+        let category_clone = category.clone();
+        let source_clone = source.clone();
+        let barcode_clone = barcode.clone();
+        let tags_clone = tags_json.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO food_db
+                 (food_id, name, brand, category, kcal_per_100g,
+                  protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+                  fiber_g_per_100g, serving_size_g, source, barcode,
+                  tags_json, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                params![
+                    id_clone,
+                    name_clone,
+                    brand_clone,
+                    category_clone,
+                    kcal_per_100g,
+                    protein_g_per_100g,
+                    carbs_g_per_100g,
+                    fat_g_per_100g,
+                    fiber_g_per_100g,
+                    serving_size_g,
+                    source_clone,
+                    barcode_clone,
+                    tags_clone,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Food {
+            food_id: id,
+            name,
+            brand,
+            category,
+            kcal_per_100g,
+            protein_g_per_100g,
+            carbs_g_per_100g,
+            fat_g_per_100g,
+            fiber_g_per_100g,
+            serving_size_g,
+            source,
+            barcode,
+            tags: tags_norm,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Search foods by case-insensitive substring on name + brand.
+    /// Returns up to `limit` results, ordered by name.
+    pub async fn search_foods(&self, query: &str, limit: usize) -> Result<Vec<Food>> {
+        let query = query.trim().to_lowercase();
+        let limit = limit.clamp(1, 200);
+        let db_path = self.db_path.clone();
+        let pat = format!("%{}%", query);
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT food_id, name, brand, category, kcal_per_100g,
+                        protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+                        fiber_g_per_100g, serving_size_g, source, barcode,
+                        tags_json, created_at, updated_at
+                 FROM food_db
+                 WHERE LOWER(name) LIKE ?1 OR LOWER(IFNULL(brand,'')) LIKE ?1
+                 ORDER BY name ASC
+                 LIMIT ?2",
+            )?;
+            let rows: Vec<FoodRaw> = stmt
+                .query_map(params![pat, limit as i64], food_row_mapper)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(food_from_raw).collect())
+    }
+
+    pub async fn get_food_by_id(&self, food_id: &str) -> Result<Option<Food>> {
+        let db_path = self.db_path.clone();
+        let id = food_id.to_string();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<FoodRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT food_id, name, brand, category, kcal_per_100g,
+                        protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+                        fiber_g_per_100g, serving_size_g, source, barcode,
+                        tags_json, created_at, updated_at
+                 FROM food_db WHERE food_id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(food_row_mapper(row)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(raw.map(food_from_raw))
+    }
+
+    pub async fn get_food_by_barcode(&self, barcode: &str) -> Result<Option<Food>> {
+        let db_path = self.db_path.clone();
+        let bc = barcode.to_string();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<FoodRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT food_id, name, brand, category, kcal_per_100g,
+                        protein_g_per_100g, carbs_g_per_100g, fat_g_per_100g,
+                        fiber_g_per_100g, serving_size_g, source, barcode,
+                        tags_json, created_at, updated_at
+                 FROM food_db WHERE barcode = ?1
+                 LIMIT 1",
+            )?;
+            let mut rows = stmt.query(params![bc])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(food_row_mapper(row)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(raw.map(food_from_raw))
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1: commerce stores
+    // -----------------------------------------------------------------------
+
+    pub async fn add_commerce_store(
+        &self,
+        name: &str,
+        store_type: Option<&str>,
+        location: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<CommerceStore> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let store_type = store_type.and_then(normalize_non_empty);
+        let location = location.and_then(normalize_non_empty);
+        let notes = notes.and_then(normalize_non_empty);
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("store-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let type_clone = store_type.clone();
+        let loc_clone = location.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO commerce_stores
+                 (store_id, name, store_type, location, notes, active,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?6)",
+                params![
+                    id_clone,
+                    name_clone,
+                    type_clone,
+                    loc_clone,
+                    notes_clone,
+                    now_rfc
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CommerceStore {
+            store_id: id,
+            name,
+            store_type,
+            location,
+            notes,
+            active: true,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn deactivate_commerce_store(&self, store_id: &str) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        let id = store_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE commerce_stores
+                 SET active = 0, updated_at = ?1
+                 WHERE store_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_commerce_stores(&self, active_only: bool) -> Result<Vec<CommerceStore>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT store_id, name, store_type, location, notes, active,
+                        created_at, updated_at
+                 FROM commerce_stores WHERE active = 1
+                 ORDER BY name ASC"
+            } else {
+                "SELECT store_id, name, store_type, location, notes, active,
+                        created_at, updated_at
+                 FROM commerce_stores
+                 ORDER BY name ASC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let rows: Vec<CommerceStoreRaw> = stmt
+                .query_map([], |row| {
+                    Ok(CommerceStoreRaw {
+                        store_id: row.get(0)?,
+                        name: row.get(1)?,
+                        store_type: row.get(2)?,
+                        location: row.get(3)?,
+                        notes: row.get(4)?,
+                        active: row.get::<_, i32>(5)? != 0,
+                        created_at: row.get(6)?,
+                        updated_at: row.get(7)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| CommerceStore {
+                store_id: r.store_id,
+                name: r.name,
+                store_type: r.store_type,
+                location: r.location,
+                notes: r.notes,
+                active: r.active,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1: commerce prices
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_commerce_price(
+        &self,
+        store_id: &str,
+        food_id: Option<&str>,
+        product_name: &str,
+        price: f64,
+        currency: &str,
+        unit: Option<&str>,
+        observed_at: Option<DateTime<Utc>>,
+        notes: Option<&str>,
+        source_entry_id: Option<&str>,
+    ) -> Result<CommercePrice> {
+        let store_id = normalize_non_empty(store_id).context("store_id required")?;
+        let product_name = normalize_non_empty(product_name).context("product_name required")?;
+        let food_id_owned = food_id.and_then(normalize_non_empty);
+        let currency = normalize_non_empty(currency).unwrap_or_else(|| "MXN".to_string());
+        let unit = unit.and_then(normalize_non_empty);
+        let notes = notes.and_then(normalize_non_empty);
+        if !price.is_finite() || price < 0.0 {
+            anyhow::bail!("price must be non-negative finite");
+        }
+
+        // Verify the store exists.
+        let sid_check = store_id.clone();
+        let db_path_check = self.db_path.clone();
+        let exists = tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path_check)?;
+            let n: i64 = db.query_row(
+                "SELECT COUNT(*) FROM commerce_stores WHERE store_id = ?1",
+                params![sid_check],
+                |r| r.get(0),
+            )?;
+            Ok(n > 0)
+        })
+        .await??;
+        if !exists {
+            anyhow::bail!("no such store_id: {}", store_id);
+        }
+
+        let now = Utc::now();
+        let observed = observed_at.unwrap_or(now);
+        let observed_rfc = observed.to_rfc3339();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("price-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let store_clone = store_id.clone();
+        let food_clone = food_id_owned.clone();
+        let product_clone = product_name.clone();
+        let currency_clone = currency.clone();
+        let unit_clone = unit.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO commerce_prices
+                 (price_id, store_id, food_id, product_name, price, currency,
+                  unit, observed_at, notes, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id_clone,
+                    store_clone,
+                    food_clone,
+                    product_clone,
+                    price,
+                    currency_clone,
+                    unit_clone,
+                    observed_rfc,
+                    notes_clone,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CommercePrice {
+            price_id: id,
+            store_id,
+            food_id: food_id_owned,
+            product_name,
+            price,
+            currency,
+            unit,
+            observed_at: observed,
+            notes,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_prices_for_food(
+        &self,
+        food_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CommercePrice>> {
+        let limit = limit.clamp(1, 200);
+        let id = food_id.to_string();
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT price_id, store_id, food_id, product_name, price, currency,
+                        unit, observed_at, notes, source_entry_id, created_at
+                 FROM commerce_prices
+                 WHERE food_id = ?1
+                 ORDER BY observed_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows: Vec<CommercePriceRaw> = stmt
+                .query_map(params![id, limit as i64], commerce_price_row_mapper)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(commerce_price_from_raw).collect())
+    }
+
+    pub async fn list_prices_at_store(
+        &self,
+        store_id: &str,
+        limit: usize,
+    ) -> Result<Vec<CommercePrice>> {
+        let limit = limit.clamp(1, 500);
+        let id = store_id.to_string();
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT price_id, store_id, food_id, product_name, price, currency,
+                        unit, observed_at, notes, source_entry_id, created_at
+                 FROM commerce_prices
+                 WHERE store_id = ?1
+                 ORDER BY observed_at DESC
+                 LIMIT ?2",
+            )?;
+            let rows: Vec<CommercePriceRaw> = stmt
+                .query_map(params![id, limit as i64], commerce_price_row_mapper)?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(commerce_price_from_raw).collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1: shopping lists
+    // -----------------------------------------------------------------------
+
+    pub async fn create_shopping_list(
+        &self,
+        name: &str,
+        target_store_id: Option<&str>,
+        items: &[ShoppingListItem],
+        notes: Option<&str>,
+    ) -> Result<ShoppingList> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let target_store_id = target_store_id.and_then(normalize_non_empty);
+        let notes = notes.and_then(normalize_non_empty);
+        let items_owned = items.to_vec();
+        let items_json = serde_json::to_string(&items_owned)?;
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("shop-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let store_clone = target_store_id.clone();
+        let items_clone = items_json.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO shopping_lists
+                 (list_id, name, target_store_id, status, items_json, notes,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6, ?6)",
+                params![
+                    id_clone,
+                    name_clone,
+                    store_clone,
+                    items_clone,
+                    notes_clone,
+                    now_rfc
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ShoppingList {
+            list_id: id,
+            name,
+            target_store_id,
+            status: "active".to_string(),
+            items: items_owned,
+            notes,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Toggle the `checked` flag on the item at `item_index`. Updates
+    /// the row's items_json + updated_at. Idempotent on bounds.
+    pub async fn check_shopping_list_item(
+        &self,
+        list_id: &str,
+        item_index: usize,
+        checked: bool,
+    ) -> Result<bool> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let updated = tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path)?;
+            let json: String = match db.query_row(
+                "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                params![id],
+                |r| r.get(0),
+            ) {
+                Ok(s) => s,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+                Err(e) => return Err(e.into()),
+            };
+            let mut items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            if item_index >= items.len() {
+                return Ok(false);
+            }
+            items[item_index].checked = checked;
+            let new_json = serde_json::to_string(&items)?;
+            db.execute(
+                "UPDATE shopping_lists SET items_json = ?1, updated_at = ?2
+                 WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            Ok(true)
+        })
+        .await??;
+        Ok(updated)
+    }
+
+    pub async fn complete_shopping_list(&self, list_id: &str) -> Result<bool> {
+        self.set_shopping_list_status(list_id, "completed").await
+    }
+
+    pub async fn archive_shopping_list(&self, list_id: &str) -> Result<bool> {
+        self.set_shopping_list_status(list_id, "archived").await
+    }
+
+    async fn set_shopping_list_status(&self, list_id: &str, status: &str) -> Result<bool> {
+        let id = list_id.to_string();
+        let status_owned = status.to_string();
+        let now_rfc = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE shopping_lists SET status = ?1, updated_at = ?2
+                 WHERE list_id = ?3",
+                params![status_owned, now_rfc, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_shopping_lists(
+        &self,
+        status_filter: Option<&str>,
+    ) -> Result<Vec<ShoppingList>> {
+        let filter = status_filter.map(|s| s.to_string());
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let rows: Vec<ShoppingListRaw> = if let Some(f) = filter {
+                let mut stmt = db.prepare(
+                    "SELECT list_id, name, target_store_id, status, items_json, notes,
+                            created_at, updated_at
+                     FROM shopping_lists WHERE status = ?1
+                     ORDER BY created_at DESC",
+                )?;
+                let collected: Vec<ShoppingListRaw> = stmt
+                    .query_map(params![f], shopping_list_row_mapper)?
+                    .flatten()
+                    .collect();
+                collected
+            } else {
+                let mut stmt = db.prepare(
+                    "SELECT list_id, name, target_store_id, status, items_json, notes,
+                            created_at, updated_at
+                     FROM shopping_lists
+                     ORDER BY created_at DESC",
+                )?;
+                let collected: Vec<ShoppingListRaw> = stmt
+                    .query_map([], shopping_list_row_mapper)?
+                    .flatten()
+                    .collect();
+                collected
+            };
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(raws.into_iter().map(shopping_list_from_raw).collect())
+    }
+
+    pub async fn get_shopping_list(&self, list_id: &str) -> Result<Option<ShoppingList>> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let raw = tokio::task::spawn_blocking(move || -> Result<Option<ShoppingListRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT list_id, name, target_store_id, status, items_json, notes,
+                        created_at, updated_at
+                 FROM shopping_lists WHERE list_id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(shopping_list_row_mapper(row)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(raw.map(shopping_list_from_raw))
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1 sprint 3 — Live editable shopping lists
+    // -----------------------------------------------------------------------
+    //
+    // Convierte una lista de "batch-create-once" en algo realmente
+    // usable EN la tienda: añadir items sobre la marcha, marcar por
+    // nombre ("marca la leche") en lugar de por indice, quitar
+    // items, y resolver "qué necesito comprar" sin tener que pasar
+    // un list_id.
+    //
+    // Todas las operaciones de modificacion siguen el mismo patron
+    // que `check_shopping_list_item`: leer items_json, mutar el Vec
+    // en memoria, escribir el JSON de vuelta. Ese es el modelo de
+    // simultaneidad que ya tiene la tabla.
+
+    /// Devuelve la lista activa mas reciente, o `None` si no hay
+    /// ninguna en estado `active`. Conveniente para flujos del tipo
+    /// "Axi, qué necesito comprar" donde el usuario no tiene un
+    /// list_id en mente.
+    pub async fn get_active_shopping_list(&self) -> Result<Option<ShoppingList>> {
+        let lists = self.list_shopping_lists(Some("active")).await?;
+        // list_shopping_lists ya viene ordenado por created_at DESC,
+        // asi que el primero es el mas reciente.
+        Ok(lists.into_iter().next())
+    }
+
+    /// Añade un item a una lista existente. Devuelve la lista
+    /// actualizada o `None` si el list_id no existe.
+    pub async fn add_shopping_list_item(
+        &self,
+        list_id: &str,
+        item: ShoppingListItem,
+    ) -> Result<Option<ShoppingList>> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let updated = tokio::task::spawn_blocking(move || -> Result<Option<ShoppingListRaw>> {
+            let db = Self::open_db(&db_path)?;
+            let row: Option<(String,)> = db
+                .query_row(
+                    "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?,)),
+                )
+                .ok();
+            let json = match row {
+                Some((j,)) => j,
+                None => return Ok(None),
+            };
+            let mut items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            items.push(item);
+            let new_json = serde_json::to_string(&items)?;
+            db.execute(
+                "UPDATE shopping_lists
+                     SET items_json = ?1, updated_at = ?2
+                     WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            let mut stmt = db.prepare(
+                "SELECT list_id, name, target_store_id, status, items_json, notes,
+                            created_at, updated_at
+                     FROM shopping_lists WHERE list_id = ?1",
+            )?;
+            let mut rows = stmt.query(params![id])?;
+            if let Some(row) = rows.next()? {
+                Ok(Some(shopping_list_row_mapper(row)?))
+            } else {
+                Ok(None)
+            }
+        })
+        .await??;
+        Ok(updated.map(shopping_list_from_raw))
+    }
+
+    /// Quita el item en `item_index`. Devuelve `true` si se hizo el
+    /// remove, `false` si la lista no existe o el indice está fuera
+    /// de rango (idempotente sobre out-of-bounds, igual que
+    /// `check_shopping_list_item`).
+    pub async fn remove_shopping_list_item(
+        &self,
+        list_id: &str,
+        item_index: usize,
+    ) -> Result<bool> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let updated = tokio::task::spawn_blocking(move || -> Result<bool> {
+            let db = Self::open_db(&db_path)?;
+            let json: String = match db.query_row(
+                "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                params![id],
+                |r| r.get(0),
+            ) {
+                Ok(s) => s,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+                Err(e) => return Err(e.into()),
+            };
+            let mut items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            if item_index >= items.len() {
+                return Ok(false);
+            }
+            items.remove(item_index);
+            let new_json = serde_json::to_string(&items)?;
+            db.execute(
+                "UPDATE shopping_lists SET items_json = ?1, updated_at = ?2
+                 WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            Ok(true)
+        })
+        .await??;
+        Ok(updated)
+    }
+
+    /// Marca el primer item cuyo nombre contenga `needle` (case
+    /// insensitive substring). Devuelve `Some(match)` con el indice y
+    /// el nombre real del item, mas el `total_matches` para que el
+    /// caller pueda avisar al usuario si hubo ambiguedad. Devuelve
+    /// `None` si no hubo match o si la lista no existe.
+    pub async fn check_shopping_list_item_by_name(
+        &self,
+        list_id: &str,
+        needle: &str,
+        checked: bool,
+    ) -> Result<Option<ShoppingItemMatch>> {
+        let needle_lower = needle.trim().to_lowercase();
+        if needle_lower.is_empty() {
+            anyhow::bail!("needle (item name) cannot be empty");
+        }
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let result = tokio::task::spawn_blocking(move || -> Result<Option<ShoppingItemMatch>> {
+            let db = Self::open_db(&db_path)?;
+            let json: String = match db.query_row(
+                "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                params![id],
+                |r| r.get(0),
+            ) {
+                Ok(s) => s,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
+            let mut items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            let total_matches = items
+                .iter()
+                .filter(|i| i.name.to_lowercase().contains(&needle_lower))
+                .count();
+            if total_matches == 0 {
+                return Ok(None);
+            }
+            let first_idx = items
+                .iter()
+                .position(|i| i.name.to_lowercase().contains(&needle_lower))
+                .unwrap();
+            let matched_name = items[first_idx].name.clone();
+            items[first_idx].checked = checked;
+            let new_json = serde_json::to_string(&items)?;
+            db.execute(
+                "UPDATE shopping_lists SET items_json = ?1, updated_at = ?2
+                     WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            Ok(Some(ShoppingItemMatch {
+                item_index: first_idx,
+                matched_name,
+                total_matches,
+            }))
+        })
+        .await??;
+        Ok(result)
+    }
+}
+
+/// Result of a `check_shopping_list_item_by_name` lookup. The
+/// caller uses `total_matches` to decide whether to warn the user
+/// about ambiguity ("hay 2 items que contienen 'leche', marqué el
+/// primero").
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShoppingItemMatch {
+    pub item_index: usize,
+    pub matched_name: String,
+    pub total_matches: usize,
+}
+
+/// Quick "what's left to buy" snapshot of a single shopping list.
+/// Cheap to compute (no extra DB roundtrips beyond fetching the
+/// list itself) and meant for the UX flow "¿cuanto me falta?"
+/// while the user is in the store.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShoppingListSummary {
+    pub list_id: String,
+    pub name: String,
+    pub status: String,
+    pub total_items: usize,
+    pub checked_items: usize,
+    pub remaining_items: usize,
+    /// 0..=100. 0 if `total_items == 0` so callers don't have to
+    /// special-case the empty list to avoid div-by-zero.
+    pub percent_complete: u8,
+    pub target_store_id: Option<String>,
+    pub last_updated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Compute a `ShoppingListSummary` for the given list. Returns
+    /// `None` if the list doesn't exist. Pure derived data — no
+    /// writes — so the caller can poll this safely while shopping.
+    pub async fn get_shopping_list_summary(
+        &self,
+        list_id: &str,
+    ) -> Result<Option<ShoppingListSummary>> {
+        let list = match self.get_shopping_list(list_id).await? {
+            Some(l) => l,
+            None => return Ok(None),
+        };
+        Ok(Some(shopping_list_to_summary(&list)))
+    }
+}
+
+/// Pure derivation. Public so unit tests can hit it without going
+/// through the DB layer.
+pub fn shopping_list_to_summary(list: &ShoppingList) -> ShoppingListSummary {
+    let total = list.items.len();
+    let checked = list.items.iter().filter(|i| i.checked).count();
+    let remaining = total.saturating_sub(checked);
+    let percent = if total == 0 {
+        0u8
+    } else {
+        // Round to nearest, clamp 0..=100.
+        let pct = (checked as f64 / total as f64) * 100.0;
+        pct.round().clamp(0.0, 100.0) as u8
+    };
+    ShoppingListSummary {
+        list_id: list.list_id.clone(),
+        name: list.name.clone(),
+        status: list.status.clone(),
+        total_items: total,
+        checked_items: checked,
+        remaining_items: remaining,
+        percent_complete: percent,
+        target_store_id: list.target_store_id.clone(),
+        last_updated_at: list.updated_at,
+    }
+}
+
+// ============================================================================
+// Vida Plena — Refinements de cierre
+// ============================================================================
+//
+// Conjunto de helpers pequeños que cierran loops de UX en varios
+// pillars. Todos son DERIVED queries sobre tablas existentes — sin
+// schema changes, sin estado nuevo. La intencion es que estos
+// metodos esten disponibles para que el dashboard / Telegram bot
+// puedan responder preguntas tipo "qué me falta hoy" sin tener que
+// computar logica en el cliente.
+
+/// Streak de mood logs (BI.4). Cuenta dias consecutivos hacia
+/// atras desde `today` donde el usuario hizo al menos un
+/// `mood_log_checkin`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MoodLogStreak {
+    /// Dias consecutivos desde `today` (inclusive si hoy ya hay
+    /// log) hacia atras hasta encontrar el primer hueco.
+    pub current_streak_days: u32,
+    /// Streak mas larga jamas registrada.
+    pub longest_streak_days: u32,
+    /// Total de dias unicos con al menos un log (no checkins
+    /// totales — un dia con 5 mood logs cuenta como 1).
+    pub total_log_days: u32,
+    /// Fecha del ultimo dia con log (YYYY-MM-DD).
+    pub last_log_date: Option<String>,
+}
+
+/// Streak actual de un habito especifico (BI.7). Distinto del
+/// `get_habit_streak` existente: este cuenta dias CONSECUTIVOS
+/// hacia atras desde hoy, no dias-marcados-en-ventana.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HabitCurrentStreak {
+    pub habit_id: String,
+    pub habit_name: String,
+    pub current_streak_days: u32,
+    pub longest_streak_days: u32,
+    pub last_completed_date: Option<String>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.3.1: shopping list — bulk-clear checked items
+    // -----------------------------------------------------------------------
+
+    /// Quita TODOS los items checked de una lista de un solo golpe.
+    /// Util al regresar de la tienda para reusar la lista plantilla
+    /// sin tener que removerlos uno por uno. Devuelve cuantos items
+    /// se quitaron, o `None` si la lista no existe.
+    pub async fn shopping_list_clear_completed(&self, list_id: &str) -> Result<Option<u32>> {
+        let id = list_id.to_string();
+        let db_path = self.db_path.clone();
+        let now_rfc = Utc::now().to_rfc3339();
+        let removed = tokio::task::spawn_blocking(move || -> Result<Option<u32>> {
+            let db = Self::open_db(&db_path)?;
+            let json: String = match db.query_row(
+                "SELECT items_json FROM shopping_lists WHERE list_id = ?1",
+                params![id],
+                |r| r.get(0),
+            ) {
+                Ok(s) => s,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+                Err(e) => return Err(e.into()),
+            };
+            let items: Vec<ShoppingListItem> = serde_json::from_str(&json)?;
+            let before = items.len();
+            let kept: Vec<ShoppingListItem> = items.into_iter().filter(|i| !i.checked).collect();
+            let removed = (before - kept.len()) as u32;
+            if removed == 0 {
+                return Ok(Some(0));
+            }
+            let new_json = serde_json::to_string(&kept)?;
+            db.execute(
+                "UPDATE shopping_lists SET items_json = ?1, updated_at = ?2
+                 WHERE list_id = ?3",
+                params![new_json, now_rfc, id],
+            )?;
+            Ok(Some(removed))
+        })
+        .await??;
+        Ok(removed)
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.4: mood log streak
+    // -----------------------------------------------------------------------
+
+    /// Compute the user's mood-log streak as of `today_local`.
+    /// `today_local` is `YYYY-MM-DD` interpretado como la fecha
+    /// local del usuario. Strategy:
+    ///
+    ///   1. Pull all mood checkins ordered DESC by logged_at.
+    ///   2. Project each `logged_at` to its local day (lossy: we
+    ///      use the date portion of the RFC3339 stored, which IS
+    ///      the day in UTC — for true local-day grouping the
+    ///      caller must pass timestamps already in local time, but
+    ///      the day-bucketing is the same operation either way).
+    ///   3. Build a sorted descending Vec of unique day strings.
+    ///   4. Walk forward from `today` counting consecutive days
+    ///      that appear in the set; stop at the first gap.
+    ///   5. Compute longest streak across all days for fairness.
+    pub async fn get_mood_log_streak(&self, today_local: &str) -> Result<MoodLogStreak> {
+        let today = chrono::NaiveDate::parse_from_str(today_local, "%Y-%m-%d")
+            .with_context(|| format!("invalid today_local '{}'", today_local))?;
+
+        let db_path = self.db_path.clone();
+        let raw_dates = tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT logged_at FROM mental_health_mood_log
+                 ORDER BY logged_at DESC",
+            )?;
+            let rows: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(0))?
+                .flatten()
+                .collect();
+            Ok(rows)
+        })
+        .await??;
+
+        // Project to unique day strings (the date prefix of the
+        // RFC3339 timestamp).
+        let mut day_set = std::collections::BTreeSet::new();
+        for ts in &raw_dates {
+            if let Some(date_part) = ts.get(..10) {
+                day_set.insert(date_part.to_string());
+            }
+        }
+        let total_log_days = day_set.len() as u32;
+        let last_log_date = day_set.iter().next_back().cloned();
+
+        // Current streak: walk back from `today` checking
+        // membership in the set.
+        let mut current_streak: u32 = 0;
+        let mut cursor = today;
+        while day_set.contains(&cursor.format("%Y-%m-%d").to_string()) {
+            current_streak += 1;
+            cursor = match cursor.checked_sub_signed(chrono::Duration::days(1)) {
+                Some(d) => d,
+                None => break,
+            };
+        }
+
+        // Longest streak: scan the sorted set, counting consecutive
+        // days. We materialize as Vec<NaiveDate> for arithmetic.
+        let mut sorted_days: Vec<chrono::NaiveDate> = day_set
+            .iter()
+            .filter_map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+            .collect();
+        sorted_days.sort();
+        let mut longest: u32 = 0;
+        let mut run: u32 = 0;
+        let mut prev: Option<chrono::NaiveDate> = None;
+        for d in &sorted_days {
+            run = match prev {
+                Some(p) if (*d - p).num_days() == 1 => run + 1,
+                Some(p) if p == *d => run, // same day shouldn't happen but be safe
+                _ => 1,
+            };
+            if run > longest {
+                longest = run;
+            }
+            prev = Some(*d);
+        }
+
+        Ok(MoodLogStreak {
+            current_streak_days: current_streak,
+            longest_streak_days: longest,
+            total_log_days,
+            last_log_date,
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.7: current habit streak (consecutive days from today backwards)
+    // -----------------------------------------------------------------------
+
+    /// Compute the consecutive-day streak of a habit ending at
+    /// `today_local`. Distinct from `get_habit_streak` (which
+    /// counts marked days in a fixed N-day window).
+    ///
+    /// `current_streak_days` = consecutive days ending at today
+    ///   where the habit has at least one `completed = 1` check-in.
+    /// `longest_streak_days` = longest consecutive run anywhere in
+    ///   the user's history of this habit.
+    pub async fn get_habit_current_streak(
+        &self,
+        habit_id: &str,
+        today_local: &str,
+    ) -> Result<HabitCurrentStreak> {
+        let today = chrono::NaiveDate::parse_from_str(today_local, "%Y-%m-%d")
+            .with_context(|| format!("invalid today_local '{}'", today_local))?;
+        let id = habit_id.to_string();
+        let db_path = self.db_path.clone();
+
+        let (habit_name, completed_dates) =
+            tokio::task::spawn_blocking(move || -> Result<(String, Vec<String>)> {
+                let db = Self::open_db(&db_path)?;
+                let name: String = db.query_row(
+                    "SELECT name FROM habits WHERE habit_id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )?;
+                let mut stmt = db.prepare(
+                    "SELECT logged_for_date FROM habit_log
+                     WHERE habit_id = ?1 AND completed = 1
+                     ORDER BY logged_for_date ASC",
+                )?;
+                let dates: Vec<String> = stmt
+                    .query_map(params![id], |r| r.get::<_, String>(0))?
+                    .flatten()
+                    .collect();
+                Ok((name, dates))
+            })
+            .await??;
+
+        // Dedup into a sorted set.
+        let mut day_set = std::collections::BTreeSet::new();
+        for d in &completed_dates {
+            day_set.insert(d.clone());
+        }
+        let last_completed_date = day_set.iter().next_back().cloned();
+
+        // Current streak: walk back from today.
+        let mut current: u32 = 0;
+        let mut cursor = today;
+        while day_set.contains(&cursor.format("%Y-%m-%d").to_string()) {
+            current += 1;
+            cursor = match cursor.checked_sub_signed(chrono::Duration::days(1)) {
+                Some(d) => d,
+                None => break,
+            };
+        }
+
+        // Longest streak: scan sorted dates.
+        let mut sorted_days: Vec<chrono::NaiveDate> = day_set
+            .iter()
+            .filter_map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+            .collect();
+        sorted_days.sort();
+        let mut longest: u32 = 0;
+        let mut run: u32 = 0;
+        let mut prev: Option<chrono::NaiveDate> = None;
+        for d in &sorted_days {
+            run = match prev {
+                Some(p) if (*d - p).num_days() == 1 => run + 1,
+                _ => 1,
+            };
+            if run > longest {
+                longest = run;
+            }
+            prev = Some(*d);
+        }
+
+        Ok(HabitCurrentStreak {
+            habit_id: habit_id.to_string(),
+            habit_name,
+            current_streak_days: current,
+            longest_streak_days: longest,
+            last_completed_date,
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.7: habits due today (no check-in for `today_local`)
+    // -----------------------------------------------------------------------
+
+    /// Returns active habits that have NOT been checked off (or
+    /// recorded as skipped) for `today_local`. The dashboard /
+    /// Telegram bot can use this to ask the user which ones they
+    /// did. Frequency awareness ("solo lunes") is intentionally
+    /// NOT enforced here — the field is free-form and a smart
+    /// reminder layer would parse it. This API just answers "qué
+    /// hábitos activos no tienen log de hoy".
+    pub async fn get_habits_due_today(&self, today_local: &str) -> Result<Vec<Habit>> {
+        // Validate format eagerly.
+        chrono::NaiveDate::parse_from_str(today_local, "%Y-%m-%d")
+            .with_context(|| format!("invalid today_local '{}'", today_local))?;
+        let active_habits = self.list_habits(true).await?;
+        let today_owned = today_local.to_string();
+        let db_path = self.db_path.clone();
+
+        let logged_today: std::collections::HashSet<String> =
+            tokio::task::spawn_blocking(move || -> Result<std::collections::HashSet<String>> {
+                let db = Self::open_db(&db_path)?;
+                let mut stmt = db.prepare(
+                    "SELECT habit_id FROM habit_log
+                     WHERE logged_for_date = ?1 AND completed = 1",
+                )?;
+                let ids: std::collections::HashSet<String> = stmt
+                    .query_map(params![today_owned], |r| r.get::<_, String>(0))?
+                    .flatten()
+                    .collect();
+                Ok(ids)
+            })
+            .await??;
+
+        Ok(active_habits
+            .into_iter()
+            .filter(|h| !logged_today.contains(&h.habit_id))
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9: stale relationships (custom thresholds)
+    // -----------------------------------------------------------------------
+
+    /// List active relationships with `importance_1_10 >= min_importance`
+    /// that have not been contacted in `days_threshold` days. Generaliza
+    /// la deteccion que ya hace `forgetting_check` con thresholds fijos
+    /// — el caller puede usar 7 dias para "amistades cercanas" o 30
+    /// dias para "familia", etc.
+    pub async fn get_stale_relationships(
+        &self,
+        min_importance: u8,
+        days_threshold: i64,
+    ) -> Result<Vec<Relationship>> {
+        let now = Utc::now();
+        let active = self.list_relationships(true).await?;
+        Ok(active
+            .into_iter()
+            .filter(|r| r.importance_1_10 >= min_importance)
+            .filter(|r| {
+                let elapsed = match r.last_contact_at {
+                    Some(t) => (now - t).num_days(),
+                    None => (now - r.created_at).num_days(),
+                };
+                elapsed >= days_threshold
+            })
+            .collect())
+    }
+}
+
+// -- Private raw rows + mappers for BI.3.1 ----------------------------------
+
+struct FoodRaw {
+    food_id: String,
+    name: String,
+    brand: Option<String>,
+    category: Option<String>,
+    kcal_per_100g: Option<f64>,
+    protein_g_per_100g: Option<f64>,
+    carbs_g_per_100g: Option<f64>,
+    fat_g_per_100g: Option<f64>,
+    fiber_g_per_100g: Option<f64>,
+    serving_size_g: Option<f64>,
+    source: String,
+    barcode: Option<String>,
+    tags_json: String,
+    created_at: String,
+    updated_at: String,
+}
+
+fn food_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Result<FoodRaw> {
+    Ok(FoodRaw {
+        food_id: row.get(0)?,
+        name: row.get(1)?,
+        brand: row.get(2)?,
+        category: row.get(3)?,
+        kcal_per_100g: row.get(4)?,
+        protein_g_per_100g: row.get(5)?,
+        carbs_g_per_100g: row.get(6)?,
+        fat_g_per_100g: row.get(7)?,
+        fiber_g_per_100g: row.get(8)?,
+        serving_size_g: row.get(9)?,
+        source: row.get(10)?,
+        barcode: row.get(11)?,
+        tags_json: row.get(12)?,
+        created_at: row.get(13)?,
+        updated_at: row.get(14)?,
+    })
+}
+
+fn food_from_raw(r: FoodRaw) -> Food {
+    Food {
+        food_id: r.food_id,
+        name: r.name,
+        brand: r.brand,
+        category: r.category,
+        kcal_per_100g: r.kcal_per_100g,
+        protein_g_per_100g: r.protein_g_per_100g,
+        carbs_g_per_100g: r.carbs_g_per_100g,
+        fat_g_per_100g: r.fat_g_per_100g,
+        fiber_g_per_100g: r.fiber_g_per_100g,
+        serving_size_g: r.serving_size_g,
+        source: r.source,
+        barcode: r.barcode,
+        tags: serde_json::from_str(&r.tags_json).unwrap_or_default(),
+        created_at: parse_utc(&r.created_at),
+        updated_at: parse_utc(&r.updated_at),
+    }
+}
+
+struct CommerceStoreRaw {
+    store_id: String,
+    name: String,
+    store_type: Option<String>,
+    location: Option<String>,
+    notes: Option<String>,
+    active: bool,
+    created_at: String,
+    updated_at: String,
+}
+
+struct CommercePriceRaw {
+    price_id: String,
+    store_id: String,
+    food_id: Option<String>,
+    product_name: String,
+    price: f64,
+    currency: String,
+    unit: Option<String>,
+    observed_at: String,
+    notes: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+fn commerce_price_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommercePriceRaw> {
+    Ok(CommercePriceRaw {
+        price_id: row.get(0)?,
+        store_id: row.get(1)?,
+        food_id: row.get(2)?,
+        product_name: row.get(3)?,
+        price: row.get(4)?,
+        currency: row.get(5)?,
+        unit: row.get(6)?,
+        observed_at: row.get(7)?,
+        notes: row.get(8)?,
+        source_entry_id: row.get(9)?,
+        created_at: row.get(10)?,
+    })
+}
+
+fn commerce_price_from_raw(r: CommercePriceRaw) -> CommercePrice {
+    CommercePrice {
+        price_id: r.price_id,
+        store_id: r.store_id,
+        food_id: r.food_id,
+        product_name: r.product_name,
+        price: r.price,
+        currency: r.currency,
+        unit: r.unit,
+        observed_at: parse_utc(&r.observed_at),
+        notes: r.notes,
+        source_entry_id: r.source_entry_id,
+        created_at: parse_utc(&r.created_at),
+    }
+}
+
+struct ShoppingListRaw {
+    list_id: String,
+    name: String,
+    target_store_id: Option<String>,
+    status: String,
+    items_json: String,
+    notes: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+fn shopping_list_row_mapper(row: &rusqlite::Row<'_>) -> rusqlite::Result<ShoppingListRaw> {
+    Ok(ShoppingListRaw {
+        list_id: row.get(0)?,
+        name: row.get(1)?,
+        target_store_id: row.get(2)?,
+        status: row.get(3)?,
+        items_json: row.get(4)?,
+        notes: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
+fn shopping_list_from_raw(r: ShoppingListRaw) -> ShoppingList {
+    ShoppingList {
+        list_id: r.list_id,
+        name: r.name,
+        target_store_id: r.target_store_id,
+        status: r.status,
+        items: serde_json::from_str(&r.items_json).unwrap_or_default(),
+        notes: r.notes,
+        created_at: parse_utc(&r.created_at),
+        updated_at: parse_utc(&r.updated_at),
+    }
+}
+
+// ============================================================================
+// Fase BI.3.1 sprint 2 — Generador inteligente de listas semanales
+// ============================================================================
+//
+// Cierra el ultimo hilo abierto de Vida Plena: convertir
+// nutrition_preferences + recipes en una lista de compras automatica
+// que respeta restricciones del usuario.
+//
+// El algoritmo es DETERMINISTICO (no LLM, no cloud, sin
+// non-determinism que asuste a un usuario con alergias serias):
+//
+//   1. Pull active nutrition_preferences con pref_type en
+//      ["allergy", "intolerance", "dislike"]. Estos son
+//      INGREDIENTES PROHIBIDOS.
+//   2. Pull recipes (con tag opcional para el caso "solo recetas
+//      etiquetadas como 'cena rapida' o 'desayuno saludable'").
+//   3. Para cada receta, comprueba ingredient.name (case-insensitive
+//      substring) contra cada label prohibido. Si matchea, EXCLUYE
+//      la receta entera. Esto es agresivo a proposito — preferimos
+//      excluir de mas a darle al usuario un ingrediente que lo
+//      mande al hospital.
+//   4. Toma hasta `max_recipes` de las que pasaron, agrega sus
+//      ingredientes, dedupea por (name + unit) sumando amounts.
+//   5. Crea un shopping_list con esos items y devuelve un reporte
+//      de exclusiones (que recetas, por que ingrediente).
+
+/// One excluded recipe + the reason it was filtered out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipeExclusion {
+    pub recipe_id: String,
+    pub recipe_name: String,
+    /// The pref label (e.g. "mariscos") that triggered exclusion.
+    pub matched_label: String,
+    /// `allergy`, `intolerance`, `dislike`.
+    pub matched_pref_type: String,
+    /// The ingredient name (e.g. "Camarones") that contained the label.
+    pub ingredient_name: String,
+}
+
+/// Result of `generate_weekly_shopping_list`. Wraps the created
+/// ShoppingList with the auditing metadata the caller (Telegram,
+/// dashboard, or LLM) needs to explain *why* certain recipes were
+/// dropped.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeeklyShoppingPlan {
+    pub list: ShoppingList,
+    /// Recipe IDs that were used to derive the items.
+    pub recipes_used: Vec<String>,
+    /// Recipes that were filtered out and the reason.
+    pub recipes_excluded: Vec<RecipeExclusion>,
+    /// Labels (allergens, intolerances, dislikes) that were enforced.
+    pub allergens_avoided: Vec<String>,
+}
+
+impl MemoryPlaneManager {
+    /// BI.3.1 sprint 2 — Build a weekly shopping list from the user's
+    /// recipes filtered by their nutrition preferences. The algorithm
+    /// is deterministic and conservative: any recipe whose ingredient
+    /// names contain a forbidden label (allergy/intolerance/dislike)
+    /// is excluded entirely.
+    ///
+    /// The created ShoppingList is persisted normally — the caller
+    /// can later call `check_shopping_list_item`, `complete_shopping_list`,
+    /// etc.
+    pub async fn generate_weekly_shopping_list(
+        &self,
+        name: &str,
+        target_store_id: Option<&str>,
+        tag_filter: Option<&str>,
+        max_recipes: usize,
+    ) -> Result<WeeklyShoppingPlan> {
+        let max_recipes = max_recipes.clamp(1, 50);
+
+        // 1. Pull forbidden labels from active prefs.
+        let mut forbidden: Vec<(String, String)> = Vec::new(); // (lowercased label, pref_type)
+        for pt in &["allergy", "intolerance", "dislike"] {
+            let prefs = self
+                .list_nutrition_preferences(Some(pt), true)
+                .await
+                .unwrap_or_default();
+            for p in prefs {
+                let label = p.label.trim().to_lowercase();
+                if !label.is_empty() {
+                    forbidden.push((label, p.pref_type));
+                }
+            }
+        }
+
+        // 2. Pull candidate recipes.
+        let recipes = self.list_recipes(tag_filter).await.unwrap_or_default();
+
+        // 3. Filter.
+        let mut used: Vec<Recipe> = Vec::new();
+        let mut excluded: Vec<RecipeExclusion> = Vec::new();
+        for r in recipes {
+            if used.len() >= max_recipes {
+                break;
+            }
+            let hit = recipe_first_forbidden_match(&r, &forbidden);
+            match hit {
+                Some((label, pref_type, ing_name)) => {
+                    excluded.push(RecipeExclusion {
+                        recipe_id: r.recipe_id.clone(),
+                        recipe_name: r.name.clone(),
+                        matched_label: label,
+                        matched_pref_type: pref_type,
+                        ingredient_name: ing_name,
+                    });
+                }
+                None => used.push(r),
+            }
+        }
+
+        // 4. Aggregate ingredients across used recipes.
+        let items = dedup_recipe_ingredients(&used);
+
+        // 5. Persist as a normal shopping_list.
+        let list = self
+            .create_shopping_list(name, target_store_id, &items, None)
+            .await?;
+
+        let allergens_avoided: Vec<String> = forbidden.into_iter().map(|(l, _)| l).collect();
+        let recipes_used_ids: Vec<String> = used.into_iter().map(|r| r.recipe_id).collect();
+
+        Ok(WeeklyShoppingPlan {
+            list,
+            recipes_used: recipes_used_ids,
+            recipes_excluded: excluded,
+            allergens_avoided,
+        })
+    }
+}
+
+/// If any ingredient name in `recipe` contains any forbidden label
+/// (case-insensitive substring), return the first match.
+/// Otherwise return None.
+fn recipe_first_forbidden_match(
+    recipe: &Recipe,
+    forbidden: &[(String, String)],
+) -> Option<(String, String, String)> {
+    for ing in &recipe.ingredients {
+        let lower_name = ing.name.to_lowercase();
+        for (label, pref_type) in forbidden {
+            if lower_name.contains(label) {
+                return Some((label.clone(), pref_type.clone(), ing.name.clone()));
+            }
+        }
+    }
+    None
+}
+
+/// Combine ingredients across recipes into a deduped shopping list.
+/// Ingredients with the same lowercased name AND same unit are
+/// summed; otherwise kept as separate items so the caller never
+/// loses information (e.g. "leche 1 l" + "leche 200 ml" stays as
+/// two rows because the units differ).
+fn dedup_recipe_ingredients(recipes: &[Recipe]) -> Vec<ShoppingListItem> {
+    let mut buckets: BTreeMap<(String, String), ShoppingListItem> = BTreeMap::new();
+    for r in recipes {
+        for ing in &r.ingredients {
+            let key = (
+                ing.name.trim().to_lowercase(),
+                ing.unit.trim().to_lowercase(),
+            );
+            buckets
+                .entry(key)
+                .and_modify(|existing| {
+                    if let Some(q) = existing.quantity.as_mut() {
+                        *q += ing.amount;
+                    } else {
+                        existing.quantity = Some(ing.amount);
+                    }
+                })
+                .or_insert_with(|| ShoppingListItem {
+                    name: ing.name.clone(),
+                    quantity: Some(ing.amount),
+                    unit: if ing.unit.is_empty() {
+                        None
+                    } else {
+                        Some(ing.unit.clone())
+                    },
+                    food_id: None,
+                    checked: false,
+                    notes: ing.notes.clone(),
+                });
+        }
+    }
+    buckets.into_values().collect()
+}
+
+// ============================================================================
+// Fase BI.2 — Salud médica estructurada (Vida Plena)
+// ============================================================================
+
+/// A persistent medical fact about the user.
+///
+/// Examples: alergia a la penicilina, diabetes tipo 2 desde 2024,
+/// tipo de sangre O+, contacto de emergencia. Auto-permanent: never
+/// decays, never archives, never dedups.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthFact {
+    pub fact_id: String,
+    /// Categoría: `allergy`, `condition`, `blood_type`, `emergency_contact`,
+    /// `donor`, `insurance`, etc. (free text — convention only).
+    pub fact_type: String,
+    /// Etiqueta humana: "Penicilina", "Diabetes tipo 2", "O+",
+    /// "Mamá: 555-1234".
+    pub label: String,
+    /// Severidad cuando aplica: `mild`, `moderate`, `severe`,
+    /// `life_threatening`. None para hechos sin gravedad (tipo de
+    /// sangre, contacto).
+    pub severity: Option<String>,
+    /// Notas adicionales — cifradas en disco. Vacío cuando no hay.
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One row in the medications history table.
+///
+/// **History semantics:** every dose change creates a NEW row. The
+/// previous row gets `ended_at` set, never deleted. This means a
+/// query for "qué tomas hoy" filters `WHERE ended_at IS NULL`, while
+/// "todo el historial" simply selects all rows. Two rows for the
+/// same medication name are normal and expected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Medication {
+    pub med_id: String,
+    pub name: String,
+    pub dosage: String,
+    pub frequency: String,
+    pub condition: Option<String>,
+    pub prescribed_by: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One vital sign reading.
+///
+/// Most vitals fit in `value_numeric` (peso, glucosa, temperatura).
+/// Blood pressure is the exception — it needs both systolic and
+/// diastolic, so we either store it as two separate rows
+/// (`blood_pressure_systolic`, `blood_pressure_diastolic`) sharing
+/// the same `measured_at`, OR as a single row with `value_text =
+/// "130/85"`. The convenience helpers in this module use the
+/// two-row pattern because it makes timeseries queries cleaner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Vital {
+    pub vital_id: String,
+    pub vital_type: String,
+    pub value_numeric: Option<f64>,
+    pub value_text: Option<String>,
+    pub unit: String,
+    pub measured_at: DateTime<Utc>,
+    pub context: Option<String>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One lab test result with reference range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabResult {
+    pub lab_id: String,
+    pub test_name: String,
+    pub value_numeric: f64,
+    pub unit: String,
+    pub reference_low: Option<f64>,
+    pub reference_high: Option<f64>,
+    pub measured_at: DateTime<Utc>,
+    pub lab_name: Option<String>,
+    pub notes: String,
+    /// Optional FK to a row in `health_attachments`.
+    pub attachment_id: Option<String>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Encrypted attachment metadata. The actual binary lives at
+/// `~/.local/share/lifeos/health_attachments/<attachment_id>.enc`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthAttachment {
+    pub attachment_id: String,
+    pub file_path: String,
+    /// Categoría libre: `prescription`, `lab_pdf`, `xray`, `scan`,
+    /// `consult_note`, `other`.
+    pub file_type: String,
+    pub description: Option<String>,
+    pub related_event: Option<String>,
+    pub sha256: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `MemoryPlaneManager::get_health_summary`.
+///
+/// This is what powers the "preparación para visita médica" coaching
+/// flow: a single struct with everything a doctor would want to see
+/// at a glance.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HealthSummary {
+    pub facts: Vec<HealthFact>,
+    pub active_medications: Vec<Medication>,
+    pub recent_vitals: Vec<Vital>,
+    pub recent_labs: Vec<LabResult>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Health facts (alergias, condiciones, tipo de sangre, contactos)
+    // -----------------------------------------------------------------------
+
+    /// Add a permanent medical fact about the user.
+    ///
+    /// `notes` is encrypted at rest with the same default key as the
+    /// rest of `memory.db`. An empty `notes` string skips the
+    /// encryption step entirely. The optional `source_entry_id` links
+    /// this fact to a narrative entry in `memory_entries` so the
+    /// conversational context (where the user told Axi about the
+    /// allergy) is recoverable.
+    pub async fn add_health_fact(
+        &self,
+        fact_type: &str,
+        label: &str,
+        severity: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<HealthFact> {
+        let fact_type = normalize_non_empty(fact_type).context("fact_type required")?;
+        let label = normalize_non_empty(label).context("label required")?;
+        let severity = severity
+            .and_then(normalize_non_empty)
+            .map(|s| s.to_lowercase());
+        let notes_owned = notes.trim().to_string();
+
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _digest) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let fact_id = format!("hfact-{}", Uuid::new_v4());
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let fact_id_clone = fact_id.clone();
+        let fact_type_clone = fact_type.clone();
+        let label_clone = label.clone();
+        let severity_clone = severity.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_facts
+                 (fact_id, fact_type, label, severity, notes_nonce_b64,
+                  notes_ciphertext_b64, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                params![
+                    fact_id_clone,
+                    fact_type_clone,
+                    label_clone,
+                    severity_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(HealthFact {
+            fact_id,
+            fact_type,
+            label,
+            severity,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// List all health facts of an optional `fact_type`. Notes are
+    /// decrypted in this function (cheap — encrypted notes are tiny).
+    pub async fn list_health_facts(&self, fact_type: Option<&str>) -> Result<Vec<HealthFact>> {
+        let db_path = self.db_path.clone();
+        let filter = fact_type.map(|s| s.to_string());
+        let rows = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT fact_id, fact_type, label, severity, notes_nonce_b64,
+                        notes_ciphertext_b64, source_entry_id, created_at, updated_at
+                 FROM health_facts",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE fact_type = ?1");
+            }
+            sql.push_str(" ORDER BY created_at DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<HealthFactRaw> {
+                Ok(HealthFactRaw {
+                    fact_id: row.get(0)?,
+                    fact_type: row.get(1)?,
+                    label: row.get(2)?,
+                    severity: row.get(3)?,
+                    notes_nonce_b64: row.get(4)?,
+                    notes_ciphertext_b64: row.get(5)?,
+                    source_entry_id: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            };
+            let raws: Vec<HealthFactRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let notes = match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                _ => String::new(),
+            };
+            out.push(HealthFact {
+                fact_id: r.fact_id,
+                fact_type: r.fact_type,
+                label: r.label,
+                severity: r.severity,
+                notes,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Delete a health fact. Returns `true` if a row was actually
+    /// removed. Use with care — the auto-permanent contract for
+    /// wellness data means this should only be called when the user
+    /// explicitly asks ("ya no soy alérgico a X después del
+    /// tratamiento de desensibilización").
+    pub async fn delete_health_fact(&self, fact_id: &str) -> Result<bool> {
+        let id = normalize_non_empty(fact_id).context("fact_id required")?;
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute("DELETE FROM health_facts WHERE fact_id = ?1", params![id])?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Medications (history table)
+    // -----------------------------------------------------------------------
+
+    /// Start a new medication. If the user is already taking the same
+    /// medication, the caller should `stop_medication(old_med_id)`
+    /// first to close out the previous row — that is the history-table
+    /// contract.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_medication(
+        &self,
+        name: &str,
+        dosage: &str,
+        frequency: &str,
+        condition: Option<&str>,
+        prescribed_by: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Medication> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let dosage = normalize_non_empty(dosage).context("dosage required")?;
+        let frequency = normalize_non_empty(frequency).context("frequency required")?;
+        let condition = condition.and_then(normalize_non_empty);
+        let prescribed_by = prescribed_by.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _digest) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let med_id = format!("hmed-{}", Uuid::new_v4());
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let med_id_clone = med_id.clone();
+        let name_clone = name.clone();
+        let dosage_clone = dosage.clone();
+        let frequency_clone = frequency.clone();
+        let condition_clone = condition.clone();
+        let prescribed_by_clone = prescribed_by.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_medications
+                 (med_id, name, dosage, frequency, condition, prescribed_by,
+                  started_at, ended_at, notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?7, ?7)",
+                params![
+                    med_id_clone,
+                    name_clone,
+                    dosage_clone,
+                    frequency_clone,
+                    condition_clone,
+                    prescribed_by_clone,
+                    now_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Medication {
+            med_id,
+            name,
+            dosage,
+            frequency,
+            condition,
+            prescribed_by,
+            started_at: now,
+            ended_at: None,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark a medication as ended (the user stopped taking it). Sets
+    /// `ended_at = now` and updates `updated_at`. Returns `true` if
+    /// the row was active and is now closed.
+    pub async fn stop_medication(&self, med_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = med_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE health_medications
+                 SET ended_at = ?1, updated_at = ?1
+                 WHERE med_id = ?2 AND ended_at IS NULL",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// All medications the user is currently taking (ended_at IS NULL),
+    /// most-recently-started first.
+    pub async fn list_active_medications(&self) -> Result<Vec<Medication>> {
+        self.list_medications_internal(true).await
+    }
+
+    /// Full medication history (active + stopped), most-recently-started first.
+    pub async fn list_medication_history(&self) -> Result<Vec<Medication>> {
+        self.list_medications_internal(false).await
+    }
+
+    async fn list_medications_internal(&self, active_only: bool) -> Result<Vec<Medication>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT med_id, name, dosage, frequency, condition, prescribed_by,
+                        started_at, ended_at, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM health_medications
+                 WHERE ended_at IS NULL
+                 ORDER BY started_at DESC"
+            } else {
+                "SELECT med_id, name, dosage, frequency, condition, prescribed_by,
+                        started_at, ended_at, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM health_medications
+                 ORDER BY started_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<MedicationRaw> = stmt
+                .query_map([], |row| {
+                    Ok(MedicationRaw {
+                        med_id: row.get(0)?,
+                        name: row.get(1)?,
+                        dosage: row.get(2)?,
+                        frequency: row.get(3)?,
+                        condition: row.get(4)?,
+                        prescribed_by: row.get(5)?,
+                        started_at: row.get(6)?,
+                        ended_at: row.get(7)?,
+                        notes_nonce_b64: row.get(8)?,
+                        notes_ciphertext_b64: row.get(9)?,
+                        source_entry_id: row.get(10)?,
+                        created_at: row.get(11)?,
+                        updated_at: row.get(12)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Medication {
+                med_id: r.med_id,
+                name: r.name,
+                dosage: r.dosage,
+                frequency: r.frequency,
+                condition: r.condition,
+                prescribed_by: r.prescribed_by,
+                started_at: parse_utc(&r.started_at),
+                ended_at: r.ended_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Vital signs (timeseries)
+    // -----------------------------------------------------------------------
+
+    /// Record a vital sign reading.
+    ///
+    /// `value_numeric` covers most cases. Use `value_text` only when
+    /// the reading does not fit in a single number — but prefer the
+    /// two-row pattern for blood pressure (one row for systolic, one
+    /// for diastolic, both with the same `measured_at`).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_vital(
+        &self,
+        vital_type: &str,
+        value_numeric: Option<f64>,
+        value_text: Option<&str>,
+        unit: &str,
+        measured_at: Option<DateTime<Utc>>,
+        context: Option<&str>,
+        source_entry_id: Option<&str>,
+    ) -> Result<Vital> {
+        let vital_type = normalize_non_empty(vital_type).context("vital_type required")?;
+        let unit = normalize_non_empty(unit).context("unit required")?;
+        let value_text = value_text.and_then(normalize_non_empty);
+        let context = context.and_then(normalize_non_empty);
+        if value_numeric.is_none() && value_text.is_none() {
+            anyhow::bail!("vital must have value_numeric or value_text");
+        }
+
+        let measured = measured_at.unwrap_or_else(Utc::now);
+        let measured_rfc = measured.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let vital_id = format!("hvit-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let vital_id_clone = vital_id.clone();
+        let vital_type_clone = vital_type.clone();
+        let unit_clone = unit.clone();
+        let value_text_clone = value_text.clone();
+        let context_clone = context.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_vitals
+                 (vital_id, vital_type, value_numeric, value_text, unit,
+                  measured_at, context, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    vital_id_clone,
+                    vital_type_clone,
+                    value_numeric,
+                    value_text_clone,
+                    unit_clone,
+                    measured_rfc,
+                    context_clone,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Vital {
+            vital_id,
+            vital_type,
+            value_numeric,
+            value_text,
+            unit,
+            measured_at: measured,
+            context,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// Returns the timeseries for a given `vital_type`, newest first,
+    /// limited to `limit` rows.
+    pub async fn get_vitals_timeseries(
+        &self,
+        vital_type: &str,
+        limit: usize,
+    ) -> Result<Vec<Vital>> {
+        let db_path = self.db_path.clone();
+        let vital_type = vital_type.to_string();
+        let limit = limit.clamp(1, 5000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT vital_id, vital_type, value_numeric, value_text, unit,
+                        measured_at, context, source_entry_id, created_at
+                 FROM health_vitals
+                 WHERE vital_type = ?1
+                 ORDER BY measured_at DESC
+                 LIMIT ?2",
+            )?;
+            let raws: Vec<VitalRaw> = stmt
+                .query_map(params![vital_type, limit], |row| {
+                    Ok(VitalRaw {
+                        vital_id: row.get(0)?,
+                        vital_type: row.get(1)?,
+                        value_numeric: row.get(2)?,
+                        value_text: row.get(3)?,
+                        unit: row.get(4)?,
+                        measured_at: row.get(5)?,
+                        context: row.get(6)?,
+                        source_entry_id: row.get(7)?,
+                        created_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Vital {
+                vital_id: r.vital_id,
+                vital_type: r.vital_type,
+                value_numeric: r.value_numeric,
+                value_text: r.value_text,
+                unit: r.unit,
+                measured_at: parse_utc(&r.measured_at),
+                context: r.context,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Lab results
+    // -----------------------------------------------------------------------
+
+    /// Add a lab test result with optional reference range.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_lab_result(
+        &self,
+        test_name: &str,
+        value_numeric: f64,
+        unit: &str,
+        reference_low: Option<f64>,
+        reference_high: Option<f64>,
+        measured_at: Option<DateTime<Utc>>,
+        lab_name: Option<&str>,
+        notes: &str,
+        attachment_id: Option<&str>,
+        source_entry_id: Option<&str>,
+    ) -> Result<LabResult> {
+        let test_name = normalize_non_empty(test_name).context("test_name required")?;
+        let unit = normalize_non_empty(unit).context("unit required")?;
+        let lab_name = lab_name.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _digest) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let measured = measured_at.unwrap_or_else(Utc::now);
+        let measured_rfc = measured.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let lab_id = format!("hlab-{}", Uuid::new_v4());
+        let attachment_owned = attachment_id.map(|s| s.to_string());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let lab_id_clone = lab_id.clone();
+        let test_name_clone = test_name.clone();
+        let unit_clone = unit.clone();
+        let lab_name_clone = lab_name.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_lab_results
+                 (lab_id, test_name, value_numeric, unit, reference_low,
+                  reference_high, measured_at, lab_name, notes_nonce_b64,
+                  notes_ciphertext_b64, attachment_id, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    lab_id_clone,
+                    test_name_clone,
+                    value_numeric,
+                    unit_clone,
+                    reference_low,
+                    reference_high,
+                    measured_rfc,
+                    lab_name_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    attachment_owned,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(LabResult {
+            lab_id,
+            test_name,
+            value_numeric,
+            unit,
+            reference_low,
+            reference_high,
+            measured_at: measured,
+            lab_name,
+            notes: notes_owned,
+            attachment_id: attachment_id.map(|s| s.to_string()),
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// List lab results for an optional test name, newest first.
+    pub async fn list_lab_results(
+        &self,
+        test_name: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<LabResult>> {
+        let db_path = self.db_path.clone();
+        let filter = test_name.map(|s| s.to_string());
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT lab_id, test_name, value_numeric, unit, reference_low,
+                        reference_high, measured_at, lab_name, notes_nonce_b64,
+                        notes_ciphertext_b64, attachment_id, source_entry_id, created_at
+                 FROM health_lab_results",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE test_name = ?1 ORDER BY measured_at DESC LIMIT ?2");
+            } else {
+                sql.push_str(" ORDER BY measured_at DESC LIMIT ?1");
+            }
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<LabResultRaw> {
+                Ok(LabResultRaw {
+                    lab_id: row.get(0)?,
+                    test_name: row.get(1)?,
+                    value_numeric: row.get(2)?,
+                    unit: row.get(3)?,
+                    reference_low: row.get(4)?,
+                    reference_high: row.get(5)?,
+                    measured_at: row.get(6)?,
+                    lab_name: row.get(7)?,
+                    notes_nonce_b64: row.get(8)?,
+                    notes_ciphertext_b64: row.get(9)?,
+                    attachment_id: row.get(10)?,
+                    source_entry_id: row.get(11)?,
+                    created_at: row.get(12)?,
+                })
+            };
+            let raws: Vec<LabResultRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f, limit], map_row)?
+                    .flatten()
+                    .collect()
+            } else {
+                stmt.query_map(params![limit], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| LabResult {
+                lab_id: r.lab_id,
+                test_name: r.test_name,
+                value_numeric: r.value_numeric,
+                unit: r.unit,
+                reference_low: r.reference_low,
+                reference_high: r.reference_high,
+                measured_at: parse_utc(&r.measured_at),
+                lab_name: r.lab_name,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                attachment_id: r.attachment_id,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Encrypted attachments (recetas, radiografías, PDFs)
+    // -----------------------------------------------------------------------
+
+    /// Encrypt a binary blob and store it under
+    /// `<data_dir>/health_attachments/<attachment_id>.enc`.
+    ///
+    /// Returns the metadata row for the new attachment. The plaintext
+    /// is never written to disk — only the AES-GCM-SIV ciphertext.
+    pub async fn add_health_attachment(
+        &self,
+        file_type: &str,
+        description: Option<&str>,
+        related_event: Option<&str>,
+        plaintext_bytes: Vec<u8>,
+        source_entry_id: Option<&str>,
+    ) -> Result<HealthAttachment> {
+        let file_type = normalize_non_empty(file_type).context("file_type required")?;
+        let description = description.and_then(normalize_non_empty);
+        let related_event = related_event.and_then(normalize_non_empty);
+        if plaintext_bytes.is_empty() {
+            anyhow::bail!("attachment is empty");
+        }
+
+        let attachment_id = format!("hatt-{}", Uuid::new_v4());
+        let attachments_dir = self.data_dir.join("health_attachments");
+        std::fs::create_dir_all(&attachments_dir)
+            .context("failed to create health_attachments directory")?;
+        let file_path = attachments_dir.join(format!("{}.enc", attachment_id));
+
+        // SHA256 of plaintext for integrity check on read.
+        let sha256 = format!("{:x}", Sha256::digest(&plaintext_bytes));
+
+        // Encrypt the binary blob.
+        let cipher = cipher()?;
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext_bytes.as_ref())
+            .map_err(|e| anyhow::anyhow!("attachment encryption failed: {}", e))?;
+        let nonce_b64 = B64.encode(nonce_bytes);
+
+        // Write to disk (cipher only — never the plaintext).
+        let file_path_str = file_path.to_string_lossy().to_string();
+        tokio::fs::write(&file_path, &ciphertext)
+            .await
+            .with_context(|| format!("failed to write attachment to {}", file_path_str))?;
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let attachment_id_clone = attachment_id.clone();
+        let file_path_clone = file_path_str.clone();
+        let file_type_clone = file_type.clone();
+        let description_clone = description.clone();
+        let related_event_clone = related_event.clone();
+        let sha256_clone = sha256.clone();
+        let nonce_b64_clone = nonce_b64.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO health_attachments
+                 (attachment_id, file_path, file_type, description, related_event,
+                  sha256, nonce_b64, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    attachment_id_clone,
+                    file_path_clone,
+                    file_type_clone,
+                    description_clone,
+                    related_event_clone,
+                    sha256_clone,
+                    nonce_b64_clone,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(HealthAttachment {
+            attachment_id,
+            file_path: file_path_str,
+            file_type,
+            description,
+            related_event,
+            sha256,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// Decrypt and return the plaintext of an attachment by id.
+    /// Verifies the SHA256 — bails if the file has been tampered with.
+    pub async fn get_health_attachment(&self, attachment_id: &str) -> Result<Vec<u8>> {
+        let db_path = self.db_path.clone();
+        let id = attachment_id.to_string();
+        let (file_path, nonce_b64, expected_sha) = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let row: (String, String, String) = db.query_row(
+                "SELECT file_path, nonce_b64, sha256 FROM health_attachments
+                 WHERE attachment_id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            Ok::<_, anyhow::Error>(row)
+        })
+        .await??;
+
+        let ciphertext = tokio::fs::read(&file_path)
+            .await
+            .with_context(|| format!("failed to read attachment file {}", file_path))?;
+
+        let cipher = cipher()?;
+        let nonce_bytes = B64
+            .decode(nonce_b64.as_bytes())
+            .context("invalid attachment nonce encoding")?;
+        if nonce_bytes.len() != 12 {
+            anyhow::bail!("invalid attachment nonce length");
+        }
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_ref())
+            .map_err(|e| anyhow::anyhow!("attachment decryption failed: {}", e))?;
+
+        let actual_sha = format!("{:x}", Sha256::digest(&plaintext));
+        if actual_sha != expected_sha {
+            anyhow::bail!("attachment integrity check failed");
+        }
+        Ok(plaintext)
+    }
+
+    /// List attachment metadata (NOT the binary contents).
+    pub async fn list_health_attachments(
+        &self,
+        file_type: Option<&str>,
+    ) -> Result<Vec<HealthAttachment>> {
+        let db_path = self.db_path.clone();
+        let filter = file_type.map(|s| s.to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT attachment_id, file_path, file_type, description,
+                        related_event, sha256, nonce_b64, source_entry_id, created_at
+                 FROM health_attachments",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE file_type = ?1");
+            }
+            sql.push_str(" ORDER BY created_at DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<HealthAttachment> {
+                Ok(HealthAttachment {
+                    attachment_id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    file_type: row.get(2)?,
+                    description: row.get(3)?,
+                    related_event: row.get(4)?,
+                    sha256: row.get(5)?,
+                    // skip nonce — caller does not need it
+                    source_entry_id: row.get(7)?,
+                    created_at: parse_utc(&row.get::<_, String>(8)?),
+                })
+            };
+            let raws: Vec<HealthAttachment> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+        Ok(raws)
+    }
+
+    // -----------------------------------------------------------------------
+    // Health summary aggregator
+    // -----------------------------------------------------------------------
+
+    /// Aggregate health snapshot for the user.
+    ///
+    /// Combines: all health_facts, all active medications, the last
+    /// `vitals_per_type` vitals per known vital_type, and the last
+    /// `recent_labs_count` lab results. This is what powers the
+    /// "preparación para visita médica" coaching flow — one struct
+    /// the doctor can review at a glance.
+    pub async fn get_health_summary(
+        &self,
+        vitals_per_type: usize,
+        recent_labs_count: usize,
+    ) -> Result<HealthSummary> {
+        let facts = self.list_health_facts(None).await?;
+        let active_medications = self.list_active_medications().await?;
+
+        // Pull recent vitals across all types. We grab the union of
+        // every distinct vital_type and then take the most recent N
+        // per type so the timeseries summary is balanced.
+        let known_types: Vec<String> = {
+            let db_path = self.db_path.clone();
+            tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+                let db = Self::open_db(&db_path)?;
+                let mut stmt = db.prepare("SELECT DISTINCT vital_type FROM health_vitals")?;
+                let types: Vec<String> = stmt
+                    .query_map([], |r| r.get::<_, String>(0))?
+                    .flatten()
+                    .collect();
+                Ok(types)
+            })
+            .await??
+        };
+
+        let mut recent_vitals = Vec::new();
+        for t in known_types {
+            let mut series = self.get_vitals_timeseries(&t, vitals_per_type).await?;
+            recent_vitals.append(&mut series);
+        }
+
+        let recent_labs = self.list_lab_results(None, recent_labs_count).await?;
+
+        Ok(HealthSummary {
+            facts,
+            active_medications,
+            recent_vitals,
+            recent_labs,
+            generated_at: Utc::now(),
+        })
+    }
+}
+
+// -- Private raw row types (one per side-table) used to keep the
+//    SQLite-facing structs clearly separated from the public Rust API.
+
+struct HealthFactRaw {
+    fact_id: String,
+    fact_type: String,
+    label: String,
+    severity: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct MedicationRaw {
+    med_id: String,
+    name: String,
+    dosage: String,
+    frequency: String,
+    condition: Option<String>,
+    prescribed_by: Option<String>,
+    started_at: String,
+    ended_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct VitalRaw {
+    vital_id: String,
+    vital_type: String,
+    value_numeric: Option<f64>,
+    value_text: Option<String>,
+    unit: String,
+    measured_at: String,
+    context: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct LabResultRaw {
+    lab_id: String,
+    test_name: String,
+    value_numeric: f64,
+    unit: String,
+    reference_low: Option<f64>,
+    reference_high: Option<f64>,
+    measured_at: String,
+    lab_name: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    attachment_id: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+// ============================================================================
+// Fase BI.7 — Crecimiento personal (Vida Plena)
+// ============================================================================
+
+/// Reading status for a book in `reading_log`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BookStatus {
+    Wishlist,
+    Reading,
+    Finished,
+    Abandoned,
+}
+
+impl BookStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Wishlist => "wishlist",
+            Self::Reading => "reading",
+            Self::Finished => "finished",
+            Self::Abandoned => "abandoned",
+        }
+    }
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "wishlist" => Ok(Self::Wishlist),
+            "reading" => Ok(Self::Reading),
+            "finished" => Ok(Self::Finished),
+            "abandoned" => Ok(Self::Abandoned),
+            other => anyhow::bail!("invalid book status: {}", other),
+        }
+    }
+}
+
+/// One book in the reading log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Book {
+    pub book_id: String,
+    pub title: String,
+    pub author: Option<String>,
+    pub isbn: Option<String>,
+    pub status: BookStatus,
+    pub rating_1_5: Option<u8>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+    /// Highlights, takeaways, notes — encrypted at rest. Empty when none.
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A habit the user wants to build (meditate, read, run, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Habit {
+    pub habit_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Free-form: `daily`, `weekly:3`, `custom:MO,WE,FR`.
+    pub frequency: String,
+    pub started_at: DateTime<Utc>,
+    pub active: bool,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One day's check-in for a habit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HabitCheckIn {
+    pub log_id: String,
+    pub habit_id: String,
+    pub completed: bool,
+    /// `YYYY-MM-DD` (local date for the user).
+    pub logged_for_date: String,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Status of a long-term growth goal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GoalStatus {
+    Active,
+    Paused,
+    Achieved,
+    Abandoned,
+}
+
+impl GoalStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Achieved => "achieved",
+            Self::Abandoned => "abandoned",
+        }
+    }
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "active" => Ok(Self::Active),
+            "paused" => Ok(Self::Paused),
+            "achieved" => Ok(Self::Achieved),
+            "abandoned" => Ok(Self::Abandoned),
+            other => anyhow::bail!("invalid goal status: {}", other),
+        }
+    }
+}
+
+/// A long-term growth goal (carrera, finanzas, salud, lo que sea).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrowthGoal {
+    pub goal_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Optional ISO-8601 deadline. Free-form because some goals have
+    /// soft deadlines ("este año") and others are precise.
+    pub deadline: Option<String>,
+    /// Progress 0..100. Capped at insert/update.
+    pub progress_pct: u8,
+    pub status: GoalStatus,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `MemoryPlaneManager::get_growth_summary`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GrowthSummary {
+    pub currently_reading: Vec<Book>,
+    pub recently_finished: Vec<Book>,
+    pub active_habits: Vec<Habit>,
+    pub habit_streak_30d: Vec<HabitStreak>,
+    pub active_goals: Vec<GrowthGoal>,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// Per-habit completion stats over the last N days.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HabitStreak {
+    pub habit_id: String,
+    pub habit_name: String,
+    pub completed_days: u32,
+    pub total_days: u32,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Reading log
+    // -----------------------------------------------------------------------
+
+    /// Add a book to the reading log. `status` defaults to `wishlist`
+    /// if the user only knows they want to read it.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_book(
+        &self,
+        title: &str,
+        author: Option<&str>,
+        isbn: Option<&str>,
+        status: BookStatus,
+        rating_1_5: Option<u8>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Book> {
+        let title = normalize_non_empty(title).context("title required")?;
+        let author = author.and_then(normalize_non_empty);
+        let isbn = isbn.and_then(normalize_non_empty);
+        let rating_1_5 = match rating_1_5 {
+            Some(r) if (1..=5).contains(&r) => Some(r),
+            Some(_) => anyhow::bail!("rating must be 1..=5"),
+            None => None,
+        };
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let book_id = format!("book-{}", Uuid::new_v4());
+        let started_at = if status == BookStatus::Reading {
+            Some(now_rfc.clone())
+        } else {
+            None
+        };
+        let finished_at = if status == BookStatus::Finished {
+            Some(now_rfc.clone())
+        } else {
+            None
+        };
+        let status_str = status.as_str().to_string();
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let book_id_clone = book_id.clone();
+        let title_clone = title.clone();
+        let author_clone = author.clone();
+        let isbn_clone = isbn.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO reading_log
+                 (book_id, title, author, isbn, status, rating_1_5,
+                  started_at, finished_at, notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
+                params![
+                    book_id_clone,
+                    title_clone,
+                    author_clone,
+                    isbn_clone,
+                    status_str,
+                    rating_1_5.map(|r| r as i32),
+                    started_at,
+                    finished_at,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Book {
+            book_id,
+            title,
+            author,
+            isbn,
+            status,
+            rating_1_5,
+            started_at: if status == BookStatus::Reading {
+                Some(now)
+            } else {
+                None
+            },
+            finished_at: if status == BookStatus::Finished {
+                Some(now)
+            } else {
+                None
+            },
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update the status of a book. Side-effects:
+    /// - Setting `Reading` populates `started_at` if not already set.
+    /// - Setting `Finished` or `Abandoned` populates `finished_at`.
+    /// - `Wishlist` clears `started_at` and `finished_at`.
+    pub async fn update_book_status(
+        &self,
+        book_id: &str,
+        new_status: BookStatus,
+        rating_1_5: Option<u8>,
+    ) -> Result<bool> {
+        if let Some(r) = rating_1_5 {
+            if !(1..=5).contains(&r) {
+                anyhow::bail!("rating must be 1..=5");
+            }
+        }
+        let db_path = self.db_path.clone();
+        let id = book_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let status_str = new_status.as_str().to_string();
+
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            let n = match new_status {
+                BookStatus::Reading => db.execute(
+                    "UPDATE reading_log
+                     SET status = ?1,
+                         started_at = COALESCE(started_at, ?2),
+                         finished_at = NULL,
+                         rating_1_5 = COALESCE(?3, rating_1_5),
+                         updated_at = ?2
+                     WHERE book_id = ?4",
+                    params![status_str, now, rating_1_5.map(|r| r as i32), id],
+                )?,
+                BookStatus::Finished | BookStatus::Abandoned => db.execute(
+                    "UPDATE reading_log
+                     SET status = ?1,
+                         finished_at = ?2,
+                         rating_1_5 = COALESCE(?3, rating_1_5),
+                         updated_at = ?2
+                     WHERE book_id = ?4",
+                    params![status_str, now, rating_1_5.map(|r| r as i32), id],
+                )?,
+                BookStatus::Wishlist => db.execute(
+                    "UPDATE reading_log
+                     SET status = ?1,
+                         started_at = NULL,
+                         finished_at = NULL,
+                         rating_1_5 = COALESCE(?3, rating_1_5),
+                         updated_at = ?2
+                     WHERE book_id = ?4",
+                    params![status_str, now, rating_1_5.map(|r| r as i32), id],
+                )?,
+            };
+            Ok(n)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// List books, optionally filtered by status.
+    pub async fn list_books(&self, status: Option<BookStatus>) -> Result<Vec<Book>> {
+        let db_path = self.db_path.clone();
+        let filter = status.map(|s| s.as_str().to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT book_id, title, author, isbn, status, rating_1_5,
+                        started_at, finished_at, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM reading_log",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE status = ?1");
+            }
+            sql.push_str(" ORDER BY updated_at DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<BookRaw> {
+                Ok(BookRaw {
+                    book_id: row.get(0)?,
+                    title: row.get(1)?,
+                    author: row.get(2)?,
+                    isbn: row.get(3)?,
+                    status: row.get(4)?,
+                    rating_1_5: row.get(5)?,
+                    started_at: row.get(6)?,
+                    finished_at: row.get(7)?,
+                    notes_nonce_b64: row.get(8)?,
+                    notes_ciphertext_b64: row.get(9)?,
+                    source_entry_id: row.get(10)?,
+                    created_at: row.get(11)?,
+                    updated_at: row.get(12)?,
+                })
+            };
+            let raws: Vec<BookRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Book {
+                book_id: r.book_id,
+                title: r.title,
+                author: r.author,
+                isbn: r.isbn,
+                status: BookStatus::parse(&r.status).unwrap_or(BookStatus::Wishlist),
+                rating_1_5: r.rating_1_5.map(|n| n as u8),
+                started_at: r.started_at.as_deref().map(parse_utc),
+                finished_at: r.finished_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Habits
+    // -----------------------------------------------------------------------
+
+    /// Create a new habit.
+    pub async fn add_habit(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        frequency: &str,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Habit> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        let frequency = normalize_non_empty(frequency).context("frequency required")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let habit_id = format!("habit-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let habit_id_clone = habit_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let frequency_clone = frequency.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO habits
+                 (habit_id, name, description, frequency, started_at, active,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?5, ?5)",
+                params![
+                    habit_id_clone,
+                    name_clone,
+                    description_clone,
+                    frequency_clone,
+                    now_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Habit {
+            habit_id,
+            name,
+            description,
+            frequency,
+            started_at: now,
+            active: true,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark a habit as inactive (the user gave it up). Returns true if
+    /// the row was active and is now closed.
+    pub async fn deactivate_habit(&self, habit_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = habit_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE habits SET active = 0, updated_at = ?1
+                 WHERE habit_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// Record (or overwrite) a habit check-in for a specific date.
+    /// `logged_for_date` is `YYYY-MM-DD` in the user's local timezone —
+    /// the caller is responsible for picking the right date.
+    pub async fn log_habit_checkin(
+        &self,
+        habit_id: &str,
+        completed: bool,
+        logged_for_date: &str,
+        notes: Option<&str>,
+    ) -> Result<HabitCheckIn> {
+        let habit_id = normalize_non_empty(habit_id).context("habit_id required")?;
+        let logged_for_date =
+            normalize_non_empty(logged_for_date).context("logged_for_date required")?;
+        let notes_owned = notes.and_then(normalize_non_empty);
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let log_id = format!("hlog-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let log_id_clone = log_id.clone();
+        let habit_id_clone = habit_id.clone();
+        let date_clone = logged_for_date.clone();
+        let notes_clone = notes_owned.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            // INSERT OR REPLACE on the (habit_id, logged_for_date)
+            // unique constraint — checking in twice the same day just
+            // overwrites the latest value.
+            db.execute(
+                "INSERT INTO habit_log
+                 (log_id, habit_id, completed, logged_for_date, notes, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(habit_id, logged_for_date) DO UPDATE SET
+                     completed = excluded.completed,
+                     notes = excluded.notes,
+                     created_at = excluded.created_at",
+                params![
+                    log_id_clone,
+                    habit_id_clone,
+                    completed as i32,
+                    date_clone,
+                    notes_clone,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(HabitCheckIn {
+            log_id,
+            habit_id,
+            completed,
+            logged_for_date,
+            notes: notes_owned,
+            created_at: now,
+        })
+    }
+
+    /// All habits, optionally filtered to active-only.
+    pub async fn list_habits(&self, active_only: bool) -> Result<Vec<Habit>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT habit_id, name, description, frequency, started_at, active,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM habits WHERE active = 1 ORDER BY created_at DESC"
+            } else {
+                "SELECT habit_id, name, description, frequency, started_at, active,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM habits ORDER BY created_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<HabitRaw> = stmt
+                .query_map([], |row| {
+                    Ok(HabitRaw {
+                        habit_id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        frequency: row.get(3)?,
+                        started_at: row.get(4)?,
+                        active: row.get::<_, i32>(5)? != 0,
+                        notes_nonce_b64: row.get(6)?,
+                        notes_ciphertext_b64: row.get(7)?,
+                        source_entry_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Habit {
+                habit_id: r.habit_id,
+                name: r.name,
+                description: r.description,
+                frequency: r.frequency,
+                started_at: parse_utc(&r.started_at),
+                active: r.active,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    /// Compute completion stats for an active habit over the last N days.
+    /// Counts the number of `completed = 1` rows over the window
+    /// `[today - days + 1, today]` in **lexicographic** order on
+    /// `logged_for_date`. Caller passes `today` as a `YYYY-MM-DD`
+    /// string in their local timezone.
+    pub async fn get_habit_streak(
+        &self,
+        habit_id: &str,
+        today: &str,
+        days: u32,
+    ) -> Result<HabitStreak> {
+        if days == 0 {
+            anyhow::bail!("days must be >= 1");
+        }
+        let db_path = self.db_path.clone();
+        let id = habit_id.to_string();
+        // Compute the start date by subtracting (days-1) days from `today`.
+        // We do it in Rust because SQLite date arithmetic on text dates
+        // is brittle and we want the caller's local date semantics.
+        let today_date = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d")
+            .with_context(|| format!("invalid today date '{}'", today))?;
+        let start_date = today_date
+            .checked_sub_signed(chrono::Duration::days((days - 1) as i64))
+            .context("date underflow")?
+            .format("%Y-%m-%d")
+            .to_string();
+        let today_owned = today.to_string();
+        let id_for_query = id.clone();
+
+        let (habit_name, completed): (String, u32) =
+            tokio::task::spawn_blocking(move || -> Result<(String, u32)> {
+                let db = Self::open_db(&db_path)?;
+                let name: String = db.query_row(
+                    "SELECT name FROM habits WHERE habit_id = ?1",
+                    params![id_for_query],
+                    |r| r.get(0),
+                )?;
+                let count: i64 = db.query_row(
+                    "SELECT COUNT(*) FROM habit_log
+                     WHERE habit_id = ?1 AND completed = 1
+                       AND logged_for_date BETWEEN ?2 AND ?3",
+                    params![id, start_date, today_owned],
+                    |r| r.get(0),
+                )?;
+                Ok((name, count.max(0) as u32))
+            })
+            .await??;
+
+        Ok(HabitStreak {
+            habit_id: habit_id.to_string(),
+            habit_name,
+            completed_days: completed,
+            total_days: days,
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // Growth goals
+    // -----------------------------------------------------------------------
+
+    pub async fn add_growth_goal(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        deadline: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<GrowthGoal> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        let deadline = deadline.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let goal_id = format!("goal-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let goal_id_clone = goal_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let deadline_clone = deadline.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO growth_goals
+                 (goal_id, name, description, deadline, progress_pct, status,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 0, 'active', ?5, ?6, ?7, ?8, ?8)",
+                params![
+                    goal_id_clone,
+                    name_clone,
+                    description_clone,
+                    deadline_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(GrowthGoal {
+            goal_id,
+            name,
+            description,
+            deadline,
+            progress_pct: 0,
+            status: GoalStatus::Active,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update progress + optionally status of a goal. Progress is
+    /// clamped to 0..=100. Setting progress to 100 also flips status
+    /// to `Achieved` automatically (unless the caller specifies a
+    /// different one).
+    pub async fn update_growth_goal_progress(
+        &self,
+        goal_id: &str,
+        progress_pct: u8,
+        new_status: Option<GoalStatus>,
+    ) -> Result<bool> {
+        let progress_pct = progress_pct.min(100);
+        let auto_status = if progress_pct >= 100 {
+            GoalStatus::Achieved
+        } else {
+            GoalStatus::Active
+        };
+        let effective_status = new_status.unwrap_or(auto_status);
+        let db_path = self.db_path.clone();
+        let id = goal_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let status_str = effective_status.as_str().to_string();
+
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE growth_goals
+                 SET progress_pct = ?1, status = ?2, updated_at = ?3
+                 WHERE goal_id = ?4",
+                params![progress_pct as i32, status_str, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// List growth goals, optionally filtered by status.
+    pub async fn list_growth_goals(&self, status: Option<GoalStatus>) -> Result<Vec<GrowthGoal>> {
+        let db_path = self.db_path.clone();
+        let filter = status.map(|s| s.as_str().to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT goal_id, name, description, deadline, progress_pct, status,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM growth_goals",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE status = ?1");
+            }
+            sql.push_str(" ORDER BY updated_at DESC");
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<GrowthGoalRaw> {
+                Ok(GrowthGoalRaw {
+                    goal_id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    deadline: row.get(3)?,
+                    progress_pct: row.get(4)?,
+                    status: row.get(5)?,
+                    notes_nonce_b64: row.get(6)?,
+                    notes_ciphertext_b64: row.get(7)?,
+                    source_entry_id: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                })
+            };
+            let raws: Vec<GrowthGoalRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| GrowthGoal {
+                goal_id: r.goal_id,
+                name: r.name,
+                description: r.description,
+                deadline: r.deadline,
+                progress_pct: r.progress_pct.clamp(0, 100) as u8,
+                status: GoalStatus::parse(&r.status).unwrap_or(GoalStatus::Active),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Growth summary aggregator
+    // -----------------------------------------------------------------------
+
+    /// Aggregate growth snapshot. Used by `growth_summary` Telegram
+    /// tool and the future BI.8 narrative coaching layer.
+    pub async fn get_growth_summary(
+        &self,
+        recent_finished_limit: usize,
+        streak_today: &str,
+        streak_window_days: u32,
+    ) -> Result<GrowthSummary> {
+        let currently_reading = self.list_books(Some(BookStatus::Reading)).await?;
+        let mut recently_finished = self.list_books(Some(BookStatus::Finished)).await?;
+        recently_finished.truncate(recent_finished_limit);
+
+        let active_habits = self.list_habits(true).await?;
+        let mut habit_streak_30d = Vec::with_capacity(active_habits.len());
+        for h in &active_habits {
+            // Best-effort — if streak fails for one habit we still
+            // return the rest of the summary.
+            if let Ok(streak) = self
+                .get_habit_streak(&h.habit_id, streak_today, streak_window_days)
+                .await
+            {
+                habit_streak_30d.push(streak);
+            }
+        }
+
+        let active_goals = self.list_growth_goals(Some(GoalStatus::Active)).await?;
+
+        Ok(GrowthSummary {
+            currently_reading,
+            recently_finished,
+            active_habits,
+            habit_streak_30d,
+            active_goals,
+            generated_at: Utc::now(),
+        })
+    }
+}
+
+// -- Private raw row types for BI.7 -------------------------------------------
+
+struct BookRaw {
+    book_id: String,
+    title: String,
+    author: Option<String>,
+    isbn: Option<String>,
+    status: String,
+    rating_1_5: Option<i32>,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct HabitRaw {
+    habit_id: String,
+    name: String,
+    description: Option<String>,
+    frequency: String,
+    started_at: String,
+    active: bool,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct GrowthGoalRaw {
+    goal_id: String,
+    name: String,
+    description: Option<String>,
+    deadline: Option<String>,
+    progress_pct: i32,
+    status: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+// ============================================================================
+// Fase BI.5 — Ejercicio (Vida Plena)
+// ============================================================================
+
+/// One piece of equipment (or environment) the user has access to.
+///
+/// Used by the routine generator to constrain proposed exercises to
+/// what the user can actually execute. Examples: mancuernas
+/// ajustables 5-25kg, banca plana, liga de resistencia media, acceso
+/// a gimnasio (con todo), 4m² de espacio libre en casa.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExerciseInventoryItem {
+    pub item_id: String,
+    pub item_name: String,
+    /// Categoría libre. Convención sugerida: `free_weights`, `cardio`,
+    /// `bands`, `machine`, `gym_access`, `space`, `other`.
+    pub item_category: String,
+    pub quantity: u32,
+    pub notes: Option<String>,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One exercise inside an `ExercisePlan`. The plan stores a JSON
+/// array of these as `exercises_json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExercisePlanItem {
+    /// Free text: "press de banca con mancuernas".
+    pub name: String,
+    /// Optional sets × reps spec. We keep it as text so the plan can
+    /// also describe time-based exercises ("plancha 60s").
+    pub sets_reps: Option<String>,
+    /// Optional rest in seconds.
+    pub rest_secs: Option<u32>,
+    pub notes: Option<String>,
+}
+
+/// A saved exercise routine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExercisePlan {
+    pub plan_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    /// Free text: 'fuerza', 'cardio', 'flexibilidad', 'rehab', etc.
+    pub goal: Option<String>,
+    pub sessions_per_week: Option<u32>,
+    pub minutes_per_session: Option<u32>,
+    pub exercises: Vec<ExercisePlanItem>,
+    pub source: Option<String>,
+    pub active: bool,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One completed exercise session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExerciseSession {
+    pub session_id: String,
+    pub plan_id: Option<String>,
+    /// Convención: `strength`, `cardio`, `flexibility`, `sport`, `mixed`.
+    pub session_type: String,
+    pub description: String,
+    pub duration_min: u32,
+    /// Rate of Perceived Exertion 1-10. Optional because not every
+    /// session is rated.
+    pub rpe_1_10: Option<u8>,
+    pub notes: String,
+    pub completed_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `get_exercise_summary`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExerciseSummary {
+    pub inventory: Vec<ExerciseInventoryItem>,
+    pub active_plans: Vec<ExercisePlan>,
+    pub recent_sessions: Vec<ExerciseSession>,
+    pub sessions_last_7_days: u32,
+    pub sessions_last_30_days: u32,
+    pub total_minutes_last_30_days: u32,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Exercise inventory
+    // -----------------------------------------------------------------------
+
+    pub async fn add_exercise_inventory_item(
+        &self,
+        item_name: &str,
+        item_category: &str,
+        quantity: u32,
+        notes: Option<&str>,
+        source_entry_id: Option<&str>,
+    ) -> Result<ExerciseInventoryItem> {
+        let item_name = normalize_non_empty(item_name).context("item_name required")?;
+        let item_category = normalize_non_empty(item_category).context("item_category required")?;
+        let notes = notes.and_then(normalize_non_empty);
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let item_id = format!("einv-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let item_id_clone = item_id.clone();
+        let item_name_clone = item_name.clone();
+        let item_category_clone = item_category.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO exercise_inventory
+                 (item_id, item_name, item_category, quantity, notes, active,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?7)",
+                params![
+                    item_id_clone,
+                    item_name_clone,
+                    item_category_clone,
+                    quantity as i32,
+                    notes_clone,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ExerciseInventoryItem {
+            item_id,
+            item_name,
+            item_category,
+            quantity,
+            notes,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark an inventory item as no longer available (vendido, roto,
+    /// regalado). Returns true if the row was active.
+    pub async fn deactivate_inventory_item(&self, item_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = item_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE exercise_inventory SET active = 0, updated_at = ?1
+                 WHERE item_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// List inventory items. `active_only` filters out deactivated rows.
+    pub async fn list_exercise_inventory(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<ExerciseInventoryItem>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT item_id, item_name, item_category, quantity, notes,
+                        active, source_entry_id, created_at, updated_at
+                 FROM exercise_inventory WHERE active = 1
+                 ORDER BY item_category, item_name"
+            } else {
+                "SELECT item_id, item_name, item_category, quantity, notes,
+                        active, source_entry_id, created_at, updated_at
+                 FROM exercise_inventory
+                 ORDER BY item_category, item_name"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<ExerciseInventoryRaw> = stmt
+                .query_map([], |row| {
+                    Ok(ExerciseInventoryRaw {
+                        item_id: row.get(0)?,
+                        item_name: row.get(1)?,
+                        item_category: row.get(2)?,
+                        quantity: row.get(3)?,
+                        notes: row.get(4)?,
+                        active: row.get::<_, i32>(5)? != 0,
+                        source_entry_id: row.get(6)?,
+                        created_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ExerciseInventoryItem {
+                item_id: r.item_id,
+                item_name: r.item_name,
+                item_category: r.item_category,
+                quantity: r.quantity.max(0) as u32,
+                notes: r.notes,
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Exercise plans
+    // -----------------------------------------------------------------------
+
+    /// Create a new exercise plan with the given exercises.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_exercise_plan(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        goal: Option<&str>,
+        sessions_per_week: Option<u32>,
+        minutes_per_session: Option<u32>,
+        exercises: Vec<ExercisePlanItem>,
+        source: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<ExercisePlan> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        let goal = goal.and_then(normalize_non_empty);
+        let source = source.and_then(normalize_non_empty);
+        if exercises.is_empty() {
+            anyhow::bail!("plan must contain at least one exercise");
+        }
+        let exercises_json =
+            serde_json::to_string(&exercises).context("failed to serialise plan exercises")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let plan_id = format!("eplan-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let plan_id_clone = plan_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let goal_clone = goal.clone();
+        let source_clone = source.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO exercise_plans
+                 (plan_id, name, description, goal, sessions_per_week,
+                  minutes_per_session, exercises_json, source, active,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12, ?12)",
+                params![
+                    plan_id_clone,
+                    name_clone,
+                    description_clone,
+                    goal_clone,
+                    sessions_per_week.map(|n| n as i32),
+                    minutes_per_session.map(|n| n as i32),
+                    exercises_json,
+                    source_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ExercisePlan {
+            plan_id,
+            name,
+            description,
+            goal,
+            sessions_per_week,
+            minutes_per_session,
+            exercises,
+            source,
+            active: true,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark a plan as inactive (the user moved on or it was a one-off).
+    pub async fn deactivate_exercise_plan(&self, plan_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = plan_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE exercise_plans SET active = 0, updated_at = ?1
+                 WHERE plan_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_exercise_plans(&self, active_only: bool) -> Result<Vec<ExercisePlan>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT plan_id, name, description, goal, sessions_per_week,
+                        minutes_per_session, exercises_json, source, active,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM exercise_plans WHERE active = 1
+                 ORDER BY created_at DESC"
+            } else {
+                "SELECT plan_id, name, description, goal, sessions_per_week,
+                        minutes_per_session, exercises_json, source, active,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM exercise_plans
+                 ORDER BY created_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<ExercisePlanRaw> = stmt
+                .query_map([], |row| {
+                    Ok(ExercisePlanRaw {
+                        plan_id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        goal: row.get(3)?,
+                        sessions_per_week: row.get(4)?,
+                        minutes_per_session: row.get(5)?,
+                        exercises_json: row.get(6)?,
+                        source: row.get(7)?,
+                        active: row.get::<_, i32>(8)? != 0,
+                        notes_nonce_b64: row.get(9)?,
+                        notes_ciphertext_b64: row.get(10)?,
+                        source_entry_id: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ExercisePlan {
+                plan_id: r.plan_id,
+                name: r.name,
+                description: r.description,
+                goal: r.goal,
+                sessions_per_week: r.sessions_per_week.map(|n| n.max(0) as u32),
+                minutes_per_session: r.minutes_per_session.map(|n| n.max(0) as u32),
+                exercises: serde_json::from_str(&r.exercises_json).unwrap_or_default(),
+                source: r.source,
+                active: r.active,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Exercise log
+    // -----------------------------------------------------------------------
+
+    /// Record a completed exercise session.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_exercise_session(
+        &self,
+        plan_id: Option<&str>,
+        session_type: &str,
+        description: &str,
+        duration_min: u32,
+        rpe_1_10: Option<u8>,
+        completed_at: Option<DateTime<Utc>>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<ExerciseSession> {
+        let session_type = normalize_non_empty(session_type).context("session_type required")?;
+        let description = normalize_non_empty(description).context("description required")?;
+        if duration_min == 0 {
+            anyhow::bail!("duration_min must be > 0");
+        }
+        if let Some(r) = rpe_1_10 {
+            if !(1..=10).contains(&r) {
+                anyhow::bail!("rpe_1_10 must be in 1..=10");
+            }
+        }
+        let plan_id = plan_id.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let completed = completed_at.unwrap_or_else(Utc::now);
+        let completed_rfc = completed.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let session_id = format!("esess-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let session_id_clone = session_id.clone();
+        let plan_id_clone = plan_id.clone();
+        let session_type_clone = session_type.clone();
+        let description_clone = description.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO exercise_log
+                 (session_id, plan_id, session_type, description, duration_min,
+                  rpe_1_10, notes_nonce_b64, notes_ciphertext_b64, completed_at,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    session_id_clone,
+                    plan_id_clone,
+                    session_type_clone,
+                    description_clone,
+                    duration_min as i32,
+                    rpe_1_10.map(|r| r as i32),
+                    notes_nonce,
+                    notes_cipher,
+                    completed_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ExerciseSession {
+            session_id,
+            plan_id,
+            session_type,
+            description,
+            duration_min,
+            rpe_1_10,
+            notes: notes_owned,
+            completed_at: completed,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// Recent exercise sessions, newest first.
+    pub async fn list_exercise_sessions(&self, limit: usize) -> Result<Vec<ExerciseSession>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT session_id, plan_id, session_type, description,
+                        duration_min, rpe_1_10, notes_nonce_b64, notes_ciphertext_b64,
+                        completed_at, source_entry_id, created_at
+                 FROM exercise_log
+                 ORDER BY completed_at DESC
+                 LIMIT ?1",
+            )?;
+            let raws: Vec<ExerciseSessionRaw> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(ExerciseSessionRaw {
+                        session_id: row.get(0)?,
+                        plan_id: row.get(1)?,
+                        session_type: row.get(2)?,
+                        description: row.get(3)?,
+                        duration_min: row.get(4)?,
+                        rpe_1_10: row.get(5)?,
+                        notes_nonce_b64: row.get(6)?,
+                        notes_ciphertext_b64: row.get(7)?,
+                        completed_at: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ExerciseSession {
+                session_id: r.session_id,
+                plan_id: r.plan_id,
+                session_type: r.session_type,
+                description: r.description,
+                duration_min: r.duration_min.max(0) as u32,
+                rpe_1_10: r.rpe_1_10.map(|n| n.clamp(0, 10) as u8),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                completed_at: parse_utc(&r.completed_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Exercise summary aggregator
+    // -----------------------------------------------------------------------
+
+    /// Aggregate exercise snapshot for the user.
+    ///
+    /// Combines: full active inventory, all active plans, the last
+    /// `recent_sessions_limit` sessions, and the count + total
+    /// duration over the last 7 / 30 days. The day windows are
+    /// computed against `now_utc` so the caller does not have to
+    /// thread a clock through the test.
+    pub async fn get_exercise_summary(
+        &self,
+        recent_sessions_limit: usize,
+    ) -> Result<ExerciseSummary> {
+        let inventory = self.list_exercise_inventory(true).await?;
+        let active_plans = self.list_exercise_plans(true).await?;
+        let recent_sessions = self.list_exercise_sessions(recent_sessions_limit).await?;
+
+        let now_utc = Utc::now();
+        let cutoff_7 = now_utc - chrono::Duration::days(7);
+        let cutoff_30 = now_utc - chrono::Duration::days(30);
+
+        // Pull the rolling-window counts via SQL so we don't bring
+        // every session into RAM just to count.
+        let db_path = self.db_path.clone();
+        let cutoff_7_str = cutoff_7.to_rfc3339();
+        let cutoff_30_str = cutoff_30.to_rfc3339();
+        let (sessions_7, sessions_30, minutes_30) =
+            tokio::task::spawn_blocking(move || -> Result<(u32, u32, u32)> {
+                let db = Self::open_db(&db_path)?;
+                let s7: i64 = db.query_row(
+                    "SELECT COUNT(*) FROM exercise_log WHERE completed_at >= ?1",
+                    params![cutoff_7_str],
+                    |r| r.get(0),
+                )?;
+                let s30: i64 = db.query_row(
+                    "SELECT COUNT(*) FROM exercise_log WHERE completed_at >= ?1",
+                    params![cutoff_30_str],
+                    |r| r.get(0),
+                )?;
+                let m30: i64 = db
+                    .query_row(
+                        "SELECT COALESCE(SUM(duration_min), 0)
+                         FROM exercise_log
+                         WHERE completed_at >= ?1",
+                        params![cutoff_30_str],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                Ok((s7.max(0) as u32, s30.max(0) as u32, m30.max(0) as u32))
+            })
+            .await??;
+
+        Ok(ExerciseSummary {
+            inventory,
+            active_plans,
+            recent_sessions,
+            sessions_last_7_days: sessions_7,
+            sessions_last_30_days: sessions_30,
+            total_minutes_last_30_days: minutes_30,
+            generated_at: now_utc,
+        })
+    }
+}
+
+// -- Private raw row types for BI.5 -------------------------------------------
+
+struct ExerciseInventoryRaw {
+    item_id: String,
+    item_name: String,
+    item_category: String,
+    quantity: i32,
+    notes: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct ExercisePlanRaw {
+    plan_id: String,
+    name: String,
+    description: Option<String>,
+    goal: Option<String>,
+    sessions_per_week: Option<i32>,
+    minutes_per_session: Option<i32>,
+    exercises_json: String,
+    source: Option<String>,
+    active: bool,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct ExerciseSessionRaw {
+    session_id: String,
+    plan_id: Option<String>,
+    session_type: String,
+    description: String,
+    duration_min: i32,
+    rpe_1_10: Option<i32>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    completed_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+// ============================================================================
+// Fase BI.3 sprint 1 — Nutricion (Vida Plena)
+// ============================================================================
+
+/// One nutrition preference / restriction the user has.
+///
+/// Examples: alergia a los mariscos (severe), intolerancia a la
+/// lactosa, dieta mediterranea, le encanta el aguacate, odia el
+/// cilantro, meta de bajar 5kg para junio.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NutritionPreference {
+    pub pref_id: String,
+    /// `allergy`, `intolerance`, `diet`, `like`, `dislike`, `goal`.
+    pub pref_type: String,
+    pub label: String,
+    /// Solo relevante para alergias: `mild`, `moderate`, `severe`,
+    /// `life_threatening`.
+    pub severity: Option<String>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One meal/snack/drink/craving registered by the user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NutritionLogEntry {
+    pub log_id: String,
+    /// `breakfast`, `lunch`, `dinner`, `snack`, `drink`, `craving`.
+    pub meal_type: String,
+    /// Free text or vision-LLM result. The narrative; not the macros.
+    pub description: String,
+    /// FK opcional a `health_attachments` para la foto.
+    pub photo_attachment_id: Option<String>,
+    /// FK opcional a `health_attachments` para la nota de voz.
+    pub voice_attachment_id: Option<String>,
+    pub macros_kcal: Option<f64>,
+    pub macros_protein_g: Option<f64>,
+    pub macros_carbs_g: Option<f64>,
+    pub macros_fat_g: Option<f64>,
+    pub consumed_at: DateTime<Utc>,
+    /// Encrypted free-text notes (sentir, despues de comer, etc.).
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One ingredient inside a recipe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecipeIngredient {
+    pub name: String,
+    pub amount: f64,
+    pub unit: String,
+    pub notes: Option<String>,
+}
+
+/// A saved recipe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Recipe {
+    pub recipe_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub ingredients: Vec<RecipeIngredient>,
+    pub steps: Vec<String>,
+    pub prep_time_min: Option<u32>,
+    pub cook_time_min: Option<u32>,
+    pub servings: Option<u32>,
+    pub tags: Vec<String>,
+    pub source: Option<String>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A nutrition plan (defined by Axi or by a real nutrionist).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NutritionPlan {
+    pub plan_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub goal: Option<String>,
+    pub duration_days: Option<u32>,
+    pub daily_kcal_target: Option<f64>,
+    pub daily_protein_g_target: Option<f64>,
+    pub daily_carbs_g_target: Option<f64>,
+    pub daily_fat_g_target: Option<f64>,
+    pub source: Option<String>,
+    pub active: bool,
+    pub started_at: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `get_nutrition_summary`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NutritionSummary {
+    pub preferences: Vec<NutritionPreference>,
+    pub active_plan: Option<NutritionPlan>,
+    pub recent_meals: Vec<NutritionLogEntry>,
+    /// Sumas rolling de los ultimos 7 dias.
+    pub kcal_last_7_days: f64,
+    pub protein_g_last_7_days: f64,
+    pub carbs_g_last_7_days: f64,
+    pub fat_g_last_7_days: f64,
+    pub meals_last_7_days: u32,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // Nutrition preferences
+    // -----------------------------------------------------------------------
+
+    pub async fn add_nutrition_preference(
+        &self,
+        pref_type: &str,
+        label: &str,
+        severity: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<NutritionPreference> {
+        let pref_type = normalize_non_empty(pref_type).context("pref_type required")?;
+        let label = normalize_non_empty(label).context("label required")?;
+        let severity = severity
+            .and_then(normalize_non_empty)
+            .map(|s| s.to_lowercase());
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let pref_id = format!("npref-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let pref_id_clone = pref_id.clone();
+        let pref_type_clone = pref_type.clone();
+        let label_clone = label.clone();
+        let severity_clone = severity.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO nutrition_preferences
+                 (pref_id, pref_type, label, severity, notes_nonce_b64,
+                  notes_ciphertext_b64, active, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, ?8)",
+                params![
+                    pref_id_clone,
+                    pref_type_clone,
+                    label_clone,
+                    severity_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(NutritionPreference {
+            pref_id,
+            pref_type,
+            label,
+            severity,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark a preference inactive (the user grew out of an allergy,
+    /// gave up a diet, etc.). Allergies are particularly delicate —
+    /// the caller should confirm with the user before deactivating
+    /// a `severity = severe` row.
+    pub async fn deactivate_nutrition_preference(&self, pref_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = pref_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE nutrition_preferences
+                 SET active = 0, updated_at = ?1
+                 WHERE pref_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// List nutrition preferences. `pref_type` filter is optional;
+    /// `active_only` defaults to true at the call site.
+    pub async fn list_nutrition_preferences(
+        &self,
+        pref_type: Option<&str>,
+        active_only: bool,
+    ) -> Result<Vec<NutritionPreference>> {
+        let db_path = self.db_path.clone();
+        let filter = pref_type.map(|s| s.to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT pref_id, pref_type, label, severity, notes_nonce_b64,
+                        notes_ciphertext_b64, active, source_entry_id,
+                        created_at, updated_at
+                 FROM nutrition_preferences",
+            );
+            let mut conditions: Vec<&str> = Vec::new();
+            if active_only {
+                conditions.push("active = 1");
+            }
+            if filter.is_some() {
+                conditions.push("pref_type = ?1");
+            }
+            if !conditions.is_empty() {
+                sql.push_str(" WHERE ");
+                sql.push_str(&conditions.join(" AND "));
+            }
+            sql.push_str(" ORDER BY created_at DESC");
+
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<NutritionPreferenceRaw> {
+                Ok(NutritionPreferenceRaw {
+                    pref_id: row.get(0)?,
+                    pref_type: row.get(1)?,
+                    label: row.get(2)?,
+                    severity: row.get(3)?,
+                    notes_nonce_b64: row.get(4)?,
+                    notes_ciphertext_b64: row.get(5)?,
+                    active: row.get::<_, i32>(6)? != 0,
+                    source_entry_id: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            };
+            let raws: Vec<NutritionPreferenceRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f], map_row)?.flatten().collect()
+            } else {
+                stmt.query_map([], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| NutritionPreference {
+                pref_id: r.pref_id,
+                pref_type: r.pref_type,
+                label: r.label,
+                severity: r.severity,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Nutrition log
+    // -----------------------------------------------------------------------
+
+    /// Record a meal/snack/drink. Most fields are optional — even
+    /// `description` allows free narrative; macros and attachments
+    /// are populated only when the user (or vision pipeline) provides
+    /// them.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_nutrition_meal(
+        &self,
+        meal_type: &str,
+        description: &str,
+        macros_kcal: Option<f64>,
+        macros_protein_g: Option<f64>,
+        macros_carbs_g: Option<f64>,
+        macros_fat_g: Option<f64>,
+        photo_attachment_id: Option<&str>,
+        voice_attachment_id: Option<&str>,
+        consumed_at: Option<DateTime<Utc>>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<NutritionLogEntry> {
+        let meal_type = normalize_non_empty(meal_type).context("meal_type required")?;
+        let description = normalize_non_empty(description).context("description required")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        // Validate: macros, when present, must be non-negative.
+        for (label, v) in [
+            ("macros_kcal", macros_kcal),
+            ("macros_protein_g", macros_protein_g),
+            ("macros_carbs_g", macros_carbs_g),
+            ("macros_fat_g", macros_fat_g),
+        ] {
+            if let Some(value) = v {
+                if value < 0.0 || !value.is_finite() {
+                    anyhow::bail!("{} must be a non-negative finite number", label);
+                }
+            }
+        }
+
+        let consumed = consumed_at.unwrap_or_else(Utc::now);
+        let consumed_rfc = consumed.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let log_id = format!("nlog-{}", Uuid::new_v4());
+        let photo_owned = photo_attachment_id.map(|s| s.to_string());
+        let voice_owned = voice_attachment_id.map(|s| s.to_string());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let log_id_clone = log_id.clone();
+        let meal_type_clone = meal_type.clone();
+        let description_clone = description.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO nutrition_log
+                 (log_id, meal_type, description, photo_attachment_id,
+                  voice_attachment_id, macros_kcal, macros_protein_g,
+                  macros_carbs_g, macros_fat_g, consumed_at, notes_nonce_b64,
+                  notes_ciphertext_b64, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    log_id_clone,
+                    meal_type_clone,
+                    description_clone,
+                    photo_owned,
+                    voice_owned,
+                    macros_kcal,
+                    macros_protein_g,
+                    macros_carbs_g,
+                    macros_fat_g,
+                    consumed_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(NutritionLogEntry {
+            log_id,
+            meal_type,
+            description,
+            photo_attachment_id: photo_attachment_id.map(|s| s.to_string()),
+            voice_attachment_id: voice_attachment_id.map(|s| s.to_string()),
+            macros_kcal,
+            macros_protein_g,
+            macros_carbs_g,
+            macros_fat_g,
+            consumed_at: consumed,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// List the most recent N nutrition log entries (newest first),
+    /// optionally filtered by meal_type.
+    pub async fn list_nutrition_log(
+        &self,
+        meal_type: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<NutritionLogEntry>> {
+        let db_path = self.db_path.clone();
+        let filter = meal_type.map(|s| s.to_string());
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT log_id, meal_type, description, photo_attachment_id,
+                        voice_attachment_id, macros_kcal, macros_protein_g,
+                        macros_carbs_g, macros_fat_g, consumed_at, notes_nonce_b64,
+                        notes_ciphertext_b64, source_entry_id, created_at
+                 FROM nutrition_log",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE meal_type = ?1 ORDER BY consumed_at DESC LIMIT ?2");
+            } else {
+                sql.push_str(" ORDER BY consumed_at DESC LIMIT ?1");
+            }
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<NutritionLogRaw> {
+                Ok(NutritionLogRaw {
+                    log_id: row.get(0)?,
+                    meal_type: row.get(1)?,
+                    description: row.get(2)?,
+                    photo_attachment_id: row.get(3)?,
+                    voice_attachment_id: row.get(4)?,
+                    macros_kcal: row.get(5)?,
+                    macros_protein_g: row.get(6)?,
+                    macros_carbs_g: row.get(7)?,
+                    macros_fat_g: row.get(8)?,
+                    consumed_at: row.get(9)?,
+                    notes_nonce_b64: row.get(10)?,
+                    notes_ciphertext_b64: row.get(11)?,
+                    source_entry_id: row.get(12)?,
+                    created_at: row.get(13)?,
+                })
+            };
+            let raws: Vec<NutritionLogRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f, limit], map_row)?
+                    .flatten()
+                    .collect()
+            } else {
+                stmt.query_map(params![limit], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| NutritionLogEntry {
+                log_id: r.log_id,
+                meal_type: r.meal_type,
+                description: r.description,
+                photo_attachment_id: r.photo_attachment_id,
+                voice_attachment_id: r.voice_attachment_id,
+                macros_kcal: r.macros_kcal,
+                macros_protein_g: r.macros_protein_g,
+                macros_carbs_g: r.macros_carbs_g,
+                macros_fat_g: r.macros_fat_g,
+                consumed_at: parse_utc(&r.consumed_at),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Nutrition recipes
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_recipe(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        ingredients: Vec<RecipeIngredient>,
+        steps: Vec<String>,
+        prep_time_min: Option<u32>,
+        cook_time_min: Option<u32>,
+        servings: Option<u32>,
+        tags: Vec<String>,
+        source: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Recipe> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        if ingredients.is_empty() {
+            anyhow::bail!("recipe must have at least one ingredient");
+        }
+        if steps.is_empty() {
+            anyhow::bail!("recipe must have at least one step");
+        }
+        let source = source.and_then(normalize_non_empty);
+        let ingredients_json = serde_json::to_string(&ingredients)
+            .context("failed to serialise recipe ingredients")?;
+        let steps_json =
+            serde_json::to_string(&steps).context("failed to serialise recipe steps")?;
+        let tags_json = serde_json::to_string(&tags).context("failed to serialise recipe tags")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let recipe_id = format!("nrec-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let recipe_id_clone = recipe_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let source_clone = source.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO nutrition_recipes
+                 (recipe_id, name, description, ingredients_json, steps_json,
+                  prep_time_min, cook_time_min, servings, tags, source,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+                params![
+                    recipe_id_clone,
+                    name_clone,
+                    description_clone,
+                    ingredients_json,
+                    steps_json,
+                    prep_time_min.map(|n| n as i32),
+                    cook_time_min.map(|n| n as i32),
+                    servings.map(|n| n as i32),
+                    tags_json,
+                    source_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Recipe {
+            recipe_id,
+            name,
+            description,
+            ingredients,
+            steps,
+            prep_time_min,
+            cook_time_min,
+            servings,
+            tags,
+            source,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_recipes(&self, tag: Option<&str>) -> Result<Vec<Recipe>> {
+        let db_path = self.db_path.clone();
+        let tag_filter = tag.map(|s| s.to_string());
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT recipe_id, name, description, ingredients_json, steps_json,
+                        prep_time_min, cook_time_min, servings, tags, source,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM nutrition_recipes
+                 ORDER BY updated_at DESC",
+            )?;
+            let raws: Vec<RecipeRaw> = stmt
+                .query_map([], |row| {
+                    Ok(RecipeRaw {
+                        recipe_id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        ingredients_json: row.get(3)?,
+                        steps_json: row.get(4)?,
+                        prep_time_min: row.get(5)?,
+                        cook_time_min: row.get(6)?,
+                        servings: row.get(7)?,
+                        tags_json: row.get(8)?,
+                        source: row.get(9)?,
+                        notes_nonce_b64: row.get(10)?,
+                        notes_ciphertext_b64: row.get(11)?,
+                        source_entry_id: row.get(12)?,
+                        created_at: row.get(13)?,
+                        updated_at: row.get(14)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        // Convert + apply tag filter in Rust because the tags are
+        // stored as JSON. Cheap because we already pulled the rows.
+        let recipes: Vec<Recipe> = raws
+            .into_iter()
+            .map(|r| Recipe {
+                recipe_id: r.recipe_id,
+                name: r.name,
+                description: r.description,
+                ingredients: serde_json::from_str(&r.ingredients_json).unwrap_or_default(),
+                steps: serde_json::from_str(&r.steps_json).unwrap_or_default(),
+                prep_time_min: r.prep_time_min.map(|n| n.max(0) as u32),
+                cook_time_min: r.cook_time_min.map(|n| n.max(0) as u32),
+                servings: r.servings.map(|n| n.max(0) as u32),
+                tags: serde_json::from_str(&r.tags_json).unwrap_or_default(),
+                source: r.source,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect();
+
+        Ok(match tag_filter {
+            Some(t) => {
+                let needle = t.to_lowercase();
+                recipes
+                    .into_iter()
+                    .filter(|r| {
+                        r.tags
+                            .iter()
+                            .any(|x| x.eq_ignore_ascii_case(needle.as_str()))
+                    })
+                    .collect()
+            }
+            None => recipes,
+        })
+    }
+
+    pub async fn delete_recipe(&self, recipe_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = recipe_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "DELETE FROM nutrition_recipes WHERE recipe_id = ?1",
+                params![id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    // -----------------------------------------------------------------------
+    // Nutrition plans
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_nutrition_plan(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        goal: Option<&str>,
+        duration_days: Option<u32>,
+        daily_kcal_target: Option<f64>,
+        daily_protein_g_target: Option<f64>,
+        daily_carbs_g_target: Option<f64>,
+        daily_fat_g_target: Option<f64>,
+        source: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<NutritionPlan> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let description = description.and_then(normalize_non_empty);
+        let goal = goal.and_then(normalize_non_empty);
+        let source = source.and_then(normalize_non_empty);
+        for (label, v) in [
+            ("daily_kcal_target", daily_kcal_target),
+            ("daily_protein_g_target", daily_protein_g_target),
+            ("daily_carbs_g_target", daily_carbs_g_target),
+            ("daily_fat_g_target", daily_fat_g_target),
+        ] {
+            if let Some(value) = v {
+                if value < 0.0 || !value.is_finite() {
+                    anyhow::bail!("{} must be non-negative finite", label);
+                }
+            }
+        }
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let plan_id = format!("nplan-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let plan_id_clone = plan_id.clone();
+        let name_clone = name.clone();
+        let description_clone = description.clone();
+        let goal_clone = goal.clone();
+        let source_clone = source.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO nutrition_plans
+                 (plan_id, name, description, goal, duration_days,
+                  daily_kcal_target, daily_protein_g_target, daily_carbs_g_target,
+                  daily_fat_g_target, source, active, started_at,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?13, ?14, ?11, ?11)",
+                params![
+                    plan_id_clone,
+                    name_clone,
+                    description_clone,
+                    goal_clone,
+                    duration_days.map(|n| n as i32),
+                    daily_kcal_target,
+                    daily_protein_g_target,
+                    daily_carbs_g_target,
+                    daily_fat_g_target,
+                    source_clone,
+                    now_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(NutritionPlan {
+            plan_id,
+            name,
+            description,
+            goal,
+            duration_days,
+            daily_kcal_target,
+            daily_protein_g_target,
+            daily_carbs_g_target,
+            daily_fat_g_target,
+            source,
+            active: true,
+            started_at: Some(now),
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn deactivate_nutrition_plan(&self, plan_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = plan_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE nutrition_plans SET active = 0, updated_at = ?1
+                 WHERE plan_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_nutrition_plans(&self, active_only: bool) -> Result<Vec<NutritionPlan>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT plan_id, name, description, goal, duration_days,
+                        daily_kcal_target, daily_protein_g_target, daily_carbs_g_target,
+                        daily_fat_g_target, source, active, started_at,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM nutrition_plans WHERE active = 1
+                 ORDER BY created_at DESC"
+            } else {
+                "SELECT plan_id, name, description, goal, duration_days,
+                        daily_kcal_target, daily_protein_g_target, daily_carbs_g_target,
+                        daily_fat_g_target, source, active, started_at,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at, updated_at
+                 FROM nutrition_plans
+                 ORDER BY created_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<NutritionPlanRaw> = stmt
+                .query_map([], |row| {
+                    Ok(NutritionPlanRaw {
+                        plan_id: row.get(0)?,
+                        name: row.get(1)?,
+                        description: row.get(2)?,
+                        goal: row.get(3)?,
+                        duration_days: row.get(4)?,
+                        daily_kcal_target: row.get(5)?,
+                        daily_protein_g_target: row.get(6)?,
+                        daily_carbs_g_target: row.get(7)?,
+                        daily_fat_g_target: row.get(8)?,
+                        source: row.get(9)?,
+                        active: row.get::<_, i32>(10)? != 0,
+                        started_at: row.get(11)?,
+                        notes_nonce_b64: row.get(12)?,
+                        notes_ciphertext_b64: row.get(13)?,
+                        source_entry_id: row.get(14)?,
+                        created_at: row.get(15)?,
+                        updated_at: row.get(16)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| NutritionPlan {
+                plan_id: r.plan_id,
+                name: r.name,
+                description: r.description,
+                goal: r.goal,
+                duration_days: r.duration_days.map(|n| n.max(0) as u32),
+                daily_kcal_target: r.daily_kcal_target,
+                daily_protein_g_target: r.daily_protein_g_target,
+                daily_carbs_g_target: r.daily_carbs_g_target,
+                daily_fat_g_target: r.daily_fat_g_target,
+                source: r.source,
+                active: r.active,
+                started_at: r.started_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Nutrition summary aggregator
+    // -----------------------------------------------------------------------
+
+    /// Aggregate nutrition snapshot. Combines: all active preferences,
+    /// the most-recent active plan (if any), the last
+    /// `recent_meals_limit` meals, and rolling 7-day macro totals.
+    pub async fn get_nutrition_summary(
+        &self,
+        recent_meals_limit: usize,
+    ) -> Result<NutritionSummary> {
+        let preferences = self.list_nutrition_preferences(None, true).await?;
+        let active_plans = self.list_nutrition_plans(true).await?;
+        let active_plan = active_plans.into_iter().next();
+        let recent_meals = self.list_nutrition_log(None, recent_meals_limit).await?;
+
+        // Pull rolling 7-day macros via a single SQL aggregation.
+        let now_utc = Utc::now();
+        let cutoff_7 = (now_utc - chrono::Duration::days(7)).to_rfc3339();
+        let db_path = self.db_path.clone();
+        let totals: (f64, f64, f64, f64, u32) =
+            tokio::task::spawn_blocking(move || -> Result<(f64, f64, f64, f64, u32)> {
+                let db = Self::open_db(&db_path)?;
+                let row: (Option<f64>, Option<f64>, Option<f64>, Option<f64>, i64) = db
+                    .query_row(
+                        "SELECT
+                            SUM(macros_kcal),
+                            SUM(macros_protein_g),
+                            SUM(macros_carbs_g),
+                            SUM(macros_fat_g),
+                            COUNT(*)
+                         FROM nutrition_log
+                         WHERE consumed_at >= ?1",
+                        params![cutoff_7],
+                        |r| {
+                            Ok((
+                                r.get::<_, Option<f64>>(0)?,
+                                r.get::<_, Option<f64>>(1)?,
+                                r.get::<_, Option<f64>>(2)?,
+                                r.get::<_, Option<f64>>(3)?,
+                                r.get::<_, i64>(4)?,
+                            ))
+                        },
+                    )
+                    .unwrap_or((None, None, None, None, 0));
+                Ok((
+                    row.0.unwrap_or(0.0),
+                    row.1.unwrap_or(0.0),
+                    row.2.unwrap_or(0.0),
+                    row.3.unwrap_or(0.0),
+                    row.4.max(0) as u32,
+                ))
+            })
+            .await??;
+
+        Ok(NutritionSummary {
+            preferences,
+            active_plan,
+            recent_meals,
+            kcal_last_7_days: totals.0,
+            protein_g_last_7_days: totals.1,
+            carbs_g_last_7_days: totals.2,
+            fat_g_last_7_days: totals.3,
+            meals_last_7_days: totals.4,
+            generated_at: now_utc,
+        })
+    }
+}
+
+// -- Private raw row types for BI.3 -------------------------------------------
+
+struct NutritionPreferenceRaw {
+    pref_id: String,
+    pref_type: String,
+    label: String,
+    severity: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct NutritionLogRaw {
+    log_id: String,
+    meal_type: String,
+    description: String,
+    photo_attachment_id: Option<String>,
+    voice_attachment_id: Option<String>,
+    macros_kcal: Option<f64>,
+    macros_protein_g: Option<f64>,
+    macros_carbs_g: Option<f64>,
+    macros_fat_g: Option<f64>,
+    consumed_at: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct RecipeRaw {
+    recipe_id: String,
+    name: String,
+    description: Option<String>,
+    ingredients_json: String,
+    steps_json: String,
+    prep_time_min: Option<i32>,
+    cook_time_min: Option<i32>,
+    servings: Option<i32>,
+    tags_json: String,
+    source: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct NutritionPlanRaw {
+    plan_id: String,
+    name: String,
+    description: Option<String>,
+    goal: Option<String>,
+    duration_days: Option<i32>,
+    daily_kcal_target: Option<f64>,
+    daily_protein_g_target: Option<f64>,
+    daily_carbs_g_target: Option<f64>,
+    daily_fat_g_target: Option<f64>,
+    source: Option<String>,
+    active: bool,
+    started_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+// ============================================================================
+// Fase BI.13 — Salud social y comunitaria (Vida Plena)
+// ============================================================================
+
+/// One community/group the user belongs to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommunityActivity {
+    pub activity_id: String,
+    pub name: String,
+    /// `religious`, `sport`, `volunteer`, `hobby`, `professional`,
+    /// `educational`, `civic`, `other`.
+    pub activity_type: String,
+    pub frequency: Option<String>,
+    pub last_attended: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One civic engagement event (vote, donation, town hall, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CivicEngagement {
+    pub engagement_id: String,
+    /// `vote`, `volunteer`, `donation`, `protest`, `town_hall`,
+    /// `community_meeting`, `other`.
+    pub engagement_type: String,
+    pub description: String,
+    pub occurred_at: DateTime<Utc>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One moment where the user contributed to someone or something.
+/// Tracking these is associated with subjective wellbeing
+/// (gratitude/giving research).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Contribution {
+    pub contribution_id: String,
+    pub description: String,
+    pub beneficiary: Option<String>,
+    pub occurred_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the social/community pillar.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SocialSummary {
+    pub active_activities: Vec<CommunityActivity>,
+    pub recent_civic_events: Vec<CivicEngagement>,
+    pub recent_contributions: Vec<Contribution>,
+    pub days_since_last_activity: Option<i64>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.13: Community activities
+    // -----------------------------------------------------------------------
+
+    pub async fn add_community_activity(
+        &self,
+        name: &str,
+        activity_type: &str,
+        frequency: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<CommunityActivity> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let activity_type = normalize_non_empty(activity_type).context("activity_type required")?;
+        let frequency = frequency.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let activity_id = format!("comm-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let activity_id_clone = activity_id.clone();
+        let name_clone = name.clone();
+        let type_clone = activity_type.clone();
+        let freq_clone = frequency.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO community_activities
+                 (activity_id, name, activity_type, frequency, last_attended,
+                  notes_nonce_b64, notes_ciphertext_b64, active,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, 1, ?7, ?8, ?8)",
+                params![
+                    activity_id_clone,
+                    name_clone,
+                    type_clone,
+                    freq_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CommunityActivity {
+            activity_id,
+            name,
+            activity_type,
+            frequency,
+            last_attended: None,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark that the user attended an activity. Updates `last_attended`
+    /// to the given timestamp (defaulting to now). The caller chooses
+    /// the timestamp because some users log retroactively.
+    pub async fn mark_community_attendance(
+        &self,
+        activity_id: &str,
+        attended_at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let when = attended_at.unwrap_or_else(Utc::now).to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = activity_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE community_activities
+                 SET last_attended = ?1, updated_at = ?2
+                 WHERE activity_id = ?3",
+                params![when, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn deactivate_community_activity(&self, activity_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = activity_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE community_activities
+                 SET active = 0, updated_at = ?1
+                 WHERE activity_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_community_activities(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<CommunityActivity>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT activity_id, name, activity_type, frequency, last_attended,
+                        notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM community_activities WHERE active = 1
+                 ORDER BY name"
+            } else {
+                "SELECT activity_id, name, activity_type, frequency, last_attended,
+                        notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM community_activities
+                 ORDER BY name"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<CommunityActivityRaw> = stmt
+                .query_map([], |row| {
+                    Ok(CommunityActivityRaw {
+                        activity_id: row.get(0)?,
+                        name: row.get(1)?,
+                        activity_type: row.get(2)?,
+                        frequency: row.get(3)?,
+                        last_attended: row.get(4)?,
+                        notes_nonce_b64: row.get(5)?,
+                        notes_ciphertext_b64: row.get(6)?,
+                        active: row.get::<_, i32>(7)? != 0,
+                        source_entry_id: row.get(8)?,
+                        created_at: row.get(9)?,
+                        updated_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| CommunityActivity {
+                activity_id: r.activity_id,
+                name: r.name,
+                activity_type: r.activity_type,
+                frequency: r.frequency,
+                last_attended: r.last_attended.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.13: Civic engagement
+    // -----------------------------------------------------------------------
+
+    pub async fn log_civic_engagement(
+        &self,
+        engagement_type: &str,
+        description: &str,
+        occurred_at: Option<DateTime<Utc>>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<CivicEngagement> {
+        let engagement_type =
+            normalize_non_empty(engagement_type).context("engagement_type required")?;
+        let description = normalize_non_empty(description).context("description required")?;
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let occurred = occurred_at.unwrap_or_else(Utc::now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let engagement_id = format!("civic-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let engagement_id_clone = engagement_id.clone();
+        let type_clone = engagement_type.clone();
+        let desc_clone = description.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO civic_engagement
+                 (engagement_id, engagement_type, description, occurred_at,
+                  notes_nonce_b64, notes_ciphertext_b64, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    engagement_id_clone,
+                    type_clone,
+                    desc_clone,
+                    occurred_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CivicEngagement {
+            engagement_id,
+            engagement_type,
+            description,
+            occurred_at: occurred,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_civic_engagement(&self, limit: usize) -> Result<Vec<CivicEngagement>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT engagement_id, engagement_type, description, occurred_at,
+                        notes_nonce_b64, notes_ciphertext_b64, source_entry_id, created_at
+                 FROM civic_engagement
+                 ORDER BY occurred_at DESC
+                 LIMIT ?1",
+            )?;
+            let raws: Vec<CivicEngagementRaw> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(CivicEngagementRaw {
+                        engagement_id: row.get(0)?,
+                        engagement_type: row.get(1)?,
+                        description: row.get(2)?,
+                        occurred_at: row.get(3)?,
+                        notes_nonce_b64: row.get(4)?,
+                        notes_ciphertext_b64: row.get(5)?,
+                        source_entry_id: row.get(6)?,
+                        created_at: row.get(7)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| CivicEngagement {
+                engagement_id: r.engagement_id,
+                engagement_type: r.engagement_type,
+                description: r.description,
+                occurred_at: parse_utc(&r.occurred_at),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.13: Contribution log
+    // -----------------------------------------------------------------------
+
+    pub async fn log_contribution(
+        &self,
+        description: &str,
+        beneficiary: Option<&str>,
+        occurred_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<Contribution> {
+        let description = normalize_non_empty(description).context("description required")?;
+        let beneficiary = beneficiary.and_then(normalize_non_empty);
+        let occurred = occurred_at.unwrap_or_else(Utc::now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let contribution_id = format!("contrib-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = contribution_id.clone();
+        let desc_clone = description.clone();
+        let benef_clone = beneficiary.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO contribution_log
+                 (contribution_id, description, beneficiary, occurred_at,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    id_clone,
+                    desc_clone,
+                    benef_clone,
+                    occurred_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Contribution {
+            contribution_id,
+            description,
+            beneficiary,
+            occurred_at: occurred,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_contributions(&self, limit: usize) -> Result<Vec<Contribution>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let rows = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT contribution_id, description, beneficiary, occurred_at,
+                        source_entry_id, created_at
+                 FROM contribution_log
+                 ORDER BY occurred_at DESC
+                 LIMIT ?1",
+            )?;
+            let rows: Vec<Contribution> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(Contribution {
+                        contribution_id: row.get(0)?,
+                        description: row.get(1)?,
+                        beneficiary: row.get(2)?,
+                        occurred_at: parse_utc(&row.get::<_, String>(3)?),
+                        source_entry_id: row.get(4)?,
+                        created_at: parse_utc(&row.get::<_, String>(5)?),
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+        Ok(rows)
+    }
+
+    /// Aggregate snapshot for the BI.13 pillar.
+    ///
+    /// `days_since_last_activity` is computed against the
+    /// `last_attended` field of the most recently attended active
+    /// activity (None if there are no active activities or none
+    /// have a `last_attended` set yet).
+    pub async fn get_social_summary(
+        &self,
+        recent_civic_limit: usize,
+        recent_contrib_limit: usize,
+    ) -> Result<SocialSummary> {
+        let active_activities = self.list_community_activities(true).await?;
+        let recent_civic_events = self.list_civic_engagement(recent_civic_limit).await?;
+        let recent_contributions = self.list_contributions(recent_contrib_limit).await?;
+
+        let now = Utc::now();
+        let days_since_last_activity = active_activities
+            .iter()
+            .filter_map(|a| a.last_attended)
+            .max()
+            .map(|last| (now - last).num_days());
+
+        Ok(SocialSummary {
+            active_activities,
+            recent_civic_events,
+            recent_contributions,
+            days_since_last_activity,
+            generated_at: now,
+        })
+    }
+}
+
+// ============================================================================
+// Fase BI.14 — Sueño profundo (Vida Plena)
+// ============================================================================
+
+/// One night's sleep entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepEntry {
+    pub sleep_id: String,
+    pub bedtime: DateTime<Utc>,
+    pub wake_time: DateTime<Utc>,
+    /// Denormalised duration in hours so timeseries queries don't
+    /// have to subtract two RFC-3339 strings in SQL.
+    pub duration_hours: f64,
+    pub quality_1_10: Option<u8>,
+    pub interruptions: u32,
+    pub feeling_on_wake: Option<String>,
+    /// Encrypted dream notes / things to remember about the night.
+    pub dreams_notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Optional context for a sleep entry. The caller may choose to log
+/// only the sleep itself (when they don't have time to record
+/// environment details) or both. Each `SleepEnvironment` row
+/// references exactly one `sleep_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SleepEnvironment {
+    pub env_id: String,
+    pub sleep_id: String,
+    pub room_temperature_c: Option<f64>,
+    pub darkness_1_10: Option<u8>,
+    pub noise_1_10: Option<u8>,
+    pub screen_use_min_before_bed: Option<u32>,
+    pub caffeine_after_2pm: bool,
+    pub alcohol: bool,
+    pub heavy_dinner: bool,
+    /// `none`, `light`, `moderate`, `intense`.
+    pub exercise_intensity_today: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the sleep pillar.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SleepSummary {
+    pub recent_entries: Vec<SleepEntry>,
+    /// Average duration over the last 7 entries.
+    pub avg_duration_hours_7d: Option<f64>,
+    /// Average self-reported quality 1-10 over the last 7 entries.
+    pub avg_quality_7d: Option<f64>,
+    pub nights_logged_last_7_days: u32,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// Record a night's sleep. `duration_hours` is computed from the
+    /// difference between `bedtime` and `wake_time` and stored
+    /// denormalised.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_sleep(
+        &self,
+        bedtime: DateTime<Utc>,
+        wake_time: DateTime<Utc>,
+        quality_1_10: Option<u8>,
+        interruptions: u32,
+        feeling_on_wake: Option<&str>,
+        dreams_notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<SleepEntry> {
+        if wake_time <= bedtime {
+            anyhow::bail!("wake_time must be after bedtime");
+        }
+        if let Some(q) = quality_1_10 {
+            if !(1..=10).contains(&q) {
+                anyhow::bail!("quality_1_10 must be in 1..=10");
+            }
+        }
+        let feeling_on_wake = feeling_on_wake.and_then(normalize_non_empty);
+        let dreams_owned = dreams_notes.trim().to_string();
+        let (dreams_nonce, dreams_cipher) = if dreams_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&dreams_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let duration_hours = (wake_time - bedtime).num_seconds() as f64 / 3600.0;
+        let bedtime_rfc = bedtime.to_rfc3339();
+        let wake_rfc = wake_time.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let sleep_id = format!("sleep-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let sleep_id_clone = sleep_id.clone();
+        let feeling_clone = feeling_on_wake.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO sleep_log
+                 (sleep_id, bedtime, wake_time, duration_hours, quality_1_10,
+                  interruptions, feeling_on_wake, dreams_notes_nonce_b64,
+                  dreams_notes_ciphertext_b64, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    sleep_id_clone,
+                    bedtime_rfc,
+                    wake_rfc,
+                    duration_hours,
+                    quality_1_10.map(|q| q as i32),
+                    interruptions as i32,
+                    feeling_clone,
+                    dreams_nonce,
+                    dreams_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(SleepEntry {
+            sleep_id,
+            bedtime,
+            wake_time,
+            duration_hours,
+            quality_1_10,
+            interruptions,
+            feeling_on_wake,
+            dreams_notes: dreams_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    /// Add an environment record for a sleep entry. Each call adds a
+    /// new row, so a user can record the environment after the fact
+    /// (multiple rows for the same sleep_id are tolerated but the
+    /// caller should normally write only one).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_sleep_environment(
+        &self,
+        sleep_id: &str,
+        room_temperature_c: Option<f64>,
+        darkness_1_10: Option<u8>,
+        noise_1_10: Option<u8>,
+        screen_use_min_before_bed: Option<u32>,
+        caffeine_after_2pm: bool,
+        alcohol: bool,
+        heavy_dinner: bool,
+        exercise_intensity_today: Option<&str>,
+        notes: Option<&str>,
+    ) -> Result<SleepEnvironment> {
+        let sleep_id_owned = normalize_non_empty(sleep_id).context("sleep_id required")?;
+        if let Some(d) = darkness_1_10 {
+            if !(1..=10).contains(&d) {
+                anyhow::bail!("darkness_1_10 must be in 1..=10");
+            }
+        }
+        if let Some(n) = noise_1_10 {
+            if !(1..=10).contains(&n) {
+                anyhow::bail!("noise_1_10 must be in 1..=10");
+            }
+        }
+        let exercise_intensity_today = exercise_intensity_today.and_then(normalize_non_empty);
+        let notes = notes.and_then(normalize_non_empty);
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let env_id = format!("slpenv-{}", Uuid::new_v4());
+
+        let db_path = self.db_path.clone();
+        let env_id_clone = env_id.clone();
+        let sleep_id_clone = sleep_id_owned.clone();
+        let exercise_clone = exercise_intensity_today.clone();
+        let notes_clone = notes.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO sleep_environment
+                 (env_id, sleep_id, room_temperature_c, darkness_1_10, noise_1_10,
+                  screen_use_min_before_bed, caffeine_after_2pm, alcohol,
+                  heavy_dinner, exercise_intensity_today, notes, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    env_id_clone,
+                    sleep_id_clone,
+                    room_temperature_c,
+                    darkness_1_10.map(|d| d as i32),
+                    noise_1_10.map(|n| n as i32),
+                    screen_use_min_before_bed.map(|n| n as i32),
+                    caffeine_after_2pm as i32,
+                    alcohol as i32,
+                    heavy_dinner as i32,
+                    exercise_clone,
+                    notes_clone,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(SleepEnvironment {
+            env_id,
+            sleep_id: sleep_id_owned,
+            room_temperature_c,
+            darkness_1_10,
+            noise_1_10,
+            screen_use_min_before_bed,
+            caffeine_after_2pm,
+            alcohol,
+            heavy_dinner,
+            exercise_intensity_today,
+            notes,
+            created_at: now,
+        })
+    }
+
+    pub async fn list_sleep_log(&self, limit: usize) -> Result<Vec<SleepEntry>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT sleep_id, bedtime, wake_time, duration_hours, quality_1_10,
+                        interruptions, feeling_on_wake, dreams_notes_nonce_b64,
+                        dreams_notes_ciphertext_b64, source_entry_id, created_at
+                 FROM sleep_log
+                 ORDER BY bedtime DESC
+                 LIMIT ?1",
+            )?;
+            let raws: Vec<SleepEntryRaw> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(SleepEntryRaw {
+                        sleep_id: row.get(0)?,
+                        bedtime: row.get(1)?,
+                        wake_time: row.get(2)?,
+                        duration_hours: row.get(3)?,
+                        quality_1_10: row.get(4)?,
+                        interruptions: row.get(5)?,
+                        feeling_on_wake: row.get(6)?,
+                        dreams_notes_nonce_b64: row.get(7)?,
+                        dreams_notes_ciphertext_b64: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| SleepEntry {
+                sleep_id: r.sleep_id,
+                bedtime: parse_utc(&r.bedtime),
+                wake_time: parse_utc(&r.wake_time),
+                duration_hours: r.duration_hours,
+                quality_1_10: r.quality_1_10.map(|q| q.clamp(0, 10) as u8),
+                interruptions: r.interruptions.max(0) as u32,
+                feeling_on_wake: r.feeling_on_wake,
+                dreams_notes: match (r.dreams_notes_nonce_b64, r.dreams_notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// Aggregate snapshot for the BI.14 pillar.
+    pub async fn get_sleep_summary(&self, recent_limit: usize) -> Result<SleepSummary> {
+        let recent_entries = self.list_sleep_log(recent_limit).await?;
+
+        let now = Utc::now();
+        let cutoff = now - chrono::Duration::days(7);
+        let recent_7d: Vec<&SleepEntry> = recent_entries
+            .iter()
+            .filter(|e| e.bedtime >= cutoff)
+            .collect();
+        let nights_logged_last_7_days = recent_7d.len() as u32;
+
+        let avg_duration_hours_7d = if recent_7d.is_empty() {
+            None
+        } else {
+            let sum: f64 = recent_7d.iter().map(|e| e.duration_hours).sum();
+            Some(sum / recent_7d.len() as f64)
+        };
+        let avg_quality_7d = {
+            let qualities: Vec<f64> = recent_7d
+                .iter()
+                .filter_map(|e| e.quality_1_10.map(|q| q as f64))
+                .collect();
+            if qualities.is_empty() {
+                None
+            } else {
+                Some(qualities.iter().sum::<f64>() / qualities.len() as f64)
+            }
+        };
+
+        Ok(SleepSummary {
+            recent_entries,
+            avg_duration_hours_7d,
+            avg_quality_7d,
+            nights_logged_last_7_days,
+            generated_at: now,
+        })
+    }
+}
+
+// -- Private raw row types for BI.13 + BI.14 ---------------------------------
+
+struct CommunityActivityRaw {
+    activity_id: String,
+    name: String,
+    activity_type: String,
+    frequency: Option<String>,
+    last_attended: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct CivicEngagementRaw {
+    engagement_id: String,
+    engagement_type: String,
+    description: String,
+    occurred_at: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct SleepEntryRaw {
+    sleep_id: String,
+    bedtime: String,
+    wake_time: String,
+    duration_hours: f64,
+    quality_1_10: Option<i32>,
+    interruptions: i32,
+    feeling_on_wake: Option<String>,
+    dreams_notes_nonce_b64: Option<String>,
+    dreams_notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+// ============================================================================
+// Fase BI.10 — Espiritualidad (Vida Plena)
+// ============================================================================
+
+/// One spiritual practice the user does (or wants to do).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpiritualPractice {
+    pub practice_id: String,
+    pub practice_name: String,
+    /// Free text — `budismo`, `cristianismo`, `secular`, `agnostico`,
+    /// `sin etiqueta`, etc. Axi must NOT promote any one of these.
+    pub tradition: Option<String>,
+    pub frequency: Option<String>,
+    pub duration_min: Option<u32>,
+    pub last_practiced: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One spiritual reflection / journal entry. Always encrypted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpiritualReflection {
+    pub reflection_id: String,
+    pub topic: Option<String>,
+    pub content: String,
+    pub occurred_at: DateTime<Utc>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One core value the user identifies as theirs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoreValue {
+    pub value_id: String,
+    pub name: String,
+    pub importance_1_10: u8,
+    pub notes: String,
+    pub defined_at: DateTime<Utc>,
+    pub last_reviewed: Option<DateTime<Utc>>,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the spiritual pillar.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SpiritualSummary {
+    pub active_practices: Vec<SpiritualPractice>,
+    pub recent_reflections: Vec<SpiritualReflection>,
+    pub values: Vec<CoreValue>,
+    pub days_since_last_practice: Option<i64>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.10: Spiritual practices
+    // -----------------------------------------------------------------------
+
+    pub async fn add_spiritual_practice(
+        &self,
+        practice_name: &str,
+        tradition: Option<&str>,
+        frequency: Option<&str>,
+        duration_min: Option<u32>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<SpiritualPractice> {
+        let practice_name = normalize_non_empty(practice_name).context("practice_name required")?;
+        let tradition = tradition.and_then(normalize_non_empty);
+        let frequency = frequency.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let practice_id = format!("spirit-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = practice_id.clone();
+        let name_clone = practice_name.clone();
+        let tradition_clone = tradition.clone();
+        let freq_clone = frequency.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO spiritual_practices
+                 (practice_id, practice_name, tradition, frequency, duration_min,
+                  last_practiced, notes_nonce_b64, notes_ciphertext_b64, active,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, 1, ?8, ?9, ?9)",
+                params![
+                    id_clone,
+                    name_clone,
+                    tradition_clone,
+                    freq_clone,
+                    duration_min.map(|n| n as i32),
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(SpiritualPractice {
+            practice_id,
+            practice_name,
+            tradition,
+            frequency,
+            duration_min,
+            last_practiced: None,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Mark that the user practiced today (or at a specific time).
+    pub async fn mark_spiritual_practice(
+        &self,
+        practice_id: &str,
+        practiced_at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let when = practiced_at.unwrap_or_else(Utc::now).to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = practice_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE spiritual_practices
+                 SET last_practiced = ?1, updated_at = ?2
+                 WHERE practice_id = ?3",
+                params![when, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn deactivate_spiritual_practice(&self, practice_id: &str) -> Result<bool> {
+        let db_path = self.db_path.clone();
+        let id = practice_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE spiritual_practices
+                 SET active = 0, updated_at = ?1
+                 WHERE practice_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_spiritual_practices(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<SpiritualPractice>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT practice_id, practice_name, tradition, frequency, duration_min,
+                        last_practiced, notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM spiritual_practices WHERE active = 1
+                 ORDER BY practice_name"
+            } else {
+                "SELECT practice_id, practice_name, tradition, frequency, duration_min,
+                        last_practiced, notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM spiritual_practices
+                 ORDER BY practice_name"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<SpiritualPracticeRaw> = stmt
+                .query_map([], |row| {
+                    Ok(SpiritualPracticeRaw {
+                        practice_id: row.get(0)?,
+                        practice_name: row.get(1)?,
+                        tradition: row.get(2)?,
+                        frequency: row.get(3)?,
+                        duration_min: row.get(4)?,
+                        last_practiced: row.get(5)?,
+                        notes_nonce_b64: row.get(6)?,
+                        notes_ciphertext_b64: row.get(7)?,
+                        active: row.get::<_, i32>(8)? != 0,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                        updated_at: row.get(11)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| SpiritualPractice {
+                practice_id: r.practice_id,
+                practice_name: r.practice_name,
+                tradition: r.tradition,
+                frequency: r.frequency,
+                duration_min: r.duration_min.map(|n| n.max(0) as u32),
+                last_practiced: r.last_practiced.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.10: Spiritual reflections
+    // -----------------------------------------------------------------------
+
+    /// Add a reflection — content is REQUIRED and ALWAYS encrypted.
+    /// Spiritual entries are personal even when they look mundane;
+    /// the encryption is non-negotiable.
+    pub async fn add_spiritual_reflection(
+        &self,
+        topic: Option<&str>,
+        content: &str,
+        occurred_at: Option<DateTime<Utc>>,
+        source_entry_id: Option<&str>,
+    ) -> Result<SpiritualReflection> {
+        let content_owned = content.trim().to_string();
+        if content_owned.is_empty() {
+            anyhow::bail!("content required");
+        }
+        let topic = topic.and_then(normalize_non_empty);
+        let (content_nonce, content_cipher, _) = encrypt_content(&content_owned)?;
+
+        let occurred = occurred_at.unwrap_or_else(Utc::now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let reflection_id = format!("reflect-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = reflection_id.clone();
+        let topic_clone = topic.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO spiritual_reflections
+                 (reflection_id, topic, content_nonce_b64, content_ciphertext_b64,
+                  occurred_at, source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    id_clone,
+                    topic_clone,
+                    content_nonce,
+                    content_cipher,
+                    occurred_rfc,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(SpiritualReflection {
+            reflection_id,
+            topic,
+            content: content_owned,
+            occurred_at: occurred,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_spiritual_reflections(
+        &self,
+        topic: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SpiritualReflection>> {
+        let db_path = self.db_path.clone();
+        let topic_filter = topic.map(|s| s.to_string());
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT reflection_id, topic, content_nonce_b64, content_ciphertext_b64,
+                        occurred_at, source_entry_id, created_at
+                 FROM spiritual_reflections",
+            );
+            if topic_filter.is_some() {
+                sql.push_str(" WHERE topic = ?1 ORDER BY occurred_at DESC LIMIT ?2");
+            } else {
+                sql.push_str(" ORDER BY occurred_at DESC LIMIT ?1");
+            }
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<SpiritualReflectionRaw> {
+                Ok(SpiritualReflectionRaw {
+                    reflection_id: row.get(0)?,
+                    topic: row.get(1)?,
+                    content_nonce_b64: row.get(2)?,
+                    content_ciphertext_b64: row.get(3)?,
+                    occurred_at: row.get(4)?,
+                    source_entry_id: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            };
+            let raws: Vec<SpiritualReflectionRaw> = if let Some(t) = topic_filter {
+                stmt.query_map(params![t, limit], map_row)?
+                    .flatten()
+                    .collect()
+            } else {
+                stmt.query_map(params![limit], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| SpiritualReflection {
+                reflection_id: r.reflection_id,
+                topic: r.topic,
+                content: decrypt_to_string(&r.content_nonce_b64, &r.content_ciphertext_b64)
+                    .unwrap_or_default(),
+                occurred_at: parse_utc(&r.occurred_at),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.10: Values compass
+    // -----------------------------------------------------------------------
+
+    pub async fn add_core_value(
+        &self,
+        name: &str,
+        importance_1_10: u8,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<CoreValue> {
+        let name = normalize_non_empty(name).context("name required")?;
+        if !(1..=10).contains(&importance_1_10) {
+            anyhow::bail!("importance_1_10 must be in 1..=10");
+        }
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let value_id = format!("val-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = value_id.clone();
+        let name_clone = name.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO values_compass
+                 (value_id, name, importance_1_10, notes_nonce_b64, notes_ciphertext_b64,
+                  defined_at, last_reviewed, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?6, ?6)",
+                params![
+                    id_clone,
+                    name_clone,
+                    importance_1_10 as i32,
+                    notes_nonce,
+                    notes_cipher,
+                    now_rfc,
+                    source_owned,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(CoreValue {
+            value_id,
+            name,
+            importance_1_10,
+            notes: notes_owned,
+            defined_at: now,
+            last_reviewed: None,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_core_values(&self) -> Result<Vec<CoreValue>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT value_id, name, importance_1_10, notes_nonce_b64, notes_ciphertext_b64,
+                        defined_at, last_reviewed, source_entry_id, created_at, updated_at
+                 FROM values_compass
+                 ORDER BY importance_1_10 DESC, name",
+            )?;
+            let raws: Vec<CoreValueRaw> = stmt
+                .query_map([], |row| {
+                    Ok(CoreValueRaw {
+                        value_id: row.get(0)?,
+                        name: row.get(1)?,
+                        importance_1_10: row.get(2)?,
+                        notes_nonce_b64: row.get(3)?,
+                        notes_ciphertext_b64: row.get(4)?,
+                        defined_at: row.get(5)?,
+                        last_reviewed: row.get(6)?,
+                        source_entry_id: row.get(7)?,
+                        created_at: row.get(8)?,
+                        updated_at: row.get(9)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| CoreValue {
+                value_id: r.value_id,
+                name: r.name,
+                importance_1_10: r.importance_1_10.clamp(0, 10) as u8,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                defined_at: parse_utc(&r.defined_at),
+                last_reviewed: r.last_reviewed.as_deref().map(parse_utc),
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    pub async fn get_spiritual_summary(
+        &self,
+        recent_reflection_limit: usize,
+    ) -> Result<SpiritualSummary> {
+        let active_practices = self.list_spiritual_practices(true).await?;
+        let recent_reflections = self
+            .list_spiritual_reflections(None, recent_reflection_limit)
+            .await?;
+        let values = self.list_core_values().await?;
+
+        let now = Utc::now();
+        let days_since_last_practice = active_practices
+            .iter()
+            .filter_map(|p| p.last_practiced)
+            .max()
+            .map(|last| (now - last).num_days());
+
+        Ok(SpiritualSummary {
+            active_practices,
+            recent_reflections,
+            values,
+            days_since_last_practice,
+            generated_at: now,
+        })
+    }
+}
+
+// ============================================================================
+// Fase BI.11 — Salud financiera (Vida Plena)
+// ============================================================================
+
+/// One financial account the user manually tracks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinancialAccount {
+    pub account_id: String,
+    pub name: String,
+    /// `checking`, `savings`, `investment`, `credit_card`, `loan`, `cash`.
+    pub account_type: String,
+    pub institution: Option<String>,
+    pub balance_last_known: Option<f64>,
+    pub balance_currency: String,
+    pub balance_updated_at: Option<DateTime<Utc>>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One expense entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Expense {
+    pub expense_id: String,
+    pub amount: f64,
+    pub currency: String,
+    pub category: String,
+    pub description: Option<String>,
+    pub payment_method: Option<String>,
+    pub occurred_at: DateTime<Utc>,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One income entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Income {
+    pub income_id: String,
+    pub amount: f64,
+    pub currency: String,
+    pub source: String,
+    pub description: Option<String>,
+    pub received_at: DateTime<Utc>,
+    pub recurring: bool,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One financial goal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FinancialGoal {
+    pub goal_id: String,
+    pub name: String,
+    pub target_amount: f64,
+    pub target_currency: String,
+    pub target_date: Option<String>,
+    pub current_amount: f64,
+    /// `active`, `achieved`, `paused`, `abandoned`.
+    pub status: String,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot for the financial pillar.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FinancialSummary {
+    pub active_accounts: Vec<FinancialAccount>,
+    pub recent_expenses: Vec<Expense>,
+    pub recent_income: Vec<Income>,
+    pub active_goals: Vec<FinancialGoal>,
+    /// Sum of expenses in the last 30 days, in the user's primary
+    /// currency (taken as the most-frequent currency in those rows).
+    pub expenses_total_last_30_days: f64,
+    pub income_total_last_30_days: f64,
+    pub net_last_30_days: f64,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.11: Financial accounts
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_financial_account(
+        &self,
+        name: &str,
+        account_type: &str,
+        institution: Option<&str>,
+        balance_last_known: Option<f64>,
+        balance_currency: &str,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<FinancialAccount> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let account_type = normalize_non_empty(account_type).context("account_type required")?;
+        let institution = institution.and_then(normalize_non_empty);
+        let currency = normalize_non_empty(balance_currency).unwrap_or_else(|| "MXN".to_string());
+        if let Some(b) = balance_last_known {
+            if !b.is_finite() {
+                anyhow::bail!("balance must be finite");
+            }
+        }
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let account_id = format!("facct-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+        let balance_updated_at = if balance_last_known.is_some() {
+            Some(now_rfc.clone())
+        } else {
+            None
+        };
+
+        let db_path = self.db_path.clone();
+        let id_clone = account_id.clone();
+        let name_clone = name.clone();
+        let type_clone = account_type.clone();
+        let inst_clone = institution.clone();
+        let curr_clone = currency.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO financial_accounts
+                 (account_id, name, account_type, institution, balance_last_known,
+                  balance_currency, balance_updated_at, notes_nonce_b64,
+                  notes_ciphertext_b64, active, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?11, ?11)",
+                params![
+                    id_clone,
+                    name_clone,
+                    type_clone,
+                    inst_clone,
+                    balance_last_known,
+                    curr_clone,
+                    balance_updated_at,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(FinancialAccount {
+            account_id,
+            name,
+            account_type,
+            institution,
+            balance_last_known,
+            balance_currency: currency,
+            balance_updated_at: if balance_last_known.is_some() {
+                Some(now)
+            } else {
+                None
+            },
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update the balance of an account. Sets `balance_updated_at` to now.
+    pub async fn update_account_balance(&self, account_id: &str, new_balance: f64) -> Result<bool> {
+        if !new_balance.is_finite() {
+            anyhow::bail!("balance must be finite");
+        }
+        let now = Utc::now().to_rfc3339();
+        let db_path = self.db_path.clone();
+        let id = account_id.to_string();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE financial_accounts
+                 SET balance_last_known = ?1,
+                     balance_updated_at = ?2,
+                     updated_at = ?2
+                 WHERE account_id = ?3",
+                params![new_balance, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_financial_accounts(
+        &self,
+        active_only: bool,
+    ) -> Result<Vec<FinancialAccount>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT account_id, name, account_type, institution, balance_last_known,
+                        balance_currency, balance_updated_at, notes_nonce_b64,
+                        notes_ciphertext_b64, active, source_entry_id, created_at, updated_at
+                 FROM financial_accounts WHERE active = 1
+                 ORDER BY name"
+            } else {
+                "SELECT account_id, name, account_type, institution, balance_last_known,
+                        balance_currency, balance_updated_at, notes_nonce_b64,
+                        notes_ciphertext_b64, active, source_entry_id, created_at, updated_at
+                 FROM financial_accounts
+                 ORDER BY name"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<FinancialAccountRaw> = stmt
+                .query_map([], |row| {
+                    Ok(FinancialAccountRaw {
+                        account_id: row.get(0)?,
+                        name: row.get(1)?,
+                        account_type: row.get(2)?,
+                        institution: row.get(3)?,
+                        balance_last_known: row.get(4)?,
+                        balance_currency: row.get(5)?,
+                        balance_updated_at: row.get(6)?,
+                        notes_nonce_b64: row.get(7)?,
+                        notes_ciphertext_b64: row.get(8)?,
+                        active: row.get::<_, i32>(9)? != 0,
+                        source_entry_id: row.get(10)?,
+                        created_at: row.get(11)?,
+                        updated_at: row.get(12)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| FinancialAccount {
+                account_id: r.account_id,
+                name: r.name,
+                account_type: r.account_type,
+                institution: r.institution,
+                balance_last_known: r.balance_last_known,
+                balance_currency: r.balance_currency,
+                balance_updated_at: r.balance_updated_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.11: Expenses
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_expense(
+        &self,
+        amount: f64,
+        currency: &str,
+        category: &str,
+        description: Option<&str>,
+        payment_method: Option<&str>,
+        occurred_at: Option<DateTime<Utc>>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Expense> {
+        if amount < 0.0 || !amount.is_finite() {
+            anyhow::bail!("amount must be a non-negative finite number");
+        }
+        let category = normalize_non_empty(category).context("category required")?;
+        let currency = normalize_non_empty(currency).unwrap_or_else(|| "MXN".to_string());
+        let description = description.and_then(normalize_non_empty);
+        let payment_method = payment_method.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let occurred = occurred_at.unwrap_or_else(Utc::now);
+        let occurred_rfc = occurred.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let expense_id = format!("exp-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = expense_id.clone();
+        let category_clone = category.clone();
+        let currency_clone = currency.clone();
+        let description_clone = description.clone();
+        let pm_clone = payment_method.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO financial_expenses
+                 (expense_id, amount, currency, category, description, payment_method,
+                  occurred_at, notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id_clone,
+                    amount,
+                    currency_clone,
+                    category_clone,
+                    description_clone,
+                    pm_clone,
+                    occurred_rfc,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Expense {
+            expense_id,
+            amount,
+            currency,
+            category,
+            description,
+            payment_method,
+            occurred_at: occurred,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_expenses(
+        &self,
+        category: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Expense>> {
+        let db_path = self.db_path.clone();
+        let filter = category.map(|s| s.to_string());
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut sql = String::from(
+                "SELECT expense_id, amount, currency, category, description,
+                        payment_method, occurred_at, notes_nonce_b64,
+                        notes_ciphertext_b64, source_entry_id, created_at
+                 FROM financial_expenses",
+            );
+            if filter.is_some() {
+                sql.push_str(" WHERE category = ?1 ORDER BY occurred_at DESC LIMIT ?2");
+            } else {
+                sql.push_str(" ORDER BY occurred_at DESC LIMIT ?1");
+            }
+            let mut stmt = db.prepare(&sql)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<ExpenseRaw> {
+                Ok(ExpenseRaw {
+                    expense_id: row.get(0)?,
+                    amount: row.get(1)?,
+                    currency: row.get(2)?,
+                    category: row.get(3)?,
+                    description: row.get(4)?,
+                    payment_method: row.get(5)?,
+                    occurred_at: row.get(6)?,
+                    notes_nonce_b64: row.get(7)?,
+                    notes_ciphertext_b64: row.get(8)?,
+                    source_entry_id: row.get(9)?,
+                    created_at: row.get(10)?,
+                })
+            };
+            let raws: Vec<ExpenseRaw> = if let Some(f) = filter {
+                stmt.query_map(params![f, limit], map_row)?
+                    .flatten()
+                    .collect()
+            } else {
+                stmt.query_map(params![limit], map_row)?.flatten().collect()
+            };
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Expense {
+                expense_id: r.expense_id,
+                amount: r.amount,
+                currency: r.currency,
+                category: r.category,
+                description: r.description,
+                payment_method: r.payment_method,
+                occurred_at: parse_utc(&r.occurred_at),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.11: Income
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn log_income(
+        &self,
+        amount: f64,
+        currency: &str,
+        source: &str,
+        description: Option<&str>,
+        received_at: Option<DateTime<Utc>>,
+        recurring: bool,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Income> {
+        if amount < 0.0 || !amount.is_finite() {
+            anyhow::bail!("amount must be a non-negative finite number");
+        }
+        let source = normalize_non_empty(source).context("source required")?;
+        let currency = normalize_non_empty(currency).unwrap_or_else(|| "MXN".to_string());
+        let description = description.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let received = received_at.unwrap_or_else(Utc::now);
+        let received_rfc = received.to_rfc3339();
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let income_id = format!("inc-{}", Uuid::new_v4());
+        let source_entry_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = income_id.clone();
+        let source_clone = source.clone();
+        let currency_clone = currency.clone();
+        let description_clone = description.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO financial_income
+                 (income_id, amount, currency, source, description, received_at,
+                  recurring, notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                  created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    id_clone,
+                    amount,
+                    currency_clone,
+                    source_clone,
+                    description_clone,
+                    received_rfc,
+                    recurring as i32,
+                    notes_nonce,
+                    notes_cipher,
+                    source_entry_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Income {
+            income_id,
+            amount,
+            currency,
+            source,
+            description,
+            received_at: received,
+            recurring,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_income(&self, limit: usize) -> Result<Vec<Income>> {
+        let db_path = self.db_path.clone();
+        let limit = limit.clamp(1, 1000) as i64;
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT income_id, amount, currency, source, description, received_at,
+                        recurring, notes_nonce_b64, notes_ciphertext_b64, source_entry_id,
+                        created_at
+                 FROM financial_income
+                 ORDER BY received_at DESC
+                 LIMIT ?1",
+            )?;
+            let raws: Vec<IncomeRaw> = stmt
+                .query_map(params![limit], |row| {
+                    Ok(IncomeRaw {
+                        income_id: row.get(0)?,
+                        amount: row.get(1)?,
+                        currency: row.get(2)?,
+                        source: row.get(3)?,
+                        description: row.get(4)?,
+                        received_at: row.get(5)?,
+                        recurring: row.get::<_, i32>(6)? != 0,
+                        notes_nonce_b64: row.get(7)?,
+                        notes_ciphertext_b64: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Income {
+                income_id: r.income_id,
+                amount: r.amount,
+                currency: r.currency,
+                source: r.source,
+                description: r.description,
+                received_at: parse_utc(&r.received_at),
+                recurring: r.recurring,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.11: Financial goals
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_financial_goal(
+        &self,
+        name: &str,
+        target_amount: f64,
+        target_currency: &str,
+        target_date: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<FinancialGoal> {
+        let name = normalize_non_empty(name).context("name required")?;
+        if target_amount < 0.0 || !target_amount.is_finite() {
+            anyhow::bail!("target_amount must be non-negative finite");
+        }
+        let currency = normalize_non_empty(target_currency).unwrap_or_else(|| "MXN".to_string());
+        let target_date = target_date.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let goal_id = format!("fgoal-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = goal_id.clone();
+        let name_clone = name.clone();
+        let currency_clone = currency.clone();
+        let target_date_clone = target_date.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO financial_goals
+                 (goal_id, name, target_amount, target_currency, target_date,
+                  current_amount, status, notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'active', ?6, ?7, ?8, ?9, ?9)",
+                params![
+                    id_clone,
+                    name_clone,
+                    target_amount,
+                    currency_clone,
+                    target_date_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(FinancialGoal {
+            goal_id,
+            name,
+            target_amount,
+            target_currency: currency,
+            target_date,
+            current_amount: 0.0,
+            status: "active".into(),
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update progress on a financial goal. Auto-flips status to
+    /// `achieved` when current >= target.
+    pub async fn update_financial_goal_progress(
+        &self,
+        goal_id: &str,
+        current_amount: f64,
+    ) -> Result<bool> {
+        if current_amount < 0.0 || !current_amount.is_finite() {
+            anyhow::bail!("current_amount must be non-negative finite");
+        }
+        let db_path = self.db_path.clone();
+        let id = goal_id.to_string();
+        let now = Utc::now().to_rfc3339();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            // Read target_amount first to know whether to auto-achieve.
+            let target: Option<f64> = db
+                .query_row(
+                    "SELECT target_amount FROM financial_goals WHERE goal_id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .ok();
+            let new_status = match target {
+                Some(t) if current_amount >= t => "achieved",
+                _ => "active",
+            };
+            Ok(db.execute(
+                "UPDATE financial_goals
+                 SET current_amount = ?1, status = ?2, updated_at = ?3
+                 WHERE goal_id = ?4",
+                params![current_amount, new_status, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_financial_goals(&self, active_only: bool) -> Result<Vec<FinancialGoal>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT goal_id, name, target_amount, target_currency, target_date,
+                        current_amount, status, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM financial_goals WHERE status = 'active'
+                 ORDER BY created_at DESC"
+            } else {
+                "SELECT goal_id, name, target_amount, target_currency, target_date,
+                        current_amount, status, notes_nonce_b64, notes_ciphertext_b64,
+                        source_entry_id, created_at, updated_at
+                 FROM financial_goals
+                 ORDER BY created_at DESC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let raws: Vec<FinancialGoalRaw> = stmt
+                .query_map([], |row| {
+                    Ok(FinancialGoalRaw {
+                        goal_id: row.get(0)?,
+                        name: row.get(1)?,
+                        target_amount: row.get(2)?,
+                        target_currency: row.get(3)?,
+                        target_date: row.get(4)?,
+                        current_amount: row.get(5)?,
+                        status: row.get(6)?,
+                        notes_nonce_b64: row.get(7)?,
+                        notes_ciphertext_b64: row.get(8)?,
+                        source_entry_id: row.get(9)?,
+                        created_at: row.get(10)?,
+                        updated_at: row.get(11)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(raws)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| FinancialGoal {
+                goal_id: r.goal_id,
+                name: r.name,
+                target_amount: r.target_amount,
+                target_currency: r.target_currency,
+                target_date: r.target_date,
+                current_amount: r.current_amount,
+                status: r.status,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    /// Aggregate snapshot for the financial pillar. The 30-day totals
+    /// are computed via single SQL aggregations so we don't pull
+    /// rows just to count.
+    pub async fn get_financial_summary(
+        &self,
+        recent_expenses_limit: usize,
+        recent_income_limit: usize,
+    ) -> Result<FinancialSummary> {
+        let active_accounts = self.list_financial_accounts(true).await?;
+        let recent_expenses = self.list_expenses(None, recent_expenses_limit).await?;
+        let recent_income = self.list_income(recent_income_limit).await?;
+        let active_goals = self.list_financial_goals(true).await?;
+
+        let now_utc = Utc::now();
+        let cutoff_30 = (now_utc - chrono::Duration::days(30)).to_rfc3339();
+        let db_path = self.db_path.clone();
+        let cutoff_clone = cutoff_30.clone();
+        let (expenses_30, income_30) =
+            tokio::task::spawn_blocking(move || -> Result<(f64, f64)> {
+                let db = Self::open_db(&db_path)?;
+                let exp: f64 = db
+                    .query_row(
+                        "SELECT COALESCE(SUM(amount), 0) FROM financial_expenses
+                     WHERE occurred_at >= ?1",
+                        params![cutoff_clone],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0.0);
+                let inc: f64 = db
+                    .query_row(
+                        "SELECT COALESCE(SUM(amount), 0) FROM financial_income
+                     WHERE received_at >= ?1",
+                        params![cutoff_clone],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0.0);
+                Ok((exp, inc))
+            })
+            .await??;
+
+        Ok(FinancialSummary {
+            active_accounts,
+            recent_expenses,
+            recent_income,
+            active_goals,
+            expenses_total_last_30_days: expenses_30,
+            income_total_last_30_days: income_30,
+            net_last_30_days: income_30 - expenses_30,
+            generated_at: now_utc,
+        })
+    }
+}
+
+// ============================================================================
+// Fase BI.8 — Coaching unificado (Vida Plena)
+// ============================================================================
+//
+// BI.8 is the synthesis layer that sits on top of every other BI sub-fase.
+// It does NOT introduce new tables — instead it composes the per-domain
+// summaries into a single struct the LLM can reason over, plus three
+// higher-level helpers:
+//
+//   * `get_life_summary`           — narrative-ready snapshot across all pillars
+//   * `detect_cross_domain_patterns` — heuristic correlations (sleep ↔ exercise,
+//                                      gastos vs ingresos, metas estancadas, ...)
+//   * `prepare_medical_visit`       — structured packet for an upcoming doctor
+//                                      visit, combining health + recent symptoms
+//   * `forgetting_check`            — surfaces things the user once cared about
+//                                      and has gone quiet on (paused goals,
+//                                      stale habits, books abandoned, etc.)
+//
+// **Important:** none of these methods diagnose anything. Patterns are
+// surfaced as observations with evidence, never as conclusions. The
+// medical visit prep is an aid to talk to a real doctor, never a
+// replacement. See `docs/strategy/fase-bi-bienestar-integral.md` § "Lo
+// que NO va a hacer" — those constraints are non-negotiable and the
+// LLM system prompt around these tools enforces them at the dispatch
+// layer.
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LifeSummaryWindow {
+    Week,
+    Month,
+}
+
+impl LifeSummaryWindow {
+    pub fn days(&self) -> i64 {
+        match self {
+            Self::Week => 7,
+            Self::Month => 30,
+        }
+    }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Week => "week",
+            Self::Month => "month",
+        }
+    }
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "week" | "weekly" | "7d" | "semana" | "semanal" => Ok(Self::Week),
+            "month" | "monthly" | "30d" | "mes" | "mensual" => Ok(Self::Month),
+            other => anyhow::bail!("invalid life summary window: {}", other),
+        }
+    }
+}
+
+/// One observation linking two or more wellness domains. The
+/// description is human-readable Spanish; the evidence array carries
+/// the raw numbers behind the claim so the LLM can quote them.
+///
+/// `confidence` is a coarse 0..1 self-rating from the heuristic that
+/// produced the pattern — it is **not** a probability, just a hint to
+/// the LLM about how strongly to phrase the observation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossDomainPattern {
+    pub kind: String,
+    pub description: String,
+    pub evidence: Vec<String>,
+    pub confidence: f64,
+}
+
+/// One thing the user once cared about that has gone quiet. The
+/// `suggestion` is a gentle prompt for Axi to use when surfacing the
+/// item ("¿sigue activa esta meta?"). Never imperatively asks the
+/// user to drop or resume it — that decision is theirs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForgottenItem {
+    /// Convención: `growth_goal`, `growth_goal_paused`, `book_reading`,
+    /// `habit_inactive`, `community_inactive`, `spiritual_inactive`,
+    /// `financial_goal_inactive`.
+    pub item_type: String,
+    pub item_id: String,
+    pub name: String,
+    pub last_seen_at: Option<DateTime<Utc>>,
+    pub days_since_seen: Option<i64>,
+    pub suggestion: String,
+}
+
+/// Structured prep packet for an upcoming medical visit. Returned by
+/// `prepare_medical_visit` and meant to be rendered as a single
+/// markdown message the user can show their doctor on the phone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MedicalVisitPrep {
+    pub reason: String,
+    pub allergies: Vec<HealthFact>,
+    pub conditions: Vec<HealthFact>,
+    pub other_facts: Vec<HealthFact>,
+    pub current_medications: Vec<Medication>,
+    pub recent_vitals: Vec<Vital>,
+    pub recent_labs: Vec<LabResult>,
+    pub recent_symptom_entries: Vec<MemoryEntry>,
+    /// Family members (BI.9) with `health_conditions_known` populated
+    /// — surfaces hereditary context the doctor may want to know.
+    pub family_health_history: Vec<FamilyMember>,
+    pub suggested_questions: Vec<String>,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// The unified Vida Plena snapshot. Embeds every per-domain summary
+/// plus the cross-domain patterns. Designed to be serialized to JSON
+/// and dropped into an LLM prompt as the "what's going on with the
+/// user this {week,month}" payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LifeSummary {
+    pub window: LifeSummaryWindow,
+    pub period_start: DateTime<Utc>,
+    pub period_end: DateTime<Utc>,
+    pub health: HealthSummary,
+    pub growth: GrowthSummary,
+    pub exercise: ExerciseSummary,
+    pub nutrition: NutritionSummary,
+    pub social: SocialSummary,
+    pub sleep: SleepSummary,
+    pub spiritual: SpiritualSummary,
+    pub financial: FinancialSummary,
+    pub relationships: RelationshipsSummary,
+    pub patterns: Vec<CrossDomainPattern>,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    /// BI.8 — Build the unified life summary. This composes the
+    /// per-domain summaries (health, growth, exercise, nutrition,
+    /// social, sleep, spiritual, financial) and adds the cross-domain
+    /// pattern detector on top.
+    ///
+    /// `today_local` is the user's local date in `YYYY-MM-DD` format —
+    /// needed for habit-streak calculations whose semantics are
+    /// per-day, not per-RFC3339-instant.
+    ///
+    /// All sub-summary calls use `unwrap_or_default()` so a single
+    /// missing pillar (e.g. user has not logged any sleep yet) does
+    /// not poison the whole snapshot.
+    pub async fn get_life_summary(
+        &self,
+        window: LifeSummaryWindow,
+        today_local: &str,
+    ) -> Result<LifeSummary> {
+        let now = Utc::now();
+        let period_start = now - chrono::Duration::days(window.days());
+
+        let health = self.get_health_summary(5, 20).await.unwrap_or_default();
+        let growth = self
+            .get_growth_summary(5, today_local, window.days() as u32)
+            .await
+            .unwrap_or_default();
+        let exercise = self.get_exercise_summary(10).await.unwrap_or_default();
+        let nutrition = self.get_nutrition_summary(15).await.unwrap_or_default();
+        let social = self.get_social_summary(10, 10).await.unwrap_or_default();
+        let sleep = self.get_sleep_summary(10).await.unwrap_or_default();
+        let spiritual = self.get_spiritual_summary(10).await.unwrap_or_default();
+        let financial = self.get_financial_summary(10, 10).await.unwrap_or_default();
+        let relationships = self
+            .get_relationships_summary(today_local, 30, 10)
+            .await
+            .unwrap_or_default();
+
+        let patterns = detect_patterns_static(
+            &exercise,
+            &sleep,
+            &nutrition,
+            &spiritual,
+            &social,
+            &financial,
+            &growth,
+            &relationships,
+        );
+
+        Ok(LifeSummary {
+            window,
+            period_start,
+            period_end: now,
+            health,
+            growth,
+            exercise,
+            nutrition,
+            social,
+            sleep,
+            spiritual,
+            financial,
+            relationships,
+            patterns,
+            generated_at: now,
+        })
+    }
+
+    /// Convenience wrapper that returns just the patterns (the rest of
+    /// `LifeSummary` can be expensive when the user only wants the
+    /// "what stood out" view).
+    pub async fn detect_cross_domain_patterns(
+        &self,
+        today_local: &str,
+    ) -> Result<Vec<CrossDomainPattern>> {
+        let summary = self
+            .get_life_summary(LifeSummaryWindow::Month, today_local)
+            .await?;
+        Ok(summary.patterns)
+    }
+
+    /// BI.8 — Build a structured prep packet for an upcoming medical
+    /// visit. `reason` is what the user is going for ("control de
+    /// diabetes", "dolor de espalda", "chequeo anual"). Recent
+    /// symptom entries are pulled from `memory_entries` whose `kind`
+    /// starts with `health_` OR whose narrative content mentions a
+    /// symptom keyword in Spanish.
+    ///
+    /// Returns suggested questions the user could ask the doctor —
+    /// these are conversation starters, never diagnostic prompts.
+    pub async fn prepare_medical_visit(
+        &self,
+        reason: &str,
+        symptoms_lookback_days: u32,
+    ) -> Result<MedicalVisitPrep> {
+        let reason = normalize_non_empty(reason).context("reason required")?;
+        let allergies = self
+            .list_health_facts(Some("allergy"))
+            .await
+            .unwrap_or_default();
+        let conditions = self
+            .list_health_facts(Some("condition"))
+            .await
+            .unwrap_or_default();
+        let all_facts = self.list_health_facts(None).await.unwrap_or_default();
+        let other_facts: Vec<HealthFact> = all_facts
+            .into_iter()
+            .filter(|f| f.fact_type != "allergy" && f.fact_type != "condition")
+            .collect();
+        let current_medications = self.list_active_medications().await.unwrap_or_default();
+        let health = self.get_health_summary(8, 8).await.unwrap_or_default();
+
+        let cutoff = Utc::now() - chrono::Duration::days(symptoms_lookback_days as i64);
+        let recent_entries = self.list_entries(100, None, None).await.unwrap_or_default();
+        let recent_symptom_entries: Vec<MemoryEntry> = recent_entries
+            .into_iter()
+            .filter(|e| e.created_at >= cutoff)
+            .filter(|e| e.kind.starts_with("health_") || mentions_symptom(&e.content))
+            .take(20)
+            .collect();
+
+        // BI.9 — Surface family members whose recorded heredity is
+        // worth telling the doctor about.
+        let family_health_history: Vec<FamilyMember> = self
+            .list_family_members()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| {
+                f.health_conditions_known
+                    .as_deref()
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        let suggested_questions =
+            build_suggested_questions(&reason, &current_medications, &conditions);
+
+        Ok(MedicalVisitPrep {
+            reason,
+            allergies,
+            conditions,
+            other_facts,
+            current_medications,
+            recent_vitals: health.recent_vitals,
+            recent_labs: health.recent_labs,
+            recent_symptom_entries,
+            family_health_history,
+            suggested_questions,
+            generated_at: Utc::now(),
+        })
+    }
+
+    /// BI.8 — Proactive forgetting check. Surfaces things the user
+    /// once cared about that have gone quiet:
+    ///
+    ///   * Active growth goals not updated in 60+ days.
+    ///   * Paused growth goals (always — explicit pause is worth re-checking).
+    ///   * Books in `Reading` status with no updates in 60+ days.
+    ///   * Active habits with zero check-ins in the last 30 days.
+    ///   * Active community activities not attended in 90+ days.
+    ///   * Active spiritual practices not marked in 30+ days.
+    ///   * Active financial goals with no progress in 60+ days.
+    ///
+    /// Items are ordered "longest forgotten first" and capped to 20 so
+    /// the LLM cannot get drowned in noise.
+    pub async fn forgetting_check(&self, today_local: &str) -> Result<Vec<ForgottenItem>> {
+        let now = Utc::now();
+        let mut items: Vec<ForgottenItem> = Vec::new();
+
+        // Active growth goals not updated in 60+ days.
+        if let Ok(active_goals) = self.list_growth_goals(Some(GoalStatus::Active)).await {
+            for g in active_goals {
+                let days = (now - g.updated_at).num_days();
+                if days >= 60 {
+                    items.push(ForgottenItem {
+                        item_type: "growth_goal".to_string(),
+                        item_id: g.goal_id,
+                        name: g.name,
+                        last_seen_at: Some(g.updated_at),
+                        days_since_seen: Some(days),
+                        suggestion: format!(
+                            "Hace {} dias que no actualizas esta meta. Sigue activa o la cerramos?",
+                            days
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Paused growth goals — always surface.
+        if let Ok(paused) = self.list_growth_goals(Some(GoalStatus::Paused)).await {
+            for g in paused {
+                let days = (now - g.updated_at).num_days();
+                items.push(ForgottenItem {
+                    item_type: "growth_goal_paused".to_string(),
+                    item_id: g.goal_id,
+                    name: g.name,
+                    last_seen_at: Some(g.updated_at),
+                    days_since_seen: Some(days),
+                    suggestion: format!(
+                        "Pausaste esta meta hace {} dias. La retomamos o la cerramos formalmente?",
+                        days
+                    ),
+                });
+            }
+        }
+
+        // Books in Reading status with stale updated_at.
+        if let Ok(reading) = self.list_books(Some(BookStatus::Reading)).await {
+            for b in reading {
+                let days = (now - b.updated_at).num_days();
+                if days >= 60 {
+                    items.push(ForgottenItem {
+                        item_type: "book_reading".to_string(),
+                        item_id: b.book_id,
+                        name: b.title,
+                        last_seen_at: Some(b.updated_at),
+                        days_since_seen: Some(days),
+                        suggestion: format!(
+                            "Llevas {} dias sin avanzar este libro. Lo retomamos, lo abandonamos o lo movemos a wishlist?",
+                            days
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Active habits with zero check-ins in last 30 days.
+        if let Ok(habits) = self.list_habits(true).await {
+            for h in habits {
+                if let Ok(streak) = self.get_habit_streak(&h.habit_id, today_local, 30).await {
+                    if streak.completed_days == 0 {
+                        let days = (now - h.updated_at).num_days().max(30);
+                        items.push(ForgottenItem {
+                            item_type: "habit_inactive".to_string(),
+                            item_id: h.habit_id,
+                            name: h.name,
+                            last_seen_at: Some(h.updated_at),
+                            days_since_seen: Some(days),
+                            suggestion:
+                                "Sin check-ins en 30 dias. Sigue siendo un habito que quieres mantener?"
+                                    .to_string(),
+                        });
+                    }
+                }
+            }
+        }
+
+        // Active community activities not attended in 90+ days.
+        if let Ok(communities) = self.list_community_activities(true).await {
+            for c in communities {
+                let last = c.last_attended;
+                let days_since = last.map(|t| (now - t).num_days());
+                let stale_attended = matches!(days_since, Some(d) if d >= 90);
+                let stale_never = last.is_none() && (now - c.created_at).num_days() >= 90;
+                if stale_attended || stale_never {
+                    items.push(ForgottenItem {
+                        item_type: "community_inactive".to_string(),
+                        item_id: c.activity_id,
+                        name: c.name,
+                        last_seen_at: last,
+                        days_since_seen: days_since.or(Some((now - c.created_at).num_days())),
+                        suggestion: "No hay registros recientes. Sigues yendo o ya no?".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Active spiritual practices with no recent mark.
+        if let Ok(practices) = self.list_spiritual_practices(true).await {
+            for p in practices {
+                let last = p.last_practiced;
+                let days_since = last.map(|t| (now - t).num_days());
+                let stale_marked = matches!(days_since, Some(d) if d >= 30);
+                let stale_never = last.is_none() && (now - p.created_at).num_days() >= 30;
+                if stale_marked || stale_never {
+                    items.push(ForgottenItem {
+                        item_type: "spiritual_inactive".to_string(),
+                        item_id: p.practice_id,
+                        name: p.practice_name,
+                        last_seen_at: last,
+                        days_since_seen: days_since.or(Some((now - p.created_at).num_days())),
+                        suggestion:
+                            "Hace tiempo que no la marcas. Sigue siendo importante para ti?"
+                                .to_string(),
+                    });
+                }
+            }
+        }
+
+        // BI.9 — Active relationships with importance >= 7 not contacted
+        // in 45+ days. Lower the bar than the BI.8 pattern (30d) so this
+        // surfaces only the truly forgotten ones.
+        if let Ok(rels) = self.list_relationships(true).await {
+            for r in rels {
+                if r.importance_1_10 < 7 {
+                    continue;
+                }
+                let (last, days) = match r.last_contact_at {
+                    Some(t) => (Some(t), (now - t).num_days()),
+                    None => (None, (now - r.created_at).num_days()),
+                };
+                if days >= 45 {
+                    items.push(ForgottenItem {
+                        item_type: "relationship_stale".to_string(),
+                        item_id: r.relationship_id,
+                        name: r.name,
+                        last_seen_at: last,
+                        days_since_seen: Some(days),
+                        suggestion: format!(
+                            "Hace {} dias sin contacto registrado con esta persona. Quieres mandarle un mensaje hoy?",
+                            days
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Active financial goals with no movement in 60+ days.
+        if let Ok(fgoals) = self.list_financial_goals(true).await {
+            for g in fgoals {
+                let days = (now - g.updated_at).num_days();
+                if days >= 60 {
+                    items.push(ForgottenItem {
+                        item_type: "financial_goal_inactive".to_string(),
+                        item_id: g.goal_id,
+                        name: g.name,
+                        last_seen_at: Some(g.updated_at),
+                        days_since_seen: Some(days),
+                        suggestion: format!(
+                            "Sin movimiento en {} dias. La meta sigue vigente?",
+                            days
+                        ),
+                    });
+                }
+            }
+        }
+
+        items.sort_by(|a, b| {
+            b.days_since_seen
+                .unwrap_or(0)
+                .cmp(&a.days_since_seen.unwrap_or(0))
+        });
+        items.truncate(20);
+        Ok(items)
+    }
+}
+
+/// Heuristic cross-domain pattern detector. Pure function over the
+/// already-loaded summaries — no DB I/O. Conservative on purpose:
+/// every pattern carries `evidence` so the LLM can quote the numbers
+/// instead of speculating.
+#[allow(clippy::too_many_arguments)]
+fn detect_patterns_static(
+    exercise: &ExerciseSummary,
+    sleep: &SleepSummary,
+    nutrition: &NutritionSummary,
+    spiritual: &SpiritualSummary,
+    social: &SocialSummary,
+    financial: &FinancialSummary,
+    growth: &GrowthSummary,
+    relationships: &RelationshipsSummary,
+) -> Vec<CrossDomainPattern> {
+    let mut patterns = Vec::new();
+
+    // 1) Sleep quality low + low exercise frequency.
+    if let Some(q) = sleep.avg_quality_7d {
+        if q < 5.0 && exercise.sessions_last_7_days < 2 {
+            patterns.push(CrossDomainPattern {
+                kind: "sleep_exercise_low".to_string(),
+                description:
+                    "Tu calidad de sueno reciente es baja y haces poco ejercicio. La actividad fisica regular suele mejorar el sueno (correlacion, no diagnostico)."
+                        .to_string(),
+                evidence: vec![
+                    format!("calidad_sueno_7d = {:.1}/10", q),
+                    format!("sesiones_7d = {}", exercise.sessions_last_7_days),
+                ],
+                confidence: 0.6,
+            });
+        }
+    }
+
+    // 2) Sleep duration below 6h average.
+    if let Some(d) = sleep.avg_duration_hours_7d {
+        if d < 6.0 {
+            patterns.push(CrossDomainPattern {
+                kind: "sleep_duration_low".to_string(),
+                description: format!(
+                    "Promedio de sueno de los ultimos 7 dias: {:.1}h. Por debajo del rango recomendado (7-9h) para adultos.",
+                    d
+                ),
+                evidence: vec![format!("avg_duration_hours_7d = {:.2}", d)],
+                confidence: 0.85,
+            });
+        }
+    }
+
+    // 3) High training volume + low protein in nutrition log.
+    if exercise.sessions_last_7_days >= 3
+        && nutrition.meals_last_7_days >= 5
+        && nutrition.protein_g_last_7_days < 350.0
+    {
+        patterns.push(CrossDomainPattern {
+            kind: "nutrition_protein_low".to_string(),
+            description:
+                "Entrenas con frecuencia pero la proteina registrada en los ultimos 7 dias es baja. Para mantener masa muscular suelen sugerirse 1.6-2.2 g/kg/dia."
+                    .to_string(),
+            evidence: vec![
+                format!("sesiones_7d = {}", exercise.sessions_last_7_days),
+                format!("comidas_registradas_7d = {}", nutrition.meals_last_7_days),
+                format!(
+                    "proteina_total_7d_g = {:.0}",
+                    nutrition.protein_g_last_7_days
+                ),
+            ],
+            confidence: 0.5,
+        });
+    }
+
+    // 4) Spiritual drift (>=14 days since last practice mark).
+    if let Some(d) = spiritual.days_since_last_practice {
+        if d >= 14 && !spiritual.active_practices.is_empty() {
+            patterns.push(CrossDomainPattern {
+                kind: "spiritual_drift".to_string(),
+                description: format!(
+                    "Hace {} dias que no marcas una practica espiritual activa.",
+                    d
+                ),
+                evidence: vec![format!(
+                    "active_practices_count = {}",
+                    spiritual.active_practices.len()
+                )],
+                confidence: 0.7,
+            });
+        }
+    }
+
+    // 5) Social drift (>=21 days since last community activity).
+    if let Some(d) = social.days_since_last_activity {
+        if d >= 21 && !social.active_activities.is_empty() {
+            patterns.push(CrossDomainPattern {
+                kind: "social_drift".to_string(),
+                description: format!(
+                    "Hace {} dias que no asistes a tus actividades comunitarias activas. La conexion social pesa en bienestar.",
+                    d
+                ),
+                evidence: vec![format!(
+                    "active_activities_count = {}",
+                    social.active_activities.len()
+                )],
+                confidence: 0.7,
+            });
+        }
+    }
+
+    // 6) Financial: gastos > ingresos en 30d.
+    if financial.expenses_total_last_30_days > 0.0
+        && financial.income_total_last_30_days > 0.0
+        && financial.expenses_total_last_30_days > financial.income_total_last_30_days
+    {
+        let delta = financial.expenses_total_last_30_days - financial.income_total_last_30_days;
+        patterns.push(CrossDomainPattern {
+            kind: "financial_negative_net".to_string(),
+            description: format!(
+                "En los ultimos 30 dias gastaste mas de lo que ingreso (delta: {:.0}). Puede ser puntual; el dato esta aqui sin juicio.",
+                delta
+            ),
+            evidence: vec![
+                format!(
+                    "ingresos_30d = {:.0}",
+                    financial.income_total_last_30_days
+                ),
+                format!(
+                    "gastos_30d = {:.0}",
+                    financial.expenses_total_last_30_days
+                ),
+            ],
+            confidence: 0.95,
+        });
+    }
+
+    // 6b) Relationships: close people not contacted in 30+ days.
+    if !relationships.stale_contacts.is_empty() {
+        let names: Vec<String> = relationships
+            .stale_contacts
+            .iter()
+            .take(5)
+            .map(|r| r.name.clone())
+            .collect();
+        patterns.push(CrossDomainPattern {
+            kind: "relationships_stale_contacts".to_string(),
+            description: format!(
+                "Tienes {} personas importantes (importancia >=7) sin contacto registrado en los ultimos 30 dias.",
+                relationships.stale_contacts.len()
+            ),
+            evidence: vec![format!("personas = {}", names.join(", "))],
+            confidence: 0.7,
+        });
+    }
+
+    // 7) Growth: many active goals at 0% — possible overload.
+    let stalled = growth
+        .active_goals
+        .iter()
+        .filter(|g| g.progress_pct == 0)
+        .count();
+    if stalled >= 3 {
+        patterns.push(CrossDomainPattern {
+            kind: "goals_stalled".to_string(),
+            description: format!(
+                "Tienes {} metas activas con 0% de progreso. Quiza vale priorizar 1-2 antes de mantener tantas en paralelo.",
+                stalled
+            ),
+            evidence: vec![format!(
+                "active_goals_total = {}",
+                growth.active_goals.len()
+            )],
+            confidence: 0.65,
+        });
+    }
+
+    patterns
+}
+
+/// Cheap Spanish-keyword check used by `prepare_medical_visit` to
+/// surface narrative entries that look like the user described a
+/// symptom. Intentionally permissive — false positives are fine,
+/// false negatives are not (we want the doctor to see it).
+fn mentions_symptom(content: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "dolor",
+        "duele",
+        "sintoma",
+        "síntoma",
+        "fiebre",
+        "nausea",
+        "náusea",
+        "mareo",
+        "fatiga",
+        "cansancio",
+        "tos ",
+        "vomito",
+        "vómito",
+        "migrana",
+        "migraña",
+        "presion",
+        "presión",
+        "diarrea",
+        "ardor",
+        "comezon",
+        "comezón",
+        "sangrado",
+    ];
+    let lower = content.to_lowercase();
+    KEYWORDS.iter().any(|k| lower.contains(k))
+}
+
+/// Build a small list of conversation-starter questions for the user
+/// to consider asking their doctor. None of these are diagnostic.
+fn build_suggested_questions(
+    reason: &str,
+    current_meds: &[Medication],
+    conditions: &[HealthFact],
+) -> Vec<String> {
+    let mut q = Vec::new();
+    q.push(format!("Cual es el siguiente paso para {}?", reason));
+    if !current_meds.is_empty() {
+        q.push(
+            "Mis medicamentos actuales siguen siendo los adecuados? Hay interacciones a vigilar?"
+                .to_string(),
+        );
+    }
+    for c in conditions.iter().take(3) {
+        q.push(format!(
+            "Sobre mi {}: hay algun cambio o seguimiento que recomiende?",
+            c.label
+        ));
+    }
+    q.push("Que sintomas o senales debo vigilar antes de la siguiente visita?".to_string());
+    q.push("Cuando deberia agendar la proxima consulta?".to_string());
+    q
+}
+
+// ============================================================================
+// Fase BI.9 sprint 1 — Relaciones humanas (perfil + familia + hijos)
+// ============================================================================
+//
+// SOLO la parte no sensible: el perfil de la persona, datos familiares,
+// hitos de hijos. La narrativa intima de eventos relacionales
+// (discusiones, infidelidad, abuso) NO vive en estas tablas — espera
+// al cifrado reforzado (Argon2id) que comparte con BI.4/6/12.
+//
+// Disclaimers que el system prompt enforza: Axi NO es consejero
+// matrimonial ni terapeuta de pareja. Los consejos son generales,
+// basados en literatura amplia (Gottman, Esther Perel, Sue Johnson).
+// Para temas serios (abuso, custodia, divorcio en curso) → siempre
+// recomendar profesional certificado o lineas de ayuda.
+
+/// One human relationship the user explicitly tracks. Pareja, mejor
+/// amigo, compañero de trabajo importante — quienquiera que el
+/// usuario considere parte de su mapa relacional.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Relationship {
+    pub relationship_id: String,
+    pub name: String,
+    /// `partner`, `spouse`, `ex_partner`, `friend`, `best_friend`,
+    /// `colleague`, `boss`, `mentor`, `mentee`, `neighbor`,
+    /// `acquaintance`, `other`.
+    pub relationship_type: String,
+    /// Free text. Convención: `dating`, `engaged`, `married`,
+    /// `separated`, `divorced`, `distanced`, `close`, `casual`,
+    /// `reconnecting`.
+    pub stage: Option<String>,
+    pub importance_1_10: u8,
+    pub started_on: Option<String>,
+    pub birthday: Option<String>,
+    pub anniversary: Option<String>,
+    pub last_contact_at: Option<DateTime<Utc>>,
+    /// Encrypted free-form notes — empty when none.
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One family member with kinship + medical heredity hints.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FamilyMember {
+    pub member_id: String,
+    pub name: String,
+    /// `mother`, `father`, `sibling`, `grandparent`, `aunt_uncle`,
+    /// `cousin`, `in_law`, `other`.
+    pub kinship: String,
+    pub side: Option<String>,
+    pub birth_date: Option<String>,
+    pub death_date: Option<String>,
+    /// Plain text summary of known health conditions, used by BI.8 to
+    /// surface heredity hints. Not encrypted because it is meant to
+    /// be quoted in medical visit prep packets.
+    pub health_conditions_known: Option<String>,
+    pub contact_preferred: Option<String>,
+    pub notes: String,
+    pub active: bool,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One developmental milestone for a child. Permanent by design —
+/// these are the kind of records the user wishes they had written
+/// down in 10 years.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChildMilestone {
+    pub milestone_id: String,
+    pub child_name: String,
+    /// `first_word`, `first_step`, `tooth`, `school_start`,
+    /// `achievement`, `concern`, `vaccine`, `medical`, `other`.
+    pub milestone_type: String,
+    pub description: String,
+    pub occurred_on: String,
+    pub notes: String,
+    pub source_entry_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Aggregate snapshot returned by `get_relationships_summary`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RelationshipsSummary {
+    pub close_relationships: Vec<Relationship>,
+    pub family_members: Vec<FamilyMember>,
+    pub recent_child_milestones: Vec<ChildMilestone>,
+    pub upcoming_birthdays: Vec<UpcomingDate>,
+    pub stale_contacts: Vec<Relationship>,
+    pub generated_at: DateTime<Utc>,
+}
+
+/// One upcoming birthday/anniversary the user might want a nudge
+/// about. The `days_until` is computed against `today_local`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpcomingDate {
+    pub name: String,
+    /// `birthday` or `anniversary`.
+    pub kind: String,
+    /// `MM-DD`.
+    pub when_md: String,
+    pub days_until: u32,
+    /// `relationship` or `family_member`.
+    pub source_table: String,
+    pub source_id: String,
+}
+
+/// Derived coaching helper for one relationship. This is intentionally
+/// conservative: it summarizes what the system knows, suggests a few
+/// next steps, and flags when the topic should move to professional
+/// support instead of generic coaching.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipAdvice {
+    pub relationship_id: String,
+    pub relationship_name: String,
+    pub relationship_type: String,
+    pub stage: Option<String>,
+    pub concern: Option<String>,
+    pub observations: Vec<String>,
+    pub suggested_actions: Vec<String>,
+    pub suggested_questions: Vec<String>,
+    pub recommend_professional_support: bool,
+    pub urgent_support: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
+impl MemoryPlaneManager {
+    // -----------------------------------------------------------------------
+    // BI.9: relationships
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_relationship(
+        &self,
+        name: &str,
+        relationship_type: &str,
+        stage: Option<&str>,
+        importance_1_10: u8,
+        started_on: Option<&str>,
+        birthday: Option<&str>,
+        anniversary: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<Relationship> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let relationship_type =
+            normalize_non_empty(relationship_type).context("relationship_type required")?;
+        let stage = stage.and_then(normalize_non_empty);
+        let importance = importance_1_10.clamp(1, 10);
+        let started_on = started_on.and_then(normalize_non_empty);
+        let birthday = birthday.and_then(normalize_non_empty);
+        let anniversary = anniversary.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("rel-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let type_clone = relationship_type.clone();
+        let stage_clone = stage.clone();
+        let started_clone = started_on.clone();
+        let bday_clone = birthday.clone();
+        let anniv_clone = anniversary.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO relationships
+                 (relationship_id, name, relationship_type, stage,
+                  importance_1_10, started_on, birthday, anniversary,
+                  last_contact_at, notes_nonce_b64, notes_ciphertext_b64,
+                  active, source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL, ?9, ?10, 1, ?11, ?12, ?12)",
+                params![
+                    id_clone,
+                    name_clone,
+                    type_clone,
+                    stage_clone,
+                    importance as i32,
+                    started_clone,
+                    bday_clone,
+                    anniv_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(Relationship {
+            relationship_id: id,
+            name,
+            relationship_type,
+            stage,
+            importance_1_10: importance,
+            started_on,
+            birthday,
+            anniversary,
+            last_contact_at: None,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Update the relationship `stage` (e.g. dating → engaged →
+    /// married). Idempotent.
+    pub async fn update_relationship_stage(
+        &self,
+        relationship_id: &str,
+        stage: &str,
+    ) -> Result<bool> {
+        let stage = normalize_non_empty(stage).context("stage required")?;
+        let now = Utc::now().to_rfc3339();
+        let id = relationship_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE relationships
+                 SET stage = ?1, updated_at = ?2
+                 WHERE relationship_id = ?3 AND active = 1",
+                params![stage, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    /// Mark that the user just contacted this person. Used by the
+    /// "stale contacts" detection in `get_relationships_summary`.
+    pub async fn mark_relationship_contact(
+        &self,
+        relationship_id: &str,
+        contacted_at: Option<DateTime<Utc>>,
+    ) -> Result<bool> {
+        let when = contacted_at.unwrap_or_else(Utc::now).to_rfc3339();
+        let now = Utc::now().to_rfc3339();
+        let id = relationship_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE relationships
+                 SET last_contact_at = ?1, updated_at = ?2
+                 WHERE relationship_id = ?3",
+                params![when, now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn deactivate_relationship(&self, relationship_id: &str) -> Result<bool> {
+        let now = Utc::now().to_rfc3339();
+        let id = relationship_id.to_string();
+        let db_path = self.db_path.clone();
+        let n = tokio::task::spawn_blocking(move || -> Result<usize> {
+            let db = Self::open_db(&db_path)?;
+            Ok(db.execute(
+                "UPDATE relationships
+                 SET active = 0, updated_at = ?1
+                 WHERE relationship_id = ?2 AND active = 1",
+                params![now, id],
+            )?)
+        })
+        .await??;
+        Ok(n > 0)
+    }
+
+    pub async fn list_relationships(&self, active_only: bool) -> Result<Vec<Relationship>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let sql = if active_only {
+                "SELECT relationship_id, name, relationship_type, stage,
+                        importance_1_10, started_on, birthday, anniversary,
+                        last_contact_at, notes_nonce_b64, notes_ciphertext_b64,
+                        active, source_entry_id, created_at, updated_at
+                 FROM relationships WHERE active = 1
+                 ORDER BY importance_1_10 DESC, name ASC"
+            } else {
+                "SELECT relationship_id, name, relationship_type, stage,
+                        importance_1_10, started_on, birthday, anniversary,
+                        last_contact_at, notes_nonce_b64, notes_ciphertext_b64,
+                        active, source_entry_id, created_at, updated_at
+                 FROM relationships
+                 ORDER BY importance_1_10 DESC, name ASC"
+            };
+            let mut stmt = db.prepare(sql)?;
+            let rows: Vec<RelationshipRaw> = stmt
+                .query_map([], |row| {
+                    Ok(RelationshipRaw {
+                        relationship_id: row.get(0)?,
+                        name: row.get(1)?,
+                        relationship_type: row.get(2)?,
+                        stage: row.get(3)?,
+                        importance_1_10: row.get(4)?,
+                        started_on: row.get(5)?,
+                        birthday: row.get(6)?,
+                        anniversary: row.get(7)?,
+                        last_contact_at: row.get(8)?,
+                        notes_nonce_b64: row.get(9)?,
+                        notes_ciphertext_b64: row.get(10)?,
+                        active: row.get::<_, i32>(11)? != 0,
+                        source_entry_id: row.get(12)?,
+                        created_at: row.get(13)?,
+                        updated_at: row.get(14)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| Relationship {
+                relationship_id: r.relationship_id,
+                name: r.name,
+                relationship_type: r.relationship_type,
+                stage: r.stage,
+                importance_1_10: r.importance_1_10.clamp(1, 10) as u8,
+                started_on: r.started_on,
+                birthday: r.birthday,
+                anniversary: r.anniversary,
+                last_contact_at: r.last_contact_at.as_deref().map(parse_utc),
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9: family members
+    // -----------------------------------------------------------------------
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn add_family_member(
+        &self,
+        name: &str,
+        kinship: &str,
+        side: Option<&str>,
+        birth_date: Option<&str>,
+        death_date: Option<&str>,
+        health_conditions_known: Option<&str>,
+        contact_preferred: Option<&str>,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<FamilyMember> {
+        let name = normalize_non_empty(name).context("name required")?;
+        let kinship = normalize_non_empty(kinship).context("kinship required")?;
+        let side = side.and_then(normalize_non_empty);
+        let birth_date = birth_date.and_then(normalize_non_empty);
+        let death_date = death_date.and_then(normalize_non_empty);
+        let health_conditions_known = health_conditions_known.and_then(normalize_non_empty);
+        let contact_preferred = contact_preferred.and_then(normalize_non_empty);
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("fam-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let name_clone = name.clone();
+        let kin_clone = kinship.clone();
+        let side_clone = side.clone();
+        let birth_clone = birth_date.clone();
+        let death_clone = death_date.clone();
+        let health_clone = health_conditions_known.clone();
+        let contact_clone = contact_preferred.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO family_members
+                 (member_id, name, kinship, side, birth_date, death_date,
+                  health_conditions_known, contact_preferred,
+                  notes_nonce_b64, notes_ciphertext_b64, active,
+                  source_entry_id, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?12, ?12)",
+                params![
+                    id_clone,
+                    name_clone,
+                    kin_clone,
+                    side_clone,
+                    birth_clone,
+                    death_clone,
+                    health_clone,
+                    contact_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(FamilyMember {
+            member_id: id,
+            name,
+            kinship,
+            side,
+            birth_date,
+            death_date,
+            health_conditions_known,
+            contact_preferred,
+            notes: notes_owned,
+            active: true,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub async fn list_family_members(&self) -> Result<Vec<FamilyMember>> {
+        let db_path = self.db_path.clone();
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let mut stmt = db.prepare(
+                "SELECT member_id, name, kinship, side, birth_date, death_date,
+                        health_conditions_known, contact_preferred,
+                        notes_nonce_b64, notes_ciphertext_b64, active,
+                        source_entry_id, created_at, updated_at
+                 FROM family_members
+                 ORDER BY created_at ASC",
+            )?;
+            let rows: Vec<FamilyMemberRaw> = stmt
+                .query_map([], |row| {
+                    Ok(FamilyMemberRaw {
+                        member_id: row.get(0)?,
+                        name: row.get(1)?,
+                        kinship: row.get(2)?,
+                        side: row.get(3)?,
+                        birth_date: row.get(4)?,
+                        death_date: row.get(5)?,
+                        health_conditions_known: row.get(6)?,
+                        contact_preferred: row.get(7)?,
+                        notes_nonce_b64: row.get(8)?,
+                        notes_ciphertext_b64: row.get(9)?,
+                        active: row.get::<_, i32>(10)? != 0,
+                        source_entry_id: row.get(11)?,
+                        created_at: row.get(12)?,
+                        updated_at: row.get(13)?,
+                    })
+                })?
+                .flatten()
+                .collect();
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| FamilyMember {
+                member_id: r.member_id,
+                name: r.name,
+                kinship: r.kinship,
+                side: r.side,
+                birth_date: r.birth_date,
+                death_date: r.death_date,
+                health_conditions_known: r.health_conditions_known,
+                contact_preferred: r.contact_preferred,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                active: r.active,
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+                updated_at: parse_utc(&r.updated_at),
+            })
+            .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9: child milestones
+    // -----------------------------------------------------------------------
+
+    pub async fn add_child_milestone(
+        &self,
+        child_name: &str,
+        milestone_type: &str,
+        description: &str,
+        occurred_on: &str,
+        notes: &str,
+        source_entry_id: Option<&str>,
+    ) -> Result<ChildMilestone> {
+        let child_name = normalize_non_empty(child_name).context("child_name required")?;
+        let milestone_type =
+            normalize_non_empty(milestone_type).context("milestone_type required")?;
+        let description = normalize_non_empty(description).context("description required")?;
+        let occurred_on =
+            normalize_non_empty(occurred_on).context("occurred_on required (YYYY-MM-DD)")?;
+        // Validate the date format — we want this strict because the
+        // upcoming_birthdays heuristic in BI.8 reads it later.
+        chrono::NaiveDate::parse_from_str(&occurred_on, "%Y-%m-%d")
+            .with_context(|| format!("invalid occurred_on '{}': use YYYY-MM-DD", occurred_on))?;
+
+        let notes_owned = notes.trim().to_string();
+        let (notes_nonce, notes_cipher) = if notes_owned.is_empty() {
+            (None, None)
+        } else {
+            let (n, c, _) = encrypt_content(&notes_owned)?;
+            (Some(n), Some(c))
+        };
+
+        let now = Utc::now();
+        let now_rfc = now.to_rfc3339();
+        let id = format!("cmile-{}", Uuid::new_v4());
+        let source_owned = source_entry_id.map(|s| s.to_string());
+
+        let db_path = self.db_path.clone();
+        let id_clone = id.clone();
+        let child_clone = child_name.clone();
+        let type_clone = milestone_type.clone();
+        let desc_clone = description.clone();
+        let when_clone = occurred_on.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            db.execute(
+                "INSERT INTO children_milestones
+                 (milestone_id, child_name, milestone_type, description,
+                  occurred_on, notes_nonce_b64, notes_ciphertext_b64,
+                  source_entry_id, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    id_clone,
+                    child_clone,
+                    type_clone,
+                    desc_clone,
+                    when_clone,
+                    notes_nonce,
+                    notes_cipher,
+                    source_owned,
+                    now_rfc,
+                ],
+            )?;
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+
+        Ok(ChildMilestone {
+            milestone_id: id,
+            child_name,
+            milestone_type,
+            description,
+            occurred_on,
+            notes: notes_owned,
+            source_entry_id: source_entry_id.map(|s| s.to_string()),
+            created_at: now,
+        })
+    }
+
+    pub async fn list_child_milestones(
+        &self,
+        child_name: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ChildMilestone>> {
+        let db_path = self.db_path.clone();
+        let filter = child_name.map(|s| s.to_string());
+        let limit = limit.clamp(1, 500);
+        let raws = tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<ChildMilestoneRaw> {
+                Ok(ChildMilestoneRaw {
+                    milestone_id: row.get(0)?,
+                    child_name: row.get(1)?,
+                    milestone_type: row.get(2)?,
+                    description: row.get(3)?,
+                    occurred_on: row.get(4)?,
+                    notes_nonce_b64: row.get(5)?,
+                    notes_ciphertext_b64: row.get(6)?,
+                    source_entry_id: row.get(7)?,
+                    created_at: row.get(8)?,
+                })
+            };
+            let rows: Vec<ChildMilestoneRaw> = if let Some(c) = filter {
+                let mut stmt = db.prepare(
+                    "SELECT milestone_id, child_name, milestone_type, description,
+                            occurred_on, notes_nonce_b64, notes_ciphertext_b64,
+                            source_entry_id, created_at
+                     FROM children_milestones
+                     WHERE child_name = ?1
+                     ORDER BY occurred_on DESC
+                     LIMIT ?2",
+                )?;
+                let collected: Vec<ChildMilestoneRaw> = stmt
+                    .query_map(params![c, limit as i64], map_row)?
+                    .flatten()
+                    .collect();
+                collected
+            } else {
+                let mut stmt = db.prepare(
+                    "SELECT milestone_id, child_name, milestone_type, description,
+                            occurred_on, notes_nonce_b64, notes_ciphertext_b64,
+                            source_entry_id, created_at
+                     FROM children_milestones
+                     ORDER BY occurred_on DESC
+                     LIMIT ?1",
+                )?;
+                let collected: Vec<ChildMilestoneRaw> = stmt
+                    .query_map(params![limit as i64], map_row)?
+                    .flatten()
+                    .collect();
+                collected
+            };
+            Ok::<_, anyhow::Error>(rows)
+        })
+        .await??;
+
+        Ok(raws
+            .into_iter()
+            .map(|r| ChildMilestone {
+                milestone_id: r.milestone_id,
+                child_name: r.child_name,
+                milestone_type: r.milestone_type,
+                description: r.description,
+                occurred_on: r.occurred_on,
+                notes: match (r.notes_nonce_b64, r.notes_ciphertext_b64) {
+                    (Some(n), Some(c)) => decrypt_to_string(&n, &c).unwrap_or_default(),
+                    _ => String::new(),
+                },
+                source_entry_id: r.source_entry_id,
+                created_at: parse_utc(&r.created_at),
+            })
+            .collect())
+    }
+
+    /// BI.9 — Aggregate snapshot for the relationships pillar.
+    ///
+    /// Includes a small but useful "upcoming birthdays / anniversaries"
+    /// pre-computation in the next `lookahead_days` window so the
+    /// caller (Telegram bot) can phrase nudges in advance, plus
+    /// "stale contacts" (active relationships with `importance >= 7`
+    /// that have no `last_contact_at` in the last 30 days).
+    pub async fn get_relationships_summary(
+        &self,
+        today_local: &str,
+        lookahead_days: u32,
+        recent_milestones_limit: usize,
+    ) -> Result<RelationshipsSummary> {
+        let close_relationships = self.list_relationships(true).await.unwrap_or_default();
+        let family_members = self.list_family_members().await.unwrap_or_default();
+        let recent_child_milestones = self
+            .list_child_milestones(None, recent_milestones_limit)
+            .await
+            .unwrap_or_default();
+
+        let today = chrono::NaiveDate::parse_from_str(today_local, "%Y-%m-%d")
+            .with_context(|| format!("invalid today_local '{}'", today_local))?;
+        let lookahead = lookahead_days.clamp(1, 366);
+
+        let mut upcoming_birthdays: Vec<UpcomingDate> = Vec::new();
+        for r in &close_relationships {
+            if let Some(ref bday) = r.birthday {
+                if let Some((md, days)) = days_until_md(bday, today, lookahead) {
+                    upcoming_birthdays.push(UpcomingDate {
+                        name: r.name.clone(),
+                        kind: "birthday".to_string(),
+                        when_md: md,
+                        days_until: days,
+                        source_table: "relationship".to_string(),
+                        source_id: r.relationship_id.clone(),
+                    });
+                }
+            }
+            if let Some(ref anniv) = r.anniversary {
+                if let Some((md, days)) = days_until_md(anniv, today, lookahead) {
+                    upcoming_birthdays.push(UpcomingDate {
+                        name: r.name.clone(),
+                        kind: "anniversary".to_string(),
+                        when_md: md,
+                        days_until: days,
+                        source_table: "relationship".to_string(),
+                        source_id: r.relationship_id.clone(),
+                    });
+                }
+            }
+        }
+        for f in &family_members {
+            if let Some(ref bday) = f.birth_date {
+                if let Some((md, days)) = days_until_md(bday, today, lookahead) {
+                    upcoming_birthdays.push(UpcomingDate {
+                        name: f.name.clone(),
+                        kind: "birthday".to_string(),
+                        when_md: md,
+                        days_until: days,
+                        source_table: "family_member".to_string(),
+                        source_id: f.member_id.clone(),
+                    });
+                }
+            }
+        }
+        upcoming_birthdays.sort_by_key(|u| u.days_until);
+
+        let now = Utc::now();
+        let stale_contacts: Vec<Relationship> = close_relationships
+            .iter()
+            .filter(|r| r.importance_1_10 >= 7)
+            .filter(|r| match r.last_contact_at {
+                Some(t) => (now - t).num_days() >= 30,
+                None => (now - r.created_at).num_days() >= 30,
+            })
+            .cloned()
+            .collect();
+
+        Ok(RelationshipsSummary {
+            close_relationships,
+            family_members,
+            recent_child_milestones,
+            upcoming_birthdays,
+            stale_contacts,
+            generated_at: now,
+        })
+    }
+
+    /// BI.9 — Give a conservative coaching snapshot for one
+    /// relationship. This is NOT therapy and never overrides the
+    /// safety/professional boundaries already established in the
+    /// strategy docs and Telegram system prompt.
+    pub async fn get_relationship_advice(
+        &self,
+        relationship_id: &str,
+        today_local: &str,
+        concern: Option<&str>,
+    ) -> Result<RelationshipAdvice> {
+        let relationship_id =
+            normalize_non_empty(relationship_id).context("relationship_id required")?;
+        let relationship = self
+            .list_relationships(true)
+            .await?
+            .into_iter()
+            .find(|r| r.relationship_id == relationship_id)
+            .with_context(|| format!("no encontre relacion activa con id {}", relationship_id))?;
+        let summary = self.get_relationships_summary(today_local, 30, 10).await?;
+        let timeline = self.get_relationship_timeline(&relationship_id, 12).await?;
+        Ok(build_relationship_advice_static(
+            &relationship,
+            &summary,
+            &timeline,
+            concern,
+            Utc::now(),
+        ))
+    }
+}
+
+fn build_relationship_advice_static(
+    relationship: &Relationship,
+    summary: &RelationshipsSummary,
+    timeline: &RelationshipTimeline,
+    concern: Option<&str>,
+    now: DateTime<Utc>,
+) -> RelationshipAdvice {
+    let concern = concern.and_then(normalize_non_empty);
+    let (recommend_professional_support, urgent_support) =
+        relationship_concern_flags(concern.as_deref(), timeline);
+    let kind_bucket = relationship_kind_bucket(&relationship.relationship_type);
+
+    let days_since_last_contact = match relationship.last_contact_at {
+        Some(t) => (now - t).num_days().max(0),
+        None => (now - relationship.created_at).num_days().max(0),
+    };
+    let upcoming = summary
+        .upcoming_birthdays
+        .iter()
+        .filter(|u| u.source_id == relationship.relationship_id)
+        .min_by_key(|u| u.days_until);
+
+    let mut observations = Vec::new();
+    observations.push(format!(
+        "{} es una relacion tipo '{}' con importancia {}/10{}.",
+        relationship.name,
+        relationship.relationship_type,
+        relationship.importance_1_10,
+        relationship
+            .stage
+            .as_deref()
+            .map(|s| format!(" y etapa '{}'", s))
+            .unwrap_or_default(),
+    ));
+    if let Some(u) = upcoming {
+        let when = if u.days_until == 0 {
+            "hoy".to_string()
+        } else if u.days_until == 1 {
+            "mañana".to_string()
+        } else {
+            format!("en {} días", u.days_until)
+        };
+        observations.push(format!(
+            "Tienes un {} de esta relación {} ({}).",
+            u.kind, when, u.when_md
+        ));
+    }
+    if relationship.last_contact_at.is_some() {
+        observations.push(format!(
+            "Llevas {} días desde el último contacto registrado.",
+            days_since_last_contact
+        ));
+    } else {
+        observations.push(format!(
+            "No hay contacto registrado todavía; la relación se creó hace {} días.",
+            days_since_last_contact
+        ));
+    }
+    if timeline.events_last_30d == 0 {
+        observations.push(
+            "No hay eventos relacionales registrados en los últimos 30 días; el consejo sale sobre todo del perfil y del ritmo de contacto.".to_string(),
+        );
+    } else {
+        let mut pulse_bits = vec![format!("{} evento(s) en 30 días", timeline.events_last_30d)];
+        if let Some(avg) = timeline.avg_intensity_30d {
+            pulse_bits.push(format!("intensidad promedio {:.1}/10", avg));
+        }
+        if timeline.negative_sentiment_count_30d > 0 {
+            pulse_bits.push(format!(
+                "{} con sentimiento negativo",
+                timeline.negative_sentiment_count_30d
+            ));
+        }
+        observations.push(format!("Pulso reciente: {}.", pulse_bits.join(", ")));
+
+        let labels = recent_relationship_event_labels(&timeline.recent_events_meta, 4);
+        if !labels.is_empty() {
+            observations.push(format!("Temas recientes: {}.", labels.join(", ")));
+        }
+    }
+    if let Some(ref c) = concern {
+        observations.push(format!("Preocupación actual del usuario: {}.", c));
+    }
+
+    let mut suggested_actions = Vec::new();
+    if urgent_support {
+        push_unique(
+            &mut suggested_actions,
+            "Prioriza seguridad y apoyo externo hoy. Si hay abuso, violencia, coerción o miedo, esto ya no es terreno para coaching general.",
+        );
+        push_unique(
+            &mut suggested_actions,
+            "No intentes resolverlo solo con una conversación improvisada si te sientes en riesgo; primero asegura apoyo profesional o una red de confianza.",
+        );
+        push_unique(
+            &mut suggested_actions,
+            "Si te sirve y es seguro, registra hechos concretos (fechas, eventos, mensajes) para poder explicarlos mejor a un profesional.",
+        );
+    } else {
+        let high_friction = timeline.negative_sentiment_count_30d >= 2
+            || timeline.avg_intensity_30d.unwrap_or(0.0) >= 7.0
+            || timeline.recent_events_meta.iter().take(5).any(|e| {
+                matches!(
+                    e.event_type.as_str(),
+                    "argument" | "conflict" | "distance" | "concern"
+                )
+            });
+        let positive_momentum = timeline.recent_events_meta.iter().take(5).any(|e| {
+            matches!(
+                e.event_type.as_str(),
+                "reconciliation" | "support" | "closeness" | "achievement"
+            )
+        });
+
+        let stale_threshold = match kind_bucket {
+            "romantic" => 7,
+            "professional" => 14,
+            _ => 21,
+        };
+        if days_since_last_contact >= stale_threshold {
+            let reconnect = match kind_bucket {
+                "romantic" => format!(
+                    "Haz una reconexión pequeña con {} en las próximas 24-48h: mensaje breve, cálido y sin intentar resolver todo en el primer contacto.",
+                    relationship.name
+                ),
+                "professional" => format!(
+                    "Haz un check-in breve y claro con {}: contexto concreto, pedido puntual y tono limpio.",
+                    relationship.name
+                ),
+                _ => format!(
+                    "Haz un gesto pequeño esta semana con {}: mensaje, nota de voz corta o invitación simple.",
+                    relationship.name
+                ),
+            };
+            push_unique(&mut suggested_actions, reconnect);
+        }
+        if high_friction {
+            push_unique(
+                &mut suggested_actions,
+                "Si vas a tocar un tema difícil, usa un inicio suave: describe un hecho concreto, cómo te impactó y una petición pequeña. No abras cinco frentes a la vez.",
+            );
+            push_unique(
+                &mut suggested_actions,
+                "Antes de defenderte, resume en una frase lo que entendiste de la otra persona. Sentirse escuchado baja muchísimo la fricción.",
+            );
+        }
+        if positive_momentum && !high_friction {
+            push_unique(
+                &mut suggested_actions,
+                "Refuerza lo que sí funciona con aprecio específico: di exactamente qué gesto valoraste y por qué te importó.",
+            );
+        }
+        if let Some(u) = upcoming {
+            if u.days_until <= 14 {
+                push_unique(
+                    &mut suggested_actions,
+                    "Aprovecha la fecha próxima para crear un ritual simple y concreto: mensaje, llamada, detalle o tiempo de calidad planeado con anticipación.",
+                );
+            }
+        }
+        if timeline.events_last_30d == 0 {
+            push_unique(
+                &mut suggested_actions,
+                "Antes de sacar conclusiones grandes, registra 1-2 contactos o eventos reales. Con más contexto, el consejo mejora mucho.",
+            );
+        }
+        push_unique(
+            &mut suggested_actions,
+            "Define una sola meta para esta semana con esta relación: conexión, claridad, reparación o coordinación. Que sea observable.",
+        );
+        if recommend_professional_support {
+            push_unique(
+                &mut suggested_actions,
+                "Por el tipo de tema que mencionas, vale la pena apoyo profesional (terapia, mediación o asesoría especializada) además de cualquier conversación entre ustedes.",
+            );
+        }
+    }
+    suggested_actions.truncate(4);
+
+    let mut suggested_questions = Vec::new();
+    if urgent_support {
+        push_unique(
+            &mut suggested_questions,
+            "¿Qué apoyo profesional o persona segura puedo contactar hoy mismo?",
+        );
+        push_unique(
+            &mut suggested_questions,
+            "¿Qué límite necesito poner para protegerme mientras esto se ordena?",
+        );
+        push_unique(
+            &mut suggested_questions,
+            "¿Hay riesgo inmediato para mí o para alguien más?",
+        );
+    } else {
+        push_unique(
+            &mut suggested_questions,
+            format!(
+                "¿Qué necesito realmente de {} en esta etapa: conexión, claridad, reparación o espacio?",
+                relationship.name
+            ),
+        );
+        if days_since_last_contact >= 7 {
+            push_unique(
+                &mut suggested_questions,
+                format!(
+                    "¿Cuál es el mensaje más simple y genuino que puedo enviarle a {} hoy?",
+                    relationship.name
+                ),
+            );
+        }
+        if timeline.negative_sentiment_count_30d > 0
+            || timeline.avg_intensity_30d.unwrap_or(0.0) >= 7.0
+        {
+            push_unique(
+                &mut suggested_questions,
+                "¿Qué hecho observable quiero conversar, y qué interpretación mía estoy agregando encima?",
+            );
+        }
+        push_unique(
+            &mut suggested_questions,
+            "¿Qué petición pequeña, concreta y medible puedo hacer esta semana en vez de hablar 'de toda la relación'?",
+        );
+        match kind_bucket {
+            "romantic" => push_unique(
+                &mut suggested_questions,
+                "¿Qué ritual corto nos haría sentir más conectados esta semana?",
+            ),
+            "professional" => push_unique(
+                &mut suggested_questions,
+                "¿Qué expectativa conviene aclarar explícitamente para bajar la fricción?",
+            ),
+            _ => push_unique(
+                &mut suggested_questions,
+                "¿Qué gesto de cuidado, interés o presencia sería útil en esta relación esta semana?",
+            ),
+        }
+    }
+    suggested_questions.truncate(4);
+
+    RelationshipAdvice {
+        relationship_id: relationship.relationship_id.clone(),
+        relationship_name: relationship.name.clone(),
+        relationship_type: relationship.relationship_type.clone(),
+        stage: relationship.stage.clone(),
+        concern,
+        observations,
+        suggested_actions,
+        suggested_questions,
+        recommend_professional_support,
+        urgent_support,
+        generated_at: now,
+    }
+}
+
+fn relationship_concern_flags(
+    concern: Option<&str>,
+    timeline: &RelationshipTimeline,
+) -> (bool, bool) {
+    let lower = concern.unwrap_or("").to_lowercase();
+    let urgent_support = timeline.crisis_pattern_count_last_30d > 0
+        || contains_any(
+            &lower,
+            &[
+                "abuso",
+                "violencia",
+                "agresion",
+                "agresión",
+                "amenaza",
+                "miedo",
+                "golpe",
+                "golpear",
+                "coerc",
+                "forzo",
+                "forzó",
+            ],
+        );
+    let recommend_professional_support = urgent_support
+        || contains_any(
+            &lower,
+            &[
+                "infidelidad",
+                "divorcio",
+                "custodia",
+                "separacion",
+                "separación",
+                "abuso",
+                "violencia",
+                "agresion",
+                "agresión",
+            ],
+        );
+    (recommend_professional_support, urgent_support)
+}
+
+fn relationship_kind_bucket(relationship_type: &str) -> &'static str {
+    match relationship_type {
+        "partner" | "spouse" | "ex_partner" => "romantic",
+        "colleague" | "boss" | "mentor" | "mentee" => "professional",
+        _ => "personal",
+    }
+}
+
+fn recent_relationship_event_labels(events: &[RelationshipEvent], limit: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for e in events {
+        let label = match e.sentiment.as_deref() {
+            Some(sent) => format!("{} ({})", e.event_type, sent),
+            None => e.event_type.clone(),
+        };
+        if seen.insert(label.clone()) {
+            out.push(label);
+        }
+        if out.len() >= limit {
+            break;
+        }
+    }
+    out
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| haystack.contains(n))
+}
+
+fn push_unique(list: &mut Vec<String>, item: impl Into<String>) {
+    let item = item.into();
+    if !list.iter().any(|existing| existing == &item) {
+        list.push(item);
+    }
+}
+
+// -- Private raw rows for BI.9 ----------------------------------------------
+
+struct RelationshipRaw {
+    relationship_id: String,
+    name: String,
+    relationship_type: String,
+    stage: Option<String>,
+    importance_1_10: i32,
+    started_on: Option<String>,
+    birthday: Option<String>,
+    anniversary: Option<String>,
+    last_contact_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct FamilyMemberRaw {
+    member_id: String,
+    name: String,
+    kinship: String,
+    side: Option<String>,
+    birth_date: Option<String>,
+    death_date: Option<String>,
+    health_conditions_known: Option<String>,
+    contact_preferred: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct ChildMilestoneRaw {
+    milestone_id: String,
+    child_name: String,
+    milestone_type: String,
+    description: String,
+    occurred_on: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+/// Parse a `MM-DD` or `YYYY-MM-DD` (or `YYYY-MM-DDT...`) string and
+/// return `(canonical "MM-DD", days_until)` if the next occurrence
+/// falls within `lookahead` days from `today`. Returns `None`
+/// otherwise.
+fn days_until_md(when: &str, today: chrono::NaiveDate, lookahead: u32) -> Option<(String, u32)> {
+    let trimmed = when.trim();
+    let (month, day) = if let Some(rest) = trimmed.split('T').next() {
+        // Try YYYY-MM-DD first.
+        if let Ok(parts) = chrono::NaiveDate::parse_from_str(rest, "%Y-%m-%d") {
+            (parts.month(), parts.day())
+        } else {
+            // Try MM-DD.
+            let segs: Vec<&str> = rest.split('-').collect();
+            if segs.len() != 2 {
+                return None;
+            }
+            let m: u32 = segs[0].parse().ok()?;
+            let d: u32 = segs[1].parse().ok()?;
+            (m, d)
+        }
+    } else {
+        return None;
+    };
+
+    use chrono::Datelike;
+    // Try this year first; if already past, try next year.
+    let candidate = chrono::NaiveDate::from_ymd_opt(today.year(), month, day).or_else(|| {
+        // Feb 29 on non-leap year fallback to Feb 28.
+        if month == 2 && day == 29 {
+            chrono::NaiveDate::from_ymd_opt(today.year(), 2, 28)
+        } else {
+            None
+        }
+    })?;
+    let next = if candidate < today {
+        chrono::NaiveDate::from_ymd_opt(today.year() + 1, month, day).or_else(|| {
+            if month == 2 && day == 29 {
+                chrono::NaiveDate::from_ymd_opt(today.year() + 1, 2, 28)
+            } else {
+                None
+            }
+        })?
+    } else {
+        candidate
+    };
+
+    let diff = (next - today).num_days();
+    if diff < 0 || diff as u32 > lookahead {
+        return None;
+    }
+    Some((format!("{:02}-{:02}", month, day), diff as u32))
+}
+
+// -- Private raw row types for BI.10 + BI.11 ---------------------------------
+
+struct SpiritualPracticeRaw {
+    practice_id: String,
+    practice_name: String,
+    tradition: Option<String>,
+    frequency: Option<String>,
+    duration_min: Option<i32>,
+    last_practiced: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct SpiritualReflectionRaw {
+    reflection_id: String,
+    topic: Option<String>,
+    content_nonce_b64: String,
+    content_ciphertext_b64: String,
+    occurred_at: String,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct CoreValueRaw {
+    value_id: String,
+    name: String,
+    importance_1_10: i32,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    defined_at: String,
+    last_reviewed: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct FinancialAccountRaw {
+    account_id: String,
+    name: String,
+    account_type: String,
+    institution: Option<String>,
+    balance_last_known: Option<f64>,
+    balance_currency: String,
+    balance_updated_at: Option<String>,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    active: bool,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+struct ExpenseRaw {
+    expense_id: String,
+    amount: f64,
+    currency: String,
+    category: String,
+    description: Option<String>,
+    payment_method: Option<String>,
+    occurred_at: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct IncomeRaw {
+    income_id: String,
+    amount: f64,
+    currency: String,
+    source: String,
+    description: Option<String>,
+    received_at: String,
+    recurring: bool,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+}
+
+struct FinancialGoalRaw {
+    goal_id: String,
+    name: String,
+    target_amount: f64,
+    target_currency: String,
+    target_date: Option<String>,
+    current_amount: f64,
+    status: String,
+    notes_nonce_b64: Option<String>,
+    notes_ciphertext_b64: Option<String>,
+    source_entry_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+fn parse_utc(s: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .unwrap_or_else(|_| Utc::now())
 }
 
 fn normalize_non_empty(input: &str) -> Option<String> {
@@ -2020,6 +16094,39 @@ fn normalize_non_empty(input: &str) -> Option<String> {
     } else {
         Some(value.to_string())
     }
+}
+
+/// True if the entry `kind` belongs to the Fase BI "Vida Plena" pillar.
+///
+/// Wellness kinds skip decay, GC, dedup, and cluster summarisation —
+/// they are auto-marked permanent at insert time so the user does not
+/// have to remember to flag them. The contract is the kind namespace:
+/// any kind starting with `health_`, `wellness_`, `mental_`,
+/// `nutrition_`, `exercise_`, `sleep_`, `relationship_`, `family_`,
+/// `child_`, `spiritual_`, `financial_`, `sexual_`, or `community_` is
+/// considered wellness data and gets the protection.
+///
+/// This list is the single source of truth for the auto-permanent
+/// behaviour. Add a new prefix here when introducing a new wellness
+/// sub-fase (BI.X) so its data is automatically protected.
+pub fn is_wellness_kind(kind: &str) -> bool {
+    const WELLNESS_PREFIXES: &[&str] = &[
+        "health_",
+        "wellness_",
+        "mental_",
+        "nutrition_",
+        "exercise_",
+        "sleep_",
+        "relationship_",
+        "family_",
+        "child_",
+        "spiritual_",
+        "financial_",
+        "sexual_",
+        "community_",
+    ];
+    let lower = kind.trim().to_lowercase();
+    WELLNESS_PREFIXES.iter().any(|p| lower.starts_with(p))
 }
 
 fn normalize_tags(tags: &[String]) -> Vec<String> {
@@ -2353,6 +16460,100 @@ fn tokenize(input: &str) -> HashSet<String> {
             }
         })
         .collect()
+}
+
+/// Cheap pattern-based entity extraction.
+///
+/// Returns `Vec<(name, entity_type)>` where `entity_type` is one of the
+/// short string tags used by [`MemoryPlaneManager::add_entity_typed`]:
+/// `"date"`, `"person"`, `"file"`, `"topic"`. The result is intentionally
+/// noisy-tolerant — recall matters more than precision because all
+/// downstream consumers normalise + dedup via the unique constraint on
+/// `knowledge_graph (subject, predicate, object)`.
+///
+/// Recognised patterns:
+/// - ISO dates `YYYY-MM-DD` -> `date`
+/// - Spanish day names (lunes..domingo, with or without accent) -> `date`
+/// - `@username` mentions -> `person`
+/// - Absolute paths (`/foo/bar`) and home paths (`~/foo`) -> `file`
+/// - URLs (`http://`, `https://`) -> `topic`
+///
+/// Replaces the equivalent helper from the deleted `knowledge_graph`
+/// module.
+#[allow(dead_code)]
+pub fn extract_entities_from_text(text: &str) -> Vec<(String, &'static str)> {
+    use std::collections::HashSet;
+    let mut found: Vec<(String, &'static str)> = Vec::new();
+    let mut seen: HashSet<(String, &'static str)> = HashSet::new();
+
+    // ISO dates YYYY-MM-DD via byte scan (avoid pulling in regex just for this).
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i + 10 <= bytes.len() {
+        let slice = &bytes[i..i + 10];
+        let is_date = slice[0].is_ascii_digit()
+            && slice[1].is_ascii_digit()
+            && slice[2].is_ascii_digit()
+            && slice[3].is_ascii_digit()
+            && slice[4] == b'-'
+            && slice[5].is_ascii_digit()
+            && slice[6].is_ascii_digit()
+            && slice[7] == b'-'
+            && slice[8].is_ascii_digit()
+            && slice[9].is_ascii_digit();
+        if is_date {
+            let cap = std::str::from_utf8(slice).unwrap_or("").to_string();
+            if seen.insert((cap.clone(), "date")) {
+                found.push((cap, "date"));
+            }
+            i += 10;
+        } else {
+            i += 1;
+        }
+    }
+
+    let days = [
+        "lunes",
+        "martes",
+        "miercoles",
+        "miércoles",
+        "jueves",
+        "viernes",
+        "sabado",
+        "sábado",
+        "domingo",
+    ];
+    for word in text.split_whitespace() {
+        let w = word
+            .trim_matches(|c: char| c.is_ascii_punctuation())
+            .to_lowercase();
+        if days.contains(&w.as_str()) && seen.insert((w.clone(), "date")) {
+            found.push((w, "date"));
+        }
+        if word.starts_with('@') && word.len() > 1 {
+            let name = word
+                .trim_start_matches('@')
+                .trim_matches(|c: char| c.is_ascii_punctuation());
+            if !name.is_empty() && seen.insert((name.to_string(), "person")) {
+                found.push((name.to_string(), "person"));
+            }
+        }
+        let clean = word.trim_matches(|c: char| c == ',' || c == ';' || c == ')' || c == '(');
+        if (clean.starts_with('/') || clean.starts_with("~/"))
+            && clean.len() > 2
+            && !clean.starts_with("//")
+            && seen.insert((clean.to_string(), "file"))
+        {
+            found.push((clean.to_string(), "file"));
+        }
+        if (clean.starts_with("https://") || clean.starts_with("http://"))
+            && seen.insert((clean.to_string(), "topic"))
+        {
+            found.push((clean.to_string(), "topic"));
+        }
+    }
+
+    found
 }
 
 #[cfg(test)]
@@ -2793,6 +16994,6385 @@ mod tests {
             )
             .unwrap();
         assert_eq!(archive_count, 1, "Entry should exist in archive table");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- Sprint 2.1: memory decay tests ------------------------------------
+
+    /// Helper: backdate the `last_accessed` (and `updated_at`) of an entry by
+    /// `days` so it appears stale to the decay sweep.
+    fn backdate(dir: &Path, entry_id: &str, days: i64) {
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let when = (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
+        db.execute(
+            "UPDATE memory_entries SET last_accessed = ?1, updated_at = ?1 WHERE entry_id = ?2",
+            params![when, entry_id],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_skips_permanent() {
+        let dir = temp_dir("memory-plane-decay-permanent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 50, "Permanent decay-resistant.")
+            .await
+            .unwrap();
+        mgr.mark_permanent(&entry.entry_id).await.unwrap();
+        backdate(&dir, &entry.entry_id, 365);
+
+        let report = mgr.apply_decay().await.unwrap();
+        assert_eq!(report.deleted, 0, "Permanent entry must not be deleted");
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            importance, 50,
+            "Permanent entry importance must be preserved"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_lowers_importance() {
+        let dir = temp_dir("memory-plane-decay-lower");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // importance 60, age ~60 days => -10 importance => ~50
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 60, "Stale moderate entry.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 60);
+
+        let report = mgr.apply_decay().await.unwrap();
+        assert!(
+            report.decayed >= 1,
+            "Should report at least one decayed entry"
+        );
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            importance < 60,
+            "Importance should have dropped from 60, got {}",
+            importance
+        );
+        assert!(
+            (40..=55).contains(&importance),
+            "Importance should be ~50 after 60d decay, got {}",
+            importance
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_archives_low_importance_old() {
+        let dir = temp_dir("memory-plane-decay-archive");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Low importance + > 90 days old => archived by the <10/90d rule.
+        // BI.1: this used to DELETE the entry; now it sets archived=1.
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 5, "Old trivial entry.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 100);
+
+        let report = mgr.apply_decay().await.unwrap();
+        // `deleted` is the field name (kept for back-compat) but the
+        // semantics are now "newly archived this pass".
+        assert!(report.deleted >= 1, "Should archive at least one entry");
+
+        // Live view must hide it.
+        let entries = mgr.list_entries(50, None, None).await.unwrap();
+        assert!(
+            entries.iter().all(|e| e.entry_id != entry.entry_id),
+            "Stale low-importance entry should drop out of live list"
+        );
+
+        // But it must STILL be on disk with archived=1 (the BI.1 contract).
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let archived: i32 = db
+            .query_row(
+                "SELECT archived FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived, 1, "Entry must be flagged archived, not deleted");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Helper: forcibly set access_count on an entry to simulate
+    /// frequently-recalled state without going through `boost_on_access`.
+    fn set_access_count(dir: &Path, entry_id: &str, count: i32) {
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        db.execute(
+            "UPDATE memory_entries SET access_count = ?1 WHERE entry_id = ?2",
+            params![count, entry_id],
+        )
+        .unwrap();
+    }
+
+    /// Helper: insert a row into `memory_links` so the entry has N
+    /// outgoing edges (with synthetic peer ids — they don't have to
+    /// resolve to real entries for the link count subquery).
+    fn add_synthetic_links(dir: &Path, entry_id: &str, n: usize) {
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        for i in 0..n {
+            db.execute(
+                "INSERT OR REPLACE INTO memory_links (from_entry, to_entry, relation, created_at)
+                 VALUES (?1, ?2, 'related_to', ?3)",
+                params![entry_id, format!("synthetic-peer-{}", i), now],
+            )
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_skips_frequently_accessed() {
+        let dir = temp_dir("memory-plane-decay-frequent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Importance 60, 60 days old → without the access guard this
+        // would decay to ~43. With access_count >= 2 the curve is flat
+        // and importance stays at 60.
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 60, "Frequently recalled.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 60);
+        set_access_count(&dir, &entry.entry_id, 5);
+
+        let _report = mgr.apply_decay().await.unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            importance, 60,
+            "Frequently-accessed entry must skip the decay term, got {}",
+            importance
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_apply_decay_connection_bonus_protects_linked_entries() {
+        let dir = temp_dir("memory-plane-decay-bonus");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Importance 30, 60 days old, no recall.
+        // Without the bonus: 30 * 0.85^2 = 21.7 → 22.
+        // With 5 links: bonus = min(5*2, 20) = 10.
+        // Final: 22 + 10 = 32 (which is HIGHER than the start because the
+        // bonus exceeded the small decay).
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 30, "Densely linked entry.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 60);
+        add_synthetic_links(&dir, &entry.entry_id, 5);
+
+        let _report = mgr.apply_decay().await.unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        // The connection bonus must have raised importance back at or
+        // above the decayed-without-bonus baseline (~22). 32 is the
+        // exact expected value but we accept a small rounding window.
+        assert!(
+            (28..=36).contains(&importance),
+            "Linked entry should be protected by bonus, got {}",
+            importance
+        );
+
+        // Now verify that without links the same entry would have
+        // dropped lower — confirms the bonus is the differentiator.
+        let entry2 = mgr
+            .add_entry("note", "user", &[], None, 30, "Lonely entry.")
+            .await
+            .unwrap();
+        backdate(&dir, &entry2.entry_id, 60);
+        let _ = mgr.apply_decay().await.unwrap();
+        let lonely_importance: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![entry2.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            lonely_importance < importance,
+            "Lonely entry ({}) should decay further than linked one ({})",
+            lonely_importance,
+            importance
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_boost_on_access_increases_importance() {
+        let dir = temp_dir("memory-plane-boost");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let entry = mgr
+            .add_entry("note", "user", &[], None, 40, "Frequently recalled entry.")
+            .await
+            .unwrap();
+
+        mgr.boost_on_access(&[entry.entry_id.clone()])
+            .await
+            .unwrap();
+        mgr.boost_on_access(&[entry.entry_id.clone()])
+            .await
+            .unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let (importance, access_count, last_accessed): (i32, i32, Option<String>) = db
+            .query_row(
+                "SELECT importance, access_count, last_accessed FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(importance, 44, "Two boosts of +2 should give 44");
+        assert_eq!(access_count, 2, "access_count should be 2");
+        assert!(last_accessed.is_some(), "last_accessed should be set");
+
+        // Cap at 100 verification.
+        let high = mgr
+            .add_entry("note", "user", &[], None, 99, "Already near cap.")
+            .await
+            .unwrap();
+        mgr.boost_on_access(&[high.entry_id.clone()]).await.unwrap();
+        mgr.boost_on_access(&[high.entry_id.clone()]).await.unwrap();
+        let capped: i32 = db
+            .query_row(
+                "SELECT importance FROM memory_entries WHERE entry_id = ?1",
+                params![high.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(capped, 100, "importance must cap at 100");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- Standalone KnowledgeGraph migration -------------------------------
+
+    #[tokio::test]
+    async fn test_add_entity_typed_creates_is_a_triple() {
+        let dir = temp_dir("memory-plane-entity-typed");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_entity_typed("Hector", "person").await.unwrap();
+        mgr.add_entity_typed("LifeOS", "project").await.unwrap();
+        // Same triple twice — must dedup via the unique constraint, not error.
+        mgr.add_entity_typed("Hector", "person").await.unwrap();
+
+        let triples = mgr.query_graph("hector", 10).await.unwrap();
+        assert!(
+            triples
+                .iter()
+                .any(|t| t["predicate"] == "is_a" && t["object"] == "person"),
+            "expected (hector, is_a, person) triple, got {:?}",
+            triples
+        );
+
+        let proj = mgr.query_graph("lifeos", 10).await.unwrap();
+        assert!(proj
+            .iter()
+            .any(|t| t["predicate"] == "is_a" && t["object"] == "project"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_export_import_graph_roundtrip() {
+        let dir = temp_dir("memory-plane-graph-roundtrip");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_entity_typed("Alice", "person").await.unwrap();
+        mgr.add_triple("alice", "works_on", "lifeos", 0.9, None)
+            .await
+            .unwrap();
+
+        let exported = mgr.export_graph().await.unwrap();
+        let triples = exported["triples"].as_array().unwrap();
+        assert!(triples.len() >= 2, "expected at least 2 triples in export");
+
+        // Fresh manager — verify we can import the same JSON.
+        let dir2 = temp_dir("memory-plane-graph-roundtrip-target");
+        let mgr2 = MemoryPlaneManager::new(dir2.clone()).unwrap();
+        mgr2.initialize().await.unwrap();
+        let imported = mgr2.import_graph(&exported).await.unwrap();
+        assert_eq!(imported, triples.len());
+
+        let alice_triples = mgr2.query_graph("alice", 10).await.unwrap();
+        assert_eq!(alice_triples.len(), 2);
+
+        std::fs::remove_dir_all(dir).ok();
+        std::fs::remove_dir_all(dir2).ok();
+    }
+
+    #[test]
+    fn test_extract_entities_from_text_finds_dates_and_people() {
+        let text =
+            "El 2026-04-12 me reuno con @carlos en /home/user/proyectos sobre https://lifeos.dev";
+        let entities = extract_entities_from_text(text);
+        let kinds: Vec<&'static str> = entities.iter().map(|(_, k)| *k).collect();
+        assert!(kinds.contains(&"date"));
+        assert!(kinds.contains(&"person"));
+        assert!(kinds.contains(&"file"));
+        assert!(kinds.contains(&"topic"));
+    }
+
+    // ---- Cluster summarization helpers --------------------------------------
+
+    #[tokio::test]
+    async fn test_archive_entries_by_id_moves_and_deletes() {
+        let dir = temp_dir("memory-plane-archive-by-id");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let e1 = mgr
+            .add_entry(
+                "note",
+                "user",
+                &["cluster_a".into()],
+                None,
+                40,
+                "Original entry one",
+            )
+            .await
+            .unwrap();
+        let e2 = mgr
+            .add_entry(
+                "note",
+                "user",
+                &["cluster_a".into()],
+                None,
+                40,
+                "Original entry two",
+            )
+            .await
+            .unwrap();
+        let e3 = mgr
+            .add_entry(
+                "note",
+                "user",
+                &["other".into()],
+                None,
+                40,
+                "Unrelated entry",
+            )
+            .await
+            .unwrap();
+
+        let moved = mgr
+            .archive_entries_by_id(vec![e1.entry_id.clone(), e2.entry_id.clone()])
+            .await
+            .unwrap();
+        assert_eq!(moved, 2, "Both targeted entries should be archived");
+
+        // BI.1 update: archive is now a soft flag, not a move. Originals
+        // must be GONE from the default `list_entries` view (which
+        // filters archived) but STILL PRESENT in the underlying table
+        // with `archived = 1`.
+        let live_entries = mgr.list_entries(50, None, None).await.unwrap();
+        let live_ids: Vec<&str> = live_entries.iter().map(|e| e.entry_id.as_str()).collect();
+        assert!(!live_ids.contains(&e1.entry_id.as_str()));
+        assert!(!live_ids.contains(&e2.entry_id.as_str()));
+        // Unrelated entry must survive in the live view.
+        assert!(live_ids.contains(&e3.entry_id.as_str()));
+
+        // The archived rows still live in memory_entries with the flag set.
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let archived_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM memory_entries
+                 WHERE entry_id IN (?1, ?2) AND archived = 1",
+                params![e1.entry_id, e2.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            archived_count, 2,
+            "Both entries should be flagged archived=1"
+        );
+
+        // Embeddings are PRESERVED on archive so search_archived can find
+        // them via semantic recall (the BI.1 "never lose anything" rule).
+        let embed_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM memory_embeddings WHERE entry_id IN (?1, ?2)",
+                params![e1.entry_id, e2.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(embed_count, 2, "Embeddings must be preserved on archive");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_archive_entries_by_id_skips_permanent() {
+        let dir = temp_dir("memory-plane-archive-skip-permanent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let entry = mgr
+            .add_entry(
+                "note",
+                "user",
+                &["cluster".into()],
+                None,
+                50,
+                "Permanent entry",
+            )
+            .await
+            .unwrap();
+        mgr.mark_permanent(&entry.entry_id).await.unwrap();
+
+        let moved = mgr
+            .archive_entries_by_id(vec![entry.entry_id.clone()])
+            .await
+            .unwrap();
+        assert_eq!(moved, 0, "Permanent entry must NOT be archived");
+
+        // The entry must still be present.
+        let entries = mgr.list_entries(50, None, None).await.unwrap();
+        assert!(entries.iter().any(|e| e.entry_id == entry.entry_id));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_legacy_kg_migration_imports_entities_and_relations() {
+        let dir = temp_dir("memory-plane-legacy-kg-migration");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Seed legacy JSON files in the location the deleted module
+        // used: <data_dir>/knowledge_graph/{kg_entities,kg_relations}.json
+        let kg_dir = dir.join("knowledge_graph");
+        std::fs::create_dir_all(&kg_dir).unwrap();
+        let entities = serde_json::json!([
+            {
+                "id": "ent-1",
+                "name": "Hector",
+                "entity_type": "Person",
+                "properties": {},
+                "created_at": "2026-01-01T00:00:00Z",
+                "last_seen":  "2026-01-01T00:00:00Z",
+                "relevance_score": 1.0
+            },
+            {
+                "id": "ent-2",
+                "name": "LifeOS",
+                "entity_type": "Project",
+                "properties": {},
+                "created_at": "2026-01-01T00:00:00Z",
+                "last_seen":  "2026-01-01T00:00:00Z",
+                "relevance_score": 1.0
+            }
+        ]);
+        let relations = serde_json::json!([
+            {
+                "from_id": "ent-1",
+                "to_id": "ent-2",
+                "relation_type": "works_on",
+                "weight": 1.0,
+                "context": "creator",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "confidence": 0.95
+            }
+        ]);
+        std::fs::write(
+            kg_dir.join("kg_entities.json"),
+            serde_json::to_string_pretty(&entities).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            kg_dir.join("kg_relations.json"),
+            serde_json::to_string_pretty(&relations).unwrap(),
+        )
+        .unwrap();
+
+        // Construct the manager and run initialize() — this triggers the
+        // migration as part of normal startup, exactly like main.rs does.
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Both entities should now exist as `(name, "is_a", type)` triples.
+        let hector_triples = mgr.query_graph("hector", 10).await.unwrap();
+        assert!(
+            hector_triples
+                .iter()
+                .any(|t| t["predicate"] == "is_a" && t["object"] == "person"),
+            "Migration must create (hector, is_a, person), got {:?}",
+            hector_triples
+        );
+        let lifeos_triples = mgr.query_graph("lifeos", 10).await.unwrap();
+        assert!(lifeos_triples
+            .iter()
+            .any(|t| t["predicate"] == "is_a" && t["object"] == "project"));
+
+        // The relation must be migrated and resolved through the
+        // id->name lookup table built during migration.
+        assert!(
+            hector_triples
+                .iter()
+                .any(|t| t["predicate"] == "works_on" && t["object"] == "lifeos"),
+            "Migration must create (hector, works_on, lifeos), got {:?}",
+            hector_triples
+        );
+
+        // Source files must be renamed (not deleted) so we have evidence
+        // and the second startup is a no-op.
+        assert!(!kg_dir.join("kg_entities.json").exists());
+        assert!(!kg_dir.join("kg_relations.json").exists());
+        let migrated_files: Vec<String> = std::fs::read_dir(&kg_dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            migrated_files
+                .iter()
+                .any(|n| n.starts_with("kg_entities.json.migrated-")),
+            "expected renamed entities file, got {:?}",
+            migrated_files
+        );
+        assert!(migrated_files
+            .iter()
+            .any(|n| n.starts_with("kg_relations.json.migrated-")));
+
+        // memory.db must have been auto-backed-up.
+        let backup_files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            backup_files
+                .iter()
+                .any(|n| n.starts_with("memory.db.pre-kg-migration-") && n.ends_with(".bak")),
+            "expected auto-backup file, got {:?}",
+            backup_files
+        );
+
+        // Second initialize() must be a no-op (idempotent). Triple counts
+        // should not double.
+        mgr.initialize().await.unwrap();
+        let hector_after = mgr.query_graph("hector", 10).await.unwrap();
+        assert_eq!(
+            hector_triples.len(),
+            hector_after.len(),
+            "second initialize() must be a no-op"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_legacy_kg_migration_noop_when_no_files() {
+        let dir = temp_dir("memory-plane-legacy-kg-migration-noop");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        // Should succeed silently and create no backup file.
+        mgr.initialize().await.unwrap();
+
+        let backup_files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            backup_files
+                .iter()
+                .all(|n| !n.starts_with("memory.db.pre-kg-migration-")),
+            "no backup should be written when there is nothing to migrate, got {:?}",
+            backup_files
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_get_cluster_candidates_finds_old_groups() {
+        let dir = temp_dir("memory-plane-cluster-candidates");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert 12 entries with the same tags JSON, all > 30 days old.
+        let mut ids = Vec::new();
+        for i in 0..12 {
+            let e = mgr
+                .add_entry(
+                    "note",
+                    "user",
+                    &["projectx".into()],
+                    None,
+                    20,
+                    &format!("Entry number {}", i),
+                )
+                .await
+                .unwrap();
+            ids.push(e.entry_id);
+        }
+        for id in &ids {
+            backdate(&dir, id, 45);
+        }
+
+        // And 3 fresh entries with different tags — these should NOT
+        // create a cluster candidate (count < 10 AND too recent).
+        for i in 0..3 {
+            mgr.add_entry(
+                "note",
+                "user",
+                &["recent".into()],
+                None,
+                20,
+                &format!("Recent {}", i),
+            )
+            .await
+            .unwrap();
+        }
+
+        let candidates = mgr.get_cluster_candidates().await.unwrap();
+        assert!(
+            !candidates.is_empty(),
+            "Should find at least one cluster candidate"
+        );
+        let (_tags, count) = &candidates[0];
+        assert!(*count >= 10, "Cluster size should meet the 10+ floor");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.1: Sprint 1 — "nunca perder nada" -------------------------------
+
+    #[test]
+    fn test_is_wellness_kind_recognises_pillar_prefixes() {
+        // Positive cases — every wellness pillar prefix.
+        assert!(is_wellness_kind("health_event"));
+        assert!(is_wellness_kind("health_medication"));
+        assert!(is_wellness_kind("wellness_check_in"));
+        assert!(is_wellness_kind("mental_journal"));
+        assert!(is_wellness_kind("nutrition_log"));
+        assert!(is_wellness_kind("exercise_session"));
+        assert!(is_wellness_kind("sleep_log"));
+        assert!(is_wellness_kind("relationship_event"));
+        assert!(is_wellness_kind("family_milestone"));
+        assert!(is_wellness_kind("child_milestone"));
+        assert!(is_wellness_kind("spiritual_practice"));
+        assert!(is_wellness_kind("financial_expense"));
+        assert!(is_wellness_kind("sexual_health"));
+        assert!(is_wellness_kind("community_activity"));
+        // Case-insensitive + leading whitespace tolerant.
+        assert!(is_wellness_kind("HEALTH_event"));
+        assert!(is_wellness_kind("  mental_log  "));
+
+        // Negative cases — non-wellness kinds must NOT auto-permanent.
+        assert!(!is_wellness_kind("note"));
+        assert!(!is_wellness_kind("decision"));
+        assert!(!is_wellness_kind("bugfix"));
+        assert!(!is_wellness_kind("cluster_summary"));
+        assert!(!is_wellness_kind("preference"));
+        assert!(!is_wellness_kind(""));
+    }
+
+    #[tokio::test]
+    async fn test_health_kind_auto_permanent() {
+        let dir = temp_dir("memory-plane-health-permanent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Health entry — should be auto-permanent.
+        let health = mgr
+            .add_entry(
+                "health_event",
+                "user",
+                &["gripa".into()],
+                None,
+                40,
+                "Hoy me siento con tos y dolor de garganta",
+            )
+            .await
+            .unwrap();
+        // Plain note — should NOT be permanent.
+        let note = mgr
+            .add_entry("note", "user", &[], None, 40, "una nota cualquiera")
+            .await
+            .unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let health_perm: i32 = db
+            .query_row(
+                "SELECT permanent FROM memory_entries WHERE entry_id = ?1",
+                params![health.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(health_perm, 1, "health_event must be auto-permanent");
+
+        let note_perm: i32 = db
+            .query_row(
+                "SELECT permanent FROM memory_entries WHERE entry_id = ?1",
+                params![note.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(note_perm, 0, "plain note must NOT be auto-permanent");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_health_entries_survive_decay_indefinitely() {
+        let dir = temp_dir("memory-plane-health-survives-decay");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Low importance + 365 days old — would normally hit BOTH GC
+        // thresholds. But because it's a health_ kind, it auto-marks
+        // permanent and skips every decay/GC stage.
+        let entry = mgr
+            .add_entry(
+                "health_vital",
+                "user",
+                &[],
+                None,
+                5,
+                "presion 130/85 hace un año",
+            )
+            .await
+            .unwrap();
+        backdate(&dir, &entry.entry_id, 365);
+
+        let _ = mgr.apply_decay().await.unwrap();
+
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let row: (i32, i32, i32) = db
+            .query_row(
+                "SELECT importance, COALESCE(archived,0), COALESCE(permanent,0)
+                 FROM memory_entries WHERE entry_id = ?1",
+                params![entry.entry_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, 5, "importance must NOT decay");
+        assert_eq!(row.1, 0, "must NOT be archived");
+        assert_eq!(row.2, 1, "must remain permanent");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_dedup_skips_health_pairs() {
+        let dir = temp_dir("memory-plane-dedup-skips-health");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Two near-identical health events — they MUST stay separate.
+        // Two doses of the same medication are distinct events even if
+        // the text is the same.
+        let dose1 = mgr
+            .add_entry(
+                "health_medication",
+                "user",
+                &[],
+                None,
+                60,
+                "Tomé metformina 500mg con el desayuno",
+            )
+            .await
+            .unwrap();
+        let dose2 = mgr
+            .add_entry(
+                "health_medication",
+                "user",
+                &[],
+                None,
+                60,
+                "Tomé metformina 500mg con el desayuno",
+            )
+            .await
+            .unwrap();
+
+        // Aggressive dedup threshold — would normally fuse identical text.
+        let merged = mgr.dedup_similar(0.5).await.unwrap();
+
+        // Both must survive.
+        let db = MemoryPlaneManager::open_db(&dir.join(DB_FILE)).unwrap();
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM memory_entries WHERE entry_id IN (?1, ?2)",
+                params![dose1.entry_id, dose2.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2, "Both health doses must survive dedup");
+        assert_eq!(
+            merged, 0,
+            "dedup must report 0 merges when only health pairs are eligible"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_search_archived_finds_archived_entries() {
+        let dir = temp_dir("memory-plane-search-archived");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert two entries with the same topic.
+        let live = mgr
+            .add_entry(
+                "note",
+                "user",
+                &[],
+                None,
+                40,
+                "Idea fresca: hacer una app de listas de mercado",
+            )
+            .await
+            .unwrap();
+        let old = mgr
+            .add_entry(
+                "note",
+                "user",
+                &[],
+                None,
+                5,
+                "Idea vieja: hacer una app de listas de mercado",
+            )
+            .await
+            .unwrap();
+        // Force the old one to be archived via decay.
+        backdate(&dir, &old.entry_id, 100);
+        let _ = mgr.apply_decay().await.unwrap();
+
+        // Live search must NOT return the archived entry.
+        let live_results = mgr
+            .search_entries("listas de mercado", 10, None)
+            .await
+            .unwrap();
+        let live_ids: Vec<&str> = live_results
+            .iter()
+            .map(|r| r.entry.entry_id.as_str())
+            .collect();
+        assert!(live_ids.contains(&live.entry_id.as_str()));
+        assert!(
+            !live_ids.contains(&old.entry_id.as_str()),
+            "Live search must exclude archived entry"
+        );
+
+        // Archive search MUST return it.
+        let archived_results = mgr
+            .search_archived("listas de mercado", 10, None)
+            .await
+            .unwrap();
+        let arch_ids: Vec<&str> = archived_results
+            .iter()
+            .map(|r| r.entry.entry_id.as_str())
+            .collect();
+        assert!(
+            arch_ids.contains(&old.entry_id.as_str()),
+            "Archive search must return the archived entry, got {:?}",
+            arch_ids
+        );
+        // And the live entry must NOT show up in the archive search.
+        assert!(!arch_ids.contains(&live.entry_id.as_str()));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.2: Salud médica estructurada -----------------------------------
+
+    #[tokio::test]
+    async fn test_health_fact_add_and_list() {
+        let dir = temp_dir("memory-plane-health-facts");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let fact = mgr
+            .add_health_fact(
+                "allergy",
+                "Penicilina",
+                Some("severe"),
+                "Reaccion en el hospital en 2024",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(fact.fact_type, "allergy");
+        assert_eq!(fact.severity.as_deref(), Some("severe"));
+        assert_eq!(fact.notes, "Reaccion en el hospital en 2024");
+
+        // Add a second one of a different type.
+        mgr.add_health_fact("blood_type", "O+", None, "", None)
+            .await
+            .unwrap();
+
+        // List all.
+        let all = mgr.list_health_facts(None).await.unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Filter by type.
+        let allergies = mgr.list_health_facts(Some("allergy")).await.unwrap();
+        assert_eq!(allergies.len(), 1);
+        assert_eq!(allergies[0].label, "Penicilina");
+        // Notes survived encryption + decryption.
+        assert_eq!(allergies[0].notes, "Reaccion en el hospital en 2024");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_delete_health_fact_requires_non_empty_id_and_removes_row() {
+        let dir = temp_dir("memory-plane-health-fact-delete");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let fact = mgr
+            .add_health_fact("allergy", "Penicilina", Some("severe"), "", None)
+            .await
+            .unwrap();
+
+        let deleted = mgr.delete_health_fact(&fact.fact_id).await.unwrap();
+        assert!(deleted, "existing fact should be deletable");
+        let remaining = mgr.list_health_facts(None).await.unwrap();
+        assert!(remaining.is_empty(), "deleted fact should not remain");
+
+        let err = mgr
+            .delete_health_fact("   ")
+            .await
+            .expect_err("empty fact_id must be rejected");
+        assert!(err.to_string().contains("fact_id required"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_medication_history_lifecycle() {
+        let dir = temp_dir("memory-plane-meds-history");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Start with metformina 500mg.
+        let m1 = mgr
+            .start_medication(
+                "Metformina",
+                "500mg",
+                "cada 12h",
+                Some("diabetes tipo 2"),
+                Some("Dr. Lopez"),
+                "Con la comida",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(m1.ended_at.is_none());
+        assert_eq!(m1.notes, "Con la comida");
+
+        // Active list = 1.
+        let active = mgr.list_active_medications().await.unwrap();
+        assert_eq!(active.len(), 1);
+
+        // Stop the original.
+        let stopped = mgr.stop_medication(&m1.med_id).await.unwrap();
+        assert!(stopped, "stop should return true");
+
+        // Start a new dose.
+        let m2 = mgr
+            .start_medication(
+                "Metformina",
+                "850mg",
+                "cada 12h",
+                Some("diabetes tipo 2"),
+                Some("Dr. Lopez"),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_ne!(m1.med_id, m2.med_id);
+
+        // Active list = 1 (only m2).
+        let active = mgr.list_active_medications().await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].med_id, m2.med_id);
+        assert_eq!(active[0].dosage, "850mg");
+
+        // Full history = 2 (both rows).
+        let history = mgr.list_medication_history().await.unwrap();
+        assert_eq!(history.len(), 2);
+        // Most-recent-started first (m2).
+        assert_eq!(history[0].med_id, m2.med_id);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_stop_medication_idempotent() {
+        let dir = temp_dir("memory-plane-meds-stop-idempotent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let m = mgr
+            .start_medication("Sitagliptina", "100mg", "1x dia", None, None, "", None)
+            .await
+            .unwrap();
+        assert!(mgr.stop_medication(&m.med_id).await.unwrap());
+        // Second call must return false (already ended).
+        assert!(!mgr.stop_medication(&m.med_id).await.unwrap());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_vital_record_and_timeseries() {
+        let dir = temp_dir("memory-plane-vitals");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Record 3 glucose readings.
+        for v in [110.0_f64, 105.0, 98.0] {
+            mgr.record_vital(
+                "glucose",
+                Some(v),
+                None,
+                "mg/dL",
+                None,
+                Some("en ayunas"),
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        // Record an unrelated weight.
+        mgr.record_vital("weight", Some(78.5), None, "kg", None, None, None)
+            .await
+            .unwrap();
+
+        // Glucose timeseries should return exactly 3 entries.
+        let glucose = mgr.get_vitals_timeseries("glucose", 100).await.unwrap();
+        assert_eq!(glucose.len(), 3);
+        for v in &glucose {
+            assert_eq!(v.unit, "mg/dL");
+            assert_eq!(v.context.as_deref(), Some("en ayunas"));
+        }
+
+        // Weight is its own series.
+        let weight = mgr.get_vitals_timeseries("weight", 100).await.unwrap();
+        assert_eq!(weight.len(), 1);
+        assert_eq!(weight[0].value_numeric, Some(78.5));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_vital_requires_value() {
+        let dir = temp_dir("memory-plane-vital-requires-value");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let result = mgr
+            .record_vital("glucose", None, None, "mg/dL", None, None, None)
+            .await;
+        assert!(result.is_err(), "vital with no value should fail");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_lab_result_with_reference_range() {
+        let dir = temp_dir("memory-plane-labs");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let lab = mgr
+            .add_lab_result(
+                "HbA1c",
+                6.4,
+                "%",
+                Some(0.0),
+                Some(5.7),
+                None,
+                Some("Salud Digna"),
+                "En ayunas",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(lab.test_name, "HbA1c");
+        assert_eq!(lab.value_numeric, 6.4);
+        assert_eq!(lab.reference_high, Some(5.7));
+        assert_eq!(lab.notes, "En ayunas");
+
+        let labs = mgr.list_lab_results(Some("HbA1c"), 10).await.unwrap();
+        assert_eq!(labs.len(), 1);
+        assert_eq!(labs[0].notes, "En ayunas");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_health_attachment_roundtrip_with_integrity() {
+        let dir = temp_dir("memory-plane-attachments");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let plaintext = b"PRESCRIPTION: Metformina 500mg cada 12h. Dr. Lopez.".to_vec();
+        let original_len = plaintext.len();
+
+        let att = mgr
+            .add_health_attachment(
+                "prescription",
+                Some("Receta de la consulta del 5 de abril"),
+                Some("gripa abril 2026"),
+                plaintext.clone(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(att.file_type, "prescription");
+        assert!(att.file_path.ends_with(".enc"));
+
+        // The file on disk MUST NOT contain the plaintext.
+        let disk_bytes = std::fs::read(&att.file_path).unwrap();
+        assert!(!disk_bytes.windows(11).any(|w| w == b"Metformina "));
+        assert_ne!(disk_bytes, plaintext);
+
+        // Decrypted contents must match exactly.
+        let decrypted = mgr.get_health_attachment(&att.attachment_id).await.unwrap();
+        assert_eq!(decrypted, plaintext);
+        assert_eq!(decrypted.len(), original_len);
+
+        // Tamper with the file on disk and verify integrity check fires.
+        let mut tampered = disk_bytes.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0xFF;
+        std::fs::write(&att.file_path, &tampered).unwrap();
+        let tampered_result = mgr.get_health_attachment(&att.attachment_id).await;
+        assert!(
+            tampered_result.is_err(),
+            "tampered attachment must fail integrity check"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_health_summary_aggregates_everything() {
+        let dir = temp_dir("memory-plane-health-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Seed: 1 fact + 1 active med + 2 stopped med + 3 vitals + 1 lab.
+        mgr.add_health_fact("allergy", "Latex", Some("moderate"), "", None)
+            .await
+            .unwrap();
+
+        let m1 = mgr
+            .start_medication("Metformina", "500mg", "12h", None, None, "", None)
+            .await
+            .unwrap();
+        mgr.stop_medication(&m1.med_id).await.unwrap();
+        mgr.start_medication("Metformina", "850mg", "12h", None, None, "", None)
+            .await
+            .unwrap();
+        mgr.start_medication("Sitagliptina", "100mg", "24h", None, None, "", None)
+            .await
+            .unwrap();
+
+        for v in [110.0_f64, 105.0, 98.0] {
+            mgr.record_vital("glucose", Some(v), None, "mg/dL", None, None, None)
+                .await
+                .unwrap();
+        }
+
+        mgr.add_lab_result(
+            "HbA1c",
+            6.4,
+            "%",
+            Some(0.0),
+            Some(5.7),
+            None,
+            None,
+            "",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let summary = mgr.get_health_summary(5, 10).await.unwrap();
+        assert_eq!(summary.facts.len(), 1);
+        // Active medications = 2 (Metformina 850 + Sitagliptina); the
+        // 500mg row was stopped.
+        assert_eq!(summary.active_medications.len(), 2);
+        assert!(summary
+            .active_medications
+            .iter()
+            .all(|m| m.ended_at.is_none()));
+        // Recent vitals: 3 glucose readings (only one type registered).
+        assert_eq!(summary.recent_vitals.len(), 3);
+        assert_eq!(summary.recent_labs.len(), 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.7: Crecimiento personal ----------------------------------------
+
+    #[tokio::test]
+    async fn test_book_add_and_status_lifecycle() {
+        let dir = temp_dir("memory-plane-books-lifecycle");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let book = mgr
+            .add_book(
+                "Atomic Habits",
+                Some("James Clear"),
+                None,
+                BookStatus::Reading,
+                None,
+                "Capitulo 4 me hizo click",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(book.status, BookStatus::Reading);
+        assert!(book.started_at.is_some());
+        assert!(book.finished_at.is_none());
+        // Notes encrypted + decrypted roundtrip.
+        assert_eq!(book.notes, "Capitulo 4 me hizo click");
+
+        // Mark finished with rating 5.
+        let updated = mgr
+            .update_book_status(&book.book_id, BookStatus::Finished, Some(5))
+            .await
+            .unwrap();
+        assert!(updated);
+
+        let after = mgr.list_books(None).await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].status, BookStatus::Finished);
+        assert_eq!(after[0].rating_1_5, Some(5));
+        assert!(after[0].finished_at.is_some());
+        assert!(
+            after[0].started_at.is_some(),
+            "started_at must be preserved"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_book_filter_by_status() {
+        let dir = temp_dir("memory-plane-books-filter");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_book("A", None, None, BookStatus::Wishlist, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_book("B", None, None, BookStatus::Reading, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_book("C", None, None, BookStatus::Reading, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_book("D", None, None, BookStatus::Finished, Some(4), "", None)
+            .await
+            .unwrap();
+
+        let reading = mgr.list_books(Some(BookStatus::Reading)).await.unwrap();
+        assert_eq!(reading.len(), 2);
+        let wishlist = mgr.list_books(Some(BookStatus::Wishlist)).await.unwrap();
+        assert_eq!(wishlist.len(), 1);
+        let finished = mgr.list_books(Some(BookStatus::Finished)).await.unwrap();
+        assert_eq!(finished.len(), 1);
+        let all = mgr.list_books(None).await.unwrap();
+        assert_eq!(all.len(), 4);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_book_invalid_rating_rejected() {
+        let dir = temp_dir("memory-plane-books-bad-rating");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let result = mgr
+            .add_book("X", None, None, BookStatus::Finished, Some(7), "", None)
+            .await;
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_habit_add_and_deactivate() {
+        let dir = temp_dir("memory-plane-habit-lifecycle");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h = mgr
+            .add_habit("Meditar 10 min", Some("Por la mañana"), "daily", "", None)
+            .await
+            .unwrap();
+        assert!(h.active);
+
+        let active_before = mgr.list_habits(true).await.unwrap();
+        assert_eq!(active_before.len(), 1);
+
+        let deact = mgr.deactivate_habit(&h.habit_id).await.unwrap();
+        assert!(deact);
+        // Idempotent: second deactivate is a no-op.
+        let deact2 = mgr.deactivate_habit(&h.habit_id).await.unwrap();
+        assert!(!deact2);
+
+        let active_after = mgr.list_habits(true).await.unwrap();
+        assert_eq!(active_after.len(), 0);
+        let all = mgr.list_habits(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(!all[0].active);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_habit_checkin_idempotent_per_day() {
+        let dir = temp_dir("memory-plane-habit-checkin");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h = mgr
+            .add_habit("Leer 15 min", None, "daily", "", None)
+            .await
+            .unwrap();
+
+        // Two check-ins for the same date — second one wins (sets to false).
+        mgr.log_habit_checkin(&h.habit_id, true, "2026-04-06", Some("Mañana"))
+            .await
+            .unwrap();
+        mgr.log_habit_checkin(&h.habit_id, false, "2026-04-06", Some("Olvide"))
+            .await
+            .unwrap();
+
+        // The streak query should reflect the latest value (not completed).
+        let streak = mgr
+            .get_habit_streak(&h.habit_id, "2026-04-06", 1)
+            .await
+            .unwrap();
+        assert_eq!(streak.completed_days, 0);
+        assert_eq!(streak.total_days, 1);
+
+        // Now complete it cleanly. Streak should pick it up.
+        mgr.log_habit_checkin(&h.habit_id, true, "2026-04-06", None)
+            .await
+            .unwrap();
+        let streak2 = mgr
+            .get_habit_streak(&h.habit_id, "2026-04-06", 1)
+            .await
+            .unwrap();
+        assert_eq!(streak2.completed_days, 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_habit_streak_window() {
+        let dir = temp_dir("memory-plane-habit-streak");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h = mgr.add_habit("Run", None, "daily", "", None).await.unwrap();
+        // Mark 5 days completed in a 7-day window ending 2026-04-07.
+        for d in [
+            "2026-04-01",
+            "2026-04-02",
+            "2026-04-03",
+            "2026-04-05",
+            "2026-04-07",
+        ] {
+            mgr.log_habit_checkin(&h.habit_id, true, d, None)
+                .await
+                .unwrap();
+        }
+        // Two more days NOT completed within the window.
+        mgr.log_habit_checkin(&h.habit_id, false, "2026-04-04", None)
+            .await
+            .unwrap();
+        mgr.log_habit_checkin(&h.habit_id, false, "2026-04-06", None)
+            .await
+            .unwrap();
+
+        let streak = mgr
+            .get_habit_streak(&h.habit_id, "2026-04-07", 7)
+            .await
+            .unwrap();
+        assert_eq!(streak.total_days, 7);
+        assert_eq!(streak.completed_days, 5);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_growth_goal_progress_auto_achieves_at_100() {
+        let dir = temp_dir("memory-plane-goal-auto-achieve");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let g = mgr
+            .add_growth_goal(
+                "Aprender Rust",
+                Some("Contribuir a un proyecto open source"),
+                Some("2026-12-31"),
+                "Primer objetivo del año",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(g.progress_pct, 0);
+        assert_eq!(g.status, GoalStatus::Active);
+
+        // Advance to 60%.
+        let updated = mgr
+            .update_growth_goal_progress(&g.goal_id, 60, None)
+            .await
+            .unwrap();
+        assert!(updated);
+
+        // Push to 100 — must auto-flip to Achieved.
+        mgr.update_growth_goal_progress(&g.goal_id, 100, None)
+            .await
+            .unwrap();
+        let after = mgr
+            .list_growth_goals(Some(GoalStatus::Achieved))
+            .await
+            .unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].progress_pct, 100);
+        assert_eq!(after[0].status, GoalStatus::Achieved);
+
+        // Notes survived encryption.
+        assert_eq!(after[0].notes, "Primer objetivo del año");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_growth_goal_progress_clamps_above_100() {
+        let dir = temp_dir("memory-plane-goal-clamp");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let g = mgr
+            .add_growth_goal("X", None, None, "", None)
+            .await
+            .unwrap();
+
+        // 200 should be clamped to 100 and auto-achieve.
+        mgr.update_growth_goal_progress(&g.goal_id, 200, None)
+            .await
+            .unwrap();
+        let after = mgr.list_growth_goals(None).await.unwrap();
+        assert_eq!(after[0].progress_pct, 100);
+        assert_eq!(after[0].status, GoalStatus::Achieved);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_growth_summary_aggregates_everything() {
+        let dir = temp_dir("memory-plane-growth-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 1 reading + 2 finished + 1 wishlist
+        mgr.add_book("Read1", None, None, BookStatus::Reading, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_book("Done1", None, None, BookStatus::Finished, Some(5), "", None)
+            .await
+            .unwrap();
+        mgr.add_book("Done2", None, None, BookStatus::Finished, Some(4), "", None)
+            .await
+            .unwrap();
+        mgr.add_book("Wish1", None, None, BookStatus::Wishlist, None, "", None)
+            .await
+            .unwrap();
+
+        // 2 active habits + 1 deactivated
+        let h1 = mgr
+            .add_habit("Meditar", None, "daily", "", None)
+            .await
+            .unwrap();
+        let h2 = mgr
+            .add_habit("Leer", None, "daily", "", None)
+            .await
+            .unwrap();
+        let h3 = mgr
+            .add_habit("Correr", None, "weekly:3", "", None)
+            .await
+            .unwrap();
+        mgr.deactivate_habit(&h3.habit_id).await.unwrap();
+
+        // Some check-ins for h1 in the last 30 days ending 2026-04-30.
+        for d in ["2026-04-25", "2026-04-26", "2026-04-28", "2026-04-30"] {
+            mgr.log_habit_checkin(&h1.habit_id, true, d, None)
+                .await
+                .unwrap();
+        }
+        // None for h2.
+        let _ = h2;
+
+        // 1 active goal + 1 achieved
+        mgr.add_growth_goal("ActiveGoal", None, None, "", None)
+            .await
+            .unwrap();
+        let achieved = mgr
+            .add_growth_goal("AchievedGoal", None, None, "", None)
+            .await
+            .unwrap();
+        mgr.update_growth_goal_progress(&achieved.goal_id, 100, None)
+            .await
+            .unwrap();
+
+        let summary = mgr.get_growth_summary(10, "2026-04-30", 30).await.unwrap();
+
+        assert_eq!(summary.currently_reading.len(), 1);
+        assert_eq!(summary.recently_finished.len(), 2);
+        assert_eq!(summary.active_habits.len(), 2);
+        assert_eq!(summary.habit_streak_30d.len(), 2);
+        // h1 has 4 completed days; h2 has 0.
+        let h1_streak = summary
+            .habit_streak_30d
+            .iter()
+            .find(|s| s.habit_id == h1.habit_id)
+            .unwrap();
+        assert_eq!(h1_streak.completed_days, 4);
+        assert_eq!(h1_streak.total_days, 30);
+        let h2_streak = summary
+            .habit_streak_30d
+            .iter()
+            .find(|s| s.habit_id == h2.habit_id)
+            .unwrap();
+        assert_eq!(h2_streak.completed_days, 0);
+
+        // Active goals = 1 (the achieved one is filtered out).
+        assert_eq!(summary.active_goals.len(), 1);
+        assert_eq!(summary.active_goals[0].name, "ActiveGoal");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.5: Ejercicio ---------------------------------------------------
+
+    #[tokio::test]
+    async fn test_exercise_inventory_lifecycle() {
+        let dir = temp_dir("memory-plane-exercise-inventory");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let item = mgr
+            .add_exercise_inventory_item(
+                "mancuernas ajustables 5-25kg",
+                "free_weights",
+                2,
+                Some("Marca PowerBlock"),
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(item.active);
+        assert_eq!(item.quantity, 2);
+
+        // Add a second item.
+        mgr.add_exercise_inventory_item("liga media", "bands", 1, None, None)
+            .await
+            .unwrap();
+
+        let active = mgr.list_exercise_inventory(true).await.unwrap();
+        assert_eq!(active.len(), 2);
+
+        // Deactivate one and verify filtering.
+        let deact = mgr.deactivate_inventory_item(&item.item_id).await.unwrap();
+        assert!(deact);
+        // Idempotent: second deactivate is no-op.
+        let deact2 = mgr.deactivate_inventory_item(&item.item_id).await.unwrap();
+        assert!(!deact2);
+
+        let after_active = mgr.list_exercise_inventory(true).await.unwrap();
+        assert_eq!(after_active.len(), 1);
+        let after_all = mgr.list_exercise_inventory(false).await.unwrap();
+        assert_eq!(after_all.len(), 2);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_plan_with_exercises_json_roundtrip() {
+        let dir = temp_dir("memory-plane-exercise-plan");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let exercises = vec![
+            ExercisePlanItem {
+                name: "Press de banca con mancuernas".into(),
+                sets_reps: Some("4x10".into()),
+                rest_secs: Some(90),
+                notes: Some("forma controlada".into()),
+            },
+            ExercisePlanItem {
+                name: "Remo con mancuerna a 1 brazo".into(),
+                sets_reps: Some("3x12".into()),
+                rest_secs: Some(60),
+                notes: None,
+            },
+            ExercisePlanItem {
+                name: "Plancha".into(),
+                sets_reps: Some("60s".into()),
+                rest_secs: Some(45),
+                notes: None,
+            },
+        ];
+
+        let plan = mgr
+            .add_exercise_plan(
+                "Empuje + core",
+                Some("Sesion de tren superior con core al final"),
+                Some("fuerza"),
+                Some(3),
+                Some(45),
+                exercises.clone(),
+                Some("axi"),
+                "Hecho a la medida del inventario",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(plan.active);
+        assert_eq!(plan.exercises.len(), 3);
+        assert_eq!(plan.exercises[0].name, "Press de banca con mancuernas");
+        assert_eq!(plan.exercises[2].sets_reps.as_deref(), Some("60s"));
+        assert_eq!(plan.notes, "Hecho a la medida del inventario");
+
+        // Roundtrip via list_exercise_plans (decodes the JSON column).
+        let plans = mgr.list_exercise_plans(true).await.unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].exercises.len(), 3);
+        assert_eq!(plans[0].exercises[1].rest_secs, Some(60));
+        // Notes survived encryption.
+        assert_eq!(plans[0].notes, "Hecho a la medida del inventario");
+
+        // Deactivate and verify filtering.
+        mgr.deactivate_exercise_plan(&plan.plan_id).await.unwrap();
+        let active = mgr.list_exercise_plans(true).await.unwrap();
+        assert_eq!(active.len(), 0);
+        let all = mgr.list_exercise_plans(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(!all[0].active);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_plan_requires_at_least_one_exercise() {
+        let dir = temp_dir("memory-plane-exercise-plan-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let result = mgr
+            .add_exercise_plan("X", None, None, None, None, vec![], None, "", None)
+            .await;
+        assert!(result.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_log_session_validation() {
+        let dir = temp_dir("memory-plane-exercise-log-validation");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // duration_min = 0 must error.
+        let result = mgr
+            .log_exercise_session(None, "strength", "test", 0, Some(7), None, "", None)
+            .await;
+        assert!(result.is_err());
+
+        // rpe out of range must error.
+        let result = mgr
+            .log_exercise_session(None, "strength", "test", 30, Some(15), None, "", None)
+            .await;
+        assert!(result.is_err());
+
+        // Valid call succeeds.
+        let session = mgr
+            .log_exercise_session(
+                None,
+                "strength",
+                "test",
+                45,
+                Some(7),
+                None,
+                "Buen dia",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(session.duration_min, 45);
+        assert_eq!(session.rpe_1_10, Some(7));
+        assert_eq!(session.notes, "Buen dia");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_log_recent_sessions_ordering() {
+        let dir = temp_dir("memory-plane-exercise-log-order");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert 3 sessions with explicit timestamps to control order.
+        let t1 = Utc::now() - chrono::Duration::days(3);
+        let t2 = Utc::now() - chrono::Duration::days(1);
+        let t3 = Utc::now();
+
+        for (t, desc) in [(t1, "oldest"), (t2, "middle"), (t3, "newest")] {
+            mgr.log_exercise_session(None, "cardio", desc, 30, None, Some(t), "", None)
+                .await
+                .unwrap();
+        }
+
+        let sessions = mgr.list_exercise_sessions(50).await.unwrap();
+        assert_eq!(sessions.len(), 3);
+        // Newest first.
+        assert_eq!(sessions[0].description, "newest");
+        assert_eq!(sessions[1].description, "middle");
+        assert_eq!(sessions[2].description, "oldest");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_exercise_summary_aggregates_everything() {
+        let dir = temp_dir("memory-plane-exercise-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 2 inventory items + 1 deactivated.
+        mgr.add_exercise_inventory_item("mancuernas", "free_weights", 2, None, None)
+            .await
+            .unwrap();
+        mgr.add_exercise_inventory_item("banca", "free_weights", 1, None, None)
+            .await
+            .unwrap();
+        let dead = mgr
+            .add_exercise_inventory_item("liga rota", "bands", 1, None, None)
+            .await
+            .unwrap();
+        mgr.deactivate_inventory_item(&dead.item_id).await.unwrap();
+
+        // 1 active plan + 1 deactivated.
+        mgr.add_exercise_plan(
+            "Plan A",
+            None,
+            Some("fuerza"),
+            Some(3),
+            Some(45),
+            vec![ExercisePlanItem {
+                name: "Press".into(),
+                sets_reps: Some("4x10".into()),
+                rest_secs: Some(90),
+                notes: None,
+            }],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        let dead_plan = mgr
+            .add_exercise_plan(
+                "Plan viejo",
+                None,
+                None,
+                None,
+                None,
+                vec![ExercisePlanItem {
+                    name: "Algo".into(),
+                    sets_reps: None,
+                    rest_secs: None,
+                    notes: None,
+                }],
+                None,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        mgr.deactivate_exercise_plan(&dead_plan.plan_id)
+            .await
+            .unwrap();
+
+        // Sessions: 2 within last 7 days, 1 more within last 30 days,
+        // 1 older than 30 days.
+        let now = Utc::now();
+        let in_7d_a = now - chrono::Duration::days(2);
+        let in_7d_b = now - chrono::Duration::days(5);
+        let in_30d = now - chrono::Duration::days(20);
+        let old = now - chrono::Duration::days(40);
+
+        for (t, mins) in [(in_7d_a, 45_u32), (in_7d_b, 30), (in_30d, 60), (old, 90)] {
+            mgr.log_exercise_session(
+                None,
+                "strength",
+                "session",
+                mins,
+                Some(7),
+                Some(t),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let summary = mgr.get_exercise_summary(50).await.unwrap();
+
+        assert_eq!(summary.inventory.len(), 2);
+        assert_eq!(summary.active_plans.len(), 1);
+        // 4 sessions stored, all returned (limit 50).
+        assert_eq!(summary.recent_sessions.len(), 4);
+        assert_eq!(summary.sessions_last_7_days, 2);
+        assert_eq!(summary.sessions_last_30_days, 3);
+        assert_eq!(summary.total_minutes_last_30_days, 45 + 30 + 60);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.3 sprint 1: Nutricion ------------------------------------------
+
+    #[tokio::test]
+    async fn test_nutrition_preference_lifecycle() {
+        let dir = temp_dir("memory-plane-nutrition-pref");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let allergy = mgr
+            .add_nutrition_preference(
+                "allergy",
+                "mariscos",
+                Some("severe"),
+                "Reaccion en restaurante en 2023",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(allergy.active);
+        assert_eq!(allergy.severity.as_deref(), Some("severe"));
+        assert_eq!(allergy.notes, "Reaccion en restaurante en 2023");
+
+        mgr.add_nutrition_preference("diet", "mediterranea", None, "", None)
+            .await
+            .unwrap();
+        mgr.add_nutrition_preference("dislike", "cilantro", None, "", None)
+            .await
+            .unwrap();
+
+        let all = mgr.list_nutrition_preferences(None, true).await.unwrap();
+        assert_eq!(all.len(), 3);
+
+        let allergies = mgr
+            .list_nutrition_preferences(Some("allergy"), true)
+            .await
+            .unwrap();
+        assert_eq!(allergies.len(), 1);
+        assert_eq!(allergies[0].label, "mariscos");
+
+        // Deactivate the dislike — must drop out of active list.
+        let dislike_id = mgr
+            .list_nutrition_preferences(Some("dislike"), true)
+            .await
+            .unwrap()[0]
+            .pref_id
+            .clone();
+        let deact = mgr
+            .deactivate_nutrition_preference(&dislike_id)
+            .await
+            .unwrap();
+        assert!(deact);
+        let active_after = mgr.list_nutrition_preferences(None, true).await.unwrap();
+        assert_eq!(active_after.len(), 2);
+
+        // Idempotent deactivate.
+        let deact2 = mgr
+            .deactivate_nutrition_preference(&dislike_id)
+            .await
+            .unwrap();
+        assert!(!deact2);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_nutrition_log_meal_validation() {
+        let dir = temp_dir("memory-plane-nutrition-log-validation");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Negative kcal must error.
+        let result = mgr
+            .log_nutrition_meal(
+                "breakfast",
+                "test",
+                Some(-100.0),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        // NaN must error.
+        let result = mgr
+            .log_nutrition_meal(
+                "breakfast",
+                "test",
+                Some(f64::NAN),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        // Empty meal_type must error.
+        let result = mgr
+            .log_nutrition_meal(
+                "", "test", None, None, None, None, None, None, None, "", None,
+            )
+            .await;
+        assert!(result.is_err());
+
+        // Valid call succeeds.
+        let entry = mgr
+            .log_nutrition_meal(
+                "breakfast",
+                "Huevos revueltos con aguacate",
+                Some(420.0),
+                Some(22.0),
+                Some(15.0),
+                Some(28.0),
+                None,
+                None,
+                None,
+                "Despues de yoga",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(entry.macros_kcal, Some(420.0));
+        assert_eq!(entry.notes, "Despues de yoga");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_nutrition_log_filter_by_meal_type() {
+        let dir = temp_dir("memory-plane-nutrition-log-filter");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        for (mtype, desc) in [
+            ("breakfast", "huevos"),
+            ("breakfast", "avena"),
+            ("lunch", "ensalada"),
+            ("dinner", "pollo"),
+            ("snack", "manzana"),
+        ] {
+            mgr.log_nutrition_meal(
+                mtype, desc, None, None, None, None, None, None, None, "", None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let breakfasts = mgr.list_nutrition_log(Some("breakfast"), 50).await.unwrap();
+        assert_eq!(breakfasts.len(), 2);
+        let snacks = mgr.list_nutrition_log(Some("snack"), 50).await.unwrap();
+        assert_eq!(snacks.len(), 1);
+        let all = mgr.list_nutrition_log(None, 50).await.unwrap();
+        assert_eq!(all.len(), 5);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_recipe_with_ingredients_json_roundtrip() {
+        let dir = temp_dir("memory-plane-recipe-roundtrip");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let ingredients = vec![
+            RecipeIngredient {
+                name: "pechuga de pollo".into(),
+                amount: 150.0,
+                unit: "g".into(),
+                notes: Some("sin piel".into()),
+            },
+            RecipeIngredient {
+                name: "arroz integral".into(),
+                amount: 80.0,
+                unit: "g".into(),
+                notes: None,
+            },
+            RecipeIngredient {
+                name: "espinaca".into(),
+                amount: 1.0,
+                unit: "taza".into(),
+                notes: None,
+            },
+        ];
+        let steps = vec![
+            "Cocer el arroz".to_string(),
+            "Sazonar y asar el pollo".to_string(),
+            "Saltear la espinaca".to_string(),
+            "Servir junto".to_string(),
+        ];
+        let tags = vec!["alto_proteina".to_string(), "almuerzo".to_string()];
+
+        let recipe = mgr
+            .add_recipe(
+                "Bowl de pollo y arroz",
+                Some("Para post-entreno"),
+                ingredients.clone(),
+                steps.clone(),
+                Some(10),
+                Some(25),
+                Some(1),
+                tags,
+                Some("axi"),
+                "Receta favorita",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(recipe.ingredients.len(), 3);
+        assert_eq!(recipe.steps.len(), 4);
+        assert_eq!(recipe.tags.len(), 2);
+        assert_eq!(recipe.notes, "Receta favorita");
+
+        // Roundtrip via list.
+        let listed = mgr.list_recipes(None).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].ingredients.len(), 3);
+        assert_eq!(listed[0].ingredients[0].name, "pechuga de pollo");
+        assert_eq!(listed[0].ingredients[0].notes.as_deref(), Some("sin piel"));
+        assert_eq!(listed[0].steps[1], "Sazonar y asar el pollo");
+        assert_eq!(listed[0].notes, "Receta favorita");
+
+        // Tag filter.
+        let filtered = mgr.list_recipes(Some("alto_proteina")).await.unwrap();
+        assert_eq!(filtered.len(), 1);
+        let none = mgr.list_recipes(Some("postre")).await.unwrap();
+        assert_eq!(none.len(), 0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_recipe_requires_at_least_one_ingredient_and_step() {
+        let dir = temp_dir("memory-plane-recipe-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let result_no_ingr = mgr
+            .add_recipe(
+                "X",
+                None,
+                vec![],
+                vec!["paso 1".into()],
+                None,
+                None,
+                None,
+                vec![],
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result_no_ingr.is_err());
+
+        let result_no_steps = mgr
+            .add_recipe(
+                "X",
+                None,
+                vec![RecipeIngredient {
+                    name: "agua".into(),
+                    amount: 1.0,
+                    unit: "L".into(),
+                    notes: None,
+                }],
+                vec![],
+                None,
+                None,
+                None,
+                vec![],
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(result_no_steps.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_nutrition_plan_lifecycle() {
+        let dir = temp_dir("memory-plane-nutrition-plan");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let plan = mgr
+            .add_nutrition_plan(
+                "Plan mantenimiento",
+                Some("30 dias"),
+                Some("mantener peso"),
+                Some(30),
+                Some(2200.0),
+                Some(130.0),
+                Some(220.0),
+                Some(73.0),
+                Some("axi"),
+                "Recalcular en 30 dias",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(plan.active);
+        assert_eq!(plan.daily_kcal_target, Some(2200.0));
+        assert!(plan.started_at.is_some());
+
+        let active = mgr.list_nutrition_plans(true).await.unwrap();
+        assert_eq!(active.len(), 1);
+
+        // Negative kcal target must error.
+        let bad = mgr
+            .add_nutrition_plan(
+                "Bad",
+                None,
+                None,
+                None,
+                Some(-1.0),
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(bad.is_err());
+
+        // Deactivate.
+        let deact = mgr.deactivate_nutrition_plan(&plan.plan_id).await.unwrap();
+        assert!(deact);
+        let after = mgr.list_nutrition_plans(true).await.unwrap();
+        assert_eq!(after.len(), 0);
+        let all = mgr.list_nutrition_plans(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(!all[0].active);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_nutrition_summary_aggregates_everything() {
+        let dir = temp_dir("memory-plane-nutrition-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 1 active allergy + 1 deactivated dislike.
+        mgr.add_nutrition_preference("allergy", "mariscos", Some("severe"), "", None)
+            .await
+            .unwrap();
+        let dis = mgr
+            .add_nutrition_preference("dislike", "cilantro", None, "", None)
+            .await
+            .unwrap();
+        mgr.deactivate_nutrition_preference(&dis.pref_id)
+            .await
+            .unwrap();
+
+        // 1 active plan.
+        mgr.add_nutrition_plan(
+            "Plan A",
+            None,
+            Some("mantener"),
+            Some(30),
+            Some(2000.0),
+            Some(120.0),
+            Some(200.0),
+            Some(70.0),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // 4 meals: 3 within last 7 days, 1 older.
+        let now = Utc::now();
+        let meals = [
+            (
+                now - chrono::Duration::days(1),
+                500.0_f64,
+                30.0_f64,
+                50.0_f64,
+                18.0_f64,
+            ),
+            (now - chrono::Duration::days(3), 600.0, 35.0, 60.0, 22.0),
+            (now - chrono::Duration::days(6), 450.0, 25.0, 45.0, 15.0),
+            (now - chrono::Duration::days(20), 700.0, 40.0, 70.0, 25.0),
+        ];
+        for (when, k, p, c, f) in meals {
+            mgr.log_nutrition_meal(
+                "lunch",
+                "comida",
+                Some(k),
+                Some(p),
+                Some(c),
+                Some(f),
+                None,
+                None,
+                Some(when),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let summary = mgr.get_nutrition_summary(50).await.unwrap();
+
+        // Active prefs: 1 (allergy only — dislike is deactivated).
+        assert_eq!(summary.preferences.len(), 1);
+        assert_eq!(summary.preferences[0].pref_type, "allergy");
+
+        assert!(summary.active_plan.is_some());
+        assert_eq!(summary.active_plan.as_ref().unwrap().name, "Plan A");
+
+        // All 4 meals returned (limit 50).
+        assert_eq!(summary.recent_meals.len(), 4);
+
+        // Rolling 7-day totals: 3 meals, 1550 kcal, 90g protein, etc.
+        assert_eq!(summary.meals_last_7_days, 3);
+        assert!((summary.kcal_last_7_days - 1550.0).abs() < 0.01);
+        assert!((summary.protein_g_last_7_days - 90.0).abs() < 0.01);
+        assert!((summary.carbs_g_last_7_days - 155.0).abs() < 0.01);
+        assert!((summary.fat_g_last_7_days - 55.0).abs() < 0.01);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.13: Salud social y comunitaria ---------------------------------
+
+    #[tokio::test]
+    async fn test_community_activity_lifecycle() {
+        let dir = temp_dir("memory-plane-community-lifecycle");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let act = mgr
+            .add_community_activity(
+                "Club de lectura",
+                "hobby",
+                Some("mensual"),
+                "Primer sabado del mes",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(act.active);
+        assert!(act.last_attended.is_none());
+        assert_eq!(act.notes, "Primer sabado del mes");
+
+        // Mark attendance — last_attended must populate.
+        let attended_at = Utc::now() - chrono::Duration::days(2);
+        mgr.mark_community_attendance(&act.activity_id, Some(attended_at))
+            .await
+            .unwrap();
+        let after = mgr.list_community_activities(true).await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0].last_attended.is_some());
+
+        // Deactivate.
+        mgr.deactivate_community_activity(&act.activity_id)
+            .await
+            .unwrap();
+        let active_after = mgr.list_community_activities(true).await.unwrap();
+        assert_eq!(active_after.len(), 0);
+        let all = mgr.list_community_activities(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_civic_engagement_log_and_list() {
+        let dir = temp_dir("memory-plane-civic");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.log_civic_engagement(
+            "vote",
+            "Eleccion estatal",
+            Some(Utc::now() - chrono::Duration::days(60)),
+            "Vote temprano",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.log_civic_engagement("donation", "Cruz Roja", None, "", None)
+            .await
+            .unwrap();
+
+        let events = mgr.list_civic_engagement(50).await.unwrap();
+        assert_eq!(events.len(), 2);
+        // Newest first.
+        assert_eq!(events[0].engagement_type, "donation");
+        assert_eq!(events[1].engagement_type, "vote");
+        // Notes encryption roundtrip.
+        assert_eq!(events[1].notes, "Vote temprano");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_contribution_log_and_list() {
+        let dir = temp_dir("memory-plane-contribution");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.log_contribution("Ayude con compras", Some("Doña Lupe"), None, None)
+            .await
+            .unwrap();
+        mgr.log_contribution("Done sangre", None, None, None)
+            .await
+            .unwrap();
+
+        let contribs = mgr.list_contributions(50).await.unwrap();
+        assert_eq!(contribs.len(), 2);
+        // Both descriptions present.
+        let descs: Vec<&str> = contribs.iter().map(|c| c.description.as_str()).collect();
+        assert!(descs.contains(&"Ayude con compras"));
+        assert!(descs.contains(&"Done sangre"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_social_summary_aggregates_with_days_since() {
+        let dir = temp_dir("memory-plane-social-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Two active activities — one attended 10 days ago, one never.
+        let recent = mgr
+            .add_community_activity("Liga de futbol", "sport", Some("semanal"), "", None)
+            .await
+            .unwrap();
+        mgr.mark_community_attendance(
+            &recent.activity_id,
+            Some(Utc::now() - chrono::Duration::days(10)),
+        )
+        .await
+        .unwrap();
+        mgr.add_community_activity("Voluntariado", "volunteer", None, "", None)
+            .await
+            .unwrap();
+
+        // 1 civic + 2 contributions.
+        mgr.log_civic_engagement("vote", "Eleccion local", None, "", None)
+            .await
+            .unwrap();
+        mgr.log_contribution("Doné ropa", None, None, None)
+            .await
+            .unwrap();
+        mgr.log_contribution("Recoji basura del parque", None, None, None)
+            .await
+            .unwrap();
+
+        let summary = mgr.get_social_summary(10, 10).await.unwrap();
+        assert_eq!(summary.active_activities.len(), 2);
+        assert_eq!(summary.recent_civic_events.len(), 1);
+        assert_eq!(summary.recent_contributions.len(), 2);
+        // days_since is computed from the most recent last_attended,
+        // which is `recent` at -10 days. Tolerance ±1 day.
+        let days = summary.days_since_last_activity.unwrap();
+        assert!(
+            (9..=11).contains(&days),
+            "days_since_last_activity should be ~10, got {}",
+            days
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.14: Sueño profundo ---------------------------------------------
+
+    #[tokio::test]
+    async fn test_sleep_log_validation_and_duration() {
+        let dir = temp_dir("memory-plane-sleep-validation");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // wake_time before bedtime must error.
+        let now = Utc::now();
+        let bad = mgr
+            .log_sleep(
+                now,
+                now - chrono::Duration::hours(1),
+                None,
+                0,
+                None,
+                "",
+                None,
+            )
+            .await;
+        assert!(bad.is_err());
+
+        // quality out of range must error.
+        let bedtime = now - chrono::Duration::hours(8);
+        let wake_time = now;
+        let bad2 = mgr
+            .log_sleep(bedtime, wake_time, Some(15), 0, None, "", None)
+            .await;
+        assert!(bad2.is_err());
+
+        // Valid call: 7.5h sleep, quality 8, encrypted dream notes.
+        let bedtime = now - chrono::Duration::hours(8);
+        let wake_time = now - chrono::Duration::minutes(30);
+        let entry = mgr
+            .log_sleep(
+                bedtime,
+                wake_time,
+                Some(8),
+                1,
+                Some("descansado"),
+                "Sueño tranquilo, recuerdo el mar",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!((entry.duration_hours - 7.5).abs() < 0.01);
+        assert_eq!(entry.quality_1_10, Some(8));
+        assert_eq!(entry.interruptions, 1);
+        assert_eq!(entry.dreams_notes, "Sueño tranquilo, recuerdo el mar");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_sleep_environment_links_to_sleep_entry() {
+        let dir = temp_dir("memory-plane-sleep-environment");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let bedtime = Utc::now() - chrono::Duration::hours(8);
+        let entry = mgr
+            .log_sleep(bedtime, Utc::now(), Some(7), 0, None, "", None)
+            .await
+            .unwrap();
+
+        let env = mgr
+            .add_sleep_environment(
+                &entry.sleep_id,
+                Some(18.0),
+                Some(9),
+                Some(2),
+                Some(0),
+                false,
+                false,
+                false,
+                Some("moderate"),
+                Some("Cuarto fresco"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(env.sleep_id, entry.sleep_id);
+        assert_eq!(env.darkness_1_10, Some(9));
+        assert!(!env.alcohol);
+
+        // Validation: darkness out of range.
+        let bad = mgr
+            .add_sleep_environment(
+                &entry.sleep_id,
+                None,
+                Some(15),
+                None,
+                None,
+                false,
+                false,
+                false,
+                None,
+                None,
+            )
+            .await;
+        assert!(bad.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_sleep_summary_averages_last_7_days() {
+        let dir = temp_dir("memory-plane-sleep-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let now = Utc::now();
+        // 3 nights in last 7 days: durations 7.0, 8.0, 6.0 — qualities 7, 8, 6.
+        // 1 night older than 7 days that should NOT be included in averages.
+        let nights = [
+            (
+                now - chrono::Duration::days(1) - chrono::Duration::hours(7),
+                7.0_f64,
+                7,
+            ),
+            (
+                now - chrono::Duration::days(3) - chrono::Duration::hours(8),
+                8.0,
+                8,
+            ),
+            (
+                now - chrono::Duration::days(5) - chrono::Duration::hours(6),
+                6.0,
+                6,
+            ),
+            (
+                now - chrono::Duration::days(20) - chrono::Duration::hours(5),
+                5.0,
+                4,
+            ),
+        ];
+        for (bedtime, duration_h, quality) in nights {
+            let wake_time = bedtime + chrono::Duration::seconds((duration_h * 3600.0) as i64);
+            mgr.log_sleep(bedtime, wake_time, Some(quality), 0, None, "", None)
+                .await
+                .unwrap();
+        }
+
+        let summary = mgr.get_sleep_summary(50).await.unwrap();
+        assert_eq!(summary.recent_entries.len(), 4);
+        assert_eq!(summary.nights_logged_last_7_days, 3);
+        let avg_dur = summary.avg_duration_hours_7d.unwrap();
+        assert!(
+            (avg_dur - 7.0).abs() < 0.05,
+            "avg duration should be ~7.0, got {}",
+            avg_dur
+        );
+        let avg_q = summary.avg_quality_7d.unwrap();
+        assert!(
+            (avg_q - 7.0).abs() < 0.05,
+            "avg quality should be ~7.0, got {}",
+            avg_q
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.10: Espiritualidad ---------------------------------------------
+
+    #[tokio::test]
+    async fn test_spiritual_practice_lifecycle() {
+        let dir = temp_dir("memory-plane-spiritual-practice");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let p = mgr
+            .add_spiritual_practice(
+                "Meditacion mindfulness",
+                Some("secular"),
+                Some("diaria"),
+                Some(15),
+                "10 min en la manana",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(p.active);
+        assert!(p.last_practiced.is_none());
+        assert_eq!(p.notes, "10 min en la manana");
+
+        // Mark practiced.
+        let when = Utc::now() - chrono::Duration::days(2);
+        mgr.mark_spiritual_practice(&p.practice_id, Some(when))
+            .await
+            .unwrap();
+        let after = mgr.list_spiritual_practices(true).await.unwrap();
+        assert_eq!(after.len(), 1);
+        assert!(after[0].last_practiced.is_some());
+
+        // Deactivate.
+        mgr.deactivate_spiritual_practice(&p.practice_id)
+            .await
+            .unwrap();
+        let active_after = mgr.list_spiritual_practices(true).await.unwrap();
+        assert_eq!(active_after.len(), 0);
+        let all = mgr.list_spiritual_practices(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_spiritual_reflection_required_and_encrypted() {
+        let dir = temp_dir("memory-plane-spiritual-reflection");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Empty content must error.
+        let bad = mgr
+            .add_spiritual_reflection(Some("gratitud"), "", None, None)
+            .await;
+        assert!(bad.is_err());
+
+        // Valid call: content roundtrips through encryption.
+        let r = mgr
+            .add_spiritual_reflection(
+                Some("gratitud"),
+                "Hoy estuve agradecido por mi familia y por la salud",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!r.content.is_empty());
+
+        let listed = mgr.list_spiritual_reflections(None, 10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed[0].content,
+            "Hoy estuve agradecido por mi familia y por la salud"
+        );
+
+        // Filter by topic.
+        let by_topic = mgr
+            .list_spiritual_reflections(Some("gratitud"), 10)
+            .await
+            .unwrap();
+        assert_eq!(by_topic.len(), 1);
+        let by_other = mgr
+            .list_spiritual_reflections(Some("duda"), 10)
+            .await
+            .unwrap();
+        assert_eq!(by_other.len(), 0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_core_values_sorted_by_importance() {
+        let dir = temp_dir("memory-plane-core-values");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Out-of-range importance must error.
+        let bad = mgr.add_core_value("X", 11, "", None).await;
+        assert!(bad.is_err());
+
+        mgr.add_core_value("creatividad", 7, "", None)
+            .await
+            .unwrap();
+        mgr.add_core_value("familia", 10, "Lo mas importante", None)
+            .await
+            .unwrap();
+        mgr.add_core_value("libertad", 9, "", None).await.unwrap();
+
+        let values = mgr.list_core_values().await.unwrap();
+        assert_eq!(values.len(), 3);
+        // Sorted by importance DESC.
+        assert_eq!(values[0].name, "familia");
+        assert_eq!(values[0].importance_1_10, 10);
+        assert_eq!(values[1].name, "libertad");
+        assert_eq!(values[2].name, "creatividad");
+        // Notes encryption roundtrip.
+        assert_eq!(values[0].notes, "Lo mas importante");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_spiritual_summary_aggregates() {
+        let dir = temp_dir("memory-plane-spiritual-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let p1 = mgr
+            .add_spiritual_practice(
+                "Meditar",
+                Some("secular"),
+                Some("diaria"),
+                Some(15),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        mgr.add_spiritual_practice("Caminata bosque", None, Some("semanal"), None, "", None)
+            .await
+            .unwrap();
+        mgr.mark_spiritual_practice(
+            &p1.practice_id,
+            Some(Utc::now() - chrono::Duration::days(5)),
+        )
+        .await
+        .unwrap();
+
+        mgr.add_spiritual_reflection(Some("gratitud"), "Hoy hubo un buen dia", None, None)
+            .await
+            .unwrap();
+        mgr.add_core_value("familia", 10, "", None).await.unwrap();
+        mgr.add_core_value("creatividad", 8, "", None)
+            .await
+            .unwrap();
+
+        let summary = mgr.get_spiritual_summary(10).await.unwrap();
+        assert_eq!(summary.active_practices.len(), 2);
+        assert_eq!(summary.recent_reflections.len(), 1);
+        assert_eq!(summary.values.len(), 2);
+        let days = summary.days_since_last_practice.unwrap();
+        assert!(
+            (4..=6).contains(&days),
+            "days_since_last_practice should be ~5, got {}",
+            days
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ---- BI.11: Salud financiera -------------------------------------------
+
+    #[tokio::test]
+    async fn test_financial_account_lifecycle() {
+        let dir = temp_dir("memory-plane-fin-account");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let a = mgr
+            .add_financial_account(
+                "BBVA debito",
+                "checking",
+                Some("BBVA Mexico"),
+                Some(15000.0),
+                "MXN",
+                "Cuenta principal",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(a.active);
+        assert_eq!(a.balance_last_known, Some(15000.0));
+        assert!(a.balance_updated_at.is_some());
+        assert_eq!(a.notes, "Cuenta principal");
+
+        // NaN balance must error.
+        let bad = mgr
+            .add_financial_account("X", "cash", None, Some(f64::NAN), "MXN", "", None)
+            .await;
+        assert!(bad.is_err());
+
+        // Update balance.
+        let updated = mgr
+            .update_account_balance(&a.account_id, 18500.0)
+            .await
+            .unwrap();
+        assert!(updated);
+        let after = mgr.list_financial_accounts(true).await.unwrap();
+        assert_eq!(after[0].balance_last_known, Some(18500.0));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_expense_log_validation_and_filter() {
+        let dir = temp_dir("memory-plane-expense");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Negative amount errors.
+        let bad = mgr
+            .log_expense(-100.0, "MXN", "comida", None, None, None, "", None)
+            .await;
+        assert!(bad.is_err());
+
+        // Empty category errors.
+        let bad2 = mgr
+            .log_expense(100.0, "MXN", "", None, None, None, "", None)
+            .await;
+        assert!(bad2.is_err());
+
+        // Valid: 4 expenses across 3 categories.
+        for (amt, cat) in [
+            (450.0, "comida"),
+            (60.0, "transporte"),
+            (300.0, "comida"),
+            (1200.0, "vivienda"),
+        ] {
+            mgr.log_expense(amt, "MXN", cat, None, None, None, "", None)
+                .await
+                .unwrap();
+        }
+
+        let comida = mgr.list_expenses(Some("comida"), 50).await.unwrap();
+        assert_eq!(comida.len(), 2);
+        let all = mgr.list_expenses(None, 50).await.unwrap();
+        assert_eq!(all.len(), 4);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_income_and_financial_goal_auto_achieve() {
+        let dir = temp_dir("memory-plane-income-goal");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Income.
+        mgr.log_income(25000.0, "MXN", "salario", None, None, true, "", None)
+            .await
+            .unwrap();
+        let income = mgr.list_income(10).await.unwrap();
+        assert_eq!(income.len(), 1);
+        assert!(income[0].recurring);
+
+        // Goal — start at 0, advance to 30000, then to 90000 to auto-achieve.
+        let g = mgr
+            .add_financial_goal(
+                "Fondo emergencia 6 meses",
+                90000.0,
+                "MXN",
+                Some("2026-12-31"),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(g.current_amount, 0.0);
+        assert_eq!(g.status, "active");
+
+        mgr.update_financial_goal_progress(&g.goal_id, 30000.0)
+            .await
+            .unwrap();
+        let half = mgr.list_financial_goals(true).await.unwrap();
+        assert_eq!(half[0].current_amount, 30000.0);
+        assert_eq!(half[0].status, "active");
+
+        mgr.update_financial_goal_progress(&g.goal_id, 90000.0)
+            .await
+            .unwrap();
+        let active_after = mgr.list_financial_goals(true).await.unwrap();
+        // Now in achieved status, no longer in active list.
+        assert_eq!(active_after.len(), 0);
+        let all = mgr.list_financial_goals(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].status, "achieved");
+        assert_eq!(all[0].current_amount, 90000.0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_financial_summary_rolling_30_days() {
+        let dir = temp_dir("memory-plane-fin-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 1 active account.
+        mgr.add_financial_account("BBVA", "checking", None, Some(20000.0), "MXN", "", None)
+            .await
+            .unwrap();
+
+        // 1 active goal.
+        mgr.add_financial_goal("Viaje", 15000.0, "MXN", None, "", None)
+            .await
+            .unwrap();
+
+        // Insert 4 expenses: 3 within last 30 days, 1 older.
+        let now = Utc::now();
+        let in_30 = [
+            (now - chrono::Duration::days(2), 500.0_f64),
+            (now - chrono::Duration::days(10), 1200.0),
+            (now - chrono::Duration::days(28), 800.0),
+        ];
+        for (when, amt) in in_30 {
+            mgr.log_expense(amt, "MXN", "comida", None, None, Some(when), "", None)
+                .await
+                .unwrap();
+        }
+        mgr.log_expense(
+            999.0,
+            "MXN",
+            "comida",
+            None,
+            None,
+            Some(now - chrono::Duration::days(40)),
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Insert 2 income entries: both within last 30 days.
+        for when in [
+            now - chrono::Duration::days(5),
+            now - chrono::Duration::days(25),
+        ] {
+            mgr.log_income(25000.0, "MXN", "salario", None, Some(when), false, "", None)
+                .await
+                .unwrap();
+        }
+
+        let summary = mgr.get_financial_summary(50, 50).await.unwrap();
+        assert_eq!(summary.active_accounts.len(), 1);
+        assert_eq!(summary.active_goals.len(), 1);
+        // Recent_expenses has all 4; the rolling totals should NOT
+        // include the 999 from 40 days ago.
+        assert_eq!(summary.recent_expenses.len(), 4);
+        assert!(
+            (summary.expenses_total_last_30_days - 2500.0).abs() < 0.01,
+            "expenses_total_last_30_days should be 2500, got {}",
+            summary.expenses_total_last_30_days
+        );
+        assert!(
+            (summary.income_total_last_30_days - 50000.0).abs() < 0.01,
+            "income_total_last_30_days should be 50000, got {}",
+            summary.income_total_last_30_days
+        );
+        assert!(
+            (summary.net_last_30_days - 47500.0).abs() < 0.01,
+            "net_last_30_days should be 47500, got {}",
+            summary.net_last_30_days
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.8 — Coaching unificado
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn life_summary_window_parses_es_and_en() {
+        assert_eq!(
+            LifeSummaryWindow::parse("week").unwrap(),
+            LifeSummaryWindow::Week
+        );
+        assert_eq!(
+            LifeSummaryWindow::parse("Mensual").unwrap(),
+            LifeSummaryWindow::Month
+        );
+        assert_eq!(
+            LifeSummaryWindow::parse("7d").unwrap(),
+            LifeSummaryWindow::Week
+        );
+        assert_eq!(LifeSummaryWindow::Week.days(), 7);
+        assert_eq!(LifeSummaryWindow::Month.days(), 30);
+        assert!(LifeSummaryWindow::parse("century").is_err());
+    }
+
+    #[tokio::test]
+    async fn life_summary_aggregates_all_pillars_on_empty_db() {
+        let dir = temp_dir("memory-plane-life-summary-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Week, "2026-04-07")
+            .await
+            .unwrap();
+        assert_eq!(summary.window, LifeSummaryWindow::Week);
+        assert!(summary.health.facts.is_empty());
+        assert!(summary.growth.active_goals.is_empty());
+        assert!(summary.exercise.recent_sessions.is_empty());
+        assert!(summary.nutrition.recent_meals.is_empty());
+        assert!(summary.social.active_activities.is_empty());
+        assert!(summary.sleep.recent_entries.is_empty());
+        assert!(summary.spiritual.active_practices.is_empty());
+        assert!(summary.financial.active_accounts.is_empty());
+        assert!(summary.patterns.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn life_summary_uses_health_defaults_consistent_with_http_and_telegram() {
+        let dir = temp_dir("memory-plane-life-summary-health-defaults");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        for idx in 0..8 {
+            mgr.record_vital(
+                "glucose",
+                Some(100.0 + idx as f64),
+                None,
+                "mg/dL",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        for idx in 0..25 {
+            let test_name = format!("test-{}", idx);
+            mgr.add_lab_result(
+                &test_name,
+                1.0 + idx as f64,
+                "u",
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Week, "2026-04-07")
+            .await
+            .unwrap();
+
+        assert_eq!(summary.health.recent_vitals.len(), 5);
+        assert_eq!(summary.health.recent_labs.len(), 20);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn life_summary_health_defaults_do_not_pad_when_data_is_below_limits() {
+        let dir = temp_dir("memory-plane-life-summary-health-defaults-small");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        for idx in 0..2 {
+            mgr.record_vital(
+                "glucose",
+                Some(90.0 + idx as f64),
+                None,
+                "mg/dL",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        for idx in 0..3 {
+            let test_name = format!("small-test-{}", idx);
+            mgr.add_lab_result(
+                &test_name,
+                10.0 + idx as f64,
+                "u",
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Week, "2026-04-07")
+            .await
+            .unwrap();
+
+        assert_eq!(summary.health.recent_vitals.len(), 2);
+        assert_eq!(summary.health.recent_labs.len(), 3);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn life_summary_detects_negative_net_pattern() {
+        let dir = temp_dir("memory-plane-life-summary-net");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Spend more than earned in last 30d.
+        mgr.log_income(
+            10000.0,
+            "MXN",
+            "salary",
+            None,
+            Some(Utc::now()),
+            false,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.log_expense(
+            20000.0,
+            "MXN",
+            "rent",
+            None,
+            None,
+            Some(Utc::now()),
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Month, "2026-04-07")
+            .await
+            .unwrap();
+        assert!(summary
+            .patterns
+            .iter()
+            .any(|p| p.kind == "financial_negative_net"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn forgetting_check_surfaces_paused_goal_and_stale_active_goal() {
+        let dir = temp_dir("memory-plane-forgetting");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Create one growth goal then pause it.
+        let g = mgr
+            .add_growth_goal("Aprender Rust", None, None, "", None)
+            .await
+            .unwrap();
+        mgr.update_growth_goal_progress(&g.goal_id, 10, Some(GoalStatus::Paused))
+            .await
+            .unwrap();
+
+        // Create one active goal and backdate its updated_at to 90 days ago
+        // by hand-editing SQLite (no public API for that — keeps the
+        // production code from exposing time travel).
+        let stale = mgr
+            .add_growth_goal("Meta vieja", None, None, "", None)
+            .await
+            .unwrap();
+        let db_path = mgr.db_path.clone();
+        let stale_id = stale.goal_id.clone();
+        let backdate = (Utc::now() - chrono::Duration::days(90)).to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = MemoryPlaneManager::open_db(&db_path).unwrap();
+            db.execute(
+                "UPDATE growth_goals SET updated_at = ?1 WHERE goal_id = ?2",
+                rusqlite::params![backdate, stale_id],
+            )
+            .unwrap();
+        })
+        .await
+        .unwrap();
+
+        let items = mgr.forgetting_check("2026-04-07").await.unwrap();
+        assert!(items
+            .iter()
+            .any(|i| i.item_type == "growth_goal_paused" && i.name == "Aprender Rust"));
+        assert!(items
+            .iter()
+            .any(|i| i.item_type == "growth_goal" && i.name == "Meta vieja"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1 sprint 2 — Weekly shopping list generator
+    // -----------------------------------------------------------------------
+
+    async fn seed_recipes_for_generator(mgr: &MemoryPlaneManager) {
+        // Recipe 1: Pasta con camarones (contiene "camarones" → trigger).
+        mgr.add_recipe(
+            "Pasta con camarones",
+            None,
+            vec![
+                RecipeIngredient {
+                    name: "Camarones".to_string(),
+                    amount: 300.0,
+                    unit: "g".to_string(),
+                    notes: None,
+                },
+                RecipeIngredient {
+                    name: "Pasta".to_string(),
+                    amount: 250.0,
+                    unit: "g".to_string(),
+                    notes: None,
+                },
+            ],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec!["cena".to_string()],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Recipe 2: Ensalada cesar (no trigger).
+        mgr.add_recipe(
+            "Ensalada cesar",
+            None,
+            vec![
+                RecipeIngredient {
+                    name: "Lechuga".to_string(),
+                    amount: 1.0,
+                    unit: "pieza".to_string(),
+                    notes: None,
+                },
+                RecipeIngredient {
+                    name: "Pollo".to_string(),
+                    amount: 200.0,
+                    unit: "g".to_string(),
+                    notes: None,
+                },
+            ],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec!["cena".to_string()],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Recipe 3: Tacos de pollo (NO trigger, pollo + tortilla).
+        mgr.add_recipe(
+            "Tacos de pollo",
+            None,
+            vec![
+                RecipeIngredient {
+                    name: "Pollo".to_string(),
+                    amount: 300.0,
+                    unit: "g".to_string(),
+                    notes: None,
+                },
+                RecipeIngredient {
+                    name: "Tortilla".to_string(),
+                    amount: 8.0,
+                    unit: "pieza".to_string(),
+                    notes: None,
+                },
+            ],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(4),
+            vec!["cena".to_string()],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn weekly_shopping_excludes_recipes_with_allergens() {
+        let dir = temp_dir("memory-plane-weekly-shop-allergens");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Allergy to mariscos (substring of "camarones" via "mariscos"
+        // doesn't actually match — but "camarones" itself is an
+        // allergy label here).
+        mgr.add_nutrition_preference(
+            "allergy",
+            "camarones",
+            Some("severe"),
+            "alergia desde nino",
+            None,
+        )
+        .await
+        .unwrap();
+
+        seed_recipes_for_generator(&mgr).await;
+
+        let plan = mgr
+            .generate_weekly_shopping_list("Despensa de prueba", None, None, 10)
+            .await
+            .unwrap();
+
+        // Pasta con camarones is excluded; the other two are used.
+        assert_eq!(plan.recipes_used.len(), 2);
+        assert_eq!(plan.recipes_excluded.len(), 1);
+        assert_eq!(plan.recipes_excluded[0].matched_label, "camarones");
+        assert_eq!(plan.recipes_excluded[0].matched_pref_type, "allergy");
+
+        // Ingredients aggregated: pollo appears in both ensalada
+        // and tacos (200 + 300 = 500 g).
+        let pollo = plan
+            .list
+            .items
+            .iter()
+            .find(|i| i.name.to_lowercase().contains("pollo"));
+        let pollo = pollo.expect("pollo should be in the list");
+        assert_eq!(pollo.unit.as_deref(), Some("g"));
+        assert!(
+            (pollo.quantity.unwrap() - 500.0).abs() < 0.01,
+            "expected 500g pollo, got {:?}",
+            pollo.quantity
+        );
+
+        // The allergens_avoided list contains the trigger.
+        assert!(plan.allergens_avoided.iter().any(|l| l == "camarones"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn weekly_shopping_respects_max_recipes_cap() {
+        let dir = temp_dir("memory-plane-weekly-shop-cap");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        seed_recipes_for_generator(&mgr).await;
+
+        let plan = mgr
+            .generate_weekly_shopping_list("Compras", None, None, 1)
+            .await
+            .unwrap();
+        assert_eq!(plan.recipes_used.len(), 1);
+        assert!(plan.recipes_excluded.is_empty()); // not excluded, just not picked
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn weekly_shopping_empty_list_when_all_excluded() {
+        let dir = temp_dir("memory-plane-weekly-shop-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Allergy to "pollo" + "camarones" excludes ALL three seeded
+        // recipes.
+        mgr.add_nutrition_preference("allergy", "pollo", Some("severe"), "", None)
+            .await
+            .unwrap();
+        mgr.add_nutrition_preference("allergy", "camarones", Some("severe"), "", None)
+            .await
+            .unwrap();
+
+        seed_recipes_for_generator(&mgr).await;
+
+        let plan = mgr
+            .generate_weekly_shopping_list("Compras vacias", None, None, 10)
+            .await
+            .unwrap();
+        assert!(plan.recipes_used.is_empty());
+        assert_eq!(plan.recipes_excluded.len(), 3);
+        assert!(plan.list.items.is_empty());
+        // Even an empty list is persisted — the user can still see it.
+        let fetched = mgr.get_shopping_list(&plan.list.list_id).await.unwrap();
+        assert!(fetched.is_some());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn weekly_shopping_dedups_by_name_and_unit() {
+        let dir = temp_dir("memory-plane-weekly-shop-dedup");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Two recipes that share an ingredient with the SAME unit
+        // (should be summed) plus a recipe with the same ingredient
+        // in a different unit (should remain separate).
+        mgr.add_recipe(
+            "R1",
+            None,
+            vec![RecipeIngredient {
+                name: "Leche".to_string(),
+                amount: 1.0,
+                unit: "l".to_string(),
+                notes: None,
+            }],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec![],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_recipe(
+            "R2",
+            None,
+            vec![RecipeIngredient {
+                name: "Leche".to_string(),
+                amount: 0.5,
+                unit: "l".to_string(),
+                notes: None,
+            }],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec![],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_recipe(
+            "R3",
+            None,
+            vec![RecipeIngredient {
+                name: "Leche".to_string(),
+                amount: 200.0,
+                unit: "ml".to_string(),
+                notes: None,
+            }],
+            vec!["paso 1".to_string()],
+            None,
+            None,
+            Some(2),
+            vec![],
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let plan = mgr
+            .generate_weekly_shopping_list("Test dedup", None, None, 10)
+            .await
+            .unwrap();
+        let leche_rows: Vec<_> = plan
+            .list
+            .items
+            .iter()
+            .filter(|i| i.name.to_lowercase() == "leche")
+            .collect();
+        assert_eq!(
+            leche_rows.len(),
+            2,
+            "expected one row per unit (l + ml), got {}",
+            leche_rows.len()
+        );
+        let l_row = leche_rows
+            .iter()
+            .find(|r| r.unit.as_deref() == Some("l"))
+            .unwrap();
+        assert!((l_row.quantity.unwrap() - 1.5).abs() < 0.01);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI sensible — Modo panico (/wipe-*) y predictor menstrual
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn wipe_rejects_wrong_confirmation_phrase() {
+        let dir = temp_dir("memory-plane-wipe-bad-phrase");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert one mood checkin so there is data to (try to) wipe.
+        mgr.log_mood_checkin(7, None, None, "ok", None, None)
+            .await
+            .unwrap();
+
+        let bad = mgr.wipe_mental_health_data("borrar todo").await;
+        assert!(bad.is_err());
+        let bad2 = mgr.wipe_mental_health_data("").await;
+        assert!(bad2.is_err());
+
+        // Data is still there.
+        let still = mgr.list_mood_checkins(10).await.unwrap();
+        assert_eq!(still.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn wipe_mental_health_with_correct_phrase_clears_both_tables() {
+        let dir = temp_dir("memory-plane-wipe-mental-ok");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        mgr.log_mood_checkin(5, None, None, "", None, None)
+            .await
+            .unwrap();
+        mgr.log_mood_checkin(7, None, None, "", None, None)
+            .await
+            .unwrap();
+        mgr.add_journal_entry(
+            Some(4),
+            None,
+            None,
+            "una entrada de diario",
+            &[],
+            &[],
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let n = mgr
+            .wipe_mental_health_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+
+        // Both tables empty now.
+        assert!(mgr.list_mood_checkins(10).await.unwrap().is_empty());
+        assert!(mgr.list_journal_meta(10).await.unwrap().is_empty());
+
+        // Vault still configured.
+        assert!(mgr.is_reinforced_vault_configured().await.unwrap());
+
+        // Idempotent.
+        let n2 = mgr
+            .wipe_mental_health_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n2, 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn wipe_menstrual_clears_table_keeps_vault() {
+        let dir = temp_dir("memory-plane-wipe-mens");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.log_menstrual_entry(
+            Some(1),
+            Some("medium"),
+            &[],
+            None,
+            None,
+            None,
+            "",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let n = mgr
+            .wipe_menstrual_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(mgr
+            .list_menstrual_entries_meta(10)
+            .await
+            .unwrap()
+            .is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn wipe_sexual_health_clears_all_three_tables() {
+        let dir = temp_dir("memory-plane-wipe-sxh");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        mgr.log_sexual_health_entry("partner", None, Some(true), Some(8), true, "ok", None, None)
+            .await
+            .unwrap();
+        mgr.log_sti_test("HIV", "negative", Utc::now(), None, "", None)
+            .await
+            .unwrap();
+        mgr.add_contraception_method("condom", Utc::now(), "", None)
+            .await
+            .unwrap();
+
+        let n = mgr
+            .wipe_sexual_health_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n, 3);
+        assert!(mgr.list_sexual_health_meta(10).await.unwrap().is_empty());
+        assert!(mgr.list_sti_tests(10).await.unwrap().is_empty());
+        assert!(mgr
+            .list_contraception_methods(false)
+            .await
+            .unwrap()
+            .is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn wipe_relationship_events_keeps_relationship_profile() {
+        let dir = temp_dir("memory-plane-wipe-revt");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let r = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_relationship_event(
+            &r.relationship_id,
+            "argument",
+            Some(7),
+            Some("negative"),
+            "test",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let n = mgr
+            .wipe_relationship_events_data("BORRAR DEFINITIVAMENTE")
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+
+        // Events gone, but Maria still in relationships.
+        let metas = mgr
+            .list_relationship_event_meta(Some(&r.relationship_id), 10)
+            .await
+            .unwrap();
+        assert!(metas.is_empty());
+        let still = mgr.list_relationships(true).await.unwrap();
+        assert_eq!(still.len(), 1);
+        assert_eq!(still[0].name, "Maria");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_predictor_with_zero_or_one_periods() {
+        let dir = temp_dir("memory-plane-predict-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // No entries.
+        let p0 = mgr.predict_next_period().await.unwrap();
+        assert_eq!(p0.period_starts_detected, 0);
+        assert!(p0.predicted_next_period.is_none());
+
+        // One period — still cannot predict.
+        mgr.log_menstrual_entry(None, Some("medium"), &[], None, None, None, "", None, None)
+            .await
+            .unwrap();
+        let p1 = mgr.predict_next_period().await.unwrap();
+        assert_eq!(p1.period_starts_detected, 1);
+        assert!(p1.predicted_next_period.is_none());
+        assert!(p1.last_period_start.is_some());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_predictor_averages_last_cycles() {
+        let dir = temp_dir("memory-plane-predict-3cycles");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Simulate 3 period starts at 28-day intervals, ending today.
+        // Each period is 1 entry (sufficient — the gap-detection
+        // logic only needs the start day).
+        let now = Utc::now();
+        for days_ago in [56, 28, 0] {
+            mgr.log_menstrual_entry(
+                None,
+                Some("medium"),
+                &[],
+                None,
+                None,
+                None,
+                "",
+                Some(now - chrono::Duration::days(days_ago)),
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let p = mgr.predict_next_period().await.unwrap();
+        assert_eq!(p.period_starts_detected, 3);
+        // 2 gaps of 28 days → avg 28.
+        let avg = p.avg_cycle_length_days.unwrap();
+        assert!((avg - 28.0).abs() < 0.5, "expected ~28 got {}", avg);
+        // Predicted = today + 28 days, days_until ≈ 28.
+        let d = p.days_until_next.unwrap();
+        assert!((27..=29).contains(&d), "expected days_until ~28, got {}", d);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_predictor_groups_consecutive_days_as_one_period() {
+        let dir = temp_dir("memory-plane-predict-grouping");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // 3 consecutive days of flow + 1 entry 28 days later =
+        // 2 distinct period starts (not 4).
+        let now = Utc::now();
+        for days_ago in [30, 29, 28, 0] {
+            mgr.log_menstrual_entry(
+                None,
+                Some("medium"),
+                &[],
+                None,
+                None,
+                None,
+                "",
+                Some(now - chrono::Duration::days(days_ago)),
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        let p = mgr.predict_next_period().await.unwrap();
+        assert_eq!(p.period_starts_detected, 2);
+        let avg = p.avg_cycle_length_days.unwrap();
+        // Gap between start (30d ago) and start (0d ago) = 30.
+        assert!((avg - 30.0).abs() < 0.5, "expected ~30 got {}", avg);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1 — food_db + commerce + shopping lists
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn food_add_validates_source_and_round_trips() {
+        let dir = temp_dir("memory-plane-food-add");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let bad = mgr
+            .add_food(
+                "Test",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "weird",
+                None,
+                &[],
+            )
+            .await;
+        assert!(bad.is_err(), "invalid source must reject");
+
+        let f = mgr
+            .add_food(
+                "Avena Quaker",
+                Some("Quaker"),
+                Some("grain"),
+                Some(380.0),
+                Some(13.0),
+                Some(67.0),
+                Some(7.0),
+                Some(10.0),
+                Some(40.0),
+                "user",
+                Some("7501234567890"),
+                &["desayuno".to_string()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(f.name, "Avena Quaker");
+        assert_eq!(f.source, "user");
+        assert_eq!(f.tags, vec!["desayuno".to_string()]);
+
+        let by_id = mgr.get_food_by_id(&f.food_id).await.unwrap().unwrap();
+        assert_eq!(by_id.name, "Avena Quaker");
+        let by_bc = mgr
+            .get_food_by_barcode("7501234567890")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_bc.food_id, f.food_id);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn food_search_matches_substring_case_insensitive() {
+        let dir = temp_dir("memory-plane-food-search");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.add_food(
+            "Avena Quaker",
+            Some("Quaker"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "user",
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+        mgr.add_food(
+            "Manzana Roja",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "user",
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+        mgr.add_food(
+            "Pan integral Bimbo",
+            Some("Bimbo"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "user",
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let hits = mgr.search_foods("AVENA", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "Avena Quaker");
+
+        let by_brand = mgr.search_foods("bimbo", 10).await.unwrap();
+        assert_eq!(by_brand.len(), 1);
+
+        let none = mgr.search_foods("torta", 10).await.unwrap();
+        assert!(none.is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn food_rejects_negative_macros() {
+        let dir = temp_dir("memory-plane-food-neg");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr
+            .add_food(
+                "Bad",
+                None,
+                None,
+                Some(-50.0),
+                None,
+                None,
+                None,
+                None,
+                None,
+                "user",
+                None,
+                &[],
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn commerce_store_lifecycle_and_active_filter() {
+        let dir = temp_dir("memory-plane-store");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let s1 = mgr
+            .add_commerce_store("Walmart", Some("supermarket"), Some("Centro"), None)
+            .await
+            .unwrap();
+        let _s2 = mgr
+            .add_commerce_store("Mercado SJR", Some("mercado"), None, None)
+            .await
+            .unwrap();
+        assert_eq!(mgr.list_commerce_stores(true).await.unwrap().len(), 2);
+
+        let ok = mgr.deactivate_commerce_store(&s1.store_id).await.unwrap();
+        assert!(ok);
+        assert_eq!(mgr.list_commerce_stores(true).await.unwrap().len(), 1);
+        assert_eq!(mgr.list_commerce_stores(false).await.unwrap().len(), 2);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn commerce_price_rejects_unknown_store_and_records_valid() {
+        let dir = temp_dir("memory-plane-prices");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let bad = mgr
+            .record_commerce_price(
+                "store-doesnt-exist",
+                None,
+                "leche",
+                28.0,
+                "MXN",
+                Some("l"),
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(bad.is_err());
+
+        let s = mgr
+            .add_commerce_store("Walmart", Some("supermarket"), None, None)
+            .await
+            .unwrap();
+        let f = mgr
+            .add_food(
+                "Leche",
+                None,
+                None,
+                Some(60.0),
+                None,
+                None,
+                None,
+                None,
+                None,
+                "user",
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+        let p = mgr
+            .record_commerce_price(
+                &s.store_id,
+                Some(&f.food_id),
+                "Leche entera 1L",
+                28.50,
+                "MXN",
+                Some("l"),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(p.product_name, "Leche entera 1L");
+
+        let by_food = mgr.list_prices_for_food(&f.food_id, 10).await.unwrap();
+        assert_eq!(by_food.len(), 1);
+        let by_store = mgr.list_prices_at_store(&s.store_id, 10).await.unwrap();
+        assert_eq!(by_store.len(), 1);
+
+        // Negative price → reject.
+        let neg = mgr
+            .record_commerce_price(
+                &s.store_id,
+                None,
+                "test",
+                -1.0,
+                "MXN",
+                None,
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(neg.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn shopping_list_lifecycle_and_check_item() {
+        let dir = temp_dir("memory-plane-shopping");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let items = vec![
+            ShoppingListItem {
+                name: "leche".to_string(),
+                quantity: Some(2.0),
+                unit: Some("l".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "manzanas".to_string(),
+                quantity: Some(1.0),
+                unit: Some("kg".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+        ];
+        let l = mgr
+            .create_shopping_list("Despensa semanal", None, &items, None)
+            .await
+            .unwrap();
+        assert_eq!(l.items.len(), 2);
+        assert_eq!(l.status, "active");
+
+        // Check first item.
+        let ok = mgr
+            .check_shopping_list_item(&l.list_id, 0, true)
+            .await
+            .unwrap();
+        assert!(ok);
+        let g = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert!(g.items[0].checked);
+        assert!(!g.items[1].checked);
+
+        // Out-of-bounds index → false but not error.
+        let bad_idx = mgr
+            .check_shopping_list_item(&l.list_id, 99, true)
+            .await
+            .unwrap();
+        assert!(!bad_idx);
+
+        // Filter by status.
+        let active = mgr.list_shopping_lists(Some("active")).await.unwrap();
+        assert_eq!(active.len(), 1);
+        let archived = mgr.list_shopping_lists(Some("archived")).await.unwrap();
+        assert!(archived.is_empty());
+
+        // Complete + archive lifecycle.
+        assert!(mgr.complete_shopping_list(&l.list_id).await.unwrap());
+        let g2 = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(g2.status, "completed");
+        assert!(mgr.archive_shopping_list(&l.list_id).await.unwrap());
+        let g3 = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(g3.status, "archived");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.3.1 sprint 3 — Live editable shopping lists
+    // -----------------------------------------------------------------------
+
+    async fn make_shopping_list_with_items(mgr: &MemoryPlaneManager) -> ShoppingList {
+        let items = vec![
+            ShoppingListItem {
+                name: "Leche entera".to_string(),
+                quantity: Some(1.0),
+                unit: Some("l".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "Pan integral".to_string(),
+                quantity: Some(1.0),
+                unit: Some("pieza".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "Manzanas".to_string(),
+                quantity: Some(1.0),
+                unit: Some("kg".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+        ];
+        mgr.create_shopping_list("Despensa", None, &items, None)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_active_shopping_list_returns_most_recent() {
+        let dir = temp_dir("memory-plane-shop-active");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // No active lists yet.
+        assert!(mgr.get_active_shopping_list().await.unwrap().is_none());
+
+        let _l1 = mgr
+            .create_shopping_list("Lista 1", None, &[], None)
+            .await
+            .unwrap();
+        // Tiny sleep so created_at differs.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let l2 = mgr
+            .create_shopping_list("Lista 2 mas reciente", None, &[], None)
+            .await
+            .unwrap();
+
+        let active = mgr.get_active_shopping_list().await.unwrap().unwrap();
+        assert_eq!(active.list_id, l2.list_id);
+
+        // Archive the most recent → the older one becomes the active one.
+        mgr.archive_shopping_list(&l2.list_id).await.unwrap();
+        let active2 = mgr.get_active_shopping_list().await.unwrap().unwrap();
+        assert_eq!(active2.name, "Lista 1");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn add_shopping_list_item_extends_list() {
+        let dir = temp_dir("memory-plane-shop-add");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+
+        let new_item = ShoppingListItem {
+            name: "Tortillas".to_string(),
+            quantity: Some(1.0),
+            unit: Some("paquete".to_string()),
+            food_id: None,
+            checked: false,
+            notes: Some("para la cena".to_string()),
+        };
+        let updated = mgr
+            .add_shopping_list_item(&l.list_id, new_item)
+            .await
+            .unwrap()
+            .expect("list should exist");
+        assert_eq!(updated.items.len(), 4);
+        assert_eq!(updated.items.last().unwrap().name, "Tortillas");
+
+        // Persisted: re-fetch and verify.
+        let fetched = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(fetched.items.len(), 4);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn add_shopping_list_item_returns_none_for_unknown_list() {
+        let dir = temp_dir("memory-plane-shop-add-unknown");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let item = ShoppingListItem {
+            name: "X".to_string(),
+            quantity: None,
+            unit: None,
+            food_id: None,
+            checked: false,
+            notes: None,
+        };
+        let result = mgr
+            .add_shopping_list_item("shop-doesnt-exist", item)
+            .await
+            .unwrap();
+        assert!(result.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn remove_shopping_list_item_drops_correct_item() {
+        let dir = temp_dir("memory-plane-shop-remove");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+
+        // Remove the middle one (Pan).
+        let ok = mgr.remove_shopping_list_item(&l.list_id, 1).await.unwrap();
+        assert!(ok);
+
+        let fetched = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(fetched.items.len(), 2);
+        assert_eq!(fetched.items[0].name, "Leche entera");
+        assert_eq!(fetched.items[1].name, "Manzanas");
+
+        // Out-of-bounds → false, no error.
+        let bad = mgr.remove_shopping_list_item(&l.list_id, 99).await.unwrap();
+        assert!(!bad);
+
+        // Unknown list → false.
+        let unknown = mgr.remove_shopping_list_item("shop-nope", 0).await.unwrap();
+        assert!(!unknown);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_first_match_with_count() {
+        let dir = temp_dir("memory-plane-shop-check-name");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Create a list with TWO items containing "leche".
+        let items = vec![
+            ShoppingListItem {
+                name: "Leche entera".to_string(),
+                quantity: Some(1.0),
+                unit: Some("l".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "Leche deslactosada".to_string(),
+                quantity: Some(1.0),
+                unit: Some("l".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+            ShoppingListItem {
+                name: "Pan integral".to_string(),
+                quantity: Some(1.0),
+                unit: Some("pieza".to_string()),
+                food_id: None,
+                checked: false,
+                notes: None,
+            },
+        ];
+        let l = mgr
+            .create_shopping_list("Test", None, &items, None)
+            .await
+            .unwrap();
+
+        // Match "leche" → should pick the first one and report 2 matches.
+        let m = mgr
+            .check_shopping_list_item_by_name(&l.list_id, "leche", true)
+            .await
+            .unwrap()
+            .expect("should match");
+        assert_eq!(m.item_index, 0);
+        assert_eq!(m.matched_name, "Leche entera");
+        assert_eq!(m.total_matches, 2);
+
+        // Verify only the first item was checked.
+        let fetched = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert!(fetched.items[0].checked);
+        assert!(!fetched.items[1].checked);
+        assert!(!fetched.items[2].checked);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_unique_match() {
+        let dir = temp_dir("memory-plane-shop-check-unique");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+
+        let m = mgr
+            .check_shopping_list_item_by_name(&l.list_id, "PAN", true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(m.matched_name, "Pan integral");
+        assert_eq!(m.total_matches, 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_no_match() {
+        let dir = temp_dir("memory-plane-shop-check-nomatch");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+
+        let m = mgr
+            .check_shopping_list_item_by_name(&l.list_id, "chocolate", true)
+            .await
+            .unwrap();
+        assert!(m.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_unknown_list_returns_none() {
+        let dir = temp_dir("memory-plane-shop-check-noliste");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let m = mgr
+            .check_shopping_list_item_by_name("shop-nope", "leche", true)
+            .await
+            .unwrap();
+        assert!(m.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // Vida Plena refinements de cierre
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn shopping_list_clear_completed_removes_only_checked() {
+        let dir = temp_dir("memory-plane-shop-clear");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await; // 3 items, none checked
+
+        // Check 2 of 3 items.
+        mgr.check_shopping_list_item(&l.list_id, 0, true)
+            .await
+            .unwrap();
+        mgr.check_shopping_list_item(&l.list_id, 2, true)
+            .await
+            .unwrap();
+
+        let removed = mgr
+            .shopping_list_clear_completed(&l.list_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(removed, 2);
+
+        let fetched = mgr.get_shopping_list(&l.list_id).await.unwrap().unwrap();
+        assert_eq!(fetched.items.len(), 1);
+        assert_eq!(fetched.items[0].name, "Pan integral"); // the unchecked one survived
+
+        // Idempotent — second call removes nothing.
+        let again = mgr
+            .shopping_list_clear_completed(&l.list_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(again, 0);
+
+        // Unknown list → None.
+        let none = mgr
+            .shopping_list_clear_completed("shop-doesnt-exist")
+            .await
+            .unwrap();
+        assert!(none.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn mood_log_streak_empty_returns_zeros() {
+        let dir = temp_dir("memory-plane-mood-streak-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let s = mgr.get_mood_log_streak("2026-04-08").await.unwrap();
+        assert_eq!(s.current_streak_days, 0);
+        assert_eq!(s.longest_streak_days, 0);
+        assert_eq!(s.total_log_days, 0);
+        assert!(s.last_log_date.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn mood_log_streak_counts_consecutive_days_back_from_today() {
+        let dir = temp_dir("memory-plane-mood-streak-3");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Insert mood logs at specific UTC dates so the day-bucket
+        // grouping is deterministic regardless of host timezone.
+        let dates = ["2026-04-08", "2026-04-07", "2026-04-06", "2026-04-04"];
+        for d in dates {
+            let ts = format!("{}T12:00:00Z", d);
+            let parsed: DateTime<Utc> = chrono::DateTime::parse_from_rfc3339(&ts)
+                .unwrap()
+                .with_timezone(&Utc);
+            mgr.log_mood_checkin(7, None, None, "", Some(parsed), None)
+                .await
+                .unwrap();
+        }
+        // 2x logs on the same day shouldn't double-count.
+        let same_day_extra: DateTime<Utc> =
+            chrono::DateTime::parse_from_rfc3339("2026-04-08T20:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc);
+        mgr.log_mood_checkin(8, None, None, "", Some(same_day_extra), None)
+            .await
+            .unwrap();
+
+        // From today=2026-04-08: 08, 07, 06 are consecutive → 3.
+        // 04 is a gap (05 missing), so streak stops at 3.
+        let s = mgr.get_mood_log_streak("2026-04-08").await.unwrap();
+        assert_eq!(s.current_streak_days, 3, "got {:?}", s);
+        assert_eq!(s.total_log_days, 4); // 04, 06, 07, 08 — same-day extra dedup'd
+                                         // Longest streak should also be 3 (06,07,08).
+        assert_eq!(s.longest_streak_days, 3);
+        assert_eq!(s.last_log_date.as_deref(), Some("2026-04-08"));
+
+        // From a later day where today doesn't have a log → current=0.
+        let s2 = mgr.get_mood_log_streak("2026-04-10").await.unwrap();
+        assert_eq!(s2.current_streak_days, 0);
+        assert_eq!(s2.longest_streak_days, 3);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn habit_current_streak_consecutive_days_back() {
+        let dir = temp_dir("memory-plane-habit-streak-current");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h = mgr
+            .add_habit("Meditar", None, "daily", "", None)
+            .await
+            .unwrap();
+        // Check-ins for 2026-04-06, 07, 08 (consecutive ending today).
+        for d in ["2026-04-06", "2026-04-07", "2026-04-08"] {
+            mgr.log_habit_checkin(&h.habit_id, true, d, None)
+                .await
+                .unwrap();
+        }
+        // Older streak: 2026-04-01, 02, 03 (3 days), gap, then the 3 above.
+        for d in ["2026-04-01", "2026-04-02", "2026-04-03"] {
+            mgr.log_habit_checkin(&h.habit_id, true, d, None)
+                .await
+                .unwrap();
+        }
+
+        let s = mgr
+            .get_habit_current_streak(&h.habit_id, "2026-04-08")
+            .await
+            .unwrap();
+        assert_eq!(s.current_streak_days, 3);
+        assert_eq!(s.longest_streak_days, 3); // tied
+        assert_eq!(s.last_completed_date.as_deref(), Some("2026-04-08"));
+        assert_eq!(s.habit_name, "Meditar");
+
+        // Today not checked → current=0, longest still 3.
+        let s2 = mgr
+            .get_habit_current_streak(&h.habit_id, "2026-04-10")
+            .await
+            .unwrap();
+        assert_eq!(s2.current_streak_days, 0);
+        assert_eq!(s2.longest_streak_days, 3);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn habits_due_today_excludes_logged_ones() {
+        let dir = temp_dir("memory-plane-habits-due");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let h1 = mgr
+            .add_habit("Meditar", None, "daily", "", None)
+            .await
+            .unwrap();
+        let h2 = mgr
+            .add_habit("Leer", None, "daily", "", None)
+            .await
+            .unwrap();
+        let h3 = mgr
+            .add_habit("Correr", None, "daily", "", None)
+            .await
+            .unwrap();
+
+        // Mark h1 as done today.
+        mgr.log_habit_checkin(&h1.habit_id, true, "2026-04-08", None)
+            .await
+            .unwrap();
+        // Mark h2 as INCOMPLETE today (completed=false). Should still
+        // count as "due" since the active filter expects completed=1.
+        mgr.log_habit_checkin(&h2.habit_id, false, "2026-04-08", None)
+            .await
+            .unwrap();
+
+        let due = mgr.get_habits_due_today("2026-04-08").await.unwrap();
+        let names: Vec<String> = due.iter().map(|h| h.name.clone()).collect();
+        assert!(names.contains(&"Leer".to_string()));
+        assert!(names.contains(&"Correr".to_string()));
+        assert!(!names.contains(&"Meditar".to_string()));
+
+        // Inactive habits don't appear at all.
+        mgr.deactivate_habit(&h3.habit_id).await.unwrap();
+        let due2 = mgr.get_habits_due_today("2026-04-08").await.unwrap();
+        let names2: Vec<String> = due2.iter().map(|h| h.name.clone()).collect();
+        assert!(!names2.contains(&"Correr".to_string()));
+        assert_eq!(due2.len(), 1); // only Leer
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn stale_relationships_filters_by_importance_and_threshold() {
+        let dir = temp_dir("memory-plane-stale-rels");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let r_high = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        let _r_low = mgr
+            .add_relationship("Bob", "acquaintance", None, 3, None, None, None, "", None)
+            .await
+            .unwrap();
+        let r_mid = mgr
+            .add_relationship("Pedro", "friend", None, 7, None, None, None, "", None)
+            .await
+            .unwrap();
+
+        // Backdate Maria to 60 days ago, Pedro to 10 days ago.
+        let db_path = mgr.db_path.clone();
+        let maria_id = r_high.relationship_id.clone();
+        let pedro_id = r_mid.relationship_id.clone();
+        let backdate_60 = (Utc::now() - chrono::Duration::days(60)).to_rfc3339();
+        let backdate_10 = (Utc::now() - chrono::Duration::days(10)).to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = MemoryPlaneManager::open_db(&db_path).unwrap();
+            db.execute(
+                "UPDATE relationships SET created_at = ?1 WHERE relationship_id = ?2",
+                rusqlite::params![backdate_60, maria_id],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE relationships SET created_at = ?1 WHERE relationship_id = ?2",
+                rusqlite::params![backdate_10, pedro_id],
+            )
+            .unwrap();
+        })
+        .await
+        .unwrap();
+
+        // min_importance=7, days_threshold=30 → only Maria (10/10 + 60d ago).
+        // Pedro is 7/10 but only 10d old.
+        // Bob is 3/10 → filtered by importance.
+        let stale = mgr.get_stale_relationships(7, 30).await.unwrap();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].name, "Maria");
+
+        // Lower threshold to 7 days → both Maria + Pedro.
+        let stale2 = mgr.get_stale_relationships(7, 7).await.unwrap();
+        assert_eq!(stale2.len(), 2);
+
+        // Lower importance to 1 with threshold 30 → still only Maria
+        // (because Pedro and Bob are both < 30 days).
+        let stale3 = mgr.get_stale_relationships(1, 30).await.unwrap();
+        assert_eq!(stale3.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn shopping_list_to_summary_pure_derivation() {
+        let now = Utc::now();
+        let list = ShoppingList {
+            list_id: "shop-test".to_string(),
+            name: "Test".to_string(),
+            target_store_id: Some("store-1".to_string()),
+            status: "active".to_string(),
+            items: vec![
+                ShoppingListItem {
+                    name: "A".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "B".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "C".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: false,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "D".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: false,
+                    notes: None,
+                },
+            ],
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let s = shopping_list_to_summary(&list);
+        assert_eq!(s.list_id, "shop-test");
+        assert_eq!(s.total_items, 4);
+        assert_eq!(s.checked_items, 2);
+        assert_eq!(s.remaining_items, 2);
+        assert_eq!(s.percent_complete, 50);
+        assert_eq!(s.target_store_id.as_deref(), Some("store-1"));
+    }
+
+    #[test]
+    fn shopping_list_to_summary_handles_empty_list() {
+        let now = Utc::now();
+        let list = ShoppingList {
+            list_id: "shop-empty".to_string(),
+            name: "Empty".to_string(),
+            target_store_id: None,
+            status: "active".to_string(),
+            items: vec![],
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let s = shopping_list_to_summary(&list);
+        assert_eq!(s.total_items, 0);
+        assert_eq!(s.checked_items, 0);
+        assert_eq!(s.remaining_items, 0);
+        // No div-by-zero — empty list reports 0%, not NaN.
+        assert_eq!(s.percent_complete, 0);
+    }
+
+    #[test]
+    fn shopping_list_to_summary_all_checked_is_100_percent() {
+        let now = Utc::now();
+        let list = ShoppingList {
+            list_id: "shop-done".to_string(),
+            name: "Done".to_string(),
+            target_store_id: None,
+            status: "active".to_string(),
+            items: vec![
+                ShoppingListItem {
+                    name: "A".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "B".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+                ShoppingListItem {
+                    name: "C".to_string(),
+                    quantity: None,
+                    unit: None,
+                    food_id: None,
+                    checked: true,
+                    notes: None,
+                },
+            ],
+            notes: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let s = shopping_list_to_summary(&list);
+        assert_eq!(s.percent_complete, 100);
+        assert_eq!(s.remaining_items, 0);
+    }
+
+    #[tokio::test]
+    async fn get_shopping_list_summary_round_trip() {
+        let dir = temp_dir("memory-plane-shop-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await; // 3 items, none checked
+
+        let s = mgr
+            .get_shopping_list_summary(&l.list_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(s.total_items, 3);
+        assert_eq!(s.checked_items, 0);
+        assert_eq!(s.percent_complete, 0);
+
+        // Check one item and re-summary.
+        mgr.check_shopping_list_item(&l.list_id, 0, true)
+            .await
+            .unwrap();
+        let s2 = mgr
+            .get_shopping_list_summary(&l.list_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(s2.checked_items, 1);
+        assert_eq!(s2.remaining_items, 2);
+        // 1/3 → 33.33% rounds to 33.
+        assert_eq!(s2.percent_complete, 33);
+
+        // Unknown list → None.
+        let none = mgr
+            .get_shopping_list_summary("shop-doesnt-exist")
+            .await
+            .unwrap();
+        assert!(none.is_none());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn check_by_name_rejects_empty_needle() {
+        let dir = temp_dir("memory-plane-shop-check-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let l = make_shopping_list_with_items(&mgr).await;
+        let err = mgr
+            .check_shopping_list_item_by_name(&l.list_id, "   ", true)
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.6 — Salud femenina / ciclo menstrual
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn menstrual_log_without_narrative_does_not_need_vault() {
+        let dir = temp_dir("memory-plane-mens-no-vault");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let (entry, det) = mgr
+            .log_menstrual_entry(
+                Some(2),
+                Some("medium"),
+                &["calambres".to_string()],
+                Some(5),
+                Some(4),
+                Some(7),
+                "",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(det.is_none());
+        assert!(!entry.had_crisis_pattern);
+        assert_eq!(entry.flow_intensity.as_deref(), Some("medium"));
+        assert_eq!(entry.symptoms, vec!["calambres".to_string()]);
+
+        // Lock vault is the default — meta should still be visible.
+        let meta = mgr.list_menstrual_entries_meta(10).await.unwrap();
+        assert_eq!(meta.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_log_with_narrative_requires_vault() {
+        let dir = temp_dir("memory-plane-mens-vault-needed");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let err = mgr
+            .log_menstrual_entry(
+                Some(2),
+                Some("medium"),
+                &[],
+                None,
+                None,
+                None,
+                "tuve un dia muy dificil con mucho dolor",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err(), "narrative requires vault");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_log_rejects_invalid_flow_intensity() {
+        let dir = temp_dir("memory-plane-mens-bad-flow");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr
+            .log_menstrual_entry(
+                None,
+                Some("torrencial"),
+                &[],
+                None,
+                None,
+                None,
+                "",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_summary_computes_days_since_last_period() {
+        let dir = temp_dir("memory-plane-mens-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Mid-cycle entry today (no flow).
+        mgr.log_menstrual_entry(
+            Some(14),
+            Some("none"),
+            &[],
+            Some(7),
+            None,
+            None,
+            "",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        // Period entry 5 days ago — flow=medium.
+        let five_days_ago = Utc::now() - chrono::Duration::days(5);
+        mgr.log_menstrual_entry(
+            Some(1),
+            Some("medium"),
+            &["calambres".to_string()],
+            Some(5),
+            None,
+            Some(7),
+            "",
+            Some(five_days_ago),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let s = mgr.get_menstrual_cycle_summary(50).await.unwrap();
+        assert_eq!(s.entries_last_30d, 2);
+        // days_since_last_period should be ~5
+        let d = s.days_since_last_period.unwrap();
+        assert!((4..=6).contains(&d), "expected ~5, got {}", d);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn menstrual_roundtrip_under_vault_decrypts_narrative() {
+        let dir = temp_dir("memory-plane-mens-rt");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        mgr.log_menstrual_entry(
+            Some(3),
+            Some("heavy"),
+            &["dolor".to_string()],
+            Some(3),
+            None,
+            Some(8),
+            "fue un dia complicado",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let full = mgr.list_menstrual_entries(10).await.unwrap();
+        assert_eq!(full.len(), 1);
+        assert!(full[0].narrative.contains("complicado"));
+
+        // Lock and verify narrative is empty in full list (errors out).
+        mgr.lock_reinforced_vault();
+        let err = mgr.list_menstrual_entries(10).await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.12 — Salud sexual
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn sexual_health_requires_vault_unlocked() {
+        let dir = temp_dir("memory-plane-sxh-locked");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr
+            .log_sexual_health_entry(
+                "partner",
+                None,
+                Some(true),
+                Some(8),
+                true,
+                "test",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sexual_health_consent_false_always_marks_crisis() {
+        let dir = temp_dir("memory-plane-sxh-consent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        // Narrative deliberately neutral — but consent_clear=false
+        // must still set the flag and severity=severe.
+        let (entry, det) = mgr
+            .log_sexual_health_entry(
+                "partner",
+                None,
+                Some(true),
+                Some(3),
+                false,
+                "una situacion confusa",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let d = det.expect("consent=false must always trigger crisis");
+        assert_eq!(d.severity, "severe");
+        assert!(entry.had_crisis_pattern);
+        assert!(!entry.consent_clear);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sexual_health_meta_visible_locked_narrative_protected() {
+        let dir = temp_dir("memory-plane-sxh-meta");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        mgr.log_sexual_health_entry(
+            "partner",
+            None,
+            Some(true),
+            Some(8),
+            true,
+            "encuentro tranquilo",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.lock_reinforced_vault();
+
+        let meta = mgr.list_sexual_health_meta(10).await.unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].encounter_type, "partner");
+        assert_eq!(meta[0].narrative, "");
+        assert!(meta[0].consent_clear);
+
+        let err = mgr.list_sexual_health_entries(10).await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sexual_health_rejects_invalid_encounter_type() {
+        let dir = temp_dir("memory-plane-sxh-bad-type");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let err = mgr
+            .log_sexual_health_entry("weird", None, None, None, true, "test", None, None)
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sti_test_lifecycle_and_validation() {
+        let dir = temp_dir("memory-plane-sti");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Bad result → reject.
+        let bad = mgr
+            .log_sti_test("HIV", "maybe", Utc::now(), None, "", None)
+            .await;
+        assert!(bad.is_err());
+
+        // Good result.
+        let t = mgr
+            .log_sti_test(
+                "HIV",
+                "Negative",
+                Utc::now(),
+                Some("Lab Salud"),
+                "rutinario",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(t.result, "negative"); // lowercased
+        assert_eq!(t.notes, "rutinario"); // round-trip decrypted
+
+        let listed = mgr.list_sti_tests(10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn contraception_lifecycle() {
+        let dir = temp_dir("memory-plane-ctp");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let m = mgr
+            .add_contraception_method(
+                "iud_hormonal",
+                Utc::now() - chrono::Duration::days(120),
+                "tolerado bien",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(m.method_name, "iud_hormonal");
+
+        let active = mgr.list_contraception_methods(true).await.unwrap();
+        assert_eq!(active.len(), 1);
+
+        let ended = mgr
+            .end_contraception_method(&m.method_id, None)
+            .await
+            .unwrap();
+        assert!(ended);
+        let active = mgr.list_contraception_methods(true).await.unwrap();
+        assert!(active.is_empty());
+        let all = mgr.list_contraception_methods(false).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].ended_at.is_some());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sexual_health_summary_aggregates_with_consent_violations() {
+        let dir = temp_dir("memory-plane-sxh-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        // 1 normal, 1 consent violation.
+        mgr.log_sexual_health_entry("partner", None, Some(true), Some(8), true, "ok", None, None)
+            .await
+            .unwrap();
+        mgr.log_sexual_health_entry(
+            "partner",
+            None,
+            None,
+            None,
+            false,
+            "no me sentia bien con la situacion",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.log_sti_test("HIV", "negative", Utc::now(), None, "", None)
+            .await
+            .unwrap();
+
+        mgr.lock_reinforced_vault();
+        let s = mgr.get_sexual_health_summary(50).await.unwrap();
+        assert!(!s.vault_unlocked);
+        assert_eq!(s.entries_last_30d, 2);
+        assert_eq!(s.consent_violations_count_30d, 1);
+        // Only the consent violation triggers crisis. The "ok" text
+        // does not match any moderate/high/severe keyword.
+        assert_eq!(s.crisis_pattern_count_30d, 1);
+        assert_eq!(s.days_since_last_sti_test, Some(0));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9.2 — Relationship events (vault-protected narrative)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn relationship_event_requires_vault_unlocked() {
+        let dir = temp_dir("memory-plane-revt-locked");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Vault not configured at all → should fail.
+        // We don't even get to the relationship check because the
+        // crisis detector + encrypt path runs first and bails on vault.
+        // (Actually no — we check rel exists first, then encrypt.
+        // So we need a relationship to test the vault gate.)
+        let r = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        let err = mgr
+            .add_relationship_event(
+                &r.relationship_id,
+                "argument",
+                Some(7),
+                Some("negative"),
+                "no debería poder escribir esto",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err(), "should fail without vault");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_rejects_unknown_relationship_id() {
+        let dir = temp_dir("memory-plane-revt-orphan");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let err = mgr
+            .add_relationship_event(
+                "rel-doesnt-exist",
+                "argument",
+                Some(5),
+                Some("negative"),
+                "test",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_rejects_invalid_sentiment() {
+        let dir = temp_dir("memory-plane-revt-bad-sentiment");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let r = mgr
+            .add_relationship("Bob", "friend", None, 5, None, None, None, "", None)
+            .await
+            .unwrap();
+        let err = mgr
+            .add_relationship_event(
+                &r.relationship_id,
+                "argument",
+                Some(5),
+                Some("super-bad"),
+                "test",
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_roundtrip_under_vault_meta_visible_locked() {
+        let dir = temp_dir("memory-plane-revt-rt");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let r = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        let (event, detection) = mgr
+            .add_relationship_event(
+                &r.relationship_id,
+                "argument",
+                Some(8),
+                Some("negative"),
+                "discutimos por la cena, ambos estabamos cansados",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(detection.is_none());
+        assert!(!event.had_crisis_pattern);
+        assert_eq!(event.event_type, "argument");
+
+        // Lock vault → meta still visible, full list errors out.
+        mgr.lock_reinforced_vault();
+        let metas = mgr
+            .list_relationship_event_meta(Some(&r.relationship_id), 10)
+            .await
+            .unwrap();
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].narrative, "");
+        assert_eq!(metas[0].intensity_1_10, Some(8));
+        let full = mgr.list_relationship_events(&r.relationship_id, 10).await;
+        assert!(full.is_err());
+
+        // Unlock → full list returns plaintext.
+        mgr.unlock_reinforced_vault("super-secret-pass-123")
+            .await
+            .unwrap();
+        let full = mgr
+            .list_relationship_events(&r.relationship_id, 10)
+            .await
+            .unwrap();
+        assert_eq!(full.len(), 1);
+        assert!(full[0].narrative.contains("cansados"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_crisis_persists_flag_not_keywords() {
+        let dir = temp_dir("memory-plane-revt-crisis");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let r = mgr
+            .add_relationship("Persona", "ex_partner", None, 8, None, None, None, "", None)
+            .await
+            .unwrap();
+        let (event, detection) = mgr
+            .add_relationship_event(
+                &r.relationship_id,
+                "concern",
+                Some(10),
+                Some("negative"),
+                "me grita y me amenaza, ya no aguanto",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let det = detection.expect("crisis expected");
+        assert_eq!(det.severity, "high");
+        assert!(event.had_crisis_pattern);
+
+        mgr.lock_reinforced_vault();
+        let metas = mgr
+            .list_relationship_event_meta(Some(&r.relationship_id), 10)
+            .await
+            .unwrap();
+        assert_eq!(metas.len(), 1);
+        assert!(metas[0].had_crisis_pattern);
+        assert_eq!(metas[0].narrative, ""); // keywords stay encrypted
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_timeline_aggregates_with_locked_vault() {
+        let dir = temp_dir("memory-plane-revt-timeline");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let r = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        // 2 negative events, 1 positive, 1 with crisis pattern.
+        mgr.add_relationship_event(
+            &r.relationship_id,
+            "argument",
+            Some(7),
+            Some("negative"),
+            "discusion por dinero",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_relationship_event(
+            &r.relationship_id,
+            "concern",
+            Some(9),
+            Some("negative"),
+            "me grita y no aguanto",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_relationship_event(
+            &r.relationship_id,
+            "reconciliation",
+            Some(8),
+            Some("positive"),
+            "logramos hablar tranquilos despues",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        mgr.lock_reinforced_vault();
+        let t = mgr
+            .get_relationship_timeline(&r.relationship_id, 50)
+            .await
+            .unwrap();
+        assert!(!t.vault_unlocked);
+        assert_eq!(t.events_last_30d, 3);
+        assert_eq!(t.crisis_pattern_count_last_30d, 1);
+        assert_eq!(t.negative_sentiment_count_30d, 2);
+        let avg = t.avg_intensity_30d.unwrap();
+        assert!((avg - 8.0).abs() < 0.01);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_event_meta_all_relationships() {
+        let dir = temp_dir("memory-plane-revt-meta-all");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let r1 = mgr
+            .add_relationship("Maria", "spouse", None, 10, None, None, None, "", None)
+            .await
+            .unwrap();
+        let r2 = mgr
+            .add_relationship("Pedro", "friend", None, 7, None, None, None, "", None)
+            .await
+            .unwrap();
+        mgr.add_relationship_event(
+            &r1.relationship_id,
+            "milestone",
+            Some(9),
+            Some("positive"),
+            "aniversario",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        mgr.add_relationship_event(
+            &r2.relationship_id,
+            "support",
+            Some(6),
+            Some("positive"),
+            "me acompano en un dia dificil",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // No filter → both events visible.
+        let all = mgr.list_relationship_event_meta(None, 100).await.unwrap();
+        assert_eq!(all.len(), 2);
+        // Filter by r1 → only one.
+        let only_r1 = mgr
+            .list_relationship_event_meta(Some(&r1.relationship_id), 100)
+            .await
+            .unwrap();
+        assert_eq!(only_r1.len(), 1);
+        assert_eq!(only_r1[0].event_type, "milestone");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.4 — Salud mental + diario emocional
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn detect_crisis_severe_keywords() {
+        let d = detect_crisis_in_text("a veces pienso en suicidio").unwrap();
+        assert_eq!(d.severity, "severe");
+        let d2 = detect_crisis_in_text("tengo ganas de cortarme cuando me siento asi").unwrap();
+        assert_eq!(d2.severity, "severe");
+    }
+
+    #[test]
+    fn detect_crisis_high_keywords() {
+        let d = detect_crisis_in_text("mi pareja me grita y me amenaza").unwrap();
+        assert_eq!(d.severity, "high");
+    }
+
+    #[test]
+    fn detect_crisis_moderate_keywords() {
+        let d = detect_crisis_in_text("ya no puedo con tanto trabajo").unwrap();
+        assert_eq!(d.severity, "moderate");
+    }
+
+    #[test]
+    fn detect_crisis_no_match() {
+        assert!(detect_crisis_in_text("hoy fui al parque con la familia").is_none());
+    }
+
+    #[test]
+    fn crisis_resources_mx_includes_911_and_saptel() {
+        let r = crisis_resources_mx();
+        assert!(r.iter().any(|c| c.phone == "911"));
+        assert!(r.iter().any(|c| c.name == "SAPTEL"));
+    }
+
+    #[tokio::test]
+    async fn mood_log_validates_range_and_lists() {
+        let dir = temp_dir("memory-plane-mood");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let bad = mgr.log_mood_checkin(11, None, None, "", None, None).await;
+        assert!(bad.is_err());
+
+        let c = mgr
+            .log_mood_checkin(7, Some(5), Some(4), "tarde tranquila", None, None)
+            .await
+            .unwrap();
+        assert_eq!(c.mood_1_10, 7);
+        assert_eq!(c.note, "tarde tranquila");
+
+        let listed = mgr.list_mood_checkins(10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].mood_1_10, 7);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn journal_add_requires_unlocked_vault() {
+        let dir = temp_dir("memory-plane-journal-locked");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Vault not configured at all → should fail.
+        let err = mgr
+            .add_journal_entry(
+                Some(5),
+                None,
+                None,
+                "no debería poder escribir esto",
+                &[],
+                &[],
+                None,
+                None,
+            )
+            .await;
+        assert!(err.is_err());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn journal_roundtrip_under_vault_and_meta_visible_locked() {
+        let dir = temp_dir("memory-plane-journal-rt");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let (entry, detection) = mgr
+            .add_journal_entry(
+                Some(4),
+                Some(3),
+                Some(7),
+                "hoy fue un dia dificil pero no tan terrible",
+                &["trabajo".to_string(), "agotamiento".to_string()],
+                &["junta".to_string()],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(detection.is_none(), "no crisis pattern expected");
+        assert!(!entry.had_crisis_pattern);
+
+        // Lock vault → meta is still visible, full list errors out.
+        mgr.lock_reinforced_vault();
+        let meta = mgr.list_journal_meta(10).await.unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].mood_1_10, Some(4));
+        assert_eq!(meta[0].narrative, "");
+        let full = mgr.list_journal_entries(10).await;
+        assert!(
+            full.is_err(),
+            "list_journal_entries should fail when locked"
+        );
+
+        // Unlock → full list returns plaintext.
+        mgr.unlock_reinforced_vault("super-secret-pass-123")
+            .await
+            .unwrap();
+        let full = mgr.list_journal_entries(10).await.unwrap();
+        assert_eq!(full.len(), 1);
+        assert!(full[0].narrative.contains("dia dificil"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn journal_crisis_pattern_persists_flag_but_not_keywords() {
+        let dir = temp_dir("memory-plane-journal-crisis");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        let (entry, detection) = mgr
+            .add_journal_entry(
+                Some(2),
+                None,
+                Some(9),
+                "hoy ya no puedo con todo, a veces pienso en suicidio",
+                &[],
+                &[],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let det = detection.expect("expected crisis detection");
+        assert_eq!(det.severity, "severe");
+        assert!(entry.had_crisis_pattern);
+
+        // Lock and check meta — the flag is visible without vault but
+        // narrative is not.
+        mgr.lock_reinforced_vault();
+        let meta = mgr.list_journal_meta(10).await.unwrap();
+        assert_eq!(meta.len(), 1);
+        assert!(meta[0].had_crisis_pattern);
+        assert_eq!(meta[0].narrative, "");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn mental_health_summary_works_locked_and_counts_crisis() {
+        let dir = temp_dir("memory-plane-mh-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+
+        // 2 mood check-ins.
+        mgr.log_mood_checkin(6, Some(5), Some(4), "ok", None, None)
+            .await
+            .unwrap();
+        mgr.log_mood_checkin(7, Some(6), Some(3), "mejor", None, None)
+            .await
+            .unwrap();
+        // 1 journal entry with crisis pattern.
+        mgr.add_journal_entry(
+            Some(3),
+            None,
+            Some(8),
+            "no aguanto mas, me quiero quitar la vida",
+            &[],
+            &[],
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        mgr.lock_reinforced_vault();
+        let s = mgr.get_mental_health_summary(50).await.unwrap();
+        assert!(!s.vault_unlocked);
+        assert_eq!(s.recent_mood_checkins.len(), 2);
+        assert_eq!(s.journal_entries_last_30d, 1);
+        assert_eq!(s.crisis_pattern_count_last_30d, 1);
+        let avg = s.avg_mood_7d.unwrap();
+        assert!((avg - 6.5).abs() < 0.01);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI cifrado reforzado — PIN local de segunda capa
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn local_pin_starts_unconfigured() {
+        let dir = temp_dir("memory-plane-pin-empty");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let s = mgr.local_pin_status().await.unwrap();
+        assert!(!s.configured);
+        assert_eq!(s.failed_attempts, 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_set_then_validate_success_resets_counter() {
+        let dir = temp_dir("memory-plane-pin-validate-ok");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_local_pin("1234", None, None).await.unwrap();
+
+        // One bad attempt to bump the counter.
+        let bad = mgr.validate_local_pin("9999").await.unwrap();
+        assert!(!bad.ok);
+        assert_eq!(bad.failed_attempts, 1);
+
+        // Then a good attempt resets to 0.
+        let good = mgr.validate_local_pin("1234").await.unwrap();
+        assert!(good.ok);
+        assert_eq!(good.failed_attempts, 0);
+
+        let s = mgr.local_pin_status().await.unwrap();
+        assert_eq!(s.failed_attempts, 0);
+        assert!(s.last_validated_at.is_some());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_rejects_too_short() {
+        let dir = temp_dir("memory-plane-pin-short");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr.set_local_pin("ab", None, None).await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_rejects_double_init() {
+        let dir = temp_dir("memory-plane-pin-double");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_local_pin("1234", None, None).await.unwrap();
+        let err = mgr.set_local_pin("5678", None, None).await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_max_failures_auto_locks_vault() {
+        let dir = temp_dir("memory-plane-pin-killswitch");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        // Configure vault and unlock it.
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        assert!(mgr.reinforced_vault_status().await.unwrap().unlocked);
+
+        // Configure PIN with low max_failures (3) and auto-lock on.
+        mgr.set_local_pin("1234", Some(3), Some(true))
+            .await
+            .unwrap();
+
+        // Two wrong attempts: still unlocked, counter incrementing.
+        for expected in 1..=2u32 {
+            let r = mgr.validate_local_pin("9999").await.unwrap();
+            assert!(!r.ok);
+            assert_eq!(r.failed_attempts, expected);
+            assert!(!r.vault_locked_as_kill_switch);
+            assert!(mgr.reinforced_vault_status().await.unwrap().unlocked);
+        }
+
+        // Third wrong attempt: hits max_failures → kill-switch.
+        let r = mgr.validate_local_pin("9999").await.unwrap();
+        assert!(!r.ok);
+        assert!(r.vault_locked_as_kill_switch);
+        assert_eq!(r.failed_attempts, 0); // counter reset post-killswitch
+        assert!(!mgr.reinforced_vault_status().await.unwrap().unlocked);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_auto_lock_disabled_does_not_lock_vault() {
+        let dir = temp_dir("memory-plane-pin-no-killswitch");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        // PIN with auto_lock_vault disabled.
+        mgr.set_local_pin("1234", Some(3), Some(false))
+            .await
+            .unwrap();
+
+        // Burn through all attempts.
+        for _ in 0..3 {
+            let r = mgr.validate_local_pin("9999").await.unwrap();
+            assert!(!r.ok);
+            assert!(!r.vault_locked_as_kill_switch);
+        }
+
+        // Counter is at max but vault is still unlocked.
+        let s = mgr.local_pin_status().await.unwrap();
+        assert_eq!(s.failed_attempts, 3);
+        assert!(mgr.reinforced_vault_status().await.unwrap().unlocked);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_clear_removes_meta() {
+        let dir = temp_dir("memory-plane-pin-clear");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        mgr.set_local_pin("1234", None, None).await.unwrap();
+        assert!(mgr.is_local_pin_set().await.unwrap());
+
+        mgr.clear_local_pin().await.unwrap();
+        assert!(!mgr.is_local_pin_set().await.unwrap());
+        // Idempotent.
+        mgr.clear_local_pin().await.unwrap();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn local_pin_validate_when_unconfigured_errors() {
+        let dir = temp_dir("memory-plane-pin-no-config");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        let err = mgr.validate_local_pin("1234").await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn constant_time_eq_slice_works() {
+        assert!(constant_time_eq_slice(b"hello", b"hello"));
+        assert!(!constant_time_eq_slice(b"hello", b"world"));
+        assert!(!constant_time_eq_slice(b"hello", b"hellos"));
+        assert!(!constant_time_eq_slice(b"", b"x"));
+        assert!(constant_time_eq_slice(b"", b""));
+    }
+
+    // -----------------------------------------------------------------------
+    // BI cifrado reforzado (foundation) — Argon2id vault
+    // -----------------------------------------------------------------------
+
+    /// Spawn a manager with a fast Argon2id profile for tests. The
+    /// production constants are too slow to run dozens of times in
+    /// the test suite (~50ms each adds up).
+    async fn make_vault_test_manager(prefix: &str) -> (MemoryPlaneManager, PathBuf) {
+        let dir = temp_dir(prefix);
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+        (mgr, dir)
+    }
+
+    #[tokio::test]
+    async fn vault_starts_locked_and_unconfigured() {
+        let (mgr, dir) = make_vault_test_manager("vault-empty").await;
+        let status = mgr.reinforced_vault_status().await.unwrap();
+        assert!(!status.configured);
+        assert!(!status.unlocked);
+        assert!(status.seconds_until_relock.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vault_set_passphrase_then_roundtrip() {
+        let (mgr, dir) = make_vault_test_manager("vault-roundtrip").await;
+        mgr.set_reinforced_passphrase("super-secret-pass-123", Some(60))
+            .await
+            .unwrap();
+        let status = mgr.reinforced_vault_status().await.unwrap();
+        assert!(status.configured);
+        assert!(status.unlocked);
+
+        let (n, c) = mgr.encrypt_reinforced("notas privadas").unwrap();
+        assert_ne!(c, "notas privadas");
+        let plain = mgr.decrypt_reinforced(&n, &c).unwrap();
+        assert_eq!(plain, "notas privadas");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vault_set_passphrase_rejects_short() {
+        let (mgr, dir) = make_vault_test_manager("vault-short").await;
+        let err = mgr.set_reinforced_passphrase("abc", None).await;
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vault_set_passphrase_rejects_double_init() {
+        let (mgr, dir) = make_vault_test_manager("vault-double").await;
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let second = mgr
+            .set_reinforced_passphrase("otra-pass-bien-larga", None)
+            .await;
+        assert!(second.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vault_unlock_after_lock_then_wrong_passphrase_fails() {
+        let (mgr, dir) = make_vault_test_manager("vault-wrong-pass").await;
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        let (n, c) = mgr.encrypt_reinforced("hola").unwrap();
+        mgr.lock_reinforced_vault();
+        assert!(!mgr.reinforced_vault_status().await.unwrap().unlocked);
+
+        // Wrong pass → fails AND vault stays locked.
+        let bad = mgr.unlock_reinforced_vault("wrong-passphrase-xyz").await;
+        assert!(bad.is_err());
+        assert!(!mgr.reinforced_vault_status().await.unwrap().unlocked);
+
+        // Right pass → unlocks and decrypt works.
+        mgr.unlock_reinforced_vault("super-secret-pass-123")
+            .await
+            .unwrap();
+        let plain = mgr.decrypt_reinforced(&n, &c).unwrap();
+        assert_eq!(plain, "hola");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vault_encrypt_fails_when_locked() {
+        let (mgr, dir) = make_vault_test_manager("vault-locked-fail").await;
+        let err = mgr.encrypt_reinforced("anything");
+        assert!(err.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vault_reset_destroys_meta_and_locks() {
+        let (mgr, dir) = make_vault_test_manager("vault-reset").await;
+        mgr.set_reinforced_passphrase("super-secret-pass-123", None)
+            .await
+            .unwrap();
+        assert!(mgr.is_reinforced_vault_configured().await.unwrap());
+
+        mgr.reset_reinforced_passphrase().await.unwrap();
+        assert!(!mgr.is_reinforced_vault_configured().await.unwrap());
+        assert!(!mgr.reinforced_vault_status().await.unwrap().unlocked);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn vault_status_side_effect_locks_after_idle() {
+        let (mgr, dir) = make_vault_test_manager("vault-idle").await;
+        // 60s is the minimum allowed; we cannot make it shorter from
+        // the public API. So instead we set it via private state
+        // surgery: configure normally, then mutate the in-memory
+        // last_used backwards.
+        mgr.set_reinforced_passphrase("super-secret-pass-123", Some(60))
+            .await
+            .unwrap();
+
+        // Backdate last_used so the next status() call sees expiry.
+        {
+            let mut guard = mgr.reinforced_vault.lock().unwrap();
+            if let Some(state) = guard.as_mut() {
+                state.last_used = Instant::now() - std::time::Duration::from_secs(120);
+            }
+        }
+
+        let status = mgr.reinforced_vault_status().await.unwrap();
+        assert!(!status.unlocked, "should auto-relock after idle");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // -----------------------------------------------------------------------
+    // BI.9 — Relaciones humanas (sprint 1)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn relationship_add_list_and_stage_lifecycle() {
+        let dir = temp_dir("memory-plane-relationship");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let r = mgr
+            .add_relationship(
+                "Maria",
+                "spouse",
+                Some("married"),
+                10,
+                Some("2018-06-15"),
+                Some("03-22"),
+                Some("06-15"),
+                "amor de mi vida",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(r.name, "Maria");
+        assert_eq!(r.importance_1_10, 10);
+        assert_eq!(r.notes, "amor de mi vida"); // round-trip decrypted
+
+        let updated = mgr
+            .update_relationship_stage(&r.relationship_id, "separated")
+            .await
+            .unwrap();
+        assert!(updated);
+
+        let rels = mgr.list_relationships(true).await.unwrap();
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0].stage.as_deref(), Some("separated"));
+
+        let deactivated = mgr
+            .deactivate_relationship(&r.relationship_id)
+            .await
+            .unwrap();
+        assert!(deactivated);
+        let active_after = mgr.list_relationships(true).await.unwrap();
+        assert!(active_after.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_importance_clamped_to_1_10() {
+        let dir = temp_dir("memory-plane-relationship-clamp");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let r = mgr
+            .add_relationship("Bob", "friend", None, 99, None, None, None, "", None)
+            .await
+            .unwrap();
+        assert_eq!(r.importance_1_10, 10);
+
+        let r2 = mgr
+            .add_relationship("Carol", "friend", None, 0, None, None, None, "", None)
+            .await
+            .unwrap();
+        assert_eq!(r2.importance_1_10, 1);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn family_member_health_history_surfaces_in_visit_prep() {
+        let dir = temp_dir("memory-plane-family-visit");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_family_member(
+            "Papa",
+            "father",
+            Some("paternal"),
+            Some("1965-08-10"),
+            None,
+            Some("diabetes tipo 2 a los 50"),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        // A family member without health hints — must NOT surface.
+        mgr.add_family_member(
+            "Tia Ana",
+            "aunt_uncle",
+            Some("maternal"),
+            None,
+            None,
+            None,
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let prep = mgr
+            .prepare_medical_visit("chequeo anual", 14)
+            .await
+            .unwrap();
+        assert_eq!(prep.family_health_history.len(), 1);
+        assert_eq!(prep.family_health_history[0].name, "Papa");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn child_milestone_log_validates_date() {
+        let dir = temp_dir("memory-plane-child-milestone");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Bad date format → reject.
+        let bad = mgr
+            .add_child_milestone("Sofia", "first_word", "agua", "abril 5", "", None)
+            .await;
+        assert!(bad.is_err());
+
+        // Good date.
+        let good = mgr
+            .add_child_milestone(
+                "Sofia",
+                "first_word",
+                "dijo agua",
+                "2026-04-05",
+                "fue en la cocina",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(good.child_name, "Sofia");
+        assert_eq!(good.notes, "fue en la cocina");
+
+        let listed = mgr.list_child_milestones(Some("Sofia"), 10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+
+        let other = mgr.list_child_milestones(Some("Pedro"), 10).await.unwrap();
+        assert!(other.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationships_summary_picks_upcoming_birthdays_and_stale_contacts() {
+        let dir = temp_dir("memory-plane-rels-summary");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        // Today (in test) is 2026-04-07. Birthday in 5 days = 04-12.
+        mgr.add_relationship(
+            "Maria",
+            "spouse",
+            Some("married"),
+            10,
+            None,
+            Some("04-12"),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        // Birthday far away (200 days) — should NOT appear with default lookahead 30.
+        mgr.add_relationship(
+            "Lejano",
+            "friend",
+            None,
+            5,
+            None,
+            Some("11-15"),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+        // Family birthday in 3 days.
+        mgr.add_family_member(
+            "Mama",
+            "mother",
+            Some("maternal"),
+            Some("1968-04-10"),
+            None,
+            None,
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        let summary = mgr
+            .get_relationships_summary("2026-04-07", 30, 10)
+            .await
+            .unwrap();
+        // Maria (in 5 days) + Mama (in 3 days) = 2 upcoming events.
+        assert_eq!(summary.upcoming_birthdays.len(), 2);
+        // Sorted by days_until ascending → Mama first.
+        assert_eq!(summary.upcoming_birthdays[0].name, "Mama");
+        assert_eq!(summary.upcoming_birthdays[0].days_until, 3);
+        assert_eq!(summary.upcoming_birthdays[1].name, "Maria");
+
+        // Maria has importance 10 and no last_contact_at — should appear
+        // as stale (created_at is now, so diff is 0 days; but the
+        // cutoff is 30 days). Override created_at to backdate.
+        let db_path = mgr.db_path.clone();
+        let backdate = (Utc::now() - chrono::Duration::days(45)).to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = MemoryPlaneManager::open_db(&db_path).unwrap();
+            db.execute(
+                "UPDATE relationships SET created_at = ?1 WHERE name = 'Maria'",
+                rusqlite::params![backdate],
+            )
+            .unwrap();
+        })
+        .await
+        .unwrap();
+
+        let summary2 = mgr
+            .get_relationships_summary("2026-04-07", 30, 10)
+            .await
+            .unwrap();
+        assert!(summary2.stale_contacts.iter().any(|r| r.name == "Maria"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_advice_combines_stale_contact_and_high_friction() {
+        let dir = temp_dir("memory-plane-relationship-advice-friction");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let rel = mgr
+            .add_relationship(
+                "Maria",
+                "spouse",
+                Some("married"),
+                10,
+                None,
+                None,
+                Some("06-15"),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+
+        mgr.set_reinforced_passphrase("supersegura123", None)
+            .await
+            .unwrap();
+        mgr.add_relationship_event(
+            &rel.relationship_id,
+            "conflict",
+            Some(8),
+            Some("negative"),
+            "Tuvimos una discusión fuerte y quedamos distantes.",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let db_path = mgr.db_path.clone();
+        let rel_id = rel.relationship_id.clone();
+        let backdate = (Utc::now() - chrono::Duration::days(40)).to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = MemoryPlaneManager::open_db(&db_path).unwrap();
+            db.execute(
+                "UPDATE relationships SET created_at = ?1 WHERE relationship_id = ?2",
+                rusqlite::params![backdate, rel_id],
+            )
+            .unwrap();
+        })
+        .await
+        .unwrap();
+
+        let advice = mgr
+            .get_relationship_advice(&rel.relationship_id, "2026-04-07", Some("siento distancia"))
+            .await
+            .unwrap();
+        assert!(!advice.urgent_support);
+        assert!(advice
+            .suggested_actions
+            .iter()
+            .any(|a| a.contains("reconexión pequeña")));
+        assert!(advice
+            .suggested_actions
+            .iter()
+            .any(|a| a.contains("inicio suave")));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_advice_flags_urgent_support_for_abuse_keywords() {
+        let dir = temp_dir("memory-plane-relationship-advice-urgent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let rel = mgr
+            .add_relationship(
+                "Ana",
+                "partner",
+                Some("dating"),
+                9,
+                None,
+                None,
+                None,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let advice = mgr
+            .get_relationship_advice(
+                &rel.relationship_id,
+                "2026-04-07",
+                Some("hay abuso, amenazas y me da miedo hablar con ella"),
+            )
+            .await
+            .unwrap();
+        assert!(advice.recommend_professional_support);
+        assert!(advice.urgent_support);
+        assert!(advice
+            .suggested_questions
+            .iter()
+            .any(|q| q.contains("apoyo profesional") || q.contains("persona segura")));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn life_summary_includes_relationships_pillar() {
+        let dir = temp_dir("memory-plane-life-rels");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_relationship("Pedro", "best_friend", None, 8, None, None, None, "", None)
+            .await
+            .unwrap();
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Week, "2026-04-07")
+            .await
+            .unwrap();
+        assert_eq!(summary.relationships.close_relationships.len(), 1);
+        assert_eq!(summary.relationships.close_relationships[0].name, "Pedro");
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn medical_visit_prep_collects_all_health_data() {
+        let dir = temp_dir("memory-plane-visit-prep");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        mgr.add_health_fact("allergy", "Penicilina", Some("severe"), "", None)
+            .await
+            .unwrap();
+        mgr.add_health_fact("condition", "Diabetes tipo 2", None, "", None)
+            .await
+            .unwrap();
+        mgr.add_health_fact("blood_type", "O+", None, "", None)
+            .await
+            .unwrap();
+        mgr.start_medication(
+            "Metformina",
+            "850mg",
+            "2x/dia",
+            Some("Diabetes tipo 2"),
+            None,
+            "",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // A symptom narrative entry.
+        mgr.add_entry(
+            "note",
+            "user",
+            &[],
+            None,
+            50,
+            "Hoy me duele la cabeza por la tarde, presion en las sienes.",
+        )
+        .await
+        .unwrap();
+
+        let prep = mgr
+            .prepare_medical_visit("control de diabetes", 30)
+            .await
+            .unwrap();
+        assert_eq!(prep.allergies.len(), 1);
+        assert_eq!(prep.conditions.len(), 1);
+        assert_eq!(prep.other_facts.len(), 1);
+        assert_eq!(prep.current_medications.len(), 1);
+        assert!(!prep.recent_symptom_entries.is_empty());
+        assert!(!prep.suggested_questions.is_empty());
+        assert!(prep
+            .suggested_questions
+            .iter()
+            .any(|q| q.contains("control de diabetes")));
 
         std::fs::remove_dir_all(dir).ok();
     }

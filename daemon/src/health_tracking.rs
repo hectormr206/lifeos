@@ -52,7 +52,6 @@ pub enum ReminderType {
 pub struct HealthTracker {
     state: HealthState,
     break_interval_minutes: u64,
-    hydration_interval_minutes: u64,
 }
 
 impl Default for HealthTracker {
@@ -66,7 +65,6 @@ impl HealthTracker {
         Self {
             state: HealthState::default(),
             break_interval_minutes: 45,
-            hydration_interval_minutes: 60,
         }
     }
 

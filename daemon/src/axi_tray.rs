@@ -3,7 +3,7 @@
 //! Shows Axi as an icon in the system tray (top panel) with:
 //! - Color-changing icon based on Axi state (green=idle, cyan=listening, etc.)
 //! - Right-click menu with status info, sensor toggles, dashboard link
-//! - Sensor controls: mic, camera, screen capture, kill switch
+//! - Sensor controls: always-on, mic, TTS, camera, screen capture, kill switch
 //!
 //! Uses the freedesktop StatusNotifierItem protocol via `ksni` crate.
 //! Works with COSMIC, KDE Plasma, GNOME (with AppIndicator extension).
@@ -196,10 +196,43 @@ pub mod inner {
                     activate: Box::new(move |_| {
                         let url = dashboard.clone();
                         std::thread::spawn(move || {
-                            std::process::Command::new("xdg-open")
-                                .arg(&url)
-                                .spawn()
-                                .ok();
+                            // Try multiple browser openers in order.
+                            // xdg-open often fails silently in COSMIC DE without
+                            // proper portal configuration, so we try direct browsers
+                            // as fallback.
+                            let openers: &[(&str, &[&str])] = &[
+                                ("xdg-open", &[]),
+                                ("gio", &["open"]),
+                                ("firefox", &["--new-tab"]),
+                                ("flatpak", &["run", "org.mozilla.firefox", "--new-tab"]),
+                                ("chromium", &["--new-tab"]),
+                                ("flatpak", &["run", "org.chromium.Chromium", "--new-tab"]),
+                                (
+                                    "flatpak",
+                                    &[
+                                        "run",
+                                        "io.github.ungoogled_software.ungoogled_chromium",
+                                        "--new-tab",
+                                    ],
+                                ),
+                            ];
+                            for (cmd, args) in openers {
+                                let mut command = std::process::Command::new(cmd);
+                                command.args(*args).arg(&url);
+                                if let Ok(mut child) = command.spawn() {
+                                    // Give the command a moment to fail fast
+                                    std::thread::sleep(std::time::Duration::from_millis(300));
+                                    match child.try_wait() {
+                                        Ok(Some(status)) if status.success() => return,
+                                        Ok(Some(_)) => continue, // Failed, try next
+                                        Ok(None) => return,      // Still running = success
+                                        Err(_) => continue,
+                                    }
+                                }
+                            }
+                            log::warn!(
+                                "[tray] Failed to open dashboard — no browser opener worked"
+                            );
                         });
                     }),
                     ..Default::default()
@@ -262,13 +295,13 @@ pub mod inner {
                     checked: self.tts,
                     activate: Box::new(move |this: &mut Self| {
                         this.tts = !this.tts;
-                        // TTS doesn't have its own API field yet — toggle is local-only for now.
-                        // When a TTS-specific endpoint is added, wire it here.
                         call_api(
                             &api_tts,
                             &tok_tts,
                             "/runtime/sensory",
-                            serde_json::json!({}),
+                            serde_json::json!({
+                                "tts_enabled": this.tts
+                            }),
                         );
                     }),
                     ..Default::default()
@@ -425,12 +458,20 @@ pub mod inner {
                         mic,
                         camera,
                         screen,
+                        always_on,
+                        tts,
                         kill_switch,
                     }) => {
                         handle.update(|tray: &mut AxiTray| {
                             tray.mic = mic;
                             tray.camera = camera;
                             tray.screen = screen;
+                            if let Some(always_on) = always_on {
+                                tray.always_on = always_on;
+                            }
+                            if let Some(tts) = tts {
+                                tray.tts = tts;
+                            }
                             tray.kill_switch = kill_switch;
                         });
                     }

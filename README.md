@@ -4,6 +4,8 @@
 
 Your personal AI assistant **Axi** lives at the OS level — local inference, encrypted memory, voice, vision, autonomous execution, and privacy by default. No cloud required.
 
+LifeOS is built in Mexico and developed in the open for users, contributors, and supporters anywhere.
+
 ## What Makes LifeOS Different
 
 - **IS the OS** — not an app inside an OS. Full access to kernel, systemd, GPU, hardware
@@ -48,6 +50,7 @@ All documentation is organized in [`docs/`](docs/README.md):
 | Architecture & specs | `docs/architecture/` |
 | Operations & runbooks | `docs/operations/` |
 | User guides | `docs/user/` |
+| Contributing | `CONTRIBUTING.md`, `docs/contributor/` |
 | Branding & design | `docs/branding/` |
 | Privacy analysis | `docs/privacy/` |
 | Research | `docs/research/` |

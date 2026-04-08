@@ -209,38 +209,6 @@ impl SkillGenerator {
             }
         }
     }
-
-    /// Get diagnostic metrics: total skills, avg success rate, most/least used.
-    pub async fn diagnostics(&self) -> Result<SkillDiagnostics> {
-        let skills = self.list_skills().await?;
-        let total = skills.len();
-        let avg_success = if total > 0 {
-            skills.iter().map(|s| s.success_rate).sum::<f64>() / total as f64
-        } else {
-            0.0
-        };
-        let most_used = skills.iter().max_by_key(|s| s.use_count).cloned();
-        let least_reliable = skills
-            .iter()
-            .filter(|s| s.use_count >= 3 && s.success_rate < 0.5)
-            .cloned()
-            .collect();
-
-        Ok(SkillDiagnostics {
-            total_skills: total,
-            avg_success_rate: avg_success,
-            most_used,
-            unreliable_skills: least_reliable,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillDiagnostics {
-    pub total_skills: usize,
-    pub avg_success_rate: f64,
-    pub most_used: Option<SkillManifest>,
-    pub unreliable_skills: Vec<SkillManifest>,
 }
 
 // ---------------------------------------------------------------------------
@@ -467,20 +435,6 @@ impl SkillRegistry {
         inner.skills.get(name).cloned()
     }
 
-    /// Find a skill matching an objective by trigger patterns.
-    pub async fn find_for_objective(&self, objective: &str) -> Option<(SkillManifest, PathBuf)> {
-        let lower = objective.to_lowercase();
-        let inner = self.inner.read().await;
-        for (manifest, dir) in inner.skills.values() {
-            for pattern in &manifest.trigger_patterns {
-                if lower.contains(&pattern.to_lowercase()) {
-                    return Some((manifest.clone(), dir.clone()));
-                }
-            }
-        }
-        None
-    }
-
     /// Run a skill by name with optional input.
     pub async fn run(&self, name: &str, _input: &str) -> Result<String> {
         let (manifest, skill_dir) = self
@@ -648,32 +602,6 @@ pub struct InteractionRecord {
     pub screenshot_after: Option<String>,
     pub result: String,
     pub success: bool,
-}
-
-/// Record an interaction for skill learning.
-/// Saves screenshot before/after + action + result to the skill directory.
-pub async fn record_interaction(
-    skills_dir: &std::path::Path,
-    skill_name: &str,
-    record: &InteractionRecord,
-) -> anyhow::Result<()> {
-    let recordings_dir = skills_dir.join(skill_name).join("recordings");
-    fs::create_dir_all(&recordings_dir).await?;
-
-    let filename = format!(
-        "interaction-{}.json",
-        chrono::Utc::now().format("%Y%m%d-%H%M%S-%3f")
-    );
-    let json = serde_json::to_string_pretty(record)?;
-    fs::write(recordings_dir.join(filename), json).await?;
-
-    info!(
-        "[skill_gen] Recorded interaction for '{}': {} ({})",
-        skill_name,
-        record.action,
-        if record.success { "OK" } else { "FAIL" }
-    );
-    Ok(())
 }
 
 /// Convert a task objective to a filesystem-safe slug.
