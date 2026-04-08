@@ -30,6 +30,16 @@ cargo fmt --manifest-path daemon/Cargo.toml       # Format
 4. **`/usr` is read-only** at runtime (bootc immutable) — state goes to `/var/` or `/home/`
 5. **Auth required** — all API routes need `x-bootstrap-token` header
 
+## Contribution Workflow Policy
+
+LifeOS uses a pragmatic issue/PR policy:
+
+- **Small fixes, maintenance, or obvious cleanup** — no issue required
+- **Medium features or important changes** — issue recommended, not mandatory
+- **Large, architectural, or sensitive changes** — issue + PR required
+
+Prefer the lightest process that still preserves enough context for future maintainers and agents.
+
 ## How to Navigate This Repo
 
 **Do NOT read all docs.** Use targeted searches:

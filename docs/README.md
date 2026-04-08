@@ -32,4 +32,5 @@ Start here based on what you need:
 | [CLAUDE.md](../CLAUDE.md) | Build commands, architecture, constraints for Claude Code |
 | [GEMINI.md](../GEMINI.md) | Equivalent for Gemini |
 | [AGENTS.md](../AGENTS.md) | Quick onboarding for AI agents |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | Contributor entry point with issue/PR policy and quality gates |
 | [README.md](../README.md) | Project entry point |
