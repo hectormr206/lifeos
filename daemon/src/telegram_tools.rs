@@ -3032,7 +3032,10 @@ REGLAS FIRMES:
         let mem = require_memory(ctx).await?;
         let deleted = mem.delete_health_fact(fact_id).await?;
         if deleted {
-            Ok(format!("Hecho de salud {} eliminado por correccion.", fact_id))
+            Ok(format!(
+                "Hecho de salud {} eliminado por correccion.",
+                fact_id
+            ))
         } else {
             Ok(format!(
                 "No se encontro un hecho de salud con id {}.",

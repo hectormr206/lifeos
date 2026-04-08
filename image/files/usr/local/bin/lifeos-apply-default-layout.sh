@@ -80,7 +80,7 @@ apply_for_user() {
         # COSMIC stores one file per field).
         while IFS= read -r f; do
             [ -z "$f" ] && continue
-            rel="${f#${src_group}/}"
+            rel="${f#"${src_group}"/}"
             copy_if_absent "$f" "${dst_group}/${rel}"
         done < <(find "$src_group" -type f 2>/dev/null)
     done

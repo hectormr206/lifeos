@@ -200,7 +200,10 @@ async fn delete_health_fact(
     Path(fact_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let mgr = state.memory_plane_manager.read().await;
-    let deleted = mgr.delete_health_fact(&fact_id).await.map_err(err_to_http)?;
+    let deleted = mgr
+        .delete_health_fact(&fact_id)
+        .await
+        .map_err(err_to_http)?;
     if deleted {
         Ok(Json(health_fact_delete_body(true, &fact_id)))
     } else {

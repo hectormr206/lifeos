@@ -64,12 +64,14 @@ fi
 
 # Wait for COSMIC compositor to be ready (retry up to 15 seconds)
 READY=false
-for i in $(seq 1 15); do
+attempts_left=15
+while [ "$attempts_left" -gt 0 ]; do
     if command -v cosmic-settings >/dev/null 2>&1; then
         READY=true
         break
     fi
     sleep 1
+    attempts_left=$((attempts_left - 1))
 done
 
 if [ "$READY" = "false" ]; then

@@ -4,7 +4,6 @@
 
 set -euo pipefail
 
-LIFEOS_CONFIG_DIR="/etc/lifeos"
 FIRST_BOOT_MARKER="/var/lib/lifeos/.first-boot-complete"
 LOG_FILE="/var/log/lifeos-first-boot.log"
 
@@ -113,9 +112,11 @@ enforce_password_change() {
             # If we can verify it is the default, or this is the very first boot, force change.
             if [[ -z "$shadow_hash" ]] || \
                python3 -c "import crypt; import sys; sys.exit(0 if crypt.crypt('lifeos','${shadow_hash}')=='${shadow_hash}' else 1)" 2>/dev/null; then
-                chage -d 0 lifeos 2>/dev/null && \
-                    log_success "Forced password change on next login for user lifeos" || \
+                if chage -d 0 lifeos 2>/dev/null; then
+                    log_success "Forced password change on next login for user lifeos"
+                else
                     log_warn "Could not enforce password change (non-fatal)"
+                fi
             else
                 log "User lifeos has a non-default password — skipping forced change"
             fi
@@ -386,7 +387,11 @@ start_services() {
     # Start llama-server if installed
     if systemctl is-enabled llama-server.service &>/dev/null; then
         log "Starting llama-server service..."
-        systemctl start llama-server.service && log_success "llama-server started" || log_warn "Failed to start llama-server"
+        if systemctl start llama-server.service; then
+            log_success "llama-server started"
+        else
+            log_warn "Failed to start llama-server"
+        fi
     fi
 }
 
@@ -456,7 +461,8 @@ verify_installation() {
 
 # Mark first boot as complete
 mark_complete() {
-    local timestamp=$(date -Iseconds)
+    local timestamp
+    timestamp=$(date -Iseconds)
     echo "First boot completed: $timestamp" > "$FIRST_BOOT_MARKER"
     log_success "First boot setup marked complete"
 }
