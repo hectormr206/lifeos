@@ -16,7 +16,7 @@ WALLPAPER_STATE_SYNC="/usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh"
 # Theme rollout markers follow the formal package release metadata, not the
 # booted bootc/channel version, so edge builds do not force re-application.
 if [ -f "$VERSION_METADATA_ENV" ]; then
-    # shellcheck disable=SC1091
+    # shellcheck disable=SC1090,SC1091
     . "$VERSION_METADATA_ENV"
 fi
 
