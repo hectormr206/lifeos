@@ -5,6 +5,8 @@ use clap::Args;
 use clap::Subcommand;
 use colored::Colorize;
 
+const CANONICAL_CHANNELS: [&str; 3] = ["stable", "candidate", "edge"];
+
 #[derive(Subcommand)]
 pub enum UpdateSubcommand {
     /// Show canonical bootc update status and local policy
@@ -21,7 +23,7 @@ pub struct UpdateArgs {
     /// Reboot immediately after update
     #[arg(long)]
     pub now: bool,
-    /// Update channel
+    /// Preferred release channel (stable, candidate, edge)
     #[arg(long)]
     pub channel: Option<String>,
 }
@@ -37,12 +39,21 @@ pub async fn execute(args: UpdateArgs) -> anyhow::Result<()> {
         .or_else(|| config::load_config().ok().map(|c| c.updates.channel))
         .unwrap_or_else(|| "stable".to_string());
 
+    validate_channel(&channel)?;
+
     if args.dry_run {
         println!(
             "{}",
-            format!("📋 Simulating bootc update check for channel: {}", channel)
-                .blue()
-                .bold()
+            format!(
+                "📋 Simulating bootc update check for channel preference: {}",
+                channel
+            )
+            .blue()
+            .bold()
+        );
+        println!(
+            "{}",
+            "   Canonical channels: stable, candidate, edge".dimmed()
         );
 
         // Check if bootc is available
@@ -91,9 +102,16 @@ pub async fn execute(args: UpdateArgs) -> anyhow::Result<()> {
     } else {
         println!(
             "{}",
-            format!("🔄 Staging bootc update from channel: {}", channel)
-                .blue()
-                .bold()
+            format!(
+                "🔄 Staging bootc update for channel preference: {}",
+                channel
+            )
+            .blue()
+            .bold()
+        );
+        println!(
+            "{}",
+            "   `life update` follows the currently selected bootc image; switch tracks with `bootc switch` first when needed.".dimmed()
         );
 
         // Check if bootc is available
@@ -149,7 +167,16 @@ async fn show_status() -> anyhow::Result<()> {
         .ok()
         .map(|c| c.updates.channel)
         .unwrap_or_else(|| "stable".to_string());
-    println!("  {}: {}", "Configured channel".bold(), channel.cyan());
+    validate_channel(&channel)?;
+    println!(
+        "  {}: {}",
+        "Configured channel preference".bold(),
+        channel.cyan()
+    );
+    println!(
+        "  {}",
+        "bootc status remains the runtime authority for what is actually booted/staged.".dimmed()
+    );
 
     if !system::is_bootc_available() {
         println!("  {}: {}", "bootc".bold(), "not available".yellow());
@@ -202,4 +229,16 @@ async fn show_status() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn validate_channel(channel: &str) -> anyhow::Result<()> {
+    if CANONICAL_CHANNELS.contains(&channel) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "unsupported channel '{}'; use one of: {}",
+        channel,
+        CANONICAL_CHANNELS.join(", ")
+    )
 }

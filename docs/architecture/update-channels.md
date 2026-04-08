@@ -16,6 +16,8 @@ What is explicitly not canonical anymore:
 - The old daemon-side simulated update catalog.
 - ISO download/install semantics for normal host updates.
 - Treating config defaults as proof of what image/version is actually installed.
+- Treating `life beta` as a separate release model. It is only legacy transition UX and
+  maps conceptually to the `candidate` pre-release channel.
 
 If you only need operator-driven `stable` updates for your main laptop, follow the
 manual update runbook in this document.
@@ -75,6 +77,8 @@ manual update runbook in this document.
 life status
 life update status
 
+# `life beta` is deprecated compatibility UX and is intentionally not the
+# canonical channel interface anymore.
 # There is no shipped `life channel set` command yet.
 # Switch channels explicitly with bootc. Then keep local preference aligned in
 # `/etc/lifeos/lifeos.toml`.

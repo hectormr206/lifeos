@@ -5,7 +5,7 @@ mod tests {
     use super::super::*;
     use crate::commands::config::ConfigCommands;
     use crate::commands::lab::{LabArgs, LabCommands};
-    use clap::{error::ErrorKind, Parser};
+    use clap::{error::ErrorKind, CommandFactory, Parser};
 
     #[test]
     fn test_cli_parses_init_command() {
@@ -99,6 +99,15 @@ mod tests {
                 ));
             }
             _ => panic!("Expected Update command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_beta_status_command_for_compatibility() {
+        let cli = Cli::parse_from(["life", "beta", "status"]);
+        match cli.command.expect("Expected command") {
+            Commands::Beta(BetaCommands::Status) => (),
+            _ => panic!("Expected Beta Status command"),
         }
     }
 
@@ -249,6 +258,36 @@ mod tests {
             result,
             Err(err) if err.kind() == ErrorKind::DisplayHelp
         ));
+    }
+
+    #[test]
+    fn test_root_help_hides_beta_command() {
+        let help = Cli::command().render_help().to_string();
+        assert!(!help.contains("\n  beta "));
+        assert!(!help.contains("Beta testing commands"));
+    }
+
+    #[test]
+    fn test_update_rejects_legacy_beta_channel_name() {
+        let result = Cli::try_parse_from(["life", "update", "--channel", "beta"]);
+        let cli = match result {
+            Ok(cli) => cli,
+            Err(err) => panic!("Expected clap parsing to succeed, got: {err}"),
+        };
+
+        match cli.command.expect("Expected command") {
+            Commands::Update(args) => {
+                let runtime = tokio::runtime::Runtime::new().expect("runtime");
+                let err = runtime
+                    .block_on(commands::update::execute(args))
+                    .expect_err("expected invalid beta channel to be rejected");
+                assert!(
+                    err.to_string().contains("unsupported channel 'beta'"),
+                    "unexpected error: {err}"
+                );
+            }
+            _ => panic!("Expected Update command"),
+        }
     }
 
     #[test]
