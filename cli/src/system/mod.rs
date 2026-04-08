@@ -623,11 +623,12 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     }
 
     if !daemon_running {
-        if restart_unit(&["systemctl", "--user", "restart", "lifeosd.service"])
-            || restart_unit(&["systemctl", "--user", "start", "lifeosd.service"])
-        {
-            report.repairs.push("Restarted lifeosd".to_string());
-        } else if restart_unit(&["systemctl", "restart", "lifeosd.service"]) {
+        let restarted_lifeosd =
+            restart_unit(&["systemctl", "--user", "restart", "lifeosd.service"])
+                || restart_unit(&["systemctl", "--user", "start", "lifeosd.service"])
+                || restart_unit(&["systemctl", "restart", "lifeosd.service"]);
+
+        if restarted_lifeosd {
             report.repairs.push("Restarted lifeosd".to_string());
         } else {
             report.repairs.push(
