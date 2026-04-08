@@ -19,6 +19,8 @@ ARG FEDORA_MAJOR=43
 FROM fedora:${FEDORA_MAJOR} AS builder
 
 ARG LIFEOS_CHANNEL=edge
+# Runtime booted version for bootc/channel manifests.
+# Keep distinct from the formal workspace package semver in Cargo.toml.
 ARG LIFEOS_VERSION=dev
 ARG BUILD_DATE
 ARG VCS_REF
@@ -202,6 +204,8 @@ ARG LIFEOS_PRELOAD_MODEL=false
 ARG FEDORA_MAJOR=43
 
 ARG LIFEOS_CHANNEL=edge
+# Runtime booted version for bootc/channel manifests.
+# Keep distinct from the formal workspace package semver in Cargo.toml.
 ARG LIFEOS_VERSION=dev
 ARG BUILD_DATE
 ARG VCS_REF
@@ -537,6 +541,24 @@ COPY image/files/usr/share/backgrounds/lifeos /usr/share/backgrounds/lifeos
 # LifeOS Icon Theme
 COPY image/files/usr/share/icons/LifeOS /usr/share/icons/LifeOS
 
+# Formal release metadata comes from the workspace manifest.
+COPY Cargo.toml /tmp/lifeos-workspace.Cargo.toml
+
+RUN set -eux && \
+    mkdir -p /usr/share/lifeos && \
+    package_version="$(awk '\''BEGIN { section = "" } /^\[/ { section = $0 } section == "[workspace.package]" && $1 == "version" { gsub(/"/, "", $3); print $3; exit }'\'' /tmp/lifeos-workspace.Cargo.toml)" && \
+    codename="$(awk '\''BEGIN { section = "" } /^\[/ { section = $0 } section == "[workspace.metadata.lifeos]" && $1 == "codename" { gsub(/"/, "", $3); print $3; exit }'\'' /tmp/lifeos-workspace.Cargo.toml)" && \
+    theme_marker_epoch="$(awk '\''BEGIN { section = "" } /^\[/ { section = $0 } section == "[workspace.metadata.lifeos]" && $1 == "theme_marker_epoch" { gsub(/"/, "", $3); print $3; exit }'\'' /tmp/lifeos-workspace.Cargo.toml)" && \
+    test -n "${package_version}" && \
+    test -n "${codename}" && \
+    test -n "${theme_marker_epoch}" && \
+    printf '%s\n' \
+    "LIFEOS_PACKAGE_VERSION=${package_version}" \
+    "LIFEOS_CODENAME=${codename}" \
+    "LIFEOS_THEME_MARKER_EPOCH=${theme_marker_epoch}" \
+    > /usr/share/lifeos/version-metadata.env && \
+    rm -f /tmp/lifeos-workspace.Cargo.toml
+
 RUN echo "LIFEOS_CHANNEL=${LIFEOS_CHANNEL}" > /etc/lifeos/channel && \
     echo "LIFEOS_VERSION=${LIFEOS_VERSION}" >> /etc/lifeos/channel && \
     echo "BUILD_DATE=${BUILD_DATE}" >> /etc/lifeos/channel && \
@@ -823,16 +845,18 @@ RUN mkdir -p /etc/systemd/system && \
     ln -sf /dev/null /etc/systemd/system/bootc-fetch-apply-updates.service
 
 # --- Branding y Personalización ---
-RUN rm -f /usr/lib/os-release && \
+RUN set -eu && \
+    . /usr/share/lifeos/version-metadata.env && \
+    rm -f /usr/lib/os-release && \
     printf '%s\n' \
     'NAME="LifeOS"' \
-    'VERSION="0.3.5 Axolotl"' \
+    "VERSION=\"${LIFEOS_PACKAGE_VERSION} ${LIFEOS_CODENAME}\"" \
     'ID=fedora' \
     'VARIANT_ID=lifeos' \
     'VARIANT="LifeOS"' \
     "VERSION_ID=\"${FEDORA_MAJOR}\"" \
     "PLATFORM_ID=\"platform:f${FEDORA_MAJOR}\"" \
-    "PRETTY_NAME=\"LifeOS 0.3.5 Axolotl - by Hector Martinez (hectormr.com) (Fedora ${FEDORA_MAJOR})\"" \
+    "PRETTY_NAME=\"LifeOS ${LIFEOS_PACKAGE_VERSION} ${LIFEOS_CODENAME} - by Hector Martinez (hectormr.com) (Fedora ${FEDORA_MAJOR})\"" \
     'ANSI_COLOR="0;36"' \
     'LOGO="lifeos"' \
     'VENDOR_NAME="Hector Martinez Resediz"' \

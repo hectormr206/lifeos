@@ -66,7 +66,11 @@ Esta atribucion DEBE aparecer en TODOS estos lugares y NUNCA debe ser removida:
 
 **Script:** `bash scripts/bump-version.sh [patch|minor|major]`
 
-Actualiza automaticamente: daemon/Cargo.toml, cli/Cargo.toml, Containerfile (VERSION + PRETTY_NAME), lifeos-apply-theme.sh
+Fuente unica formal: `Cargo.toml` raiz (`[workspace.package].version`).
+
+Consumidores derivados: `cli/Cargo.toml`, `daemon/Cargo.toml`, `tests/Cargo.toml`, `image/Containerfile` (branding `os-release`) y `image/files/usr/local/bin/lifeos-apply-theme.sh`.
+
+`LIFEOS_VERSION` en workflows/canales bootc sigue siendo OTRA cosa: la version runtime publicada para la imagen (`edge-...`, tag, canal). No reemplaza el semver formal del workspace.
 
 ### Cuando cambiar cada posicion (MAYOR.MENOR.PARCHE)
 
