@@ -1,5 +1,6 @@
 //! System health and bootc integration module
 use serde::Serialize;
+use std::fs;
 use std::process::Command;
 
 #[cfg(test)]
@@ -253,8 +254,8 @@ pub fn check_health() -> HealthStatus {
         issues.push("no network default route".to_string());
     }
 
-    if !check_ai_service() {
-        issues.push("llama-server not running".to_string());
+    if let Some(ai_issue) = check_ai_service_issue() {
+        issues.push(ai_issue);
     }
 
     if issues.is_empty() {
@@ -323,13 +324,36 @@ fn check_network() -> bool {
         .unwrap_or(false)
 }
 
-/// Check if the AI service (llama-server) is running.
-fn check_ai_service() -> bool {
-    Command::new("systemctl")
-        .args(["is-active", "--quiet", "llama-server.service"])
+fn systemd_unit_is_active(args: &[&str]) -> bool {
+    Command::new(args[0])
+        .args(&args[1..])
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+/// Check the AI service state and return a human-readable issue when degraded.
+fn check_ai_service_issue() -> Option<String> {
+    if systemd_unit_is_active(&["systemctl", "is-active", "--quiet", "llama-server.service"])
+        || systemd_unit_is_active(&[
+            "systemctl",
+            "--user",
+            "is-active",
+            "--quiet",
+            "llama-server.service",
+        ])
+    {
+        return None;
+    }
+
+    if let Ok(reason) = fs::read_to_string("/var/lib/lifeos/llama-server-preflight.reason") {
+        let reason = reason.trim();
+        if !reason.is_empty() {
+            return Some(reason.to_string());
+        }
+    }
+
+    Some("llama-server not running".to_string())
 }
 
 /// Check for available updates via bootc.
