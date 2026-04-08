@@ -333,6 +333,161 @@ fn systemd_unit_is_active(args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SystemdUnitState {
+    scope: &'static str,
+    load_state: String,
+    active_state: String,
+    sub_state: String,
+    result: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AiServiceAssessment {
+    issue: Option<String>,
+    status_message: String,
+    restart_recommended: bool,
+}
+
+fn systemd_unit_state(command: &[&str], scope: &'static str) -> Option<SystemdUnitState> {
+    let output = Command::new(command[0]).args(&command[1..]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let mut load_state = None;
+    let mut active_state = None;
+    let mut sub_state = None;
+    let mut result = None;
+
+    for line in stdout.lines() {
+        let (key, value) = match line.split_once('=') {
+            Some(parts) => parts,
+            None => continue,
+        };
+
+        match key {
+            "LoadState" => load_state = Some(value.to_string()),
+            "ActiveState" => active_state = Some(value.to_string()),
+            "SubState" => sub_state = Some(value.to_string()),
+            "Result" => result = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    Some(SystemdUnitState {
+        scope,
+        load_state: load_state.unwrap_or_else(|| "unknown".to_string()),
+        active_state: active_state.unwrap_or_else(|| "unknown".to_string()),
+        sub_state: sub_state.unwrap_or_else(|| "unknown".to_string()),
+        result: result.unwrap_or_else(|| "unknown".to_string()),
+    })
+}
+
+fn llama_reason_paths() -> Vec<String> {
+    let mut candidate_paths = vec!["/var/lib/lifeos/llama-server-preflight.reason".to_string()];
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        candidate_paths.push(format!(
+            "{runtime_dir}/lifeos/llama-server-preflight.reason"
+        ));
+    }
+    candidate_paths
+}
+
+fn persisted_llama_reason() -> Option<String> {
+    for path in llama_reason_paths() {
+        if let Ok(reason) = fs::read_to_string(path) {
+            let reason = reason.trim();
+            if !reason.is_empty() {
+                return Some(reason.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn format_failed_llama_service(state: &SystemdUnitState) -> String {
+    if state.result != "unknown" && state.result != "success" {
+        format!(
+            "llama-server {scope} service failed ({result})",
+            scope = state.scope,
+            result = state.result
+        )
+    } else {
+        format!(
+            "llama-server {scope} service is {active}/{sub}",
+            scope = state.scope,
+            active = state.active_state,
+            sub = state.sub_state
+        )
+    }
+}
+
+fn assess_ai_service(
+    system_state: Option<SystemdUnitState>,
+    user_state: Option<SystemdUnitState>,
+    persisted_reason: Option<String>,
+) -> AiServiceAssessment {
+    let states = [system_state.as_ref(), user_state.as_ref()];
+
+    if let Some(state) = states.iter().flatten().find(|state| {
+        matches!(
+            state.active_state.as_str(),
+            "active" | "activating" | "reloading"
+        )
+    }) {
+        return AiServiceAssessment {
+            issue: None,
+            status_message: format!("llama-server is running via {} systemd", state.scope),
+            restart_recommended: false,
+        };
+    }
+
+    if let Some(reason) = persisted_reason {
+        return AiServiceAssessment {
+            issue: Some(reason.clone()),
+            status_message: reason,
+            restart_recommended: false,
+        };
+    }
+
+    if let Some(state) = states.iter().flatten().find(|state| {
+        state.load_state == "loaded"
+            && (state.active_state == "failed"
+                || state.sub_state == "failed"
+                || (state.active_state != "inactive" && state.result != "success"))
+    }) {
+        let message = format_failed_llama_service(state);
+        return AiServiceAssessment {
+            issue: Some(message.clone()),
+            status_message: message,
+            restart_recommended: true,
+        };
+    }
+
+    if let Some(state) = states.iter().flatten().find(|state| {
+        state.load_state == "loaded"
+            && state.active_state == "inactive"
+            && matches!(state.result.as_str(), "success" | "unknown")
+    }) {
+        return AiServiceAssessment {
+            issue: None,
+            status_message: format!(
+                "llama-server is healthy but inactive ({scope} systemd, on-demand)",
+                scope = state.scope
+            ),
+            restart_recommended: false,
+        };
+    }
+
+    AiServiceAssessment {
+        issue: Some("llama-server not running".to_string()),
+        status_message: "llama-server not running".to_string(),
+        restart_recommended: true,
+    }
+}
+
 fn restart_unit(args: &[&str]) -> bool {
     Command::new(args[0])
         .args(&args[1..])
@@ -369,35 +524,32 @@ fn lifeosd_status_message(is_running: bool) -> String {
 
 /// Check the AI service state and return a human-readable issue when degraded.
 fn check_ai_service_issue() -> Option<String> {
-    if systemd_unit_is_active(&["systemctl", "is-active", "--quiet", "llama-server.service"])
-        || systemd_unit_is_active(&[
-            "systemctl",
-            "--user",
-            "is-active",
-            "--quiet",
-            "llama-server.service",
-        ])
-    {
-        return None;
-    }
+    assess_llama_service().issue
+}
 
-    let mut candidate_paths = vec!["/var/lib/lifeos/llama-server-preflight.reason".to_string()];
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        candidate_paths.push(format!(
-            "{runtime_dir}/lifeos/llama-server-preflight.reason"
-        ));
-    }
-
-    for path in candidate_paths {
-        if let Ok(reason) = fs::read_to_string(path) {
-            let reason = reason.trim();
-            if !reason.is_empty() {
-                return Some(reason.to_string());
-            }
-        }
-    }
-
-    Some("llama-server not running".to_string())
+fn assess_llama_service() -> AiServiceAssessment {
+    assess_ai_service(
+        systemd_unit_state(
+            &[
+                "systemctl",
+                "show",
+                "llama-server.service",
+                "--property=LoadState,ActiveState,SubState,Result",
+            ],
+            "system",
+        ),
+        systemd_unit_state(
+            &[
+                "systemctl",
+                "--user",
+                "show",
+                "llama-server.service",
+                "--property=LoadState,ActiveState,SubState,Result",
+            ],
+            "user",
+        ),
+        persisted_llama_reason(),
+    )
 }
 
 /// Check for available updates via bootc.
@@ -590,15 +742,15 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     });
 
     // 4. Check AI service (llama-server)
-    let ai_issue = check_ai_service_issue();
-    let ai_running = ai_issue.is_none();
+    let ai_assessment = assess_llama_service();
+    let ai_running = ai_assessment.issue.is_none();
     report.checks.push(HealthCheck {
         name: "ai-service".to_string(),
         passed: ai_running,
         message: if ai_running {
-            "llama-server is running".to_string()
+            ai_assessment.status_message.clone()
         } else {
-            ai_issue.unwrap_or_else(|| "llama-server is not running".to_string())
+            ai_assessment.status_message.clone()
         },
     });
 
@@ -611,7 +763,7 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     });
 
     // --- Repair actions for failed services ---
-    if !ai_running {
+    if ai_assessment.restart_recommended {
         if restart_unit(&["systemctl", "restart", "llama-server.service"]) {
             report.repairs.push("Restarted ai-service".to_string());
         } else {

@@ -206,4 +206,73 @@ Rollback image: ghcr.io/hectormr206/lifeos:edge-20260403-b369513
         let result = check_updates("stable");
         assert!(result.is_ok());
     }
+
+    fn system_state(
+        scope: &'static str,
+        load_state: &str,
+        active_state: &str,
+        sub_state: &str,
+        result: &str,
+    ) -> SystemdUnitState {
+        SystemdUnitState {
+            scope,
+            load_state: load_state.to_string(),
+            active_state: active_state.to_string(),
+            sub_state: sub_state.to_string(),
+            result: result.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_assess_ai_service_treats_clean_inactive_as_on_demand() {
+        let assessment = assess_ai_service(
+            Some(system_state(
+                "system", "loaded", "inactive", "dead", "success",
+            )),
+            None,
+            None,
+        );
+
+        assert_eq!(assessment.issue, None);
+        assert!(assessment.status_message.contains("on-demand"));
+        assert!(!assessment.restart_recommended);
+    }
+
+    #[test]
+    fn test_assess_ai_service_reports_persisted_preflight_reason() {
+        let assessment = assess_ai_service(
+            Some(system_state(
+                "system", "loaded", "inactive", "dead", "success",
+            )),
+            None,
+            Some("llama-server preflight: unsupported CPU".to_string()),
+        );
+
+        assert_eq!(
+            assessment.issue,
+            Some("llama-server preflight: unsupported CPU".to_string())
+        );
+        assert!(!assessment.restart_recommended);
+    }
+
+    #[test]
+    fn test_assess_ai_service_reports_failed_unit() {
+        let assessment = assess_ai_service(
+            Some(system_state(
+                "system",
+                "loaded",
+                "failed",
+                "failed",
+                "exit-code",
+            )),
+            None,
+            None,
+        );
+
+        assert_eq!(
+            assessment.issue,
+            Some("llama-server system service failed (exit-code)".to_string())
+        );
+        assert!(assessment.restart_recommended);
+    }
 }
