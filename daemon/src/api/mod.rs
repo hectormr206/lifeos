@@ -5689,26 +5689,27 @@ async fn get_available_updates(
     State(_state): State<ApiState>,
 ) -> Result<Json<AvailableUpdatesResponse>, (StatusCode, Json<ApiError>)> {
     let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
-    match scheduler.get_available_versions(None).await {
-        Ok(versions) => {
-            let version_infos: Vec<AvailableVersionInfo> = versions
-                .iter()
-                .map(|v| AvailableVersionInfo {
-                    version: v.version.clone(),
-                    channel: format!("{:?}", v.channel),
-                    release_date: v.release_date.to_rfc3339(),
-                    notes: v.notes.clone(),
-                    size_bytes: v.size_bytes,
-                    download_url: v.download_url.clone(),
-                    required_disk_space_mb: v.required_disk_space_mb,
-                })
-                .collect();
+    let channel = format!("{:?}", scheduler.get_channel().await);
+    let mut checker = crate::updates::UpdateChecker::new();
 
-            Ok(Json(AvailableUpdatesResponse {
-                updates: version_infos,
-                count: versions.len(),
-            }))
-        }
+    match checker.check_for_updates().await {
+        Ok(result) if result.available => Ok(Json(AvailableUpdatesResponse {
+            updates: vec![AvailableVersionInfo {
+                version: result.new_version,
+                channel,
+                release_date: "unknown".to_string(),
+                notes: "Detected via bootc upgrade --check against the tracked GHCR image"
+                    .to_string(),
+                size_bytes: 0,
+                download_url: String::new(),
+                required_disk_space_mb: 0,
+            }],
+            count: 1,
+        })),
+        Ok(_) => Ok(Json(AvailableUpdatesResponse {
+            updates: vec![],
+            count: 0,
+        })),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -5785,28 +5786,27 @@ async fn check_for_updates(
     State(_state): State<ApiState>,
 ) -> Result<Json<AvailableUpdatesResponse>, (StatusCode, Json<ApiError>)> {
     let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
-    match scheduler.fetch_available_versions().await {
-        Ok(_) => {
-            if let Ok(Some(update)) = scheduler.check_for_updates().await {
-                Ok(Json(AvailableUpdatesResponse {
-                    updates: vec![AvailableVersionInfo {
-                        version: update.version,
-                        channel: format!("{:?}", update.channel),
-                        release_date: update.release_date.to_rfc3339(),
-                        notes: update.notes,
-                        size_bytes: update.size_bytes,
-                        download_url: update.download_url,
-                        required_disk_space_mb: update.required_disk_space_mb,
-                    }],
-                    count: 1,
-                }))
-            } else {
-                Ok(Json(AvailableUpdatesResponse {
-                    updates: vec![],
-                    count: 0,
-                }))
-            }
-        }
+    let channel = format!("{:?}", scheduler.get_channel().await);
+    let mut checker = crate::updates::UpdateChecker::new();
+
+    match checker.check_for_updates().await {
+        Ok(result) if result.available => Ok(Json(AvailableUpdatesResponse {
+            updates: vec![AvailableVersionInfo {
+                version: result.new_version,
+                channel,
+                release_date: "unknown".to_string(),
+                notes: "Detected via bootc upgrade --check against the tracked GHCR image"
+                    .to_string(),
+                size_bytes: 0,
+                download_url: String::new(),
+                required_disk_space_mb: 0,
+            }],
+            count: 1,
+        })),
+        Ok(_) => Ok(Json(AvailableUpdatesResponse {
+            updates: vec![],
+            count: 0,
+        })),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
@@ -5866,60 +5866,19 @@ async fn get_update_history(
 )]
 async fn install_update(
     State(_state): State<ApiState>,
-    Json(request): Json<InstallUpdateRequest>,
+    Json(_request): Json<InstallUpdateRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ApiError>)> {
-    let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
+    // The legacy request payload still contains a version field, but the real
+    // install path is bootc staging the next deployment tracked by the current
+    // image reference.
+    let checker = crate::updates::UpdateChecker::new();
 
-    // Get available versions
-    let available = match scheduler.get_available_versions(None).await {
-        Ok(v) => v,
-        Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiError {
-                    error: "Failed to get available versions".to_string(),
-                    message: e.to_string(),
-                    code: 500,
-                }),
-            ))
-        }
-    };
-
-    // Find the requested version
-    let version = available
-        .iter()
-        .find(|v| v.version == request.version)
-        .ok_or_else(|| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ApiError {
-                    error: "Version not found".to_string(),
-                    message: format!("Version {} not available", request.version),
-                    code: 400,
-                }),
-            )
-        })?;
-
-    // Download update
-    match scheduler.download_update(version).await {
-        Ok(_) => {
-            // Install update
-            match scheduler.install_update(version).await {
-                Ok(_) => Ok(StatusCode::OK),
-                Err(e) => Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ApiError {
-                        error: "Failed to install update".to_string(),
-                        message: e.to_string(),
-                        code: 500,
-                    }),
-                )),
-            }
-        }
+    match checker.stage_update().await {
+        Ok(_) => Ok(StatusCode::OK),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiError {
-                error: "Failed to download update".to_string(),
+                error: "Failed to stage update".to_string(),
                 message: e.to_string(),
                 code: 500,
             }),
@@ -5970,10 +5929,15 @@ async fn get_update_status(
 ) -> Result<Json<UpdateStatusResponse>, (StatusCode, Json<ApiError>)> {
     let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
     let status = scheduler.get_status().await;
+    let mut checker = crate::updates::UpdateChecker::new();
+    let available_versions = match checker.check_for_updates().await {
+        Ok(result) if result.available => 1,
+        _ => 0,
+    };
 
     Ok(Json(UpdateStatusResponse {
         current_channel: format!("{:?}", status.current_channel),
-        available_versions: status.available_versions,
+        available_versions,
         scheduled_updates: status.scheduled_updates,
         last_update: status.last_update,
         schedule_type: format!("{:?}", status.schedule_type),

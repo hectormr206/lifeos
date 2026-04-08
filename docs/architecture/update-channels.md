@@ -2,6 +2,21 @@
 
 LifeOS uses a multi-channel release system to balance stability with rapid iteration.
 
+## Canonical Update Model
+
+There is one operational truth for OS updates/releases in LifeOS:
+
+1. `bootc` is the runtime authority on the host.
+2. The signed GHCR image digest is the release artifact that `bootc` stages/boots.
+3. `channels/*.json` is CI publication metadata that points at the latest digest per channel.
+4. `/etc/lifeos/channels.toml` and `[updates]` in `lifeos.toml` only express local preference/policy.
+
+What is explicitly not canonical anymore:
+
+- The old daemon-side simulated update catalog.
+- ISO download/install semantics for normal host updates.
+- Treating config defaults as proof of what image/version is actually installed.
+
 If you only need operator-driven `stable` updates for your main laptop, follow the
 manual update runbook in this document.
 
@@ -61,7 +76,8 @@ life status
 life update status
 
 # There is no shipped `life channel set` command yet.
-# Switch channels explicitly with bootc:
+# Switch channels explicitly with bootc. Then keep local preference aligned in
+# `/etc/lifeos/lifeos.toml`.
 sudo bootc switch ghcr.io/hectormr206/lifeos:stable
 sudo bootc switch ghcr.io/hectormr206/lifeos:candidate
 sudo bootc switch ghcr.io/hectormr206/lifeos:edge
@@ -69,7 +85,7 @@ sudo bootc switch ghcr.io/hectormr206/lifeos:edge
 
 ### Manual Configuration
 
-Edit `/etc/lifeos/lifeos.toml` to keep local config aligned with the image you switch to:
+Edit `/etc/lifeos/lifeos.toml` to keep local preference aligned with the image you switch to:
 
 ```toml
 [updates]
@@ -97,7 +113,7 @@ auto_apply = false
 For daily-driver hosts, LifeOS uses an operator-driven update policy:
 
 1. Automatic checks are allowed.
-2. Staging/download can be manual or daemon-assisted.
+2. Staging can be manual or daemon-assisted.
 3. `bootc upgrade --apply` is not used as the default background path.
 4. Reboot is user-initiated during a maintenance window.
 
@@ -134,6 +150,9 @@ sudo bootc status
 # 4) Reboot when you decide
 sudo reboot
 ```
+
+`life update` now follows the same canonical path: it stages with `bootc upgrade`
+and only reboots immediately if you pass `--now`.
 
 If you explicitly run `bootc upgrade --apply`, some environments may reboot immediately.
 
@@ -182,7 +201,8 @@ cosign download sbom ghcr.io/hectormr206/lifeos:stable
 
 ## Channel Configuration File
 
-The local update preference is typically stored in `/etc/lifeos/lifeos.toml`:
+The local update preference is typically stored in `/etc/lifeos/lifeos.toml`.
+This is preference, not proof of the currently booted image:
 
 ```toml
 [updates]

@@ -7,7 +7,7 @@ use colored::Colorize;
 
 #[derive(Subcommand)]
 pub enum UpdateSubcommand {
-    /// Show update scheduler/channel status
+    /// Show canonical bootc update status and local policy
     Status,
 }
 
@@ -40,7 +40,7 @@ pub async fn execute(args: UpdateArgs) -> anyhow::Result<()> {
     if args.dry_run {
         println!(
             "{}",
-            format!("📋 Simulating update from channel: {}", channel)
+            format!("📋 Simulating bootc update check for channel: {}", channel)
                 .blue()
                 .bold()
         );
@@ -91,7 +91,7 @@ pub async fn execute(args: UpdateArgs) -> anyhow::Result<()> {
     } else {
         println!(
             "{}",
-            format!("🔄 Updating system from channel: {}", channel)
+            format!("🔄 Staging bootc update from channel: {}", channel)
                 .blue()
                 .bold()
         );
@@ -104,7 +104,10 @@ pub async fn execute(args: UpdateArgs) -> anyhow::Result<()> {
         // Perform the update
         match system::perform_update(&channel, false).await {
             Ok(result) => {
-                println!("{}", "✅ Update staged successfully".green().bold());
+                println!(
+                    "{}",
+                    "✅ Next deployment staged successfully".green().bold()
+                );
 
                 if !result.changes.is_empty() {
                     println!("\nChanges:");
@@ -114,11 +117,18 @@ pub async fn execute(args: UpdateArgs) -> anyhow::Result<()> {
                 }
 
                 if args.now {
-                    println!("{}", "\n🔄 Rebooting system...".yellow().bold());
-                    // In a real implementation, this would reboot
-                    // tokio::process::Command::new("reboot").spawn()?;
+                    println!(
+                        "{}",
+                        "\n🔄 Rebooting into the staged deployment..."
+                            .yellow()
+                            .bold()
+                    );
+                    system::request_reboot()?;
                 } else {
-                    println!("{}", "\n💡 System will be updated on next reboot".blue());
+                    println!(
+                        "{}",
+                        "\n💡 The update is staged and will activate on the next reboot".blue()
+                    );
                     println!("   Run 'life update --now' to reboot immediately");
                 }
             }
@@ -135,50 +145,11 @@ async fn show_status() -> anyhow::Result<()> {
     println!("{}", "Update Status".bold().blue());
     println!();
 
-    // Try daemon scheduler status first (Phase 1 update system)
-    let client = daemon_client::authenticated_client();
-    let url = format!("{}/api/v1/updates/status", daemon_client::daemon_url());
-    if let Ok(response) = client.get(url).send().await {
-        if response.status().is_success() {
-            let body: serde_json::Value = response.json().await?;
-            println!(
-                "  {}: {}",
-                "Channel".bold(),
-                body["current_channel"].as_str().unwrap_or("unknown").cyan()
-            );
-            println!(
-                "  {}: {}",
-                "Schedule".bold(),
-                body["schedule_type"].as_str().unwrap_or("unknown")
-            );
-            println!(
-                "  {}: {}",
-                "Check every (hours)".bold(),
-                body["check_frequency_hours"].as_u64().unwrap_or(0)
-            );
-            println!(
-                "  {}: {}",
-                "Available versions".bold(),
-                body["available_versions"].as_u64().unwrap_or(0)
-            );
-            println!(
-                "  {}: {}",
-                "Scheduled updates".bold(),
-                body["scheduled_updates"].as_u64().unwrap_or(0)
-            );
-            if let Some(last) = body["last_update"].as_str() {
-                println!("  {}: {}", "Last update".bold(), last);
-            }
-            return Ok(());
-        }
-    }
-
-    // Fallback to local bootc-based status
     let channel = config::load_config()
         .ok()
         .map(|c| c.updates.channel)
         .unwrap_or_else(|| "stable".to_string());
-    println!("  {}: {}", "Channel".bold(), channel.cyan());
+    println!("  {}: {}", "Configured channel".bold(), channel.cyan());
 
     if !system::is_bootc_available() {
         println!("  {}: {}", "bootc".bold(), "not available".yellow());
@@ -188,6 +159,9 @@ async fn show_status() -> anyhow::Result<()> {
     match system::get_bootc_status() {
         Ok(status) => {
             println!("  {}: {}", "Booted image".bold(), status.booted_slot);
+            if let Some(staged) = status.staged {
+                println!("  {}: {}", "Staged image".bold(), staged.version);
+            }
             if let Some(rollback) = status.rollback_slot {
                 println!("  {}: {}", "Rollback image".bold(), rollback);
             }
@@ -197,6 +171,32 @@ async fn show_status() -> anyhow::Result<()> {
                 "  {}: {}",
                 "bootc status".bold(),
                 format!("unavailable ({})", e).yellow()
+            );
+        }
+    }
+
+    match system::check_updates(&channel) {
+        Ok(true) => println!("  {}: {}", "Updates available".bold(), "yes".green()),
+        Ok(false) => println!("  {}: {}", "Updates available".bold(), "no".green()),
+        Err(e) => println!("  {}: {}", "Update check".bold(), e.to_string().yellow()),
+    }
+
+    let client = daemon_client::authenticated_client();
+    let url = format!("{}/api/v1/updates/status", daemon_client::daemon_url());
+    if let Ok(response) = client.get(url).send().await {
+        if response.status().is_success() {
+            let body: serde_json::Value = response.json().await?;
+            println!();
+            println!("{}", "Daemon policy metadata".bold());
+            println!(
+                "  {}: {}",
+                "Schedule type".bold(),
+                body["schedule_type"].as_str().unwrap_or("unknown")
+            );
+            println!(
+                "  {}: {}",
+                "Check every (hours)".bold(),
+                body["check_frequency_hours"].as_u64().unwrap_or(0)
             );
         }
     }

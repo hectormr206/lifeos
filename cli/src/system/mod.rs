@@ -635,11 +635,9 @@ pub async fn perform_update(_channel: &str, dry_run: bool) -> anyhow::Result<Upd
     }
 
     let output = if is_root() {
-        Command::new("bootc")
-            .args(["upgrade", "--apply"])
-            .output()?
+        Command::new("bootc").arg("upgrade").output()?
     } else {
-        run_with_sudo_fallback("bootc", &["upgrade", "--apply"])?
+        run_with_sudo_fallback("bootc", &["upgrade"])?
     };
 
     if !output.status.success() {
@@ -649,9 +647,27 @@ pub async fn perform_update(_channel: &str, dry_run: bool) -> anyhow::Result<Upd
     Ok(UpdateResult {
         would_update: true,
         from_version: "current".to_string(),
-        to_version: "updated".to_string(),
-        changes: vec!["System updated".to_string()],
+        to_version: "staged".to_string(),
+        changes: vec!["Next bootc deployment staged for the next reboot".to_string()],
     })
+}
+
+/// Reboot the host after a staged deployment.
+pub fn request_reboot() -> anyhow::Result<()> {
+    let output = if is_root() {
+        Command::new("systemctl").arg("reboot").output()?
+    } else {
+        run_with_sudo_fallback("systemctl", &["reboot"])?
+    };
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "Failed to reboot: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(())
 }
 
 /// Create a readonly Btrfs snapshot before attempting an update.

@@ -4,6 +4,8 @@
   "tag": "stable",
   "digest": "sha256:f9bfc89c8b4d6c0cdccd698179ab6b85103831a5b64789333083aae9e89b27fb",
   "image": "ghcr.io/hectormr206/lifeos:stable",
+  "manifest_role": "publication-index",
+  "source_of_truth": "ghcr-digest",
   "released_at": "2026-04-06T05:49:48Z",
   "commit": "9444dc387da7c3103e28c2ec5a31d8f7683354d4"
 }

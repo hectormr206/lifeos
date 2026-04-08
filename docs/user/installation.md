@@ -190,29 +190,32 @@ life first-boot
 
 This will:
 - Configure timezone
-- Set up automatic updates
+- Set up update preferences
 - Download AI models (optional)
 - Configure privacy settings
 
 ### Update System
 
 ```bash
-# Inspect update channel and staged image state
+# Inspect local preference and real bootc state
 life update status
 sudo bootc status
 
 # Check whether a newer deployment exists
 sudo bootc upgrade --check
 
-# Stage the update for the next reboot
+# Stage the next deployment for the next reboot
+life update
+# Equivalent low-level command:
 sudo bootc upgrade
 
 # Reboot when you are ready to boot into the staged deployment
 sudo reboot
 ```
 
-LifeOS does not currently ship `life update check` or `life update apply` wrappers.
-Use the `bootc` flow above for real image updates.
+Canonical rule: the installed/staged OS version is whatever `bootc status`
+reports for the tracked GHCR image. `lifeos.toml` only stores preference such as
+the desired channel.
 
 ### Install Additional Software
 

@@ -382,9 +382,11 @@ El estado del sistema se describe en un archivo `lifeos.toml`:
 
 ```toml
 [system]
-channel = "stable"
 mode = "pro"
 locale = "es_MX.UTF-8"
+
+[updates]
+channel = "stable"
 
 [apps]
 flatpak = ["org.mozilla.Firefox", "com.spotify.Client"]
@@ -2498,7 +2500,7 @@ pub async fn execute(args: StatusArgs) -> anyhow::Result<()> {
         let output = serde_json::json!({
             "version": bootc.version,
             "slot": bootc.active_slot,
-            "channel": config.system.channel,
+            "channel": config.updates.channel,
             "mode": config.system.mode,
             "health": health.summary(),
             "updates_available": bootc.updates_available,
@@ -2508,7 +2510,7 @@ pub async fn execute(args: StatusArgs) -> anyhow::Result<()> {
         println!("{}", "LifeOS Status".bold());
         println!("  Version:    {}", bootc.version);
         println!("  Slot:       {}", bootc.active_slot);
-        println!("  Channel:    {}", config.system.channel);
+        println!("  Channel:    {}", config.updates.channel);
         println!("  Mode:       {}", config.system.mode);
         println!("  Health:     {}", health.colored_summary());
         if bootc.updates_available {
@@ -2680,17 +2682,16 @@ life id rotate-keys --provider kms
 
 [system]
 version = "0.1.0"                     # Version de LifeOS instalada (read-only, gestionada por bootc)
-channel = "stable"                     # stable | candidate | edge
 mode = "simple"                        # simple | pro | builder
 locale = "es_MX.UTF-8"
 timezone = "America/Mexico_City"
 hostname = "lifeos-laptop"
 
-[system.updates]
-auto_download = true                   # Descargar updates automaticamente
-auto_install = false                   # Instalar requiere confirmacion del usuario
-schedule = "04:00"                     # Hora preferida para updates automaticas
-snapshot_before_update = true          # Snapshot de Btrfs antes de cada update
+[updates]
+channel = "stable"                     # stable | candidate | edge
+auto_check = true
+auto_apply = false
+schedule = "daily"
 
 [onboarding]
 trust_me_mode = false                  # false por defecto; true solo en despliegue administrado

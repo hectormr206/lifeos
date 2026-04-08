@@ -215,15 +215,17 @@ bootc switch ghcr.io/hectormr206/lifeos:candidate
 | `candidate` | Pre-release validation | Medium    |
 | `edge`      | Latest development     | Low       |
 
+Canonical rule:
+
+- `bootc status` tells you what deployment is actually booted/staged.
+- GHCR digest is the release artifact that matters operationally.
+- `lifeos.toml` and `channels.toml` are policy/preferences only.
+
 ### Custom Update Server
 
-Configure a custom OCI registry:
-
-```toml
-[updates]
-channel = "custom"
-custom_registry = "registry.example.com/lifeos"
-```
+LifeOS currently documents `stable`, `candidate`, and `edge` as the supported
+channels for the signed GHCR release flow. A custom OCI registry path is not
+part of the canonical shipped model today.
 
 ## Health Monitoring
 

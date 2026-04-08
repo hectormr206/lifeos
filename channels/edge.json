@@ -4,6 +4,8 @@
   "tag": "edge-20260408-f6f80ec",
   "digest": "sha256:443221e05c48bf6a66982288ff97019a78a1001f9f05d038890df23a9f8b299b",
   "image": "ghcr.io/hectormr206/lifeos:edge-20260408-f6f80ec",
+  "manifest_role": "publication-index",
+  "source_of_truth": "ghcr-digest",
   "released_at": "2026-04-08T07:31:40Z",
   "commit": "f6f80ecc72bfb960987a2252b115710375f34dc0"
 }

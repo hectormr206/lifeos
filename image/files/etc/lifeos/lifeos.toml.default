@@ -1,8 +1,13 @@
 [system]
-channel = "stable"
 mode = "personal"
 locale = "es_MX.UTF-8"
 timezone = "UTC"
+
+[updates]
+channel = "stable"
+auto_check = true
+auto_apply = false
+schedule = "daily"
 
 [ai]
 enabled = true
