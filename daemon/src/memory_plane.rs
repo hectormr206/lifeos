@@ -4679,6 +4679,7 @@ pub struct CrisisResource {
 /// Mexican crisis hotlines. Hardcoded for the user's locale (San Juan
 /// del Río, QRO). Future versions can localize per-locale; for now we
 /// always include `911` as the universal emergency number.
+#[allow(dead_code)]
 pub fn crisis_resources_mx() -> &'static [CrisisResource] {
     &[
         CrisisResource {

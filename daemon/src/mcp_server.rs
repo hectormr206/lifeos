@@ -16,6 +16,8 @@
 //! - lifeos_meeting_status: Check if a meeting is active
 //! - lifeos_game_guard_status: Check GPU/gaming state
 
+#![allow(dead_code)]
+
 /// Process an MCP tool call and return the result.
 /// This is a dispatcher — actual execution delegates to the appropriate module.
 pub async fn call_tool(

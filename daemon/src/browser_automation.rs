@@ -6,6 +6,8 @@
 //!
 //! Flow: open URL → wait → screenshot → analyze with vision LLM → decide next action
 
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use log::info;
 use serde::{Deserialize, Serialize};
