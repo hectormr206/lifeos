@@ -78,6 +78,7 @@ fn parse_bootc_status_text(output: &str) -> anyhow::Result<BootcStatus> {
 
     for raw_line in output.lines() {
         let line = raw_line.trim();
+        let line = line.strip_prefix('●').map(str::trim).unwrap_or(line);
 
         if let Some(value) = line.strip_prefix("Booted image:") {
             booted_image = Some(value.trim().to_string());
