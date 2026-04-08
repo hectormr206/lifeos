@@ -272,7 +272,7 @@ jobs:
 
   update-channel-manifest:
     needs: [determine-channel, build-and-push]
-    if: needs.determine-channel.outputs.channel != 'skip'
+    if: needs.determine-channel.outputs.channel != 'skip' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
