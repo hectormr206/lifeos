@@ -1,6 +1,8 @@
 [Unit]
 Description=LifeOS AI Inference Server (llama.cpp)
 Documentation=https://github.com/ggml-org/llama.cpp
+# Canonical runtime: system scope. Some hosts may keep a user-scoped override
+# for recovery/dev flows, but that is fallback behavior only.
 After=network-online.target systemd-user-sessions.service
 Wants=network-online.target
 ConditionPathExists=/etc/lifeos/llama-server.env

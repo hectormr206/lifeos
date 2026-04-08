@@ -6,7 +6,8 @@
 #   layers = -1  → All layers on GPU (restore)
 #
 # This script can be used for manual recovery; lifeosd now writes the same
-# override file directly under /var/lib/lifeos.
+# override file directly under /var/lib/lifeos. The primary llama-server
+# runtime is the system unit; user-scoped runs are fallback only.
 
 set -euo pipefail
 

@@ -30,7 +30,7 @@ It focuses on fast containment, deterministic rollback, and auditable recovery.
     - `systemctl --user restart lifeosd`
 3. If the local model is implicated, restart the inference service:
     - `sudo systemctl restart llama-server`
-    - Fallback: `systemctl --user restart llama-server`
+    - Fallback only if that host runs `llama-server` as a user override: `systemctl --user restart llama-server`
 
 ### 3.2 Permissions containment
 
@@ -57,7 +57,7 @@ It focuses on fast containment, deterministic rollback, and auditable recovery.
 2. Re-check critical services:
     - `systemctl --user status lifeosd`
     - `sudo systemctl status llama-server`
-    - Fallback: `systemctl --user status llama-server`
+    - Fallback only if that host runs `llama-server` as a user override: `systemctl --user status llama-server`
 3. Confirm health gates:
     - `life check`
 

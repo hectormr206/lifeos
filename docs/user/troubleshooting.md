@@ -6,7 +6,7 @@
 ```bash
 life doctor                      # Diagnostico rapido de salud
 systemctl --user status lifeosd   # El daemon principal corre como user service
-systemctl status llama-server     # El modelo local esta corriendo?
+sudo systemctl status llama-server  # Runtime canonico del modelo local
 curl http://127.0.0.1:8081/api/v1/health  # Estado agregado de salud
 journalctl --user -u lifeosd --since "10 min ago"  # Logs recientes del daemon
 ```
@@ -14,7 +14,7 @@ journalctl --user -u lifeosd --since "10 min ago"  # Logs recientes del daemon
 **Solucion comun:**
 - Si lifeosd no esta corriendo: `systemctl --user restart lifeosd`
 - Si llama-server no esta corriendo: `sudo systemctl restart llama-server`
-- Si `llama-server` no existe como system service en ese host: probar `systemctl --user restart llama-server`
+- Si `llama-server` no existe como system service en ese host: probar `systemctl --user restart llama-server` como fallback puntual
 - Si el modelo local fallo: verificar `/var/lib/lifeos/models/` tiene el archivo .gguf
 
 ## Modelo local muy lento

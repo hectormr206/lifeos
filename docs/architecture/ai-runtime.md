@@ -1597,7 +1597,7 @@ Audio entrante
 **Bloque 4 — Permisos y autonomia de Axi (P0):**
 
 - [x] **Polkit rules para auto-gestion:** Regla `40-lifeos-axi.rules` permite al usuario `lifeos` gestionar `lifeosd.service`, `llama-server.service`, `whisper-stt.service` y `daemon-reload` sin password.
-- [x] **Auto-restart del daemon:** `Restart=on-failure` + `WatchdogSec=300` en servicio systemd. Polkit rules permiten self-restart via `systemctl restart lifeosd`. Hot-reload de wake word model sin restart. _Configurado en lifeosd.service._
+- [x] **Auto-restart del daemon:** `Restart=on-failure` + `WatchdogSec=300` en la user unit de `lifeosd`. Polkit rules siguen cubriendo la gestion del ecosistema LifeOS; el runtime canonico del daemon es `systemd --user`. Hot-reload de wake word model sin restart. _Configurado en `image/Containerfile`._
 - [x] **Systemd sandboxing:** `NoNewPrivileges=yes`, `PrivateTmp=yes` en servicio user-level. User service hereda permisos del usuario grafico (PipeWire, Wayland, D-Bus) sin necesidad de root. _Configurado en lifeosd.service generado en Containerfile._
 
 **Criterios de salida de Fase 4.6:**
@@ -2280,7 +2280,8 @@ COPY files/ /
 RUN systemctl enable cosmic-greeter.service && \
     systemctl enable NetworkManager.service && \
     systemctl enable bluetooth.service && \
-    systemctl enable lifeosd.service && \
+    # Nota: el Containerfile canonico actual habilita `lifeosd` como user service
+    # en `default.target`, no como system service.
     systemctl enable llama-server.service && \
     systemctl enable lifeos-first-boot.service
 

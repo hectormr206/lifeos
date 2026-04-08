@@ -1,7 +1,9 @@
 [Unit]
 Description=LifeOS Sentinel — Independent watchdog for lifeosd
-After=network-online.target lifeosd.service
-Wants=lifeosd.service
+# Sentinel observes lifeosd over loopback; it does not define the daemon's
+# primary runtime model. lifeosd itself runs canonically as a user service.
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple

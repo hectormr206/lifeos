@@ -16,7 +16,7 @@ Start here based on what you need:
 |--------|---------|-----------|
 | [strategy/](strategy/) | Strategic roadmap, phases, competition | unified-strategy |
 | [public/](public/) | Public-facing summaries for users and sponsors | roadmap, roadmap.es-mx |
-| [architecture/](architecture/) | Technical architecture and specs | ai-runtime, llm-providers, threat-model, update-channels |
+| [architecture/](architecture/) | Technical architecture and specs | ai-runtime, service-runtime, llm-providers, threat-model, update-channels |
 | [operations/](operations/) | Runbooks and operational guides | bootc-playbook, incident-response, build-iso, nvidia-secure-boot, system-admin |
 | [user/](user/) | End-user documentation | installation, user-guide, troubleshooting |
 | [branding/](branding/) | Visual identity and design | brand-guidelines, axi-visual-system, design-tokens, icon-theme-guide |

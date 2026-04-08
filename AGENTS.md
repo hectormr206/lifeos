@@ -7,7 +7,7 @@ AI-native Linux distribution (Fedora bootc + COSMIC Desktop). Three Rust crates:
 | Crate | Binary | Purpose |
 |-------|--------|---------|
 | `cli/` | `life` | CLI for user interaction |
-| `daemon/` | `lifeosd` | System daemon: REST API, AI, Telegram, supervisor |
+| `daemon/` | `lifeosd` | User-session daemon: REST API, AI, Telegram, supervisor |
 | `tests/` | — | Integration tests |
 
 Plus: `image/` (OS container), `scripts/` (automation), `docs/` (documentation).

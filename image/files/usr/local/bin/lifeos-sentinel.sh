@@ -14,6 +14,34 @@ MAX_LOG_LINES=100
 LOG_FILE="/var/log/lifeos/sentinel.log"
 DISK_THRESHOLD=95
 MEMORY_THRESHOLD=95
+LIFEOS_PRIMARY_USER="${LIFEOS_PRIMARY_USER:-lifeos}"
+LIFEOS_PRIMARY_UID="${LIFEOS_PRIMARY_UID:-1000}"
+
+user_systemctl() {
+    local runtime_dir="/run/user/${LIFEOS_PRIMARY_UID}"
+    local user_bus="${runtime_dir}/bus"
+
+    if ! command -v runuser >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if [ ! -S "$user_bus" ]; then
+        return 1
+    fi
+
+    runuser -u "$LIFEOS_PRIMARY_USER" -- \
+        env XDG_RUNTIME_DIR="$runtime_dir" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=${user_bus}" \
+            systemctl --user "$@"
+}
+
+restart_lifeosd() {
+    # Canonical path: restart the user-scoped daemon. Keep the system-scope
+    # alias only as a legacy/debug fallback if the user bus is unavailable.
+    user_systemctl restart lifeosd.service 2>/dev/null || \
+        systemctl restart lifeosd.service 2>/dev/null || \
+        log "Failed to restart lifeosd in both user and system scopes"
+}
 
 log() {
     echo "$(date -Iseconds) [sentinel] $*" | tee -a "$LOG_FILE" 2>/dev/null || true
@@ -121,7 +149,7 @@ ${local_logs}"
         else
             check_memory
             log "ESCALATION: Restarting lifeosd"
-            systemctl restart lifeosd 2>/dev/null || log "Failed to restart lifeosd"
+            restart_lifeosd
         fi
     fi
 
@@ -130,7 +158,7 @@ ${local_logs}"
             check_memory
             log "ESCALATION: Running life doctor --repair"
             /usr/bin/life doctor --repair 2>/dev/null || log "Doctor repair failed"
-            systemctl restart lifeosd 2>/dev/null || true
+            restart_lifeosd
         fi
     fi
 
@@ -148,8 +176,9 @@ ${local_logs}"
 
         # Step 3: Full daemon restart with environment reset
         log "Recovery step 3: full daemon restart with reset-failed"
-        systemctl reset-failed lifeosd 2>/dev/null || true
-        systemctl restart lifeosd 2>/dev/null || true
+        user_systemctl reset-failed lifeosd.service 2>/dev/null || \
+            systemctl reset-failed lifeosd.service 2>/dev/null || true
+        restart_lifeosd
 
         # Step 4: Wait and check if recovery worked
         sleep 10

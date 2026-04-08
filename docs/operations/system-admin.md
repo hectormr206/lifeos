@@ -16,8 +16,8 @@ This guide is for system administrators managing LifeOS deployments.
 │  └── llama-server       - AI inference engine (llama.cpp)    │
 ├─────────────────────────────────────────────────────────────┤
 │  Service Ownership                                           │
-│  ├── lifeosd.service    - Primarily user service             │
-│  ├── llama-server.service - Usually system service           │
+│  ├── lifeosd.service    - User service (canonical runtime)   │
+│  ├── llama-server.service - System service (canonical runtime) │
 │  └── lifeos-update-check.service - System update probe       │
 ├─────────────────────────────────────────────────────────────┤
 │  bootc (Image-based Updates)                                 │
@@ -45,9 +45,11 @@ This guide is for system administrators managing LifeOS deployments.
 
 ## Service Management
 
+Canonical runtime reference: `docs/architecture/service-runtime.md`.
+
 ### lifeosd (LifeOS Daemon)
 
-The system daemon provides:
+The daemon provides:
 
 - Health monitoring
 - Update checking
@@ -55,7 +57,7 @@ The system daemon provides:
 - Desktop notifications
 - D-Bus interface
 
-`lifeosd` is operated primarily as a per-user service so it can inherit the desktop session
+`lifeosd` is operated canonically as a per-user service so it can inherit the desktop session
 (Wayland, D-Bus, PipeWire, user secrets) without requiring a root-owned foreground session.
 
 ```bash
@@ -75,7 +77,7 @@ systemctl --user status lifeosd
 journalctl --user -u lifeosd -f
 ```
 
-Fallback only when a host still ships a system-scoped unit:
+Legacy/debug only when a host still exposes the system-scope alias:
 
 ```bash
 sudo systemctl status lifeosd
@@ -94,8 +96,8 @@ journalctl -u lifeos-update-check.service
 ### llama-server Service
 
 `llama-server` is shipped as a system service by default. Some recovery flows and
-hardware-specific fallbacks may also run it as a user unit, so check both scopes if the
-system unit is absent.
+host-specific overrides may also run it as a user unit, but that is fallback behavior,
+not the primary runtime model.
 
 ```bash
 # Manage default system service
@@ -106,7 +108,7 @@ sudo systemctl restart llama-server
 # View llama-server logs
 journalctl -u llama-server -f
 
-# Fallback on hosts using a user-scoped override
+# Fallback only if this host does not ship the system unit
 systemctl --user status llama-server
 ```
 
@@ -270,14 +272,13 @@ touch /usr/test  # Will fail
 
 ### Service Hardening
 
-The `lifeosd.service` includes:
+The canonical `lifeosd` user unit includes:
 
 - `NoNewPrivileges=true`
-- `ProtectSystem=strict`
-- `ProtectHome=true`
-- `ProtectKernelTunables=true`
-- `ProtectKernelModules=true`
-- `ProtectControlGroups=true`
+- `PrivateTmp=yes`
+- `Restart=on-failure`
+- `WatchdogSec=300`
+- `Environment=LIFEOS_RUNTIME_DIR=%t/lifeos`
 
 ### SELinux
 
@@ -455,7 +456,7 @@ sudo systemctl status llama-server
 # View AI service logs
 journalctl -u llama-server -n 50
 
-# Fallback if the host runs the user-scoped unit instead
+# Fallback only if the host runs a user-scoped override instead
 systemctl --user status llama-server
 
 # Test inference

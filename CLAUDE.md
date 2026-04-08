@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-LifeOS — AI-native Linux distribution on Fedora bootc (immutable). Rust CLI (`life`) + system daemon (`lifeosd`) + bootc OS image.
+LifeOS — AI-native Linux distribution on Fedora bootc (immutable). Rust CLI (`life`) + user-session daemon (`lifeosd`) + bootc OS image.
 
 **Language:** Rust 2021. Documentation in Spanish, code in English.
 

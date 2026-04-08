@@ -1,4 +1,4 @@
-# LifeOS — Ensure lifeosd user service is active on every login.
+# LifeOS — Ensure the canonical lifeosd user service is active on every login.
 # Prevents masked/disabled state from persisting across bootc updates.
 # Runs silently in background to avoid slowing down shell startup.
 

@@ -763,7 +763,8 @@ COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-over
 # Dashboard access: only via Axi tray icon → "Abrir Dashboard"
 # COPY image/files/etc/xdg/autostart/lifeos-axi-experience.desktop /etc/xdg/autostart/lifeos-axi-experience.desktop
 # COPY image/files/usr/share/applications/lifeos-axi-dashboard.desktop /usr/share/applications/lifeos-axi-dashboard.desktop
-# lifeosd.service — user service so it inherits Wayland, PipeWire, D-Bus
+# lifeosd.service — canonical runtime is a user service so it inherits
+# Wayland, PipeWire, D-Bus, and the active user's session state.
 # This lets the GTK4 mini-widget (Eye of Axi) render on the desktop and
 # gives native access to audio, camera, and screen capture.
 RUN printf '%s\n' \
@@ -793,7 +794,8 @@ RUN printf '%s\n' \
     '[Install]' \
     'WantedBy=default.target' \
     > /usr/lib/systemd/user/lifeosd.service
-# Keep a system-level alias so `systemctl status lifeosd` still works for debugging
+# Keep a system-level alias only for compatibility/debugging.
+# This alias is NOT the primary runtime contract for lifeosd.
 RUN ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/system/lifeosd.service
 
 # Habilitar servicios via symlinks
@@ -804,6 +806,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/user/default.target.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
+    # Canonical enablement: lifeosd starts from the user's default.target.
     ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
