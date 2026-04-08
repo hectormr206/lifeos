@@ -12,7 +12,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [fases-ab-aj.md](fases-ab-aj.md) | Fases AB-AL (roadmap activo) + vision futura (AH/AI/AJ sacadas del consecutivo) | ~460 |
 | [competencia.md](competencia.md) | Analisis competitivo detallado (OpenClaw, Devin, Replit, gigantes tech) | ~292 |
 | [fase-aq-personalizacion.md](fase-aq-personalizacion.md) | Fase AQ: experiencias personalizadas (10 sub-fases, User Model, adaptacion, proactividad) | ~160 |
-| [fase-ar-custom-training.md](fase-ar-custom-training.md) | Fase AR: entrenamiento local de modelos (LoRA/QLoRA, Unsloth, distillation, DPO) | ~280 |
+| [fase-ar-custom-training.md](fase-ar-custom-training.md) | Fase AR: entrenamiento local de modelos diferido; fine-tuning, distillation, DPO y modelos especializados solo despues de BJ + AQ | ~280 |
 | [mejoras-memoria.md](mejoras-memoria.md) | Mejoras al memory_plane: filtro basura, decay exponencial, dedup, resumen, permanentes | ~80 |
 | [fase-as-lifeos-android.md](fase-as-lifeos-android.md) | Fase AS: LifeOS Mobile para Pixel (GrapheneOS, hibrido local+server) | ~120 |
 | [fase-at-android-app-nativa.md](fase-at-android-app-nativa.md) | Fase AT: App Android nativa con todos los sentidos de Axi (cualquier telefono) | ~420 |
@@ -24,6 +24,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | [auditoria-estados-reales.md](auditoria-estados-reales.md) | Matriz viva de estados reales: que esta validado en host, que esta parcial y que esta solo en repo o feature-flag | ~110 |
 | [fase-be-actividad-real.md](fase-be-actividad-real.md) | Fase BE: Actividad Real — tracking real de usuario (idle, lock, apps, Telegram, audio, camara) con maquina de estados | ~430 |
 | [fase-bf-modelos-remotos-gratis.md](fase-bf-modelos-remotos-gratis.md) | Fase BF: modelos remotos gratis/preview como opcion experimental, con opt-in, etiquetas de privacidad y aislamiento de memoria | ~170 |
+| [fase-bj-nanoagentes-local-first.md](fase-bj-nanoagentes-local-first.md) | Fase BJ: nanoagentes local-first, small models, prompting estructurado, optimizacion por hardware, contexto inteligente y orquestacion especializada | ~220 |
 
 ## Estado de Fases (resumen rapido)
 
@@ -42,7 +43,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | R | Repo integrado: pipeline wired end-to-end, pendiente validacion host |
 | S | Parcial: health checks existen; reportes diarios/semanales por Telegram no wired |
 | T | Parcial: voz funciona (wake word, STT, TTS); no es pipeline Alexa-style completo |
-| U | Parcial: prompt evolution y workflow learner existen; full self-improvement loop parcial |
+| U | Parcial: prompt evolution observacional y workflow learner existen; auto-optimizacion real, GEPA-like loops y training autonomo siguen diferidos |
 | V | Parcial: knowledge graph existe y se consulta; export/import no implementados |
 | W | Parcial: ReliabilityTracker existe; checkpoint/resume y audit trail basicos |
 | X | Parcial: traduccion existe en repo, pero no esta integrada como experiencia completa del producto |
@@ -59,6 +60,7 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | AN | Repo integrado: providers y hot reload tienen evidencia fuerte |
 | AO | Parcial: Telegram UX mejorada; webhook es polling-only, no webhook real |
 | AP | Parcial: worker pool si, pero lifecycle `worker.*` sigue sin aparecer estructurado end-to-end para dashboard/WS |
+| BJ | Nueva fase propuesta: nanoagentes local-first como politica tecnica de producto; baseline parcial ya aterrizado en runtime, pendiente cierre de prompting, contexto, especialistas, privacidad y release gates |
 
 ### Fases Consecutivas Proximas (implementables sin investigacion profunda)
 
@@ -70,12 +72,13 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 | **AY** | **OS Control Plane: 20+ MCP tools para ventanas/apps/clipboard/sistema + politica de seleccion de capa (MCP > adapter > AT-SPI2 > vision)** |
 | **BE** | **Actividad Real: tracking real de usuario (idle, lock, apps, Telegram, audio, camara) — Axi sabe si el usuario trabaja o descansa de verdad** |
 | **BI** | **Bienestar Integral & Coach Personal: salud médica estructurada, nutrición con recetas + listas de compras locales, salud mental con cifrado reforzado, ejercicio, ciclo menstrual, hábitos, lectura. Axi pasa de asistente productivo a compañero de vida — todo local-first, cifrado, opt-in. Sub-fases BI.1-BI.8. Ver `fase-bi-bienestar-integral.md` y `docs/research/wellness-pillar/`** |
+| **BJ** | **NanoAgentes Local-First: small models por defecto, prompting estructurado por ruta, optimizacion por hardware, contexto comprimido, agentes especializados, privacidad local y orquestacion por encima del tamano bruto del modelo** |
 
 ### Fases de Investigacion (requieren mas research antes de implementar)
 
 | Fase | Descripcion |
 |------|-------------|
-| **AR** | **Entrenamiento Local: QLoRA fine-tuning, knowledge distillation, DPO, modelos especializados** |
+| **AR** | **Entrenamiento Local diferido: mantener investigacion viva, pero no abrir implementacion hasta que BJ y AQ dejen de ser el cuello de botella principal** |
 | **AV** | **Financiamiento y Sostenibilidad: post-NLnet, landing publica, grants, sponsors y monetizacion** |
 
 ### Vision Futura (ideas a largo plazo, no para desarrollo inmediato)
@@ -98,4 +101,4 @@ Este documento fue dividido en archivos mas pequenos para facilitar la lectura p
 - **Quieres ver la vision y reglas?** `vision-y-decisiones.md`
 - **Quieres ver los gaps de OpenClaw?** `fases-ab-aj.md` (tabla comparativa al inicio)
 
-Ultima actualizacion: 2026-04-02
+Ultima actualizacion: 2026-04-07
