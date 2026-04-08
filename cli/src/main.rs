@@ -319,8 +319,11 @@ async fn handle_beta_command(cmd: BetaCommands) -> anyhow::Result<()> {
         BetaCommands::Update => {
             println!("{}", "🔄 Checking for beta updates...".bold().blue());
             println!();
-            println!("To update to the latest beta:");
-            println!("  {}", "life update apply --channel beta".cyan());
+            println!("To move to the current pre-release track:");
+            println!(
+                "  {}",
+                "sudo bootc switch ghcr.io/hectormr206/lifeos:candidate".cyan()
+            );
             Ok(())
         }
         BetaCommands::Rollback => {

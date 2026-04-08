@@ -95,7 +95,7 @@ journalctl -u lifeos-update-check.service
 
 ### llama-server Service
 
-`llama-server` is shipped as a system service by default. Some recovery flows and
+`llama-server` is operated canonically as a system service. Some recovery flows and
 host-specific overrides may also run it as a user unit, but that is fallback behavior,
 not the primary runtime model.
 

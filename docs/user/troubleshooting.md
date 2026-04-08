@@ -14,7 +14,7 @@ journalctl --user -u lifeosd --since "10 min ago"  # Logs recientes del daemon
 **Solucion comun:**
 - Si lifeosd no esta corriendo: `systemctl --user restart lifeosd`
 - Si llama-server no esta corriendo: `sudo systemctl restart llama-server`
-- Si `llama-server` no existe como system service en ese host: probar `systemctl --user restart llama-server` como fallback puntual
+- Si `llama-server` no existe como system service en ese host: probar `systemctl --user restart llama-server` solo como fallback puntual
 - Si el modelo local fallo: verificar `/var/lib/lifeos/models/` tiene el archivo .gguf
 
 ## Modelo local muy lento

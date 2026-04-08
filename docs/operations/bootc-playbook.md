@@ -104,11 +104,11 @@ curl -H "x-bootstrap-token: $TOKEN" http://127.0.0.1:8081/api/v1/health
 Modelo canonico de runtime hoy:
 
 - `lifeosd` es user service.
-- `llama-server` es system service.
+- `llama-server` corre canonicamente como system service.
 - `lifeosd` en system scope se considera alias/debug legacy, no runtime primario.
 - `llama-server` en user scope se revisa solo como fallback cuando ese host no expone la unit de sistema.
 
-Si `llama-server` no esta cargado como system service en ese host, revisar tambien:
+Si `llama-server` no esta cargado como system service en ese host, revisar tambien el fallback puntual en user scope:
 
 ```bash
 systemctl --user status llama-server --no-pager
