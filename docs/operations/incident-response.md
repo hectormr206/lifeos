@@ -14,10 +14,10 @@ It focuses on fast containment, deterministic rollback, and auditable recovery.
 1. Capture current status:
    - `life status --detailed`
    - `life check`
-   - `sudo journalctl -u lifeosd -n 200 --no-pager`
+   - `journalctl --user -u lifeosd -n 200 --no-pager`
 2. Freeze update pressure:
    - `life update status`
-   - If needed: switch channel to stable only.
+   - If an update was already staged, defer reboot until containment is complete.
 3. Classify severity and open an incident timeline in internal tracking.
 
 ## 3. Containment patterns
@@ -25,21 +25,18 @@ It focuses on fast containment, deterministic rollback, and auditable recovery.
 ### 3.1 AI/runtime containment
 
 1. Stop AI runtime if unsafe behavior is detected:
-   - `life ai stop`
-2. Disable autonomous trust mode immediately:
-   - `life onboarding trust-mode disable --actor user://incident/commander`
-3. Force interactive execution mode:
-   - `life intents mode set interactive --actor user://incident/commander`
+    - `life ai stop`
+2. Restart the daemon session if behavior persists:
+    - `systemctl --user restart lifeosd`
+3. If the local model is implicated, restart the inference service:
+    - `sudo systemctl restart llama-server`
+    - Fallback: `systemctl --user restart llama-server`
 
 ### 3.2 Permissions containment
 
-1. Inspect current grants:
-   - `life permissions show`
-2. Revoke compromised grants:
-   - `life permissions revoke <app_id> --resource <resource>`
-   - `life permissions revoke <app_id>` (all resources)
-3. Review permission activity:
-   - `life permissions log --lines 200`
+1. Preserve current evidence before changing access state.
+2. If compromise involves the user session, restart `lifeosd` and rotate affected credentials/config.
+3. If compromise involves the shipped image, prefer rollback to the previous deployment.
 
 ## 4. Rollback and recovery
 
@@ -56,12 +53,13 @@ It focuses on fast containment, deterministic rollback, and auditable recovery.
 ### 4.2 Runtime recovery
 
 1. Run guided diagnostics:
-   - `life recover`
+    - `life recover`
 2. Re-check critical services:
-   - `sudo systemctl status lifeosd`
-   - `sudo systemctl status llama-server`
+    - `systemctl --user status lifeosd`
+    - `sudo systemctl status llama-server`
+    - Fallback: `systemctl --user status llama-server`
 3. Confirm health gates:
-   - `life check`
+    - `life check`
 
 ## 5. Artifact revocation workflow
 
@@ -71,7 +69,7 @@ Use this workflow when an image/model artifact is compromised.
 2. Rotate signing material (cosign/GPG) if key compromise is suspected.
 3. Publish updated trusted metadata (timestamp/snapshot/targets).
 4. Force update checks on affected systems:
-   - `life update check`
+    - `sudo bootc upgrade --check`
 5. Confirm clients reject revoked artifact and accept replacement.
 
 ## 6. Evidence and audit requirements
@@ -80,10 +78,8 @@ For every incident, collect:
 
 1. Command evidence (timestamps + outputs for status/check/recover/rollback).
 2. Relevant journal excerpts (`lifeosd`, `llama-server`, update pipeline).
-3. Intent ledger export for autonomous actions:
-   - `life intents log --export /tmp/incident-ledger.json --passphrase <secret>`
-4. Memory-plane context export if used by agents:
-   - `life memory mcp "<incident query>" --limit 10`
+3. Relevant config diffs under `/etc/lifeos/` if service behavior changed.
+4. `bootc status` / `ostree admin status` output when deployment state is relevant.
 
 ## 7. Exit criteria
 

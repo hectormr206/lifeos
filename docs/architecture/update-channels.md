@@ -2,8 +2,8 @@
 
 LifeOS uses a multi-channel release system to balance stability with rapid iteration.
 
-If you only need private `stable` updates for your main laptop, use:
-- `docs/UPDATE_STABLE_PRIVATE_QUICKSTART.md`
+If you only need operator-driven `stable` updates for your main laptop, follow the
+manual update runbook in this document.
 
 ## Available Channels
 
@@ -58,25 +58,24 @@ If you only need private `stable` updates for your main laptop, use:
 ```bash
 # Check current channel
 life status
+life update status
 
-# Switch to stable
-life channel set stable
-
-# Switch to candidate
-life channel set candidate
-
-# Switch to edge
-life channel set edge
+# There is no shipped `life channel set` command yet.
+# Switch channels explicitly with bootc:
+sudo bootc switch ghcr.io/hectormr206/lifeos:stable
+sudo bootc switch ghcr.io/hectormr206/lifeos:candidate
+sudo bootc switch ghcr.io/hectormr206/lifeos:edge
 ```
 
 ### Manual Configuration
 
-Edit `/etc/lifeos/lifeos.toml`:
+Edit `/etc/lifeos/lifeos.toml` to keep local config aligned with the image you switch to:
 
 ```toml
 [updates]
 channel = "stable"
-auto_update = true
+auto_check = true
+auto_apply = false
 ```
 
 ## Update Workflow
@@ -99,7 +98,7 @@ For daily-driver hosts, LifeOS uses an operator-driven update policy:
 
 1. Automatic checks are allowed.
 2. Staging/download can be manual or daemon-assisted.
-3. `bootc upgrade --apply` is never run in background timers by default.
+3. `bootc upgrade --apply` is not used as the default background path.
 4. Reboot is user-initiated during a maintenance window.
 
 Persisted controls on host:
@@ -183,41 +182,14 @@ cosign download sbom ghcr.io/hectormr206/lifeos:stable
 
 ## Channel Configuration File
 
-The channel configuration is stored in `/etc/lifeos/channels.toml`:
+The local update preference is typically stored in `/etc/lifeos/lifeos.toml`:
 
 ```toml
-[channels.stable]
-name = "stable"
-description = "Production-ready releases"
-update_schedule = "weekly"
-auto_update = true
-require_signature = true
-require_sbom = true
-
-[channels.candidate]
-name = "candidate"
-description = "Pre-release testing"
-update_schedule = "daily"
-auto_update = false
-require_signature = true
-require_sbom = true
-
-[channels.edge]
-name = "edge"
-description = "Bleeding edge development"
-update_schedule = "on-demand"
-auto_update = false
-require_signature = true
-require_sbom = false
-
-[promotion]
-candidate_to_stable_min_age_hours = 168
-candidate_to_stable_requires = [
-    "all-tests-pass",
-    "no-critical-bugs",
-    "manual-approval",
-    "sbom-verified"
-]
+[updates]
+channel = "stable"
+auto_check = true
+auto_apply = false
+schedule = "daily"
 ```
 
 ## Building Channel-Specific Images
@@ -285,12 +257,11 @@ gh workflow run release-channels.yml -f channel=edge
 If an update causes issues:
 
 ```bash
-# Rollback to previous version in current channel
-life update rollback
+# Rollback to previous deployment
+life rollback
 
-# Switch to previous stable
-podman image tag ghcr.io/hectormr206/lifeos:stable ghcr.io/hectormr206/lifeos:stable-backup
-bootc switch ghcr.io/hectormr206/lifeos:v0.1.0
+# Or pin a known-good image tag explicitly
+bootc switch ghcr.io/hectormr206/lifeos:<known-good-tag>
 ```
 
 ## Security Considerations
@@ -306,10 +277,11 @@ bootc switch ghcr.io/hectormr206/lifeos:v0.1.0
 
 ```bash
 # Check update status
-life status
+life update status
+sudo bootc status
 
 # View logs
-journalctl -u lifeosd -f
+journalctl --user -u lifeosd -f
 
 # Manual update check
 life update --dry-run
@@ -355,8 +327,8 @@ Notes:
 ### Channel Switch Fails
 
 ```bash
-# Verify channel exists
-cat /etc/lifeos/channels.toml
+# Verify local update preference
+grep '^channel' /etc/lifeos/lifeos.toml
 
 # Check network connectivity
 curl -I https://ghcr.io/v2/

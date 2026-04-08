@@ -12,13 +12,13 @@ This guide is for system administrators managing LifeOS deployments.
 ├─────────────────────────────────────────────────────────────┤
 │  User Space                                                  │
 │  ├── life CLI           - User interface                     │
-│  ├── lifeosd            - System daemon                      │
+│  ├── lifeosd            - Main user-session daemon           │
 │  └── llama-server       - AI inference engine (llama.cpp)    │
 ├─────────────────────────────────────────────────────────────┤
-│  System Services                                             │
-│  ├── lifeosd.service    - Main daemon                        │
-│  ├── lifeos-update.timer - Periodic update checks            │
-│  └── lifeos-health.timer - Health monitoring                 │
+│  Service Ownership                                           │
+│  ├── lifeosd.service    - Primarily user service             │
+│  ├── llama-server.service - Usually system service           │
+│  └── lifeos-update-check.service - System update probe       │
 ├─────────────────────────────────────────────────────────────┤
 │  bootc (Image-based Updates)                                 │
 │  ├── booted deployment  - Currently running system           │
@@ -55,50 +55,59 @@ The system daemon provides:
 - Desktop notifications
 - D-Bus interface
 
+`lifeosd` is operated primarily as a per-user service so it can inherit the desktop session
+(Wayland, D-Bus, PipeWire, user secrets) without requiring a root-owned foreground session.
+
 ```bash
 # Start/stop/restart
-sudo systemctl start lifeosd
-sudo systemctl stop lifeosd
-sudo systemctl restart lifeosd
+systemctl --user start lifeosd
+systemctl --user stop lifeosd
+systemctl --user restart lifeosd
 
-# Enable/disable at boot
-sudo systemctl enable lifeosd
-sudo systemctl disable lifeosd
+# Enable/disable at login
+systemctl --user enable lifeosd
+systemctl --user disable lifeosd
 
 # View status
-systemctl status lifeosd
+systemctl --user status lifeosd
 
 # View logs
-journalctl -u lifeosd -f
+journalctl --user -u lifeosd -f
 ```
 
-### Timer-Based Services
+Fallback only when a host still ships a system-scoped unit:
 
 ```bash
-# List LifeOS timers
-systemctl list-timers lifeos-*
+sudo systemctl status lifeosd
+```
 
-# Trigger update check manually
-systemctl start lifeos-update
+### Update Check Service
 
-# Trigger health check manually
-systemctl start lifeos-health
+```bash
+# Trigger the update probe manually
+sudo systemctl start lifeos-update-check.service
 
-# View timer logs
-journalctl -u lifeos-update
-journalctl -u lifeos-health
+# View probe logs
+journalctl -u lifeos-update-check.service
 ```
 
 ### llama-server Service
 
+`llama-server` is shipped as a system service by default. Some recovery flows and
+hardware-specific fallbacks may also run it as a user unit, so check both scopes if the
+system unit is absent.
+
 ```bash
-# Manage llama-server (AI inference)
+# Manage default system service
 sudo systemctl start llama-server
 sudo systemctl stop llama-server
 sudo systemctl restart llama-server
 
 # View llama-server logs
 journalctl -u llama-server -f
+
+# Fallback on hosts using a user-scoped override
+systemctl --user status llama-server
 ```
 
 ## Configuration Reference
@@ -186,26 +195,23 @@ bootc status
 # Check for updates
 bootc upgrade --check
 
-# Stage an update (download only)
+# Stage an update for next boot
 bootc upgrade
-
-# Apply update (requires reboot)
-bootc upgrade --apply
 
 # Rollback to previous version
 bootc rollback
 
-# Switch to different image
-bootc switch ghcr.io/lifeos/lifeos:testing
+# Switch to different image/channel explicitly
+bootc switch ghcr.io/hectormr206/lifeos:candidate
 ```
 
 ### Update Channels
 
 | Channel   | Purpose             | Stability |
 | --------- | ------------------- | --------- |
-| `stable`  | Production use      | High      |
-| `testing` | Pre-release testing | Medium    |
-| `nightly` | Latest development  | Low       |
+| `stable`    | Production use         | High      |
+| `candidate` | Pre-release validation | Medium    |
+| `edge`      | Latest development     | Low       |
 
 ### Custom Update Server
 
@@ -240,11 +246,12 @@ The daemon performs these checks:
 ### Manual Health Check
 
 ```bash
-# Run all health checks
-life osd health-check
+# User-session daemon health
+life doctor
+life check
 
-# Or via systemctl
-systemctl start lifeos-health
+# System image state
+sudo bootc status
 ```
 
 ## Security
@@ -340,7 +347,7 @@ bootc rollback  # If needed
 journalctl -t lifeos
 
 # View daemon logs
-journalctl -u lifeosd
+journalctl --user -u lifeosd
 
 # View bootc logs
 journalctl -t bootc
@@ -358,7 +365,7 @@ The daemon collects metrics:
 curl http://localhost:8082/metrics
 
 # Or check logs
-journalctl -u lifeosd | grep "metrics"
+journalctl --user -u lifeosd | grep "metrics"
 ```
 
 ### Prometheus Integration
@@ -416,14 +423,14 @@ ansible-playbook -i inventory site.yml
 
 ```bash
 # Check for errors
-journalctl -u lifeosd -n 50
+journalctl --user -u lifeosd -n 50
 
 # Verify configuration
 toml-test /etc/lifeos/daemon.toml
 
 # Reset to defaults
 sudo rm /etc/lifeos/daemon.toml
-sudo systemctl restart lifeosd
+systemctl --user restart lifeosd
 ```
 
 ### Update Failures
@@ -443,10 +450,13 @@ bootc cleanup
 
 ```bash
 # Check llama-server status
-systemctl status llama-server
+sudo systemctl status llama-server
 
 # View AI service logs
 journalctl -u llama-server -n 50
+
+# Fallback if the host runs the user-scoped unit instead
+systemctl --user status llama-server
 
 # Test inference
 curl http://127.0.0.1:8082/v1/chat/completions \
@@ -503,9 +513,9 @@ dbus-send --system --print-reply \
 ## Resources
 
 - **Man pages**: `man life`, `man lifeosd`, `man bootc`
-- **Online docs**: https://docs.lifeos.io/admin
-- **Community**: https://community.lifeos.io
-- **GitHub**: https://github.com/lifeos/lifeos
+- **Documentation index**: `docs/README.md`
+- **Operations docs**: `docs/operations/`
+- **GitHub**: https://github.com/hectormr/lifeos
 
 ---
 
