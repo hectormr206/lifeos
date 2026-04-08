@@ -25,7 +25,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,7 @@ pub fn vida_plena_routes() -> Router<ApiState> {
     Router::new()
         // -- per-pillar summaries (read) ----------------------------
         .route("/health/summary", get(get_health_summary))
+        .route("/health/facts/:fact_id", delete(delete_health_fact))
         .route("/growth/summary", get(get_growth_summary))
         .route("/exercise/summary", get(get_exercise_summary))
         .route("/nutrition/summary", get(get_nutrition_summary))
@@ -166,6 +167,18 @@ fn today_or_local(today: Option<&str>) -> String {
         .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string())
 }
 
+fn health_summary_defaults() -> (usize, usize) {
+    // Keep defaults aligned with Telegram `health_summary` tool.
+    (5, 20)
+}
+
+fn health_fact_delete_body(deleted: bool, fact_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "deleted": deleted,
+        "fact_id": fact_id,
+    })
+}
+
 // ----------------------------------------------------------------------
 // Per-pillar summary handlers
 // ----------------------------------------------------------------------
@@ -174,8 +187,32 @@ async fn get_health_summary(
     State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let mgr = state.memory_plane_manager.read().await;
-    let s = mgr.get_health_summary(10, 5).await.map_err(err_to_http)?;
+    let (vitals_per_type, recent_labs_count) = health_summary_defaults();
+    let s = mgr
+        .get_health_summary(vitals_per_type, recent_labs_count)
+        .await
+        .map_err(err_to_http)?;
     Ok(Json(serde_json::json!({ "summary": s })))
+}
+
+async fn delete_health_fact(
+    State(state): State<ApiState>,
+    Path(fact_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let mgr = state.memory_plane_manager.read().await;
+    let deleted = mgr.delete_health_fact(&fact_id).await.map_err(err_to_http)?;
+    if deleted {
+        Ok(Json(health_fact_delete_body(true, &fact_id)))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("no health fact with id {}", fact_id),
+                code: 404,
+            }),
+        ))
+    }
 }
 
 async fn get_growth_summary(
@@ -851,4 +888,27 @@ async fn get_stale_relationships(
         "relationships": stale,
         "count": stale.len(),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn health_summary_defaults_are_consistent_for_http_and_telegram() {
+        let (vitals_per_type, recent_labs_count) = health_summary_defaults();
+        assert_eq!(vitals_per_type, 5);
+        assert_eq!(recent_labs_count, 20);
+    }
+
+    #[test]
+    fn health_fact_delete_body_reports_deleted_and_not_found() {
+        let deleted = health_fact_delete_body(true, "hfact-1");
+        assert_eq!(deleted["deleted"], true);
+        assert_eq!(deleted["fact_id"], "hfact-1");
+
+        let missing = health_fact_delete_body(false, "hfact-2");
+        assert_eq!(missing["deleted"], false);
+        assert_eq!(missing["fact_id"], "hfact-2");
+    }
 }

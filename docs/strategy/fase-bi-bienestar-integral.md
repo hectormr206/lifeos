@@ -77,7 +77,7 @@ fase, traducidos a capacidades técnicas:
 
 | Caso real del usuario | Capacidad técnica |
 |---|---|
-| "Me dio gripa, le doy mis síntomas, le paso foto de la receta, Axi me agenda recordatorios de medicamento, le voy contando cómo me siento, hasta que me recupero" | Side-tables `health_events` + `health_medications` + `health_attachments` + integración con `calendar` para reminders |
+| "Me dio gripa, le doy mis síntomas, le paso foto de la receta, le voy contando cómo me siento, hasta que me recupero" | `health_facts` + `health_medications` (history table) + `health_vitals` + `health_lab_results` + `health_attachments` (storage cifrado). **Recordatorios de medicamento/calendario: pendiente de integración explícita en BI** |
 | "Tengo diabetes/hipertensión, las dosis cambian con el tiempo, hago ejercicio y eventualmente me las quitan" | `health_medications` como history table (cada cambio = row nuevo) + `health_vitals` timeseries |
 | "Le mando foto/voz/texto de lo que comí" | `nutrition_log` con vision pipeline para fotos + STT para voz |
 | "Quiero que me proponga recetas con lo que conoce de mí, ligadas a productos que sí venda mi tienda local" | `nutrition_recipes` + integración con `local_commerce` (catálogo de productos disponibles en zona) |
@@ -101,11 +101,11 @@ fase, traducidos a capacidades técnicas:
 A la fecha de esta auditoría, Vida Plena ya cuenta con:
 
 - soporte de datos para BI.1–BI.14 en `daemon/src/memory_plane.rs`
-- surface principal en `daemon/src/telegram_tools.rs`
-- HTTP API dedicada en `daemon/src/api/vida_plena.rs`
+- surface principal de escritura/corrección en `daemon/src/telegram_tools.rs`
+- HTTP API dedicada en `daemon/src/api/vida_plena.rs` (principalmente lectura + algunos writes puntuales)
 - coaching unificado (`life_summary`, `cross_domain_patterns`,
   `forgetting_check`, `medical_visit_prep`)
-- vault, PIN local y wipes para las áreas sensibles
+- vault, PIN local y wipes para áreas sensibles (mental, menstrual, sexual/consent)
 - generador semanal de listas de compras
 - predictor menstrual
 - streaks, `habits_due_today` y `stale_relationships`
@@ -160,9 +160,11 @@ así narrativa y estructura quedan vinculadas.
   clave que `memory.db`.
 - [x] Migrations idempotentes en `run_migrations` (mismo patrón que
   ya usamos en commits anteriores).
-- [x] API Rust: `add_health_fact`, `record_vital`, `start_medication`,
-  `stop_medication`, `update_medication`, `get_active_medications`,
-  `get_vitals_timeseries`, `get_health_summary`, etc.
+- [x] API Rust: `add_health_fact`, `delete_health_fact`, `record_vital`,
+  `start_medication`, `stop_medication`, `get_active_medications`,
+  `get_vitals_timeseries`, `get_health_summary`, etc. **No existe
+  `update_medication` como mutación in-place: el modelo real es
+  `stop_medication` + `start_medication` para preservar historial.**
 - [x] Tests + version bump.
 
 ### BI.3 — Nutrición + recetas + listas de compras
@@ -641,7 +643,7 @@ pillar sin grandes refactors:
 | Almacenamiento cifrado local | `memory_plane` (AES-GCM-SIV) |
 | Búsqueda híbrida sobre memoria | `search_entries` con embeddings nomic |
 | Memoria que nunca pierde nada importante | `permanent=1` + decay Ebbinghaus + connection bonus + cluster summary (commits del 2026-04-06) |
-| Recordatorios programados | `calendar` + `scheduled_tasks` |
+| Recordatorios programados | `calendar` + `scheduled_tasks` (infra disponible, no integrada de forma completa en BI para medication reminders) |
 | Procesamiento de fotos | Vision pipeline existente (Qwen3.5-VL multimodal) |
 | Procesamiento de voz | Wake word + STT + TTS pipeline |
 | Conversación natural en español | Telegram bridge + agentic chat loop |
@@ -649,11 +651,10 @@ pillar sin grandes refactors:
 | Tools system para capacidades nuevas | 84 tools actuales + extensible |
 | Dashboard UI | Web dashboard ya existe, fácil agregar tabs |
 
-Lo único que falta agregar es:
-1. Side-tables nuevas en `memory.db` (BI.2-BI.7).
-2. Tools nuevos en `telegram_tools.rs` (10-15 herramientas adicionales).
-3. Pipeline de ingest foto/voz para nutrición (reusa lo que ya tenemos).
-4. Lógica de coaching unificada (BI.8 — la cereza del pastel).
+Notas de realidad (post-auditoría):
+1. BI ya NO está en etapa foundation; BI.1–BI.14 están implementadas en backend.
+2. Lo pendiente principal es consumo (dashboard UX, integraciones puntuales), no side-tables base.
+3. `health_attachments` existe en backend/storage cifrado, pero no tiene todavía una surface de producto completa (upload/download UX end-to-end) en esta fase documental.
 
 ## Riesgos a vigilar
 
@@ -680,6 +681,5 @@ Resumen:
 ## Estado
 
 - Investigación profunda: [`docs/research/wellness-pillar/README.md`](../research/wellness-pillar/README.md)
-- Sprint 1 (BI.1) listo para empezar cuando el usuario diga.
-- Posición en `unified-strategy.md`: **Fases Consecutivas Próximas**
-  (no es visión futura — es trabajo concreto).
+- Backend del pillar BI: **cerrado funcionalmente** (auditoría 2026-04-07).
+- Pendientes actuales: surfaces consumidoras (dashboard/UX), integraciones explícitas (ej. reminders), y mejoras fuera del cierre de BI.

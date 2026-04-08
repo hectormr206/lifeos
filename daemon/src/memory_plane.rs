@@ -8630,8 +8630,8 @@ impl MemoryPlaneManager {
     /// explicitly asks ("ya no soy alérgico a X después del
     /// tratamiento de desensibilización").
     pub async fn delete_health_fact(&self, fact_id: &str) -> Result<bool> {
+        let id = normalize_non_empty(fact_id).context("fact_id required")?;
         let db_path = self.db_path.clone();
-        let id = fact_id.to_string();
         let n = tokio::task::spawn_blocking(move || -> Result<usize> {
             let db = Self::open_db(&db_path)?;
             Ok(db.execute("DELETE FROM health_facts WHERE fact_id = ?1", params![id])?)
@@ -14207,7 +14207,7 @@ impl MemoryPlaneManager {
         let now = Utc::now();
         let period_start = now - chrono::Duration::days(window.days());
 
-        let health = self.get_health_summary(10, 5).await.unwrap_or_default();
+        let health = self.get_health_summary(5, 20).await.unwrap_or_default();
         let growth = self
             .get_growth_summary(5, today_local, window.days() as u32)
             .await
@@ -17973,6 +17973,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_health_fact_requires_non_empty_id_and_removes_row() {
+        let dir = temp_dir("memory-plane-health-fact-delete");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let fact = mgr
+            .add_health_fact("allergy", "Penicilina", Some("severe"), "", None)
+            .await
+            .unwrap();
+
+        let deleted = mgr.delete_health_fact(&fact.fact_id).await.unwrap();
+        assert!(deleted, "existing fact should be deletable");
+        let remaining = mgr.list_health_facts(None).await.unwrap();
+        assert!(remaining.is_empty(), "deleted fact should not remain");
+
+        let err = mgr
+            .delete_health_fact("   ")
+            .await
+            .expect_err("empty fact_id must be rejected");
+        assert!(err.to_string().contains("fact_id required"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
     async fn test_medication_history_lifecycle() {
         let dir = temp_dir("memory-plane-meds-history");
         let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
@@ -20040,6 +20065,104 @@ mod tests {
         assert!(summary.spiritual.active_practices.is_empty());
         assert!(summary.financial.active_accounts.is_empty());
         assert!(summary.patterns.is_empty());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn life_summary_uses_health_defaults_consistent_with_http_and_telegram() {
+        let dir = temp_dir("memory-plane-life-summary-health-defaults");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        for idx in 0..8 {
+            mgr.record_vital(
+                "glucose",
+                Some(100.0 + idx as f64),
+                None,
+                "mg/dL",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        for idx in 0..25 {
+            let test_name = format!("test-{}", idx);
+            mgr.add_lab_result(
+                &test_name,
+                1.0 + idx as f64,
+                "u",
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Week, "2026-04-07")
+            .await
+            .unwrap();
+
+        assert_eq!(summary.health.recent_vitals.len(), 5);
+        assert_eq!(summary.health.recent_labs.len(), 20);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn life_summary_health_defaults_do_not_pad_when_data_is_below_limits() {
+        let dir = temp_dir("memory-plane-life-summary-health-defaults-small");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        for idx in 0..2 {
+            mgr.record_vital(
+                "glucose",
+                Some(90.0 + idx as f64),
+                None,
+                "mg/dL",
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        for idx in 0..3 {
+            let test_name = format!("small-test-{}", idx);
+            mgr.add_lab_result(
+                &test_name,
+                10.0 + idx as f64,
+                "u",
+                None,
+                None,
+                None,
+                None,
+                "",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        let summary = mgr
+            .get_life_summary(LifeSummaryWindow::Week, "2026-04-07")
+            .await
+            .unwrap();
+
+        assert_eq!(summary.health.recent_vitals.len(), 2);
+        assert_eq!(summary.health.recent_labs.len(), 3);
 
         std::fs::remove_dir_all(dir).ok();
     }

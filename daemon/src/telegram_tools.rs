@@ -170,6 +170,9 @@ LifeOS guarda salud medica estructurada con las siguientes herramientas. **Regla
 10d. **health_fact_list** — Lista los hechos de salud guardados, opcionalmente filtrados por tipo.
     args: {"fact_type": "allergy"} o {} para ver todos
 
+10d2. **health_fact_delete** — Corrige historial cuando un hecho permanente ya no aplica (ej. alergia superada por desensibilizacion). SOLO usar por pedido explicito del usuario.
+    args: {"fact_id": "hfact-..."}
+
 10e. **medication_start** — Registra que el usuario empieza a tomar un medicamento. Si ya tomaba ese mismo medicamento con otra dosis, primero usa medication_stop con el med_id viejo. Cada cambio de dosis es un row nuevo (history table).
     args: {"name": "Metformina", "dosage": "500mg", "frequency": "cada 12h", "condition": "diabetes tipo 2", "prescribed_by": "Dr. Lopez", "notes": "Con la comida"}
 
@@ -255,7 +258,7 @@ LifeOS lleva el registro completo de lo que el usuario come, sus preferencias/al
 11b. **nutrition_pref_list** — Lista las preferencias del usuario. pref_type es opcional para filtrar.
     args: {"pref_type": "allergy"} o {} para todas
 
-11c. **nutrition_log_meal** — Registra una comida. meal_type: breakfast, lunch, dinner, snack, drink, craving. Macros y attachments son opcionales. Si el usuario manda foto o voz, primero crea un health_attachment y pasa el id aqui.
+11c. **nutrition_log_meal** — Registra una comida. meal_type: breakfast, lunch, dinner, snack, drink, craving. Macros y attachments son opcionales. Si hay foto/voz, registralo en descripcion/notas; la surface de adjuntos de salud sigue siendo backend-level, no flujo Telegram directo en esta fase.
     args: {"meal_type": "breakfast", "description": "Huevos revueltos con aguacate y cafe", "macros_kcal": 420, "macros_protein_g": 22}
 
 11d. **nutrition_log_recent** — Devuelve los registros recientes. limit por defecto 20. meal_type opcional para filtrar.
@@ -1806,6 +1809,7 @@ REGLAS FIRMES:
             // BI.2 — Salud médica estructurada
             "health_fact_add" => execute_health_fact_add(&call.args, ctx).await,
             "health_fact_list" => execute_health_fact_list(&call.args, ctx).await,
+            "health_fact_delete" => execute_health_fact_delete(&call.args, ctx).await,
             "medication_start" => execute_medication_start(&call.args, ctx).await,
             "medication_stop" => execute_medication_stop(&call.args, ctx).await,
             "medication_active" => execute_medication_active(ctx).await,
@@ -3016,6 +3020,25 @@ REGLAS FIRMES:
             })
             .collect();
         Ok(format!("Hechos de salud:\n{}", lines.join("\n")))
+    }
+
+    async fn execute_health_fact_delete(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let fact_id = args["fact_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'fact_id'"))?;
+        let mem = require_memory(ctx).await?;
+        let deleted = mem.delete_health_fact(fact_id).await?;
+        if deleted {
+            Ok(format!("Hecho de salud {} eliminado por correccion.", fact_id))
+        } else {
+            Ok(format!(
+                "No se encontro un hecho de salud con id {}.",
+                fact_id
+            ))
+        }
     }
 
     async fn execute_medication_start(
