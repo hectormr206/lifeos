@@ -589,14 +589,15 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     });
 
     // 4. Check AI service (llama-server)
-    let ai_running = check_ai_service();
+    let ai_issue = check_ai_service_issue();
+    let ai_running = ai_issue.is_none();
     report.checks.push(HealthCheck {
         name: "ai-service".to_string(),
         passed: ai_running,
         message: if ai_running {
             "llama-server is running".to_string()
         } else {
-            "llama-server is not running".to_string()
+            ai_issue.unwrap_or_else(|| "llama-server is not running".to_string())
         },
     });
 
