@@ -94,6 +94,7 @@ RUN set -eux && \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
         -DGGML_STATIC=ON \
+        -DGGML_NATIVE=OFF \
         -DGGML_VULKAN=ON \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
@@ -623,6 +624,7 @@ COPY image/files/usr/local/bin/lifeos-apply-default-layout.sh /usr/local/bin/lif
 COPY image/files/usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh /usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh
 COPY image/files/usr/local/bin/lifeos-sync-greeter-wallpaper.sh /usr/local/bin/lifeos-sync-greeter-wallpaper.sh
 COPY image/files/usr/local/bin/lifeos-ai-setup.sh          /usr/local/bin/lifeos-ai-setup.sh
+COPY image/files/usr/local/bin/lifeos-llama-preflight.sh   /usr/local/bin/lifeos-llama-preflight.sh
 COPY image/files/usr/local/bin/lifeos-embeddings-setup.sh  /usr/local/bin/lifeos-embeddings-setup.sh
 COPY image/files/usr/local/bin/lifeos-stt-setup.sh         /usr/local/bin/lifeos-stt-setup.sh
 COPY image/files/usr/local/bin/llama-server-health-check.sh /usr/local/bin/llama-server-health-check.sh
@@ -643,6 +645,7 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh \
              /usr/local/bin/lifeos-sync-greeter-wallpaper.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
+             /usr/local/bin/lifeos-llama-preflight.sh \
              /usr/local/bin/lifeos-embeddings-setup.sh \
              /usr/local/bin/lifeos-stt-setup.sh \
              /usr/local/bin/llama-server-health-check.sh \
