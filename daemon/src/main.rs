@@ -536,6 +536,9 @@ async fn main() -> anyhow::Result<()> {
     // (e.g. first boot before the file existed, or when running outside systemd).
     ensure_llm_provider_env();
 
+    #[cfg(feature = "ui-overlay")]
+    ensure_graphical_environment();
+
     // Load configuration
     let config = load_config().await?;
     info!("Configuration loaded: {:?}", config);

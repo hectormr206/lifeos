@@ -1794,6 +1794,7 @@ impl SensoryPipelineManager {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn stream_text_chat_with_prefetched_tts(
         &self,
         ai_manager: &AiManager,

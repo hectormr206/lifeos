@@ -1257,6 +1257,7 @@ impl AgentRuntimeManager {
         state.sensory_capture_runtime.clone()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn set_sensory_capture_runtime(
         &self,
         enabled: bool,

@@ -2761,8 +2761,8 @@ mod inner {
             }
 
             let lower = trimmed.to_lowercase();
-            if lower.starts_with(prefix) {
-                let suffix = lower[prefix.len()..].chars().next();
+            if let Some(stripped) = lower.strip_prefix(prefix) {
+                let suffix = stripped.chars().next();
                 let boundary_ok = match suffix {
                     None => true,
                     Some(c) => c.is_whitespace() || ",:;!?.-".contains(c),

@@ -577,6 +577,7 @@ fn proc_has_any(names: &[&str]) -> bool {
 }
 
 /// Use `nvidia-smi pmon -c 1 -s m` to find processes consuming significant VRAM.
+#[allow(dead_code)]
 pub fn detect_vram_heavy_processes(threshold_mb: u64) -> Vec<GameInfo> {
     detect_vram_heavy_processes_with_markers(threshold_mb, false)
 }
@@ -822,6 +823,7 @@ pub fn get_game_name_from_pid(pid: u32) -> Option<String> {
 }
 
 /// Find a process by comm name; returns `(pid, comm)` if found.
+#[allow(dead_code)]
 fn proc_find_process_by_name(name: &str) -> Option<(u32, String)> {
     let proc_dir = fs::read_dir("/proc").ok()?;
     for entry in proc_dir.flatten() {
