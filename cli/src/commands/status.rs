@@ -38,8 +38,8 @@ pub async fn execute(args: StatusArgs) -> anyhow::Result<()> {
     // Determine slot
     let slot = bootc_status
         .as_ref()
-        .map(|s| s.booted_slot.clone())
-        .unwrap_or_else(|| "A".to_string());
+        .map(|_| "booted".to_string())
+        .unwrap_or_else(|| "unknown".to_string());
 
     // Get mode from environment or config
     let mode = std::env::var("LIFEOS_MODE").unwrap_or_else(|_| "personal".to_string());
@@ -58,7 +58,11 @@ pub async fn execute(args: StatusArgs) -> anyhow::Result<()> {
     };
 
     let status = SystemStatus {
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: bootc_status
+            .as_ref()
+            .and_then(|s| s.slots.first())
+            .map(|slot| slot.version.clone())
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
         slot,
         channel,
         mode,

@@ -58,6 +58,76 @@ pub struct BootcStatus {
     pub staged: Option<BootcSlot>,
 }
 
+fn parse_image_reference(value: Option<&serde_json::Value>) -> Option<String> {
+    let value = value?;
+    value
+        .get("image")
+        .and_then(|v| v.as_str())
+        .or_else(|| value.get("reference").and_then(|v| v.as_str()))
+        .or_else(|| value.as_str())
+        .map(|s| s.to_string())
+}
+
+fn parse_bootc_status_text(output: &str) -> anyhow::Result<BootcStatus> {
+    let mut booted_image = None;
+    let mut booted_version = None;
+    let mut rollback_image = None;
+    let mut rollback_version = None;
+    let mut current = "";
+
+    for raw_line in output.lines() {
+        let line = raw_line.trim();
+
+        if let Some(value) = line.strip_prefix("Booted image:") {
+            booted_image = Some(value.trim().to_string());
+            current = "booted";
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("Rollback image:") {
+            rollback_image = Some(value.trim().to_string());
+            current = "rollback";
+            continue;
+        }
+
+        if let Some(value) = line.strip_prefix("Version:") {
+            match current {
+                "booted" => booted_version = Some(value.trim().to_string()),
+                "rollback" => rollback_version = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    let booted_image = booted_image.ok_or_else(|| anyhow::anyhow!("Missing booted image"))?;
+    let booted_version = booted_version.unwrap_or_else(|| "unknown".to_string());
+
+    let mut slots = vec![BootcSlot {
+        name: "booted".to_string(),
+        version: booted_version,
+        image: Some(booted_image.clone()),
+        booted: true,
+        rollback: false,
+    }];
+
+    if let Some(image) = rollback_image.clone() {
+        slots.push(BootcSlot {
+            name: "rollback".to_string(),
+            version: rollback_version.unwrap_or_else(|| "unknown".to_string()),
+            image: Some(image),
+            booted: false,
+            rollback: true,
+        });
+    }
+
+    Ok(BootcStatus {
+        slots,
+        booted_slot: booted_image,
+        rollback_slot: rollback_image,
+        staged: None,
+    })
+}
+
 /// Check if bootc is available on the system
 pub fn is_bootc_available() -> bool {
     Command::new("bootc")
@@ -94,14 +164,30 @@ pub fn get_bootc_status() -> anyhow::Result<BootcStatus> {
     };
 
     if !output.status.success() {
-        anyhow::bail!(
-            "bootc status failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let text_output = if is_root() {
+            Command::new("bootc").arg("status").output()?
+        } else {
+            run_with_sudo_fallback("bootc", &["status"])?
+        };
+
+        if !text_output.status.success() {
+            anyhow::bail!(
+                "bootc status failed: {}",
+                String::from_utf8_lossy(&text_output.stderr)
+            );
+        }
+
+        let stdout = String::from_utf8(text_output.stdout)?;
+        return parse_bootc_status_text(&stdout);
     }
 
-    let json: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    parse_bootc_status(json)
+    match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+        Ok(json) => parse_bootc_status(json),
+        Err(_) => {
+            let stdout = String::from_utf8(output.stdout)?;
+            parse_bootc_status_text(&stdout)
+        }
+    }
 }
 
 /// Parse bootc status from JSON
@@ -114,11 +200,7 @@ fn parse_bootc_status(json: serde_json::Value) -> anyhow::Result<BootcStatus> {
         .get("booted")
         .ok_or_else(|| anyhow::anyhow!("Missing booted field"))?;
 
-    let booted_slot = booted
-        .get("image")
-        .and_then(|i| i.get("image"))
-        .and_then(|i| i.as_str())
-        .map(|s| s.to_string())
+    let booted_slot = parse_image_reference(booted.get("image"))
         .unwrap_or_else(|| "unknown".to_string());
 
     let slots = vec![BootcSlot {
@@ -126,23 +208,22 @@ fn parse_bootc_status(json: serde_json::Value) -> anyhow::Result<BootcStatus> {
         version: booted
             .get("version")
             .and_then(|v| v.as_str())
+            .or_else(|| {
+                booted
+                    .get("image")
+                    .and_then(|i| i.get("version"))
+                    .and_then(|v| v.as_str())
+            })
             .map(|s| s.to_string())
             .unwrap_or_else(|| "unknown".to_string()),
-        image: booted
-            .get("image")
-            .and_then(|i| i.get("image"))
-            .and_then(|i| i.as_str())
-            .map(|s| s.to_string()),
+        image: parse_image_reference(booted.get("image")),
         booted: true,
         rollback: false,
     }];
 
     let rollback_slot = status
         .get("rollback")
-        .and_then(|r| r.get("image"))
-        .and_then(|i| i.get("image"))
-        .and_then(|i| i.as_str())
-        .map(|s| s.to_string());
+        .and_then(|r| parse_image_reference(r.get("image")));
 
     Ok(BootcStatus {
         slots,
