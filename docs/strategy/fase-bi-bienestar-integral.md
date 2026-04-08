@@ -310,7 +310,7 @@ etapa están, qué ha pasado, qué le importa.
   desarrollo, vacunas, primer diente, primera palabra, escuela,
   problemas de conducta, logros. Permanente por diseño. Validación
   estricta de fecha YYYY-MM-DD. Notas cifradas.
-- [ ] **Coaching de relaciones** — Axi puede:
+- [x] **Coaching de relaciones** — Axi puede:
   - Dar consejos generales basados en literatura de relaciones (Gottman,
     Esther Perel, Gary Chapman) — sin ser terapeuta de pareja.
   - Sugerir lecturas, videos, podcasts específicos cuando el usuario
@@ -321,7 +321,7 @@ etapa están, qué ha pasado, qué le importa.
   - Sugerir acciones concretas ("dijiste que querías llamar más a tu
     papá — han pasado 3 semanas desde la última, ¿quieres que te lo
     recuerde mañana?").
-- [ ] **Disclaimers de relaciones**: Axi NO es consejero matrimonial,
+- [x] **Disclaimers de relaciones**: Axi NO es consejero matrimonial,
   NO es terapeuta de pareja, NO sustituye terapia familiar
   profesional. Las recomendaciones son generales — para problemas
   serios (abuso, infidelidad, divorcio en curso, custodia), recomendar
@@ -330,8 +330,8 @@ etapa están, qué ha pasado, qué le importa.
   `relationship_add`, `relationship_stage`, `relationship_contact`,
   `relationship_list`, `family_member_add`, `family_list`,
   `child_milestone_log`, `child_milestones_list`,
-  `relationships_summary`. Pendiente: `relationship_advice` (espera
-  a curaduría de literatura). `relationship_event_log` ya entregado
+  `relationships_summary`, `relationship_advice`.
+  `relationship_event_log` ya entregado
   en BI.9.2.
 - [x] **(sprint 3)** `stale_relationships(min_importance, days_threshold)`
   — generaliza el detector de forgetting_check con thresholds

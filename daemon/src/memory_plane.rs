@@ -14878,6 +14878,25 @@ pub struct UpcomingDate {
     pub source_id: String,
 }
 
+/// Derived coaching helper for one relationship. This is intentionally
+/// conservative: it summarizes what the system knows, suggests a few
+/// next steps, and flags when the topic should move to professional
+/// support instead of generic coaching.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelationshipAdvice {
+    pub relationship_id: String,
+    pub relationship_name: String,
+    pub relationship_type: String,
+    pub stage: Option<String>,
+    pub concern: Option<String>,
+    pub observations: Vec<String>,
+    pub suggested_actions: Vec<String>,
+    pub suggested_questions: Vec<String>,
+    pub recommend_professional_support: bool,
+    pub urgent_support: bool,
+    pub generated_at: DateTime<Utc>,
+}
+
 impl MemoryPlaneManager {
     // -----------------------------------------------------------------------
     // BI.9: relationships
@@ -15497,6 +15516,366 @@ impl MemoryPlaneManager {
             stale_contacts,
             generated_at: now,
         })
+    }
+
+    /// BI.9 — Give a conservative coaching snapshot for one
+    /// relationship. This is NOT therapy and never overrides the
+    /// safety/professional boundaries already established in the
+    /// strategy docs and Telegram system prompt.
+    pub async fn get_relationship_advice(
+        &self,
+        relationship_id: &str,
+        today_local: &str,
+        concern: Option<&str>,
+    ) -> Result<RelationshipAdvice> {
+        let relationship_id =
+            normalize_non_empty(relationship_id).context("relationship_id required")?;
+        let relationship = self
+            .list_relationships(true)
+            .await?
+            .into_iter()
+            .find(|r| r.relationship_id == relationship_id)
+            .with_context(|| format!("no encontre relacion activa con id {}", relationship_id))?;
+        let summary = self.get_relationships_summary(today_local, 30, 10).await?;
+        let timeline = self.get_relationship_timeline(&relationship_id, 12).await?;
+        Ok(build_relationship_advice_static(
+            &relationship,
+            &summary,
+            &timeline,
+            concern,
+            Utc::now(),
+        ))
+    }
+}
+
+fn build_relationship_advice_static(
+    relationship: &Relationship,
+    summary: &RelationshipsSummary,
+    timeline: &RelationshipTimeline,
+    concern: Option<&str>,
+    now: DateTime<Utc>,
+) -> RelationshipAdvice {
+    let concern = concern.and_then(normalize_non_empty);
+    let (recommend_professional_support, urgent_support) =
+        relationship_concern_flags(concern.as_deref(), timeline);
+    let kind_bucket = relationship_kind_bucket(&relationship.relationship_type);
+
+    let days_since_last_contact = match relationship.last_contact_at {
+        Some(t) => (now - t).num_days().max(0),
+        None => (now - relationship.created_at).num_days().max(0),
+    };
+    let upcoming = summary
+        .upcoming_birthdays
+        .iter()
+        .filter(|u| u.source_id == relationship.relationship_id)
+        .min_by_key(|u| u.days_until);
+
+    let mut observations = Vec::new();
+    observations.push(format!(
+        "{} es una relacion tipo '{}' con importancia {}/10{}.",
+        relationship.name,
+        relationship.relationship_type,
+        relationship.importance_1_10,
+        relationship
+            .stage
+            .as_deref()
+            .map(|s| format!(" y etapa '{}'", s))
+            .unwrap_or_default(),
+    ));
+    if let Some(u) = upcoming {
+        let when = if u.days_until == 0 {
+            "hoy".to_string()
+        } else if u.days_until == 1 {
+            "mañana".to_string()
+        } else {
+            format!("en {} días", u.days_until)
+        };
+        observations.push(format!(
+            "Tienes un {} de esta relación {} ({}).",
+            u.kind, when, u.when_md
+        ));
+    }
+    if relationship.last_contact_at.is_some() {
+        observations.push(format!(
+            "Llevas {} días desde el último contacto registrado.",
+            days_since_last_contact
+        ));
+    } else {
+        observations.push(format!(
+            "No hay contacto registrado todavía; la relación se creó hace {} días.",
+            days_since_last_contact
+        ));
+    }
+    if timeline.events_last_30d == 0 {
+        observations.push(
+            "No hay eventos relacionales registrados en los últimos 30 días; el consejo sale sobre todo del perfil y del ritmo de contacto.".to_string(),
+        );
+    } else {
+        let mut pulse_bits = vec![format!("{} evento(s) en 30 días", timeline.events_last_30d)];
+        if let Some(avg) = timeline.avg_intensity_30d {
+            pulse_bits.push(format!("intensidad promedio {:.1}/10", avg));
+        }
+        if timeline.negative_sentiment_count_30d > 0 {
+            pulse_bits.push(format!(
+                "{} con sentimiento negativo",
+                timeline.negative_sentiment_count_30d
+            ));
+        }
+        observations.push(format!("Pulso reciente: {}.", pulse_bits.join(", ")));
+
+        let labels = recent_relationship_event_labels(&timeline.recent_events_meta, 4);
+        if !labels.is_empty() {
+            observations.push(format!("Temas recientes: {}.", labels.join(", ")));
+        }
+    }
+    if let Some(ref c) = concern {
+        observations.push(format!("Preocupación actual del usuario: {}.", c));
+    }
+
+    let mut suggested_actions = Vec::new();
+    if urgent_support {
+        push_unique(
+            &mut suggested_actions,
+            "Prioriza seguridad y apoyo externo hoy. Si hay abuso, violencia, coerción o miedo, esto ya no es terreno para coaching general.",
+        );
+        push_unique(
+            &mut suggested_actions,
+            "No intentes resolverlo solo con una conversación improvisada si te sientes en riesgo; primero asegura apoyo profesional o una red de confianza.",
+        );
+        push_unique(
+            &mut suggested_actions,
+            "Si te sirve y es seguro, registra hechos concretos (fechas, eventos, mensajes) para poder explicarlos mejor a un profesional.",
+        );
+    } else {
+        let high_friction = timeline.negative_sentiment_count_30d >= 2
+            || timeline.avg_intensity_30d.unwrap_or(0.0) >= 7.0
+            || timeline.recent_events_meta.iter().take(5).any(|e| {
+                matches!(
+                    e.event_type.as_str(),
+                    "argument" | "conflict" | "distance" | "concern"
+                )
+            });
+        let positive_momentum = timeline.recent_events_meta.iter().take(5).any(|e| {
+            matches!(
+                e.event_type.as_str(),
+                "reconciliation" | "support" | "closeness" | "achievement"
+            )
+        });
+
+        let stale_threshold = match kind_bucket {
+            "romantic" => 7,
+            "professional" => 14,
+            _ => 21,
+        };
+        if days_since_last_contact >= stale_threshold {
+            let reconnect = match kind_bucket {
+                "romantic" => format!(
+                    "Haz una reconexión pequeña con {} en las próximas 24-48h: mensaje breve, cálido y sin intentar resolver todo en el primer contacto.",
+                    relationship.name
+                ),
+                "professional" => format!(
+                    "Haz un check-in breve y claro con {}: contexto concreto, pedido puntual y tono limpio.",
+                    relationship.name
+                ),
+                _ => format!(
+                    "Haz un gesto pequeño esta semana con {}: mensaje, nota de voz corta o invitación simple.",
+                    relationship.name
+                ),
+            };
+            push_unique(&mut suggested_actions, reconnect);
+        }
+        if high_friction {
+            push_unique(
+                &mut suggested_actions,
+                "Si vas a tocar un tema difícil, usa un inicio suave: describe un hecho concreto, cómo te impactó y una petición pequeña. No abras cinco frentes a la vez.",
+            );
+            push_unique(
+                &mut suggested_actions,
+                "Antes de defenderte, resume en una frase lo que entendiste de la otra persona. Sentirse escuchado baja muchísimo la fricción.",
+            );
+        }
+        if positive_momentum && !high_friction {
+            push_unique(
+                &mut suggested_actions,
+                "Refuerza lo que sí funciona con aprecio específico: di exactamente qué gesto valoraste y por qué te importó.",
+            );
+        }
+        if let Some(u) = upcoming {
+            if u.days_until <= 14 {
+                push_unique(
+                    &mut suggested_actions,
+                    "Aprovecha la fecha próxima para crear un ritual simple y concreto: mensaje, llamada, detalle o tiempo de calidad planeado con anticipación.",
+                );
+            }
+        }
+        if timeline.events_last_30d == 0 {
+            push_unique(
+                &mut suggested_actions,
+                "Antes de sacar conclusiones grandes, registra 1-2 contactos o eventos reales. Con más contexto, el consejo mejora mucho.",
+            );
+        }
+        push_unique(
+            &mut suggested_actions,
+            "Define una sola meta para esta semana con esta relación: conexión, claridad, reparación o coordinación. Que sea observable.",
+        );
+        if recommend_professional_support {
+            push_unique(
+                &mut suggested_actions,
+                "Por el tipo de tema que mencionas, vale la pena apoyo profesional (terapia, mediación o asesoría especializada) además de cualquier conversación entre ustedes.",
+            );
+        }
+    }
+    suggested_actions.truncate(4);
+
+    let mut suggested_questions = Vec::new();
+    if urgent_support {
+        push_unique(
+            &mut suggested_questions,
+            "¿Qué apoyo profesional o persona segura puedo contactar hoy mismo?",
+        );
+        push_unique(
+            &mut suggested_questions,
+            "¿Qué límite necesito poner para protegerme mientras esto se ordena?",
+        );
+        push_unique(
+            &mut suggested_questions,
+            "¿Hay riesgo inmediato para mí o para alguien más?",
+        );
+    } else {
+        push_unique(
+            &mut suggested_questions,
+            format!(
+                "¿Qué necesito realmente de {} en esta etapa: conexión, claridad, reparación o espacio?",
+                relationship.name
+            ),
+        );
+        if days_since_last_contact >= 7 {
+            push_unique(
+                &mut suggested_questions,
+                format!(
+                    "¿Cuál es el mensaje más simple y genuino que puedo enviarle a {} hoy?",
+                    relationship.name
+                ),
+            );
+        }
+        if timeline.negative_sentiment_count_30d > 0
+            || timeline.avg_intensity_30d.unwrap_or(0.0) >= 7.0
+        {
+            push_unique(
+                &mut suggested_questions,
+                "¿Qué hecho observable quiero conversar, y qué interpretación mía estoy agregando encima?",
+            );
+        }
+        push_unique(
+            &mut suggested_questions,
+            "¿Qué petición pequeña, concreta y medible puedo hacer esta semana en vez de hablar 'de toda la relación'?",
+        );
+        match kind_bucket {
+            "romantic" => push_unique(
+                &mut suggested_questions,
+                "¿Qué ritual corto nos haría sentir más conectados esta semana?",
+            ),
+            "professional" => push_unique(
+                &mut suggested_questions,
+                "¿Qué expectativa conviene aclarar explícitamente para bajar la fricción?",
+            ),
+            _ => push_unique(
+                &mut suggested_questions,
+                "¿Qué gesto de cuidado, interés o presencia sería útil en esta relación esta semana?",
+            ),
+        }
+    }
+    suggested_questions.truncate(4);
+
+    RelationshipAdvice {
+        relationship_id: relationship.relationship_id.clone(),
+        relationship_name: relationship.name.clone(),
+        relationship_type: relationship.relationship_type.clone(),
+        stage: relationship.stage.clone(),
+        concern,
+        observations,
+        suggested_actions,
+        suggested_questions,
+        recommend_professional_support,
+        urgent_support,
+        generated_at: now,
+    }
+}
+
+fn relationship_concern_flags(
+    concern: Option<&str>,
+    timeline: &RelationshipTimeline,
+) -> (bool, bool) {
+    let lower = concern.unwrap_or("").to_lowercase();
+    let urgent_support = timeline.crisis_pattern_count_last_30d > 0
+        || contains_any(
+            &lower,
+            &[
+                "abuso",
+                "violencia",
+                "agresion",
+                "agresión",
+                "amenaza",
+                "miedo",
+                "golpe",
+                "golpear",
+                "coerc",
+                "forzo",
+                "forzó",
+            ],
+        );
+    let recommend_professional_support = urgent_support
+        || contains_any(
+            &lower,
+            &[
+                "infidelidad",
+                "divorcio",
+                "custodia",
+                "separacion",
+                "separación",
+                "abuso",
+                "violencia",
+                "agresion",
+                "agresión",
+            ],
+        );
+    (recommend_professional_support, urgent_support)
+}
+
+fn relationship_kind_bucket(relationship_type: &str) -> &'static str {
+    match relationship_type {
+        "partner" | "spouse" | "ex_partner" => "romantic",
+        "colleague" | "boss" | "mentor" | "mentee" => "professional",
+        _ => "personal",
+    }
+}
+
+fn recent_relationship_event_labels(events: &[RelationshipEvent], limit: usize) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for e in events {
+        let label = match e.sentiment.as_deref() {
+            Some(sent) => format!("{} ({})", e.event_type, sent),
+            None => e.event_type.clone(),
+        };
+        if seen.insert(label.clone()) {
+            out.push(label);
+        }
+        if out.len() >= limit {
+            break;
+        }
+    }
+    out
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| haystack.contains(n))
+}
+
+fn push_unique(list: &mut Vec<String>, item: impl Into<String>) {
+    let item = item.into();
+    if !list.iter().any(|existing| existing == &item) {
+        list.push(item);
     }
 }
 
@@ -22686,6 +23065,112 @@ mod tests {
             .await
             .unwrap();
         assert!(summary2.stale_contacts.iter().any(|r| r.name == "Maria"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_advice_combines_stale_contact_and_high_friction() {
+        let dir = temp_dir("memory-plane-relationship-advice-friction");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let rel = mgr
+            .add_relationship(
+                "Maria",
+                "spouse",
+                Some("married"),
+                10,
+                None,
+                None,
+                Some("06-15"),
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+
+        mgr.set_reinforced_passphrase("supersegura123", None)
+            .await
+            .unwrap();
+        mgr.add_relationship_event(
+            &rel.relationship_id,
+            "conflict",
+            Some(8),
+            Some("negative"),
+            "Tuvimos una discusión fuerte y quedamos distantes.",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let db_path = mgr.db_path.clone();
+        let rel_id = rel.relationship_id.clone();
+        let backdate = (Utc::now() - chrono::Duration::days(40)).to_rfc3339();
+        tokio::task::spawn_blocking(move || {
+            let db = MemoryPlaneManager::open_db(&db_path).unwrap();
+            db.execute(
+                "UPDATE relationships SET created_at = ?1 WHERE relationship_id = ?2",
+                rusqlite::params![backdate, rel_id],
+            )
+            .unwrap();
+        })
+        .await
+        .unwrap();
+
+        let advice = mgr
+            .get_relationship_advice(&rel.relationship_id, "2026-04-07", Some("siento distancia"))
+            .await
+            .unwrap();
+        assert!(!advice.urgent_support);
+        assert!(advice
+            .suggested_actions
+            .iter()
+            .any(|a| a.contains("reconexión pequeña")));
+        assert!(advice
+            .suggested_actions
+            .iter()
+            .any(|a| a.contains("inicio suave")));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn relationship_advice_flags_urgent_support_for_abuse_keywords() {
+        let dir = temp_dir("memory-plane-relationship-advice-urgent");
+        let mgr = MemoryPlaneManager::new(dir.clone()).unwrap();
+        mgr.initialize().await.unwrap();
+
+        let rel = mgr
+            .add_relationship(
+                "Ana",
+                "partner",
+                Some("dating"),
+                9,
+                None,
+                None,
+                None,
+                "",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let advice = mgr
+            .get_relationship_advice(
+                &rel.relationship_id,
+                "2026-04-07",
+                Some("hay abuso, amenazas y me da miedo hablar con ella"),
+            )
+            .await
+            .unwrap();
+        assert!(advice.recommend_professional_support);
+        assert!(advice.urgent_support);
+        assert!(advice
+            .suggested_questions
+            .iter()
+            .any(|q| q.contains("apoyo profesional") || q.contains("persona segura")));
 
         std::fs::remove_dir_all(dir).ok();
     }

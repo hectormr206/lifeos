@@ -446,6 +446,10 @@ REGLAS FIRMES:
 14i. **relationships_summary** — Devuelve resumen completo: relaciones cercanas + familia + hitos recientes de hijos + cumpleanos/aniversarios proximos en los siguientes N dias + contactos importantes que no has visto en 30+ dias.
     args: {"today_local": "2026-04-07", "lookahead_days": 30}
 
+14j. **relationship_advice** — Da una lectura y siguientes pasos concretos para UNA relacion usando el perfil, el ritmo de contacto, proximas fechas y el timeline reciente. Es coaching general, NO terapia. Si el tema toca abuso, violencia, custodia, divorcio o infidelidad en curso, la salida empuja a apoyo profesional.
+    args: {"relationship_id": "rel-...", "concern": "siento distancia y no se como reconectar", "today_local": "2026-04-07"}
+    `concern` es opcional pero recomendable. Si no conoces el id, usa `relationship_list` primero.
+
 15. **Vida Plena — Cifrado reforzado (vault) — foundation BI.4/6/9.2/12**
 
 Esta es la capa de cifrado opt-in para datos extra-sensibles. NO reemplaza el cifrado por defecto del memory_plane (que ya protege todo). Es una segunda capa con passphrase del usuario, derivada con Argon2id. Defiende contra: lectura del disco crudo, snapshots de respaldo, lectura del DB cuando el daemon corre pero el vault esta locked. NO defiende contra: keylogger, root attacker que vuelque RAM.
@@ -1882,6 +1886,7 @@ REGLAS FIRMES:
             "child_milestone_log" => execute_child_milestone_log(&call.args, ctx).await,
             "child_milestones_list" => execute_child_milestones_list(&call.args, ctx).await,
             "relationships_summary" => execute_relationships_summary(&call.args, ctx).await,
+            "relationship_advice" => execute_relationship_advice(&call.args, ctx).await,
             "vault_status" => execute_vault_status(ctx).await,
             "vault_set_passphrase" => execute_vault_set_passphrase(&call.args, ctx).await,
             "vault_unlock" => execute_vault_unlock(&call.args, ctx).await,
@@ -5665,6 +5670,70 @@ REGLAS FIRMES:
             && summary.recent_child_milestones.is_empty()
         {
             out.push_str("Aun no hay datos relacionales. Empieza con `relationship_add` o `family_member_add`.\n");
+        }
+
+        Ok(out)
+    }
+
+    async fn execute_relationship_advice(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let mem = require_memory(ctx).await?;
+        let relationship_id = args["relationship_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'relationship_id'"))?;
+        let today_local = today_local_arg(args);
+        let concern = args["concern"].as_str();
+        let advice = mem
+            .get_relationship_advice(relationship_id, &today_local, concern)
+            .await?;
+
+        let mut out = format!("# Consejo relacional para {}\n\n", advice.relationship_name);
+        out.push_str(
+            "_Guia general solamente: Axi NO es terapeuta, consejero matrimonial ni mediador legal. Para temas serios, toca apoyo profesional real._\n\n",
+        );
+        out.push_str(&format!(
+            "Tipo: {}{}\n",
+            advice.relationship_type,
+            advice
+                .stage
+                .as_deref()
+                .map(|s| format!(" — etapa {}", s))
+                .unwrap_or_default(),
+        ));
+        if let Some(ref concern) = advice.concern {
+            out.push_str(&format!("Consulta actual: {}\n", concern));
+        }
+
+        if !advice.observations.is_empty() {
+            out.push_str("\n## Lectura actual\n");
+            for item in &advice.observations {
+                out.push_str(&format!("- {}\n", item));
+            }
+        }
+
+        if !advice.suggested_actions.is_empty() {
+            out.push_str("\n## Siguientes pasos sugeridos\n");
+            for (idx, item) in advice.suggested_actions.iter().enumerate() {
+                out.push_str(&format!("{}. {}\n", idx + 1, item));
+            }
+        }
+
+        if !advice.suggested_questions.is_empty() {
+            out.push_str("\n## Preguntas utiles para pensar o conversar\n");
+            for item in &advice.suggested_questions {
+                out.push_str(&format!("- {}\n", item));
+            }
+        }
+
+        if advice.recommend_professional_support {
+            out.push_str(
+                "\n## Limite importante\nEsto ya roza un terreno donde conviene apoyo profesional (terapia, mediacion o asesoria especializada) ademas de cualquier conversacion entre ustedes.\n",
+            );
+        }
+        if advice.urgent_support {
+            out.push_str(&render_crisis_block());
         }
 
         Ok(out)
