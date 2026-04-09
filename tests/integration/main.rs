@@ -368,3 +368,14 @@ fn test_phase2_model_catalog_exists_and_has_signature() {
         "Catalog signature should be sha256-prefixed"
     );
 }
+
+// v0.4.0: verify the CLI `life ai status` subcommand struct is parseable.
+#[test]
+fn cli_ai_status_help_succeeds() {
+    let root = project_root();
+    let bin = build_cli(&root);
+    let output = Command::new(&bin).args(["ai", "status", "--help"]).output().unwrap();
+    assert!(output.status.success(), "life ai status --help should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("status"), "help should mention 'status'");
+}
