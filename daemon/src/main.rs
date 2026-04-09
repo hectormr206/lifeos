@@ -942,44 +942,47 @@ async fn main() -> anyhow::Result<()> {
     {
         let tray_state = state.clone();
         tokio::spawn(async move {
-            // Wait for display server to be ready (retry up to 30s)
-            let mut display_ready = false;
-            for attempt in 0..15 {
-                if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
-                    display_ready = true;
-                    break;
-                }
-                // Try to discover Wayland socket dynamically
-                if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-                    if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
-                        for entry in entries.flatten() {
-                            if let Ok(name) = entry.file_name().into_string() {
-                                if name.starts_with("wayland-") && !name.ends_with(".lock") {
-                                    unsafe { std::env::set_var("WAYLAND_DISPLAY", &name) };
-                                    info!("Discovered Wayland socket: {}", name);
-                                    display_ready = true;
-                                    break;
+            // Keep waiting until the graphical session is actually ready.
+            // On some boots lifeosd starts before COSMIC exports DISPLAY/
+            // WAYLAND_DISPLAY; disabling the tray after 30s leaves Axi without
+            // an icon for the entire session.
+            loop {
+                let mut display_ready = false;
+                let mut attempts = 0usize;
+                while !display_ready {
+                    if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok()
+                    {
+                        display_ready = true;
+                        break;
+                    }
+                    // Try to discover Wayland socket dynamically
+                    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+                        if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
+                            for entry in entries.flatten() {
+                                if let Ok(name) = entry.file_name().into_string() {
+                                    if name.starts_with("wayland-") && !name.ends_with(".lock") {
+                                        unsafe { std::env::set_var("WAYLAND_DISPLAY", &name) };
+                                        info!("Discovered Wayland socket: {}", name);
+                                        display_ready = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
+                    if display_ready {
+                        break;
+                    }
+                    if attempts == 0 {
+                        info!("[tray] Waiting for display server...");
+                    } else if attempts % 15 == 0 {
+                        warn!("[tray] Display still unavailable, retrying tray startup...");
+                    }
+                    attempts += 1;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
-                if display_ready {
-                    break;
-                }
-                if attempt == 0 {
-                    info!("[tray] Waiting for display server...");
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            }
 
-            if !display_ready {
-                warn!("[tray] No display found after 30s, tray icon disabled");
-                return;
-            }
-
-            // Spawn tray with health monitoring — re-spawn on failure
-            loop {
+                // Spawn tray with health monitoring — re-spawn on failure
                 info!("[tray] Spawning Axi system tray icon");
                 let tray_token = tray_state.bootstrap_token.clone().unwrap_or_default();
                 let tray_api_base = format!(
