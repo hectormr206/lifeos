@@ -14,6 +14,7 @@ use crate::audio_frontend::{
 use crate::follow_along::FollowAlongManager;
 use crate::memory_plane::MemoryPlaneManager;
 use crate::overlay::{AxiState, OverlayManager};
+use crate::privacy_filter::{PrivacyFilter, SensitivityLevel};
 use crate::screen_capture::ScreenCapture;
 use crate::telemetry::{MetricCategory, TelemetryManager};
 use anyhow::{Context, Result};
@@ -149,10 +150,12 @@ const FAR_FIELD_EXTRA_GAIN_DB: f64 = 8.0;
 
 const SCREENSHOT_RETENTION_COUNT: usize = 50;
 const SCREENSHOT_RETENTION_DAYS: u64 = 2;
+const SCREENSHOT_RETENTION_MAX_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
 const IDLE_SCREEN_INTERVAL_SECONDS: u64 = 45;
 const VISION_MEMORY_ROUTINE_HOURS: u64 = 4;
 const VISION_MEMORY_KEY_DAYS: u64 = 7;
 const AUDIO_RETENTION_COUNT: usize = 120;
+const AUDIO_RETENTION_MAX_BYTES: u64 = 200 * 1024 * 1024; // 200 MB
 const TTS_RETENTION_COUNT: usize = 120;
 const OCR_SIMILARITY_SKIP_THRESHOLD: f32 = 0.92;
 const RELEVANT_SIMILARITY_SKIP_THRESHOLD: f32 = 0.60;
@@ -650,6 +653,7 @@ pub struct SensoryPipelineManager {
     state: Arc<RwLock<SensoryPipelineState>>,
     playback: Arc<Mutex<Option<ActivePlayback>>>,
     speaker_id: Arc<RwLock<crate::speaker_id::SpeakerIdManager>>,
+    privacy_filter: Option<Arc<PrivacyFilter>>,
 }
 
 impl SensoryPipelineManager {
@@ -663,7 +667,13 @@ impl SensoryPipelineManager {
             speaker_id: Arc::new(RwLock::new(crate::speaker_id::SpeakerIdManager::new(
                 speaker_dir,
             ))),
+            privacy_filter: None,
         })
+    }
+
+    /// Attach a shared privacy filter for OCR text classification.
+    pub fn set_privacy_filter(&mut self, filter: Arc<PrivacyFilter>) {
+        self.privacy_filter = Some(filter);
     }
 
     /// Returns the shared speaker identification manager so other subsystems
@@ -1805,7 +1815,7 @@ impl SensoryPipelineManager {
         language: Option<&str>,
         voice_model: Option<&str>,
     ) -> Result<StreamingVoiceChatResult> {
-        let (partial_tx, mut partial_rx) = mpsc::unbounded_channel();
+        let (partial_tx, mut partial_rx) = mpsc::channel(1024);
         let ai = *ai_manager;
         let system_prompt = system_prompt.to_string();
         let transcript = transcript.to_string();
@@ -2045,6 +2055,27 @@ impl SensoryPipelineManager {
             return Ok(None);
         }
 
+        // Skip capture if active window looks sensitive (login, password dialogs).
+        if let Some(ref title) = state.vision.current_window {
+            let lower = title.to_lowercase();
+            let sensitive = [
+                "password",
+                "login",
+                "sign in",
+                "pin",
+                "cvv",
+                "secret",
+                "private",
+                "contraseña",
+                "iniciar sesión",
+                "unlock",
+            ];
+            if sensitive.iter().any(|kw| lower.contains(kw)) {
+                log::info!("sensory: skipping capture — sensitive window: {}", title);
+                return Ok(None);
+            }
+        }
+
         // Determine if a window change triggered this capture.
         let window_changed = state
             .vision
@@ -2158,26 +2189,52 @@ impl SensoryPipelineManager {
         }
 
         // Phase 3: structured memory content with app metadata.
+        // Privacy-filter the OCR excerpt before writing to memory.
+        let mut skip_awareness_persist = false;
         let ocr_excerpt: String = context.ocr_text.chars().take(2048).collect();
-        let memory_content = truncate_for_memory(&format!(
-            "app: {}\nwindow: {}\nsummary: {}\nrelevant_lines:\n{}\nocr_excerpt:\n{}",
-            state.vision.current_app.as_deref().unwrap_or("unknown"),
-            state.vision.current_window.as_deref().unwrap_or("unknown"),
-            summary,
-            context.relevant_text.join("\n"),
-            &ocr_excerpt,
-        ));
-        memory_plane
-            .add_entry(
-                "vision-snapshot",
-                "short-term",
-                &tags,
-                Some("sensor://screen-awareness"),
-                importance,
-                &memory_content,
-            )
-            .await
-            .ok();
+        let ocr_for_memory = if let Some(ref pf) = self.privacy_filter {
+            let sensitivity = pf.classify(&ocr_excerpt);
+            match sensitivity {
+                SensitivityLevel::Critical => {
+                    log::warn!(
+                        "Vision awareness OCR classified as Critical — skipping memory persistence"
+                    );
+                    skip_awareness_persist = true;
+                    String::new()
+                }
+                SensitivityLevel::High => {
+                    log::info!(
+                        "Vision awareness OCR classified as High — sanitizing before persistence"
+                    );
+                    pf.sanitize(&ocr_excerpt).sanitized_text
+                }
+                _ => ocr_excerpt,
+            }
+        } else {
+            ocr_excerpt
+        };
+
+        if !skip_awareness_persist {
+            let memory_content = truncate_for_memory(&format!(
+                "app: {}\nwindow: {}\nsummary: {}\nrelevant_lines:\n{}\nocr_excerpt:\n{}",
+                state.vision.current_app.as_deref().unwrap_or("unknown"),
+                state.vision.current_window.as_deref().unwrap_or("unknown"),
+                summary,
+                context.relevant_text.join("\n"),
+                &ocr_for_memory,
+            ));
+            memory_plane
+                .add_entry(
+                    "vision-snapshot",
+                    "short-term",
+                    &tags,
+                    Some("sensor://screen-awareness"),
+                    importance,
+                    &memory_content,
+                )
+                .await
+                .ok();
+        }
 
         let mut state = self.state.write().await;
         state.vision.last_capture_path = Some(context.screen_path);
@@ -2224,6 +2281,18 @@ impl SensoryPipelineManager {
                     "Screen capture retention removed {} files older than {} days",
                     removed,
                     SCREENSHOT_RETENTION_DAYS
+                );
+            }
+        }
+
+        if let Ok(removed) = screen_capture
+            .cleanup_by_size(SCREENSHOT_RETENTION_MAX_BYTES)
+            .await
+        {
+            if removed > 0 {
+                log::info!(
+                    "Screen capture size-based retention removed {} files (limit=500MB)",
+                    removed
                 );
             }
         }
@@ -2583,7 +2652,7 @@ impl SensoryPipelineManager {
         };
 
         let ocr_lang = detect_ocr_languages();
-        let ocr_text = extract_ocr(&screen_path, Some(&ocr_lang))
+        let mut ocr_text = extract_ocr(&screen_path, Some(&ocr_lang))
             .await
             .unwrap_or_default();
         let relevant_text = relevant_ocr_lines(&ocr_text, query);
@@ -2593,24 +2662,46 @@ impl SensoryPipelineManager {
             false
         };
 
-        let tags = vec!["screen".to_string(), "ocr".to_string()];
-        let memory_content = truncate_for_memory(&format!(
-            "query: {}\nocr:\n{}\nrelevant:\n{}",
-            query,
-            ocr_text,
-            relevant_text.join("\n")
-        ));
-        memory_plane
-            .add_entry(
-                "screen-ocr",
-                "user",
-                &tags,
-                Some("sensor://screen-ocr"),
-                45,
-                &memory_content,
-            )
-            .await
-            .ok();
+        // Privacy-filter OCR text before persisting to memory.
+        let mut skip_memory_persist = false;
+        if let Some(ref pf) = self.privacy_filter {
+            let sensitivity = pf.classify(&ocr_text);
+            match sensitivity {
+                SensitivityLevel::Critical => {
+                    log::warn!("OCR text classified as Critical — skipping memory persistence");
+                    skip_memory_persist = true;
+                }
+                SensitivityLevel::High => {
+                    log::info!(
+                        "OCR text classified as High sensitivity — sanitizing before persistence"
+                    );
+                    let result = pf.sanitize(&ocr_text);
+                    ocr_text = result.sanitized_text;
+                }
+                _ => {}
+            }
+        }
+
+        if !skip_memory_persist {
+            let tags = vec!["screen".to_string(), "ocr".to_string()];
+            let memory_content = truncate_for_memory(&format!(
+                "query: {}\nocr:\n{}\nrelevant:\n{}",
+                query,
+                ocr_text,
+                relevant_text.join("\n")
+            ));
+            memory_plane
+                .add_entry(
+                    "screen-ocr",
+                    "user",
+                    &tags,
+                    Some("sensor://screen-ocr"),
+                    45,
+                    &memory_content,
+                )
+                .await
+                .ok();
+        }
 
         Ok(ScreenContextResult {
             screen_path,
@@ -4220,6 +4311,9 @@ async fn capture_audio_snippet_ms(
     cleanup_dir_by_count(&audio_dir, AUDIO_RETENTION_COUNT, "audio")
         .await
         .ok();
+    cleanup_dir_by_size(&audio_dir, AUDIO_RETENTION_MAX_BYTES, "audio")
+        .await
+        .ok();
     Ok(output_path)
 }
 
@@ -4458,6 +4552,71 @@ async fn cleanup_dir_by_count(dir: &Path, max_files: usize, label: &str) -> Resu
             label,
             removed,
             max_files
+        );
+    }
+
+    Ok(removed)
+}
+
+/// Remove oldest files in `dir` until total size is within `max_bytes`.
+async fn cleanup_dir_by_size(dir: &Path, max_bytes: u64, label: &str) -> Result<u64> {
+    if max_bytes == 0 || !dir.exists() {
+        return Ok(0);
+    }
+
+    let mut files: Vec<(u64, u64, PathBuf)> = Vec::new();
+    let mut total_size: u64 = 0;
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .with_context(|| format!("Failed to read {} directory {}", label, dir.display()))?;
+
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .with_context(|| format!("Failed to read {} directory entry", label))?
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let metadata = match tokio::fs::metadata(&path).await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let size = metadata.len();
+        total_size += size;
+        let modified_epoch = metadata
+            .modified()
+            .ok()
+            .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        files.push((modified_epoch, size, path));
+    }
+
+    if total_size <= max_bytes {
+        return Ok(0);
+    }
+
+    files.sort_by_key(|(epoch, _, _)| *epoch);
+    let mut removed = 0u64;
+    for (_, size, path) in &files {
+        if total_size <= max_bytes {
+            break;
+        }
+        tokio::fs::remove_file(path)
+            .await
+            .with_context(|| format!("Failed to remove {} file {}", label, path.display()))?;
+        total_size = total_size.saturating_sub(*size);
+        removed += 1;
+    }
+
+    if removed > 0 {
+        log::info!(
+            "{} size-based retention removed {} files (limit={}MB)",
+            label,
+            removed,
+            max_bytes / (1024 * 1024)
         );
     }
 
@@ -4791,6 +4950,9 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
     tokio::fs::write(&audio_path, &wav).await?;
 
     cleanup_dir_by_count(&audio_dir, AUDIO_RETENTION_COUNT, "audio")
+        .await
+        .ok();
+    cleanup_dir_by_size(&audio_dir, AUDIO_RETENTION_MAX_BYTES, "audio")
         .await
         .ok();
 

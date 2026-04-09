@@ -932,6 +932,8 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
     println!("{}", "AI Service Status".bold().blue());
     println!();
 
+    let daemon_ai_status = fetch_daemon_ai_status().await;
+
     // Installation status
     let installed = Command::new("which")
         .arg("llama-server")
@@ -1047,6 +1049,101 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
         );
     }
 
+    if let Some(ai_status) = daemon_ai_status.as_ref() {
+        if let Some(runtime) = ai_status.runtime.as_ref() {
+            println!();
+            println!("{}", "Axi Runtime:".bold());
+            println!(
+                "  Modo: {} ({})",
+                runtime.mode.as_str().cyan(),
+                runtime.mode_confidence.as_str().dimmed()
+            );
+            println!("  Motivo: {}", runtime.mode_reason);
+            if let Some(profile) = runtime.active_profile.as_ref() {
+                let source = runtime
+                    .profile_source
+                    .as_deref()
+                    .map(|value| format!(" [{}]", value))
+                    .unwrap_or_default();
+                println!("  Perfil activo: {}{}", profile.cyan(), source.dimmed());
+            }
+            if let Some(gpu_layers) = runtime.effective_gpu_layers {
+                let source = runtime
+                    .gpu_layers_source
+                    .as_deref()
+                    .map(|value| format!(" ({value})"))
+                    .unwrap_or_default();
+                println!(
+                    "  GPU layers: {}{}",
+                    gpu_layers.to_string().cyan(),
+                    source.dimmed()
+                );
+            }
+            if let Some(backend) = runtime.backend.as_ref() {
+                let backend_name = runtime
+                    .backend_name
+                    .as_deref()
+                    .map(|value| format!(" / {value}"))
+                    .unwrap_or_default();
+                println!("  Backend: {}{}", backend.cyan(), backend_name.dimmed());
+            }
+            println!(
+                "  Servicio: {}{}{}",
+                runtime.service_state.as_str().cyan(),
+                runtime
+                    .service_scope
+                    .as_deref()
+                    .map(|value| format!(" ({value})"))
+                    .unwrap_or_default(),
+                runtime
+                    .service_pid
+                    .map(|pid| format!(" pid {pid}"))
+                    .unwrap_or_default()
+            );
+            if let Some(memory_mb) = runtime.gpu_memory_mb {
+                println!("  VRAM llama-server: {} MiB", memory_mb.to_string().cyan());
+            }
+            if let Some(memory_mb) = runtime.rss_memory_mb {
+                println!("  RSS llama-server: {} MiB", memory_mb.to_string().cyan());
+            }
+            if let Some(game_guard) = runtime.game_guard.as_ref() {
+                let status = if game_guard.guard_enabled {
+                    "activo".green().to_string()
+                } else if game_guard.supported {
+                    "desactivado".yellow().to_string()
+                } else {
+                    "no soportado".yellow().to_string()
+                };
+                println!("  Game Guard: {}", status);
+                if game_guard.game_detected {
+                    println!(
+                        "    Juego detectado: {}{}",
+                        game_guard
+                            .game_name
+                            .as_deref()
+                            .unwrap_or("desconocido")
+                            .cyan(),
+                        game_guard
+                            .game_pid
+                            .map(|pid| format!(" (pid {pid})"))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+            if let Some(reason) = runtime.preflight_reason.as_ref() {
+                println!("  Preflight: {}", reason.yellow());
+            }
+            if let Some(reason) = runtime.benchmark_pending_reason.as_ref() {
+                println!("  Benchmark: {}", reason.yellow());
+            } else if runtime.benchmark_completed == Some(true) {
+                println!("  Benchmark: {}", "completado".green());
+            }
+            for note in &runtime.notes {
+                println!("  Nota: {}", note.dimmed());
+            }
+        }
+    }
+
     // Models
     println!();
     println!("{}", "Models:".bold());
@@ -1121,6 +1218,56 @@ async fn check_status(verbose: bool) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DaemonAiStatus {
+    runtime: Option<DaemonAiRuntimeStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DaemonAiRuntimeStatus {
+    service_state: String,
+    service_scope: Option<String>,
+    service_pid: Option<u32>,
+    active_profile: Option<String>,
+    profile_source: Option<String>,
+    benchmark_completed: Option<bool>,
+    benchmark_pending_reason: Option<String>,
+    effective_gpu_layers: Option<i32>,
+    gpu_layers_source: Option<String>,
+    backend: Option<String>,
+    backend_name: Option<String>,
+    mode: String,
+    mode_confidence: String,
+    mode_reason: String,
+    gpu_memory_mb: Option<u64>,
+    rss_memory_mb: Option<u64>,
+    preflight_reason: Option<String>,
+    game_guard: Option<DaemonAiGameGuardStatus>,
+    #[serde(default)]
+    notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DaemonAiGameGuardStatus {
+    supported: bool,
+    guard_enabled: bool,
+    game_detected: bool,
+    game_name: Option<String>,
+    game_pid: Option<u32>,
+}
+
+async fn fetch_daemon_ai_status() -> Option<DaemonAiStatus> {
+    let response = daemon_client::authenticated_client()
+        .get(format!("{}/api/v1/ai/status", daemon_client::daemon_url()))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json::<DaemonAiStatus>().await.ok()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2357,6 +2504,13 @@ mod tests {
         let download = resolve_model_download("qwen3.5-27b");
         assert!(download.url.contains("Qwen3.5-27B-GGUF"));
         assert_eq!(download.filename, "Qwen3.5-27B-Q4_K_M.gguf");
+    }
+
+    #[test]
+    fn test_daemon_ai_status_deserializes_minimal() {
+        let json = r#"{"runtime":null}"#;
+        let status: DaemonAiStatus = serde_json::from_str(json).unwrap();
+        assert!(status.runtime.is_none());
     }
 
     #[test]

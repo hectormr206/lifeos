@@ -10,7 +10,7 @@
 | Capa | Archivo | Retencion | Que guarda |
 |------|---------|-----------|------------|
 | **1. Historial in-memory** | `telegram_tools.rs` (ConversationHistory) | 48h, ultimos 15 mensajes | Conversacion activa en RAM. Compactacion automatica a resumen despues de 20 mensajes |
-| **2. SessionStore (JSONL)** | `session_store.rs` | 72h en disco, 24h al reiniciar (50 turnos) | Transcript completo por chat. Incluye mensajes automaticos (cron, notificaciones). Sobrevive reinicios del daemon |
+| **2. SessionStore (JSONL)** | `session_store.rs` | 72h en disco, 24h al reiniciar (50 turnos) | Transcript completo por chat. Incluye mensajes automaticos (cron, notificaciones). Sobrevive reinicios del daemon. **No cifrado** — texto plano en JSONL; datos sensibles deben guardarse en el Memory Plane cifrado |
 | **3. Memory Plane (SQLite)** | `memory_plane.rs` | **Permanente** (encriptado AES-GCM-SIV) | Decisiones, eventos, preferencias, resúmenes de conversaciones. Busqueda semantica por embeddings (768 dims) |
 | **4. Knowledge Graph** | `knowledge_graph.rs` + tabla en memory.db | **Permanente** | Relaciones: "Hector trabaja en LifeOS", "suegro tiene dialisis los martes", "prefiere formato bullet" |
 | **5. Procedural Memory** | Tabla `procedural_memory` en memory.db | **Permanente** | Workflows: "para deploy: cargo build → podman push → bootc update". Trigger patterns, veces usado |

@@ -22,7 +22,9 @@ mod inner {
     use crate::memory_plane::MemoryPlaneManager;
     use crate::supervisor::SupervisorNotification;
     use crate::task_queue::TaskQueue;
-    use crate::telegram_tools::{self, ConversationHistory, CronStore, SddStore, ToolContext};
+    use crate::telegram_tools::{
+        self, ConversationHistory, CronStore, RateLimiter, SddStore, ToolContext,
+    };
     use crate::user_model::UserModel;
 
     /// Heartbeat interval — how often Axi proactively checks system health.
@@ -43,12 +45,17 @@ mod inner {
         created_at: std::time::Instant,
     }
 
+    const PAIRING_MAX_FAILED_ATTEMPTS: u32 = 5;
+    const PAIRING_LOCKOUT_SECS: u64 = 300;
+
     #[derive(Clone)]
     struct PairingStore {
         /// Pending codes: code -> PendingPair
         pending: Arc<RwLock<HashMap<u32, PendingPair>>>,
         /// Dynamically added chat IDs (persisted to disk on changes)
         dynamic_ids: Arc<RwLock<Vec<i64>>>,
+        /// Failed pairing attempts: chat_id -> (count, first_attempt_at)
+        failed_attempts: Arc<RwLock<HashMap<i64, (u32, std::time::Instant)>>>,
     }
 
     impl PairingStore {
@@ -57,6 +64,7 @@ mod inner {
             Self {
                 pending: Arc::new(RwLock::new(HashMap::new())),
                 dynamic_ids: Arc::new(RwLock::new(dynamic)),
+                failed_attempts: Arc::new(RwLock::new(HashMap::new())),
             }
         }
 
@@ -74,14 +82,43 @@ mod inner {
             code
         }
 
+        /// Check if a chat_id is locked out from pairing attempts.
+        async fn is_pairing_locked_out(&self, chat_id: i64) -> bool {
+            let attempts = self.failed_attempts.read().await;
+            if let Some((count, first_at)) = attempts.get(&chat_id) {
+                if first_at.elapsed().as_secs() > PAIRING_LOCKOUT_SECS {
+                    return false; // lockout expired
+                }
+                *count >= PAIRING_MAX_FAILED_ATTEMPTS
+            } else {
+                false
+            }
+        }
+
         /// Try to redeem a pairing code. Returns the inviter's chat_id on success.
-        async fn try_redeem(&self, code_text: &str) -> Option<i64> {
+        async fn try_redeem(&self, code_text: &str, requester: i64) -> Option<i64> {
+            if self.is_pairing_locked_out(requester).await {
+                log::warn!("Pairing attempt from locked-out chat_id {}", requester);
+                return None;
+            }
             let code: u32 = code_text.trim().parse().ok()?;
             let mut pending = self.pending.write().await;
             if let Some(pair) = pending.remove(&code) {
                 if pair.created_at.elapsed().as_secs() <= PAIRING_TTL_SECS {
+                    // Success — clear failed attempts
+                    self.failed_attempts.write().await.remove(&requester);
                     return Some(pair.created_by);
                 }
+            }
+            // Failed — record attempt
+            let mut attempts = self.failed_attempts.write().await;
+            let entry = attempts
+                .entry(requester)
+                .or_insert((0, std::time::Instant::now()));
+            if entry.1.elapsed().as_secs() > PAIRING_LOCKOUT_SECS {
+                *entry = (1, std::time::Instant::now()); // reset window
+            } else {
+                entry.0 += 1;
             }
             None
         }
@@ -322,6 +359,7 @@ mod inner {
         let history = Arc::new(ConversationHistory::new());
         let cron_store = Arc::new(CronStore::new());
         let sdd_store = Arc::new(SddStore::new());
+        let rate_limiter = RateLimiter::new();
 
         let heartbeat_tool_ctx = ToolContext {
             router: router.clone(),
@@ -335,6 +373,7 @@ mod inner {
             meeting_archive: meeting_archive.clone(),
             meeting_assistant: meeting_assistant.clone(),
             calendar: calendar.clone(),
+            rate_limiter: rate_limiter.clone(),
         };
 
         // Heartbeat — configurable HEARTBEAT.md evaluation loop
@@ -407,38 +446,11 @@ mod inner {
             }
         });
 
-        // Memory consolidation — runs every 6 hours (nocturnal consolidation)
-        let consolidation_memory = memory.clone();
-        tokio::spawn(async move {
-            // Wait 5 minutes before first consolidation
-            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
-
-                if let Some(ref mem) = consolidation_memory {
-                    let m = mem.read().await;
-                    // Standard consolidation: boost/degrade/forget
-                    match m.consolidate().await {
-                        Ok((boosted, degraded, deleted)) => {
-                            info!(
-                                "[consolidation] Memory maintenance: boosted={}, degraded={}, deleted={}",
-                                boosted, degraded, deleted
-                            );
-                        }
-                        Err(e) => {
-                            warn!("[consolidation] Failed: {}", e);
-                        }
-                    }
-                    // Cross-memory consolidation: auto-generate graph links from recent memories
-                    match m.cross_link_recent(&None).await {
-                        Ok(links) if links > 0 => {
-                            info!("[consolidation] Cross-linked {} new relationships", links);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        });
+        // Memory consolidation is handled centrally by the housekeeping
+        // loop in main.rs (filter_garbage → boost_frequent → apply_decay →
+        // dedup_similar → cross_link_recent → cluster_summary). Removed the
+        // duplicate loop that was here to avoid conflicting maintenance
+        // (hard-delete vs archive, divergent decay curves).
 
         let tool_ctx = ToolContext {
             router,
@@ -452,6 +464,7 @@ mod inner {
             meeting_archive,
             meeting_assistant,
             calendar,
+            rate_limiter,
         };
 
         let worker_pool = Arc::new(if let Some(ref bus) = event_bus {
@@ -753,7 +766,7 @@ mod inner {
             if let Some(text) = msg.text() {
                 let trimmed = text.trim();
                 if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                    if let Some(inviter) = ctx.pairing.try_redeem(trimmed).await {
+                    if let Some(inviter) = ctx.pairing.try_redeem(trimmed, chat_id.0).await {
                         ctx.pairing.add_dynamic_id(chat_id.0).await;
                         bot.send_message(chat_id, "Vinculacion exitosa! Ya puedes hablar conmigo.")
                             .await?;
@@ -1818,6 +1831,7 @@ mod inner {
                             args,
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(chat_id, result.output).await?;
@@ -1932,6 +1946,7 @@ mod inner {
                             args: serde_json::json!({}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     send_chunked(&bot, chat_id, &result.output).await?;
@@ -1954,6 +1969,7 @@ mod inner {
                             args: serde_json::json!({"command": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%+"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -1973,6 +1989,7 @@ mod inner {
                             args: serde_json::json!({"command": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%-"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -1992,6 +2009,7 @@ mod inner {
                             args: serde_json::json!({"command": "brightnessctl set +10%"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -2011,6 +2029,7 @@ mod inner {
                             args: serde_json::json!({"command": "brightnessctl set 10%-"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -2031,6 +2050,7 @@ mod inner {
                             args: serde_json::json!({}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     // The output contains the file path
@@ -2052,6 +2072,7 @@ mod inner {
                             args: serde_json::json!({"command": "loginctl lock-session"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -2072,6 +2093,7 @@ mod inner {
                             args: serde_json::json!({"service": "nftables", "action": "status"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     send_chunked(&bot, chat_id, &result.output).await?;

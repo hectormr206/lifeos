@@ -1874,8 +1874,15 @@ impl MemoryPlaneManager {
         limit: usize,
         scope: Option<&str>,
     ) -> Result<Vec<MemorySearchResult>> {
-        self.search_entries_with_mode(query, limit, scope, MemorySearchMode::Hybrid)
-            .await
+        self.search_entries_inner(
+            query,
+            limit,
+            scope,
+            None,
+            MemorySearchMode::Hybrid,
+            ArchivedFilter::ExcludeArchived,
+        )
+        .await
     }
 
     /// BI.1: search the archived tier.
@@ -1896,6 +1903,7 @@ impl MemoryPlaneManager {
             query,
             limit,
             scope,
+            None,
             MemorySearchMode::Hybrid,
             ArchivedFilter::OnlyArchived,
         )
@@ -1909,8 +1917,34 @@ impl MemoryPlaneManager {
         scope: Option<&str>,
         mode: MemorySearchMode,
     ) -> Result<Vec<MemorySearchResult>> {
-        self.search_entries_inner(query, limit, scope, mode, ArchivedFilter::ExcludeArchived)
-            .await
+        self.search_entries_inner(
+            query,
+            limit,
+            scope,
+            None,
+            mode,
+            ArchivedFilter::ExcludeArchived,
+        )
+        .await
+    }
+
+    /// Search with an explicit tag filter.  The tag is matched against the
+    /// JSON array stored in `memory_entries.tags` (e.g. `["meeting"]`).
+    pub async fn search_entries_with_tag(
+        &self,
+        query: &str,
+        limit: usize,
+        tag: &str,
+    ) -> Result<Vec<MemorySearchResult>> {
+        self.search_entries_inner(
+            query,
+            limit,
+            None,
+            Some(tag),
+            MemorySearchMode::Hybrid,
+            ArchivedFilter::ExcludeArchived,
+        )
+        .await
     }
 
     /// Inner implementation; the public wrappers fix the
@@ -1921,6 +1955,7 @@ impl MemoryPlaneManager {
         query: &str,
         limit: usize,
         scope: Option<&str>,
+        tag: Option<&str>,
         mode: MemorySearchMode,
         archived_filter: ArchivedFilter,
     ) -> Result<Vec<MemorySearchResult>> {
@@ -1929,6 +1964,9 @@ impl MemoryPlaneManager {
         let scope = scope
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty());
+        let tag = tag
+            .map(|t| t.trim().to_lowercase())
+            .filter(|t| !t.is_empty());
         let limit = limit.clamp(1, 100);
 
         let db_path = self.db_path.clone();
@@ -1969,6 +2007,11 @@ impl MemoryPlaneManager {
                     if let Some(ref s) = scope {
                         where_parts.push("me.scope = ?".to_string());
                         params_vec.push(Box::new(s.clone()));
+                    }
+                    if let Some(ref t) = tag {
+                        // Tags are stored as a JSON array; match `"tagvalue"` inside.
+                        where_parts.push("me.tags LIKE ?".to_string());
+                        params_vec.push(Box::new(format!("%\"{}\"%" , t)));
                     }
 
                     sql.push_str(" WHERE ");
@@ -2021,14 +2064,18 @@ impl MemoryPlaneManager {
                                    FROM memory_entries"
                         .to_string();
                     let archived_clause = archived_filter.sql_clause("");
-                    let mut conditions: Vec<&str> =
-                        vec!["ciphertext_b64 LIKE ?", archived_clause.as_str()];
+                    let mut conditions: Vec<String> =
+                        vec!["ciphertext_b64 LIKE ?".into(), archived_clause];
                     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> =
                         vec![Box::new(format!("%{}%", query_lc))];
 
                     if let Some(ref s) = scope {
-                        conditions.push("scope = ?");
+                        conditions.push("scope = ?".into());
                         params_vec.push(Box::new(s.clone()));
+                    }
+                    if let Some(ref t) = tag {
+                        conditions.push("tags LIKE ?".into());
+                        params_vec.push(Box::new(format!("%\"{}\"%" , t)));
                     }
 
                     sql.push_str(" WHERE ");
@@ -2095,6 +2142,10 @@ impl MemoryPlaneManager {
                     if let Some(ref s) = scope {
                         where_parts.push("me.scope = ?".to_string());
                         params_vec.push(Box::new(s.clone()));
+                    }
+                    if let Some(ref t) = tag {
+                        where_parts.push("me.tags LIKE ?".to_string());
+                        params_vec.push(Box::new(format!("%\"{}\"%" , t)));
                     }
 
                     sql.push_str(" WHERE ");
@@ -2807,6 +2858,27 @@ impl MemoryPlaneManager {
 
     /// Nocturnal consolidation: boost frequently accessed, degrade never-accessed.
     /// Returns (boosted_count, degraded_count, deleted_count).
+    /// Boost entries accessed frequently (5+ times) by increasing their
+    /// importance.  Called from the central housekeeping loop in main.rs
+    /// before `apply_decay` so the boost is applied before the decay curve.
+    pub async fn boost_frequent_access(&self) -> Result<usize> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let boosted = db.execute(
+                "UPDATE memory_entries SET importance = MIN(importance + 5, 100)
+                 WHERE access_count >= 5 AND importance < 100
+                   AND (permanent IS NULL OR permanent = 0)",
+                [],
+            )?;
+            Ok::<_, anyhow::Error>(boosted)
+        })
+        .await?
+    }
+
+    /// Legacy consolidation — kept for test compatibility.
+    /// The central housekeeping loop now calls `boost_frequent_access` +
+    /// `apply_decay` instead.
     pub async fn consolidate(&self) -> Result<(usize, usize, usize)> {
         let db_path = self.db_path.clone();
         tokio::task::spawn_blocking(move || {
@@ -3763,6 +3835,7 @@ impl MemoryPlaneManager {
                 sensitivity: None,
                 preferred_provider: None,
                 max_tokens: Some(400),
+                task_type: None,
             };
 
             let summary_text = match router.chat(&req).await {

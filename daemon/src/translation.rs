@@ -71,6 +71,7 @@ pub async fn detect_language(text: &str, router: Option<&LlmRouter>) -> Result<S
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(4),
+            task_type: None,
         };
         match router.chat(&req).await {
             Ok(resp) => {
@@ -283,6 +284,7 @@ impl TranslationEngine {
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(2048),
+            task_type: None,
         };
         let resp = router
             .chat(&req)

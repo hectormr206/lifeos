@@ -18,6 +18,7 @@ use tokio::signal;
 use tokio::sync::RwLock;
 
 mod accessibility;
+mod agent_loop;
 mod agent_roles;
 mod agent_runtime;
 mod ai;
@@ -443,6 +444,7 @@ fn ensure_graphical_environment() {
 
 /// Daemon state shared across tasks
 pub struct DaemonState {
+    pub data_dir: PathBuf,
     pub config: DaemonConfig,
     pub system_monitor: Arc<RwLock<SystemMonitor>>,
     pub health_monitor: Arc<HealthMonitor>,
@@ -647,11 +649,17 @@ async fn main() -> anyhow::Result<()> {
         task_queue::TaskQueue::new(std::path::Path::new("/tmp/lifeos"))
             .expect("fallback task queue must work")
     }));
+    let shared_ai_manager = Arc::new(ai::AiManager::new());
     let shared_memory = Arc::new(RwLock::new(
-        MemoryPlaneManager::new(data_dir.clone()).unwrap_or_else(|e| {
-            warn!("Failed to initialize MemoryPlaneManager: {}", e);
-            MemoryPlaneManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        }),
+        MemoryPlaneManager::with_ai_manager(data_dir.clone(), Some(shared_ai_manager.clone()))
+            .unwrap_or_else(|e| {
+                warn!("Failed to initialize MemoryPlaneManager: {}", e);
+                MemoryPlaneManager::with_ai_manager(
+                    PathBuf::from("/tmp/lifeos"),
+                    Some(shared_ai_manager.clone()),
+                )
+                .unwrap()
+            }),
     ));
 
     // Initialize session store (durable conversation sessions)
@@ -662,6 +670,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize state
     let state = Arc::new(DaemonState {
+        data_dir: data_dir.clone(),
         config: config.clone(),
         system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
         health_monitor: Arc::new(HealthMonitor::new()),
@@ -674,12 +683,14 @@ async fn main() -> anyhow::Result<()> {
         screen_capture: Arc::new(RwLock::new(ScreenCapture::new(
             data_dir.join("screenshots"),
         ))),
-        sensory_pipeline_manager: Arc::new(RwLock::new(
-            SensoryPipelineManager::new(data_dir.clone()).unwrap_or_else(|e| {
+        sensory_pipeline_manager: Arc::new(RwLock::new({
+            let mut spm = SensoryPipelineManager::new(data_dir.clone()).unwrap_or_else(|e| {
                 warn!("Failed to initialize SensoryPipelineManager: {}", e);
                 SensoryPipelineManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-            }),
-        )),
+            });
+            spm.set_privacy_filter(shared_privacy.clone());
+            spm
+        })),
         experience_manager: Arc::new(RwLock::new(ExperienceManager::new(data_dir.clone()))),
         update_scheduler: Arc::new(RwLock::new(UpdateScheduler::new(data_dir.clone()))),
         follow_along_manager: Arc::new(RwLock::new(
@@ -940,44 +951,47 @@ async fn main() -> anyhow::Result<()> {
     {
         let tray_state = state.clone();
         tokio::spawn(async move {
-            // Wait for display server to be ready (retry up to 30s)
-            let mut display_ready = false;
-            for attempt in 0..15 {
-                if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
-                    display_ready = true;
-                    break;
-                }
-                // Try to discover Wayland socket dynamically
-                if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-                    if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
-                        for entry in entries.flatten() {
-                            if let Ok(name) = entry.file_name().into_string() {
-                                if name.starts_with("wayland-") && !name.ends_with(".lock") {
-                                    unsafe { std::env::set_var("WAYLAND_DISPLAY", &name) };
-                                    info!("Discovered Wayland socket: {}", name);
-                                    display_ready = true;
-                                    break;
+            // Keep waiting until the graphical session is actually ready.
+            // On some boots lifeosd starts before COSMIC exports DISPLAY/
+            // WAYLAND_DISPLAY; disabling the tray after 30s leaves Axi without
+            // an icon for the entire session.
+            loop {
+                let mut display_ready = false;
+                let mut attempts = 0usize;
+                while !display_ready {
+                    if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok()
+                    {
+                        display_ready = true;
+                        break;
+                    }
+                    // Try to discover Wayland socket dynamically
+                    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+                        if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
+                            for entry in entries.flatten() {
+                                if let Ok(name) = entry.file_name().into_string() {
+                                    if name.starts_with("wayland-") && !name.ends_with(".lock") {
+                                        unsafe { std::env::set_var("WAYLAND_DISPLAY", &name) };
+                                        info!("Discovered Wayland socket: {}", name);
+                                        display_ready = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
+                    if display_ready {
+                        break;
+                    }
+                    if attempts == 0 {
+                        info!("[tray] Waiting for display server...");
+                    } else if attempts % 15 == 0 {
+                        warn!("[tray] Display still unavailable, retrying tray startup...");
+                    }
+                    attempts += 1;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
-                if display_ready {
-                    break;
-                }
-                if attempt == 0 {
-                    info!("[tray] Waiting for display server...");
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            }
 
-            if !display_ready {
-                warn!("[tray] No display found after 30s, tray icon disabled");
-                return;
-            }
-
-            // Spawn tray with health monitoring — re-spawn on failure
-            loop {
+                // Spawn tray with health monitoring — re-spawn on failure
                 info!("[tray] Spawning Axi system tray icon");
                 let tray_token = tray_state.bootstrap_token.clone().unwrap_or_default();
                 let tray_api_base = format!(
@@ -1144,20 +1158,64 @@ async fn main() -> anyhow::Result<()> {
 
     // Autonomous agent — check user presence every 30s, activate when screen locked
     let autonomous_event_bus = state.event_bus.clone();
+    let autonomous_tq = state.task_queue.clone();
+    let autonomous_router = state.llm_router.clone();
     let _autonomous_handle = tokio::spawn(async move {
         let mut agent = autonomous_agent::AutonomousAgent::new();
+        let mut loop_state = agent_loop::AgentLoopState::new();
+        let agent_loop_enabled = agent_loop::is_enabled();
+        let mut was_working = false;
         let mut interval = tokio::time::interval(Duration::from_secs(30));
+        if agent_loop_enabled {
+            info!("[agent_loop] Agent loop enabled (LIFEOS_AGENT_LOOP=true)");
+        }
         loop {
             interval.tick().await;
             if safe_mode::is_safe_mode() {
                 debug!("[safe_mode] Skipping autonomous agent tick — safe mode active");
                 continue;
             }
-            if agent.check_presence().await.is_ok() && agent.should_work() {
+            let presence_ok = agent.check_presence().await.is_ok();
+            let should_work = presence_ok && agent.should_work();
+
+            // Transition: was working → no longer working = reset session
+            if was_working && !should_work {
+                info!(
+                    "[agent_loop] User returned — session ended ({} tasks enqueued)",
+                    loop_state.tasks_enqueued()
+                );
+                loop_state.reset();
+            }
+            was_working = should_work;
+
+            if should_work {
                 let _ = autonomous_event_bus.send(events::DaemonEvent::Notification {
                     priority: "info".into(),
                     message: "Axi en modo autonomo — trabajando mientras estas ausente.".into(),
                 });
+
+                // Agent loop: generate and enqueue proactive tasks
+                if agent_loop_enabled {
+                    match agent_loop::try_generate_task(
+                        &mut loop_state,
+                        &autonomous_tq,
+                        &autonomous_router,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            info!("[agent_loop] Task enqueued successfully");
+                        }
+                        Ok(false) => {
+                            debug!(
+                                "[agent_loop] No task generated (limits/cooldown/nothing to do)"
+                            );
+                        }
+                        Err(e) => {
+                            warn!("[agent_loop] Task generation failed: {}", e);
+                        }
+                    }
+                }
             }
         }
     });
@@ -1386,6 +1444,7 @@ async fn main() -> anyhow::Result<()> {
     let housekeeping_data_dir = data_dir.clone();
     let housekeeping_memory = state.memory_plane_manager.clone();
     let housekeeping_router = state.llm_router.clone();
+    let housekeeping_ai = shared_ai_manager.clone();
     let _housekeeping_handle = tokio::spawn(async move {
         // Wait 5 minutes after boot before first housekeeping run
         tokio::time::sleep(Duration::from_secs(300)).await;
@@ -1423,6 +1482,17 @@ async fn main() -> anyhow::Result<()> {
                 let garbage = mem.filter_garbage().await.unwrap_or(0);
                 if garbage > 0 {
                     info!("memory_plane: filter_garbage removed {} entries", garbage);
+                }
+
+                match mem.boost_frequent_access().await {
+                    Ok(boosted) if boosted > 0 => {
+                        info!(
+                            "memory_plane: boosted {} frequently-accessed entries",
+                            boosted
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!("memory_plane: boost_frequent_access failed: {}", e),
                 }
 
                 match mem.apply_decay().await {
@@ -1467,6 +1537,18 @@ async fn main() -> anyhow::Result<()> {
                         Err(e) => {
                             warn!("memory_plane: summarize_clusters_with_router failed: {}", e)
                         }
+                    }
+
+                    // Cross-link recent memories via LLM-extracted triples.
+                    match mem.cross_link_recent(&Some(housekeeping_ai.clone())).await {
+                        Ok(links) if links > 0 => {
+                            info!(
+                                "memory_plane: cross_link_recent generated {} new links",
+                                links
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => warn!("memory_plane: cross_link_recent failed: {}", e),
                     }
                 }
             }
@@ -1930,6 +2012,7 @@ async fn main() -> anyhow::Result<()> {
 /// Start REST API server
 async fn start_api_server(state: Arc<DaemonState>) {
     let api_state = api::ApiState {
+        data_dir: state.data_dir.clone(),
         system_monitor: state.system_monitor.clone(),
         health_monitor: state.health_monitor.clone(),
         ai_manager: state.ai_manager.clone(),

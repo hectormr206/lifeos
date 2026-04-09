@@ -1101,6 +1101,12 @@ async fn benchmark_runtime_profile(profile: &mut RuntimeProfile) -> Result<bool>
             profile.measurements = measurements;
             profile.updated_at = Utc::now();
             apply_runtime_env(&profile.active_settings())?;
+            if profile.benchmark_completed {
+                info!(
+                    "[ai_runtime] restoring active runtime profile after microbenchmark candidate restarts"
+                );
+                restart_llama_server_sync()?;
+            }
             Ok(profile.benchmark_completed)
         }
         Err(error) => {

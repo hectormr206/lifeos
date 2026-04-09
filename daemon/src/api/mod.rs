@@ -152,6 +152,7 @@ struct OverlayModelFitAssessment {
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct ApiState {
+    pub data_dir: PathBuf,
     pub system_monitor: Arc<RwLock<SystemMonitor>>,
     pub health_monitor: Arc<HealthMonitor>,
     pub ai_manager: Arc<RwLock<AiManager>>,
@@ -279,6 +280,8 @@ impl Default for ApiConfig {
             ResourceUsage,
             HealthReport,
             AiStatus,
+            AiRuntimeStatus,
+            AiGameGuardStatus,
             ModelInfo,
             ChatRequest,
             ChatResponse,
@@ -1123,6 +1126,44 @@ pub struct AiStatus {
     pub models_loaded: Vec<String>,
     pub gpu_available: bool,
     pub gpu_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<AiRuntimeStatus>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct AiRuntimeStatus {
+    pub service_state: String,
+    pub service_scope: Option<String>,
+    pub service_pid: Option<u32>,
+    pub active_profile: Option<String>,
+    pub profile_source: Option<String>,
+    pub benchmark_completed: Option<bool>,
+    pub benchmark_pending_reason: Option<String>,
+    pub effective_gpu_layers: Option<i32>,
+    pub gpu_layers_source: Option<String>,
+    pub backend: Option<String>,
+    pub backend_name: Option<String>,
+    pub mode: String,
+    pub mode_confidence: String,
+    pub mode_reason: String,
+    pub gpu_memory_mb: Option<u64>,
+    pub rss_memory_mb: Option<u64>,
+    pub preflight_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub game_guard: Option<AiGameGuardStatus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema, Clone)]
+pub struct AiGameGuardStatus {
+    pub supported: bool,
+    pub guard_enabled: bool,
+    pub assistant_enabled: bool,
+    pub game_detected: bool,
+    pub game_name: Option<String>,
+    pub game_pid: Option<u32>,
+    pub llm_mode: String,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -1974,6 +2015,7 @@ async fn get_ai_status(
     State(state): State<ApiState>,
 ) -> Result<Json<AiStatus>, (StatusCode, Json<ApiError>)> {
     let ai_manager = state.ai_manager.read().await;
+    let runtime = collect_ai_runtime_status(&state).await;
 
     let status = AiStatus {
         running: ai_manager.is_running().await,
@@ -1982,9 +2024,407 @@ async fn get_ai_status(
         models_loaded: ai_manager.loaded_models().await,
         gpu_available: ai_manager.gpu_available().await,
         gpu_name: ai_manager.gpu_name().await,
+        runtime: Some(runtime),
     };
 
     Ok(Json(status))
+}
+
+#[derive(Debug, Clone)]
+struct LlamaServiceStatusSnapshot {
+    state: String,
+    scope: Option<String>,
+    pid: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeModeSummary {
+    mode: String,
+    confidence: String,
+    reason: String,
+    notes: Vec<String>,
+}
+
+async fn collect_ai_runtime_status(state: &ApiState) -> AiRuntimeStatus {
+    let service = detect_llama_service_status().await;
+    let profile = load_runtime_profile_snapshot(&state.data_dir);
+    let game_guard = read_game_guard_status(state).await;
+    let preflight_reason = read_llama_preflight_reason();
+
+    let llama_env_path = crate::ai_runtime_profile::llama_env_path();
+    let llama_env_path_str = llama_env_path.to_string_lossy().to_string();
+    let effective_gpu_layers = crate::game_guard::effective_gpu_layers(&llama_env_path_str);
+    let gpu_layers_source = detect_gpu_layers_source();
+    let active_profile = determine_active_profile_name(
+        profile.as_ref(),
+        effective_gpu_layers,
+        gpu_layers_source.as_deref(),
+    );
+    let gpu_memory_mb = query_llama_gpu_memory_mb(service.pid).await;
+    let rss_memory_mb = service.pid.and_then(read_process_rss_mb);
+    let mode = summarize_runtime_mode(
+        &service,
+        effective_gpu_layers,
+        gpu_layers_source.as_deref(),
+        gpu_memory_mb,
+        preflight_reason.as_deref(),
+        game_guard.as_ref(),
+    );
+
+    AiRuntimeStatus {
+        service_state: service.state,
+        service_scope: service.scope,
+        service_pid: service.pid,
+        active_profile,
+        profile_source: profile.as_ref().map(|snapshot| snapshot.source.clone()),
+        benchmark_completed: profile
+            .as_ref()
+            .map(|snapshot| snapshot.benchmark_completed),
+        benchmark_pending_reason: benchmark_pending_reason(
+            profile.as_ref(),
+            preflight_reason.as_deref(),
+            game_guard.as_ref(),
+        ),
+        effective_gpu_layers,
+        gpu_layers_source,
+        backend: profile
+            .as_ref()
+            .and_then(|snapshot| snapshot.fingerprint.accelerator_backend.clone()),
+        backend_name: profile
+            .as_ref()
+            .and_then(|snapshot| snapshot.fingerprint.accelerator_name.clone()),
+        mode: mode.mode,
+        mode_confidence: mode.confidence,
+        mode_reason: mode.reason,
+        gpu_memory_mb,
+        rss_memory_mb,
+        preflight_reason,
+        game_guard,
+        notes: mode.notes,
+    }
+}
+
+fn load_runtime_profile_snapshot(
+    data_dir: &std::path::Path,
+) -> Option<crate::ai_runtime_profile::RuntimeProfile> {
+    let path = crate::ai_runtime_profile::runtime_profile_path(data_dir);
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+async fn read_game_guard_status(state: &ApiState) -> Option<AiGameGuardStatus> {
+    let guard = state.game_guard.as_ref()?.clone();
+    let state = guard.read_owned().await.state().await;
+    Some(AiGameGuardStatus {
+        supported: state.supported,
+        guard_enabled: state.guard_enabled,
+        assistant_enabled: state.assistant_enabled,
+        game_detected: state.game_detected,
+        game_name: state.game_name,
+        game_pid: state.game_pid,
+        llm_mode: match state.llm_mode {
+            crate::game_guard::LlmMode::Gpu => "gpu".to_string(),
+            crate::game_guard::LlmMode::Cpu => "cpu".to_string(),
+        },
+    })
+}
+
+async fn detect_llama_service_status() -> LlamaServiceStatusSnapshot {
+    if let Some(pid) = systemctl_main_pid(false).await {
+        return LlamaServiceStatusSnapshot {
+            state: "running".to_string(),
+            scope: Some("system".to_string()),
+            pid: Some(pid),
+        };
+    }
+
+    if let Some(pid) = systemctl_main_pid(true).await {
+        return LlamaServiceStatusSnapshot {
+            state: "running".to_string(),
+            scope: Some("user".to_string()),
+            pid: Some(pid),
+        };
+    }
+
+    let pid = detect_llama_pid_via_pgrep().await;
+    LlamaServiceStatusSnapshot {
+        state: if pid.is_some() {
+            "running".to_string()
+        } else {
+            "stopped".to_string()
+        },
+        scope: None,
+        pid,
+    }
+}
+
+async fn systemctl_main_pid(user_scope: bool) -> Option<u32> {
+    let mut command = Command::new("systemctl");
+    if user_scope {
+        command.arg("--user");
+    }
+    let output = command
+        .args(["show", "llama-server.service", "-p", "MainPID", "--value"])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|pid| *pid > 0)
+}
+
+async fn detect_llama_pid_via_pgrep() -> Option<u32> {
+    let output = Command::new("pgrep")
+        .args(["-x", "llama-server"])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.trim().parse::<u32>().ok())
+}
+
+fn read_process_rss_mb(pid: u32) -> Option<u64> {
+    let path = PathBuf::from("/proc").join(pid.to_string()).join("status");
+    let raw = std::fs::read_to_string(path).ok()?;
+    raw.lines().find_map(|line| {
+        let value = line.strip_prefix("VmRSS:")?;
+        value
+            .split_whitespace()
+            .next()
+            .and_then(|kb| kb.parse::<u64>().ok())
+            .map(|kb| kb / 1024)
+    })
+}
+
+async fn query_llama_gpu_memory_mb(service_pid: Option<u32>) -> Option<u64> {
+    let output = Command::new("nvidia-smi")
+        .args([
+            "--query-compute-apps=pid,process_name,used_gpu_memory",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let target_pid = service_pid.unwrap_or_default();
+    let mut total = 0_u64;
+    let mut matched = false;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let parts = line.split(',').map(str::trim).collect::<Vec<_>>();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        let pid_matches = parts[0]
+            .parse::<u32>()
+            .ok()
+            .is_some_and(|pid| pid == target_pid);
+        let name_matches = parts[1].contains("llama-server");
+        if !pid_matches && !name_matches {
+            continue;
+        }
+
+        if let Ok(memory_mb) = parts[2].parse::<u64>() {
+            total += memory_mb;
+            matched = true;
+        }
+    }
+
+    matched.then_some(total)
+}
+
+fn read_gpu_layers_from_env_file(path: &std::path::Path) -> Option<i32> {
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_env_var(&content, "LIFEOS_AI_GPU_LAYERS")?
+        .parse::<i32>()
+        .ok()
+}
+
+fn detect_gpu_layers_source() -> Option<String> {
+    let game_guard_path = crate::ai_runtime_profile::game_guard_override_env_path();
+    if read_gpu_layers_from_env_file(&game_guard_path).is_some() {
+        return Some("game_guard_override".to_string());
+    }
+
+    let runtime_path = crate::ai_runtime_profile::runtime_override_env_path();
+    if read_gpu_layers_from_env_file(&runtime_path).is_some() {
+        return Some("runtime_override".to_string());
+    }
+
+    let llama_env_path = crate::ai_runtime_profile::llama_env_path();
+    if read_gpu_layers_from_env_file(&llama_env_path).is_some() {
+        return Some("base_env".to_string());
+    }
+
+    None
+}
+
+fn determine_active_profile_name(
+    profile: Option<&crate::ai_runtime_profile::RuntimeProfile>,
+    effective_gpu_layers: Option<i32>,
+    gpu_layers_source: Option<&str>,
+) -> Option<String> {
+    if gpu_layers_source == Some("game_guard_override") {
+        return Some("game_guard_cpu_fallback".to_string());
+    }
+
+    let profile = profile?;
+    if profile
+        .profiles
+        .normal_gpu
+        .as_ref()
+        .is_some_and(|settings| Some(settings.gpu_layers) == effective_gpu_layers)
+    {
+        return Some("normal_gpu".to_string());
+    }
+    if Some(profile.profiles.cpu_ram.gpu_layers) == effective_gpu_layers {
+        return Some("cpu_ram".to_string());
+    }
+    if profile
+        .profiles
+        .game_guard_cpu_fallback
+        .as_ref()
+        .is_some_and(|settings| Some(settings.gpu_layers) == effective_gpu_layers)
+    {
+        return Some("game_guard_cpu_fallback".to_string());
+    }
+    None
+}
+
+fn benchmark_pending_reason(
+    profile: Option<&crate::ai_runtime_profile::RuntimeProfile>,
+    preflight_reason: Option<&str>,
+    game_guard: Option<&AiGameGuardStatus>,
+) -> Option<String> {
+    let profile = profile?;
+    if profile.benchmark_completed {
+        return None;
+    }
+    if let Some(error) = profile.last_benchmark_error.as_ref() {
+        return Some(error.clone());
+    }
+    if let Some(reason) = preflight_reason {
+        return Some(format!("preflight: {reason}"));
+    }
+    if game_guard.as_ref().is_some_and(|guard| guard.game_detected) {
+        return Some("benchmark postergado porque Game Guard detecto un juego activo".to_string());
+    }
+    Some("benchmark pendiente o aun sin muestras validas".to_string())
+}
+
+fn summarize_runtime_mode(
+    service: &LlamaServiceStatusSnapshot,
+    effective_gpu_layers: Option<i32>,
+    gpu_layers_source: Option<&str>,
+    gpu_memory_mb: Option<u64>,
+    preflight_reason: Option<&str>,
+    game_guard: Option<&AiGameGuardStatus>,
+) -> RuntimeModeSummary {
+    if service.state != "running" {
+        let reason = preflight_reason.map_or_else(
+            || "llama-server no esta corriendo".to_string(),
+            |reason| format!("llama-server no esta corriendo; preflight reporto: {reason}"),
+        );
+        return RuntimeModeSummary {
+            mode: "unknown".to_string(),
+            confidence: "unknown".to_string(),
+            reason,
+            notes: Vec::new(),
+        };
+    }
+
+    if let Some(memory_mb) = gpu_memory_mb.filter(|memory_mb| *memory_mb > 0) {
+        return RuntimeModeSummary {
+            mode: "gpu".to_string(),
+            confidence: "confirmed".to_string(),
+            reason: format!("nvidia-smi reporta {memory_mb} MiB usados por llama-server en la GPU"),
+            notes: Vec::new(),
+        };
+    }
+
+    if effective_gpu_layers == Some(0) {
+        let reason = if let Some(guard) = game_guard.filter(|guard| guard.game_detected) {
+            format!(
+                "Game Guard activo; perfil CPU/RAM aplicado por juego detectado{}",
+                guard
+                    .game_name
+                    .as_deref()
+                    .map(|name| format!(" ({name})"))
+                    .unwrap_or_default()
+            )
+        } else {
+            format!(
+                "LIFEOS_AI_GPU_LAYERS efectivo es 0{}",
+                gpu_layers_source
+                    .map(|source| format!(" via {source}"))
+                    .unwrap_or_default()
+            )
+        };
+        return RuntimeModeSummary {
+            mode: "cpu".to_string(),
+            confidence: "inferred".to_string(),
+            reason,
+            notes: Vec::new(),
+        };
+    }
+
+    if let Some(gpu_layers) = effective_gpu_layers {
+        return RuntimeModeSummary {
+            mode: "gpu".to_string(),
+            confidence: "inferred".to_string(),
+            reason: format!(
+                "LIFEOS_AI_GPU_LAYERS efectivo es {gpu_layers}{}",
+                gpu_layers_source
+                    .map(|source| format!(" via {source}"))
+                    .unwrap_or_default()
+            ),
+            notes: vec![
+                "Sin telemetria directa de residency en GPU; el modo se infiere desde la configuracion efectiva cuando nvidia-smi no reporta memoria de llama-server.".to_string(),
+            ],
+        };
+    }
+
+    RuntimeModeSummary {
+        mode: "unknown".to_string(),
+        confidence: "unknown".to_string(),
+        reason: "No se pudo leer LIFEOS_AI_GPU_LAYERS efectivo".to_string(),
+        notes: vec![
+            "La certeza GPU/CPU depende de que haya proceso activo y, en NVIDIA, de que nvidia-smi exponga compute apps.".to_string(),
+        ],
+    }
+}
+
+fn read_llama_preflight_reason() -> Option<String> {
+    let mut candidate_paths = vec![PathBuf::from(
+        "/var/lib/lifeos/llama-server-preflight.reason",
+    )];
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        candidate_paths
+            .push(PathBuf::from(runtime_dir).join("lifeos/llama-server-preflight.reason"));
+    }
+    if let Some(home_dir) = std::env::var_os("HOME") {
+        candidate_paths
+            .push(PathBuf::from(home_dir).join(".cache/lifeos/llama-server-preflight.reason"));
+    }
+
+    candidate_paths.into_iter().find_map(|path| {
+        std::fs::read_to_string(path)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    })
 }
 
 /// Get available AI models
@@ -10695,6 +11135,7 @@ async fn post_llm_chat(
         sensitivity,
         preferred_provider,
         max_tokens,
+        task_type: None,
     };
 
     let router = state.llm_router.read().await;
@@ -11198,6 +11639,67 @@ async fn get_memory_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai_runtime_profile::{
+        HardwareFingerprint, RuntimeInputs, RuntimeProfile, RuntimeProfiles, RuntimeSettings,
+    };
+    use chrono::Utc;
+
+    fn sample_runtime_profile() -> RuntimeProfile {
+        RuntimeProfile {
+            schema_version: 1,
+            daemon_version: "test".to_string(),
+            fingerprint: HardwareFingerprint {
+                cpu_model: "test cpu".to_string(),
+                logical_cpus: 8,
+                physical_cpus: 4,
+                total_ram_mb: 32768,
+                accelerator_backend: Some("cuda".to_string()),
+                accelerator_name: Some("RTX Test".to_string()),
+                accelerator_total_mem_mb: Some(12288),
+                dedicated_gpu: true,
+                driver_version: None,
+                llama_server_version: None,
+            },
+            inputs: RuntimeInputs {
+                model: "Qwen3.5-4B-Q4_K_M.gguf".to_string(),
+                alias: "lifeos".to_string(),
+                port: 8082,
+                requested_ctx_size: 16384,
+            },
+            source: "microbenchmark".to_string(),
+            benchmark_completed: true,
+            last_benchmark_at: Some(Utc::now()),
+            last_benchmark_error: None,
+            updated_at: Utc::now(),
+            measurements: Vec::new(),
+            profiles: RuntimeProfiles {
+                cpu_ram: RuntimeSettings {
+                    ctx_size: 8192,
+                    threads: 8,
+                    gpu_layers: 0,
+                    parallel: 1,
+                    batch_size: 256,
+                    ubatch_size: 64,
+                },
+                normal_gpu: Some(RuntimeSettings {
+                    ctx_size: 16384,
+                    threads: 8,
+                    gpu_layers: 99,
+                    parallel: 1,
+                    batch_size: 512,
+                    ubatch_size: 128,
+                }),
+                game_guard_cpu_fallback: Some(RuntimeSettings {
+                    ctx_size: 8192,
+                    threads: 8,
+                    gpu_layers: 0,
+                    parallel: 1,
+                    batch_size: 256,
+                    ubatch_size: 64,
+                }),
+            },
+        }
+    }
 
     #[test]
     fn test_parse_signature_valid_hex() {
@@ -11338,5 +11840,51 @@ mod tests {
         let summary = build_storage_summary(&installed, &pinned, Some("c.gguf"));
         assert_eq!(summary.installed_model_bytes, 600);
         assert_eq!(summary.reclaimable_model_bytes, 100);
+    }
+
+    #[test]
+    fn test_determine_active_profile_name_prefers_matching_gpu_profile() {
+        let profile = sample_runtime_profile();
+        assert_eq!(
+            determine_active_profile_name(Some(&profile), Some(99), Some("runtime_override")),
+            Some("normal_gpu".to_string())
+        );
+    }
+
+    #[test]
+    fn test_determine_active_profile_name_prefers_game_guard_override_source() {
+        let profile = sample_runtime_profile();
+        assert_eq!(
+            determine_active_profile_name(Some(&profile), Some(0), Some("game_guard_override")),
+            Some("game_guard_cpu_fallback".to_string())
+        );
+    }
+
+    #[test]
+    fn test_summarize_runtime_mode_marks_cpu_when_layers_are_zero() {
+        let summary = summarize_runtime_mode(
+            &LlamaServiceStatusSnapshot {
+                state: "running".to_string(),
+                scope: Some("system".to_string()),
+                pid: Some(1234),
+            },
+            Some(0),
+            Some("game_guard_override"),
+            None,
+            None,
+            Some(&AiGameGuardStatus {
+                supported: true,
+                guard_enabled: true,
+                assistant_enabled: true,
+                game_detected: true,
+                game_name: Some("RERequiem".to_string()),
+                game_pid: Some(999),
+                llm_mode: "cpu".to_string(),
+            }),
+        );
+
+        assert_eq!(summary.mode, "cpu");
+        assert_eq!(summary.confidence, "inferred");
+        assert!(summary.reason.contains("Game Guard activo"));
     }
 }

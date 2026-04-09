@@ -914,4 +914,114 @@ mod tests {
         assert_eq!(missing["deleted"], false);
         assert_eq!(missing["fact_id"], "hfact-2");
     }
+
+    #[test]
+    fn today_or_local_uses_provided_date() {
+        let result = today_or_local(Some("2025-06-15"));
+        assert_eq!(result, "2025-06-15");
+    }
+
+    #[test]
+    fn today_or_local_falls_back_when_empty() {
+        let result = today_or_local(Some(""));
+        // Should fall back to today's date (non-empty, YYYY-MM-DD format)
+        assert!(!result.is_empty());
+        assert_eq!(result.len(), 10); // "YYYY-MM-DD"
+        assert!(result.contains('-'));
+    }
+
+    #[test]
+    fn today_or_local_falls_back_when_none() {
+        let result = today_or_local(None);
+        assert!(!result.is_empty());
+        assert_eq!(result.len(), 10);
+        assert!(result.contains('-'));
+    }
+
+    #[test]
+    fn life_summary_window_parse_defaults_to_week() {
+        let w = LifeSummaryWindow::parse("week").unwrap();
+        assert_eq!(w, LifeSummaryWindow::Week);
+    }
+
+    #[test]
+    fn limit_query_default_is_none() {
+        let q = LimitQuery::default();
+        assert!(q.limit.is_none());
+    }
+
+    #[test]
+    fn life_summary_query_defaults() {
+        let q = LifeSummaryQuery::default();
+        assert!(q.window.is_none());
+        assert!(q.today_local.is_none());
+    }
+
+    #[test]
+    fn today_query_default_is_none() {
+        let q = TodayQuery::default();
+        assert!(q.today_local.is_none());
+    }
+
+    #[test]
+    fn stale_relationships_query_defaults() {
+        let q = StaleRelationshipsQuery {
+            min_importance: default_min_importance(),
+            days_threshold: default_days_threshold(),
+        };
+        assert_eq!(q.min_importance, 7);
+        assert_eq!(q.days_threshold, 30);
+    }
+
+    #[test]
+    fn err_to_http_maps_locked_to_forbidden() {
+        let err = anyhow::anyhow!("vault is locked");
+        let (status, body) = err_to_http(err);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body.0.code, 403);
+    }
+
+    #[test]
+    fn err_to_http_maps_wrong_passphrase_to_forbidden() {
+        let err = anyhow::anyhow!("wrong passphrase provided");
+        let (status, _) = err_to_http(err);
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn err_to_http_maps_required_to_bad_request() {
+        let err = anyhow::anyhow!("passphrase is required");
+        let (status, body) = err_to_http(err);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.0.code, 400);
+    }
+
+    #[test]
+    fn err_to_http_maps_invalid_to_bad_request() {
+        let err = anyhow::anyhow!("invalid PIN format");
+        let (status, _) = err_to_http(err);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn err_to_http_maps_already_configured_to_conflict() {
+        let err = anyhow::anyhow!("passphrase already configured");
+        let (status, body) = err_to_http(err);
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body.0.code, 409);
+    }
+
+    #[test]
+    fn err_to_http_maps_generic_to_internal_server_error() {
+        let err = anyhow::anyhow!("something unexpected happened");
+        let (status, body) = err_to_http(err);
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.0.code, 500);
+    }
+
+    #[test]
+    fn vida_plena_routes_builds_without_panic() {
+        // Ensures the router tree is well-formed and has no duplicate routes.
+        let _router = vida_plena_routes();
+    }
 }

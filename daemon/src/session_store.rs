@@ -219,7 +219,9 @@ impl SessionStore {
 
         let meta_path = session_dir.join("metadata.json");
         let content = serde_json::to_string_pretty(&meta)?;
-        tokio::fs::write(&meta_path, content).await?;
+        tokio::fs::write(&meta_path, &content).await?;
+        // Restrict metadata to owner-only (contains session keys and timestamps).
+        Self::set_file_permissions_0o600(&meta_path);
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(key_str, meta.clone());
@@ -249,6 +251,12 @@ impl SessionStore {
 
         let line = serde_json::to_string(&turn)? + "\n";
 
+        // Future: encrypt transcript lines at rest (AES-256-GCM-SIV pattern
+        // from memory_plane.rs). Requires updating load_recent_turns() and
+        // compact_session() to decrypt.
+        // Deferred because it touches the read path in load_recent_turns() and
+        // compact_session(). File permissions (0o600) provide baseline protection.
+
         use tokio::io::AsyncWriteExt;
         let mut file = tokio::fs::OpenOptions::new()
             .create(true)
@@ -256,6 +264,8 @@ impl SessionStore {
             .open(&transcript_path)
             .await?;
         file.write_all(line.as_bytes()).await?;
+        // Restrict transcript to owner-only (contains conversation content).
+        Self::set_file_permissions_0o600(&transcript_path);
 
         // Update metadata
         let key_str = key.as_canonical();
@@ -270,6 +280,7 @@ impl SessionStore {
             let meta_path = session_dir.join("metadata.json");
             if let Ok(content) = serde_json::to_string_pretty(meta) {
                 let _ = tokio::fs::write(&meta_path, content).await;
+                Self::set_file_permissions_0o600(&meta_path);
             }
         }
 
@@ -326,6 +337,7 @@ impl SessionStore {
             let meta_path = session_dir.join("metadata.json");
             if let Ok(content) = serde_json::to_string_pretty(meta) {
                 let _ = tokio::fs::write(&meta_path, content).await;
+                Self::set_file_permissions_0o600(&meta_path);
             }
         }
 
@@ -359,6 +371,18 @@ impl SessionStore {
 
         Ok(count)
     }
+
+    /// Set file permissions to 0o600 (owner read/write only).
+    /// Best-effort: failures are silently ignored since the daemon may
+    /// run on non-Unix or permission-restricted filesystems.
+    #[cfg(unix)]
+    fn set_file_permissions_0o600(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    #[cfg(not(unix))]
+    fn set_file_permissions_0o600(_path: &std::path::Path) {}
 
     /// List all active sessions.
     pub async fn list_sessions(&self) -> Vec<SessionMetadata> {
@@ -405,6 +429,7 @@ impl SessionStore {
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(1024),
+            task_type: None,
         };
 
         let router_guard = router.read().await;
@@ -425,6 +450,7 @@ impl SessionStore {
             content.push('\n');
         }
         tokio::fs::write(&transcript_path, content).await?;
+        Self::set_file_permissions_0o600(&transcript_path);
 
         info!(
             "[session_store] Compacted session {}: {} turns -> {} recent + summary",

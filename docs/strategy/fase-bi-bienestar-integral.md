@@ -16,7 +16,7 @@
 > usuario llevaba con OpenClaw, donde registraba enfermedades, ejercicios,
 > y reflexiones diarias. Esta fase es la versión local-first, cifrada y
 > mucho más amplia de esa idea.
-> **Fecha de auditoría:** 2026-04-07
+> **Fecha de auditoría:** 2026-04-09 (BI.3 nutrition tables corregidas a [x])
 >
 > **Leyenda rápida:**
 > - `[x]` = entregado y auditado en repo
@@ -169,19 +169,19 @@ así narrativa y estructura quedan vinculadas.
 
 ### BI.3 — Nutrición + recetas + listas de compras
 
-- [ ] Side-table `nutrition_log` — cada comida/snack/colación con
+- [x] Side-table `nutrition_log` — cada comida/snack/colación con
   timestamp, descripción libre, fotos opcionales, voz opcional (path al
   audio cifrado), macros estimados (opcional, calculados por LLM cuando
-  hay datos suficientes).
-- [ ] Side-table `nutrition_preferences` — alergias alimentarias,
+  hay datos suficientes). _Entregado: tabla + índices en `memory_plane.rs`._
+- [x] Side-table `nutrition_preferences` — alergias alimentarias,
   intolerancias, dietas (vegetariano, vegano, keto, mediterráneo,
-  diabético, hipertenso), gustos y disgustos del usuario.
-- [ ] Side-table `nutrition_plans` — planes generados por Axi o por un
+  diabético, hipertenso), gustos y disgustos del usuario. _Entregado: tabla + índices en `memory_plane.rs`._
+- [x] Side-table `nutrition_plans` — planes generados por Axi o por un
   nutriólogo (subido como atachment), con duración, objetivos, comidas
-  sugeridas por día.
-- [ ] Side-table `nutrition_recipes` — recetas guardadas (propuestas
+  sugeridas por día. _Entregado: tabla + índices en `memory_plane.rs`._
+- [x] Side-table `nutrition_recipes` — recetas guardadas (propuestas
   por Axi o subidas por el usuario) con ingredientes, pasos, tiempo,
-  porciones, tags.
+  porciones, tags. _Entregado: tabla + índices en `memory_plane.rs`._
 - [ ] Pipeline de **ingest desde foto**: usuario manda foto de su
   comida → vision-capable LLM (Qwen3.5-VL local o BYOK) la describe →
   Axi pregunta por confirmación/correcciones → guarda en

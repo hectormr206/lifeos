@@ -76,6 +76,47 @@ pub mod inner {
         }
     }
 
+    fn open_url_in_browser(url: &str) {
+        let url = url.to_string();
+        std::thread::spawn(move || {
+            // Try multiple browser openers in order.
+            // xdg-open often fails silently in COSMIC DE without
+            // proper portal configuration, so we try direct browsers
+            // as fallback.
+            let openers: &[(&str, &[&str])] = &[
+                ("xdg-open", &[]),
+                ("gio", &["open"]),
+                ("firefox", &["--new-tab"]),
+                ("flatpak", &["run", "org.mozilla.firefox", "--new-tab"]),
+                ("chromium", &["--new-tab"]),
+                ("flatpak", &["run", "org.chromium.Chromium", "--new-tab"]),
+                (
+                    "flatpak",
+                    &[
+                        "run",
+                        "io.github.ungoogled_software.ungoogled_chromium",
+                        "--new-tab",
+                    ],
+                ),
+            ];
+            for (cmd, args) in openers {
+                let mut command = std::process::Command::new(cmd);
+                command.args(*args).arg(&url);
+                if let Ok(mut child) = command.spawn() {
+                    // Give the command a moment to fail fast
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    match child.try_wait() {
+                        Ok(Some(status)) if status.success() => return,
+                        Ok(Some(_)) => continue,
+                        Ok(None) => return,
+                        Err(_) => continue,
+                    }
+                }
+            }
+            log::warn!("[tray] Failed to open dashboard — no browser opener worked");
+        });
+    }
+
     /// Call the daemon API to toggle a sensor. Uses curl to avoid reqwest::blocking dependency.
     fn call_api(api_base: &str, token: &str, endpoint: &str, body: serde_json::Value) {
         let url = format!("{}/api/v1{}", api_base, endpoint);
@@ -114,6 +155,10 @@ pub mod inner {
     }
 
     impl Tray for AxiTray {
+        fn activate(&mut self, _x: i32, _y: i32) {
+            open_url_in_browser(&self.dashboard_url);
+        }
+
         fn id(&self) -> String {
             "lifeos-axi".into()
         }
@@ -194,46 +239,7 @@ pub mod inner {
                 StandardItem {
                     label: "Abrir Dashboard".into(),
                     activate: Box::new(move |_| {
-                        let url = dashboard.clone();
-                        std::thread::spawn(move || {
-                            // Try multiple browser openers in order.
-                            // xdg-open often fails silently in COSMIC DE without
-                            // proper portal configuration, so we try direct browsers
-                            // as fallback.
-                            let openers: &[(&str, &[&str])] = &[
-                                ("xdg-open", &[]),
-                                ("gio", &["open"]),
-                                ("firefox", &["--new-tab"]),
-                                ("flatpak", &["run", "org.mozilla.firefox", "--new-tab"]),
-                                ("chromium", &["--new-tab"]),
-                                ("flatpak", &["run", "org.chromium.Chromium", "--new-tab"]),
-                                (
-                                    "flatpak",
-                                    &[
-                                        "run",
-                                        "io.github.ungoogled_software.ungoogled_chromium",
-                                        "--new-tab",
-                                    ],
-                                ),
-                            ];
-                            for (cmd, args) in openers {
-                                let mut command = std::process::Command::new(cmd);
-                                command.args(*args).arg(&url);
-                                if let Ok(mut child) = command.spawn() {
-                                    // Give the command a moment to fail fast
-                                    std::thread::sleep(std::time::Duration::from_millis(300));
-                                    match child.try_wait() {
-                                        Ok(Some(status)) if status.success() => return,
-                                        Ok(Some(_)) => continue, // Failed, try next
-                                        Ok(None) => return,      // Still running = success
-                                        Err(_) => continue,
-                                    }
-                                }
-                            }
-                            log::warn!(
-                                "[tray] Failed to open dashboard — no browser opener worked"
-                            );
-                        });
+                        open_url_in_browser(&dashboard);
                     }),
                     ..Default::default()
                 }

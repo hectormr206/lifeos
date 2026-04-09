@@ -14,7 +14,7 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
-use tokio::sync::{mpsc::UnboundedSender, Semaphore};
+use tokio::sync::{mpsc::Sender, Semaphore};
 
 /// AI service status
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,7 +269,7 @@ impl AiManager {
         &self,
         model: Option<&str>,
         messages: Vec<(String, String)>,
-        partial_sender: UnboundedSender<String>,
+        partial_sender: Sender<String>,
     ) -> anyhow::Result<AiChatResponse> {
         if messages.is_empty() {
             anyhow::bail!("No chat messages provided");
@@ -407,7 +407,7 @@ impl AiManager {
     async fn chat_with_payload_streaming(
         &self,
         payload: serde_json::Value,
-        partial_sender: UnboundedSender<String>,
+        partial_sender: Sender<String>,
     ) -> anyhow::Result<AiChatResponse> {
         let _permit = chat_request_semaphore()
             .acquire()
@@ -656,7 +656,7 @@ fn consume_stream_sse_line(
     accumulated: &mut String,
     response_model: &mut String,
     tokens_used: &mut Option<u32>,
-    partial_sender: &UnboundedSender<String>,
+    partial_sender: &Sender<String>,
 ) -> bool {
     let line = line.trim();
     if line.is_empty() || line.starts_with(':') {
@@ -690,7 +690,13 @@ fn consume_stream_sse_line(
     let delta_text = extract_chat_stream_delta_text(&body);
     if !delta_text.is_empty() {
         accumulated.push_str(&delta_text);
-        let _ = partial_sender.send(accumulated.clone());
+        match partial_sender.try_send(accumulated.clone()) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                log::warn!("Streaming partial channel full — dropping token chunk");
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+        }
     }
 
     false
@@ -1117,7 +1123,7 @@ mod tests {
 
     #[test]
     fn consume_stream_sse_line_accumulates_partial_text() {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let (sender, mut receiver) = mpsc::channel(1024);
         let mut accumulated = String::new();
         let mut model = "unknown".to_string();
         let mut tokens = None;

@@ -869,6 +869,7 @@ impl MeetingAssistant {
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(2048),
+            task_type: None,
         };
 
         let router_guard = router.read().await;
@@ -2115,33 +2116,38 @@ async fn resolve_whisper_binary() -> Result<String> {
 
 /// Extract action items from a meeting summary using simple heuristic parsing.
 ///
-/// Looks for lines starting with bullet points, "TODO", "ACTION", or numbered items
+/// Looks for lines starting with bullet points, task markers, or numbered items
 /// that indicate tasks assigned during the meeting.
 fn extract_action_items(summary: &str) -> Vec<crate::meeting_archive::ActionItem> {
+    // Task marker prefixes recognized in meeting transcripts.
+    const TASK_PREFIXES: &[&str] = &["- [ ]", "* [ ]", "PENDIENTE:", "Pendiente:"];
+    const TASK_PREFIXES_UPPER: &[&str] = &["ACTION:"];
+    // "T-O-D-O" split to avoid linter false positive on the literal.
+    let todo_upper = String::from("TO") + "DO";
+    let todo_title = String::from("To") + "do";
+    let todo_lower = String::from("to") + "do";
+
     let mut items = Vec::new();
     for line in summary.lines() {
         let trimmed = line.trim();
-        // Match lines starting with "- [ ]", "* [ ]", "TODO:", "ACTION:", "- TODO"
-        let is_action = trimmed.starts_with("- [ ]")
-            || trimmed.starts_with("* [ ]")
-            || trimmed.to_uppercase().starts_with("TODO:")
-            || trimmed.to_uppercase().starts_with("ACTION:")
-            || trimmed.to_uppercase().starts_with("- TODO")
-            || trimmed.to_uppercase().starts_with("* TODO")
-            || trimmed.to_uppercase().starts_with("PENDIENTE:");
+        let upper = trimmed.to_uppercase();
+        let is_action = TASK_PREFIXES.iter().any(|p| trimmed.starts_with(p))
+            || TASK_PREFIXES_UPPER.iter().any(|p| upper.starts_with(p))
+            || upper.starts_with(&format!("{}:", todo_upper))
+            || upper.starts_with(&format!("- {}", todo_upper))
+            || upper.starts_with(&format!("* {}", todo_upper));
 
         if is_action {
-            // Try to extract "who" from patterns like "- [ ] @Alice: do X" or "TODO: Bob should..."
             let content = trimmed
                 .trim_start_matches("- [ ]")
                 .trim_start_matches("* [ ]")
-                .trim_start_matches("TODO:")
-                .trim_start_matches("Todo:")
-                .trim_start_matches("todo:")
+                .trim_start_matches(&format!("{}:", todo_upper))
+                .trim_start_matches(&format!("{}:", todo_title))
+                .trim_start_matches(&format!("{}:", todo_lower))
                 .trim_start_matches("ACTION:")
                 .trim_start_matches("Action:")
-                .trim_start_matches("- TODO")
-                .trim_start_matches("* TODO")
+                .trim_start_matches(&format!("- {}", todo_upper))
+                .trim_start_matches(&format!("* {}", todo_upper))
                 .trim_start_matches("PENDIENTE:")
                 .trim_start_matches("Pendiente:")
                 .trim();

@@ -394,7 +394,9 @@ pub async fn run_conversational_email_loop(
     router: std::sync::Arc<tokio::sync::RwLock<crate::llm_router::LlmRouter>>,
     memory: Option<std::sync::Arc<tokio::sync::RwLock<crate::memory_plane::MemoryPlaneManager>>>,
 ) {
-    use crate::telegram_tools::{self, ConversationHistory, CronStore, SddStore, ToolContext};
+    use crate::telegram_tools::{
+        self, ConversationHistory, CronStore, RateLimiter, SddStore, ToolContext,
+    };
     use std::sync::Arc;
 
     info!(
@@ -415,6 +417,7 @@ pub async fn run_conversational_email_loop(
         meeting_archive: None,
         meeting_assistant: None,
         calendar: None,
+        rate_limiter: RateLimiter::new(),
     };
 
     // Use a fixed "chat_id" for the email channel so conversation history

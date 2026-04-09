@@ -368,3 +368,6 @@ fn test_phase2_model_catalog_exists_and_has_signature() {
         "Catalog signature should be sha256-prefixed"
     );
 }
+
+// v0.4.0: DaemonAiStatus deserialization is tested in cli/src/commands/ai.rs
+// (unit test that doesn't require the compiled binary).

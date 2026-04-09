@@ -392,7 +392,7 @@ impl TaskQueue {
             (
                 "SELECT id, objective, status, priority, source, plan, result, error,
                         attempts, max_attempts, created_at, updated_at, started_at, completed_at
-                 FROM tasks ORDER BY updated_at DESC LIMIT ?2",
+                 FROM tasks ORDER BY updated_at DESC LIMIT ?1",
                 None,
             )
         };

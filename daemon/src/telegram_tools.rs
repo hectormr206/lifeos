@@ -16,9 +16,10 @@ pub mod inner {
     use anyhow::Result;
     use log::{info, warn};
     use serde::{Deserialize, Serialize};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use std::time::Instant;
     use tokio::sync::RwLock;
 
     use crate::browser_automation::BrowserAutomation;
@@ -1224,6 +1225,7 @@ REGLAS FIRMES:
                 sensitivity: None,
                 preferred_provider: None,
                 max_tokens: Some(256),
+                task_type: None,
             };
 
             let r = router.read().await;
@@ -1583,6 +1585,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(512),
+            task_type: None,
         };
 
         let router = ctx.router.read().await;
@@ -1663,6 +1666,105 @@ REGLAS FIRMES:
         }
     }
 
+    /// Per-chat rate limiter for tool calls.
+    ///
+    /// General limit: max 10 tool calls per 60 seconds per chat_id.
+    /// Wipe limit: max 1 wipe/vault_reset per 60 seconds per chat_id.
+    #[derive(Clone)]
+    pub struct RateLimiter {
+        inner: Arc<RwLock<RateLimiterInner>>,
+    }
+
+    struct RateLimiterInner {
+        /// General tool call timestamps per chat_id.
+        general: HashMap<i64, VecDeque<Instant>>,
+        /// Last wipe/vault_reset timestamp per chat_id.
+        last_wipe: HashMap<i64, Instant>,
+        /// Counter for periodic global cleanup.
+        call_count: u64,
+    }
+
+    impl RateLimiter {
+        pub fn new() -> Self {
+            Self {
+                inner: Arc::new(RwLock::new(RateLimiterInner {
+                    general: HashMap::new(),
+                    last_wipe: HashMap::new(),
+                    call_count: 0,
+                })),
+            }
+        }
+
+        /// Check general rate limit. Returns Ok(()) if allowed, Err with message if exceeded.
+        pub async fn check_general(&self, chat_id: i64) -> Result<()> {
+            let mut inner = self.inner.write().await;
+            let now = Instant::now();
+            let window = std::time::Duration::from_secs(60);
+
+            // Periodic global cleanup every 100 calls
+            inner.call_count += 1;
+            if inner.call_count % 100 == 0 {
+                Self::cleanup_inner(&mut inner);
+            }
+
+            let timestamps = inner.general.entry(chat_id).or_default();
+
+            // Purge entries older than 60s
+            while timestamps
+                .front()
+                .is_some_and(|t| now.duration_since(*t) > window)
+            {
+                timestamps.pop_front();
+            }
+
+            if timestamps.len() >= 10 {
+                anyhow::bail!("Rate limit exceeded, wait a moment");
+            }
+
+            timestamps.push_back(now);
+            Ok(())
+        }
+
+        /// Check wipe-specific rate limit (min 60s between consecutive wipe ops).
+        pub async fn check_wipe(&self, chat_id: i64) -> Result<()> {
+            let mut inner = self.inner.write().await;
+            let now = Instant::now();
+            let cooldown = std::time::Duration::from_secs(60);
+
+            if let Some(last) = inner.last_wipe.get(&chat_id) {
+                if now.duration_since(*last) < cooldown {
+                    anyhow::bail!(
+                        "Wipe rate limit: debes esperar al menos 60 segundos entre operaciones destructivas"
+                    );
+                }
+            }
+
+            inner.last_wipe.insert(chat_id, now);
+            Ok(())
+        }
+
+        /// Cleanup stale entries across all chats.
+        /// Called automatically from `check_general` every 100th call.
+        fn cleanup_inner(inner: &mut RateLimiterInner) {
+            let now = Instant::now();
+            let window = std::time::Duration::from_secs(60);
+
+            inner.general.retain(|_, timestamps| {
+                while timestamps
+                    .front()
+                    .is_some_and(|t| now.duration_since(*t) > window)
+                {
+                    timestamps.pop_front();
+                }
+                !timestamps.is_empty()
+            });
+
+            inner
+                .last_wipe
+                .retain(|_, last| now.duration_since(*last) < window);
+        }
+    }
+
     #[derive(Clone)]
     pub struct ToolContext {
         pub router: Arc<RwLock<LlmRouter>>,
@@ -1681,6 +1783,8 @@ REGLAS FIRMES:
         pub meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
         /// Calendar manager for event scheduling and reminders.
         pub calendar: Option<Arc<crate::calendar::CalendarManager>>,
+        /// Rate limiter for tool calls per chat_id.
+        pub rate_limiter: RateLimiter,
     }
 
     /// Check if the user's message contains keywords that suggest they want
@@ -1788,11 +1892,40 @@ REGLAS FIRMES:
         pub output: String,
     }
 
-    pub async fn execute_tool(call: &ToolCall, ctx: &ToolContext) -> ToolResult {
+    /// Tool names that are destructive wipe/reset operations (rate-limited separately).
+    const WIPE_TOOLS: &[&str] = &[
+        "wipe_mental_health",
+        "wipe_menstrual",
+        "wipe_sexual_health",
+        "wipe_relationship_events",
+        "vault_reset",
+    ];
+
+    pub async fn execute_tool(call: &ToolCall, ctx: &ToolContext, chat_id: i64) -> ToolResult {
         info!(
             "[telegram_tools] Executing tool: {} args={}",
             call.name, call.args
         );
+
+        // P1-3: General rate limit — max 10 tool calls per 60s per chat_id
+        if let Err(e) = ctx.rate_limiter.check_general(chat_id).await {
+            return ToolResult {
+                tool: call.name.clone(),
+                success: false,
+                output: format!("Error: {}", e),
+            };
+        }
+
+        // P3-9: Wipe-specific rate limit — min 60s between consecutive wipe ops
+        if WIPE_TOOLS.contains(&call.name.as_str()) {
+            if let Err(e) = ctx.rate_limiter.check_wipe(chat_id).await {
+                return ToolResult {
+                    tool: call.name.clone(),
+                    success: false,
+                    output: format!("Error: {}", e),
+                };
+            }
+        }
 
         let result = match call.name.as_str() {
             "screenshot" => execute_screenshot().await,
@@ -1895,7 +2028,7 @@ REGLAS FIRMES:
             "vault_set_passphrase" => execute_vault_set_passphrase(&call.args, ctx).await,
             "vault_unlock" => execute_vault_unlock(&call.args, ctx).await,
             "vault_lock" => execute_vault_lock(ctx).await,
-            "vault_reset" => execute_vault_reset(ctx).await,
+            "vault_reset" => execute_vault_reset(&call.args, ctx).await,
             "pin_set" => execute_pin_set(&call.args, ctx).await,
             "pin_validate" => execute_pin_validate(&call.args, ctx).await,
             "pin_status" => execute_pin_status(ctx).await,
@@ -2232,6 +2365,7 @@ REGLAS FIRMES:
                 sensitivity: None,
                 preferred_provider: None,
                 max_tokens: Some(2048),
+                task_type: None,
             };
 
             let router = ctx.router.read().await;
@@ -2368,7 +2502,7 @@ REGLAS FIRMES:
             // Execute tool calls and collect results
             let mut tool_results = Vec::new();
             for call in &tool_calls {
-                let result = execute_tool(call, ctx).await;
+                let result = execute_tool(call, ctx, chat_id).await;
 
                 // Capture screenshot path for sending as photo
                 if (call.name == "screenshot" || call.name == "browser_navigate")
@@ -2597,6 +2731,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(1024),
+            task_type: None,
         };
 
         let router = ctx.router.read().await;
@@ -5815,8 +5950,9 @@ REGLAS FIRMES:
         Ok("Vault cerrado.".to_string())
     }
 
-    async fn execute_vault_reset(ctx: &ToolContext) -> Result<String> {
+    async fn execute_vault_reset(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
         let mem = require_memory(ctx).await?;
+        require_panic_phrase(args)?;
         mem.reset_reinforced_passphrase().await?;
         Ok("Vault reseteado. Toda la metadata fue borrada — cualquier dato sensible previamente cifrado bajo este vault quedo INRECUPERABLE.".to_string())
     }
@@ -5828,6 +5964,13 @@ REGLAS FIRMES:
         let pin = args["pin"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'pin'"))?;
+        if pin.len() < 4 || pin.len() > 16 {
+            anyhow::bail!("El PIN debe tener entre 4 y 16 caracteres.");
+        }
+        let weak_pins = ["0000", "1111", "1234", "4321", "9999"];
+        if weak_pins.contains(&pin) {
+            anyhow::bail!("PIN demasiado comun. Usa uno mas seguro.");
+        }
         let max_failures = args["max_failures"].as_u64().map(|n| n as u32);
         let auto_lock = args["auto_lock_vault_on_max_failures"].as_bool();
         mem.set_local_pin(pin, max_failures, auto_lock).await?;
@@ -7709,11 +7852,31 @@ REGLAS FIRMES:
         }
     }
 
+    /// Validate that a flatpak_id has the expected reverse-DNS format:
+    /// only ASCII alphanumeric + dots, at least 2 dots (e.g. com.example.App).
+    fn validate_flatpak_id(id: &str) -> Result<()> {
+        if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.') {
+            anyhow::bail!(
+                "flatpak_id invalido '{}': solo se permiten caracteres ASCII alfanumericos y puntos",
+                id
+            );
+        }
+        let dot_count = id.chars().filter(|c| *c == '.').count();
+        if dot_count < 2 {
+            anyhow::bail!(
+                "flatpak_id invalido '{}': debe contener al menos 2 puntos (ej: com.example.App)",
+                id
+            );
+        }
+        Ok(())
+    }
+
     async fn execute_install_app(args: &serde_json::Value) -> Result<String> {
         let name = args["name"].as_str().unwrap_or("app");
         let flatpak_id = args["flatpak_id"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'flatpak_id'"))?;
+        validate_flatpak_id(flatpak_id)?;
         let output = tokio::process::Command::new("flatpak")
             .args(["install", "-y", "--noninteractive", "flathub", flatpak_id])
             .output()
@@ -7811,6 +7974,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(1024),
+        task_type: None,
         };
 
         let router = ctx.router.read().await;
@@ -8147,6 +8311,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: model.map(|m| m.to_string()),
             max_tokens: Some(2048),
+            task_type: None,
         };
 
         let router = ctx.router.read().await;
@@ -8704,6 +8869,7 @@ REGLAS FIRMES:
                 sensitivity: None,
                 preferred_provider: Some(model.to_string()),
                 max_tokens: Some(2048),
+            task_type: None,
             };
 
             let router = ctx.router.read().await;
@@ -8854,6 +9020,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(512),
+            task_type: None,
         };
 
         let router = ctx.router.read().await;
@@ -9473,7 +9640,7 @@ max_context = 128000
             );
         }
 
-        let blocked_fragments = ["\n", "\r", "&&", "||", ";", "|", ">", "<", "`", "$("];
+        let blocked_fragments = ["\n", "\r", "&&", "||", ";", "|", ">", "<", "`", "$(", "${"];
         if let Some(fragment) = blocked_fragments
             .iter()
             .find(|fragment| trimmed.contains(**fragment))
@@ -10140,7 +10307,7 @@ max_context = 128000
             .unwrap_or(tag_filter);
         if let Some(memory) = &ctx.memory {
             let mem = memory.read().await;
-            match mem.search_entries(query, 5, Some(tag_filter)).await {
+            match mem.search_entries_with_tag(query, 5, tag_filter).await {
                 Ok(results) => {
                     if results.is_empty() {
                         Ok(format!(
@@ -10182,7 +10349,7 @@ max_context = 128000
         if let Some(memory) = &ctx.memory {
             let mem = memory.read().await;
             match mem
-                .search_entries("app activity today", 10, Some(tag))
+                .search_entries_with_tag("app activity today", 10, tag)
                 .await
             {
                 Ok(results) => {
