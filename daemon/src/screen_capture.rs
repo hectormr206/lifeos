@@ -457,11 +457,8 @@ impl ScreenCapture {
             .await
             .with_context(|| format!("Failed to read temporary capture {}", source.display()))?;
 
-        // TODO(encryption): Encrypt screenshot bytes at rest using AES-256-GCM-SIV
-        // before writing to disk. The codebase already has the pattern in memory_plane.rs
-        // (derive_machine_key -> Sha256 -> Aes256GcmSiv). Implementation requires:
-        //   1. Encrypt `bytes` with a nonce, prepend nonce (12 bytes) to ciphertext.
-        //   2. Write to `dest` with `.enc` extension instead of raw image.
+        // Future: encrypt screenshot bytes at rest (AES-256-GCM-SIV pattern
+        // from memory_plane.rs). Requires changing all read sites to decrypt.
         //   3. Update ALL read sites: list_screenshots(), cleanup_old/by_count/by_size(),
         //      get_image_resolution(), and any external consumer that reads via `path`.
         //   4. Add a decrypt_screenshot() helper that reads nonce + ciphertext, decrypts,

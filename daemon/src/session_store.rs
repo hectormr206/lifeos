@@ -251,12 +251,9 @@ impl SessionStore {
 
         let line = serde_json::to_string(&turn)? + "\n";
 
-        // TODO(encryption): Encrypt transcript lines at rest using AES-256-GCM-SIV
-        // before appending. The codebase already has the pattern in memory_plane.rs
-        // (derive_machine_key -> Sha256 -> Aes256GcmSiv). Implementation requires:
-        //   1. Encrypt each JSONL line independently (nonce + ciphertext per line).
-        //   2. Update load_recent_turns() to decrypt each line before deserializing.
-        //   3. Update compact_session() which rewrites the transcript file.
+        // Future: encrypt transcript lines at rest (AES-256-GCM-SIV pattern
+        // from memory_plane.rs). Requires updating load_recent_turns() and
+        // compact_session() to decrypt.
         // Deferred because it touches the read path in load_recent_turns() and
         // compact_session(). File permissions (0o600) provide baseline protection.
 

@@ -2507,6 +2507,13 @@ mod tests {
     }
 
     #[test]
+    fn test_daemon_ai_status_deserializes_minimal() {
+        let json = r#"{"runtime":null}"#;
+        let status: DaemonAiStatus = serde_json::from_str(json).unwrap();
+        assert!(status.runtime.is_none());
+    }
+
+    #[test]
     fn test_selectable_model_asset_filters_auxiliary_ggufs() {
         assert!(is_selectable_model_asset("Qwen3.5-4B-Q4_K_M.gguf"));
         assert!(!is_selectable_model_asset("Qwen3.5-4B-mmproj-F16.gguf"));
