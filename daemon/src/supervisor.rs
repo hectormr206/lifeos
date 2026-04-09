@@ -953,6 +953,7 @@ impl Supervisor {
                     sensitivity: None,
                     preferred_provider: None,
                     max_tokens: Some(2048),
+                    task_type: None,
                 };
 
                 let plan_result = {
@@ -1367,6 +1368,7 @@ impl Supervisor {
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(256),
+            task_type: None,
         };
 
         let router = self.router.read().await;
@@ -1518,6 +1520,7 @@ impl Supervisor {
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(512),
+        task_type: None,
         };
 
         let router = self.router.read().await;
@@ -1941,6 +1944,7 @@ Always end with a "respond" step summarizing what was done."#,
             sensitivity: Some(self.privacy.classify(objective)),
             preferred_provider: None,
             max_tokens: Some(2048),
+            task_type: None,
         };
 
         let router = self.router.read().await;
@@ -2339,6 +2343,7 @@ Respond ONLY with a JSON object (no markdown):
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(512),
+            task_type: None,
         };
 
         let router = self.router.read().await;
@@ -2408,6 +2413,7 @@ Respond ONLY with a JSON object (no markdown):
             sensitivity: Some(sensitivity),
             preferred_provider: None,
             max_tokens: Some(1024),
+            task_type: None,
         };
 
         let router = self.router.read().await;

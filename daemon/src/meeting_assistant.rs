@@ -869,6 +869,7 @@ impl MeetingAssistant {
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(2048),
+            task_type: None,
         };
 
         let router_guard = router.read().await;

@@ -1917,8 +1917,15 @@ impl MemoryPlaneManager {
         scope: Option<&str>,
         mode: MemorySearchMode,
     ) -> Result<Vec<MemorySearchResult>> {
-        self.search_entries_inner(query, limit, scope, None, mode, ArchivedFilter::ExcludeArchived)
-            .await
+        self.search_entries_inner(
+            query,
+            limit,
+            scope,
+            None,
+            mode,
+            ArchivedFilter::ExcludeArchived,
+        )
+        .await
     }
 
     /// Search with an explicit tag filter.  The tag is matched against the
@@ -3828,6 +3835,7 @@ impl MemoryPlaneManager {
                 sensitivity: None,
                 preferred_provider: None,
                 max_tokens: Some(400),
+                task_type: None,
             };
 
             let summary_text = match router.chat(&req).await {

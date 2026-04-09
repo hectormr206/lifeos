@@ -28,6 +28,26 @@ pub enum TaskComplexity {
     Vision,
 }
 
+/// Task type classification — the router uses this to prefer providers
+/// with the right capabilities for the job. Orthogonal to complexity:
+/// complexity says HOW HARD, task type says WHAT KIND.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskType {
+    /// Complex logic, planning, code analysis — prefer large reasoning models
+    Reasoning,
+    /// Image analysis, screenshot understanding — prefer vision-capable models
+    Vision,
+    /// Simple responses, translations, formatting — prefer fast local/cheap models
+    Quick,
+    /// Summarization of long documents — prefer large-context models (Gemini, etc.)
+    LongContext,
+    /// Writing, brainstorming, creative content — prefer Claude or GPT-4
+    Creative,
+    /// No special routing preference
+    Default,
+}
+
 /// A chat message in OpenAI format.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -47,6 +67,9 @@ pub struct RouterRequest {
     pub preferred_provider: Option<String>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Optional task type hint. If `None`, the router auto-classifies from messages.
+    #[serde(default)]
+    pub task_type: Option<TaskType>,
 }
 
 /// Response returned by the router.
@@ -124,6 +147,197 @@ pub enum ProviderTier {
 }
 
 // ---------------------------------------------------------------------------
+// Task type classification
+// ---------------------------------------------------------------------------
+
+/// Classify the task type from message content using simple heuristics.
+/// This is a best-effort classifier — it doesn't need to be perfect,
+/// just good enough to route most requests to a better-suited provider.
+pub fn classify_task_type(messages: &[ChatMessage]) -> TaskType {
+    // Collect all user message text for analysis
+    let mut total_len = 0usize;
+    let mut has_image_content = false;
+    let mut combined_text = String::new();
+
+    for msg in messages {
+        if msg.role == "user" {
+            // Check for image content (OpenAI vision format: array with image_url parts)
+            if let Some(arr) = msg.content.as_array() {
+                for part in arr {
+                    if part.get("type").and_then(|t| t.as_str()) == Some("image_url") {
+                        has_image_content = true;
+                    }
+                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                        total_len += text.len();
+                        combined_text.push(' ');
+                        combined_text.push_str(text);
+                    }
+                }
+            } else if let Some(text) = msg.content.as_str() {
+                total_len += text.len();
+                combined_text.push(' ');
+                combined_text.push_str(text);
+            }
+        }
+    }
+
+    // Rule 1: Image data present → Vision
+    if has_image_content {
+        return TaskType::Vision;
+    }
+
+    let lower = combined_text.to_lowercase();
+
+    // Rule 2: Mentions of images/screenshots in text → Vision
+    let vision_keywords = [
+        "screenshot",
+        "image",
+        "picture",
+        "photo",
+        "diagram",
+        "captura",
+        "imagen",
+        "foto",
+    ];
+    if vision_keywords.iter().any(|kw| lower.contains(kw)) {
+        // Only if they're asking to analyze/look at something, not just mentioning the word
+        let vision_action = [
+            "analyze",
+            "look at",
+            "what's in",
+            "describe",
+            "analiza",
+            "mira",
+            "qué hay",
+            "qué ves",
+        ];
+        if vision_action.iter().any(|kw| lower.contains(kw)) {
+            return TaskType::Vision;
+        }
+    }
+
+    // Rule 3: Long content → LongContext
+    if total_len > 8000 {
+        return TaskType::LongContext;
+    }
+
+    // Rule 4: Reasoning keywords
+    let reasoning_keywords = [
+        "plan",
+        "analyze",
+        "debug",
+        "architecture",
+        "refactor",
+        "explain why",
+        "compare",
+        "evaluate",
+        "trade-off",
+        "tradeoff",
+        "analiza",
+        "planifica",
+        "depura",
+        "arquitectura",
+    ];
+    if reasoning_keywords.iter().any(|kw| lower.contains(kw)) {
+        return TaskType::Reasoning;
+    }
+
+    // Rule 5: Creative keywords
+    let creative_keywords = [
+        "write",
+        "create",
+        "brainstorm",
+        "draft",
+        "compose",
+        "story",
+        "poem",
+        "essay",
+        "redacta",
+        "escribe",
+        "crea",
+        "borrador",
+    ];
+    if creative_keywords.iter().any(|kw| lower.contains(kw)) {
+        return TaskType::Creative;
+    }
+
+    // Rule 6: Short, single-turn → Quick
+    let user_messages = messages.iter().filter(|m| m.role == "user").count();
+    if user_messages <= 1 && total_len < 100 {
+        return TaskType::Quick;
+    }
+
+    TaskType::Default
+}
+
+/// Compute a task-type affinity bonus for a provider (0-50).
+/// This is added to the complexity-based score as a SOFT preference.
+fn task_type_bonus(provider: &ProviderConfig, task_type: TaskType) -> u32 {
+    match task_type {
+        TaskType::Vision => {
+            if provider.supports_vision {
+                40
+            } else {
+                0
+            }
+        }
+        TaskType::LongContext => {
+            if provider.max_context >= 500_000 {
+                50 // Gemini-class context
+            } else if provider.max_context >= 200_000 {
+                30
+            } else {
+                0
+            }
+        }
+        TaskType::Quick => {
+            match provider.tier {
+                ProviderTier::Local => 40, // fastest, no network
+                ProviderTier::Free => {
+                    // Small fast models get a boost
+                    let model_lower = provider.model.to_lowercase();
+                    if model_lower.contains("8b") || model_lower.contains("nano") {
+                        30
+                    } else {
+                        10
+                    }
+                }
+                _ => 0,
+            }
+        }
+        TaskType::Reasoning => {
+            let name_lower = provider.name.to_lowercase();
+            let model_lower = provider.model.to_lowercase();
+            if name_lower.contains("anthropic") || name_lower.contains("claude") {
+                50
+            } else if name_lower.contains("openai") || model_lower.contains("gpt") {
+                45
+            } else if model_lower.contains("qwen") && model_lower.contains("235b") {
+                40 // Large MoE reasoning model
+            } else if model_lower.contains("70b") || model_lower.contains("120b") {
+                30
+            } else {
+                0
+            }
+        }
+        TaskType::Creative => {
+            let name_lower = provider.name.to_lowercase();
+            let model_lower = provider.model.to_lowercase();
+            if name_lower.contains("anthropic") || name_lower.contains("claude") {
+                50
+            } else if name_lower.contains("openai") || model_lower.contains("gpt") {
+                45
+            } else if model_lower.contains("70b") || model_lower.contains("235b") {
+                25
+            } else {
+                0
+            }
+        }
+        TaskType::Default => 0, // No bonus — use complexity scoring only
+    }
+}
+
+// ---------------------------------------------------------------------------
 // LLM Router
 // ---------------------------------------------------------------------------
 
@@ -194,8 +408,17 @@ impl LlmRouter {
         // Use the detected sensitivity (highest between explicit and classified)
         let sensitivity = highest_sensitivity;
 
-        let candidates =
-            self.select_candidates(complexity, sensitivity, &sanitized_request.preferred_provider);
+        // Auto-classify task type if not explicitly provided
+        let task_type = request
+            .task_type
+            .unwrap_or_else(|| classify_task_type(&request.messages));
+
+        let candidates = self.select_candidates(
+            complexity,
+            sensitivity,
+            &sanitized_request.preferred_provider,
+            task_type,
+        );
 
         if candidates.is_empty() {
             if complexity == TaskComplexity::Vision {
@@ -213,10 +436,11 @@ impl LlmRouter {
         }
 
         info!(
-            "[llm_router] {} candidates for complexity={:?} sensitivity={:?}: {}",
+            "[llm_router] {} candidates for complexity={:?} sensitivity={:?} task={:?}: {}",
             candidates.len(),
             complexity,
             sensitivity,
+            task_type,
             candidates
                 .iter()
                 .map(|p| p.name.as_str())
@@ -269,11 +493,13 @@ impl LlmRouter {
     }
 
     /// Select candidate providers in priority order.
+    /// Task type adds a soft scoring bonus to prefer providers with matching capabilities.
     fn select_candidates(
         &self,
         complexity: TaskComplexity,
         sensitivity: SensitivityLevel,
         preferred: &Option<String>,
+        task_type: TaskType,
     ) -> Vec<&ProviderConfig> {
         // If user specified a provider, try it first
         let mut candidates: Vec<&ProviderConfig> = Vec::new();
@@ -360,7 +586,9 @@ impl LlmRouter {
                         }
                     }
                 };
-                (p, score)
+                // Add task-type affinity bonus (soft preference, doesn't eliminate anyone)
+                let bonus = task_type_bonus(p, task_type);
+                (p, score + bonus)
             })
             .filter(|(_, score)| *score > 0)
             .collect();
@@ -1346,5 +1574,137 @@ mod tests {
             token.chars().all(|c| c.is_ascii_hexdigit()),
             "Token must be hex-encoded"
         );
+    }
+
+    // ---- Task type classification tests ----
+
+    fn msg(role: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            role: role.into(),
+            content: serde_json::Value::String(content.into()),
+        }
+    }
+
+    #[test]
+    fn test_classify_short_single_turn_is_quick() {
+        let messages = vec![msg("user", "hi")];
+        assert_eq!(classify_task_type(&messages), TaskType::Quick);
+    }
+
+    #[test]
+    fn test_classify_reasoning_keywords() {
+        let messages = vec![msg("user", "Can you analyze this architecture decision?")];
+        assert_eq!(classify_task_type(&messages), TaskType::Reasoning);
+    }
+
+    #[test]
+    fn test_classify_creative_keywords() {
+        let messages = vec![msg("user", "Write me a short story about a robot")];
+        assert_eq!(classify_task_type(&messages), TaskType::Creative);
+    }
+
+    #[test]
+    fn test_classify_long_context() {
+        let long_text = "x".repeat(9000);
+        let messages = vec![msg("user", &long_text)];
+        assert_eq!(classify_task_type(&messages), TaskType::LongContext);
+    }
+
+    #[test]
+    fn test_classify_vision_with_image_content() {
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content: serde_json::json!([
+                {"type": "text", "text": "What is this?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+            ]),
+        }];
+        assert_eq!(classify_task_type(&messages), TaskType::Vision);
+    }
+
+    #[test]
+    fn test_classify_vision_text_mention() {
+        let messages = vec![msg("user", "Analyze this screenshot image for me")];
+        assert_eq!(classify_task_type(&messages), TaskType::Vision);
+    }
+
+    #[test]
+    fn test_classify_default_for_normal_message() {
+        // Message > 100 chars, no keywords, single turn → Default (not Quick)
+        let messages = vec![msg("user", "Tell me about the weather in Buenos Aires tomorrow morning please, I need to know if I should bring an umbrella or a jacket")];
+        assert_eq!(classify_task_type(&messages), TaskType::Default);
+    }
+
+    #[test]
+    fn test_classify_empty_messages_is_default() {
+        let messages: Vec<ChatMessage> = vec![];
+        // No user messages, short total → Quick since 0 < 100 but 0 user msgs ≤ 1
+        assert_eq!(classify_task_type(&messages), TaskType::Quick);
+    }
+
+    #[test]
+    fn test_task_type_bonus_vision_provider() {
+        let provider = ProviderConfig {
+            name: "local".into(),
+            api_base: "http://127.0.0.1:8082".into(),
+            api_key_env: "".into(),
+            model: "local".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.0,
+            cost_output_per_m: 0.0,
+            max_rpm: None,
+            max_rpd: None,
+            supports_vision: true,
+            max_context: 16384,
+            tier: ProviderTier::Local,
+            chat_path: None,
+            privacy: "max".into(),
+        };
+        assert_eq!(task_type_bonus(&provider, TaskType::Vision), 40);
+        assert_eq!(task_type_bonus(&provider, TaskType::Quick), 40);
+        assert_eq!(task_type_bonus(&provider, TaskType::Default), 0);
+    }
+
+    #[test]
+    fn test_task_type_bonus_gemini_long_context() {
+        let provider = ProviderConfig {
+            name: "gemini-flash".into(),
+            api_base: "https://generativelanguage.googleapis.com".into(),
+            api_key_env: "GEMINI_API_KEY".into(),
+            model: "gemini-2.5-flash".into(),
+            api_format: ApiFormat::Gemini,
+            cost_input_per_m: 0.0,
+            cost_output_per_m: 0.0,
+            max_rpm: Some(10),
+            max_rpd: Some(250),
+            supports_vision: true,
+            max_context: 1_000_000,
+            tier: ProviderTier::Free,
+            chat_path: None,
+            privacy: "low".into(),
+        };
+        assert_eq!(task_type_bonus(&provider, TaskType::LongContext), 50);
+    }
+
+    #[test]
+    fn test_task_type_bonus_anthropic_reasoning() {
+        let provider = ProviderConfig {
+            name: "anthropic-haiku".into(),
+            api_base: "https://api.anthropic.com".into(),
+            api_key_env: "ANTHROPIC_API_KEY".into(),
+            model: "claude-haiku-4-5-20251001".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.25,
+            cost_output_per_m: 1.25,
+            max_rpm: None,
+            max_rpd: None,
+            supports_vision: true,
+            max_context: 200_000,
+            tier: ProviderTier::Premium,
+            chat_path: Some("/v1/messages".into()),
+            privacy: "medium".into(),
+        };
+        assert_eq!(task_type_bonus(&provider, TaskType::Reasoning), 50);
+        assert_eq!(task_type_bonus(&provider, TaskType::Creative), 50);
     }
 }
