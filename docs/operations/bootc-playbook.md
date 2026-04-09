@@ -95,9 +95,23 @@ Checks minimos post-install:
 
 ```bash
 life --version
-systemctl status lifeosd llama-server --no-pager
+systemctl --user status lifeosd --no-pager
+sudo systemctl status llama-server --no-pager
 TOKEN=$(cat /run/lifeos/bootstrap.token)
 curl -H "x-bootstrap-token: $TOKEN" http://127.0.0.1:8081/api/v1/health
+```
+
+Modelo canonico de runtime hoy:
+
+- `lifeosd` es user service.
+- `llama-server` corre canonicamente como system service.
+- `lifeosd` en system scope se considera alias/debug legacy, no runtime primario.
+- `llama-server` en user scope se revisa solo como fallback cuando ese host no expone la unit de sistema.
+
+Si `llama-server` no esta cargado como system service en ese host, revisar tambien el fallback puntual en user scope:
+
+```bash
+systemctl --user status llama-server --no-pager
 ```
 
 Tests de regresion:
@@ -144,7 +158,7 @@ Se considera correcto cuando:
 
 1. La imagen OCI builda de forma reproducible.
 2. Se puede generar ISO y arrancar en VM/hardware.
-3. `lifeosd` y `llama-server` quedan operativos en loopback.
+3. `lifeosd` queda operativo como user service y `llama-server` en loopback como system service. El alias system-scope de `lifeosd` queda solo para compat/debug; el user scope de `llama-server` queda como fallback puntual.
 4. Health checks y security baseline reportan estado esperado.
 5. Suite de seguridad runtime pasa en local/CI.
 6. Roadmap/spec se mantiene sincronizado con el codigo real.

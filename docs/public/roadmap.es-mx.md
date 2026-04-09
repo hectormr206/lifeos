@@ -18,14 +18,14 @@ LifeOS esta hecho en Mexico y se publica para una audiencia global de codigo abi
 
 ## Que ya es real hoy
 
-Estas bases ya existen hoy dentro del proyecto:
+Estas bases ya existen hoy dentro del proyecto, pero no todas tienen la misma madurez:
 
-- inferencia local a traves del runtime de IA de LifeOS
-- bases de memoria local cifrada
-- bases del control plane de escritorio
-- interaccion remota por Telegram
-- bases de voz, vision y automatizacion
-- branding publico y cimientos de la landing page
+- inferencia local a traves del runtime de IA de LifeOS (`validada en host`)
+- bases de memoria local cifrada (`integrada en repo`)
+- bases del control plane de escritorio (`integrada en repo`)
+- interaccion remota por Telegram (`validada en host`)
+- bases de voz, vision y automatizacion (`experimental`)
+- branding publico y cimientos de la landing page (`integrada en repo`)
 
 Importante:
 
@@ -139,7 +139,8 @@ Cuando sea posible, una feature debe caer en una de estas realidades:
 
 - validada en host real
 - integrada en repo
-- parcial / todavia sin cerrar end-to-end
+- experimental / todavia sin cerrar end-to-end
+- shipped deshabilitado / feature-gated
 
 Esa honestidad importa porque LifeOS se esta construyendo en publico.
 

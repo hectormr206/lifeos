@@ -1,11 +1,9 @@
-//! Update Scheduler with Channels
+//! Update preferences and maintenance-window metadata.
 //!
-//! Provides update scheduling and management with multiple channels:
-//! - stable: Stable releases only
-//! - candidate: Release candidates for testing
-//! - edge: Bleeding edge features
-//!
-//! Supports scheduled updates, rollback, and verification.
+//! Canonical update execution in LifeOS is `bootc` against the signed GHCR
+//! image that the host is currently tracking. This module does not decide what
+//! image gets installed; it only persists local channel preference and optional
+//! scheduling metadata used by higher layers.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -93,6 +91,8 @@ pub struct UpdateRecord {
 /// Update schedule configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduleConfig {
+    #[serde(default)]
+    pub current_channel: UpdateChannel,
     /// Schedule type
     pub schedule_type: ScheduleType,
     /// Update time (for scheduled updates, HH:MM format)
@@ -112,11 +112,12 @@ pub struct ScheduleConfig {
 impl Default for ScheduleConfig {
     fn default() -> Self {
         Self {
-            schedule_type: ScheduleType::Automatic,
+            current_channel: UpdateChannel::Stable,
+            schedule_type: ScheduleType::Manual,
             update_time: "02:00".to_string(),
             update_day: 1, // Monday
             check_frequency_hours: 24,
-            auto_install: true, // Zero-config: auto-install at 2am by default
+            auto_install: false,
             verify_checksum: true,
             create_backup: true,
         }
@@ -154,7 +155,7 @@ impl UpdateScheduler {
         };
 
         let scheduler = Self {
-            current_channel: Arc::new(RwLock::new(UpdateChannel::default())),
+            current_channel: Arc::new(RwLock::new(config.current_channel)),
             schedule_type: Arc::new(RwLock::new(config.schedule_type)),
             update_time: Arc::new(RwLock::new(config.update_time)),
             update_day: Arc::new(RwLock::new(config.update_day)),
@@ -189,6 +190,7 @@ impl UpdateScheduler {
     async fn save_config(&self) -> Result<()> {
         let config_file = self.config_dir.join("update_schedule.conf");
         let schedule_type = *self.schedule_type.read().await;
+        let current_channel = *self.current_channel.read().await;
         let update_time = self.update_time.read().await.clone();
         let update_day = *self.update_day.read().await;
         let check_frequency = *self.check_frequency_hours.read().await;
@@ -197,6 +199,7 @@ impl UpdateScheduler {
         let create_backup = *self.create_backup.read().await;
 
         let config = ScheduleConfig {
+            current_channel,
             schedule_type,
             update_time,
             update_day,
@@ -273,35 +276,11 @@ impl UpdateScheduler {
 
     /// Update available versions from remote
     pub async fn fetch_available_versions(&self) -> Result<()> {
-        info!("Fetching available updates...");
-
-        // Simulated catalog for now.
-        let versions = vec![
-            AvailableVersion {
-                version: "0.1.1".to_string(),
-                channel: UpdateChannel::Stable,
-                release_date: Utc::now(),
-                checksum: format!("sha256_{}", uuid::Uuid::new_v4()),
-                notes: "Stable release with bug fixes".to_string(),
-                size_bytes: 250 * 1024 * 1024, // 250 MB
-                download_url: "https://lifeos.io/releases/0.1.1/LifeOS-0.1.1.iso".to_string(),
-                required_disk_space_mb: 500,
-            },
-            AvailableVersion {
-                version: "0.2.0-beta".to_string(),
-                channel: UpdateChannel::Candidate,
-                release_date: Utc::now() - Duration::days(7),
-                checksum: format!("sha256_{}", uuid::Uuid::new_v4()),
-                notes: "Beta release with new features".to_string(),
-                size_bytes: 300 * 1024 * 1024, // 300 MB
-                download_url: "https://lifeos.io/releases/0.2.0-beta/LifeOS-0.2.0.iso".to_string(),
-                required_disk_space_mb: 600,
-            },
-        ];
-
-        let total = versions.len();
-        *self.available_versions.write().await = versions;
-        info!("Fetched {} available versions", total);
+        // Availability is determined by `bootc upgrade --check` against the
+        // tracked OCI image. Channel manifests generated in CI are publication
+        // metadata, not a runtime catalog to install from here.
+        self.available_versions.write().await.clear();
+        info!("UpdateScheduler: runtime version catalog disabled; bootc is canonical");
         Ok(())
     }
 
@@ -388,29 +367,11 @@ impl UpdateScheduler {
 
     /// Rollback to previous version in current channel
     pub async fn rollback(&self) -> Result<()> {
-        info!("Rolling back to previous version...");
-
-        let channel = *self.current_channel.read().await;
-        let previous = self
-            .update_history
-            .read()
-            .await
-            .iter()
-            .rev()
-            .find(|r| r.channel == channel && r.status == UpdateStatus::Installed)
-            .cloned();
-
-        let prev = previous.ok_or_else(|| anyhow::anyhow!("No previous version to rollback to"))?;
-
-        self.update_history.write().await.push(UpdateRecord {
-            timestamp: Utc::now(),
-            version: prev.version.clone(),
-            channel: prev.channel,
-            status: UpdateStatus::RolledBack,
-            checksum: prev.checksum.clone(),
-        });
-
-        info!("Rollback completed: {}", prev.version);
+        info!("Rolling back with bootc...");
+        let status = Command::new("bootc").arg("rollback").status().await?;
+        if !status.success() {
+            anyhow::bail!("bootc rollback failed with status {}", status);
+        }
         Ok(())
     }
 
@@ -502,9 +463,10 @@ mod tests {
     #[test]
     fn test_default_schedule_config() {
         let config = ScheduleConfig::default();
-        assert_eq!(config.schedule_type, ScheduleType::Automatic);
+        assert_eq!(config.current_channel, UpdateChannel::Stable);
+        assert_eq!(config.schedule_type, ScheduleType::Manual);
         assert_eq!(config.update_time, "02:00");
-        assert!(config.auto_install);
+        assert!(!config.auto_install);
     }
 
     #[test]

@@ -213,17 +213,6 @@ ARG VCS_REF
 ARG LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64=""
 ARG LIFEOS_NVIDIA_KMOD_CERT_DER_B64=""
 
-LABEL org.lifeos.channel="${LIFEOS_CHANNEL}" \
-      org.lifeos.version="${LIFEOS_VERSION}" \
-      org.lifeos.build-date="${BUILD_DATE}" \
-      org.lifeos.vcs-ref="${VCS_REF}" \
-      org.opencontainers.image.source="https://github.com/hectormrm/lifeos" \
-      org.opencontainers.image.title="LifeOS" \
-      org.opencontainers.image.description="AI-focused operating system with COSMIC Desktop" \
-      org.opencontainers.image.version="${LIFEOS_VERSION}" \
-      org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.revision="${VCS_REF}"
-
 # --- Repositorios adicionales (COSMIC y RPMFusion) ---
 RUN dnf -y install dnf5-plugins && \
     dnf -y copr enable ryanabx/cosmic-epoch && \
@@ -448,19 +437,11 @@ RUN set -eux && \
         test -f /boot/efi/EFI/fedora/grubx64.efi; \
     fi
 
-# --- CLI Life y Daemon (binarios compilados) ---
-COPY --from=builder /out/life /usr/bin/life
-COPY --from=builder /out/lifeosd /usr/bin/lifeosd
+# --- CLI LifeOS build artifacts needed before app/config layers ---
+# Keep the frequently changing CLI/dashboard bits for later so they do not
+# force new copies of large model/runtime layers on every update.
 COPY --from=builder /out/lifeos-train-wakeword /usr/local/bin/lifeos-train-wakeword
-COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
-
-# --- Dashboard web (Axi control panel) ---
-COPY daemon/static/dashboard /usr/share/lifeos/dashboard
-
-RUN chmod +x /usr/bin/life /usr/bin/lifeosd /usr/local/bin/lifeos-train-wakeword && \
-    ln -sf /usr/bin/life /usr/local/bin/life && \
-    ln -sf /usr/bin/lifeosd /usr/local/bin/lifeosd && \
-    life --version
+RUN chmod +x /usr/local/bin/lifeos-train-wakeword
 
 # --- AI Runtime (llama.cpp / llama-server) ---
 # Built in isolated stage to avoid pulling/removing toolchains in the final image.
@@ -550,11 +531,6 @@ RUN set -eux && \
     python3 -c "import tomllib, pathlib; data = tomllib.loads(pathlib.Path('/tmp/lifeos-workspace.Cargo.toml').read_text()); workspace = data['workspace']; lifeos = workspace['metadata']['lifeos']; print(f'LIFEOS_PACKAGE_VERSION={workspace[\"package\"][\"version\"]}'); print(f'LIFEOS_CODENAME={lifeos[\"codename\"]}'); print(f'LIFEOS_THEME_MARKER_EPOCH={lifeos[\"theme_marker_epoch\"]}')" > /usr/share/lifeos/version-metadata.env && \
     test -s /usr/share/lifeos/version-metadata.env && \
     rm -f /tmp/lifeos-workspace.Cargo.toml
-
-RUN echo "LIFEOS_CHANNEL=${LIFEOS_CHANNEL}" > /etc/lifeos/channel && \
-    echo "LIFEOS_VERSION=${LIFEOS_VERSION}" >> /etc/lifeos/channel && \
-    echo "BUILD_DATE=${BUILD_DATE}" >> /etc/lifeos/channel && \
-    echo "VCS_REF=${VCS_REF}" >> /etc/lifeos/channel
 
 # LifeOS COSMIC Themes (index.theme + GTK4 CSS)
 COPY image/files/usr/share/themes/LifeOS-Dark/index.theme        /usr/share/themes/LifeOS-Dark/index.theme
@@ -763,7 +739,8 @@ COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-over
 # Dashboard access: only via Axi tray icon → "Abrir Dashboard"
 # COPY image/files/etc/xdg/autostart/lifeos-axi-experience.desktop /etc/xdg/autostart/lifeos-axi-experience.desktop
 # COPY image/files/usr/share/applications/lifeos-axi-dashboard.desktop /usr/share/applications/lifeos-axi-dashboard.desktop
-# lifeosd.service — user service so it inherits Wayland, PipeWire, D-Bus
+# lifeosd.service — canonical runtime is a user service so it inherits
+# Wayland, PipeWire, D-Bus, and the active user's session state.
 # This lets the GTK4 mini-widget (Eye of Axi) render on the desktop and
 # gives native access to audio, camera, and screen capture.
 RUN printf '%s\n' \
@@ -793,7 +770,8 @@ RUN printf '%s\n' \
     '[Install]' \
     'WantedBy=default.target' \
     > /usr/lib/systemd/user/lifeosd.service
-# Keep a system-level alias so `systemctl status lifeosd` still works for debugging
+# Keep a system-level alias only for compatibility/debugging.
+# This alias is NOT the primary runtime contract for lifeosd.
 RUN ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/system/lifeosd.service
 
 # Habilitar servicios via symlinks
@@ -804,6 +782,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/user/default.target.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
+    # Canonical enablement: lifeosd starts from the user's default.target.
     ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
@@ -837,6 +816,39 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
 RUN mkdir -p /etc/systemd/system && \
     ln -sf /dev/null /etc/systemd/system/bootc-fetch-apply-updates.timer && \
     ln -sf /dev/null /etc/systemd/system/bootc-fetch-apply-updates.service
+
+# --- CLI Life y Daemon (binarios compilados) ---
+# Keep app binaries and dashboard late in the Dockerfile because they change
+# more often than the large OS/model layers above.
+COPY --from=builder /out/life /usr/bin/life
+COPY --from=builder /out/lifeosd /usr/bin/lifeosd
+COPY --from=builder /opt/lifeos-devtools/bin/cargo-audit /usr/local/bin/cargo-audit
+
+# --- Dashboard web (Axi control panel) ---
+COPY daemon/static/dashboard /usr/share/lifeos/dashboard
+
+RUN chmod +x /usr/bin/life /usr/bin/lifeosd /usr/local/bin/cargo-audit && \
+    ln -sf /usr/bin/life /usr/local/bin/life && \
+    ln -sf /usr/bin/lifeosd /usr/local/bin/lifeosd
+
+# --- Runtime metadata that changes on almost every build ---
+# Keep labels/channel markers at the end so BUILD_DATE/VCS_REF churn does not
+# invalidate cache and layer reuse for the full OS filesystem payload.
+RUN echo "LIFEOS_CHANNEL=${LIFEOS_CHANNEL}" > /etc/lifeos/channel && \
+    echo "LIFEOS_VERSION=${LIFEOS_VERSION}" >> /etc/lifeos/channel && \
+    echo "BUILD_DATE=${BUILD_DATE}" >> /etc/lifeos/channel && \
+    echo "VCS_REF=${VCS_REF}" >> /etc/lifeos/channel
+
+LABEL org.lifeos.channel="${LIFEOS_CHANNEL}" \
+      org.lifeos.version="${LIFEOS_VERSION}" \
+      org.lifeos.build-date="${BUILD_DATE}" \
+      org.lifeos.vcs-ref="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/hectormrm/lifeos" \
+      org.opencontainers.image.title="LifeOS" \
+      org.opencontainers.image.description="AI-focused operating system with COSMIC Desktop" \
+      org.opencontainers.image.version="${LIFEOS_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}"
 
 # --- Branding y Personalización ---
 RUN set -eu && \

@@ -149,10 +149,10 @@ enum Commands {
     /// xdg-desktop-portal integration for app sandboxing
     #[clap(subcommand)]
     Portal(commands::portal::PortalCommands),
-    /// Beta testing commands
-    #[clap(subcommand)]
+    /// Legacy compatibility shim for the pre-release channel flow
+    #[clap(subcommand, hide = true)]
     Beta(BetaCommands),
-    /// Submit feedback for beta testing
+    /// Submit user feedback
     #[clap(subcommand)]
     Feedback(FeedbackCommands),
     /// LifeOS Lab - autonomous improvement pipeline
@@ -161,19 +161,19 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum BetaCommands {
-    /// Join the beta testing program
+    /// Switch guidance to the candidate channel
     Join,
-    /// Download latest beta build
+    /// Show where release artifacts live now
     Download,
-    /// Check for beta updates
+    /// Show canonical pre-release update guidance
     Update,
-    /// Rollback to stable
+    /// Show stable rollback guidance
     Rollback,
-    /// Leave the beta program
+    /// Switch guidance back to stable
     Leave,
-    /// Check beta status
+    /// Explain how beta maps to canonical channels
     Status,
-    /// View known issues
+    /// View pre-release known issues
     KnownIssues,
 }
 
@@ -299,58 +299,121 @@ fn print_axi_facts() {
 }
 
 async fn handle_beta_command(cmd: BetaCommands) -> anyhow::Result<()> {
+    println!(
+        "{}",
+        "`life beta` is deprecated. Use canonical update channels instead."
+            .yellow()
+            .bold()
+    );
+    println!(
+        "{}",
+        "Canonical channels: stable (production), candidate (pre-release), edge (bleeding edge)."
+            .dimmed()
+    );
+    println!();
+
     match cmd {
         BetaCommands::Join => {
-            println!("{}", "🚀 Joining LifeOS Beta Program...".bold().blue());
+            println!(
+                "{}",
+                "Use `candidate` for pre-release testing.".bold().blue()
+            );
+            println!("Switch the host image explicitly with:");
+            println!(
+                "  {}",
+                "sudo bootc switch ghcr.io/hectormr206/lifeos:candidate".cyan()
+            );
+            println!("Then keep local preference aligned in `/etc/lifeos/lifeos.toml`:");
+            println!("  {}", "[updates]".cyan());
+            println!("  {}", "channel = \"candidate\"".cyan());
             println!();
-            println!("Opening beta registration...");
-            println!("Visit: {}", "https://lifeos.io/beta".cyan().underline());
-            println!();
-            println!("Or use the web form to apply.");
+            println!("Check current state with: {}", "life update status".cyan());
             Ok(())
         }
         BetaCommands::Download => {
-            println!("{}", "⬇️  Downloading latest beta...".bold().blue());
-            println!();
-            println!("Latest beta available at:");
-            println!("  {}", "https://github.com/hectormr/lifeos/releases".cyan());
+            println!(
+                "{}",
+                "LifeOS updates no longer revolve around beta downloads."
+                    .bold()
+                    .blue()
+            );
+            println!("Normal host updates come from signed GHCR images staged by `bootc`.");
+            println!(
+                "Release page: {}",
+                "https://github.com/hectormr/lifeos/releases".cyan()
+            );
+            println!("Canonical status path: {}", "life update status".cyan());
             Ok(())
         }
         BetaCommands::Update => {
-            println!("{}", "🔄 Checking for beta updates...".bold().blue());
-            println!();
-            println!("To update to the latest beta:");
-            println!("  {}", "life update apply --channel beta".cyan());
+            println!(
+                "{}",
+                "Pre-release updates map to the `candidate` channel."
+                    .bold()
+                    .blue()
+            );
+            println!("If you are already on `candidate`, use:");
+            println!("  {}", "life update".cyan());
+            println!("If you are still on another track, switch first with:");
+            println!(
+                "  {}",
+                "sudo bootc switch ghcr.io/hectormr206/lifeos:candidate".cyan()
+            );
+            println!("Then verify with: {}", "life update status".cyan());
             Ok(())
         }
         BetaCommands::Rollback => {
-            println!("{}", "⏮️  Rolling back to stable...".bold().yellow());
-            println!();
-            println!("This will revert to the last stable version.");
-            println!("Run: {}", "life rollback".cyan());
+            println!("{}", "Rollback stays canonical too.".bold().yellow());
+            println!(
+                "To return to the previous deployment, run: {}",
+                "life rollback".cyan()
+            );
+            println!(
+                "To pin the stable track explicitly, run: {}",
+                "sudo bootc switch ghcr.io/hectormr206/lifeos:stable".cyan()
+            );
             Ok(())
         }
         BetaCommands::Leave => {
-            println!("{}", "👋 Leaving beta program...".bold().yellow());
-            println!();
-            println!("You will no longer receive beta updates.");
-            println!("To rejoin later, run: {}", "life beta join".cyan());
+            println!(
+                "{}",
+                "Leaving beta means moving back to `stable`."
+                    .bold()
+                    .yellow()
+            );
+            println!(
+                "Switch the host image with: {}",
+                "sudo bootc switch ghcr.io/hectormr206/lifeos:stable".cyan()
+            );
+            println!("Then keep local preference aligned in `/etc/lifeos/lifeos.toml`.");
+            println!(
+                "Check resulting state with: {}",
+                "life update status".cyan()
+            );
             Ok(())
         }
         BetaCommands::Status => {
-            println!("{}", "📊 Beta Program Status".bold().blue());
+            println!("{}", "`beta` is not a canonical channel.".bold().blue());
+            println!("Use the real channels instead:");
+            println!("  {}", "stable     production/default track".cyan());
+            println!("  {}", "candidate  pre-release validation track".cyan());
+            println!("  {}", "edge       latest development track".cyan());
             println!();
-            println!("Channel:     {}", "beta".cyan());
-            println!("Version:     {}", "0.2.0-beta.1".cyan());
-            println!("Build:       {}", "2026-02-24".dimmed());
-            println!();
-            println!("Run {} for available updates.", "life beta update".cyan());
+            println!(
+                "Inspect current state with: {}",
+                "life update status".cyan()
+            );
             Ok(())
         }
         BetaCommands::KnownIssues => {
-            println!("{}", "🐛 Known Issues in Beta".bold().blue());
-            println!();
-            println!("{}", "View all known issues:".dimmed());
+            println!(
+                "{}",
+                "Known issues live in the normal tracker.".bold().blue()
+            );
+            println!(
+                "{}",
+                "For pre-release validation, review candidate-related issues:".dimmed()
+            );
             println!(
                 "  {}",
                 "https://github.com/hectormr/lifeos/issues?q=is:issue+label:beta".cyan()
@@ -361,7 +424,7 @@ async fn handle_beta_command(cmd: BetaCommands) -> anyhow::Result<()> {
 }
 
 async fn handle_feedback_command(cmd: FeedbackCommands) -> anyhow::Result<()> {
-    // Call the beta-feedback script
+    // Call the legacy feedback helper if it exists.
     let script_path = std::path::PathBuf::from("/usr/local/share/lifeos/scripts/beta-feedback.sh");
 
     let subcommand = match cmd {

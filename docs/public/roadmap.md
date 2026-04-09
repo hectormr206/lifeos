@@ -18,14 +18,14 @@ LifeOS is built in Mexico and published for a global open-source audience. That 
 
 ## What is real today
 
-These foundations are already present in the project today:
+These foundations are already present in the project today, but not all of them are equally mature:
 
-- Local inference through the LifeOS AI runtime
-- Encrypted local memory foundations
-- Desktop control plane foundations
-- Remote interaction through Telegram
-- Voice, vision, and automation groundwork
-- Public branding and landing page foundations
+- Local inference through the LifeOS AI runtime (`validated on host`)
+- Encrypted local memory foundations (`integrated in repo`)
+- Desktop control plane foundations (`integrated in repo`)
+- Remote interaction through Telegram (`validated on host`)
+- Voice, vision, and automation groundwork (`experimental`)
+- Public branding and landing page foundations (`integrated in repo`)
 
 Important:
 
@@ -139,7 +139,8 @@ When possible, a feature should fit one of these realities:
 
 - validated on a real host
 - integrated in repo
-- partial / still being wired end-to-end
+- experimental / still being wired end-to-end
+- shipped disabled / feature-gated
 
 That honesty matters because LifeOS is being built in public.
 

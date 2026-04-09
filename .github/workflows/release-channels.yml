@@ -30,7 +30,17 @@ env:
   TMPDIR: /var/tmp
 
 jobs:
+  truth-alignment:
+    name: Truth Alignment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify truth alignment
+        run: make truth-alignment
+
   determine-channel:
+    needs: truth-alignment
     runs-on: ubuntu-latest
     outputs:
       channel: ${{ steps.set-channel.outputs.channel }}
@@ -290,9 +300,11 @@ jobs:
           VERSION="${{ needs.determine-channel.outputs.version }}"
           DIGEST="${{ needs.build-and-push.outputs.digest }}"
           DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-          
+
           mkdir -p channels
-          
+
+          # This manifest is a CI publication index only. The canonical release
+          # artifact remains the signed GHCR image digest consumed by bootc.
           cat > channels/${CHANNEL}.json << EOF
           {
             "channel": "${CHANNEL}",
@@ -300,6 +312,8 @@ jobs:
             "tag": "${TAG}",
             "digest": "${DIGEST}",
             "image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}:${TAG}",
+            "manifest_role": "publication-index",
+            "source_of_truth": "ghcr-digest",
             "released_at": "${DATE}",
             "commit": "${{ github.sha }}"
           }

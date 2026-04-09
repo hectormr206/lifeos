@@ -12,13 +12,13 @@ This guide is for system administrators managing LifeOS deployments.
 ├─────────────────────────────────────────────────────────────┤
 │  User Space                                                  │
 │  ├── life CLI           - User interface                     │
-│  ├── lifeosd            - System daemon                      │
+│  ├── lifeosd            - Main user-session daemon           │
 │  └── llama-server       - AI inference engine (llama.cpp)    │
 ├─────────────────────────────────────────────────────────────┤
-│  System Services                                             │
-│  ├── lifeosd.service    - Main daemon                        │
-│  ├── lifeos-update.timer - Periodic update checks            │
-│  └── lifeos-health.timer - Health monitoring                 │
+│  Service Ownership                                           │
+│  ├── lifeosd.service    - User service (canonical runtime)   │
+│  ├── llama-server.service - System service (canonical runtime) │
+│  └── lifeos-update-check.service - System update probe       │
 ├─────────────────────────────────────────────────────────────┤
 │  bootc (Image-based Updates)                                 │
 │  ├── booted deployment  - Currently running system           │
@@ -45,9 +45,11 @@ This guide is for system administrators managing LifeOS deployments.
 
 ## Service Management
 
+Canonical runtime reference: `docs/architecture/service-runtime.md`.
+
 ### lifeosd (LifeOS Daemon)
 
-The system daemon provides:
+The daemon provides:
 
 - Health monitoring
 - Update checking
@@ -55,50 +57,59 @@ The system daemon provides:
 - Desktop notifications
 - D-Bus interface
 
+`lifeosd` is operated canonically as a per-user service so it can inherit the desktop session
+(Wayland, D-Bus, PipeWire, user secrets) without requiring a root-owned foreground session.
+
 ```bash
 # Start/stop/restart
-sudo systemctl start lifeosd
-sudo systemctl stop lifeosd
-sudo systemctl restart lifeosd
+systemctl --user start lifeosd
+systemctl --user stop lifeosd
+systemctl --user restart lifeosd
 
-# Enable/disable at boot
-sudo systemctl enable lifeosd
-sudo systemctl disable lifeosd
+# Enable/disable at login
+systemctl --user enable lifeosd
+systemctl --user disable lifeosd
 
 # View status
-systemctl status lifeosd
+systemctl --user status lifeosd
 
 # View logs
-journalctl -u lifeosd -f
+journalctl --user -u lifeosd -f
 ```
 
-### Timer-Based Services
+Legacy/debug only when a host still exposes the system-scope alias:
 
 ```bash
-# List LifeOS timers
-systemctl list-timers lifeos-*
+sudo systemctl status lifeosd
+```
 
-# Trigger update check manually
-systemctl start lifeos-update
+### Update Check Service
 
-# Trigger health check manually
-systemctl start lifeos-health
+```bash
+# Trigger the update probe manually
+sudo systemctl start lifeos-update-check.service
 
-# View timer logs
-journalctl -u lifeos-update
-journalctl -u lifeos-health
+# View probe logs
+journalctl -u lifeos-update-check.service
 ```
 
 ### llama-server Service
 
+`llama-server` is operated canonically as a system service. Some recovery flows and
+host-specific overrides may also run it as a user unit, but that is fallback behavior,
+not the primary runtime model.
+
 ```bash
-# Manage llama-server (AI inference)
+# Manage default system service
 sudo systemctl start llama-server
 sudo systemctl stop llama-server
 sudo systemctl restart llama-server
 
 # View llama-server logs
 journalctl -u llama-server -f
+
+# Fallback only if this host does not ship the system unit
+systemctl --user status llama-server
 ```
 
 ## Configuration Reference
@@ -186,36 +197,35 @@ bootc status
 # Check for updates
 bootc upgrade --check
 
-# Stage an update (download only)
+# Stage an update for next boot
 bootc upgrade
-
-# Apply update (requires reboot)
-bootc upgrade --apply
 
 # Rollback to previous version
 bootc rollback
 
-# Switch to different image
-bootc switch ghcr.io/lifeos/lifeos:testing
+# Switch to different image/channel explicitly
+bootc switch ghcr.io/hectormr206/lifeos:candidate
 ```
 
 ### Update Channels
 
 | Channel   | Purpose             | Stability |
 | --------- | ------------------- | --------- |
-| `stable`  | Production use      | High      |
-| `testing` | Pre-release testing | Medium    |
-| `nightly` | Latest development  | Low       |
+| `stable`    | Production use         | High      |
+| `candidate` | Pre-release validation | Medium    |
+| `edge`      | Latest development     | Low       |
+
+Canonical rule:
+
+- `bootc status` tells you what deployment is actually booted/staged.
+- GHCR digest is the release artifact that matters operationally.
+- `lifeos.toml` and `channels.toml` are policy/preferences only.
 
 ### Custom Update Server
 
-Configure a custom OCI registry:
-
-```toml
-[updates]
-channel = "custom"
-custom_registry = "registry.example.com/lifeos"
-```
+LifeOS currently documents `stable`, `candidate`, and `edge` as the supported
+channels for the signed GHCR release flow. A custom OCI registry path is not
+part of the canonical shipped model today.
 
 ## Health Monitoring
 
@@ -240,11 +250,12 @@ The daemon performs these checks:
 ### Manual Health Check
 
 ```bash
-# Run all health checks
-life osd health-check
+# User-session daemon health
+life doctor
+life check
 
-# Or via systemctl
-systemctl start lifeos-health
+# System image state
+sudo bootc status
 ```
 
 ## Security
@@ -263,14 +274,13 @@ touch /usr/test  # Will fail
 
 ### Service Hardening
 
-The `lifeosd.service` includes:
+The canonical `lifeosd` user unit includes:
 
 - `NoNewPrivileges=true`
-- `ProtectSystem=strict`
-- `ProtectHome=true`
-- `ProtectKernelTunables=true`
-- `ProtectKernelModules=true`
-- `ProtectControlGroups=true`
+- `PrivateTmp=yes`
+- `Restart=on-failure`
+- `WatchdogSec=300`
+- `Environment=LIFEOS_RUNTIME_DIR=%t/lifeos`
 
 ### SELinux
 
@@ -340,7 +350,7 @@ bootc rollback  # If needed
 journalctl -t lifeos
 
 # View daemon logs
-journalctl -u lifeosd
+journalctl --user -u lifeosd
 
 # View bootc logs
 journalctl -t bootc
@@ -358,7 +368,7 @@ The daemon collects metrics:
 curl http://localhost:8082/metrics
 
 # Or check logs
-journalctl -u lifeosd | grep "metrics"
+journalctl --user -u lifeosd | grep "metrics"
 ```
 
 ### Prometheus Integration
@@ -416,14 +426,14 @@ ansible-playbook -i inventory site.yml
 
 ```bash
 # Check for errors
-journalctl -u lifeosd -n 50
+journalctl --user -u lifeosd -n 50
 
 # Verify configuration
 toml-test /etc/lifeos/daemon.toml
 
 # Reset to defaults
 sudo rm /etc/lifeos/daemon.toml
-sudo systemctl restart lifeosd
+systemctl --user restart lifeosd
 ```
 
 ### Update Failures
@@ -443,10 +453,13 @@ bootc cleanup
 
 ```bash
 # Check llama-server status
-systemctl status llama-server
+sudo systemctl status llama-server
 
 # View AI service logs
 journalctl -u llama-server -n 50
+
+# Fallback only if the host runs a user-scoped override instead
+systemctl --user status llama-server
 
 # Test inference
 curl http://127.0.0.1:8082/v1/chat/completions \
@@ -503,9 +516,9 @@ dbus-send --system --print-reply \
 ## Resources
 
 - **Man pages**: `man life`, `man lifeosd`, `man bootc`
-- **Online docs**: https://docs.lifeos.io/admin
-- **Community**: https://community.lifeos.io
-- **GitHub**: https://github.com/lifeos/lifeos
+- **Documentation index**: `docs/README.md`
+- **Operations docs**: `docs/operations/`
+- **GitHub**: https://github.com/hectormr/lifeos
 
 ---
 

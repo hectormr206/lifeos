@@ -1,6 +1,6 @@
 // Allow wheel group members to manage LifeOS system services without a password.
-// This enables Axi (lifeosd) to transparently manage its own services:
-//   - Restart lifeosd after model updates (hot-reload fallback)
+// This enables Axi (lifeosd) to transparently manage its own ecosystem:
+//   - Restart the legacy/debug system-scope alias of lifeosd when needed
 //   - Manage llama-server for GPU offload (Game Guard)
 //   - Manage whisper-stt for voice pipeline
 //   - Reload systemd daemon after drop-in changes

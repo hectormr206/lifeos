@@ -5,15 +5,16 @@
 **Diagnostico:**
 ```bash
 life doctor                      # Diagnostico rapido de salud
-systemctl status lifeosd          # El daemon esta corriendo?
-systemctl status llama-server     # El modelo local esta corriendo?
+systemctl --user status lifeosd   # El daemon principal corre como user service
+sudo systemctl status llama-server  # Runtime canonico del modelo local
 curl http://127.0.0.1:8081/api/v1/health  # Estado agregado de salud
-journalctl -u lifeosd --since "10 min ago"  # Logs recientes
+journalctl --user -u lifeosd --since "10 min ago"  # Logs recientes del daemon
 ```
 
 **Solucion comun:**
-- Si lifeosd no esta corriendo: `sudo systemctl restart lifeosd`
+- Si lifeosd no esta corriendo: `systemctl --user restart lifeosd`
 - Si llama-server no esta corriendo: `sudo systemctl restart llama-server`
+- Si `llama-server` no existe como system service en ese host: probar `systemctl --user restart llama-server` solo como fallback puntual
 - Si el modelo local fallo: verificar `/var/lib/lifeos/models/` tiene el archivo .gguf
 
 ## Modelo local muy lento
@@ -23,11 +24,11 @@ journalctl -u lifeosd --since "10 min ago"  # Logs recientes
 life doctor                      # Verifica provider local, disco y DBs
 life ai status                    # Ver velocidad del modelo
 nvidia-smi                        # GPU esta disponible?
-cat /etc/lifeos/llama-server.env  # GPU_LAYERS=99?
+grep '^LIFEOS_AI_GPU_LAYERS=' /etc/lifeos/llama-server.env
 ```
 
 **Solucion:**
-- Si GPU_LAYERS=0: `sudo sed -i 's/GPU_LAYERS=0/GPU_LAYERS=99/' /etc/lifeos/llama-server.env && sudo systemctl restart llama-server`
+- Si `LIFEOS_AI_GPU_LAYERS=0`: editar `/etc/lifeos/llama-server.env` y reiniciar `llama-server`
 - Si no hay GPU: el modelo corre en CPU (8-30 tok/s es normal)
 
 ## Actualizacion de LifeOS fallo
@@ -54,7 +55,7 @@ life doctor
 curl http://127.0.0.1:8081/api/v1/health  # La API responde?
 ```
 
-Si no responde, reinicia el daemon: `sudo systemctl restart lifeosd`
+Si no responde, reinicia el daemon: `systemctl --user restart lifeosd`
 
 ## La API de health reporta base de datos corrupta
 
@@ -69,7 +70,7 @@ cp /var/lib/lifeos/<nombre>.db /var/lib/lifeos/<nombre>.db.corrupt
 rm /var/lib/lifeos/<nombre>.db
 
 # Reiniciar el daemon
-sudo systemctl restart lifeosd
+systemctl --user restart lifeosd
 ```
 
 ## Espacio en disco bajo

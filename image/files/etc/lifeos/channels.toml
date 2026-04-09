@@ -1,3 +1,7 @@
+# Channel policy defaults for a host already tracking a LifeOS OCI image.
+# Canonical runtime truth is the booted/staged deployment reported by `bootc`
+# against GHCR. This file only describes local channel policy and guardrails.
+
 [channels.stable]
 name = "stable"
 description = "Production-ready releases - recommended for most users"

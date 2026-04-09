@@ -47,27 +47,26 @@ This guide covers installing LifeOS on bare metal or virtual machines.
 - AMD Ryzen-based systems
 - Custom builds with NVIDIA/AMD GPUs
 
-See [HARDWARE_COMPATIBILITY.md](./HARDWARE_COMPATIBILITY.md) for detailed compatibility info.
+See the [documentation index](../README.md) for the current hardware, operations, and release docs.
 
 ## Download
 
 ### Official Releases
 
-Download the latest ISO from:
+Download the latest published install media from GitHub Releases:
 - GitHub Releases: https://github.com/hectormr/lifeos/releases
-- Official mirror: https://lifeos.io/download
 
 ### Verify Download
 
-Always verify the SHA256 checksum:
+Always verify the SHA256 checksum that matches the exact release asset you downloaded:
 
 ```bash
-# Download ISO and checksum
-wget https://github.com/hectormr/lifeos/releases/download/v0.1.0/lifeos-0.1.0-x86_64.iso
-wget https://github.com/hectormr/lifeos/releases/download/v0.1.0/lifeos-0.1.0-x86_64.iso.sha256
+# Example: latest release asset names vary by version
+wget https://github.com/hectormr/lifeos/releases/download/<tag>/lifeos-<version>-x86_64.iso
+wget https://github.com/hectormr/lifeos/releases/download/<tag>/lifeos-<version>-x86_64.iso.sha256
 
 # Verify
-sha256sum -c lifeos-0.1.0-x86_64.iso.sha256
+sha256sum -c lifeos-<version>-x86_64.iso.sha256
 ```
 
 ## Create Bootable Media
@@ -191,21 +190,32 @@ life first-boot
 
 This will:
 - Configure timezone
-- Set up automatic updates
+- Set up update preferences
 - Download AI models (optional)
 - Configure privacy settings
 
 ### Update System
 
 ```bash
-# Check for updates
-life update check
+# Inspect local preference and real bootc state
+life update status
+sudo bootc status
 
-# Apply updates
-life update apply
+# Check whether a newer deployment exists
+sudo bootc upgrade --check
 
-# Or use GNOME Software
+# Stage the next deployment for the next reboot
+life update
+# Equivalent low-level command:
+sudo bootc upgrade
+
+# Reboot when you are ready to boot into the staged deployment
+sudo reboot
 ```
+
+Canonical rule: the installed/staged OS version is whatever `bootc status`
+reports for the tracked GHCR image. `lifeos.toml` only stores preference such as
+the desired channel.
 
 ### Install Additional Software
 
@@ -264,7 +274,7 @@ sudo reboot
 
 On image-mode/bootc hosts, avoid relying on runtime `akmods` installs on read-only `/usr`.
 Prefer updating to an image that already contains signed NVIDIA modules.
-See [`docs/NVIDIA_SECURE_BOOT.md`](./NVIDIA_SECURE_BOOT.md) for the full build + enrollment flow.
+See [`../operations/nvidia-secure-boot.md`](../operations/nvidia-secure-boot.md) for the full build + enrollment flow.
 Current release images also include bootc kargs to prefer proprietary NVIDIA over `nouveau`
 (`rd.driver.blacklist=nouveau`, `modprobe.blacklist=nouveau`, `nouveau.modeset=0`).
 
@@ -279,7 +289,7 @@ AMD GPUs work out of the box with Mesa drivers.
 life ai start
 
 # Pull recommended models
-life ai pull qwen3:8b
+life ai pull qwen3.5-4b
 
 # Check status
 life ai status --verbose
@@ -331,7 +341,7 @@ systemctl --user restart pipewire
 #### High CPU/Memory usage
 ```bash
 # Check resource usage
-life status resources
+top
 
 # Check AI service
 life ai status
@@ -343,7 +353,7 @@ life ai stop
 #### Boot problems
 ```bash
 # From recovery mode
-life recover boot
+life recover
 
 # Rollback to previous version
 life rollback
@@ -351,9 +361,9 @@ life rollback
 
 ### Getting Help
 
-1. Check [HARDWARE_COMPATIBILITY.md](./HARDWARE_COMPATIBILITY.md)
+1. Review the [documentation index](../README.md)
 2. Search [GitHub Issues](https://github.com/hectormr/lifeos/issues)
-3. Join [Discord Community](https://discord.gg/lifeos)
+3. Check the relevant operations runbook under `docs/operations/`
 4. File a bug report: `life feedback bug`
 
 ## Advanced Topics
@@ -387,6 +397,6 @@ ssh root@<installer-ip>
 
 ## See Also
 
-- [HARDWARE_COMPATIBILITY.md](./HARDWARE_COMPATIBILITY.md) - Detailed hardware support
-- [BETA_TESTING.md](./BETA_TESTING.md) - Join the beta program
-- [README.md](../README.md) - Project overview
+- [../README.md](../README.md) - Documentation index
+- [../operations/nvidia-secure-boot.md](../operations/nvidia-secure-boot.md) - NVIDIA + Secure Boot flow
+- [../../README.md](../../README.md) - Project overview

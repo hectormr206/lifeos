@@ -26,6 +26,7 @@ Run these before opening a PR:
 ```bash
 make check-daemon-prereqs
 make phase3-hardening
+make truth-alignment
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features --no-fail-fast
@@ -35,5 +36,6 @@ cargo test --package lifeos-integration-tests --test integration_tests -- --test
 ## More Contributor Docs
 
 - `docs/contributor/contributor-guide.md` — contributor workflow and local setup
+- `docs/contributor/claim-vs-runtime-checklist.md` — fast guardrail for docs/runtime/update claims
 - `docs/contributor/testing-conventions.md` — testing expectations and regression coverage
 - `docs/README.md` — documentation index

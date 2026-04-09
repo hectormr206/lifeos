@@ -34,6 +34,15 @@ Public messaging should keep two truths together:
 
 The public front door should avoid sounding region-exclusive or turning the brand into tourism or folklore.
 
+Public-facing copy should also inherit the repo maturity taxonomy:
+
+- **validated on host**
+- **integrated in repo**
+- **experimental**
+- **shipped disabled / feature-gated**
+
+That keeps the landing honest about what is already defendable versus what is still a strong foundation in progress.
+
 ---
 
 ## 2. Why This Matters Now
@@ -270,11 +279,11 @@ Three short pillars:
 
 Only claims that are already real enough to defend:
 
-- local inference
-- encrypted local memory
-- desktop control plane
-- Telegram remote loop
-- voice / vision / automation foundations
+- local inference (`validated on host`)
+- encrypted local memory foundations (`integrated in repo`)
+- desktop control plane foundations (`integrated in repo`)
+- Telegram remote loop (`validated on host`)
+- voice / vision / automation foundations (`experimental`)
 
 ### 4. Why It Matters
 
@@ -317,6 +326,10 @@ Short 3-step roadmap, not giant roadmap dump.
 **Subheadline**
 
 `LifeOS is an AI-native Linux distribution where your assistant runs on your own machine, remembers locally, and helps across your desktop without sending your life to the cloud.`
+
+Safer variant if you want tighter truth alignment:
+
+`LifeOS is an AI-native Linux distribution exploring a local-first assistant that runs on your own machine, keeps core data local, and is being hardened across desktop control and remote interaction.`
 
 **Primary CTA**
 

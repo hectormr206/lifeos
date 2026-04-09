@@ -9,6 +9,7 @@
 ```bash
 make check-daemon-prereqs
 make phase3-hardening
+make truth-alignment
 ```
 
 4. Open a pull request with a concise summary once local checks pass.
@@ -29,6 +30,7 @@ Use the heavier workflow when the value is clarity, discussion, or historical co
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - `cargo test --workspace --all-features --no-fail-fast`
 - `cargo test --package lifeos-integration-tests --test integration_tests -- --test-threads=1`
+- `make truth-alignment`
 
 ## Build Prerequisites
 
