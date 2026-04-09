@@ -146,6 +146,33 @@ impl PrivacyFilter {
             });
         }
 
+        // Redact SSNs (###-##-#### with optional dashes)
+        let ssn_count = redact_ssns(&mut sanitized);
+        if ssn_count > 0 {
+            redactions.push(Redaction {
+                pattern_type: "ssn".into(),
+                count: ssn_count,
+            });
+        }
+
+        // Redact 16 consecutive digits starting with 4/5/3/6 (credit cards without separators)
+        let cc_nosep_count = redact_credit_cards_no_separator(&mut sanitized);
+        if cc_nosep_count > 0 {
+            redactions.push(Redaction {
+                pattern_type: "credit_card".into(),
+                count: cc_nosep_count,
+            });
+        }
+
+        // Redact base64 tokens (32+ base64 chars that look like tokens)
+        let b64_count = redact_base64_tokens(&mut sanitized);
+        if b64_count > 0 {
+            redactions.push(Redaction {
+                pattern_type: "base64_token".into(),
+                count: b64_count,
+            });
+        }
+
         // Redact IP addresses (private ranges especially)
         let ip_count = redact_pattern(
             &mut sanitized,
@@ -575,6 +602,146 @@ fn redact_private_ips(text: &mut String) -> u32 {
     count
 }
 
+/// Redact SSNs: ###-##-#### with optional dashes
+fn redact_ssns(text: &mut String) -> u32 {
+    let mut count = 0u32;
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            let start = i;
+            // Check not preceded by alphanumeric
+            if start > 0 && chars[start - 1].is_alphanumeric() {
+                result.push(chars[i]);
+                i += 1;
+                continue;
+            }
+            // Try to match ###-##-#### or ######### (9 digits)
+            let mut digits = Vec::new();
+            let mut j = i;
+            while j < chars.len() && (chars[j].is_ascii_digit() || chars[j] == '-') {
+                if chars[j].is_ascii_digit() {
+                    digits.push(chars[j]);
+                }
+                j += 1;
+                // Stop if we have enough digits
+                if digits.len() == 9 {
+                    break;
+                }
+            }
+            if digits.len() == 9 {
+                // Check not followed by digit
+                let followed_ok = j >= chars.len() || !chars[j].is_ascii_digit();
+                if followed_ok {
+                    // Verify it looks like SSN: first 3 digits not 000 or 666 or 9xx
+                    let area: u16 = (digits[0] as u16 - b'0' as u16) * 100
+                        + (digits[1] as u16 - b'0' as u16) * 10
+                        + (digits[2] as u16 - b'0' as u16);
+                    let group: u16 =
+                        (digits[3] as u16 - b'0' as u16) * 10 + (digits[4] as u16 - b'0' as u16);
+                    if area != 0 && area != 666 && area < 900 && group != 0 {
+                        result.push_str("[SSN_REDACTED]");
+                        count += 1;
+                        i = j;
+                        continue;
+                    }
+                }
+            }
+            result.push(chars[start]);
+            i = start + 1;
+            continue;
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    if count > 0 {
+        *text = result;
+    }
+    count
+}
+
+/// Redact 16 consecutive digits starting with 4, 5, 3, or 6 (credit cards without separators)
+fn redact_credit_cards_no_separator(text: &mut String) -> u32 {
+    let mut count = 0u32;
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i].is_ascii_digit()
+            && (i == 0 || !chars[i - 1].is_ascii_digit())
+            && "3456".contains(chars[i])
+        {
+            // Count consecutive digits
+            let start = i;
+            let mut j = i;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            let digit_count = j - start;
+            if digit_count == 16 && (j >= chars.len() || !chars[j].is_ascii_digit()) {
+                result.push_str("[CC_REDACTED]");
+                count += 1;
+                i = j;
+                continue;
+            }
+            // Not a match, emit first char and continue
+            result.push(chars[start]);
+            i = start + 1;
+            continue;
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    if count > 0 {
+        *text = result;
+    }
+    count
+}
+
+/// Redact base64 tokens: sequences of 32+ base64 chars (A-Z, a-z, 0-9, +, /, =)
+/// that are bounded by non-base64 characters.
+fn redact_base64_tokens(text: &mut String) -> u32 {
+    let mut count = 0u32;
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    let is_base64_char =
+        |c: char| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' || c == '_' || c == '-';
+
+    while i < chars.len() {
+        if is_base64_char(chars[i]) && (i == 0 || chars[i - 1].is_whitespace() || chars[i - 1] == '"' || chars[i - 1] == '\'' || chars[i - 1] == ':' || chars[i - 1] == '=') {
+            let start = i;
+            while i < chars.len() && is_base64_char(chars[i]) {
+                i += 1;
+            }
+            let token_len = i - start;
+            if token_len >= 32 {
+                result.push_str("[BASE64_REDACTED]");
+                count += 1;
+            } else {
+                // Not long enough, keep original
+                for c in &chars[start..i] {
+                    result.push(*c);
+                }
+            }
+            continue;
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    if count > 0 {
+        *text = result;
+    }
+    count
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +823,43 @@ mod tests {
         assert!(
             !filter.is_safe_for_tier(SensitivityLevel::Low, crate::llm_router::ProviderTier::Free)
         );
+    }
+
+    #[test]
+    fn test_sanitize_ssn_with_dashes() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("my ssn is 123-45-6789 ok");
+        assert!(result.sanitized_text.contains("[SSN_REDACTED]"));
+        assert!(!result.sanitized_text.contains("123-45-6789"));
+    }
+
+    #[test]
+    fn test_sanitize_ssn_without_dashes() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("ssn 123456789 here");
+        assert!(result.sanitized_text.contains("[SSN_REDACTED]"));
+        assert!(!result.sanitized_text.contains("123456789"));
+    }
+
+    #[test]
+    fn test_sanitize_cc_no_separator() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("card 4111111111111111 done");
+        assert!(result.sanitized_text.contains("[CC_REDACTED]"));
+        assert!(!result.sanitized_text.contains("4111111111111111"));
+    }
+
+    #[test]
+    fn test_sanitize_base64_token() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("key: ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456789+/== end");
+        assert!(result.sanitized_text.contains("[BASE64_REDACTED]"));
+    }
+
+    #[test]
+    fn test_sanitize_short_base64_not_redacted() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("short token ABC123 here");
+        assert!(!result.sanitized_text.contains("[BASE64_REDACTED]"));
     }
 }

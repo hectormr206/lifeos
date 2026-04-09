@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::privacy_filter::{PrivacyLevel, SensitivityLevel};
+use crate::privacy_filter::{PrivacyFilter, PrivacyLevel, SensitivityLevel};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -173,10 +173,29 @@ impl LlmRouter {
     /// Route a chat request to the best available provider.
     pub async fn chat(&self, request: &RouterRequest) -> Result<RouterResponse> {
         let complexity = request.complexity.unwrap_or(TaskComplexity::Medium);
-        let sensitivity = request.sensitivity.unwrap_or(SensitivityLevel::Low);
+        let filter = PrivacyFilter::new(self.privacy_level);
+
+        // P0-1: Sanitize all user message content before sending to any provider
+        let mut sanitized_request = request.clone();
+        let mut highest_sensitivity = request.sensitivity.unwrap_or(SensitivityLevel::Low);
+
+        for msg in &mut sanitized_request.messages {
+            if msg.role == "user" {
+                if let Some(text) = msg.content.as_str() {
+                    let result = filter.sanitize(text);
+                    if result.sensitivity > highest_sensitivity {
+                        highest_sensitivity = result.sensitivity;
+                    }
+                    msg.content = serde_json::Value::String(result.sanitized_text);
+                }
+            }
+        }
+
+        // Use the detected sensitivity (highest between explicit and classified)
+        let sensitivity = highest_sensitivity;
 
         let candidates =
-            self.select_candidates(complexity, sensitivity, &request.preferred_provider);
+            self.select_candidates(complexity, sensitivity, &sanitized_request.preferred_provider);
 
         if candidates.is_empty() {
             if complexity == TaskComplexity::Vision {
@@ -208,9 +227,18 @@ impl LlmRouter {
         let mut last_error = None;
 
         for provider in &candidates {
+            // P0-2: Check if content is safe for this provider's tier
+            if !filter.is_safe_for_tier(sensitivity, provider.tier) {
+                info!(
+                    "[llm_router] skipping {} — content too sensitive for {:?} tier",
+                    provider.name, provider.tier
+                );
+                continue;
+            }
+
             info!("[llm_router] trying provider: {}", provider.name);
             let start = Instant::now();
-            match self.call_provider(provider, request).await {
+            match self.call_provider(provider, &sanitized_request).await {
                 Ok(mut response) => {
                     response.latency_ms = start.elapsed().as_millis() as u64;
                     if let Some(tracker) = self.cost_trackers.get(&provider.name) {
