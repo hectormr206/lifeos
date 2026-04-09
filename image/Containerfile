@@ -470,6 +470,14 @@ RUN set -eux && \
 COPY --from=builder /out/lifeos-train-wakeword /usr/local/bin/lifeos-train-wakeword
 RUN chmod +x /usr/local/bin/lifeos-train-wakeword
 
+# --- Conduit Matrix Homeserver ---
+# TODO: Download Conduit static binary from GitHub releases:
+#   https://gitlab.com/famedly/conduit/-/releases  (or GitHub mirror)
+#   Example: curl -L https://gitlab.com/famedly/conduit/-/releases/v0.10.0/downloads/conduit-x86_64-unknown-linux-musl -o /usr/sbin/conduit
+# For now, expect the binary to be provided externally or built in a separate stage.
+# COPY --from=conduit-builder /out/conduit /usr/sbin/conduit
+# RUN chmod +x /usr/sbin/conduit
+
 # --- AI Runtime (llama.cpp / llama-server) ---
 # Built in isolated stage to avoid pulling/removing toolchains in the final image.
 COPY --from=llama-builder /out/llama-server /usr/sbin/llama-server
@@ -761,6 +769,9 @@ COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.service /usr/lib/
 COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/lifeos-sentinel.service
+COPY image/files/etc/systemd/system/conduit.service /usr/lib/systemd/system/conduit.service
+COPY image/files/usr/local/bin/lifeos-matrix-setup.sh /usr/local/bin/lifeos-matrix-setup.sh
+RUN chmod +x /usr/local/bin/lifeos-matrix-setup.sh
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
 COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf /etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf
 # Dashboard access: only via Axi tray icon → "Abrir Dashboard"
@@ -809,6 +820,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/user/default.target.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
+    ln -sf /usr/lib/systemd/system/conduit.service /usr/lib/systemd/system/multi-user.target.wants/conduit.service && \
     # Canonical enablement: lifeosd starts from the user's default.target.
     ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \

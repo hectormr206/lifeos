@@ -53,7 +53,10 @@ mod health_tracking;
 #[cfg(feature = "homeassistant")]
 mod home_assistant;
 mod lab;
+#[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+mod llm_debate;
 mod llm_router;
+mod matrix_bridge;
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
 mod meeting_archive;
@@ -1904,6 +1907,28 @@ async fn main() -> anyhow::Result<()> {
     };
     #[cfg(not(feature = "telegram"))]
     let telegram_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Start Matrix bridge if Conduit credentials exist (requires telegram feature
+    // because it reuses the agentic chat infrastructure from telegram_tools).
+    #[cfg(feature = "telegram")]
+    let _matrix_handle = {
+        if let Some(mx_config) = matrix_bridge::MatrixConfig::from_credentials_file() {
+            let tq = state.task_queue.clone();
+            let router = state.llm_router.clone();
+            let memory = Some(state.memory_plane_manager.clone());
+            Some(tokio::spawn(async move {
+                matrix_bridge::run_matrix_bridge(mx_config, tq, router, memory).await;
+            }))
+        } else {
+            info!(
+                "Matrix bridge: {} not found, skipping",
+                "/etc/lifeos/matrix-axi-credentials"
+            );
+            None
+        }
+    };
+    #[cfg(not(feature = "telegram"))]
+    let _matrix_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start conversational email bridge if configured (requires telegram feature
     // because it reuses the agentic chat infrastructure from telegram_tools).
