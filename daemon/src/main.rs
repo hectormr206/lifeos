@@ -18,6 +18,7 @@ use tokio::signal;
 use tokio::sync::RwLock;
 
 mod accessibility;
+mod agent_loop;
 mod agent_roles;
 mod agent_runtime;
 mod ai;
@@ -1157,20 +1158,64 @@ async fn main() -> anyhow::Result<()> {
 
     // Autonomous agent — check user presence every 30s, activate when screen locked
     let autonomous_event_bus = state.event_bus.clone();
+    let autonomous_tq = state.task_queue.clone();
+    let autonomous_router = state.llm_router.clone();
     let _autonomous_handle = tokio::spawn(async move {
         let mut agent = autonomous_agent::AutonomousAgent::new();
+        let mut loop_state = agent_loop::AgentLoopState::new();
+        let agent_loop_enabled = agent_loop::is_enabled();
+        let mut was_working = false;
         let mut interval = tokio::time::interval(Duration::from_secs(30));
+        if agent_loop_enabled {
+            info!("[agent_loop] Agent loop enabled (LIFEOS_AGENT_LOOP=true)");
+        }
         loop {
             interval.tick().await;
             if safe_mode::is_safe_mode() {
                 debug!("[safe_mode] Skipping autonomous agent tick — safe mode active");
                 continue;
             }
-            if agent.check_presence().await.is_ok() && agent.should_work() {
+            let presence_ok = agent.check_presence().await.is_ok();
+            let should_work = presence_ok && agent.should_work();
+
+            // Transition: was working → no longer working = reset session
+            if was_working && !should_work {
+                info!(
+                    "[agent_loop] User returned — session ended ({} tasks enqueued)",
+                    loop_state.tasks_enqueued()
+                );
+                loop_state.reset();
+            }
+            was_working = should_work;
+
+            if should_work {
                 let _ = autonomous_event_bus.send(events::DaemonEvent::Notification {
                     priority: "info".into(),
                     message: "Axi en modo autonomo — trabajando mientras estas ausente.".into(),
                 });
+
+                // Agent loop: generate and enqueue proactive tasks
+                if agent_loop_enabled {
+                    match agent_loop::try_generate_task(
+                        &mut loop_state,
+                        &autonomous_tq,
+                        &autonomous_router,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            info!("[agent_loop] Task enqueued successfully");
+                        }
+                        Ok(false) => {
+                            debug!(
+                                "[agent_loop] No task generated (limits/cooldown/nothing to do)"
+                            );
+                        }
+                        Err(e) => {
+                            warn!("[agent_loop] Task generation failed: {}", e);
+                        }
+                    }
+                }
             }
         }
     });
@@ -1441,7 +1486,10 @@ async fn main() -> anyhow::Result<()> {
 
                 match mem.boost_frequent_access().await {
                     Ok(boosted) if boosted > 0 => {
-                        info!("memory_plane: boosted {} frequently-accessed entries", boosted);
+                        info!(
+                            "memory_plane: boosted {} frequently-accessed entries",
+                            boosted
+                        );
                     }
                     Ok(_) => {}
                     Err(e) => warn!("memory_plane: boost_frequent_access failed: {}", e),
@@ -1492,10 +1540,7 @@ async fn main() -> anyhow::Result<()> {
                     }
 
                     // Cross-link recent memories via LLM-extracted triples.
-                    match mem
-                        .cross_link_recent(&Some(housekeeping_ai.clone()))
-                        .await
-                    {
+                    match mem.cross_link_recent(&Some(housekeeping_ai.clone())).await {
                         Ok(links) if links > 0 => {
                             info!(
                                 "memory_plane: cross_link_recent generated {} new links",
