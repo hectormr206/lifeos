@@ -846,6 +846,11 @@ impl LlmRouter {
         &self.providers
     }
 
+    /// Return the configured privacy level.
+    pub fn privacy_level(&self) -> PrivacyLevel {
+        self.privacy_level
+    }
+
     /// Reload providers from the TOML config file.
     /// Called via API endpoint or SIGHUP signal.
     pub fn reload_providers(&mut self) -> Result<usize> {

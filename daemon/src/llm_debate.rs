@@ -16,6 +16,7 @@ use tokio::time::timeout;
 use crate::llm_router::{
     ChatMessage, LlmRouter, ProviderConfig, ProviderTier, RouterRequest,
 };
+use crate::privacy_filter::{PrivacyFilter, PrivacyLevel};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -100,6 +101,9 @@ pub struct DebateRequest {
     /// What kind of question is being debated.
     #[serde(default)]
     pub topic: DebateTopic,
+    /// Privacy level to enforce — filters providers and sanitizes content.
+    #[serde(default)]
+    pub privacy_level: Option<PrivacyLevel>,
 }
 
 fn default_min() -> usize {
@@ -139,6 +143,9 @@ pub struct DebateResponse {
 /// Timeout per individual provider query.
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Global timeout for the entire debate (all providers combined).
+const DEBATE_GLOBAL_TIMEOUT: Duration = Duration::from_secs(90);
+
 // ---------------------------------------------------------------------------
 // Debate Engine
 // ---------------------------------------------------------------------------
@@ -162,15 +169,38 @@ impl DebateEngine {
     /// 4. Return the synthesis + individual opinions.
     pub async fn debate(&self, request: &DebateRequest) -> Result<DebateResponse> {
         let router = self.router.read().await;
+
+        // Determine privacy level: explicit request > router default
+        let privacy_level = request
+            .privacy_level
+            .unwrap_or_else(|| router.privacy_level());
+
+        // Sanitize the question before sending to any provider
+        let filter = PrivacyFilter::new(privacy_level);
+        let filter_result = filter.sanitize(&request.question);
+        let sensitivity = filter_result.sensitivity;
+
         let providers = select_diverse_providers(
             router.provider_configs(),
             request.min_providers,
             request.max_providers,
+            privacy_level,
+            sensitivity,
         );
 
         if providers.is_empty() {
             bail!("No LLM providers available for debate");
         }
+
+        // Build a sanitized request — use filtered question for external providers
+        let sanitized_request = DebateRequest {
+            question: filter_result.sanitized_text.clone(),
+            context: request.context.clone(),
+            min_providers: request.min_providers,
+            max_providers: request.max_providers,
+            topic: request.topic,
+            privacy_level: request.privacy_level,
+        };
 
         // Single provider — skip debate, return directly with a note
         if providers.len() == 1 {
@@ -178,7 +208,8 @@ impl DebateEngine {
                 "[llm_debate] Only 1 provider available ({}), skipping debate",
                 providers[0].name
             );
-            let response = query_single_provider(&router, &providers[0], request).await?;
+            let response =
+                query_single_provider(&router, &providers[0], &sanitized_request).await?;
             return Ok(DebateResponse {
                 synthesis: format!(
                     "[Nota: Solo 1 modelo disponible — sin debate multi-perspectiva]\n\n{}",
@@ -204,13 +235,13 @@ impl DebateEngine {
                 .join(", ")
         );
 
-        // Query all providers in parallel with timeout
+        // Query all providers in parallel with per-provider + global timeout
         let futures: Vec<_> = providers
             .iter()
             .map(|provider| {
                 let name = provider.name.clone();
-                let question = request.question.clone();
-                let context = request.context.clone();
+                let question = sanitized_request.question.clone();
+                let context = sanitized_request.context.clone();
                 let provider_clone = provider.clone();
 
                 // We need to clone the router Arc for each task
@@ -228,6 +259,7 @@ impl DebateEngine {
                                 min_providers: 0,
                                 max_providers: 0,
                                 topic: DebateTopic::General,
+                                privacy_level: None,
                             },
                         )
                         .await
@@ -252,8 +284,20 @@ impl DebateEngine {
             })
             .collect();
 
-        let results = futures_util::future::join_all(futures).await;
-        let responses: Vec<(String, String)> = results.into_iter().flatten().collect();
+        // Global timeout: 90s for the entire debate to prevent hanging
+        let all_results = timeout(
+            DEBATE_GLOBAL_TIMEOUT,
+            futures_util::future::join_all(futures),
+        )
+        .await;
+
+        let responses: Vec<(String, String)> = match all_results {
+            Ok(results) => results.into_iter().flatten().collect(),
+            Err(_) => {
+                warn!("[llm_debate] Global debate timeout (90s) exceeded");
+                bail!("Debate timed out after 90 seconds");
+            }
+        };
 
         if responses.is_empty() {
             bail!("All providers failed or timed out during debate");
@@ -322,10 +366,19 @@ impl DebateEngine {
 // Provider selection — pick diverse providers across tiers
 // ---------------------------------------------------------------------------
 
-fn select_diverse_providers(all: &[ProviderConfig], min: usize, max: usize) -> Vec<ProviderConfig> {
+fn select_diverse_providers(
+    all: &[ProviderConfig],
+    min: usize,
+    max: usize,
+    privacy_level: PrivacyLevel,
+    sensitivity: crate::privacy_filter::SensitivityLevel,
+) -> Vec<ProviderConfig> {
     // Goal: pick providers from different tiers for diversity of perspective.
     // Priority: Local first (always if available), then one from each tier,
     // then fill remaining slots by score.
+    // Privacy: filter out providers whose tier doesn't match the sensitivity level.
+
+    let filter = PrivacyFilter::new(privacy_level);
 
     let mut selected: Vec<ProviderConfig> = Vec::new();
     let mut used_names: Vec<String> = Vec::new();
@@ -340,10 +393,11 @@ fn select_diverse_providers(all: &[ProviderConfig], min: usize, max: usize) -> V
         if selected.len() >= max {
             break;
         }
-        if let Some(p) = all
-            .iter()
-            .find(|p| p.tier == *tier && !used_names.contains(&p.name))
-        {
+        if let Some(p) = all.iter().find(|p| {
+            p.tier == *tier
+                && !used_names.contains(&p.name)
+                && filter.is_safe_for_tier(sensitivity, p.tier)
+        }) {
             used_names.push(p.name.clone());
             selected.push(p.clone());
         }
@@ -354,7 +408,7 @@ fn select_diverse_providers(all: &[ProviderConfig], min: usize, max: usize) -> V
         if selected.len() >= max {
             break;
         }
-        if !used_names.contains(&p.name) {
+        if !used_names.contains(&p.name) && filter.is_safe_for_tier(sensitivity, p.tier) {
             used_names.push(p.name.clone());
             selected.push(p.clone());
         }
@@ -471,11 +525,17 @@ fn parse_judge_output(raw: &str, responses: &[(String, String)]) -> DebateRespon
     let synthesis = extract_section(raw, "SINTESIS:");
     let level_str = extract_section(raw, "NIVEL_CONSENSO:");
 
-    let consensus_level = level_str
-        .trim()
-        .parse::<f32>()
-        .unwrap_or(0.5)
-        .clamp(0.0, 1.0);
+    let consensus_level = match level_str.trim().parse::<f32>() {
+        Ok(v) => v.clamp(0.0, 1.0),
+        Err(e) => {
+            warn!(
+                "[llm_debate] Failed to parse consensus_level '{}': {} — defaulting to 0.5",
+                level_str.trim(),
+                e
+            );
+            0.5
+        }
+    };
 
     let synthesis_text = if synthesis.is_empty() {
         // Fallback: use the whole output as synthesis
@@ -514,17 +574,28 @@ fn parse_judge_output(raw: &str, responses: &[(String, String)]) -> DebateRespon
     }
 }
 
-/// Extract content between a section header and the next section header.
-fn extract_section(text: &str, header: &str) -> String {
-    let headers = ["CONSENSO:", "DISENSO:", "SINTESIS:", "NIVEL_CONSENSO:"];
+/// Strip markdown bold formatting (`**text**` → `text`).
+fn strip_markdown_bold(text: &str) -> String {
+    text.replace("**", "")
+}
 
-    if let Some(start) = text.find(header) {
-        let after = &text[start + header.len()..];
+/// Extract content between a section header and the next section header.
+/// Case-insensitive and strips markdown formatting before searching.
+fn extract_section(text: &str, header: &str) -> String {
+    let clean = strip_markdown_bold(text);
+    let lower = clean.to_lowercase();
+    let header_lower = header.to_lowercase();
+
+    let headers_lower = ["consenso:", "disenso:", "sintesis:", "nivel_consenso:"];
+
+    if let Some(start) = lower.find(&header_lower) {
+        let after = &clean[start + header.len()..];
+        let after_lower = &lower[start + header_lower.len()..];
         // Find where the next section starts
-        let end = headers
+        let end = headers_lower
             .iter()
-            .filter(|h| **h != header)
-            .filter_map(|h| after.find(h))
+            .filter(|h| **h != header_lower)
+            .filter_map(|h| after_lower.find(h))
             .min()
             .unwrap_or(after.len());
 
@@ -541,14 +612,40 @@ async fn synthesize_with_judge(
     responses: &[(String, String)],
     topic: DebateTopic,
 ) -> Result<DebateResponse> {
-    let judge_prompt = build_judge_prompt(question, context, responses, topic);
-
-    // Always prefer local model as judge to avoid adding external bias
+    // The judge MUST be a local model to avoid adding external bias.
+    // If no local model is available, return responses without synthesis.
     let local_provider = router
         .provider_configs()
         .iter()
         .find(|p| p.tier == ProviderTier::Local)
         .map(|p| p.name.clone());
+
+    if local_provider.is_none() {
+        warn!("[llm_debate] No local model available for judge synthesis — returning raw responses");
+        let raw_synthesis = format!(
+            "[Sintesis no disponible — no hay modelo local para juez imparcial]\n\n{}",
+            responses
+                .iter()
+                .map(|(name, resp)| format!("**{}**: {}", name, resp))
+                .collect::<Vec<_>>()
+                .join("\n\n---\n\n")
+        );
+        return Ok(DebateResponse {
+            synthesis: raw_synthesis,
+            consensus_level: 0.5,
+            provider_responses: responses
+                .iter()
+                .map(|(name, resp)| ProviderOpinion {
+                    provider_name: name.clone(),
+                    response: resp.clone(),
+                    agrees_with_majority: true,
+                })
+                .collect(),
+            dissenting_views: vec![],
+        });
+    }
+
+    let judge_prompt = build_judge_prompt(question, context, responses, topic);
 
     let messages = vec![ChatMessage {
         role: "user".to_string(),
@@ -635,6 +732,8 @@ mod tests {
 
     #[test]
     fn test_select_diverse_providers_picks_one_per_tier() {
+        use crate::privacy_filter::SensitivityLevel;
+
         let providers = vec![
             make_provider("local-qwen", ProviderTier::Local),
             make_provider("groq", ProviderTier::Free),
@@ -643,7 +742,13 @@ mod tests {
             make_provider("claude", ProviderTier::Premium),
         ];
 
-        let selected = select_diverse_providers(&providers, 2, 4);
+        let selected = select_diverse_providers(
+            &providers,
+            2,
+            4,
+            PrivacyLevel::Balanced,
+            SensitivityLevel::Low,
+        );
 
         assert_eq!(selected.len(), 4);
         // Should pick one from each tier first
@@ -656,9 +761,17 @@ mod tests {
 
     #[test]
     fn test_select_diverse_providers_under_min() {
+        use crate::privacy_filter::SensitivityLevel;
+
         let providers = vec![make_provider("local-qwen", ProviderTier::Local)];
 
-        let selected = select_diverse_providers(&providers, 3, 5);
+        let selected = select_diverse_providers(
+            &providers,
+            3,
+            5,
+            PrivacyLevel::Balanced,
+            SensitivityLevel::Low,
+        );
 
         // Returns what's available even if under min
         assert_eq!(selected.len(), 1);
@@ -667,6 +780,8 @@ mod tests {
 
     #[test]
     fn test_select_diverse_providers_respects_max() {
+        use crate::privacy_filter::SensitivityLevel;
+
         let providers = vec![
             make_provider("local", ProviderTier::Local),
             make_provider("groq", ProviderTier::Free),
@@ -676,9 +791,59 @@ mod tests {
             make_provider("gpt4", ProviderTier::Premium),
         ];
 
-        let selected = select_diverse_providers(&providers, 2, 3);
+        let selected = select_diverse_providers(
+            &providers,
+            2,
+            3,
+            PrivacyLevel::Balanced,
+            SensitivityLevel::Low,
+        );
 
         assert_eq!(selected.len(), 3);
+    }
+
+    #[test]
+    fn test_select_diverse_providers_filters_by_privacy() {
+        use crate::privacy_filter::SensitivityLevel;
+
+        let providers = vec![
+            make_provider("local-qwen", ProviderTier::Local),
+            make_provider("groq", ProviderTier::Free),
+            make_provider("openrouter", ProviderTier::Cheap),
+            make_provider("claude", ProviderTier::Premium),
+        ];
+
+        // Paranoid mode: only local providers should be selected
+        let selected = select_diverse_providers(
+            &providers,
+            1,
+            5,
+            PrivacyLevel::Paranoid,
+            SensitivityLevel::Low,
+        );
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].name, "local-qwen");
+    }
+
+    #[test]
+    fn test_parse_judge_output_case_insensitive() {
+        // Judge output with lowercase headers and markdown bold
+        let raw = "**consenso:** Todos coinciden en el ejercicio.\n\n\
+                   **disenso:** Diferencias en frecuencia.\n\n\
+                   **sintesis:** El ejercicio es bueno para todos.\n\n\
+                   **nivel_consenso:** 0.75";
+
+        let responses = vec![
+            ("ModeloA".to_string(), "resp1".to_string()),
+            ("ModeloB".to_string(), "resp2".to_string()),
+        ];
+
+        let result = parse_judge_output(raw, &responses);
+
+        assert!((result.consensus_level - 0.75).abs() < 0.01);
+        assert!(result.synthesis.contains("ejercicio es bueno"));
+        assert!(!result.dissenting_views.is_empty());
     }
 
     #[test]

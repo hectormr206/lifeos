@@ -8979,12 +8979,19 @@ REGLAS FIRMES:
 
         let engine = crate::llm_debate::DebateEngine::new(Arc::clone(&ctx.router));
 
+        // Read the router's privacy level so the debate engine can filter providers
+        let privacy_level = {
+            let router = ctx.router.read().await;
+            router.privacy_level()
+        };
+
         let request = crate::llm_debate::DebateRequest {
             question,
             context,
             min_providers: 2,
             max_providers: 5,
             topic,
+            privacy_level: Some(privacy_level),
         };
 
         let resp = engine.debate(&request).await?;
