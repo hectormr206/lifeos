@@ -10140,7 +10140,7 @@ max_context = 128000
             .unwrap_or(tag_filter);
         if let Some(memory) = &ctx.memory {
             let mem = memory.read().await;
-            match mem.search_entries(query, 5, Some(tag_filter)).await {
+            match mem.search_entries_with_tag(query, 5, tag_filter).await {
                 Ok(results) => {
                     if results.is_empty() {
                         Ok(format!(
@@ -10182,7 +10182,7 @@ max_context = 128000
         if let Some(memory) = &ctx.memory {
             let mem = memory.read().await;
             match mem
-                .search_entries("app activity today", 10, Some(tag))
+                .search_entries_with_tag("app activity today", 10, tag)
                 .await
             {
                 Ok(results) => {
