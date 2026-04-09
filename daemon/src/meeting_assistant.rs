@@ -2120,9 +2120,7 @@ async fn resolve_whisper_binary() -> Result<String> {
 /// that indicate tasks assigned during the meeting.
 fn extract_action_items(summary: &str) -> Vec<crate::meeting_archive::ActionItem> {
     // Task marker prefixes recognized in meeting transcripts.
-    const TASK_PREFIXES: &[&str] = &[
-        "- [ ]", "* [ ]", "PENDIENTE:", "Pendiente:",
-    ];
+    const TASK_PREFIXES: &[&str] = &["- [ ]", "* [ ]", "PENDIENTE:", "Pendiente:"];
     const TASK_PREFIXES_UPPER: &[&str] = &["ACTION:"];
     // "T-O-D-O" split to avoid linter false positive on the literal.
     let todo_upper = String::from("TO") + "DO";
