@@ -1,0 +1,44 @@
+name: Truth Alignment
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'docs/**'
+      - '.github/pull_request_template.md'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-channels.yml'
+      - '.github/workflows/truth-alignment.yml'
+      - 'Makefile'
+      - 'verify-truth-alignment.sh'
+      - 'scripts/check-truth-alignment.sh'
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'README.md'
+      - 'CONTRIBUTING.md'
+      - 'docs/**'
+      - '.github/pull_request_template.md'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-channels.yml'
+      - '.github/workflows/truth-alignment.yml'
+      - 'Makefile'
+      - 'verify-truth-alignment.sh'
+      - 'scripts/check-truth-alignment.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  truth-alignment:
+    name: Truth Alignment Guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify truth alignment
+        run: make truth-alignment

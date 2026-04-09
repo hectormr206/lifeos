@@ -30,7 +30,17 @@ env:
   TMPDIR: /var/tmp
 
 jobs:
+  truth-alignment:
+    name: Truth Alignment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify truth alignment
+        run: make truth-alignment
+
   determine-channel:
+    needs: truth-alignment
     runs-on: ubuntu-latest
     outputs:
       channel: ${{ steps.set-channel.outputs.channel }}
