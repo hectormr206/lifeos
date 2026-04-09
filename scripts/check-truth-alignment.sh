@@ -38,7 +38,7 @@ check_file() {
 check_pattern() {
   local pattern="$1"
   local file="$2"
-  if rg -Fq -- "$pattern" "$file"; then
+  if grep -Fq -- "$pattern" "$file"; then
     printf "${GREEN}[OK]${NC} %s :: %s\n" "$file" "$pattern"
   else
     printf "${RED}[FAIL]${NC} %s :: missing %s\n" "$file" "$pattern"
@@ -50,7 +50,7 @@ check_absent_in_paths() {
   local pattern="$1"
   local label="$2"
   shift 2
-  if rg -n -F -- "$pattern" "$@" >/tmp/lifeos-truth-alignment-hit.txt 2>/dev/null; then
+  if grep -RFn -- "$pattern" "$@" >/tmp/lifeos-truth-alignment-hit.txt 2>/dev/null; then
     printf "${RED}[FAIL]${NC} %s :: forbidden pattern found\n" "$label"
     sed 's/^/    /' /tmp/lifeos-truth-alignment-hit.txt
     errors=$((errors + 1))
