@@ -763,11 +763,7 @@ pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     report.checks.push(HealthCheck {
         name: "ai-service".to_string(),
         passed: ai_running,
-        message: if ai_running {
-            ai_assessment.status_message.clone()
-        } else {
-            ai_assessment.status_message.clone()
-        },
+        message: ai_assessment.status_message.clone(),
     });
 
     // 5. Check lifeosd daemon
