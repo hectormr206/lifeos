@@ -504,11 +504,13 @@ RUN set -eux && \
 COPY --from=builder /out/lifeos-train-wakeword /usr/local/bin/lifeos-train-wakeword
 RUN chmod +x /usr/local/bin/lifeos-train-wakeword
 
-# --- Conduit Matrix Homeserver ---
-# Static musl binary from GitLab releases.
-# Update the version tag below when upgrading Conduit.
+# --- Conduwuit Matrix Homeserver (Conduit fork, actively maintained) ---
+# Static musl binary from GitHub releases. Conduwuit is a Rust Matrix
+# homeserver — fork of Conduit with performance improvements (io_uring,
+# jemalloc). Update the version tag below when upgrading.
+ARG CONDUWUIT_VERSION=v0.4.6
 RUN curl -fSL -o /usr/sbin/conduit \
-    "https://gitlab.com/famedly/conduit/-/releases/v0.10.0/downloads/conduit-x86_64-unknown-linux-musl" && \
+    "https://github.com/x86pup/conduwuit/releases/download/${CONDUWUIT_VERSION}/static-x86_64-unknown-linux-musl" && \
     chmod +x /usr/sbin/conduit
 
 # --- AI Runtime (llama.cpp / llama-server) ---
