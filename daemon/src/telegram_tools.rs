@@ -1225,6 +1225,7 @@ REGLAS FIRMES:
                 sensitivity: None,
                 preferred_provider: None,
                 max_tokens: Some(256),
+                task_type: None,
             };
 
             let r = router.read().await;
@@ -1584,6 +1585,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(512),
+            task_type: None,
         };
 
         let router = ctx.router.read().await;
@@ -1708,7 +1710,10 @@ REGLAS FIRMES:
             let timestamps = inner.general.entry(chat_id).or_default();
 
             // Purge entries older than 60s
-            while timestamps.front().is_some_and(|t| now.duration_since(*t) > window) {
+            while timestamps
+                .front()
+                .is_some_and(|t| now.duration_since(*t) > window)
+            {
                 timestamps.pop_front();
             }
 
@@ -1745,13 +1750,18 @@ REGLAS FIRMES:
             let window = std::time::Duration::from_secs(60);
 
             inner.general.retain(|_, timestamps| {
-                while timestamps.front().is_some_and(|t| now.duration_since(*t) > window) {
+                while timestamps
+                    .front()
+                    .is_some_and(|t| now.duration_since(*t) > window)
+                {
                     timestamps.pop_front();
                 }
                 !timestamps.is_empty()
             });
 
-            inner.last_wipe.retain(|_, last| now.duration_since(*last) < window);
+            inner
+                .last_wipe
+                .retain(|_, last| now.duration_since(*last) < window);
         }
     }
 
@@ -2355,6 +2365,7 @@ REGLAS FIRMES:
                 sensitivity: None,
                 preferred_provider: None,
                 max_tokens: Some(2048),
+                task_type: None,
             };
 
             let router = ctx.router.read().await;
@@ -2720,6 +2731,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(1024),
+            task_type: None,
         };
 
         let router = ctx.router.read().await;
@@ -7843,10 +7855,7 @@ REGLAS FIRMES:
     /// Validate that a flatpak_id has the expected reverse-DNS format:
     /// only ASCII alphanumeric + dots, at least 2 dots (e.g. com.example.App).
     fn validate_flatpak_id(id: &str) -> Result<()> {
-        if !id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'.')
-        {
+        if !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.') {
             anyhow::bail!(
                 "flatpak_id invalido '{}': solo se permiten caracteres ASCII alfanumericos y puntos",
                 id
@@ -7965,6 +7974,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(1024),
+        task_type: None,
         };
 
         let router = ctx.router.read().await;
@@ -8301,6 +8311,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: model.map(|m| m.to_string()),
             max_tokens: Some(2048),
+            task_type: None,
         };
 
         let router = ctx.router.read().await;
@@ -8858,6 +8869,7 @@ REGLAS FIRMES:
                 sensitivity: None,
                 preferred_provider: Some(model.to_string()),
                 max_tokens: Some(2048),
+            task_type: None,
             };
 
             let router = ctx.router.read().await;
@@ -9008,6 +9020,7 @@ REGLAS FIRMES:
             sensitivity: None,
             preferred_provider: None,
             max_tokens: Some(512),
+            task_type: None,
         };
 
         let router = ctx.router.read().await;

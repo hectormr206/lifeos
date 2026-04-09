@@ -456,6 +456,19 @@ impl ScreenCapture {
         let bytes = fs::read(source)
             .await
             .with_context(|| format!("Failed to read temporary capture {}", source.display()))?;
+
+        // TODO(encryption): Encrypt screenshot bytes at rest using AES-256-GCM-SIV
+        // before writing to disk. The codebase already has the pattern in memory_plane.rs
+        // (derive_machine_key -> Sha256 -> Aes256GcmSiv). Implementation requires:
+        //   1. Encrypt `bytes` with a nonce, prepend nonce (12 bytes) to ciphertext.
+        //   2. Write to `dest` with `.enc` extension instead of raw image.
+        //   3. Update ALL read sites: list_screenshots(), cleanup_old/by_count/by_size(),
+        //      get_image_resolution(), and any external consumer that reads via `path`.
+        //   4. Add a decrypt_screenshot() helper that reads nonce + ciphertext, decrypts,
+        //      and returns the original JPEG/PNG bytes.
+        // This is deferred because it touches every read path across the screenshot
+        // lifecycle. File permissions (0o600) provide baseline protection meanwhile.
+
         fs::write(dest, bytes)
             .await
             .with_context(|| format!("Failed to write final capture {}", dest.display()))?;
@@ -977,10 +990,7 @@ impl ScreenCapture {
                 .with_context(|| format!("Failed to remove screenshot {}", path.display()))?;
             total_size = total_size.saturating_sub(*size);
             removed += 1;
-            log::info!(
-                "Size-based cleanup removed screenshot: {}",
-                path.display()
-            );
+            log::info!("Size-based cleanup removed screenshot: {}", path.display());
         }
 
         Ok(removed)

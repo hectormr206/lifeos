@@ -378,7 +378,74 @@ fn redact_pattern(text: &mut String, patterns: &[&str]) -> u32 {
     count
 }
 
-/// Redact email addresses (word@domain.tld)
+/// Check whether `c` is a valid email local-part character, including
+/// common internationalised chars (accented Latin, ñ, ü, etc.).
+fn is_email_local_char(c: char) -> bool {
+    c.is_alphanumeric() || "._%+-".contains(c) || is_common_intl_char(c)
+}
+
+/// Check whether `c` is a valid email domain character, including
+/// internationalised domain name chars.
+fn is_email_domain_char(c: char) -> bool {
+    c.is_alphanumeric() || ".-".contains(c) || is_common_intl_char(c)
+}
+
+/// Common international characters that appear in real-world email
+/// addresses and internationalised domain names (IDN).
+fn is_common_intl_char(c: char) -> bool {
+    matches!(
+        c,
+        'á' | 'é'
+            | 'í'
+            | 'ó'
+            | 'ú'
+            | 'Á'
+            | 'É'
+            | 'Í'
+            | 'Ó'
+            | 'Ú'
+            | 'ñ'
+            | 'Ñ'
+            | 'ü'
+            | 'Ü'
+            | 'ä'
+            | 'ö'
+            | 'Ä'
+            | 'Ö'
+            | 'à'
+            | 'è'
+            | 'ì'
+            | 'ò'
+            | 'ù'
+            | 'À'
+            | 'È'
+            | 'Ì'
+            | 'Ò'
+            | 'Ù'
+            | 'â'
+            | 'ê'
+            | 'î'
+            | 'ô'
+            | 'û'
+            | 'Â'
+            | 'Ê'
+            | 'Î'
+            | 'Ô'
+            | 'Û'
+            | 'ç'
+            | 'Ç'
+            | 'ß'
+            | 'ø'
+            | 'Ø'
+            | 'å'
+            | 'Å'
+            | 'æ'
+            | 'Æ'
+    )
+}
+
+/// Redact email addresses (word@domain.tld), including internationalised
+/// addresses with accented characters (á, é, ñ, ü, etc.).
 fn redact_emails(text: &mut String) -> u32 {
     let mut count = 0u32;
     let chars: Vec<char> = text.chars().collect();
@@ -389,14 +456,12 @@ fn redact_emails(text: &mut String) -> u32 {
         if chars[i] == '@' && i > 0 {
             // Find start of local part
             let mut start = i;
-            while start > 0
-                && (chars[start - 1].is_alphanumeric() || "._%+-".contains(chars[start - 1]))
-            {
+            while start > 0 && is_email_local_char(chars[start - 1]) {
                 start -= 1;
             }
             // Find end of domain
             let mut end = i + 1;
-            while end < chars.len() && (chars[end].is_alphanumeric() || ".-".contains(chars[end])) {
+            while end < chars.len() && is_email_domain_char(chars[end]) {
                 end += 1;
             }
             // Must have local part, @, and domain with dot
@@ -722,11 +787,19 @@ fn redact_base64_tokens(text: &mut String) -> u32 {
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
 
-    let is_base64_char =
-        |c: char| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' || c == '_' || c == '-';
+    let is_base64_char = |c: char| {
+        c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' || c == '_' || c == '-'
+    };
 
     while i < chars.len() {
-        if is_base64_char(chars[i]) && (i == 0 || chars[i - 1].is_whitespace() || chars[i - 1] == '"' || chars[i - 1] == '\'' || chars[i - 1] == ':' || chars[i - 1] == '=') {
+        if is_base64_char(chars[i])
+            && (i == 0
+                || chars[i - 1].is_whitespace()
+                || chars[i - 1] == '"'
+                || chars[i - 1] == '\''
+                || chars[i - 1] == ':'
+                || chars[i - 1] == '=')
+        {
             let start = i;
             while i < chars.len() && is_base64_char(chars[i]) {
                 i += 1;
@@ -872,5 +945,53 @@ mod tests {
         let filter = PrivacyFilter::new(PrivacyLevel::Careful);
         let result = filter.sanitize("short token ABC123 here");
         assert!(!result.sanitized_text.contains("[BASE64_REDACTED]"));
+    }
+
+    #[test]
+    fn test_sanitize_intl_email_with_accents() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("escríbeme a josé.García@correo.mx por favor");
+        assert!(
+            result.sanitized_text.contains("[EMAIL_REDACTED]"),
+            "expected internationalized email to be redacted, got: {}",
+            result.sanitized_text
+        );
+        assert!(!result.sanitized_text.contains("josé.García@correo.mx"));
+    }
+
+    #[test]
+    fn test_sanitize_intl_email_with_ñ() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("contact: señor.peña@dominio.es");
+        assert!(
+            result.sanitized_text.contains("[EMAIL_REDACTED]"),
+            "expected ñ-containing email to be redacted, got: {}",
+            result.sanitized_text
+        );
+        assert!(!result.sanitized_text.contains("señor.peña@dominio.es"));
+    }
+
+    #[test]
+    fn test_sanitize_intl_email_with_umlaut() {
+        let filter = PrivacyFilter::new(PrivacyLevel::Careful);
+        let result = filter.sanitize("email: müller@büro.de done");
+        assert!(
+            result.sanitized_text.contains("[EMAIL_REDACTED]"),
+            "expected umlaut email to be redacted, got: {}",
+            result.sanitized_text
+        );
+        assert!(!result.sanitized_text.contains("müller@büro.de"));
+    }
+
+    #[test]
+    fn test_intl_chars_helper() {
+        assert!(is_common_intl_char('á'));
+        assert!(is_common_intl_char('ñ'));
+        assert!(is_common_intl_char('ü'));
+        assert!(is_common_intl_char('ß'));
+        assert!(is_common_intl_char('ç'));
+        assert!(!is_common_intl_char('a'));
+        assert!(!is_common_intl_char('z'));
+        assert!(!is_common_intl_char('@'));
     }
 }

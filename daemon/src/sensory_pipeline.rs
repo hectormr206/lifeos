@@ -2059,8 +2059,16 @@ impl SensoryPipelineManager {
         if let Some(ref title) = state.vision.current_window {
             let lower = title.to_lowercase();
             let sensitive = [
-                "password", "login", "sign in", "pin", "cvv", "secret",
-                "private", "contraseña", "iniciar sesión", "unlock",
+                "password",
+                "login",
+                "sign in",
+                "pin",
+                "cvv",
+                "secret",
+                "private",
+                "contraseña",
+                "iniciar sesión",
+                "unlock",
             ];
             if sensitive.iter().any(|kw| lower.contains(kw)) {
                 log::info!("sensory: skipping capture — sensitive window: {}", title);
@@ -2660,9 +2668,7 @@ impl SensoryPipelineManager {
             let sensitivity = pf.classify(&ocr_text);
             match sensitivity {
                 SensitivityLevel::Critical => {
-                    log::warn!(
-                        "OCR text classified as Critical — skipping memory persistence"
-                    );
+                    log::warn!("OCR text classified as Critical — skipping memory persistence");
                     skip_memory_persist = true;
                 }
                 SensitivityLevel::High => {

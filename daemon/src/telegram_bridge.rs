@@ -112,7 +112,9 @@ mod inner {
             }
             // Failed — record attempt
             let mut attempts = self.failed_attempts.write().await;
-            let entry = attempts.entry(requester).or_insert((0, std::time::Instant::now()));
+            let entry = attempts
+                .entry(requester)
+                .or_insert((0, std::time::Instant::now()));
             if entry.1.elapsed().as_secs() > PAIRING_LOCKOUT_SECS {
                 *entry = (1, std::time::Instant::now()); // reset window
             } else {
