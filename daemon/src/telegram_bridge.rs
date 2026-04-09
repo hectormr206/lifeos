@@ -22,7 +22,9 @@ mod inner {
     use crate::memory_plane::MemoryPlaneManager;
     use crate::supervisor::SupervisorNotification;
     use crate::task_queue::TaskQueue;
-    use crate::telegram_tools::{self, ConversationHistory, CronStore, SddStore, ToolContext};
+    use crate::telegram_tools::{
+        self, ConversationHistory, CronStore, RateLimiter, SddStore, ToolContext,
+    };
     use crate::user_model::UserModel;
 
     /// Heartbeat interval — how often Axi proactively checks system health.
@@ -322,6 +324,7 @@ mod inner {
         let history = Arc::new(ConversationHistory::new());
         let cron_store = Arc::new(CronStore::new());
         let sdd_store = Arc::new(SddStore::new());
+        let rate_limiter = RateLimiter::new();
 
         let heartbeat_tool_ctx = ToolContext {
             router: router.clone(),
@@ -335,6 +338,7 @@ mod inner {
             meeting_archive: meeting_archive.clone(),
             meeting_assistant: meeting_assistant.clone(),
             calendar: calendar.clone(),
+            rate_limiter: rate_limiter.clone(),
         };
 
         // Heartbeat — configurable HEARTBEAT.md evaluation loop
@@ -425,6 +429,7 @@ mod inner {
             meeting_archive,
             meeting_assistant,
             calendar,
+            rate_limiter,
         };
 
         let worker_pool = Arc::new(if let Some(ref bus) = event_bus {
@@ -1791,6 +1796,7 @@ mod inner {
                             args,
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(chat_id, result.output).await?;
@@ -1905,6 +1911,7 @@ mod inner {
                             args: serde_json::json!({}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     send_chunked(&bot, chat_id, &result.output).await?;
@@ -1927,6 +1934,7 @@ mod inner {
                             args: serde_json::json!({"command": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%+"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -1946,6 +1954,7 @@ mod inner {
                             args: serde_json::json!({"command": "wpctl set-volume @DEFAULT_AUDIO_SINK@ 10%-"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -1965,6 +1974,7 @@ mod inner {
                             args: serde_json::json!({"command": "brightnessctl set +10%"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -1984,6 +1994,7 @@ mod inner {
                             args: serde_json::json!({"command": "brightnessctl set 10%-"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -2004,6 +2015,7 @@ mod inner {
                             args: serde_json::json!({}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     // The output contains the file path
@@ -2025,6 +2037,7 @@ mod inner {
                             args: serde_json::json!({"command": "loginctl lock-session"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     bot.send_message(
@@ -2045,6 +2058,7 @@ mod inner {
                             args: serde_json::json!({"service": "nftables", "action": "status"}),
                         },
                         &ctx.tool_ctx,
+                        chat_id.0,
                     )
                     .await;
                     send_chunked(&bot, chat_id, &result.output).await?;
