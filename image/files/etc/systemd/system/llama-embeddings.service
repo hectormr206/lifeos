@@ -3,13 +3,11 @@ Description=LifeOS Semantic Embeddings Server (nomic-embed-text via llama.cpp)
 Documentation=https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF
 After=network-online.target systemd-user-sessions.service
 Wants=network-online.target
-# This unit is best-effort: if the embedding model has not been downloaded
-# yet, lifeos-embeddings-setup.sh exits 0 without writing the env file and
-# the ConditionPathExists below skips startup until the next attempt.
-ConditionPathExists=/etc/lifeos/llama-embeddings.env
 
 [Service]
 Type=simple
+# Inherit LIFEOS_AI_AUTO_MANAGE_MODELS from the shared AI config.
+EnvironmentFile=-/etc/lifeos/llama-server.env
 EnvironmentFile=-/etc/lifeos/llama-embeddings.env
 ExecStartPre=/usr/local/bin/lifeos-embeddings-setup.sh
 ExecStart=/usr/sbin/llama-server \

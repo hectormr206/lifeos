@@ -4,14 +4,12 @@
 # Ensures the nomic-embed-text-v1.5 GGUF model is present so the
 # llama-embeddings.service can serve real semantic embeddings on port 8083.
 #
-# This is a best-effort setup: if the download fails (offline boot, mirror
-# down, etc.) the script exits 0 without writing the env file. The systemd
-# unit's ConditionPathExists then prevents llama-server from starting in a
-# bad state, and `MemoryPlaneManager` falls back to the chat-model
-# embeddings (port 8082) or, ultimately, the deterministic hash fallback.
+# Called as ExecStartPre by llama-embeddings.service.  Exits 0 when the
+# model is ready (so ExecStart can proceed) or 1 when it is not (download
+# failed, offline boot, auto-manage disabled).  In the failure case systemd
+# skips ExecStart and MemoryPlaneManager falls back to the hash embedding.
 #
-# Re-running this script (manually or via the unit's ExecStartPre) is
-# idempotent: the model is downloaded only when missing.
+# Re-running is idempotent: the model is downloaded only when missing.
 set -euo pipefail
 
 MODEL_DIR="/var/lib/lifeos/models"
@@ -50,7 +48,7 @@ case "$AUTO_MANAGE_MODELS" in
     1|true|TRUE|yes|YES|on|ON) ;;
     *)
         echo "[lifeos-embeddings-setup] LIFEOS_AI_AUTO_MANAGE_MODELS=$AUTO_MANAGE_MODELS — skipping download"
-        exit 0
+        exit 1
         ;;
 esac
 
@@ -60,11 +58,9 @@ if curl -fSL --retry 3 --connect-timeout 30 -o "$TMP_PATH" "$EMBED_MODEL_URL"; t
     mv "$TMP_PATH" "$EMBED_PATH"
     echo "[lifeos-embeddings-setup] downloaded $EMBED_MODEL"
     set_env_value "LIFEOS_EMBED_MODEL" "$EMBED_MODEL"
+    exit 0
 else
-    echo "[lifeos-embeddings-setup] WARNING: download failed; semantic embeddings will fall back to chat model or hash"
+    echo "[lifeos-embeddings-setup] WARNING: download failed; semantic embeddings will fall back to hash"
     rm -f "$TMP_PATH"
+    exit 1
 fi
-
-# Always exit 0 — failure to download must not block the systemd unit; the
-# MemoryPlaneManager handles missing embeddings gracefully.
-exit 0

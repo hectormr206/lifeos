@@ -648,11 +648,17 @@ async fn main() -> anyhow::Result<()> {
         task_queue::TaskQueue::new(std::path::Path::new("/tmp/lifeos"))
             .expect("fallback task queue must work")
     }));
+    let shared_ai_manager = Arc::new(ai::AiManager::new());
     let shared_memory = Arc::new(RwLock::new(
-        MemoryPlaneManager::new(data_dir.clone()).unwrap_or_else(|e| {
-            warn!("Failed to initialize MemoryPlaneManager: {}", e);
-            MemoryPlaneManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-        }),
+        MemoryPlaneManager::with_ai_manager(data_dir.clone(), Some(shared_ai_manager.clone()))
+            .unwrap_or_else(|e| {
+                warn!("Failed to initialize MemoryPlaneManager: {}", e);
+                MemoryPlaneManager::with_ai_manager(
+                    PathBuf::from("/tmp/lifeos"),
+                    Some(shared_ai_manager.clone()),
+                )
+                .unwrap()
+            }),
     ));
 
     // Initialize session store (durable conversation sessions)
