@@ -1527,16 +1527,8 @@ async function refreshProviders() {
 
 // --- Provider actions ---
 window.toggleProvider = async (name, enabled) => {
-  try {
-    await fetch(`${API}/llm/providers/${encodeURIComponent(name)}/toggle`, {
-      method: 'POST', headers: apiHeaders(),
-      body: JSON.stringify({ enabled })
-    });
-    addFeedItem('&#9881;', `Proveedor ${name}: ${enabled ? 'activado' : 'desactivado'}`);
-    setTimeout(refreshProviders, 500);
-  } catch (err) {
-    addFeedItem('&#10060;', `Error toggle ${name}: ${err.message}`);
-  }
+  // TODO: POST /llm/providers/:name/toggle not yet implemented in backend
+  addFeedItem('&#9888;', `Toggle de proveedores no disponible aun. Usa Telegram: /provider toggle ${name}`);
 };
 
 window.testProvider = async (name) => {
@@ -1593,19 +1585,9 @@ window.addProvider = async () => {
     return;
   }
 
-  try {
-    await api('POST', '/llm/providers', { name, api_base: base, model, api_key_env: keyEnv, tier, privacy_level: privacy });
-    addFeedItem('&#9989;', `Proveedor ${name} agregado`);
-    if (hint) hint.textContent = `Proveedor "${name}" agregado correctamente.`;
-    if ($('#new-provider-name')) $('#new-provider-name').value = '';
-    if ($('#new-provider-base')) $('#new-provider-base').value = '';
-    if ($('#new-provider-model')) $('#new-provider-model').value = '';
-    if ($('#new-provider-key-env')) $('#new-provider-key-env').value = '';
-    await refreshProviders();
-  } catch (err) {
-    if (hint) hint.textContent = `Error: ${err.message}. Puedes agregar proveedores via Telegram: /provider add ${name}`;
-    addFeedItem('&#10060;', `Error agregando proveedor: ${err.message}`);
-  }
+  // TODO: POST /llm/providers not yet implemented in backend
+  if (hint) hint.textContent = `Agregar proveedores via dashboard no disponible aun. Usa Telegram: /provider add ${name}`;
+  addFeedItem('&#9888;', `Agregar proveedor via dashboard no disponible aun. Usa Telegram.`);
 };
 
 const addProviderBtn = document.getElementById('add-provider-btn');
@@ -1615,7 +1597,10 @@ if (addProviderBtn) {
 
 function updateKeyStatus(name, working) {
   const el = $(`#key-status-${name}`);
-  if (el) el.textContent = working ? '\u2705' : '\u26A0\uFE0F';
+  if (!el) return;
+  el.textContent = working ? '\u2705' : '\u26A0\uFE0F';
+  el.classList.toggle('ok', !!working);
+  el.classList.toggle('missing', !working);
 }
 
 // --- API Keys Status & Save ---
@@ -1634,7 +1619,11 @@ async function refreshKeyStatus() {
     };
     for (const [env, name] of Object.entries(map)) {
       const el = $(`#key-status-${name}`);
-      if (el) el.textContent = keys[env] ? '\u2705' : '\u274C';
+      if (!el) continue;
+      const configured = !!keys[env];
+      el.textContent = configured ? '\u2705' : '\u274C';
+      el.classList.toggle('ok', configured);
+      el.classList.toggle('missing', !configured);
     }
   } catch (e) { /* silent */ }
 }
@@ -1822,10 +1811,10 @@ async function refreshMemory() {
 
 async function searchMemory(query) {
   try {
-    const res = await fetch(`${API}/memory/search`, {
-      method: 'POST', headers: apiHeaders(),
-      body: JSON.stringify({ query, limit: 10 })
-    });
+    const path = query
+      ? `${API}/memory/search?q=${encodeURIComponent(query)}&limit=10`
+      : `${API}/memory/entries?limit=10`;
+    const res = await fetch(path, { headers: apiHeaders() });
     if (!res.ok) return;
     const data = await res.json();
     const container = $('#memory-entries');
@@ -1833,7 +1822,7 @@ async function searchMemory(query) {
 
     const entries = data.entries || data.results || [];
     if (entries.length === 0) {
-      container.innerHTML = '<p class="task-empty">Sin resultados</p>';
+      container.innerHTML = `<p class="task-empty">${query ? 'Sin resultados' : 'Sin entradas recientes'}</p>`;
       return;
     }
 
@@ -1925,14 +1914,8 @@ if (schedAddBtn) {
 
 // --- OS Actions ---
 window.setOsMode = async (mode) => {
-  try {
-    addFeedItem('&#9881;', `Cambiando a modo: ${mode}...`);
-    // Simulando llamada a la API (o a implementar en el backend Rust: POST /system/mode)
-    await api('POST', '/system/mode', { mode });
-    addFeedItem('&#9989;', `Modo ${mode} activado`);
-  } catch (err) {
-    addFeedItem('&#10060;', `Error al cambiar modo: ${err.message}`);
-  }
+  // TODO: POST /system/mode not yet implemented in backend
+  addFeedItem('&#9888;', `Cambio de modo del sistema no disponible aun (backend pending)`);
 };
 
 window.triggerSystemAction = async (action) => {
@@ -2061,39 +2044,15 @@ function markWorkerFailed(data) {
 
 window.cancelWorker = async (id) => {
   if (!id) return;
-  try {
-    await fetch(`${API}/workers/${encodeURIComponent(id)}/cancel`, { method: 'POST', headers: apiHeaders() });
-    addFeedItem('&#9888;', `Worker ${id} cancelado`);
-    activeWorkers.delete(id);
-    renderWorkers();
-  } catch (err) {
-    addFeedItem('&#10060;', `Error cancelando worker: ${err.message}`);
-  }
+  // TODO: POST /workers/:id/cancel not yet implemented in backend
+  addFeedItem('&#9888;', `Worker cancel no disponible aun (backend pending)`);
 };
 
-// Try fetching active workers from API on load
+// Workers are tracked locally via WS events. GET /workers is not yet
+// implemented in the backend, so we only render what we already know.
 async function refreshWorkers() {
-  try {
-    const res = await fetch(`${API}/workers`, { headers: apiHeaders() });
-    if (!res.ok) return;
-    const data = await res.json();
-    const workers = data.workers || [];
-    // Merge with existing tracked workers
-    workers.forEach(w => {
-      const id = w.id || w.worker_id;
-      if (id && !activeWorkers.has(id)) {
-        activeWorkers.set(id, {
-          id,
-          task: w.task || w.objective || w.description || '',
-          chat_id: w.chat_id || '',
-          status: w.status || 'running',
-          started_at: w.started_at || w.created_at || new Date().toISOString(),
-        });
-      }
-    });
-    renderWorkers();
-    if (activeWorkers.size > 0) startWorkerElapsedTimer();
-  } catch (e) { /* silent — endpoint may not exist yet */ }
+  renderWorkers();
+  if (activeWorkers.size > 0) startWorkerElapsedTimer();
 }
 
 // --- Polling ---
@@ -3002,25 +2961,10 @@ if (mdExportBtn) {
 // ==================== CONVERSATION HISTORY ====================
 const conversationList = $('#conversation-list');
 
+// TODO: GET /conversations and GET /sessions not yet implemented in backend.
+// Show placeholder until the conversation history API is available.
 async function refreshConversations() {
-  try {
-    const res = await fetch(`${API}/conversations?limit=15`, { headers: apiHeaders() });
-    if (!res.ok) {
-      // Fallback: try sessions endpoint
-      const sessRes = await fetch(`${API}/sessions?limit=15`, { headers: apiHeaders() });
-      if (!sessRes.ok) {
-        if (conversationList) conversationList.innerHTML = '<p class="task-empty">Sin conversaciones recientes</p>';
-        return;
-      }
-      const sessData = await sessRes.json();
-      renderConversations(sessData.sessions || sessData.conversations || []);
-      return;
-    }
-    const data = await res.json();
-    renderConversations(data.conversations || data.sessions || []);
-  } catch (e) {
-    if (conversationList) conversationList.innerHTML = '<p class="task-empty">Sin conversaciones recientes</p>';
-  }
+  if (conversationList) conversationList.innerHTML = '<p class="task-empty">Historial de conversaciones no disponible aun</p>';
 }
 
 function renderConversations(convos) {
