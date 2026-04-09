@@ -443,6 +443,7 @@ fn ensure_graphical_environment() {
 
 /// Daemon state shared across tasks
 pub struct DaemonState {
+    pub data_dir: PathBuf,
     pub config: DaemonConfig,
     pub system_monitor: Arc<RwLock<SystemMonitor>>,
     pub health_monitor: Arc<HealthMonitor>,
@@ -662,6 +663,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize state
     let state = Arc::new(DaemonState {
+        data_dir: data_dir.clone(),
         config: config.clone(),
         system_monitor: Arc::new(RwLock::new(SystemMonitor::new())),
         health_monitor: Arc::new(HealthMonitor::new()),
@@ -1930,6 +1932,7 @@ async fn main() -> anyhow::Result<()> {
 /// Start REST API server
 async fn start_api_server(state: Arc<DaemonState>) {
     let api_state = api::ApiState {
+        data_dir: state.data_dir.clone(),
         system_monitor: state.system_monitor.clone(),
         health_monitor: state.health_monitor.clone(),
         ai_manager: state.ai_manager.clone(),
