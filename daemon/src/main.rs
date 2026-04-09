@@ -682,12 +682,14 @@ async fn main() -> anyhow::Result<()> {
         screen_capture: Arc::new(RwLock::new(ScreenCapture::new(
             data_dir.join("screenshots"),
         ))),
-        sensory_pipeline_manager: Arc::new(RwLock::new(
-            SensoryPipelineManager::new(data_dir.clone()).unwrap_or_else(|e| {
+        sensory_pipeline_manager: Arc::new(RwLock::new({
+            let mut spm = SensoryPipelineManager::new(data_dir.clone()).unwrap_or_else(|e| {
                 warn!("Failed to initialize SensoryPipelineManager: {}", e);
                 SensoryPipelineManager::new(PathBuf::from("/tmp/lifeos")).unwrap()
-            }),
-        )),
+            });
+            spm.set_privacy_filter(shared_privacy.clone());
+            spm
+        })),
         experience_manager: Arc::new(RwLock::new(ExperienceManager::new(data_dir.clone()))),
         update_scheduler: Arc::new(RwLock::new(UpdateScheduler::new(data_dir.clone()))),
         follow_along_manager: Arc::new(RwLock::new(

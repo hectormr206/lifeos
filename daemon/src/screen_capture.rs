@@ -922,6 +922,64 @@ impl ScreenCapture {
         Ok(removed)
     }
 
+    /// Remove oldest screenshots until total directory size is within `max_bytes`.
+    pub async fn cleanup_by_size(&self, max_bytes: u64) -> Result<u64> {
+        if max_bytes == 0 || !self.output_dir.exists() {
+            return Ok(0);
+        }
+
+        let mut files: Vec<(u64, u64, PathBuf)> = Vec::new(); // (modified_epoch, size, path)
+        let mut total_size: u64 = 0;
+        let mut entries = fs::read_dir(&self.output_dir).await?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .context("Failed to read directory entry")?
+        {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let metadata = match fs::metadata(&path).await {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let size = metadata.len();
+            total_size += size;
+            let modified_epoch = metadata
+                .modified()
+                .ok()
+                .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or_default();
+            files.push((modified_epoch, size, path));
+        }
+
+        if total_size <= max_bytes {
+            return Ok(0);
+        }
+
+        // Sort oldest first
+        files.sort_by_key(|(epoch, _, _)| *epoch);
+        let mut removed = 0u64;
+        for (_, size, path) in &files {
+            if total_size <= max_bytes {
+                break;
+            }
+            fs::remove_file(path)
+                .await
+                .with_context(|| format!("Failed to remove screenshot {}", path.display()))?;
+            total_size = total_size.saturating_sub(*size);
+            removed += 1;
+            log::info!(
+                "Size-based cleanup removed screenshot: {}",
+                path.display()
+            );
+        }
+
+        Ok(removed)
+    }
+
     /// List all screenshots
     pub async fn list_screenshots(&self) -> Result<Vec<Screenshot>> {
         if !self.output_dir.exists() {
