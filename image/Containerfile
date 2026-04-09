@@ -217,6 +217,9 @@ RUN dnf -y install dnf5-plugins && \
         kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda \
         xorg-x11-drv-nvidia-power nvidia-settings nvidia-modprobe \
         akmods gcc && \
+    if dnf -q repoquery --available --qf '%{name}' akmod-wl 2>/dev/null | grep -Fxq akmod-wl; then \
+        dnf -y install broadcom-wl akmod-wl; \
+    fi && \
     for modules_dir in /usr/lib/modules/*; do \
         [ -d "${modules_dir}" ] || continue; \
         kernel_ver="$(basename "${modules_dir}")"; \
@@ -227,6 +230,14 @@ RUN dnf -y install dnf5-plugins && \
         akmods --force --kernels "${kernel_ver}" || \
             echo "WARNING: akmods failed for ${kernel_ver}"; \
     done && \
+    NVIDIA_FOUND=0; \
+    for d in /usr/lib/modules/*/extra/nvidia/nvidia.ko; do \
+        [ -f "$d" ] && NVIDIA_FOUND=1 && break; \
+    done; \
+    if [ "$NVIDIA_FOUND" -eq 0 ]; then \
+        echo "ERROR: No nvidia.ko modules found after akmods build"; \
+        exit 1; \
+    fi && \
     dnf clean all
 
 # ============================================================================
@@ -296,14 +307,18 @@ RUN dnf -y install --skip-unavailable \
     fi && \
     dnf clean all
 
-# Copy pre-built NVIDIA kernel modules and sign-file tool from the builder stage.
+# Copy pre-built NVIDIA kernel modules and kernel-devel headers (for Secure Boot signing) from the builder stage.
 COPY --from=nvidia-kmod-builder /usr/lib/modules/ /usr/lib/modules/
 COPY --from=nvidia-kmod-builder /usr/src/kernels/ /usr/src/kernels/
 
 # Regenerate module dependency maps for every kernel present.
 RUN for modules_dir in /usr/lib/modules/*; do \
         [ -d "${modules_dir}/extra/nvidia" ] || continue; \
-        depmod "$(basename "${modules_dir}")" || true; \
+        kernel_ver="$(basename "${modules_dir}")"; \
+        if ! depmod "${kernel_ver}"; then \
+            echo "ERROR: depmod failed for kernel ${kernel_ver}"; \
+            exit 1; \
+        fi; \
     done
 
 # Secure Boot signing of NVIDIA kernel modules (optional — needs build args).
@@ -343,7 +358,11 @@ RUN set -eux && \
         fi; \
         for modules_dir in /usr/lib/modules/*; do \
             [ -d "${modules_dir}/extra/nvidia" ] || continue; \
-            depmod "$(basename "${modules_dir}")" || true; \
+            kernel_ver="$(basename "${modules_dir}")"; \
+            if ! depmod "${kernel_ver}"; then \
+                echo "ERROR: depmod failed for kernel ${kernel_ver} after signing"; \
+                exit 1; \
+            fi; \
         done; \
         echo "INFO: Signed ${SIGNED_COUNT} NVIDIA kernel modules for Secure Boot"; \
         rm -f "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}"; \
@@ -351,6 +370,9 @@ RUN set -eux && \
         echo "INFO: NVIDIA signing secrets not provided; Secure Boot may reject modules"; \
         rm -f /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der; \
     fi
+
+# Clean up kernel-devel headers (only needed for signing, not runtime)
+RUN rm -rf /usr/src/kernels/
 
 # --- Gaming support (controller udev rules only) ---
 # Steam and ProtonUp-Qt are available via Flatpak from COSMIC Store.
@@ -471,12 +493,11 @@ COPY --from=builder /out/lifeos-train-wakeword /usr/local/bin/lifeos-train-wakew
 RUN chmod +x /usr/local/bin/lifeos-train-wakeword
 
 # --- Conduit Matrix Homeserver ---
-# TODO: Download Conduit static binary from GitHub releases:
-#   https://gitlab.com/famedly/conduit/-/releases  (or GitHub mirror)
-#   Example: curl -L https://gitlab.com/famedly/conduit/-/releases/v0.10.0/downloads/conduit-x86_64-unknown-linux-musl -o /usr/sbin/conduit
-# For now, expect the binary to be provided externally or built in a separate stage.
-# COPY --from=conduit-builder /out/conduit /usr/sbin/conduit
-# RUN chmod +x /usr/sbin/conduit
+# Static musl binary from GitLab releases.
+# Update the version tag below when upgrading Conduit.
+RUN curl -fSL -o /usr/sbin/conduit \
+    "https://gitlab.com/famedly/conduit/-/releases/v0.10.0/downloads/conduit-x86_64-unknown-linux-musl" && \
+    chmod +x /usr/sbin/conduit
 
 # --- AI Runtime (llama.cpp / llama-server) ---
 # Built in isolated stage to avoid pulling/removing toolchains in the final image.

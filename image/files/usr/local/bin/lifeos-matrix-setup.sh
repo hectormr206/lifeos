@@ -9,6 +9,13 @@ DATA_DIR="/var/lib/lifeos/conduit"
 CONFIG_FILE="/etc/lifeos/conduit.toml"
 CREDENTIALS_FILE="/etc/lifeos/matrix-axi-credentials"
 CONDUIT_PORT=6167
+SETUP_MARKER="/var/lib/lifeos/conduit/.setup-done"
+
+# --- 0. Idempotency guard ---
+if [ -f "$SETUP_MARKER" ]; then
+    echo "[lifeos-matrix-setup] Already configured, skipping"
+    exit 0
+fi
 
 # --- 1. Data directory ---
 mkdir -p "$DATA_DIR"
@@ -80,14 +87,10 @@ for i in \$(seq 1 \$MAX_WAIT); do
 done
 
 # Register the axi user
+PAYLOAD=\$(printf '{"username":"axi","password":"%s","auth":{"type":"m.login.dummy"},"inhibit_login":false}' "${AXI_PASSWORD}")
 RESP=\$(curl -sf -X POST "http://127.0.0.1:${CONDUIT_PORT}/_matrix/client/v3/register" \\
     -H "Content-Type: application/json" \\
-    -d '{
-        "username": "axi",
-        "password": "${AXI_PASSWORD}",
-        "auth": {"type": "m.login.dummy"},
-        "inhibit_login": false
-    }' 2>&1) || true
+    -d "\$PAYLOAD" 2>&1) || true
 
 if echo "\$RESP" | grep -q "access_token"; then
     echo "[lifeos-matrix-setup] Axi user registered successfully"
@@ -106,4 +109,5 @@ REGEOF
     echo "[lifeos-matrix-setup] Registration script written; will run after Conduit starts"
 fi
 
+touch "$SETUP_MARKER"
 echo "[lifeos-matrix-setup] Setup complete"

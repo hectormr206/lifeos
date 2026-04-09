@@ -143,7 +143,7 @@ mod inner {
     impl MatrixClient {
         async fn login(homeserver: &str, user_id: &str, password: &str) -> anyhow::Result<Self> {
             let http = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
+                .timeout(std::time::Duration::from_secs(45))
                 .build()?;
 
             // Extract localpart from @axi:server_name
@@ -274,9 +274,7 @@ mod inner {
 
     /// Percent-encode a room_id for use in URL paths.
     fn urlencoded(s: &str) -> String {
-        s.replace('!', "%21")
-            .replace(':', "%3A")
-            .replace('#', "%23")
+        percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
     }
 
     // -----------------------------------------------------------------------
