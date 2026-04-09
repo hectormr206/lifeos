@@ -244,8 +244,26 @@ impl GameGuard {
 
     /// Enable or disable the guard at runtime.
     pub async fn set_enabled(&self, enabled: bool) {
-        let mut inner = self.inner.write().await;
-        inner.config.enabled = enabled;
+        let llama_env_path = {
+            let mut inner = self.inner.write().await;
+            inner.config.enabled = enabled;
+            if enabled || inner.current_mode != LlmMode::Cpu {
+                None
+            } else {
+                inner.last_game = None;
+                Some(inner.config.llama_server_env_path.clone())
+            }
+        };
+
+        if let Some(llama_env_path) = llama_env_path {
+            if let Err(error) = clear_game_guard_override_and_restart() {
+                warn!("[game_guard] failed to restore GPU profile while disabling guard: {error}");
+            }
+
+            let mut inner = self.inner.write().await;
+            inner.current_mode = llm_mode_from_layers(effective_gpu_layers(&llama_env_path));
+        }
+
         info!(
             "[game_guard] guard {}",
             if enabled { "enabled" } else { "disabled" }
@@ -268,16 +286,27 @@ impl GameGuard {
         supported: bool,
         cpu_fallback_profile: Option<RuntimeSettings>,
     ) {
-        let mut inner = self.inner.write().await;
-        inner.config.supported = supported;
-        inner.config.cpu_fallback_profile = cpu_fallback_profile;
-        if !supported {
-            if let Err(e) = crate::ai_runtime_profile::clear_game_guard_override() {
-                warn!("[game_guard] failed to clear stale override while disabling support: {e}");
+        let llama_env_path = {
+            let mut inner = self.inner.write().await;
+            inner.config.supported = supported;
+            inner.config.cpu_fallback_profile = cpu_fallback_profile;
+            if !supported && inner.current_mode == LlmMode::Cpu {
+                inner.last_game = None;
+                Some(inner.config.llama_server_env_path.clone())
+            } else {
+                None
             }
-            inner.last_game = None;
-            inner.current_mode =
-                llm_mode_from_layers(effective_gpu_layers(&inner.config.llama_server_env_path));
+        };
+
+        if let Some(llama_env_path) = llama_env_path {
+            if let Err(error) = clear_game_guard_override_and_restart() {
+                warn!(
+                    "[game_guard] failed to clear stale override while disabling support: {error}"
+                );
+            }
+
+            let mut inner = self.inner.write().await;
+            inner.current_mode = llm_mode_from_layers(effective_gpu_layers(&llama_env_path));
         }
     }
 
@@ -371,6 +400,16 @@ impl GameGuard {
 pub fn detect_game(vram_threshold_mb: u64) -> Option<GameInfo> {
     let gamemode_active = detect_gamemode_active();
     let support_process_active = proc_has_any(SUPPORT_PROCESS_NAMES);
+    let has_ambiguous_runtime = has_ambiguous_game_process();
+
+    // Precision first: support wrappers such as gamescope/mangohud are not
+    // enough by themselves to evict Axi from GPU. For marker-based detection,
+    // require GameMode or a Proton/Wine-style runtime alongside the wrappers.
+    let allow_marker_based_vram = marker_based_vram_allowed(
+        gamemode_active,
+        support_process_active,
+        has_ambiguous_runtime,
+    );
 
     // 1. GameMode D-Bus / gamemoded
     if gamemode_active {
@@ -389,10 +428,8 @@ pub fn detect_game(vram_threshold_mb: u64) -> Option<GameInfo> {
     // 3. VRAM-heavy graphics processes via nvidia-smi pmon.
     // Support/game-mode signals allow us to accept game-install-path markers
     // for binaries whose short process names are not in our curated list.
-    let vram_games = detect_vram_heavy_processes_with_markers(
-        vram_threshold_mb,
-        gamemode_active || support_process_active,
-    );
+    let vram_games =
+        detect_vram_heavy_processes_with_markers(vram_threshold_mb, allow_marker_based_vram);
     if let Some(info) = vram_games.into_iter().next() {
         return Some(info);
     }
@@ -400,8 +437,7 @@ pub fn detect_game(vram_threshold_mb: u64) -> Option<GameInfo> {
     // 4. Ambiguous processes (wine/wineserver) — only count as game if a
     //    high-confidence indicator is ALSO present and we can locate a
     //    corroborating child/candidate process.
-    let has_wine = has_ambiguous_game_process();
-    if has_wine {
+    if has_ambiguous_runtime {
         let has_strong_signal = gamemode_active || support_process_active;
         if has_strong_signal {
             if let Some(info) = find_gamemoded_child() {
@@ -804,6 +840,14 @@ fn process_has_game_install_markers(pid: u32) -> bool {
         .any(|value| contains_game_install_marker(&value))
 }
 
+fn marker_based_vram_allowed(
+    gamemode_active: bool,
+    support_process_active: bool,
+    has_ambiguous_runtime: bool,
+) -> bool {
+    gamemode_active || (support_process_active && has_ambiguous_runtime)
+}
+
 /// Get the best available name for a PID (comm, falling back to cmdline basename).
 pub fn get_game_name_from_pid(pid: u32) -> Option<String> {
     if let Some(comm) = read_proc_comm(pid) {
@@ -1122,6 +1166,13 @@ mod tests {
         assert!(!is_explicit_game_process("godot"));
         assert!(!is_explicit_game_process("UnrealEditor"));
         assert!(is_generic_game_executable("game.exe"));
+    }
+
+    #[test]
+    fn test_marker_based_vram_detection_requires_more_than_support_wrappers() {
+        assert!(!marker_based_vram_allowed(false, true, false));
+        assert!(marker_based_vram_allowed(false, true, true));
+        assert!(marker_based_vram_allowed(true, false, false));
     }
 
     #[test]
