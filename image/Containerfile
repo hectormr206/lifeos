@@ -365,6 +365,12 @@ RUN mkdir -p /etc/flatpak/remotes.d && \
     flatpak remote-add --if-not-exists --system flathub https://flathub.org/repo/flathub.flatpakrepo || true && \
     flatpak remote-add --if-not-exists --system cosmic https://flatpak.pop-os.org/repo/ || true
 
+# --- Default COSMIC applets (panel essentials) ---
+RUN flatpak install --system -y --noninteractive cosmic \
+        io.github.cosmic_utils.cosmic-ext-applet-clipboard-manager \
+        io.github.cosmic_utils.minimon-applet \
+        com.vintagetechie.CosmicExtAppletTempest
+
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \
     firefox \
