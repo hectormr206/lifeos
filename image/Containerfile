@@ -394,10 +394,16 @@ RUN mkdir -p /etc/flatpak/remotes.d && \
     flatpak remote-add --if-not-exists --system cosmic https://flatpak.pop-os.org/repo/ || true
 
 # --- Default COSMIC applets (panel essentials) ---
-RUN flatpak install --system -y --noninteractive cosmic \
+# Ensure remotes are available in this layer, then install applets.
+RUN flatpak remote-add --if-not-exists --system flathub \
+        https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true && \
+    flatpak remote-add --if-not-exists --system cosmic \
+        https://flatpak.pop-os.org/repo/ 2>/dev/null || true && \
+    flatpak install --system -y --noninteractive cosmic \
         io.github.cosmic_utils.cosmic-ext-applet-clipboard-manager \
         io.github.cosmic_utils.minimon-applet \
-        com.vintagetechie.CosmicExtAppletTempest
+        com.vintagetechie.CosmicExtAppletTempest 2>/dev/null || \
+    echo "INFO: COSMIC applets not available during build; user can install from COSMIC Store"
 
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \

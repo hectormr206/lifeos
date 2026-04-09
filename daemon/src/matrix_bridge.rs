@@ -421,19 +421,20 @@ mod inner {
 #[cfg(feature = "telegram")]
 pub use inner::*;
 
-// Stub when telegram feature is disabled
+// Stub when telegram feature is disabled — all items are used
+// conditionally in main.rs behind the same feature gate.
 #[cfg(not(feature = "telegram"))]
-pub mod stubs {
+mod stubs {
     #[derive(Debug, Clone)]
-    pub struct MatrixConfig;
+    pub(crate) struct MatrixConfig;
 
     impl MatrixConfig {
-        pub fn from_credentials_file() -> Option<Self> {
+        pub(crate) fn from_credentials_file() -> Option<Self> {
             None
         }
     }
 
-    pub async fn run_matrix_bridge(
+    pub(crate) async fn run_matrix_bridge(
         _config: MatrixConfig,
         _task_queue: std::sync::Arc<crate::task_queue::TaskQueue>,
         _router: std::sync::Arc<tokio::sync::RwLock<crate::llm_router::LlmRouter>>,
@@ -445,4 +446,4 @@ pub mod stubs {
 }
 
 #[cfg(not(feature = "telegram"))]
-pub use stubs::*;
+pub(crate) use stubs::*;

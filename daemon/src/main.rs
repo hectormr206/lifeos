@@ -56,6 +56,7 @@ mod lab;
 #[cfg_attr(not(feature = "telegram"), allow(dead_code))]
 mod llm_debate;
 mod llm_router;
+#[cfg(feature = "telegram")]
 mod matrix_bridge;
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
