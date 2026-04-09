@@ -13,9 +13,7 @@ use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
 
-use crate::llm_router::{
-    ChatMessage, LlmRouter, ProviderConfig, ProviderTier, RouterRequest,
-};
+use crate::llm_router::{ChatMessage, LlmRouter, ProviderConfig, ProviderTier, RouterRequest};
 use crate::privacy_filter::{PrivacyFilter, PrivacyLevel};
 
 // ---------------------------------------------------------------------------
@@ -621,7 +619,9 @@ async fn synthesize_with_judge(
         .map(|p| p.name.clone());
 
     if local_provider.is_none() {
-        warn!("[llm_debate] No local model available for judge synthesis — returning raw responses");
+        warn!(
+            "[llm_debate] No local model available for judge synthesis — returning raw responses"
+        );
         let raw_synthesis = format!(
             "[Sintesis no disponible — no hay modelo local para juez imparcial]\n\n{}",
             responses
