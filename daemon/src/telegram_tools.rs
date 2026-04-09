@@ -5952,6 +5952,13 @@ REGLAS FIRMES:
         let pin = args["pin"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("Falta parametro 'pin'"))?;
+        if pin.len() < 4 || pin.len() > 16 {
+            anyhow::bail!("El PIN debe tener entre 4 y 16 caracteres.");
+        }
+        let weak_pins = ["0000", "1111", "1234", "4321", "9999"];
+        if weak_pins.contains(&pin) {
+            anyhow::bail!("PIN demasiado comun. Usa uno mas seguro.");
+        }
         let max_failures = args["max_failures"].as_u64().map(|n| n as u32);
         let auto_lock = args["auto_lock_vault_on_max_failures"].as_bool();
         mem.set_local_pin(pin, max_failures, auto_lock).await?;

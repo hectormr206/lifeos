@@ -459,6 +459,12 @@ impl ScreenCapture {
         fs::write(dest, bytes)
             .await
             .with_context(|| format!("Failed to write final capture {}", dest.display()))?;
+        // Restrict to owner-only so other users cannot read screenshots.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600));
+        }
         let _ = fs::remove_file(source).await;
         Ok(())
     }

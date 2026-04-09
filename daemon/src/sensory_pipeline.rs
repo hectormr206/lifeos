@@ -2055,6 +2055,19 @@ impl SensoryPipelineManager {
             return Ok(None);
         }
 
+        // Skip capture if active window looks sensitive (login, password dialogs).
+        if let Some(ref title) = state.vision.current_window {
+            let lower = title.to_lowercase();
+            let sensitive = [
+                "password", "login", "sign in", "pin", "cvv", "secret",
+                "private", "contraseña", "iniciar sesión", "unlock",
+            ];
+            if sensitive.iter().any(|kw| lower.contains(kw)) {
+                log::info!("sensory: skipping capture — sensitive window: {}", title);
+                return Ok(None);
+            }
+        }
+
         // Determine if a window change triggered this capture.
         let window_changed = state
             .vision

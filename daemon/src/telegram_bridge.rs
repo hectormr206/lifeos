@@ -45,12 +45,17 @@ mod inner {
         created_at: std::time::Instant,
     }
 
+    const PAIRING_MAX_FAILED_ATTEMPTS: u32 = 5;
+    const PAIRING_LOCKOUT_SECS: u64 = 300;
+
     #[derive(Clone)]
     struct PairingStore {
         /// Pending codes: code -> PendingPair
         pending: Arc<RwLock<HashMap<u32, PendingPair>>>,
         /// Dynamically added chat IDs (persisted to disk on changes)
         dynamic_ids: Arc<RwLock<Vec<i64>>>,
+        /// Failed pairing attempts: chat_id -> (count, first_attempt_at)
+        failed_attempts: Arc<RwLock<HashMap<i64, (u32, std::time::Instant)>>>,
     }
 
     impl PairingStore {
@@ -59,6 +64,7 @@ mod inner {
             Self {
                 pending: Arc::new(RwLock::new(HashMap::new())),
                 dynamic_ids: Arc::new(RwLock::new(dynamic)),
+                failed_attempts: Arc::new(RwLock::new(HashMap::new())),
             }
         }
 
@@ -76,14 +82,41 @@ mod inner {
             code
         }
 
+        /// Check if a chat_id is locked out from pairing attempts.
+        async fn is_pairing_locked_out(&self, chat_id: i64) -> bool {
+            let attempts = self.failed_attempts.read().await;
+            if let Some((count, first_at)) = attempts.get(&chat_id) {
+                if first_at.elapsed().as_secs() > PAIRING_LOCKOUT_SECS {
+                    return false; // lockout expired
+                }
+                *count >= PAIRING_MAX_FAILED_ATTEMPTS
+            } else {
+                false
+            }
+        }
+
         /// Try to redeem a pairing code. Returns the inviter's chat_id on success.
-        async fn try_redeem(&self, code_text: &str) -> Option<i64> {
+        async fn try_redeem(&self, code_text: &str, requester: i64) -> Option<i64> {
+            if self.is_pairing_locked_out(requester).await {
+                log::warn!("Pairing attempt from locked-out chat_id {}", requester);
+                return None;
+            }
             let code: u32 = code_text.trim().parse().ok()?;
             let mut pending = self.pending.write().await;
             if let Some(pair) = pending.remove(&code) {
                 if pair.created_at.elapsed().as_secs() <= PAIRING_TTL_SECS {
+                    // Success — clear failed attempts
+                    self.failed_attempts.write().await.remove(&requester);
                     return Some(pair.created_by);
                 }
+            }
+            // Failed — record attempt
+            let mut attempts = self.failed_attempts.write().await;
+            let entry = attempts.entry(requester).or_insert((0, std::time::Instant::now()));
+            if entry.1.elapsed().as_secs() > PAIRING_LOCKOUT_SECS {
+                *entry = (1, std::time::Instant::now()); // reset window
+            } else {
+                entry.0 += 1;
             }
             None
         }
@@ -731,7 +764,7 @@ mod inner {
             if let Some(text) = msg.text() {
                 let trimmed = text.trim();
                 if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                    if let Some(inviter) = ctx.pairing.try_redeem(trimmed).await {
+                    if let Some(inviter) = ctx.pairing.try_redeem(trimmed, chat_id.0).await {
                         ctx.pairing.add_dynamic_id(chat_id.0).await;
                         bot.send_message(chat_id, "Vinculacion exitosa! Ya puedes hablar conmigo.")
                             .await?;

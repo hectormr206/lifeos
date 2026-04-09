@@ -67,7 +67,7 @@ impl PrivacyFilter {
     /// Classify the sensitivity of text content.
     pub fn classify(&self, text: &str) -> SensitivityLevel {
         // Critical patterns — never send externally
-        if has_critical_patterns(text) {
+        if has_critical_patterns(text) || has_medical_patterns(text) {
             return SensitivityLevel::Critical;
         }
 
@@ -258,17 +258,28 @@ fn has_critical_patterns(text: &str) -> bool {
     critical_keywords.iter().any(|kw| lower.contains(kw))
 }
 
-fn has_high_sensitivity_patterns(text: &str) -> bool {
+fn has_medical_patterns(text: &str) -> bool {
     let lower = text.to_lowercase();
-    let high_keywords = [
+    let medical_keywords = [
         "medical",
         "diagnosis",
         "prescription",
+        "enfermedad",
+        "tratamiento",
+        "patient",
+        "paciente",
+        "symptoms",
+        "sintomas",
+    ];
+    medical_keywords.iter().any(|kw| lower.contains(kw))
+}
+
+fn has_high_sensitivity_patterns(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    let high_keywords = [
         "salary",
         "bank account",
         "cuenta bancaria",
-        "enfermedad",
-        "tratamiento",
         "relationship",
         "pareja",
         "personal life",
