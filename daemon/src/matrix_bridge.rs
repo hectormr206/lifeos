@@ -190,7 +190,7 @@ mod inner {
                 self.homeserver, SYNC_TIMEOUT_MS
             );
             if let Some(token) = since {
-                url.push_str(&format!("&since={}", token));
+                url.push_str(&format!("&since={}", urlencoded(token)));
             }
             // On first sync, use a filter to skip old messages
             if since.is_none() {

@@ -371,6 +371,12 @@ RUN set -eux && \
         rm -f /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der; \
     fi
 
+# Final depmod pass — covers both signed and unsigned paths.
+RUN for modules_dir in /usr/lib/modules/*; do \
+        [ -d "${modules_dir}/extra/nvidia" ] || continue; \
+        depmod "$(basename "${modules_dir}")"; \
+    done
+
 # Clean up kernel-devel headers (only needed for signing, not runtime)
 RUN rm -rf /usr/src/kernels/
 
