@@ -1780,3 +1780,54 @@ section { scroll-margin-top: 92px; }
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
   margin-bottom: 1.5rem;
 }
+
+/* === Vida Plena Section === */
+.vida-plena-section {
+  padding: 1.5rem;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  margin-bottom: 1.5rem;
+}
+.vida-plena-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin-top: 1rem;
+}
+.vida-plena-card {
+  background: var(--bg-card-alt, rgba(255, 255, 255, 0.04));
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vida-plena-card .pillar-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.vida-plena-card .pillar-score {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+.vida-plena-card .pillar-detail {
+  font-size: 0.8rem;
+  color: var(--text-muted, #aaa);
+}
+.vida-plena-pillars { margin-top: 12px; }
+.vida-plena-habits { margin-top: 12px; }
+.vida-plena-mood { margin-top: 12px; }
+.habit-item, .mood-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.85rem;
+}
+.mood-streak {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--accent, #00d4aa);
+}

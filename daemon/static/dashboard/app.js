@@ -3244,6 +3244,76 @@ if (calendarAddForm) {
   calendarAddForm.addEventListener('submit', addCalendarEvent);
 }
 
+// ==================== VIDA PLENA ====================
+const VP_PILLARS = [
+  { key: 'health',        label: 'Salud',        stat: s => `${(s.facts||[]).length} hechos, ${(s.active_medications||[]).length} medicamentos` },
+  { key: 'growth',        label: 'Crecimiento',  stat: s => `${(s.currently_reading||[]).length} leyendo, ${(s.active_habits||[]).length} habitos` },
+  { key: 'exercise',      label: 'Ejercicio',    stat: s => `${s.sessions_last_7_days||0} sesiones (7d), ${s.total_minutes_last_30_days||0} min (30d)` },
+  { key: 'nutrition',     label: 'Nutricion',    stat: s => `${(s.recent_logs||[]).length} registros recientes` },
+  { key: 'social',        label: 'Social',       stat: s => `${(s.recent_interactions||[]).length} interacciones` },
+  { key: 'sleep',         label: 'Sueno',        stat: s => `${(s.recent_logs||[]).length} registros` },
+  { key: 'spiritual',     label: 'Espiritual',   stat: s => `${(s.recent_entries||s.practices||[]).length} practicas` },
+  { key: 'financial',     label: 'Finanzas',     stat: s => `${(s.recent_transactions||[]).length} transacciones` },
+  { key: 'relationships', label: 'Relaciones',   stat: s => `${(s.contacts||s.people||[]).length} contactos` },
+];
+
+async function refreshVidaPlena() {
+  const summaryEl = $('#vida-plena-summary');
+  const habitsEl = $('#vida-plena-habits');
+  const moodEl = $('#vida-plena-mood');
+  if (!summaryEl) return;
+
+  // Life summary (unified coaching snapshot)
+  try {
+    const data = await api('GET', '/vida-plena/life-summary');
+    const s = data && data.summary;
+    if (s) {
+      const cards = VP_PILLARS.map(p => {
+        const pillarData = s[p.key];
+        if (!pillarData) return '';
+        let detail = '';
+        try { detail = p.stat(pillarData); } catch {}
+        return `<div class="vida-plena-card">
+          <span class="pillar-name">${p.label}</span>
+          <span class="pillar-detail">${detail || 'Sin datos'}</span>
+        </div>`;
+      }).filter(Boolean);
+      summaryEl.innerHTML = cards.join('') || '<p class="task-empty">Sin datos de vida plena aun</p>';
+    } else {
+      summaryEl.innerHTML = '<p class="task-empty">Sin datos de vida plena aun</p>';
+    }
+  } catch (e) {
+    summaryEl.innerHTML = '<p class="task-empty">Error cargando resumen de vida plena</p>';
+  }
+
+  // Habits due today
+  if (habitsEl) {
+    try {
+      const data = await api('GET', '/vida-plena/habits/due-today');
+      const habits = data.habits || data || [];
+      if (Array.isArray(habits) && habits.length > 0) {
+        habitsEl.innerHTML = '<h3>Habitos de hoy</h3>' + habits.map(h =>
+          `<div class="habit-item"><span>${h.completed ? '&#9989;' : '&#9744;'}</span><span>${h.name || h.habit_id || 'Habito'}</span></div>`
+        ).join('');
+      } else {
+        habitsEl.innerHTML = '';
+      }
+    } catch { habitsEl.innerHTML = ''; }
+  }
+
+  // Mood streak
+  if (moodEl) {
+    try {
+      const data = await api('GET', '/vida-plena/mood-streak');
+      if (data && data.streak != null) {
+        moodEl.innerHTML = `<div class="mood-item"><span>Racha de animo:</span><span class="mood-streak">${data.streak} dias</span></div>`;
+      } else {
+        moodEl.innerHTML = '';
+      }
+    } catch { moodEl.innerHTML = ''; }
+  }
+}
+
 // --- Boot ---
 (async () => {
   initTabs();
@@ -3267,6 +3337,7 @@ if (calendarAddForm) {
   refreshGameGuard();
   refreshWorkers();
   refreshSystemHealth();
+  refreshVidaPlena();
   loadMeetings();
   loadCalendar();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
