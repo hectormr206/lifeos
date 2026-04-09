@@ -407,38 +407,11 @@ mod inner {
             }
         });
 
-        // Memory consolidation — runs every 6 hours (nocturnal consolidation)
-        let consolidation_memory = memory.clone();
-        tokio::spawn(async move {
-            // Wait 5 minutes before first consolidation
-            tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
-
-                if let Some(ref mem) = consolidation_memory {
-                    let m = mem.read().await;
-                    // Standard consolidation: boost/degrade/forget
-                    match m.consolidate().await {
-                        Ok((boosted, degraded, deleted)) => {
-                            info!(
-                                "[consolidation] Memory maintenance: boosted={}, degraded={}, deleted={}",
-                                boosted, degraded, deleted
-                            );
-                        }
-                        Err(e) => {
-                            warn!("[consolidation] Failed: {}", e);
-                        }
-                    }
-                    // Cross-memory consolidation: auto-generate graph links from recent memories
-                    match m.cross_link_recent(&None).await {
-                        Ok(links) if links > 0 => {
-                            info!("[consolidation] Cross-linked {} new relationships", links);
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        });
+        // Memory consolidation is handled centrally by the housekeeping
+        // loop in main.rs (filter_garbage → boost_frequent → apply_decay →
+        // dedup_similar → cross_link_recent → cluster_summary). Removed the
+        // duplicate loop that was here to avoid conflicting maintenance
+        // (hard-delete vs archive, divergent decay curves).
 
         let tool_ctx = ToolContext {
             router,

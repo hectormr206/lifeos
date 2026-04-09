@@ -1397,6 +1397,7 @@ async fn main() -> anyhow::Result<()> {
     let housekeeping_data_dir = data_dir.clone();
     let housekeeping_memory = state.memory_plane_manager.clone();
     let housekeeping_router = state.llm_router.clone();
+    let housekeeping_ai = shared_ai_manager.clone();
     let _housekeeping_handle = tokio::spawn(async move {
         // Wait 5 minutes after boot before first housekeeping run
         tokio::time::sleep(Duration::from_secs(300)).await;
@@ -1434,6 +1435,14 @@ async fn main() -> anyhow::Result<()> {
                 let garbage = mem.filter_garbage().await.unwrap_or(0);
                 if garbage > 0 {
                     info!("memory_plane: filter_garbage removed {} entries", garbage);
+                }
+
+                match mem.boost_frequent_access().await {
+                    Ok(boosted) if boosted > 0 => {
+                        info!("memory_plane: boosted {} frequently-accessed entries", boosted);
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!("memory_plane: boost_frequent_access failed: {}", e),
                 }
 
                 match mem.apply_decay().await {
@@ -1478,6 +1487,21 @@ async fn main() -> anyhow::Result<()> {
                         Err(e) => {
                             warn!("memory_plane: summarize_clusters_with_router failed: {}", e)
                         }
+                    }
+
+                    // Cross-link recent memories via LLM-extracted triples.
+                    match mem
+                        .cross_link_recent(&Some(housekeeping_ai.clone()))
+                        .await
+                    {
+                        Ok(links) if links > 0 => {
+                            info!(
+                                "memory_plane: cross_link_recent generated {} new links",
+                                links
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => warn!("memory_plane: cross_link_recent failed: {}", e),
                     }
                 }
             }

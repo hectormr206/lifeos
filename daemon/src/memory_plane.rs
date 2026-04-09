@@ -2851,6 +2851,27 @@ impl MemoryPlaneManager {
 
     /// Nocturnal consolidation: boost frequently accessed, degrade never-accessed.
     /// Returns (boosted_count, degraded_count, deleted_count).
+    /// Boost entries accessed frequently (5+ times) by increasing their
+    /// importance.  Called from the central housekeeping loop in main.rs
+    /// before `apply_decay` so the boost is applied before the decay curve.
+    pub async fn boost_frequent_access(&self) -> Result<usize> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Self::open_db(&db_path)?;
+            let boosted = db.execute(
+                "UPDATE memory_entries SET importance = MIN(importance + 5, 100)
+                 WHERE access_count >= 5 AND importance < 100
+                   AND (permanent IS NULL OR permanent = 0)",
+                [],
+            )?;
+            Ok::<_, anyhow::Error>(boosted)
+        })
+        .await?
+    }
+
+    /// Legacy consolidation — kept for test compatibility.
+    /// The central housekeeping loop now calls `boost_frequent_access` +
+    /// `apply_decay` instead.
     pub async fn consolidate(&self) -> Result<(usize, usize, usize)> {
         let db_path = self.db_path.clone();
         tokio::task::spawn_blocking(move || {
