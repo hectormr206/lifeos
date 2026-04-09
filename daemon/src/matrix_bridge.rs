@@ -114,12 +114,14 @@ mod inner {
         r#type: Option<String>,
         sender: Option<String>,
         content: Option<EventContent>,
-        event_id: Option<String>,
+        #[serde(rename = "event_id")]
+        _event_id: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
     struct EventContent {
-        msgtype: Option<String>,
+        #[serde(rename = "msgtype")]
+        _msgtype: Option<String>,
         body: Option<String>,
     }
 
