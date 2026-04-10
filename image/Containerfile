@@ -200,16 +200,23 @@ RUN set -eux && \
 # ============================================================================
 # Stage 6a-simplex: Extract SimpleX CLI binary from Ubuntu .deb
 # ============================================================================
-FROM ubuntu:22.04 AS simplex-extract
+# We use bsdtar (libarchive) which natively handles .deb (ar) and .tar.zst
+# without needing dpkg or extra packages.
+FROM fedora:${FEDORA_MAJOR} AS simplex-extract
 ARG SIMPLEX_CLI_VERSION=v6.4.11
-RUN apt-get update -qq && apt-get install -y -qq curl zstd && \
+RUN set -eux && \
+    dnf -y install bsdtar curl && \
     curl -fSL -o /tmp/simplex-chat.deb \
         "https://github.com/simplex-chat/simplex-chat/releases/download/${SIMPLEX_CLI_VERSION}/simplex-chat-ubuntu-22_04-x86_64.deb" && \
-    dpkg -x /tmp/simplex-chat.deb /tmp/simplex-extract && \
+    mkdir -p /tmp/deb-extract && \
+    cd /tmp/deb-extract && \
+    bsdtar xf /tmp/simplex-chat.deb && \
+    bsdtar xf data.tar.* && \
     mkdir -p /out && \
-    install -m 0755 /tmp/simplex-extract/usr/local/bin/simplex-chat /out/simplex-chat && \
-    file /out/simplex-chat && \
-    rm -rf /tmp/simplex-chat.deb /tmp/simplex-extract
+    install -m 0755 usr/local/bin/simplex-chat /out/simplex-chat && \
+    ls -la /out/simplex-chat && \
+    cd / && rm -rf /tmp/simplex-chat.deb /tmp/deb-extract && \
+    dnf clean all
 
 # ============================================================================
 # Stage 6a: Pre-build NVIDIA kernel modules (isolated — pattern from UBlue)
