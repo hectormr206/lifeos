@@ -589,20 +589,38 @@ Pipeline foto/voz → nutrition_log incompleta.
 
 | # | Item | Estado | Commit | Fecha |
 |---|------|--------|--------|-------|
-| A | llama-embeddings fix | pending | — | — |
-| 1 | Axi tray + senses | pending | — | — |
-| 3 | VRAM retention | pending | — | — |
-| 5 | Dashboard audit | pending | — | — |
-| 4 | SimpleX parity | pending | — | — |
-| 2 | Game guard | pending | — | — |
-| S1 | self_improving audit | pending | — | — |
-| S2 | mcp_server audit | pending | — | — |
-| S3 | skill_generator audit | pending | — | — |
-| B | COSMIC snapshot | pending | — | — |
-| I | AMD/NVIDIA split | pending | — | — |
-| β | Beta badge | pending | — | — |
-| E | Screenshot encryption | pending | — | — |
-| N | Nutrition pipeline | pending | — | — |
+| A | llama-embeddings fix | ✅ done | d1b013d | 2026-04-10 |
+| 1 | Axi tray + senses | ✅ done | 7625d94 | 2026-04-10 |
+| 3 | VRAM retention | ✅ done | 7db18fe | 2026-04-10 |
+| 5 | Dashboard timezone | 🟡 partial | a957ff4 | 2026-04-10 |
+| 4 | SimpleX parity | ✅ done | ebd72e4 | 2026-04-10 |
+| 2 | Game guard | ✅ audit-only | 6cc7509 | 2026-04-10 |
+| S1 | self_improving audit | ✅ audit-only | — | 2026-04-10 |
+| S2 | mcp_server audit | ✅ done | 099646e | 2026-04-10 |
+| S3 | skill_generator audit | ✅ done | 099646e | 2026-04-10 |
+| B | COSMIC snapshot | ✅ done | 49bcd3d | 2026-04-10 |
+| I | AMD/NVIDIA split | 🟡 scaffolded | ba6235c | 2026-04-10 |
+| β | Beta badge | ✅ done | ec2b30c | 2026-04-10 |
+| E | Screenshot encryption | ⬜ pending | — | — |
+| N | Nutrition pipeline | ⬜ pending | — | — |
+
+## Legend
+
+- ✅ **done** — committed and ready to verify on hardware
+- ✅ **audit-only** — audited, no code change needed (S1) or only doc-level (#2)
+- 🟡 **partial** — core fix landed, follow-ups deferred to a dedicated sprint
+- 🟡 **scaffolded** — anchor point in place, full refactor pending
+- ⬜ **pending** — not yet started
+
+## Deferred follow-ups (next sprints)
+
+- **#5 dashboard CRUD routes:** GET /conversations, GET /workers, POST /llm/providers, POST /llm/providers/:name/toggle, POST /system/mode, POST /workers/:id/cancel, GET /sessions. Require cross-bridge state merging and API layer expansion.
+- **#I AMD/NVIDIA split:** wire the `LIFEOS_IMAGE_VARIANT` arg through the Containerfile conditionals, skip nvidia stage inputs on AMD, update CI matrix.
+- **#S2 mcp_server full sandbox:** replace blocklist with allowlist + argv exec + bubblewrap. Current state is "disabled by default, opt-in accepts the risk".
+- **#S3 skill_generator approval UI:** human-in-the-loop first-run approval, HMAC on manifests, sandbox via systemd transient units with DynamicUser.
+- **#S1 workflow_actions HMAC:** defense-in-depth even though self_improving.rs has no exec path today.
+- **COSMIC post-upgrade notification service** (#B extension): user-facing prompt when a COSMIC package version change is detected post-upgrade.
+- **Unified `life cosmic {list, restore}` CLI subcommand** (#B extension): thin wrapper over the existing shell utility.
 
 ---
 
