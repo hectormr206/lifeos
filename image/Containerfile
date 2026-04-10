@@ -885,6 +885,14 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/simplex-chat.service /usr/lib/systemd/system/multi-user.target.wants/simplex-chat.service && \
     # Canonical enablement: lifeosd starts from the user's default.target.
     ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
+    # Enable nvidia-persistenced so the NVIDIA driver keeps the GPU
+    # context alive across idle periods. Without this the driver unloads
+    # the context when no client is active and the LLM weights get
+    # evicted from VRAM. The lifeos-conditions dropin gates it on
+    # /dev/nvidiactl so it's a no-op on AMD/Intel machines.
+    if [ -f /usr/lib/systemd/system/nvidia-persistenced.service ]; then \
+        ln -sf /usr/lib/systemd/system/nvidia-persistenced.service /usr/lib/systemd/system/multi-user.target.wants/nvidia-persistenced.service; \
+    fi && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \

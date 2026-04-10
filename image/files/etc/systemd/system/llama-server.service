@@ -3,8 +3,14 @@ Description=LifeOS AI Inference Server (llama.cpp)
 Documentation=https://github.com/ggml-org/llama.cpp
 # Canonical runtime: system scope. Some hosts may keep a user-scoped override
 # for recovery/dev flows, but that is fallback behavior only.
-After=network-online.target systemd-user-sessions.service
-Wants=network-online.target
+#
+# Ordering note: wait for nvidia-persistenced so the NVIDIA driver context is
+# pinned BEFORE we load the model. Without persistenced the driver unloads
+# the GPU context whenever no client is active, and the model gets evicted
+# from VRAM — exactly the bug where the Qwen weights "leave" VRAM after a
+# few minutes of idle.
+After=network-online.target systemd-user-sessions.service nvidia-persistenced.service
+Wants=network-online.target nvidia-persistenced.service
 ConditionPathExists=/etc/lifeos/llama-server.env
 
 [Service]
@@ -46,6 +52,7 @@ ExecStart=/usr/sbin/llama-server \
     --ctx-size ${LIFEOS_AI_CTX_SIZE} \
     --threads ${LIFEOS_AI_THREADS} \
     --n-gpu-layers ${LIFEOS_AI_GPU_LAYERS} \
+    --mlock \
     --parallel ${LIFEOS_AI_PARALLEL} \
     --batch-size ${LIFEOS_AI_BATCH_SIZE} \
     --ubatch-size ${LIFEOS_AI_UBATCH_SIZE} \
@@ -91,6 +98,10 @@ SystemCallArchitectures=native
 # Resource limits
 LimitNOFILE=65536
 MemoryMax=16G
+# --mlock requires a generous memlock ulimit. The default (~64KB) would
+# cause mlock() to fail with ENOMEM and llama-server would fall back to
+# swappable pages, defeating the whole point of --mlock.
+LimitMEMLOCK=infinity
 
 # NOTE:
 # Keep systemd's default device policy here. Restrictive DeviceAllow filters
