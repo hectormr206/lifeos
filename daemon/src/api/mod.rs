@@ -8158,6 +8158,38 @@ async fn get_sensory_runtime(
     ))
 }
 
+/// Compute the effective master `enabled` flag for a sensory runtime update.
+///
+/// Rules:
+///   1. If the payload explicitly sets `enabled`, honor it unchanged.
+///   2. Otherwise, if the payload is activating ANY capture sense
+///      (audio/screen/camera), auto-activate the master.
+///   3. Otherwise, preserve the current value.
+///
+/// Rule 2 exists because `AgentRuntimeManager::set_sensory_capture_runtime`
+/// applies an AND gate (`audio_enabled = enabled && audio_enabled`). A client
+/// that toggles a single sense without also passing `enabled: true` would be
+/// silently zeroed out — the exact bug where the Axi tray menu checkboxes
+/// flipped back to off immediately after being checked.
+fn compute_effective_enabled(
+    payload_enabled: Option<bool>,
+    payload_audio: Option<bool>,
+    payload_screen: Option<bool>,
+    payload_camera: Option<bool>,
+    current_enabled: bool,
+) -> bool {
+    if let Some(explicit) = payload_enabled {
+        return explicit;
+    }
+    let any_sense_activating =
+        payload_audio == Some(true) || payload_screen == Some(true) || payload_camera == Some(true);
+    if any_sense_activating {
+        true
+    } else {
+        current_enabled
+    }
+}
+
 async fn set_sensory_runtime(
     State(state): State<ApiState>,
     Json(payload): Json<SensoryRuntimePayload>,
@@ -8169,7 +8201,15 @@ async fn set_sensory_runtime(
         mgr.sensory_capture_runtime().await
     };
 
-    let enabled = payload.enabled.unwrap_or(current.enabled);
+    // Determine the new master `enabled` state. Extracted to a pure helper
+    // so the behaviour is unit-tested independently from axum/state wiring.
+    let enabled = compute_effective_enabled(
+        payload.enabled,
+        payload.audio_enabled,
+        payload.screen_enabled,
+        payload.camera_enabled,
+        current.enabled,
+    );
     let audio_enabled = payload.audio_enabled.unwrap_or(current.audio_enabled);
     let screen_enabled = payload.screen_enabled.unwrap_or(current.screen_enabled);
     let camera_enabled = payload.camera_enabled.unwrap_or(current.camera_enabled);
@@ -11643,6 +11683,93 @@ mod tests {
         HardwareFingerprint, RuntimeInputs, RuntimeProfile, RuntimeProfiles, RuntimeSettings,
     };
     use chrono::Utc;
+
+    // ───────────────────────────────────────────────────────────────────
+    // Regression tests for the tray-menu sense-toggle bug.
+    //
+    // Symptom: clicking a sense checkbox in the Axi tray menu would check
+    // it briefly and then revert. Only Always-On (separate endpoint) and
+    // Habla (no AND gate in the runtime manager) persisted.
+    //
+    // Root cause: the tray sent payloads like `{"audio_enabled": true}`
+    // without also setting `enabled: true`. The handler read
+    // `current.enabled` (stale `false` on fresh state), and the runtime
+    // manager's AND gate zeroed audio_enabled back to `false`.
+    //
+    // Fix: `compute_effective_enabled` auto-activates the master when any
+    // sense is being turned on and the payload omits `enabled`.
+    // ───────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn effective_enabled_honors_explicit_payload() {
+        assert!(compute_effective_enabled(
+            Some(true),
+            None,
+            None,
+            None,
+            false
+        ));
+        assert!(!compute_effective_enabled(
+            Some(false),
+            Some(true),
+            None,
+            None,
+            true
+        ));
+    }
+
+    #[test]
+    fn effective_enabled_auto_activates_on_sense_turn_on() {
+        // Audio on → master on
+        assert!(compute_effective_enabled(
+            None,
+            Some(true),
+            None,
+            None,
+            false
+        ));
+        // Screen on → master on
+        assert!(compute_effective_enabled(
+            None,
+            None,
+            Some(true),
+            None,
+            false
+        ));
+        // Camera on → master on
+        assert!(compute_effective_enabled(
+            None,
+            None,
+            None,
+            Some(true),
+            false
+        ));
+    }
+
+    #[test]
+    fn effective_enabled_preserves_current_when_only_turning_off() {
+        // Turning a sense off does NOT flip master — preserves current.
+        assert!(!compute_effective_enabled(
+            None,
+            Some(false),
+            None,
+            None,
+            false
+        ));
+        assert!(compute_effective_enabled(
+            None,
+            Some(false),
+            None,
+            None,
+            true
+        ));
+    }
+
+    #[test]
+    fn effective_enabled_preserves_current_when_payload_empty() {
+        assert!(compute_effective_enabled(None, None, None, None, true));
+        assert!(!compute_effective_enabled(None, None, None, None, false));
+    }
 
     fn sample_runtime_profile() -> RuntimeProfile {
         RuntimeProfile {

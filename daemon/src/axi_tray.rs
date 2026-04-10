@@ -79,13 +79,13 @@ pub mod inner {
     fn open_url_in_browser(url: &str) {
         let url = url.to_string();
         std::thread::spawn(move || {
-            // Try multiple browser openers in order.
-            // xdg-open often fails silently in COSMIC DE without
-            // proper portal configuration, so we try direct browsers
-            // as fallback.
+            log::info!("[tray] open_url_in_browser: {}", url);
+            // Firefox direct first — LifeOS ships a hardened Firefox profile
+            // (`lifeos.default`) and removes other browser .desktop files, so
+            // the Firefox binary is the canonical entrypoint. xdg-open is
+            // last because it dispatches through MIME handlers which can
+            // silently fail in COSMIC if the portal is misconfigured.
             let openers: &[(&str, &[&str])] = &[
-                ("xdg-open", &[]),
-                ("gio", &["open"]),
                 ("firefox", &["--new-tab"]),
                 ("flatpak", &["run", "org.mozilla.firefox", "--new-tab"]),
                 ("chromium", &["--new-tab"]),
@@ -98,34 +98,71 @@ pub mod inner {
                         "--new-tab",
                     ],
                 ),
+                ("gio", &["open"]),
+                ("xdg-open", &[]),
             ];
             for (cmd, args) in openers {
                 let mut command = std::process::Command::new(cmd);
                 command.args(*args).arg(&url);
-                if let Ok(mut child) = command.spawn() {
-                    // Give the command a moment to fail fast
-                    std::thread::sleep(std::time::Duration::from_millis(300));
-                    match child.try_wait() {
-                        Ok(Some(status)) if status.success() => return,
-                        Ok(Some(_)) => continue,
-                        Ok(None) => return,
-                        Err(_) => continue,
+                match command.spawn() {
+                    Ok(mut child) => {
+                        // Give the command a moment to fail fast. Browsers
+                        // that launch successfully stay alive past 300ms.
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        match child.try_wait() {
+                            Ok(Some(status)) if status.success() => {
+                                log::info!("[tray] opened via {}", cmd);
+                                return;
+                            }
+                            Ok(Some(status)) => {
+                                log::debug!(
+                                    "[tray] {} exited with {} — trying next opener",
+                                    cmd,
+                                    status
+                                );
+                                continue;
+                            }
+                            Ok(None) => {
+                                // Still running — assume the browser took over.
+                                log::info!("[tray] {} launched (still running)", cmd);
+                                return;
+                            }
+                            Err(e) => {
+                                log::debug!("[tray] wait error for {}: {}", cmd, e);
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::debug!("[tray] spawn {} failed: {}", cmd, e);
+                        continue;
                     }
                 }
             }
-            log::warn!("[tray] Failed to open dashboard — no browser opener worked");
+            log::error!(
+                "[tray] Failed to open dashboard — no browser opener worked (url={})",
+                url
+            );
         });
     }
 
     /// Call the daemon API to toggle a sensor. Uses curl to avoid reqwest::blocking dependency.
+    /// Captures HTTP status from curl and logs failures so tray actions that
+    /// silently fail in the backend become visible in the journal.
     fn call_api(api_base: &str, token: &str, endpoint: &str, body: serde_json::Value) {
         let url = format!("{}/api/v1{}", api_base, endpoint);
+        let endpoint = endpoint.to_string();
         let token = token.to_string();
         let body_str = serde_json::to_string(&body).unwrap_or_default();
         std::thread::spawn(move || {
-            std::process::Command::new("curl")
+            log::debug!("[tray] call_api POST {} body={}", endpoint, body_str);
+            let output = std::process::Command::new("curl")
                 .args([
                     "-sS",
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    "%{http_code}",
                     "-X",
                     "POST",
                     "-H",
@@ -136,8 +173,26 @@ pub mod inner {
                     &body_str,
                     &url,
                 ])
-                .output()
-                .ok();
+                .output();
+            match output {
+                Ok(out) => {
+                    let code = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if code.starts_with('2') {
+                        log::debug!("[tray] call_api {} → HTTP {}", endpoint, code);
+                    } else {
+                        let err = String::from_utf8_lossy(&out.stderr);
+                        log::warn!(
+                            "[tray] call_api {} FAILED → HTTP {} stderr={}",
+                            endpoint,
+                            code,
+                            err.trim()
+                        );
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[tray] call_api {} curl spawn failed: {}", endpoint, e);
+                }
+            }
         });
     }
 
@@ -273,21 +328,21 @@ pub mod inner {
                 .into(),
             );
 
-            // Mic toggle — only send the changed field
+            // Mic toggle — when enabling, also turn on the master `enabled`
+            // flag so the backend's AND gate doesn't zero this out.
             items.push(
                 CheckmarkItem {
                     label: "Microfono".into(),
                     checked: self.mic,
                     activate: Box::new(move |this: &mut Self| {
                         this.mic = !this.mic;
-                        call_api(
-                            &api_mic,
-                            &tok_mic,
-                            "/runtime/sensory",
-                            serde_json::json!({
-                                "audio_enabled": this.mic
-                            }),
-                        );
+                        let mut body = serde_json::json!({
+                            "audio_enabled": this.mic
+                        });
+                        if this.mic {
+                            body["enabled"] = serde_json::Value::Bool(true);
+                        }
+                        call_api(&api_mic, &tok_mic, "/runtime/sensory", body);
                     }),
                     ..Default::default()
                 }
@@ -322,14 +377,13 @@ pub mod inner {
                     checked: self.camera,
                     activate: Box::new(move |this: &mut Self| {
                         this.camera = !this.camera;
-                        call_api(
-                            &api_cam,
-                            &tok_cam,
-                            "/runtime/sensory",
-                            serde_json::json!({
-                                "camera_enabled": this.camera
-                            }),
-                        );
+                        let mut body = serde_json::json!({
+                            "camera_enabled": this.camera
+                        });
+                        if this.camera {
+                            body["enabled"] = serde_json::Value::Bool(true);
+                        }
+                        call_api(&api_cam, &tok_cam, "/runtime/sensory", body);
                     }),
                     ..Default::default()
                 }
@@ -343,14 +397,13 @@ pub mod inner {
                     checked: self.screen,
                     activate: Box::new(move |this: &mut Self| {
                         this.screen = !this.screen;
-                        call_api(
-                            &api_scr,
-                            &tok_scr,
-                            "/runtime/sensory",
-                            serde_json::json!({
-                                "screen_enabled": this.screen
-                            }),
-                        );
+                        let mut body = serde_json::json!({
+                            "screen_enabled": this.screen
+                        });
+                        if this.screen {
+                            body["enabled"] = serde_json::Value::Bool(true);
+                        }
+                        call_api(&api_scr, &tok_scr, "/runtime/sensory", body);
                     }),
                     ..Default::default()
                 }
