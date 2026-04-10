@@ -1041,116 +1041,118 @@ RUN set -eux && \
     /usr/bin/whisper-stream -h >/dev/null
 
 # --- Verificación final ---
-RUN test -x /usr/bin/mpv && \
-    test -x /usr/bin/evince && \
-    test -x /usr/bin/keepassxc && \
-    test -x /usr/bin/life && \
-    test -x /usr/bin/lifeosd && \
-    test -x /usr/local/bin/cargo-audit && \
-    test -x /usr/bin/llama-server && \
-    test -x /usr/bin/whisper-cli && \
-    test -x /usr/bin/whisper-stream && \
-    test -x /usr/bin/grim && \
-    test -x /usr/bin/wl-copy && \
-    test -x /usr/bin/tesseract && \
-    test -x /usr/bin/espeak-ng && \
-    test -x /usr/local/bin/lifeos-piper && \
-    /usr/local/bin/lifeos-piper --help 2>&1 | grep -q -- '--model' && \
-    test -x /usr/bin/spice-vdagent && \
-    test -x /usr/bin/virsh && \
-    test -x /usr/bin/pkg-config && \
-    test -x /usr/sbin/llama-server && \
-    test -x /usr/local/bin/lifeos-nvidia-secureboot.sh && \
-    test -x /usr/local/bin/lifeos-maintenance-cleanup.sh && \
-    test -x /usr/local/bin/lifeos-open-axi-dashboard.sh && \
-    test -f /usr/share/lifeos/dashboard/index.html && \
-    test -f /usr/share/lifeos/dashboard/app.js && \
-    test -f /usr/share/lifeos/dashboard/style.css && \
+# Wrapper reports WHICH check failed instead of a silent exit code.
+RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
+    test -x /usr/bin/mpv               || fail "/usr/bin/mpv"; \
+    test -x /usr/bin/evince              || fail "/usr/bin/evince"; \
+    test -x /usr/bin/keepassxc            || fail "/usr/bin/keepassxc"; \
+    test -x /usr/bin/life                 || fail "/usr/bin/life"; \
+    test -x /usr/bin/lifeosd              || fail "/usr/bin/lifeosd"; \
+    test -x /usr/local/bin/cargo-audit    || fail "/usr/local/bin/cargo-audit"; \
+    test -x /usr/bin/llama-server         || fail "/usr/bin/llama-server"; \
+    test -x /usr/bin/whisper-cli          || fail "/usr/bin/whisper-cli"; \
+    test -x /usr/bin/whisper-stream       || fail "/usr/bin/whisper-stream"; \
+    test -x /usr/bin/grim                 || fail "/usr/bin/grim"; \
+    test -x /usr/bin/wl-copy              || fail "/usr/bin/wl-copy"; \
+    test -x /usr/bin/tesseract            || fail "/usr/bin/tesseract"; \
+    test -x /usr/bin/espeak-ng            || fail "/usr/bin/espeak-ng"; \
+    test -x /usr/local/bin/lifeos-piper   || fail "/usr/local/bin/lifeos-piper"; \
+    /usr/local/bin/lifeos-piper --help 2>&1 | grep -q -- '--model' || fail "piper --model"; \
+    test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
+    test -x /usr/bin/virsh                || fail "/usr/bin/virsh"; \
+    test -x /usr/bin/pkg-config           || fail "/usr/bin/pkg-config"; \
+    test -x /usr/sbin/llama-server        || fail "/usr/sbin/llama-server"; \
+    test -x /usr/local/bin/lifeos-nvidia-secureboot.sh || fail "/usr/local/bin/lifeos-nvidia-secureboot.sh"; \
+    test -x /usr/local/bin/lifeos-maintenance-cleanup.sh || fail "/usr/local/bin/lifeos-maintenance-cleanup.sh"; \
+    test -x /usr/local/bin/lifeos-open-axi-dashboard.sh || fail "/usr/local/bin/lifeos-open-axi-dashboard.sh"; \
+    test -f /usr/share/lifeos/dashboard/index.html || fail "/usr/share/lifeos/dashboard/index.html"; \
+    test -f /usr/share/lifeos/dashboard/app.js || fail "/usr/share/lifeos/dashboard/app.js"; \
+    test -f /usr/share/lifeos/dashboard/style.css || fail "/usr/share/lifeos/dashboard/style.css"; \
     # Dashboard .desktop removed — access only via tray icon
-    test -f /usr/lib/systemd/user/lifeosd.service && \
-    test -f /usr/lib/systemd/system/llama-server.service && \
-    test -f /usr/lib/systemd/system/whisper-stt.service && \
-    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service && \
-    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer && \
-    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.service && \
-    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer && \
-    test -f /usr/lib/systemd/system/lifeos-security-baseline.service && \
-    test -f /usr/lib/systemd/system/lifeos-sentinel.service && \
-    test -f /usr/lib/systemd/system/lifeos-first-boot.service && \
-    test -L /etc/systemd/system/bootc-fetch-apply-updates.timer && \
-    test -L /etc/systemd/system/bootc-fetch-apply-updates.service && \
-    test -f /etc/lifeos/llama-server.env && \
-    test -f /etc/lifeos/tuf/root.json && \
-    test -f /etc/lifeos/tuf/timestamp.json && \
-    test -f /etc/lifeos/tuf/snapshot.json && \
-    test -f /etc/lifeos/tuf/targets.json && \
-    test -f /etc/lifeos/lifeos.toml.default && \
-    test -f /etc/lifeos/channels.toml && \
-    test -f /etc/lifeos/channel && \
-    test -f /etc/lifeos/maintenance-cleanup.env && \
-    test -f /etc/lifeos/cosmic-theme.toml && \
-    test -f /etc/lifeos/design-tokens.toml && \
-    test -f /etc/lifeos/design-tokens.json && \
-    test -f /usr/lib/udev/rules.d/*-steam*.rules && \
-    test -f /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml && \
-    test -f /usr/share/lifeos/models/whisper/ggml-base.bin && \
-    test -f /usr/share/lifeos/models/whisper/ggml-tiny.bin && \
-    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx && \
-    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx.json && \
-    test -f /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx && \
-    test -f /usr/share/lifeos/models/rustpotter/axi.rpw && \
-    test -d /usr/share/backgrounds/lifeos && \
-    test -d /usr/share/icons/LifeOS && \
-    test -f /usr/share/themes/LifeOS-Dark/index.theme && \
-    test -f /usr/share/themes/LifeOS-Dark/gtk-4.0/gtk.css && \
-    test -f /usr/share/themes/LifeOS-Light/index.theme && \
-    test -f /usr/share/themes/LifeOS-Light/gtk-4.0/gtk.css && \
-    test -f /usr/share/themes/LifeOS-HighContrast/index.theme && \
-    test -f /usr/share/themes/LifeOS-HighContrast/gtk-4.0/gtk.css && \
-    test -x /usr/local/bin/lifeos-first-boot.sh && \
-    test -x /usr/local/bin/lifeos-ai-setup.sh && \
-    test -x /usr/local/bin/lifeos-stt-setup.sh && \
-    test -x /usr/local/bin/llama-server-health-check.sh && \
-    test -x /usr/local/bin/lifeos-btrfs-snapshot.sh && \
-    test -x /usr/local/bin/lifeos-integrity-check.sh && \
-    test -x /usr/local/bin/lifeos-security-baseline-check.sh && \
-    test -x /usr/bin/podman && \
-    test -x /usr/bin/docker && \
-    test -x /usr/bin/fzf && \
-    test -x /usr/bin/zoxide && \
-    test -x /usr/bin/eza && \
-    test -x /usr/bin/atuin && \
-    test -x /usr/bin/direnv && \
-    test -x /usr/bin/tmux && \
-    test -x /usr/bin/btop && \
-    test -x /usr/bin/nvim && \
-    cargo fmt --version >/dev/null && \
-    cargo clippy --version >/dev/null && \
-    cargo audit --version >/dev/null && \
-    rustc --version >/dev/null && \
-    rustfmt --version >/dev/null && \
-    rust-analyzer --version >/dev/null && \
-    pkg-config --exists dbus-1 glib-2.0 gtk4 libadwaita-1 && \
-    test -f /usr/lib64/libvirt/connection-driver/libvirt_driver_qemu.so && \
-    (test -f /usr/lib/systemd/system/libvirtd.service || test -f /usr/lib/systemd/system/virtqemud.socket) && \
-    test -x /usr/bin/skopeo && \
-    test -x /usr/bin/podman-compose && \
-    podman --version >/dev/null && \
-    docker --version >/dev/null && \
-    test -f /etc/containers/containers.conf && \
-    test -f /etc/containers/storage.conf && \
-    test -f /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml && \
-    test -x /usr/bin/firefox && \
-    test -f /etc/firefox/policies/policies.json && \
-    (test -f /usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi || test -f /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi) && \
-    test -f /etc/skel/.mozilla/firefox/profiles.ini && \
-    test -f /etc/skel/.mozilla/firefox/lifeos.default/user.js && \
-    test -f /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css && \
-    test -f /etc/profile.d/firefox-wayland.sh && \
-    test -f /etc/profile.d/lifeos-terminal.sh && \
-    test -f /etc/fish/conf.d/lifeos-terminal.fish && \
-    test -f /usr/share/applications/firefox-lifeos.desktop && \
-    test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1
+    test -f /usr/lib/systemd/user/lifeosd.service || fail "/usr/lib/systemd/user/lifeosd.service"; \
+    test -f /usr/lib/systemd/system/llama-server.service || fail "llama-server.service"; \
+    test -f /usr/lib/systemd/system/whisper-stt.service || fail "whisper-stt.service"; \
+    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service || fail "lifeos-btrfs-snapshot.service"; \
+    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer || fail "lifeos-btrfs-snapshot.timer"; \
+    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.service || fail "lifeos-maintenance-cleanup.service"; \
+    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer || fail "lifeos-maintenance-cleanup.timer"; \
+    test -f /usr/lib/systemd/system/lifeos-security-baseline.service || fail "lifeos-security-baseline.service"; \
+    test -f /usr/lib/systemd/system/lifeos-sentinel.service || fail "lifeos-sentinel.service"; \
+    test -f /usr/lib/systemd/system/lifeos-first-boot.service || fail "lifeos-first-boot.service"; \
+    test -L /etc/systemd/system/bootc-fetch-apply-updates.timer || fail "bootc-fetch-apply-updates.timer"; \
+    test -L /etc/systemd/system/bootc-fetch-apply-updates.service || fail "bootc-fetch-apply-updates.service"; \
+    test -f /etc/lifeos/llama-server.env  || fail "/etc/lifeos/llama-server.env"; \
+    test -f /etc/lifeos/tuf/root.json     || fail "/etc/lifeos/tuf/root.json"; \
+    test -f /etc/lifeos/tuf/timestamp.json || fail "/etc/lifeos/tuf/timestamp.json"; \
+    test -f /etc/lifeos/tuf/snapshot.json || fail "/etc/lifeos/tuf/snapshot.json"; \
+    test -f /etc/lifeos/tuf/targets.json  || fail "/etc/lifeos/tuf/targets.json"; \
+    test -f /etc/lifeos/lifeos.toml.default || fail "/etc/lifeos/lifeos.toml.default"; \
+    test -f /etc/lifeos/channels.toml     || fail "/etc/lifeos/channels.toml"; \
+    test -f /etc/lifeos/channel           || fail "/etc/lifeos/channel"; \
+    test -f /etc/lifeos/maintenance-cleanup.env || fail "/etc/lifeos/maintenance-cleanup.env"; \
+    test -f /etc/lifeos/cosmic-theme.toml || fail "/etc/lifeos/cosmic-theme.toml"; \
+    test -f /etc/lifeos/design-tokens.toml || fail "/etc/lifeos/design-tokens.toml"; \
+    test -f /etc/lifeos/design-tokens.json || fail "/etc/lifeos/design-tokens.json"; \
+    ls /usr/lib/udev/rules.d/*-steam*.rules >/dev/null 2>&1 || fail "steam udev rules"; \
+    test -f /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml || fail "60-lifeos-split-lock-detect.toml"; \
+    test -f /usr/share/lifeos/models/whisper/ggml-base.bin || fail "whisper/ggml-base.bin"; \
+    test -f /usr/share/lifeos/models/whisper/ggml-tiny.bin || fail "whisper/ggml-tiny.bin"; \
+    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx || fail "piper/es_MX-claude-high.onnx"; \
+    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx.json || fail "piper/es_MX-claude-high.onnx.json"; \
+    test -f /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx || fail "wespeaker/voxceleb_resnet34_LM.onnx"; \
+    test -f /usr/share/lifeos/models/rustpotter/axi.rpw || fail "rustpotter/axi.rpw"; \
+    test -d /usr/share/backgrounds/lifeos || fail "/usr/share/backgrounds/lifeos"; \
+    test -d /usr/share/icons/LifeOS       || fail "/usr/share/icons/LifeOS"; \
+    test -f /usr/share/themes/LifeOS-Dark/index.theme || fail "LifeOS-Dark/index.theme"; \
+    test -f /usr/share/themes/LifeOS-Dark/gtk-4.0/gtk.css || fail "LifeOS-Dark/gtk.css"; \
+    test -f /usr/share/themes/LifeOS-Light/index.theme || fail "LifeOS-Light/index.theme"; \
+    test -f /usr/share/themes/LifeOS-Light/gtk-4.0/gtk.css || fail "LifeOS-Light/gtk.css"; \
+    test -f /usr/share/themes/LifeOS-HighContrast/index.theme || fail "LifeOS-HighContrast/index.theme"; \
+    test -f /usr/share/themes/LifeOS-HighContrast/gtk-4.0/gtk.css || fail "LifeOS-HighContrast/gtk.css"; \
+    test -x /usr/local/bin/lifeos-first-boot.sh || fail "/usr/local/bin/lifeos-first-boot.sh"; \
+    test -x /usr/local/bin/lifeos-ai-setup.sh || fail "/usr/local/bin/lifeos-ai-setup.sh"; \
+    test -x /usr/local/bin/lifeos-stt-setup.sh || fail "/usr/local/bin/lifeos-stt-setup.sh"; \
+    test -x /usr/local/bin/llama-server-health-check.sh || fail "/usr/local/bin/llama-server-health-check.sh"; \
+    test -x /usr/local/bin/lifeos-btrfs-snapshot.sh || fail "/usr/local/bin/lifeos-btrfs-snapshot.sh"; \
+    test -x /usr/local/bin/lifeos-integrity-check.sh || fail "/usr/local/bin/lifeos-integrity-check.sh"; \
+    test -x /usr/local/bin/lifeos-security-baseline-check.sh || fail "/usr/local/bin/lifeos-security-baseline-check.sh"; \
+    test -x /usr/bin/podman               || fail "/usr/bin/podman"; \
+    test -x /usr/bin/docker               || fail "/usr/bin/docker"; \
+    test -x /usr/bin/fzf                  || fail "/usr/bin/fzf"; \
+    test -x /usr/bin/zoxide               || fail "/usr/bin/zoxide"; \
+    test -x /usr/bin/eza                  || fail "/usr/bin/eza"; \
+    test -x /usr/bin/atuin                || fail "/usr/bin/atuin"; \
+    test -x /usr/bin/direnv               || fail "/usr/bin/direnv"; \
+    test -x /usr/bin/tmux                 || fail "/usr/bin/tmux"; \
+    test -x /usr/bin/btop                 || fail "/usr/bin/btop"; \
+    test -x /usr/bin/nvim                 || fail "/usr/bin/nvim"; \
+    cargo fmt --version >/dev/null        || fail "cargo fmt"; \
+    cargo clippy --version >/dev/null     || fail "cargo clippy"; \
+    cargo audit --version >/dev/null      || fail "cargo audit"; \
+    rustc --version >/dev/null            || fail "rustc"; \
+    rustfmt --version >/dev/null          || fail "rustfmt"; \
+    rust-analyzer --version >/dev/null    || fail "rust-analyzer"; \
+    pkg-config --exists dbus-1 glib-2.0 gtk4 libadwaita-1 || fail "pkg-config dbus-1 glib-2.0 gtk4 libadwaita-1"; \
+    test -f /usr/lib64/libvirt/connection-driver/libvirt_driver_qemu.so || fail "libvirt_driver_qemu.so"; \
+    (test -f /usr/lib/systemd/system/libvirtd.service || test -f /usr/lib/systemd/system/virtqemud.socket) || fail "libvirtd.service or virtqemud.socket"; \
+    test -x /usr/bin/skopeo               || fail "/usr/bin/skopeo"; \
+    test -x /usr/bin/podman-compose       || fail "/usr/bin/podman-compose"; \
+    podman --version >/dev/null           || fail "podman"; \
+    docker --version >/dev/null           || fail "docker"; \
+    test -f /etc/containers/containers.conf || fail "/etc/containers/containers.conf"; \
+    test -f /etc/containers/storage.conf  || fail "/etc/containers/storage.conf"; \
+    test -f /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml || fail "50-lifeos-nvidia-prefer-proprietary.toml"; \
+    test -x /usr/bin/firefox              || fail "/usr/bin/firefox"; \
+    test -f /etc/firefox/policies/policies.json || fail "/etc/firefox/policies/policies.json"; \
+    (test -f /usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi || test -f /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi) || fail "uBlock0 xpi"; \
+    test -f /etc/skel/.mozilla/firefox/profiles.ini || fail "firefox/profiles.ini"; \
+    test -f /etc/skel/.mozilla/firefox/lifeos.default/user.js || fail "firefox/lifeos.default/user.js"; \
+    test -f /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css || fail "firefox/userChrome.css"; \
+    test -f /etc/profile.d/firefox-wayland.sh || fail "firefox-wayland.sh"; \
+    test -f /etc/profile.d/lifeos-terminal.sh || fail "lifeos-terminal.sh"; \
+    test -f /etc/fish/conf.d/lifeos-terminal.fish || fail "lifeos-terminal.fish"; \
+    test -f /usr/share/applications/firefox-lifeos.desktop || fail "firefox-lifeos.desktop"; \
+    test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1 || fail "expected exactly 1 firefox .desktop file"
 
 # nonempty-boot is intentionally skipped: /boot/efi content is required for bootc-image-builder ISO generation.
 RUN dnf clean all && rm -f /var/log/dnf5.log* /var/cache/ldconfig/aux-cache && bootc container lint --skip nonempty-boot
