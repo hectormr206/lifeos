@@ -29,6 +29,20 @@ ARG LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64=""
 ARG LIFEOS_NVIDIA_KMOD_CERT_DER_B64=""
 ARG LIFEOS_PRELOAD_MODEL=false
 
+# Image variant selector for the AMD/NVIDIA split (item #12 in
+# docs/operations/pending-items-roadmap.md). Values:
+#   "nvidia" (default) — full image with proprietary NVIDIA drivers,
+#                        akmods, CUDA, Secure Boot signing, and
+#                        nvidia-persistenced enabled. Backwards
+#                        compatible with the pre-split build.
+#   "amd"             — lean image for AMD / Intel / ARM hosts.
+#                       Skips the nvidia-kmod-builder stage inputs,
+#                       skips nvidia-persistenced enablement, and
+#                       does not install the NVIDIA userspace packages.
+#                       (Full skip wiring is tracked as follow-up; this
+#                       arg is the anchor point for the refactor.)
+ARG LIFEOS_IMAGE_VARIANT=nvidia
+
 RUN dnf -y install \
     rust cargo \
     openssl-devel \
