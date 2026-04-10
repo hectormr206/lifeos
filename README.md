@@ -1,6 +1,10 @@
 # LifeOS
 
+![Beta](https://img.shields.io/badge/status-beta-orange?style=for-the-badge) ![Version](https://img.shields.io/badge/version-0.4.0-teal?style=for-the-badge)
+
 **AI-native Linux distribution built on Fedora bootc (immutable) with COSMIC Desktop.**
+
+> **Heads up — LifeOS is in Beta.** Things work, things break, things change. Running LifeOS on your primary machine means opting into fast iteration over long-term stability. Feedback and issue reports are welcome and actively shape the roadmap.
 
 LifeOS is building toward an OS-level assistant named **Axi** with local inference, encrypted memory, desktop control, and privacy-first defaults.
 
