@@ -143,7 +143,12 @@ mod inner {
         Ok(corr_id)
     }
 
-    /// Try to read or create an invitation link.
+    /// Maximum number of retries when requesting an invitation link.
+    const INVITE_RETRY_COUNT: u32 = 3;
+    /// Delay between invite link creation retries.
+    const INVITE_RETRY_DELAY_SECS: u64 = 5;
+
+    /// Try to read or create an invitation link with retries.
     async fn ensure_invite_link(
         ws: &mut futures_util::stream::SplitSink<
             tokio_tungstenite::WebSocketStream<
@@ -158,11 +163,25 @@ mod inner {
             return;
         }
 
-        // Ask SimpleX CLI to create an invitation.
-        match send_command(ws, "/c").await {
-            Ok(_) => info!("[simplex_bridge] Requested invitation link creation"),
-            Err(e) => warn!("[simplex_bridge] Failed to request invite link: {}", e),
+        // Ask SimpleX CLI to create an invitation, retrying on failure.
+        for attempt in 1..=INVITE_RETRY_COUNT {
+            match send_command(ws, "/c").await {
+                Ok(_) => {
+                    info!("[simplex_bridge] Requested invitation link creation (attempt {}/{})", attempt, INVITE_RETRY_COUNT);
+                    return;
+                }
+                Err(e) => {
+                    warn!(
+                        "[simplex_bridge] Failed to request invite link (attempt {}/{}): {}",
+                        attempt, INVITE_RETRY_COUNT, e
+                    );
+                    if attempt < INVITE_RETRY_COUNT {
+                        tokio::time::sleep(Duration::from_secs(INVITE_RETRY_DELAY_SECS)).await;
+                    }
+                }
+            }
         }
+        warn!("[simplex_bridge] Exhausted all {} attempts to create invite link", INVITE_RETRY_COUNT);
     }
 
     /// Save the invitation link to disk so the dashboard can read it.
@@ -171,7 +190,17 @@ mod inner {
             let _ = std::fs::create_dir_all(parent);
         }
         match std::fs::write(INVITE_LINK_PATH, link) {
-            Ok(()) => info!("[simplex_bridge] Invite link saved to {}", INVITE_LINK_PATH),
+            Ok(()) => {
+                info!("[simplex_bridge] Invite link saved to {}", INVITE_LINK_PATH);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(
+                        INVITE_LINK_PATH,
+                        std::fs::Permissions::from_mode(0o600),
+                    );
+                }
+            }
             Err(e) => error!("[simplex_bridge] Failed to save invite link: {}", e),
         }
     }
@@ -228,12 +257,33 @@ mod inner {
                     // Ensure we have an invite link for the dashboard.
                     ensure_invite_link(&mut sink).await;
 
-                    while let Some(msg_result) = stream.next().await {
-                        let msg = match msg_result {
-                            Ok(m) => m,
-                            Err(e) => {
-                                warn!("[simplex_bridge] WebSocket error: {}", e);
-                                break;
+                    let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
+                    // Consume the first immediate tick so we don't ping right away.
+                    ping_interval.tick().await;
+
+                    loop {
+                        let msg = tokio::select! {
+                            msg_result = stream.next() => {
+                                match msg_result {
+                                    Some(Ok(m)) => m,
+                                    Some(Err(e)) => {
+                                        warn!("[simplex_bridge] WebSocket error: {}", e);
+                                        break;
+                                    }
+                                    None => {
+                                        info!("[simplex_bridge] WebSocket stream ended");
+                                        break;
+                                    }
+                                }
+                            }
+                            _ = ping_interval.tick() => {
+                                if let Err(e) = sink.send(
+                                    tokio_tungstenite::tungstenite::Message::Ping(vec![].into())
+                                ).await {
+                                    warn!("[simplex_bridge] Ping failed, reconnecting: {}", e);
+                                    break;
+                                }
+                                continue;
                             }
                         };
 
@@ -265,7 +315,20 @@ mod inner {
                                     "[simplex_bridge] Invitation link: {}",
                                     &link.chars().take(60).collect::<String>()
                                 );
-                                persist_invite_link(&link);
+                                if link.is_empty() || link.len() > 2000 {
+                                    warn!(
+                                        "[simplex_bridge] Invalid invite link length ({}), skipping persist",
+                                        link.len()
+                                    );
+                                } else if !link.starts_with("simplex://")
+                                    && !link.starts_with("https://simplex.chat")
+                                {
+                                    warn!(
+                                        "[simplex_bridge] Invite link has unexpected format, skipping persist"
+                                    );
+                                } else {
+                                    persist_invite_link(&link);
+                                }
                             }
                             SimplexResponse::ContactConnected { contact } => {
                                 if let Some(c) = contact {
@@ -322,13 +385,20 @@ mod inner {
                                     .await;
 
                                     // Send the response back
-                                    if let Err(e) =
-                                        send_message(&mut sink, contact_id, &reply).await
-                                    {
-                                        error!(
-                                            "[simplex_bridge] Failed to send reply to contact {}: {}",
-                                            contact_id, e
-                                        );
+                                    match send_message(&mut sink, contact_id, &reply).await {
+                                        Ok(()) => {
+                                            info!(
+                                                "[simplex_bridge] Reply sent to contact {} ({} chars)",
+                                                contact_id,
+                                                reply.len()
+                                            );
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "[simplex_bridge] Failed to send reply to contact {}: {}",
+                                                contact_id, e
+                                            );
+                                        }
                                     }
                                 }
                             }
