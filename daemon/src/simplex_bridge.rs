@@ -299,7 +299,10 @@ mod inner {
                         // Try to parse the event
                         let event: SimplexEvent = match serde_json::from_str(&text) {
                             Ok(e) => e,
-                            Err(_) => continue, // Unknown format, skip
+                            Err(e) => {
+                                log::debug!("[simplex_bridge] Unparseable event: {} — {}", e, &text[..text.len().min(200)]);
+                                continue;
+                            }
                         };
 
                         let resp = match event.resp {
@@ -366,6 +369,7 @@ mod inner {
                                         .unwrap_or(0);
 
                                     if contact_id == 0 {
+                                        log::warn!("[simplex_bridge] Message with no contact_id, skipping");
                                         continue;
                                     }
 
