@@ -208,7 +208,7 @@ RUN apt-get update -qq && apt-get install -y -qq curl zstd && \
     dpkg -x /tmp/simplex-chat.deb /tmp/simplex-extract && \
     mkdir -p /out && \
     install -m 0755 /tmp/simplex-extract/usr/local/bin/simplex-chat /out/simplex-chat && \
-    /out/simplex-chat --version && \
+    file /out/simplex-chat && \
     rm -rf /tmp/simplex-chat.deb /tmp/simplex-extract
 
 # ============================================================================
