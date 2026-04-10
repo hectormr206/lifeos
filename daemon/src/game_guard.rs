@@ -965,6 +965,16 @@ pub fn effective_gpu_layers(env_path: &str) -> Option<i32> {
 // ---------------------------------------------------------------------------
 
 /// Writes the Game Guard override env with a CPU fallback profile.
+/// Write the CPU fallback profile to disk and restart llama-server so the
+/// game has exclusive access to the GPU.
+///
+/// Interaction with VRAM retention (item #3 in the roadmap): llama-server
+/// now runs with `--mlock` and `LimitMEMLOCK=infinity`. When this function
+/// restarts the service with `gpu_layers=0`, the CPU-resident model weights
+/// (~3-4 GB for Qwen3.5-4B Q4) will be locked in RAM — which is desirable
+/// for CPU inference speed but means a few extra GB of RAM are committed
+/// while the game runs. On machines with 16 GB+ RAM this is fine; on
+/// lower-memory machines the runtime profile should pick a smaller model.
 pub fn persist_game_guard_override(profile: Option<&RuntimeSettings>) -> Result<()> {
     let profile = profile.cloned().unwrap_or(RuntimeSettings {
         ctx_size: 4096,
