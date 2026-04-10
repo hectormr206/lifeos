@@ -515,15 +515,18 @@ RUN curl -fSL -o /usr/sbin/conduit \
 
 # --- SimpleX Chat CLI (private messaging for Axi) ---
 # Static binary for headless bot operation via WebSocket API.
-# Extracted from Ubuntu .deb (only the binary is needed).
+# Extract binary from Ubuntu .deb using ar+tar (dpkg not available on Fedora).
 # Release page: https://github.com/simplex-chat/simplex-chat/releases
 ARG SIMPLEX_CLI_VERSION=v6.4.11
-RUN curl -fSL -o /tmp/simplex-chat.deb \
-    "https://github.com/simplex-chat/simplex-chat/releases/download/${SIMPLEX_CLI_VERSION}/simplex-chat-ubuntu-22_04-x86_64.deb" && \
-    dpkg -x /tmp/simplex-chat.deb /tmp/simplex-extract && \
-    install -m 0755 /tmp/simplex-extract/usr/local/bin/simplex-chat /usr/local/bin/simplex-chat && \
-    rm -rf /tmp/simplex-chat.deb /tmp/simplex-extract \
-    || exit 1
+RUN set -eux && \
+    curl -fSL -o /tmp/simplex-chat.deb \
+        "https://github.com/simplex-chat/simplex-chat/releases/download/${SIMPLEX_CLI_VERSION}/simplex-chat-ubuntu-22_04-x86_64.deb" && \
+    mkdir -p /tmp/simplex-extract && \
+    cd /tmp/simplex-extract && \
+    ar x /tmp/simplex-chat.deb && \
+    tar xf data.tar.* && \
+    install -m 0755 usr/local/bin/simplex-chat /usr/local/bin/simplex-chat && \
+    cd / && rm -rf /tmp/simplex-chat.deb /tmp/simplex-extract
 
 # --- AI Runtime (llama.cpp / llama-server) ---
 # Built in isolated stage to avoid pulling/removing toolchains in the final image.
