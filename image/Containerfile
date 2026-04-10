@@ -1,6 +1,7 @@
 # image/Containerfile
 # LifeOS: construido directamente sobre Fedora bootc
-# Incorpora COSMIC Desktop, Nvidia Optimus + Gaming (Steam/Proton) y llama-server (AI local)
+# Incorpora COSMIC Desktop, Nvidia Optimus y llama-server (AI local)
+# Gaming (Steam/Proton) disponible via Flatpak desde COSMIC Store
 #
 # Build context must be the repo root:
 #   podman build -t lifeos:latest -f image/Containerfile .
@@ -197,6 +198,49 @@ RUN set -eux && \
     /out/opt/lifeos/piper-tts/piper --help 2>&1 | grep -q -- '--model'
 
 # ============================================================================
+# Stage 6a: Pre-build NVIDIA kernel modules (isolated — pattern from UBlue)
+# ============================================================================
+# This stage compiles NVIDIA akmods against the exact kernel in fedora-bootc.
+# Pre-built RPMs are COPYed into the final stage, keeping the main build fast
+# and cacheable when only non-kernel layers change.
+FROM quay.io/fedora/fedora-bootc:${FEDORA_MAJOR} AS nvidia-kmod-builder
+
+RUN dnf -y install dnf5-plugins && \
+    dnf -y install distribution-gpg-keys && \
+    rpm --import \
+      /usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-free-fedora-2020 \
+      /usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-nonfree-fedora-2020 && \
+    dnf -y --setopt=localpkg_gpgcheck=1 install \
+      "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+      "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" && \
+    dnf -y install \
+        kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda \
+        xorg-x11-drv-nvidia-power nvidia-settings nvidia-modprobe \
+        akmods gcc && \
+    if dnf -q repoquery --available --qf '%{name}' akmod-wl 2>/dev/null | grep -Fxq akmod-wl; then \
+        dnf -y install broadcom-wl akmod-wl; \
+    fi && \
+    for modules_dir in /usr/lib/modules/*; do \
+        [ -d "${modules_dir}" ] || continue; \
+        kernel_ver="$(basename "${modules_dir}")"; \
+        if [ ! -d "/usr/src/kernels/${kernel_ver}" ]; then \
+            echo "WARNING: kernel-devel missing for ${kernel_ver}; skipping"; \
+            continue; \
+        fi; \
+        akmods --force --kernels "${kernel_ver}" || \
+            echo "WARNING: akmods failed for ${kernel_ver}"; \
+    done && \
+    NVIDIA_FOUND=0; \
+    for d in /usr/lib/modules/*/extra/nvidia/nvidia.ko; do \
+        [ -f "$d" ] && NVIDIA_FOUND=1 && break; \
+    done; \
+    if [ "$NVIDIA_FOUND" -eq 0 ]; then \
+        echo "ERROR: No nvidia.ko modules found after akmods build"; \
+        exit 1; \
+    fi && \
+    dnf clean all
+
+# ============================================================================
 # Stage 6: Sistema Final
 # ============================================================================
 FROM quay.io/fedora/fedora-bootc:${FEDORA_MAJOR}
@@ -244,32 +288,41 @@ RUN dnf -y install --skip-unavailable \
     fwupd \
     && dnf clean all
 
-# --- Soporte Nvidia Optimus y Gaming ---
-RUN set -eux && \
-    dnf -y install --skip-unavailable \
-        kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda \
-        xorg-x11-drv-nvidia-power nvidia-settings nvidia-modprobe && \
+# --- Soporte Nvidia Optimus (pre-built kmods from Stage 6a) ---
+# Install NVIDIA userspace packages, then COPY the pre-compiled kernel
+# modules from the nvidia-kmod-builder stage. This avoids compiling
+# akmods in the final image and makes the build cacheable.
+RUN dnf -y install --skip-unavailable \
+        xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-power \
+        nvidia-settings nvidia-modprobe && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
         dnf -y install supergfxctl; \
     else \
-        echo "INFO: supergfxctl not available in current repos; continuing without hybrid-switch helper"; \
+        echo "INFO: supergfxctl not available; continuing without hybrid-switch helper"; \
     fi && \
     if dnf -q repoquery --available --qf '%{name}' akmod-wl 2>/dev/null | grep -Fxq akmod-wl; then \
         dnf -y install broadcom-wl akmod-wl; \
     else \
-        echo "INFO: broadcom-wl/akmod-wl not available in current repos; continuing without Broadcom proprietary module"; \
+        echo "INFO: broadcom-wl/akmod-wl not available; continuing without Broadcom proprietary module"; \
     fi && \
-    if command -v akmods >/dev/null 2>&1; then \
-        for modules_dir in /usr/lib/modules/*; do \
-            [ -d "${modules_dir}" ] || continue; \
-            kernel_ver="$(basename "${modules_dir}")"; \
-            if [ ! -d "/usr/src/kernels/${kernel_ver}" ]; then \
-                echo "WARNING: kernel-devel missing for ${kernel_ver}; skipping akmods build for that kernel"; \
-                continue; \
-            fi; \
-            akmods --force --kernels "${kernel_ver}" || echo "WARNING: akmods failed for ${kernel_ver} in build environment; will retry on target host"; \
-        done; \
-    fi && \
+    dnf clean all
+
+# Copy pre-built NVIDIA kernel modules and kernel-devel headers (for Secure Boot signing) from the builder stage.
+COPY --from=nvidia-kmod-builder /usr/lib/modules/ /usr/lib/modules/
+COPY --from=nvidia-kmod-builder /usr/src/kernels/ /usr/src/kernels/
+
+# Regenerate module dependency maps for every kernel present.
+RUN for modules_dir in /usr/lib/modules/*; do \
+        [ -d "${modules_dir}/extra/nvidia" ] || continue; \
+        kernel_ver="$(basename "${modules_dir}")"; \
+        if ! depmod "${kernel_ver}"; then \
+            echo "ERROR: depmod failed for kernel ${kernel_ver}"; \
+            exit 1; \
+        fi; \
+    done
+
+# Secure Boot signing of NVIDIA kernel modules (optional — needs build args).
+RUN set -eux && \
     install -d /usr/share/lifeos/secureboot && \
     if [ -n "${LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64:-}" ] && [ -n "${LIFEOS_NVIDIA_KMOD_CERT_DER_B64:-}" ]; then \
         KMOD_SIGN_KEY=/tmp/lifeos-nvidia-kmod-sign.key; \
@@ -285,7 +338,7 @@ RUN set -eux && \
             kernel_ver="$(basename "${modules_dir}")"; \
             SIGN_TOOL="/usr/src/kernels/${kernel_ver}/scripts/sign-file"; \
             if [ ! -x "${SIGN_TOOL}" ]; then \
-                echo "ERROR: sign-file tool not found for kernel ${kernel_ver} at ${SIGN_TOOL}; cannot sign NVIDIA modules"; \
+                echo "ERROR: sign-file not found for kernel ${kernel_ver}"; \
                 KERNELS_WITH_MISSING_SIGN_TOOL=$((KERNELS_WITH_MISSING_SIGN_TOOL + 1)); \
                 continue; \
             fi; \
@@ -294,48 +347,43 @@ RUN set -eux && \
                 "${SIGN_TOOL}" sha256 "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}" "${mod}"; \
                 SIGNED_COUNT=$((SIGNED_COUNT + 1)); \
             done; \
-            depmod "${kernel_ver}" || true; \
         done; \
         if [ "${KERNELS_WITH_MISSING_SIGN_TOOL}" -gt 0 ]; then \
-            echo "ERROR: ${KERNELS_WITH_MISSING_SIGN_TOOL} kernel module trees could not be signed due to missing sign-file"; \
+            echo "ERROR: ${KERNELS_WITH_MISSING_SIGN_TOOL} kernels could not be signed"; \
             exit 1; \
         fi; \
         if [ "${SIGNED_COUNT}" -eq 0 ]; then \
             echo "ERROR: No NVIDIA kernel modules found to sign"; \
             exit 1; \
         fi; \
-        UNSIGNED_COUNT=0; \
-        for mod in /usr/lib/modules/*/extra/nvidia/*.ko; do \
-            [ -e "${mod}" ] || continue; \
-            if [ -z "$(modinfo -F signer "${mod}" 2>/dev/null || true)" ]; then \
-                echo "WARNING: modinfo reports unsigned after signing: ${mod}"; \
-                UNSIGNED_COUNT=$((UNSIGNED_COUNT + 1)); \
+        for modules_dir in /usr/lib/modules/*; do \
+            [ -d "${modules_dir}/extra/nvidia" ] || continue; \
+            kernel_ver="$(basename "${modules_dir}")"; \
+            if ! depmod "${kernel_ver}"; then \
+                echo "ERROR: depmod failed for kernel ${kernel_ver} after signing"; \
+                exit 1; \
             fi; \
         done; \
-        if [ "${UNSIGNED_COUNT}" -gt 0 ]; then \
-            echo "WARNING: ${UNSIGNED_COUNT} NVIDIA modules report unsigned via modinfo (may be false-negative in container builds)"; \
-            echo "INFO: sign-file ran successfully on ${SIGNED_COUNT} modules; signatures are embedded in the .ko files"; \
-        fi; \
         echo "INFO: Signed ${SIGNED_COUNT} NVIDIA kernel modules for Secure Boot"; \
         rm -f "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}"; \
     else \
-        echo "INFO: NVIDIA module signing secrets not provided; Secure Boot may reject NVIDIA modules"; \
+        echo "INFO: NVIDIA signing secrets not provided; Secure Boot may reject modules"; \
         rm -f /usr/share/lifeos/secureboot/lifeos-nvidia-kmod.der; \
-    fi && \
-    dnf clean all
+    fi
 
-# --- Steam/Proton (default via RPM Fusion) + ProtonUp-Qt ---
-RUN set -eux && \
-    dnf -y install steam steam-devices && \
-    if dnf -q repoquery --available --qf '%{name}' protonup-qt 2>/dev/null | grep -Fxq protonup-qt; then \
-        dnf -y install protonup-qt; \
-    else \
-        echo "INFO: protonup-qt RPM not available; installing official Flatpak app (net.davidotek.pupgui2)"; \
-        dnf -y install flatpak && \
-        flatpak remote-add --if-not-exists --system flathub https://flathub.org/repo/flathub.flatpakrepo && \
-        flatpak install --system -y --noninteractive flathub net.davidotek.pupgui2; \
-    fi && \
-    dnf clean all
+# Final depmod pass — covers both signed and unsigned paths.
+RUN for modules_dir in /usr/lib/modules/*; do \
+        [ -d "${modules_dir}/extra/nvidia" ] || continue; \
+        depmod "$(basename "${modules_dir}")"; \
+    done
+
+# Clean up kernel-devel headers (only needed for signing, not runtime)
+RUN rm -rf /usr/src/kernels/
+
+# --- Gaming support (controller udev rules only) ---
+# Steam and ProtonUp-Qt are available via Flatpak from COSMIC Store.
+# We keep steam-devices for controller/joystick udev rules (tiny, no deps).
+RUN dnf -y install steam-devices && dnf clean all
 
 # --- Flatpak: configure Flathub so COSMIC Store shows apps ---
 # Use /etc/flatpak/remotes.d/ (immutable, survives bootc updates) + runtime init
@@ -344,6 +392,18 @@ RUN mkdir -p /etc/flatpak/remotes.d && \
         > /etc/flatpak/remotes.d/flathub.flatpakrepo && \
     flatpak remote-add --if-not-exists --system flathub https://flathub.org/repo/flathub.flatpakrepo || true && \
     flatpak remote-add --if-not-exists --system cosmic https://flatpak.pop-os.org/repo/ || true
+
+# --- Default COSMIC applets (panel essentials) ---
+# Ensure remotes are available in this layer, then install applets.
+RUN flatpak remote-add --if-not-exists --system flathub \
+        https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true && \
+    flatpak remote-add --if-not-exists --system cosmic \
+        https://flatpak.pop-os.org/repo/ 2>/dev/null || true && \
+    flatpak install --system -y --noninteractive cosmic \
+        io.github.cosmic_utils.cosmic-ext-applet-clipboard-manager \
+        io.github.cosmic_utils.minimon-applet \
+        com.vintagetechie.CosmicExtAppletTempest 2>/dev/null || \
+    echo "INFO: COSMIC applets not available during build; user can install from COSMIC Store"
 
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \
@@ -392,6 +452,7 @@ RUN dnf -y install \
     fish bat ripgrep fd-find htop fastfetch age jq sqlite git gh wget \
     zoxide fzf eza atuin direnv tmux btop neovim \
     rsms-inter-fonts jetbrains-mono-fonts cascadia-code-nf-fonts \
+    google-noto-color-emoji-fonts pop-icon-theme \
     pkgconf-pkg-config \
     gcc gcc-c++ make cmake \
     openssl-devel \
@@ -442,6 +503,15 @@ RUN set -eux && \
 # force new copies of large model/runtime layers on every update.
 COPY --from=builder /out/lifeos-train-wakeword /usr/local/bin/lifeos-train-wakeword
 RUN chmod +x /usr/local/bin/lifeos-train-wakeword
+
+# --- Conduwuit Matrix Homeserver (Conduit fork, actively maintained) ---
+# Static musl binary from GitHub releases. Conduwuit is a Rust Matrix
+# homeserver — fork of Conduit with performance improvements (io_uring,
+# jemalloc). Update the version tag below when upgrading.
+ARG CONDUWUIT_VERSION=v0.4.6
+RUN curl -fSL -o /usr/sbin/conduit \
+    "https://github.com/x86pup/conduwuit/releases/download/${CONDUWUIT_VERSION}/static-x86_64-unknown-linux-musl" && \
+    chmod +x /usr/sbin/conduit
 
 # --- AI Runtime (llama.cpp / llama-server) ---
 # Built in isolated stage to avoid pulling/removing toolchains in the final image.
@@ -734,6 +804,9 @@ COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.service /usr/lib/
 COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/lifeos-sentinel.service
+COPY image/files/etc/systemd/system/conduit.service /usr/lib/systemd/system/conduit.service
+COPY image/files/usr/local/bin/lifeos-matrix-setup.sh /usr/local/bin/lifeos-matrix-setup.sh
+RUN chmod +x /usr/local/bin/lifeos-matrix-setup.sh
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
 COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf /etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf
 # Dashboard access: only via Axi tray icon → "Abrir Dashboard"
@@ -782,6 +855,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/user/default.target.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
+    ln -sf /usr/lib/systemd/system/conduit.service /usr/lib/systemd/system/multi-user.target.wants/conduit.service && \
     # Canonical enablement: lifeosd starts from the user's default.target.
     ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
@@ -967,116 +1041,118 @@ RUN set -eux && \
     /usr/bin/whisper-stream -h >/dev/null
 
 # --- Verificación final ---
-RUN test -x /usr/bin/mpv && \
-    test -x /usr/bin/evince && \
-    test -x /usr/bin/keepassxc && \
-    test -x /usr/bin/life && \
-    test -x /usr/bin/lifeosd && \
-    test -x /usr/local/bin/cargo-audit && \
-    test -x /usr/bin/llama-server && \
-    test -x /usr/bin/whisper-cli && \
-    test -x /usr/bin/whisper-stream && \
-    test -x /usr/bin/grim && \
-    test -x /usr/bin/wl-copy && \
-    test -x /usr/bin/tesseract && \
-    test -x /usr/bin/espeak-ng && \
-    test -x /usr/local/bin/lifeos-piper && \
-    /usr/local/bin/lifeos-piper --help 2>&1 | grep -q -- '--model' && \
-    test -x /usr/bin/spice-vdagent && \
-    test -x /usr/bin/virsh && \
-    test -x /usr/bin/pkg-config && \
-    test -x /usr/sbin/llama-server && \
-    test -x /usr/local/bin/lifeos-nvidia-secureboot.sh && \
-    test -x /usr/local/bin/lifeos-maintenance-cleanup.sh && \
-    test -x /usr/local/bin/lifeos-open-axi-dashboard.sh && \
-    test -f /usr/share/lifeos/dashboard/index.html && \
-    test -f /usr/share/lifeos/dashboard/app.js && \
-    test -f /usr/share/lifeos/dashboard/style.css && \
+# Wrapper reports WHICH check failed instead of a silent exit code.
+RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
+    test -x /usr/bin/mpv               || fail "/usr/bin/mpv"; \
+    test -x /usr/bin/evince              || fail "/usr/bin/evince"; \
+    test -x /usr/bin/keepassxc            || fail "/usr/bin/keepassxc"; \
+    test -x /usr/bin/life                 || fail "/usr/bin/life"; \
+    test -x /usr/bin/lifeosd              || fail "/usr/bin/lifeosd"; \
+    test -x /usr/local/bin/cargo-audit    || fail "/usr/local/bin/cargo-audit"; \
+    test -x /usr/bin/llama-server         || fail "/usr/bin/llama-server"; \
+    test -x /usr/bin/whisper-cli          || fail "/usr/bin/whisper-cli"; \
+    test -x /usr/bin/whisper-stream       || fail "/usr/bin/whisper-stream"; \
+    test -x /usr/bin/grim                 || fail "/usr/bin/grim"; \
+    test -x /usr/bin/wl-copy              || fail "/usr/bin/wl-copy"; \
+    test -x /usr/bin/tesseract            || fail "/usr/bin/tesseract"; \
+    test -x /usr/bin/espeak-ng            || fail "/usr/bin/espeak-ng"; \
+    test -x /usr/local/bin/lifeos-piper   || fail "/usr/local/bin/lifeos-piper"; \
+    /usr/local/bin/lifeos-piper --help 2>&1 | grep -q -- '--model' || fail "piper --model"; \
+    test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
+    test -x /usr/bin/virsh                || fail "/usr/bin/virsh"; \
+    test -x /usr/bin/pkg-config           || fail "/usr/bin/pkg-config"; \
+    test -x /usr/sbin/llama-server        || fail "/usr/sbin/llama-server"; \
+    test -x /usr/local/bin/lifeos-nvidia-secureboot.sh || fail "/usr/local/bin/lifeos-nvidia-secureboot.sh"; \
+    test -x /usr/local/bin/lifeos-maintenance-cleanup.sh || fail "/usr/local/bin/lifeos-maintenance-cleanup.sh"; \
+    test -x /usr/local/bin/lifeos-open-axi-dashboard.sh || fail "/usr/local/bin/lifeos-open-axi-dashboard.sh"; \
+    test -f /usr/share/lifeos/dashboard/index.html || fail "/usr/share/lifeos/dashboard/index.html"; \
+    test -f /usr/share/lifeos/dashboard/app.js || fail "/usr/share/lifeos/dashboard/app.js"; \
+    test -f /usr/share/lifeos/dashboard/style.css || fail "/usr/share/lifeos/dashboard/style.css"; \
     # Dashboard .desktop removed — access only via tray icon
-    test -f /usr/lib/systemd/user/lifeosd.service && \
-    test -f /usr/lib/systemd/system/llama-server.service && \
-    test -f /usr/lib/systemd/system/whisper-stt.service && \
-    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service && \
-    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer && \
-    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.service && \
-    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer && \
-    test -f /usr/lib/systemd/system/lifeos-security-baseline.service && \
-    test -f /usr/lib/systemd/system/lifeos-sentinel.service && \
-    test -f /usr/lib/systemd/system/lifeos-first-boot.service && \
-    test -L /etc/systemd/system/bootc-fetch-apply-updates.timer && \
-    test -L /etc/systemd/system/bootc-fetch-apply-updates.service && \
-    test -f /etc/lifeos/llama-server.env && \
-    test -f /etc/lifeos/tuf/root.json && \
-    test -f /etc/lifeos/tuf/timestamp.json && \
-    test -f /etc/lifeos/tuf/snapshot.json && \
-    test -f /etc/lifeos/tuf/targets.json && \
-    test -f /etc/lifeos/lifeos.toml.default && \
-    test -f /etc/lifeos/channels.toml && \
-    test -f /etc/lifeos/channel && \
-    test -f /etc/lifeos/maintenance-cleanup.env && \
-    test -f /etc/lifeos/cosmic-theme.toml && \
-    test -f /etc/lifeos/design-tokens.toml && \
-    test -f /etc/lifeos/design-tokens.json && \
-    (test -x /usr/bin/protonup-qt || flatpak info --system net.davidotek.pupgui2 >/dev/null 2>&1) && \
-    test -f /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml && \
-    test -f /usr/share/lifeos/models/whisper/ggml-base.bin && \
-    test -f /usr/share/lifeos/models/whisper/ggml-tiny.bin && \
-    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx && \
-    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx.json && \
-    test -f /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx && \
-    test -f /usr/share/lifeos/models/rustpotter/axi.rpw && \
-    test -d /usr/share/backgrounds/lifeos && \
-    test -d /usr/share/icons/LifeOS && \
-    test -f /usr/share/themes/LifeOS-Dark/index.theme && \
-    test -f /usr/share/themes/LifeOS-Dark/gtk-4.0/gtk.css && \
-    test -f /usr/share/themes/LifeOS-Light/index.theme && \
-    test -f /usr/share/themes/LifeOS-Light/gtk-4.0/gtk.css && \
-    test -f /usr/share/themes/LifeOS-HighContrast/index.theme && \
-    test -f /usr/share/themes/LifeOS-HighContrast/gtk-4.0/gtk.css && \
-    test -x /usr/local/bin/lifeos-first-boot.sh && \
-    test -x /usr/local/bin/lifeos-ai-setup.sh && \
-    test -x /usr/local/bin/lifeos-stt-setup.sh && \
-    test -x /usr/local/bin/llama-server-health-check.sh && \
-    test -x /usr/local/bin/lifeos-btrfs-snapshot.sh && \
-    test -x /usr/local/bin/lifeos-integrity-check.sh && \
-    test -x /usr/local/bin/lifeos-security-baseline-check.sh && \
-    test -x /usr/bin/podman && \
-    test -x /usr/bin/docker && \
-    test -x /usr/bin/fzf && \
-    test -x /usr/bin/zoxide && \
-    test -x /usr/bin/eza && \
-    test -x /usr/bin/atuin && \
-    test -x /usr/bin/direnv && \
-    test -x /usr/bin/tmux && \
-    test -x /usr/bin/btop && \
-    test -x /usr/bin/nvim && \
-    cargo fmt --version >/dev/null && \
-    cargo clippy --version >/dev/null && \
-    cargo audit --version >/dev/null && \
-    rustc --version >/dev/null && \
-    rustfmt --version >/dev/null && \
-    rust-analyzer --version >/dev/null && \
-    pkg-config --exists dbus-1 glib-2.0 gtk4 libadwaita-1 && \
-    test -f /usr/lib64/libvirt/connection-driver/libvirt_driver_qemu.so && \
-    (test -f /usr/lib/systemd/system/libvirtd.service || test -f /usr/lib/systemd/system/virtqemud.socket) && \
-    test -x /usr/bin/skopeo && \
-    test -x /usr/bin/podman-compose && \
-    podman --version >/dev/null && \
-    docker --version >/dev/null && \
-    test -f /etc/containers/containers.conf && \
-    test -f /etc/containers/storage.conf && \
-    test -f /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml && \
-    test -x /usr/bin/firefox && \
-    test -f /etc/firefox/policies/policies.json && \
-    (test -f /usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi || test -f /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi) && \
-    test -f /etc/skel/.mozilla/firefox/profiles.ini && \
-    test -f /etc/skel/.mozilla/firefox/lifeos.default/user.js && \
-    test -f /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css && \
-    test -f /etc/profile.d/firefox-wayland.sh && \
-    test -f /etc/profile.d/lifeos-terminal.sh && \
-    test -f /etc/fish/conf.d/lifeos-terminal.fish && \
-    test -f /usr/share/applications/firefox-lifeos.desktop && \
-    test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1
+    test -f /usr/lib/systemd/user/lifeosd.service || fail "/usr/lib/systemd/user/lifeosd.service"; \
+    test -f /usr/lib/systemd/system/llama-server.service || fail "llama-server.service"; \
+    test -f /usr/lib/systemd/system/whisper-stt.service || fail "whisper-stt.service"; \
+    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.service || fail "lifeos-btrfs-snapshot.service"; \
+    test -f /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer || fail "lifeos-btrfs-snapshot.timer"; \
+    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.service || fail "lifeos-maintenance-cleanup.service"; \
+    test -f /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer || fail "lifeos-maintenance-cleanup.timer"; \
+    test -f /usr/lib/systemd/system/lifeos-security-baseline.service || fail "lifeos-security-baseline.service"; \
+    test -f /usr/lib/systemd/system/lifeos-sentinel.service || fail "lifeos-sentinel.service"; \
+    test -f /usr/lib/systemd/system/lifeos-first-boot.service || fail "lifeos-first-boot.service"; \
+    test -L /etc/systemd/system/bootc-fetch-apply-updates.timer || fail "bootc-fetch-apply-updates.timer"; \
+    test -L /etc/systemd/system/bootc-fetch-apply-updates.service || fail "bootc-fetch-apply-updates.service"; \
+    test -f /etc/lifeos/llama-server.env  || fail "/etc/lifeos/llama-server.env"; \
+    test -f /etc/lifeos/tuf/root.json     || fail "/etc/lifeos/tuf/root.json"; \
+    test -f /etc/lifeos/tuf/timestamp.json || fail "/etc/lifeos/tuf/timestamp.json"; \
+    test -f /etc/lifeos/tuf/snapshot.json || fail "/etc/lifeos/tuf/snapshot.json"; \
+    test -f /etc/lifeos/tuf/targets.json  || fail "/etc/lifeos/tuf/targets.json"; \
+    test -f /etc/lifeos/lifeos.toml.default || fail "/etc/lifeos/lifeos.toml.default"; \
+    test -f /etc/lifeos/channels.toml     || fail "/etc/lifeos/channels.toml"; \
+    test -f /etc/lifeos/channel           || fail "/etc/lifeos/channel"; \
+    test -f /etc/lifeos/maintenance-cleanup.env || fail "/etc/lifeos/maintenance-cleanup.env"; \
+    test -f /etc/lifeos/cosmic-theme.toml || fail "/etc/lifeos/cosmic-theme.toml"; \
+    test -f /etc/lifeos/design-tokens.toml || fail "/etc/lifeos/design-tokens.toml"; \
+    test -f /etc/lifeos/design-tokens.json || fail "/etc/lifeos/design-tokens.json"; \
+    ls /usr/lib/udev/rules.d/*-steam*.rules >/dev/null 2>&1 || fail "steam udev rules"; \
+    test -f /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml || fail "60-lifeos-split-lock-detect.toml"; \
+    test -f /usr/share/lifeos/models/whisper/ggml-base.bin || fail "whisper/ggml-base.bin"; \
+    test -f /usr/share/lifeos/models/whisper/ggml-tiny.bin || fail "whisper/ggml-tiny.bin"; \
+    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx || fail "piper/es_MX-claude-high.onnx"; \
+    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx.json || fail "piper/es_MX-claude-high.onnx.json"; \
+    test -f /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx || fail "wespeaker/voxceleb_resnet34_LM.onnx"; \
+    test -f /usr/share/lifeos/models/rustpotter/axi.rpw || fail "rustpotter/axi.rpw"; \
+    test -d /usr/share/backgrounds/lifeos || fail "/usr/share/backgrounds/lifeos"; \
+    test -d /usr/share/icons/LifeOS       || fail "/usr/share/icons/LifeOS"; \
+    test -f /usr/share/themes/LifeOS-Dark/index.theme || fail "LifeOS-Dark/index.theme"; \
+    test -f /usr/share/themes/LifeOS-Dark/gtk-4.0/gtk.css || fail "LifeOS-Dark/gtk.css"; \
+    test -f /usr/share/themes/LifeOS-Light/index.theme || fail "LifeOS-Light/index.theme"; \
+    test -f /usr/share/themes/LifeOS-Light/gtk-4.0/gtk.css || fail "LifeOS-Light/gtk.css"; \
+    test -f /usr/share/themes/LifeOS-HighContrast/index.theme || fail "LifeOS-HighContrast/index.theme"; \
+    test -f /usr/share/themes/LifeOS-HighContrast/gtk-4.0/gtk.css || fail "LifeOS-HighContrast/gtk.css"; \
+    test -x /usr/local/bin/lifeos-first-boot.sh || fail "/usr/local/bin/lifeos-first-boot.sh"; \
+    test -x /usr/local/bin/lifeos-ai-setup.sh || fail "/usr/local/bin/lifeos-ai-setup.sh"; \
+    test -x /usr/local/bin/lifeos-stt-setup.sh || fail "/usr/local/bin/lifeos-stt-setup.sh"; \
+    test -x /usr/local/bin/llama-server-health-check.sh || fail "/usr/local/bin/llama-server-health-check.sh"; \
+    test -x /usr/local/bin/lifeos-btrfs-snapshot.sh || fail "/usr/local/bin/lifeos-btrfs-snapshot.sh"; \
+    test -x /usr/local/bin/lifeos-integrity-check.sh || fail "/usr/local/bin/lifeos-integrity-check.sh"; \
+    test -x /usr/local/bin/lifeos-security-baseline-check.sh || fail "/usr/local/bin/lifeos-security-baseline-check.sh"; \
+    test -x /usr/bin/podman               || fail "/usr/bin/podman"; \
+    test -x /usr/bin/docker               || fail "/usr/bin/docker"; \
+    test -x /usr/bin/fzf                  || fail "/usr/bin/fzf"; \
+    test -x /usr/bin/zoxide               || fail "/usr/bin/zoxide"; \
+    test -x /usr/bin/eza                  || fail "/usr/bin/eza"; \
+    test -x /usr/bin/atuin                || fail "/usr/bin/atuin"; \
+    test -x /usr/bin/direnv               || fail "/usr/bin/direnv"; \
+    test -x /usr/bin/tmux                 || fail "/usr/bin/tmux"; \
+    test -x /usr/bin/btop                 || fail "/usr/bin/btop"; \
+    test -x /usr/bin/nvim                 || fail "/usr/bin/nvim"; \
+    cargo fmt --version >/dev/null        || fail "cargo fmt"; \
+    cargo clippy --version >/dev/null     || fail "cargo clippy"; \
+    cargo audit --version >/dev/null      || fail "cargo audit"; \
+    rustc --version >/dev/null            || fail "rustc"; \
+    rustfmt --version >/dev/null          || fail "rustfmt"; \
+    rust-analyzer --version >/dev/null    || fail "rust-analyzer"; \
+    pkg-config --exists dbus-1 glib-2.0 gtk4 libadwaita-1 || fail "pkg-config dbus-1 glib-2.0 gtk4 libadwaita-1"; \
+    test -f /usr/lib64/libvirt/connection-driver/libvirt_driver_qemu.so || fail "libvirt_driver_qemu.so"; \
+    (test -f /usr/lib/systemd/system/libvirtd.service || test -f /usr/lib/systemd/system/virtqemud.socket) || fail "libvirtd.service or virtqemud.socket"; \
+    test -x /usr/bin/skopeo               || fail "/usr/bin/skopeo"; \
+    test -x /usr/bin/podman-compose       || fail "/usr/bin/podman-compose"; \
+    podman --version >/dev/null           || fail "podman"; \
+    docker --version >/dev/null           || fail "docker"; \
+    test -f /etc/containers/containers.conf || fail "/etc/containers/containers.conf"; \
+    test -f /etc/containers/storage.conf  || fail "/etc/containers/storage.conf"; \
+    test -f /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml || fail "50-lifeos-nvidia-prefer-proprietary.toml"; \
+    test -x /usr/bin/firefox              || fail "/usr/bin/firefox"; \
+    test -f /etc/firefox/policies/policies.json || fail "/etc/firefox/policies/policies.json"; \
+    (test -f /usr/lib64/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi || test -f /usr/lib/firefox/distribution/extensions/uBlock0@raymondhill.net.xpi) || fail "uBlock0 xpi"; \
+    test -f /etc/skel/.mozilla/firefox/profiles.ini || fail "firefox/profiles.ini"; \
+    test -f /etc/skel/.mozilla/firefox/lifeos.default/user.js || fail "firefox/lifeos.default/user.js"; \
+    test -f /etc/skel/.mozilla/firefox/lifeos.default/chrome/userChrome.css || fail "firefox/userChrome.css"; \
+    test -f /etc/profile.d/firefox-wayland.sh || fail "firefox-wayland.sh"; \
+    test -f /etc/profile.d/lifeos-terminal.sh || fail "lifeos-terminal.sh"; \
+    test -f /etc/fish/conf.d/lifeos-terminal.fish || fail "lifeos-terminal.fish"; \
+    test -f /usr/share/applications/firefox-lifeos.desktop || fail "firefox-lifeos.desktop"; \
+    test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1 || fail "expected exactly 1 firefox .desktop file"
 
 # nonempty-boot is intentionally skipped: /boot/efi content is required for bootc-image-builder ISO generation.
 RUN dnf clean all && rm -f /var/log/dnf5.log* /var/cache/ldconfig/aux-cache && bootc container lint --skip nonempty-boot

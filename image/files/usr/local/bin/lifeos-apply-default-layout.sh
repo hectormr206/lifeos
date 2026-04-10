@@ -21,7 +21,7 @@ LOG_TAG="[LifeOS]"
 SKEL_COSMIC="/etc/skel/.config/cosmic"
 LAYOUT_VERSION="v2"
 WALLPAPER_STATE_SYNC="/usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh"
-DEFAULT_WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-default.png"
+DEFAULT_WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-axi-night.png"
 
 log()      { echo "${LOG_TAG} $*"; }
 log_warn() { echo "${LOG_TAG} [!] $*"; }

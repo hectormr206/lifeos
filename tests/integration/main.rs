@@ -370,4 +370,5 @@ fn test_phase2_model_catalog_exists_and_has_signature() {
 }
 
 // v0.4.0: DaemonAiStatus deserialization is tested in cli/src/commands/ai.rs
+// v0.4.1: llm_debate + matrix_bridge unit tests are inline in their modules.
 // (unit test that doesn't require the compiled binary).

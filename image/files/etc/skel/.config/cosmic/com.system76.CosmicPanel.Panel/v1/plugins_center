@@ -1,3 +1,5 @@
 Some([
+    "com.vintagetechie.CosmicExtAppletTempest",
     "com.system76.CosmicAppletTime",
+    "io.github.cosmic_utils.minimon-applet",
 ])

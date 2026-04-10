@@ -983,6 +983,10 @@ REGLAS FIRMES:
 84. **agenda** — Muestra tu agenda completa: eventos del calendario, cron jobs y tareas programadas.
     args: {"days": 1}
 
+85. **multi_opinion** — Obtiene consejo balanceado consultando multiples modelos de IA en paralelo y sintetizando sus respuestas. Ideal para temas de Vida Plena donde un solo modelo puede tener sesgos (salud, nutricion, finanzas, relaciones, espiritualidad). Usa esta herramienta cuando el usuario pida consejo importante, especialmente en temas de bienestar.
+    args: {"question": "Es seguro hacer ayuno intermitente?", "topic": "health"}
+    topic (opcional): health, mental_health, nutrition, exercise, finance, relationships, spiritual, general
+
 ## Reglas
 
 - Puedes usar MULTIPLES herramientas en una respuesta.
@@ -2114,6 +2118,7 @@ REGLAS FIRMES:
             "skill_run" => execute_skill_run(&call.args).await,
             "skill_list" => execute_skill_list().await,
             "sdd_start" => execute_sdd_start(&call.args, ctx).await,
+            "multi_opinion" => execute_multi_opinion(&call.args, ctx).await,
             "graph_add" => execute_graph_add(&call.args, ctx).await,
             "graph_query" => execute_graph_query(&call.args, ctx).await,
             "procedure_save" => execute_procedure_save(&call.args, ctx).await,
@@ -8953,6 +8958,44 @@ REGLAS FIRMES:
         } else {
             Ok(result)
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-opinion debate tool
+    // -----------------------------------------------------------------------
+
+    async fn execute_multi_opinion(args: &serde_json::Value, ctx: &ToolContext) -> Result<String> {
+        let question = args["question"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'question'"))?
+            .to_string();
+
+        let topic = args["topic"]
+            .as_str()
+            .map(crate::llm_debate::DebateTopic::from_str_loose)
+            .unwrap_or_default();
+
+        let context = args["context"].as_str().map(String::from);
+
+        let engine = crate::llm_debate::DebateEngine::new(Arc::clone(&ctx.router));
+
+        // Read the router's privacy level so the debate engine can filter providers
+        let privacy_level = {
+            let router = ctx.router.read().await;
+            router.privacy_level()
+        };
+
+        let request = crate::llm_debate::DebateRequest {
+            question,
+            context,
+            min_providers: 2,
+            max_providers: 5,
+            topic,
+            privacy_level: Some(privacy_level),
+        };
+
+        let resp = engine.debate(&request).await?;
+        Ok(crate::llm_debate::format_for_telegram(&resp))
     }
 
     /// Continue an SDD session after user approval.
