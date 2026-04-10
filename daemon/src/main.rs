@@ -58,6 +58,8 @@ mod llm_debate;
 mod llm_router;
 #[cfg(feature = "telegram")]
 mod matrix_bridge;
+#[cfg(feature = "telegram")]
+mod simplex_bridge;
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
 mod meeting_archive;
@@ -1930,6 +1932,27 @@ async fn main() -> anyhow::Result<()> {
     };
     #[cfg(not(feature = "telegram"))]
     let _matrix_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Start SimpleX bridge if the CLI WebSocket is reachable (requires telegram
+    // feature because it reuses the agentic chat infrastructure from telegram_tools).
+    #[cfg(feature = "telegram")]
+    let _simplex_handle = {
+        if simplex_bridge::is_simplex_available().await {
+            let tq = state.task_queue.clone();
+            let router = state.llm_router.clone();
+            let memory = Some(state.memory_plane_manager.clone());
+            Some(tokio::spawn(async move {
+                simplex_bridge::run_simplex_bridge(tq, router, memory).await;
+            }))
+        } else {
+            info!(
+                "SimpleX bridge: CLI WebSocket not reachable on port 5226, skipping"
+            );
+            None
+        }
+    };
+    #[cfg(not(feature = "telegram"))]
+    let _simplex_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start conversational email bridge if configured (requires telegram feature
     // because it reuses the agentic chat infrastructure from telegram_tools).
