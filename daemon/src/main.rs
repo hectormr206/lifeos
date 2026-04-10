@@ -58,8 +58,6 @@ mod llm_debate;
 mod llm_router;
 #[cfg(feature = "telegram")]
 mod matrix_bridge;
-#[cfg(feature = "telegram")]
-mod simplex_bridge;
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
 mod meeting_archive;
@@ -88,6 +86,8 @@ mod self_improving;
 mod sensory_memory;
 mod sensory_pipeline;
 mod session_store;
+#[cfg(feature = "telegram")]
+mod simplex_bridge;
 mod skill_generator;
 mod skill_registry;
 mod speaker_id;
@@ -1945,9 +1945,7 @@ async fn main() -> anyhow::Result<()> {
                 simplex_bridge::run_simplex_bridge(tq, router, memory).await;
             }))
         } else {
-            info!(
-                "SimpleX bridge: CLI WebSocket not reachable on port 5226, skipping"
-            );
+            info!("SimpleX bridge: CLI WebSocket not reachable on port 5226, skipping");
             None
         }
     };

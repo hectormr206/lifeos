@@ -72,9 +72,7 @@ mod inner {
         },
         /// Contact connected.
         #[serde(rename = "contactConnected")]
-        ContactConnected {
-            contact: Option<ContactInfo>,
-        },
+        ContactConnected { contact: Option<ContactInfo> },
         /// Catch-all for events we don't handle yet.
         #[serde(other)]
         Other,
@@ -159,7 +157,10 @@ mod inner {
     ) {
         // If we already have an invite link on disk, we're good.
         if std::path::Path::new(INVITE_LINK_PATH).exists() {
-            info!("[simplex_bridge] Invite link already exists at {}", INVITE_LINK_PATH);
+            info!(
+                "[simplex_bridge] Invite link already exists at {}",
+                INVITE_LINK_PATH
+            );
             return;
         }
 
@@ -167,7 +168,10 @@ mod inner {
         for attempt in 1..=INVITE_RETRY_COUNT {
             match send_command(ws, "/c").await {
                 Ok(_) => {
-                    info!("[simplex_bridge] Requested invitation link creation (attempt {}/{})", attempt, INVITE_RETRY_COUNT);
+                    info!(
+                        "[simplex_bridge] Requested invitation link creation (attempt {}/{})",
+                        attempt, INVITE_RETRY_COUNT
+                    );
                     return;
                 }
                 Err(e) => {
@@ -181,7 +185,10 @@ mod inner {
                 }
             }
         }
-        warn!("[simplex_bridge] Exhausted all {} attempts to create invite link", INVITE_RETRY_COUNT);
+        warn!(
+            "[simplex_bridge] Exhausted all {} attempts to create invite link",
+            INVITE_RETRY_COUNT
+        );
     }
 
     /// Save the invitation link to disk so the dashboard can read it.
@@ -230,7 +237,10 @@ mod inner {
         router: Arc<RwLock<LlmRouter>>,
         memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
     ) {
-        info!("[simplex_bridge] Starting SimpleX bridge (ws={})", SIMPLEX_WS_URL);
+        info!(
+            "[simplex_bridge] Starting SimpleX bridge (ws={})",
+            SIMPLEX_WS_URL
+        );
 
         // Build tool context (same pattern as matrix_bridge)
         let tool_ctx = ToolContext {
@@ -300,7 +310,11 @@ mod inner {
                         let event: SimplexEvent = match serde_json::from_str(&text) {
                             Ok(e) => e,
                             Err(e) => {
-                                log::debug!("[simplex_bridge] Unparseable event: {} — {}", e, &text[..text.len().min(200)]);
+                                log::debug!(
+                                    "[simplex_bridge] Unparseable event: {} — {}",
+                                    e,
+                                    &text[..text.len().min(200)]
+                                );
                                 continue;
                             }
                         };
@@ -369,7 +383,9 @@ mod inner {
                                         .unwrap_or(0);
 
                                     if contact_id == 0 {
-                                        log::warn!("[simplex_bridge] Message with no contact_id, skipping");
+                                        log::warn!(
+                                            "[simplex_bridge] Message with no contact_id, skipping"
+                                        );
                                         continue;
                                     }
 
@@ -430,12 +446,7 @@ mod inner {
 
     /// Check if the SimpleX CLI WebSocket is reachable.
     pub async fn is_simplex_available() -> bool {
-        match tokio::time::timeout(
-            Duration::from_secs(3),
-            connect_async(SIMPLEX_WS_URL),
-        )
-        .await
-        {
+        match tokio::time::timeout(Duration::from_secs(3), connect_async(SIMPLEX_WS_URL)).await {
             Ok(Ok(_)) => true,
             _ => false,
         }
