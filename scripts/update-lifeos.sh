@@ -592,6 +592,30 @@ main() {
     if [[ "${APPLY_UPDATE}" == true ]]; then
         warn "About to run 'bootc upgrade --apply'."
         warn "Depending on bootc/systemd behavior, this can trigger an immediate reboot."
+
+        # Pre-upgrade COSMIC config snapshot — protects user customisations
+        # against upstream COSMIC resets on the first post-upgrade boot.
+        # Runs as the logged-in user (not root) so snapshots land in the
+        # user's home. Best-effort: failures are logged but do not block
+        # the upgrade.
+        if command -v lifeos-cosmic-snapshot >/dev/null 2>&1; then
+            log "Snapshotting COSMIC config before upgrade"
+            local target_user
+            target_user="${SUDO_USER:-${LIFEOS_TARGET_USER:-}}"
+            if [[ -n "${target_user}" ]] && id -u "${target_user}" >/dev/null 2>&1; then
+                if sudo -u "${target_user}" -H lifeos-cosmic-snapshot snapshot \
+                        --label "pre-upgrade-$(date +%Y%m%d-%H%M%S)" 2>&1; then
+                    success "COSMIC snapshot saved for user ${target_user}"
+                else
+                    warn "COSMIC snapshot failed (non-fatal); continuing upgrade"
+                fi
+            else
+                warn "No target user detected for COSMIC snapshot — set SUDO_USER or LIFEOS_TARGET_USER"
+            fi
+        else
+            warn "lifeos-cosmic-snapshot not installed; skipping COSMIC snapshot step"
+        fi
+
         if confirm "Run 'bootc upgrade --apply' now (possible automatic reboot)?"; then
             bootc upgrade --apply
             success "bootc upgrade --apply completed"

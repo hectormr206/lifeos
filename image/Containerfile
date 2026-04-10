@@ -681,6 +681,7 @@ RUN find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' !
 # Scripts de LifeOS
 COPY image/files/usr/local/bin/lifeos-first-boot.sh       /usr/local/bin/lifeos-first-boot.sh
 COPY image/files/usr/local/bin/lifeos-apply-default-layout.sh /usr/local/bin/lifeos-apply-default-layout.sh
+COPY image/files/usr/local/bin/lifeos-cosmic-snapshot /usr/local/bin/lifeos-cosmic-snapshot
 COPY image/files/usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh /usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh
 COPY image/files/usr/local/bin/lifeos-sync-greeter-wallpaper.sh /usr/local/bin/lifeos-sync-greeter-wallpaper.sh
 COPY image/files/usr/local/bin/lifeos-ai-setup.sh          /usr/local/bin/lifeos-ai-setup.sh
@@ -702,6 +703,7 @@ COPY image/files/usr/local/bin/lifeos-diarize.py               /usr/local/bin/li
 COPY image/files/usr/local/bin/lifeos-sentinel.sh              /usr/local/bin/lifeos-sentinel.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-apply-default-layout.sh \
+             /usr/local/bin/lifeos-cosmic-snapshot \
              /usr/local/bin/lifeos-sync-cosmic-wallpaper-state.sh \
              /usr/local/bin/lifeos-sync-greeter-wallpaper.sh \
              /usr/local/bin/lifeos-ai-setup.sh \
