@@ -213,7 +213,7 @@ RUN set -eux && \
     bsdtar xf /tmp/simplex-chat.deb && \
     bsdtar xf data.tar.* && \
     mkdir -p /out && \
-    install -m 0755 usr/local/bin/simplex-chat /out/simplex-chat && \
+    install -m 0755 usr/bin/simplex-chat /out/simplex-chat && \
     ls -la /out/simplex-chat && \
     cd / && rm -rf /tmp/simplex-chat.deb /tmp/deb-extract && \
     dnf clean all
