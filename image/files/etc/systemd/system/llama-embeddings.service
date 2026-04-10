@@ -9,7 +9,12 @@ Type=simple
 # Inherit LIFEOS_AI_AUTO_MANAGE_MODELS from the shared AI config.
 EnvironmentFile=-/etc/lifeos/llama-server.env
 EnvironmentFile=-/etc/lifeos/llama-embeddings.env
-ExecStartPre=/usr/local/bin/lifeos-embeddings-setup.sh
+# ExecCondition (instead of ExecStartPre) lets the setup script opt the
+# service OUT cleanly: exit 0 = run, exit 1-254 = skip (service considered
+# successful, not failed). This matches the design where the script exits 1
+# when the embedding model is absent AND auto-manage is disabled — without
+# ExecCondition, systemd would mark the unit as failed, which is wrong.
+ExecCondition=/usr/local/bin/lifeos-embeddings-setup.sh
 ExecStart=/usr/sbin/llama-server \
     --model /var/lib/lifeos/models/${LIFEOS_EMBED_MODEL} \
     --alias lifeos-embeddings \
