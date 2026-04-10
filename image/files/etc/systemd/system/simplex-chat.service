@@ -1,0 +1,23 @@
+[Unit]
+Description=LifeOS SimpleX Chat Bot (Axi private messaging)
+After=network-online.target lifeosd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/bin/lifeos-simplex-setup.sh
+ExecStart=/usr/local/bin/simplex-chat -p 5226 -d /var/lib/lifeos/simplex
+Restart=always
+RestartSec=10
+TimeoutStartSec=30
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lifeos/simplex /etc/lifeos
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
