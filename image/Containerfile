@@ -202,12 +202,13 @@ RUN set -eux && \
 # ============================================================================
 FROM ubuntu:22.04 AS simplex-extract
 ARG SIMPLEX_CLI_VERSION=v6.4.11
-RUN apt-get update -qq && apt-get install -y -qq curl && \
+RUN apt-get update -qq && apt-get install -y -qq curl zstd && \
     curl -fSL -o /tmp/simplex-chat.deb \
         "https://github.com/simplex-chat/simplex-chat/releases/download/${SIMPLEX_CLI_VERSION}/simplex-chat-ubuntu-22_04-x86_64.deb" && \
     dpkg -x /tmp/simplex-chat.deb /tmp/simplex-extract && \
     mkdir -p /out && \
     install -m 0755 /tmp/simplex-extract/usr/local/bin/simplex-chat /out/simplex-chat && \
+    /out/simplex-chat --version && \
     rm -rf /tmp/simplex-chat.deb /tmp/simplex-extract
 
 # ============================================================================
