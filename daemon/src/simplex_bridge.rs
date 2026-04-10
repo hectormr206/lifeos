@@ -347,15 +347,14 @@ mod inner {
                                     persist_invite_link(&link);
                                 }
                             }
-                            SimplexResponse::ContactConnected { contact } => {
-                                if let Some(c) = contact {
-                                    info!(
-                                        "[simplex_bridge] Contact connected: {} (id={:?})",
-                                        c.local_display_name.as_deref().unwrap_or("unknown"),
-                                        c.contact_id
-                                    );
-                                }
+                            SimplexResponse::ContactConnected { contact: Some(c) } => {
+                                info!(
+                                    "[simplex_bridge] Contact connected: {} (id={:?})",
+                                    c.local_display_name.as_deref().unwrap_or("unknown"),
+                                    c.contact_id
+                                );
                             }
+                            SimplexResponse::ContactConnected { contact: None } => {}
                             SimplexResponse::NewChatItems { chat_items } => {
                                 for item in &chat_items {
                                     let inner = match &item.chat_item {
@@ -446,10 +445,10 @@ mod inner {
 
     /// Check if the SimpleX CLI WebSocket is reachable.
     pub async fn is_simplex_available() -> bool {
-        match tokio::time::timeout(Duration::from_secs(3), connect_async(SIMPLEX_WS_URL)).await {
-            Ok(Ok(_)) => true,
-            _ => false,
-        }
+        matches!(
+            tokio::time::timeout(Duration::from_secs(3), connect_async(SIMPLEX_WS_URL)).await,
+            Ok(Ok(_))
+        )
     }
 }
 
