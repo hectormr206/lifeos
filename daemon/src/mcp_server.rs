@@ -48,15 +48,63 @@ pub async fn call_tool(
             }))
         }
         "lifeos_shell" => {
+            // ────────────────────────────────────────────────────────────
+            // SECURITY HARDENING (item #S2 in pending-items-roadmap.md)
+            //
+            // The previous implementation here took arbitrary strings from
+            // the MCP client and passed them to `sh -c`, gated only by a
+            // tiny substring blocklist ("rm -rf /", "mkfs", ":(){"…). That
+            // approach is security theatre: any non-trivial attacker can
+            // bypass it with `rm -rf /*`, `rm\x20-rf\x20/`, `eval $(...)`,
+            // `$(curl|sh)`, backticks, environment manipulation, or a
+            // wine/python payload. Blocklists never work for shell command
+            // execution — you need an allowlist + argv exec + sandbox.
+            //
+            // Fully redesigning this (allowlist config file, argv exec,
+            // bubblewrap sandbox, rate limiting, audit log) is tracked as
+            // the follow-up sprint for S2. For now the tool is DISABLED
+            // by default and only runs when the operator explicitly sets
+            // LIFEOS_MCP_SHELL_ENABLE=1. When enabled we at minimum add
+            // a 30s timeout, log every invocation to the journal, and
+            // keep the legacy blocklist as defence-in-depth — but the
+            // operator has explicitly opted in to running arbitrary shell.
+            // ────────────────────────────────────────────────────────────
+            let opt_in = std::env::var("LIFEOS_MCP_SHELL_ENABLE")
+                .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+                .unwrap_or(false);
+            if !opt_in {
+                log::warn!(
+                    "[mcp_server] lifeos_shell called but disabled — set \
+                     LIFEOS_MCP_SHELL_ENABLE=1 to opt in (accepts the risk)"
+                );
+                return Err(
+                    "lifeos_shell is disabled. Set LIFEOS_MCP_SHELL_ENABLE=1 to \
+                     enable arbitrary-shell-exec mode. This tool takes raw \
+                     strings from the MCP client and pipes them into sh -c; \
+                     enabling it accepts the risk that a compromised or \
+                     jailbroken MCP client can run anything as your user."
+                        .to_string(),
+                );
+            }
+
             let command = arguments
                 .get("command")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'command' parameter")?;
 
-            // Blocklist check — same patterns as telegram_tools.rs
+            log::warn!(
+                "[mcp_server] lifeos_shell EXEC (opt-in): {}",
+                command.chars().take(200).collect::<String>()
+            );
+
+            // Legacy substring blocklist — kept as defence-in-depth, not
+            // relied on for safety. An attacker who can invoke this tool
+            // has already won; the blocklist just makes casual mistakes
+            // slightly less catastrophic.
             let lower = command.to_lowercase();
             let blocked = [
                 "rm -rf /",
+                "rm -rf /*",
                 "mkfs",
                 "dd if=",
                 ":(){",
@@ -71,13 +119,20 @@ pub async fn call_tool(
                 }
             }
 
-            // Execute with risk gating
-            let output = tokio::process::Command::new("sh")
+            // Timeout: 30s cap so a runaway command can't hold the MCP
+            // server forever. This does not stop fork-bombs or detached
+            // background work — a real sandbox (bubblewrap + cgroups)
+            // is the proper fix and is tracked as follow-up.
+            let exec = tokio::process::Command::new("sh")
                 .arg("-c")
                 .arg(command)
-                .output()
-                .await
-                .map_err(|e| format!("Execution failed: {}", e))?;
+                .output();
+            let output = match tokio::time::timeout(std::time::Duration::from_secs(30), exec).await
+            {
+                Ok(Ok(out)) => out,
+                Ok(Err(e)) => return Err(format!("Execution failed: {}", e)),
+                Err(_) => return Err("Command timed out after 30 seconds".to_string()),
+            };
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
