@@ -232,17 +232,34 @@ mod inner {
     // Main loop
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_simplex_bridge(
         task_queue: Arc<TaskQueue>,
         router: Arc<RwLock<LlmRouter>>,
         memory: Option<Arc<RwLock<MemoryPlaneManager>>>,
+        session_store: Option<Arc<crate::session_store::SessionStore>>,
+        user_model: Option<Arc<RwLock<crate::user_model::UserModel>>>,
+        meeting_archive: Option<Arc<crate::meeting_archive::MeetingArchive>>,
+        meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
+        calendar: Option<Arc<crate::calendar::CalendarManager>>,
     ) {
         info!(
             "[simplex_bridge] Starting SimpleX bridge (ws={})",
             SIMPLEX_WS_URL
         );
 
-        // Build tool context (same pattern as matrix_bridge)
+        // Build the tool context with ALL optional stores wired up.
+        //
+        // Before this commit, simplex_bridge passed `None` for session_store,
+        // user_model, meeting_archive, meeting_assistant, and calendar. Those
+        // absences meant any agentic tool that depended on them would silently
+        // degrade when invoked through SimpleX (calendar tools, meeting tools,
+        // user model lookups), producing a feature gap vs. the Telegram bridge.
+        //
+        // SimpleX remains LifeOS's privacy-first primary channel, so parity
+        // with Telegram is mandatory — not just for cosmetic feature count but
+        // because users expect the same Axi capabilities regardless of which
+        // bridge they're using.
         let tool_ctx = ToolContext {
             router,
             task_queue,
@@ -250,11 +267,11 @@ mod inner {
             history: Arc::new(ConversationHistory::new()),
             cron_store: Arc::new(CronStore::new()),
             sdd_store: Arc::new(SddStore::new()),
-            session_store: None,
-            user_model: None,
-            meeting_archive: None,
-            meeting_assistant: None,
-            calendar: None,
+            session_store,
+            user_model,
+            meeting_archive,
+            meeting_assistant,
+            calendar,
             rate_limiter: RateLimiter::new(),
         };
 

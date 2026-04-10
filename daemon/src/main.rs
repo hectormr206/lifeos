@@ -1935,14 +1935,29 @@ async fn main() -> anyhow::Result<()> {
 
     // Start SimpleX bridge if the CLI WebSocket is reachable (requires telegram
     // feature because it reuses the agentic chat infrastructure from telegram_tools).
+    //
+    // Parity note: SimpleX is our privacy-first primary channel, so it must have
+    // the SAME capability set as the Telegram bridge. We pass ALL optional stores
+    // (session, user_model, meetings, calendar) so agentic tools that depend on
+    // them do not silently degrade when invoked through SimpleX.
     #[cfg(feature = "telegram")]
     let _simplex_handle = {
         if simplex_bridge::is_simplex_available().await {
             let tq = state.task_queue.clone();
             let router = state.llm_router.clone();
             let memory = Some(state.memory_plane_manager.clone());
+            let ss = Some(state.session_store.clone());
+            let um = {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+                let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+                let model = user_model::UserModel::load_from_dir(&data_dir).await;
+                Some(Arc::new(RwLock::new(model)))
+            };
+            let ma = Some(meeting_archive.clone());
+            let mast = Some(shared_meeting_assistant.clone());
+            let cal = Some(state.calendar.clone());
             Some(tokio::spawn(async move {
-                simplex_bridge::run_simplex_bridge(tq, router, memory).await;
+                simplex_bridge::run_simplex_bridge(tq, router, memory, ss, um, ma, mast, cal).await;
             }))
         } else {
             info!("SimpleX bridge: CLI WebSocket not reachable on port 5226, skipping");
