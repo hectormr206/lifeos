@@ -1087,7 +1087,19 @@ pub struct SystemStatus {
     pub uptime_seconds: u64,
     pub version: String,
     pub hostname: String,
+    /// Boot time as RFC3339 including the user's local timezone offset.
+    /// Callers should prefer `server_time` for "current wall clock" needs —
+    /// `boot_time` is only for "how long has the system been up".
     pub boot_time: String,
+    /// Current server wall-clock time as RFC3339 with the user's local
+    /// timezone offset. The dashboard uses this to avoid clock drift
+    /// between the browser host (which could live in a different TZ than
+    /// the daemon) and the daemon's notion of "now".
+    pub server_time: String,
+    /// IANA timezone name detected by the daemon (e.g.
+    /// "America/Mexico_City"). The dashboard shows this next to the clock
+    /// so the user can verify it is rendering local time correctly.
+    pub timezone: String,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Clone)]
@@ -1742,15 +1754,18 @@ async fn get_system_status(
             .unwrap_or(0.0) as u64,
     );
 
+    let now_local = chrono::Local::now();
     let status = SystemStatus {
         online: true,
         uptime_seconds: uptime.as_secs(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         hostname: get_hostname(),
-        boot_time: chrono::Local::now()
+        boot_time: now_local
             .checked_sub_signed(chrono::Duration::seconds(uptime.as_secs() as i64))
             .map(|t| t.to_rfc3339())
             .unwrap_or_default(),
+        server_time: now_local.to_rfc3339(),
+        timezone: crate::time_context::get_user_timezone(),
     };
 
     Ok(Json(status))

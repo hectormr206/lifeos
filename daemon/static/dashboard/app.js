@@ -1182,13 +1182,22 @@ async function fetchInitialState() {
 async function refreshFullState() {
   try {
     await ensureBootstrapToken();
-    const [overlay, sensory, runtime, alwaysOn, context] = await Promise.all([
+    const [overlay, sensory, runtime, alwaysOn, context, sysStatus] = await Promise.all([
       api('GET', '/overlay/status'),
       api('GET', '/sensory/status'),
       api('GET', '/runtime/sensory'),
       api('GET', '/runtime/always-on'),
       api('GET', '/followalong/context'),
+      api('GET', '/system/status').catch(() => null),
     ]);
+
+    // Sync the clock's timezone with whatever the daemon reports. This is
+    // authoritative over the browser's detected timezone because the
+    // daemon knows the host's IANA zone, while the browser may be in a
+    // different environment (container, remote desktop, etc.).
+    if (sysStatus?.timezone) {
+      setServerTimezone(sysStatus.timezone);
+    }
 
     if (overlay?.axi_state) updateOrb(overlay.axi_state, null, overlay.reason || overlay.state_reason || overlay.axi_reason || '');
     updateOverlayDetails(overlay);
@@ -2372,15 +2381,49 @@ if (safeModeExitBtn) {
 }
 
 // ==================== TIME & TIMEZONE DISPLAY ====================
+// The dashboard fetches the daemon's timezone via /system/status on load
+// and on each refreshFullState() cycle. Until it arrives we fall back to the
+// browser's detected timezone. This matters because the browser and the
+// daemon can disagree (e.g., container vs. host), and the user expects the
+// daemon's time.
 const headerClock = $('#header-clock');
 const headerTz = $('#header-tz');
-let detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+let serverTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
 function updateClock() {
-  const now = new Date();
-  const time = now.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  if (headerClock) headerClock.textContent = time;
-  if (headerTz && detectedTimezone) headerTz.textContent = detectedTimezone;
+  // Render the current wall-clock time in the daemon's IANA timezone.
+  // `Intl.DateTimeFormat` with `timeZone` option is the correct way to
+  // force a specific zone regardless of the browser's local setting.
+  try {
+    const now = new Date();
+    const time = new Intl.DateTimeFormat('es', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      timeZone: serverTimezone,
+    }).format(now);
+    if (headerClock) headerClock.textContent = time;
+    if (headerTz) headerTz.textContent = serverTimezone;
+  } catch (_err) {
+    // If serverTimezone is somehow invalid, fall back to browser local.
+    const time = new Date().toLocaleTimeString('es', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    if (headerClock) headerClock.textContent = time;
+  }
+}
+
+// Sync the displayed timezone to whatever the daemon reports. Called from
+// refreshFullState() after a successful /system/status fetch.
+function setServerTimezone(tz) {
+  if (tz && typeof tz === 'string' && tz !== serverTimezone) {
+    serverTimezone = tz;
+    updateClock();
+  }
 }
 
 // Update clock every second
@@ -2961,10 +3004,17 @@ if (mdExportBtn) {
 // ==================== CONVERSATION HISTORY ====================
 const conversationList = $('#conversation-list');
 
-// TODO: GET /conversations and GET /sessions not yet implemented in backend.
-// Show placeholder until the conversation history API is available.
+// Conversation history is per-chat inside telegram_tools::ConversationHistory
+// and persisted to ~/.local/share/lifeos/conversation_history.json. Surfacing
+// it through a unified /conversations endpoint requires merging Telegram,
+// SimpleX, and Matrix bridges into a common format — tracked as item #5
+// (dashboard CRUD) in docs/operations/pending-items-roadmap.md.
 async function refreshConversations() {
-  if (conversationList) conversationList.innerHTML = '<p class="task-empty">Historial de conversaciones no disponible aun</p>';
+  if (conversationList) {
+    conversationList.innerHTML =
+      '<p class="task-empty">Historial unificado en desarrollo. '
+      + 'Usa <code>/telegram history</code> o <code>/simplex history</code> por ahora.</p>';
+  }
 }
 
 function renderConversations(convos) {
