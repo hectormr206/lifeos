@@ -604,6 +604,7 @@ Pipeline foto/voz → nutrition_log incompleta.
 | E | Screenshot encryption | ⬜ pending | — | — |
 | N | Nutrition pipeline | ⬜ pending | — | — |
 | 🦎 | Dev-mode dual-image arch | ✅ phases 1+2+4 | c4da89f, 3bf1f5c, 6c1a478 | 2026-04-11 |
+| W | STT pipeline upgrade (Vulkan + large-v3-turbo + streaming) | ⬜ pending | — | — |
 
 ## Legend
 
@@ -612,6 +613,185 @@ Pipeline foto/voz → nutrition_log incompleta.
 - 🟡 **partial** — core fix landed, follow-ups deferred to a dedicated sprint
 - 🟡 **scaffolded** — anchor point in place, full refactor pending
 - ⬜ **pending** — not yet started
+
+## Item W — STT pipeline upgrade (Vulkan + large-v3-turbo + streaming)
+
+### Problema
+
+El stack de STT de LifeOS esta dejando muchisima performance y calidad sobre
+la mesa. Tres observaciones concretas del build actual (`image/Containerfile`
+lineas 141-173):
+
+1. **whisper.cpp se compila 100% CPU-only**. El cmake no pasa
+   `-DWHISPER_VULKAN=ON` ni `-DWHISPER_CUDA=ON` ni `-DWHISPER_OPENBLAS=ON`.
+   En una laptop con NVIDIA 5070 Ti (12 GB VRAM) que YA corre llama-server
+   en Vulkan, estamos desperdiciando el acelerador mas importante del
+   sistema para speech-to-text.
+
+2. **Solo shippeamos `ggml-base.bin` (74 MB) y `ggml-tiny.bin` (39 MB)** —
+   los dos modelos mas chicos de la familia Whisper. Sus WERs
+   aproximadas:
+
+   | Modelo | Tamaño | WER inglés | WER español |
+   |--------|--------|------------|-------------|
+   | tiny (shipped) | 39 MB | ~13-15% | ~25-30% |
+   | **base (default)** | 74 MB | ~9-11% | ~18-22% |
+   | small | 244 MB | ~7-9% | ~12-15% |
+   | medium | 769 MB | ~5-7% | ~8-10% |
+   | large-v3 | 1.5 GB | ~4-5% | ~5-7% |
+   | **large-v3-turbo** | 800 MB | ~4-6% | ~6-8% |
+
+   Alexa/Google estan en ~4-6% WER con custom models, noise suppression,
+   beamforming, y domain adaptation. Nosotros en ~9-11% con el modelo
+   base, sin GPU, en batch mode. La brecha es grande.
+
+3. **El daemon usa `whisper-cli` (batch mode), no `whisper-stream`**
+   (streaming mode). `daemon/src/api/mod.rs:2550` tiene:
+   ```rust
+   const DEFAULT_STT_BINARY: &str = "whisper-cli";
+   ```
+   Aunque el Containerfile compila `whisper-stream` tambien, no lo
+   usamos. Resultado: la latencia percibida "end of speech →
+   transcription" es ~500ms+ porque el modelo ni siquiera empieza a
+   procesar hasta que el usuario termina de hablar.
+
+### Impacto
+
+- **Calidad**: en español conversacional el WER es ~18-22% — uno de cada
+  5 tokens es incorrecto. Esto hace que los comandos por voz fallen
+  frecuentemente, especialmente con nombres propios, numeros, o palabras
+  poco comunes.
+- **Latencia**: percibida ~500-800ms desde que el usuario termina de
+  hablar hasta que aparece el transcript. Alexa/Google responden en
+  ~100-200ms porque son streaming.
+- **Hardware desperdiciado**: la GPU esta 95% idle durante STT.
+
+### Sub-fases
+
+#### W.1 — Vulkan build flag (quick win, 30 min)
+
+Agregar `-DWHISPER_VULKAN=ON` al cmake de la stage 3 del Containerfile.
+whisper.cpp detecta Vulkan en runtime y hace fallback a CPU si no
+esta disponible (importante para imagenes AMD del split del item #I).
+
+```dockerfile
+cmake -S /tmp/whisper.cpp -B /tmp/whisper.cpp/build \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DWHISPER_BUILD_TESTS=OFF \
+    -DWHISPER_SDL2=ON \
+    -DWHISPER_BUILD_EXAMPLES=ON \
+    -DWHISPER_VULKAN=ON   # ← NUEVO
+```
+
+**Impacto esperado**: 5-10x mas rapido en GPU vs CPU.
+
+**Archivos**: `image/Containerfile` (lineas 151-156).
+
+#### W.2 — Shippar large-v3-turbo como modelo default (1 h)
+
+Agregar la descarga del modelo `ggml-large-v3-turbo.bin` (~800 MB) en la
+stage 3, y cambiar el default en el daemon para preferirlo sobre `base`.
+
+```dockerfile
+curl -fSL --retry 3 --connect-timeout 60 \
+  -o /out/models/whisper/ggml-large-v3-turbo.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
+```
+
+En `daemon/src/api/mod.rs` actualizar el model resolution para preferir
+`ggml-large-v3-turbo.bin` cuando existe, con fallback a `base` si no.
+
+**Impacto esperado**: WER de ~9-11% → ~4-6% en ingles, ~18-22% → ~6-8%
+en español. Casi 3x mejor en español.
+
+**Costo**: imagen ~800 MB mas grande. Aceptable — LifeOS ya es una
+imagen grande por los modelos AI bundled.
+
+**Archivos**: `image/Containerfile`, `daemon/src/api/mod.rs` (linea ~2600).
+
+#### W.3 — Migrar daemon API a whisper-stream (4-6 h)
+
+Reemplazar el spawn de `whisper-cli` con `whisper-stream` en modo
+persistent daemon. `whisper-stream` corre como un proceso long-running
+que acepta audio chunks via stdin y emite transcripts parciales via
+stdout. El daemon mantiene una sola instancia con el modelo cargado
+permanentemente (no re-cargar por request).
+
+Tareas:
+- Nuevo `daemon/src/whisper_stream.rs` con la struct que maneja el
+  proceso
+- Canal tokio para audio in, canal tokio para transcripts out
+- Manejo de restart si el proceso muere
+- Deprecar el path de `whisper-cli` (mantener como fallback)
+
+**Impacto esperado**: latencia percibida ~500ms → ~100-200ms. Primera
+palabra del transcript aparece mientras el usuario sigue hablando.
+
+**Archivos**: `daemon/src/api/mod.rs` (linea ~2794), nuevo
+`daemon/src/whisper_stream.rs`.
+
+#### W.4 — VAD (voice activity detection) (6-8 h, futuro)
+
+Agregar silero-vad o webrtc-vad antes del STT para segmentar audio en
+chunks solo cuando hay voz. Evita correr el modelo sobre silencio y
+mejora la segmentacion de utterances.
+
+#### W.5 — Noise suppression con RNNoise (1-2 dias, futuro)
+
+Pipeline de audio: mic → RNNoise → whisper-stream. RNNoise es un
+modelo pequeño (100 KB) que corre en tiempo real en CPU y remueve
+ruido de fondo. Mejora el WER en ambientes con ruido ~10-20%.
+
+### Criterios de exito
+
+- [ ] W.1: `whisper-cli --list-devices` muestra Vulkan/NVIDIA en la
+      imagen dev buildeada
+- [ ] W.1: transcripcion de un audio de 60 segundos usa GPU (verificable
+      con `nvidia-smi` durante la ejecucion)
+- [ ] W.2: `ls /usr/share/lifeos/models/whisper/` muestra
+      `ggml-large-v3-turbo.bin`
+- [ ] W.2: transcripcion manual de un audio de prueba en español tiene
+      WER < 10% (actual ~20%)
+- [ ] W.3: primer token del transcript aparece < 500ms despues del
+      onset de audio
+- [ ] W.3: `ps aux | grep whisper-stream` muestra un solo proceso
+      persistent
+- [ ] W.4, W.5: deferred to dedicated sprints
+
+### Estimacion
+
+- W.1 + W.2: ~1.5 h (quick wins — 70% del beneficio)
+- W.3: 4-6 h (cambio de arquitectura del daemon)
+- W.4 + W.5: 1-2 dias cada uno
+
+**Prioridad recomendada**: W.1 y W.2 primero, en la siguiente sesion
+despues de activar dev mode. W.3 como sprint dedicado. W.4 y W.5
+futuro.
+
+### Contexto: por que no estamos cerca de Alexa/Google
+
+Incluso con los 5 upgrades, no vamos a igualar Alexa/Google. Ellos
+tienen ventajas que ningun modelo solo puede cerrar:
+
+1. **Beamforming con array de microfonos** (hardware dedicado en
+   Echo/Nest)
+2. **AEC (acoustic echo cancellation)** — eliminan el eco de sus
+   propios speakers
+3. **Domain adaptation** — sus modelos estan entrenados con sesgo
+   hacia comandos ("reproduce X", "pon un timer", etc.)
+4. **Custom acoustic models** entrenados con millones de horas en
+   condiciones reales (niños, acentos, ruido)
+5. **Hardware DSP dedicado** para keyword spotting sin cargar la CPU
+6. **Streaming ASR de baja latencia** que ya tienen maduro
+7. **Billions of queries per day** para fine-tuning continuo
+
+Nosotros tenemos 0 de las 7. La meta realista es acercarnos a
+~5-6% WER en español con audio limpio y latencia sub-300ms — eso
+ya seria competitivo para un assistente local-first que NO envia
+audio a la nube.
+
+---
 
 ## Post-session addition: LifeOS Dev Mode 🦎
 
