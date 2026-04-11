@@ -138,36 +138,6 @@ impl AiManager {
         false
     }
 
-    /// Start llama-server
-    pub async fn start_server(&self) -> anyhow::Result<()> {
-        let models = self.list_models().await?;
-        let active_model = self.active_model().await;
-        let selected_model = match models
-            .iter()
-            .find(|m| active_model.as_deref() == Some(m.name.as_str()))
-            .or_else(|| models.first())
-        {
-            Some(m) => m.name.clone(),
-            None => anyhow::bail!("No models found in /var/lib/lifeos/models"),
-        };
-
-        let model_path = format!("/var/lib/lifeos/models/{}", selected_model);
-
-        Command::new("llama-server")
-            .env("GGML_BACKEND_PATH", "/usr/lib64")
-            .args(["-m", &model_path, "--port", "8082", "-c", "4096"])
-            .spawn()?;
-
-        Ok(())
-    }
-
-    /// Stop llama-server
-    pub async fn stop_server(&self) -> anyhow::Result<()> {
-        Command::new("killall").args(["llama-server"]).output()?;
-
-        Ok(())
-    }
-
     // ==================== API-Required Methods ====================
 
     /// Check if llama-server is running and responsive.
