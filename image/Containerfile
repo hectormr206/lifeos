@@ -305,6 +305,11 @@ ARG BUILD_DATE
 ARG VCS_REF
 ARG LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64=""
 ARG LIFEOS_NVIDIA_KMOD_CERT_DER_B64=""
+# Re-declare the global args that the dev-mode install block needs.
+# Without these, multi-stage builds leave LIFEOS_BUILD_MODE unbound in
+# the final stage, and the RUN block with `set -eu` crashes on unset var.
+ARG LIFEOS_IMAGE_VARIANT=nvidia
+ARG LIFEOS_BUILD_MODE=release
 
 # --- Repositorios adicionales (COSMIC y RPMFusion) ---
 RUN dnf -y install dnf5-plugins && \
@@ -1121,7 +1126,8 @@ COPY image/files/etc/sudoers.d/lifeos-dev /tmp/lifeos-dev-staging/sudoers-dev
 COPY image/files/etc/systemd/user/lifeosd.service.d/10-dev-mode.conf /tmp/lifeos-dev-staging/10-dev-mode.conf
 
 RUN set -eu; \
-    if [ "${LIFEOS_BUILD_MODE}" = "dev" ]; then \
+    BUILD_MODE="${LIFEOS_BUILD_MODE:-release}"; \
+    if [ "${BUILD_MODE}" = "dev" ]; then \
         echo "[build] LIFEOS_BUILD_MODE=dev — installing dev sudoers whitelist and dropins"; \
         install -D -m 440 -o root -g root \
             /tmp/lifeos-dev-staging/sudoers-dev \
@@ -1132,10 +1138,10 @@ RUN set -eu; \
             /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf; \
         mkdir -p /var/log/lifeos; \
         echo "[build] dev mode artifacts installed"; \
-    elif [ "${LIFEOS_BUILD_MODE}" = "release" ]; then \
+    elif [ "${BUILD_MODE}" = "release" ]; then \
         echo "[build] LIFEOS_BUILD_MODE=release — skipping dev artifacts"; \
     else \
-        echo "FATAL: LIFEOS_BUILD_MODE must be 'release' or 'dev', got '${LIFEOS_BUILD_MODE}'"; \
+        echo "FATAL: LIFEOS_BUILD_MODE must be 'release' or 'dev', got '${BUILD_MODE}'"; \
         exit 1; \
     fi; \
     rm -rf /tmp/lifeos-dev-staging
