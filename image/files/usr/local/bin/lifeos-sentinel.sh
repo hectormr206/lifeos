@@ -51,9 +51,31 @@ log() {
     fi
 }
 
+read_bootstrap_token() {
+    local token_path="/run/user/${LIFEOS_PRIMARY_UID}/lifeos/bootstrap.token"
+    if [ -r "$token_path" ]; then
+        cat "$token_path" 2>/dev/null
+    fi
+}
+
 check_health() {
+    # /api/v1/health is behind the bootstrap-token middleware. Sentinel
+    # runs as root (system service) and reads the token from the user's
+    # runtime dir each probe, so rotated tokens are picked up without
+    # needing a sentinel restart. If the token is missing (daemon not
+    # yet up) treat that as a probe failure so the escalation ladder
+    # still runs.
+    local token
+    token="$(read_bootstrap_token)"
+    if [ -z "$token" ]; then
+        echo "000"
+        return
+    fi
     local status
-    status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$API/api/v1/health" 2>/dev/null || echo "000")
+    status=$(curl -s -o /dev/null -w "%{http_code}" \
+        --max-time 5 \
+        -H "x-bootstrap-token: ${token}" \
+        "$API/api/v1/health" 2>/dev/null || echo "000")
     echo "$status"
 }
 

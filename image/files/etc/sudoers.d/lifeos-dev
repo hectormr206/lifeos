@@ -181,6 +181,8 @@ Cmnd_Alias LIFEOS_DEV_INSTALL_DROPINS = \
     /usr/bin/install -D -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/system/llama-embeddings.service.d/*.conf /etc/systemd/system/llama-embeddings.service.d/, \
     /usr/bin/install -D -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/system/nvidia-persistenced.service.d/*.conf /etc/systemd/system/nvidia-persistenced.service.d/, \
     /usr/bin/install -D -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/system/whisper-stt.service.d/*.conf /etc/systemd/system/whisper-stt.service.d/, \
+    /usr/bin/install -D -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/system/lifeos-sentinel.service.d/*.conf /etc/systemd/system/lifeos-sentinel.service.d/, \
+    /usr/bin/install -D -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/system/lifeos-sentinel.service.d/*.conf /etc/systemd/system/lifeos-sentinel.service.d/*.conf, \
     /usr/bin/install -D -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/user/lifeosd.service.d/*.conf /etc/systemd/user/lifeosd.service.d/
 
 # Module autoload and options

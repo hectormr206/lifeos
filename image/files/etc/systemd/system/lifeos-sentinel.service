@@ -11,11 +11,17 @@ ExecStart=/usr/local/bin/lifeos-sentinel.sh
 Restart=always
 RestartSec=10
 
-# Security: minimal privileges
+# Security: minimal privileges.
+# NOTE: ProtectHome=true is intentionally NOT set. Sentinel must reach
+# /run/user/1000/bus (to restart lifeosd via `systemctl --user`) and
+# /run/user/1000/lifeos/bootstrap.token (to authenticate health checks
+# against /api/v1/health). ProtectHome blocks /run/user entirely, which
+# is why earlier revisions of this unit had the watchdog silently
+# reading HTTP 401 on every probe and escalating to structured recovery
+# that stopped llama-server on a loop.
 NoNewPrivileges=true
 ProtectSystem=strict
 ReadWritePaths=/var/log/lifeos
-ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target

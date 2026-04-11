@@ -1136,6 +1136,7 @@ RUN set -eux && \
 # disk when the build completes.
 COPY image/files/etc/sudoers.d/lifeos-dev /tmp/lifeos-dev-staging/sudoers-dev
 COPY image/files/etc/systemd/user/lifeosd.service.d/10-dev-mode.conf /tmp/lifeos-dev-staging/10-dev-mode.conf
+COPY image/files/etc/systemd/system/lifeos-sentinel.service.d/10-dev-mode-override.conf /tmp/lifeos-dev-staging/sentinel-dev-override.conf
 
 RUN set -eu; \
     BUILD_MODE="${LIFEOS_BUILD_MODE:-release}"; \
@@ -1148,6 +1149,9 @@ RUN set -eu; \
         install -D -m 644 -o root -g root \
             /tmp/lifeos-dev-staging/10-dev-mode.conf \
             /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf; \
+        install -D -m 644 -o root -g root \
+            /tmp/lifeos-dev-staging/sentinel-dev-override.conf \
+            /etc/systemd/system/lifeos-sentinel.service.d/10-dev-mode-override.conf; \
         mkdir -p /var/log/lifeos; \
         echo "[build] dev mode artifacts installed"; \
     elif [ "${BUILD_MODE}" = "release" ]; then \
@@ -1166,13 +1170,17 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
             fail "dev sudoers leaked into release build"; \
         test ! -f /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf || \
             fail "dev dropin leaked into release build"; \
+        test ! -f /etc/systemd/system/lifeos-sentinel.service.d/10-dev-mode-override.conf || \
+            fail "sentinel dev-mode dropin leaked into release build"; \
         echo "[verify] release integrity OK — no dev affordances present"; \
     else \
         test -f /etc/sudoers.d/lifeos-dev || \
             fail "dev sudoers missing from dev build"; \
         test -f /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf || \
             fail "dev dropin missing from dev build"; \
-        echo "[verify] dev integrity OK — sudo whitelist and dropin present"; \
+        test -f /etc/systemd/system/lifeos-sentinel.service.d/10-dev-mode-override.conf || \
+            fail "sentinel dev-mode dropin missing from dev build"; \
+        echo "[verify] dev integrity OK — sudo whitelist and dropins present"; \
     fi; \
     test -x /usr/bin/mpv               || fail "/usr/bin/mpv"; \
     test -x /usr/bin/evince              || fail "/usr/bin/evince"; \
