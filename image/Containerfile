@@ -881,8 +881,14 @@ COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-over
 RUN printf '%s\n' \
     '[Unit]' \
     'Description=LifeOS AI Daemon (Axi)' \
+    '# Wait for BOTH pipewire and the graphical session to be ready before' \
+    '# starting. The Wants= pulls graphical-session.target into the activation' \
+    '# queue; without it, lifeosd races the display server and the Axi tray' \
+    '# icon code gives up after its 30s retry with "No display found, tray' \
+    '# icon disabled" — leaving the user without the tray icon for the whole' \
+    '# session.' \
     'After=graphical-session.target pipewire.service' \
-    'Wants=pipewire.service' \
+    'Wants=graphical-session.target pipewire.service' \
     '' \
     '[Service]' \
     'Type=simple' \
@@ -903,7 +909,10 @@ RUN printf '%s\n' \
     'PrivateTmp=yes' \
     '' \
     '[Install]' \
-    'WantedBy=default.target' \
+    '# Wanted-by graphical-session.target so lifeosd is only activated once' \
+    '# COSMIC (or whatever DE) has a real display up. Previously this was' \
+    '# default.target which activated lifeosd BEFORE the session was ready.' \
+    'WantedBy=graphical-session.target' \
     > /usr/lib/systemd/user/lifeosd.service
 # Keep a system-level alias only for compatibility/debugging.
 # This alias is NOT the primary runtime contract for lifeosd.
@@ -919,8 +928,11 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
     ln -sf /usr/lib/systemd/system/conduit.service /usr/lib/systemd/system/multi-user.target.wants/conduit.service && \
     ln -sf /usr/lib/systemd/system/simplex-chat.service /usr/lib/systemd/system/multi-user.target.wants/simplex-chat.service && \
-    # Canonical enablement: lifeosd starts from the user's default.target.
-    ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/default.target.wants/lifeosd.service && \
+    # Canonical enablement: lifeosd starts from the graphical session target
+    # so it waits for the display server to be ready (fixes the tray-icon
+    # race where lifeosd gave up after its 30s wait before COSMIC was up).
+    mkdir -p /usr/lib/systemd/user/graphical-session.target.wants && \
+    ln -sf /usr/lib/systemd/user/lifeosd.service /usr/lib/systemd/user/graphical-session.target.wants/lifeosd.service && \
     # Enable nvidia-persistenced so the NVIDIA driver keeps the GPU
     # context alive across idle periods. Without this the driver unloads
     # the context when no client is active and the LLM weights get
