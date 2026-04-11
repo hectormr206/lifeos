@@ -82,12 +82,25 @@ pub mod inner {
             log::info!("[tray] open_url_in_browser: {}", url);
             // Firefox direct first — LifeOS ships a hardened Firefox profile
             // (`lifeos.default`) and removes other browser .desktop files, so
-            // the Firefox binary is the canonical entrypoint. xdg-open is
-            // last because it dispatches through MIME handlers which can
-            // silently fail in COSMIC if the portal is misconfigured.
+            // the Firefox binary is the canonical entrypoint. Pin the profile
+            // explicitly with `-P lifeos.default`: without it, firefox reads
+            // profiles.ini and if any profile has `ShowSelector=1` it pops
+            // the profile chooser dialog on every launch — which is exactly
+            // how the tray used to spawn "múltiples ventanas de error".
+            // xdg-open is last because it dispatches through MIME handlers
+            // which can silently fail in COSMIC if the portal is misconfigured.
             let openers: &[(&str, &[&str])] = &[
-                ("firefox", &["--new-tab"]),
-                ("flatpak", &["run", "org.mozilla.firefox", "--new-tab"]),
+                ("firefox", &["-P", "lifeos.default", "--new-tab"]),
+                (
+                    "flatpak",
+                    &[
+                        "run",
+                        "org.mozilla.firefox",
+                        "-P",
+                        "lifeos.default",
+                        "--new-tab",
+                    ],
+                ),
                 ("chromium", &["--new-tab"]),
                 ("flatpak", &["run", "org.chromium.Chromium", "--new-tab"]),
                 (
