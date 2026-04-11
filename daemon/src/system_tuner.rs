@@ -84,7 +84,6 @@ impl SystemTuner {
 
     /// Write a sysctl parameter via `sysctl -w`. Requires root privileges.
     pub fn write_sysctl(param: &str, value: &str) -> Result<(), String> {
-        warn!("write_sysctl: attempting to set {param}={value} (requires sudo)");
         let output = std::process::Command::new("sysctl")
             .arg("-w")
             .arg(format!("{param}={value}"))
@@ -149,6 +148,20 @@ impl SystemTuner {
     /// Try several `vm.*` sysctl values, benchmark each, keep winners.
     pub fn optimize_vm_settings(&mut self) -> Vec<TuningResult> {
         let mut results = Vec::new();
+
+        // lifeosd runs in user scope without CAP_SYS_ADMIN, so writes to
+        // /proc/sys/vm/* always fail with EACCES. Probe once before the
+        // benchmark loop so we can bail out with a single info log instead
+        // of logging WARN for every (param, candidate) pair on every tick
+        // the system_tuner runs.
+        if let Ok(current) = Self::read_sysctl("vm.swappiness") {
+            if Self::write_sysctl("vm.swappiness", &current).is_err() {
+                info!(
+                    "[system_tuner] skipping VM tuning — sysctl writes denied (user-scope daemon, no CAP_SYS_ADMIN)"
+                );
+                return results;
+            }
+        }
 
         let params = [
             ("vm.swappiness", &["10", "30", "60"][..]),
