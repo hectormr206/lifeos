@@ -170,13 +170,27 @@ impl AiManager {
 
     // ==================== API-Required Methods ====================
 
-    /// Check if llama-server is running
+    /// Check if llama-server is running and responsive.
+    ///
+    /// The old implementation used `killall -0 llama-server`, but when
+    /// llama-server runs as a system service while lifeosd runs in the user
+    /// scope, the signal-0 probe fails with EPERM ("Operación no permitida")
+    /// and reports the server as down even though it is serving traffic.
+    /// Hitting `/health` is both permission-free and a better signal: it
+    /// confirms the server can actually answer requests, not just that a
+    /// process with the matching name exists.
     pub async fn is_running(&self) -> bool {
-        Command::new("killall")
-            .args(["-0", "llama-server"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(500))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        match client.get("http://127.0.0.1:8082/health").send().await {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        }
     }
 
     /// Get the currently active model
