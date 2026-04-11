@@ -1,0 +1,39 @@
+[Unit]
+Description=LifeOS — load locally-signed NVIDIA kernel modules
+Documentation=docs/operations/dev-mode.md
+# Workaround for dev-mode builds that don't have the MOK signing keys
+# baked in: a post-build manual sign flow stores signed .ko files at
+# /var/lib/lifeos/signed-nvidia/ and this oneshot unit insmods them at
+# boot before anything that needs the GPU.
+#
+# Release images NEVER need this: they bake the signing keys into the
+# image at build time via LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 and the main
+# /usr/lib/modules/*/extra/nvidia/*.ko files are signed in place. This
+# unit exits successfully when /var/lib/lifeos/signed-nvidia/ is
+# absent, so installing it on a release build is a harmless no-op.
+
+ConditionPathExists=/var/lib/lifeos/signed-nvidia/nvidia.ko
+# Only run if the modules are NOT already loaded (e.g. from a previous
+# boot where modprobe succeeded because the kernel and signed modules
+# matched). `lsmod | grep -q ^nvidia ` would be nicer but shells aren't
+# available here.
+After=systemd-modules-load.service
+Before=llama-server.service nvidia-persistenced.service display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/modprobe ecdh_generic
+ExecStart=/usr/sbin/modprobe ecdsa_generic
+ExecStart=-/usr/sbin/insmod /var/lib/lifeos/signed-nvidia/nvidia.ko
+ExecStart=-/usr/sbin/insmod /var/lib/lifeos/signed-nvidia/nvidia-modeset.ko
+ExecStart=-/usr/sbin/insmod /var/lib/lifeos/signed-nvidia/nvidia-drm.ko
+ExecStart=-/usr/sbin/insmod /var/lib/lifeos/signed-nvidia/nvidia-uvm.ko
+# `-` prefix on ExecStart makes failures non-fatal, so a module already
+# loaded or a spurious error doesn't cascade-fail the unit.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeos-nvidia-signed-modules
+
+[Install]
+WantedBy=multi-user.target

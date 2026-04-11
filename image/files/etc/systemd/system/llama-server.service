@@ -61,7 +61,7 @@ ExecStart=/usr/sbin/llama-server \
     --cache-type-k q8_0 \
     --cache-type-v q8_0 \
     -kvu \
-    -cram \
+    -cram -1 \
     -sm none \
     -mg 0 \
     --temp 0.6 \
