@@ -23,6 +23,20 @@ repos:
       - id: mixed-line-ending
 
   # ============================================================================
+  # Dev-mode guard — refuse to commit LIFEOS_BUILD_MODE=dev references
+  # into CI workflows. See docs/operations/dev-mode.md for the full
+  # contract. Runs on any change to .github/workflows/*.yml.
+  # ============================================================================
+  - repo: local
+    hooks:
+      - id: reject-dev-mode-in-ci
+        name: Reject LIFEOS_BUILD_MODE=dev in CI workflows
+        entry: bash -c 'if grep -rn "LIFEOS_BUILD_MODE=dev" .github/workflows/ 2>/dev/null; then echo "FATAL: LIFEOS_BUILD_MODE=dev must never appear in CI workflows"; exit 1; fi'
+        language: system
+        files: '^\.github/workflows/.*\.ya?ml$'
+        pass_filenames: false
+
+  # ============================================================================
   # Rust Formatting and Linting
   # ============================================================================
   - repo: local

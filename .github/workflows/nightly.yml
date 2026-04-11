@@ -80,9 +80,35 @@ jobs:
       - name: Set up Podman
         run: bash scripts/ci/install-linux-deps.sh podman
 
+      - name: Reject dev-mode references in CI
+        run: |
+          set -euo pipefail
+          if grep -rn "LIFEOS_BUILD_MODE=dev" .github/workflows/; then
+            echo "FATAL: LIFEOS_BUILD_MODE=dev must never appear in CI workflows"
+            exit 1
+          fi
+
       - name: Build container image
         run: |
-          podman build -t lifeos:nightly -f image/Containerfile .
+          podman build \
+            --build-arg LIFEOS_BUILD_MODE=release \
+            -t lifeos:nightly \
+            -f image/Containerfile .
+
+      - name: Verify no dev-mode artifacts in nightly image
+        run: |
+          podman run --rm --entrypoint /bin/bash lifeos:nightly -lc '
+            set -euo pipefail
+            if [ -f /etc/sudoers.d/lifeos-dev ]; then
+              echo "FATAL: /etc/sudoers.d/lifeos-dev present in release image"
+              exit 1
+            fi
+            if [ -f /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf ]; then
+              echo "FATAL: dev-mode dropin present in release image"
+              exit 1
+            fi
+            echo "dev-mode leak check passed"
+          '
 
       - name: Run container tests
         run: |
