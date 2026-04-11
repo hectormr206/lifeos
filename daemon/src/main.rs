@@ -655,6 +655,18 @@ async fn main() -> anyhow::Result<()> {
         task_queue::TaskQueue::new(std::path::Path::new("/tmp/lifeos"))
             .expect("fallback task queue must work")
     }));
+    // Sweep tasks orphaned by a previous crash or restart. Any task still
+    // Running when a new daemon starts up was owned by a worker that no
+    // longer exists, so it cannot possibly finish. A 60-second floor keeps
+    // the sweep away from tasks started by a previous daemon seconds ago
+    // that may still have in-flight state flushed to disk. Without this,
+    // Hector ended up with tasks stuck in "running" for 17 days and the
+    // proactive alert kept firing about them forever.
+    match shared_tq.clear_stuck(60) {
+        Ok(0) => {}
+        Ok(n) => info!("[startup] cleared {} orphaned running task(s)", n),
+        Err(e) => warn!("[startup] failed to clear orphaned running tasks: {}", e),
+    }
     let shared_ai_manager = Arc::new(ai::AiManager::new());
     let shared_memory = Arc::new(RwLock::new(
         MemoryPlaneManager::with_ai_manager(data_dir.clone(), Some(shared_ai_manager.clone()))
