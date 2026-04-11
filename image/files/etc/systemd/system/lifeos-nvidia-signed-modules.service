@@ -1,6 +1,6 @@
 [Unit]
 Description=LifeOS — load locally-signed NVIDIA kernel modules
-Documentation=docs/operations/dev-mode.md
+Documentation=file:///usr/share/lifeos/docs/operations/dev-mode.md
 # Workaround for dev-mode builds that don't have the MOK signing keys
 # baked in: a post-build manual sign flow stores signed .ko files at
 # /var/lib/lifeos/signed-nvidia/ and this oneshot unit insmods them at
