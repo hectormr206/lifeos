@@ -603,6 +603,7 @@ Pipeline foto/voz → nutrition_log incompleta.
 | β | Beta badge | ✅ done | ec2b30c | 2026-04-10 |
 | E | Screenshot encryption | ⬜ pending | — | — |
 | N | Nutrition pipeline | ⬜ pending | — | — |
+| 🦎 | Dev-mode dual-image arch | ✅ phases 1+2+4 | c4da89f, 3bf1f5c, 6c1a478 | 2026-04-11 |
 
 ## Legend
 
@@ -611,6 +612,23 @@ Pipeline foto/voz → nutrition_log incompleta.
 - 🟡 **partial** — core fix landed, follow-ups deferred to a dedicated sprint
 - 🟡 **scaffolded** — anchor point in place, full refactor pending
 - ⬜ **pending** — not yet started
+
+## Post-session addition: LifeOS Dev Mode 🦎
+
+El desarrollador propuso (y fue implementado el 2026-04-11) una
+**arquitectura dual-image** que da a la IA autonomia total en la laptop
+del desarrollador (via sudo whitelist) sin cambiar el comportamiento
+de los builds publicos. Referencia: `docs/operations/dev-mode.md`.
+
+**Estado actual:**
+- Fase 1 ✅ — Containerfile + sudoers whitelist + Makefile targets
+- Fase 2 ✅ — CI guards (workflow scanners, tag guards, build-time verification, post-build inspection)
+- Fase 3 ⏳ — **Requiere accion manual del desarrollador**: `make docker-build-dev` + `sudo bootc switch --transport containers-storage localhost/lifeos:dev` + reboot
+- Fase 4 ✅ — Docs actualizados
+- Fase 5 ⬜ — Futuro: lifeos-dev-helper binario, dev endpoints en el daemon via feature flag, badge "DEV MODE" en dashboard
+
+Despues de Fase 3, la IA puede operar autonomo sobre el whitelist sin
+interrumpir al desarrollador por cada sudo.
 
 ## Deferred follow-ups (next sprints)
 

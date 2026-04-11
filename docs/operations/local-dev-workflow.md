@@ -1,8 +1,15 @@
 # PRD: LifeOS Local Development & Testing Workflow
 
-**Version:** 1.1
-**Fecha:** 2026-04-10
+**Version:** 1.2
+**Fecha:** 2026-04-11
 **Estado:** Aprobado
+
+> **Nota v1.2:** Este flujo se complementa con el de **dev-mode**
+> (`docs/operations/dev-mode.md`). Cuando tu laptop corre la imagen
+> `localhost/lifeos:dev`, la Fase 1-2 de este documento gana autonomia
+> total de la IA (sudo whitelist activo). Cuando corre
+> `localhost/lifeos:release`, todo sigue funcionando exactamente como
+> aca se describe — con intervencion manual en los pasos sudo.
 
 ---
 
