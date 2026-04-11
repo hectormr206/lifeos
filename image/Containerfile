@@ -43,6 +43,21 @@ ARG LIFEOS_PRELOAD_MODEL=false
 #                       arg is the anchor point for the refactor.)
 ARG LIFEOS_IMAGE_VARIANT=nvidia
 
+# Dev-mode selector (docs/operations/dev-mode.md).
+#   "release" (default) — locked-down image shipped to users. No sudo
+#                         whitelist, no dev environment overrides,
+#                         no AI autonomy affordances.
+#   "dev"               — developer laptop image ONLY. Installs
+#                         /etc/sudoers.d/lifeos-dev (narrow sudo
+#                         whitelist for the AI assistant) and
+#                         /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf
+#                         (RUST_LOG=debug by default).
+#                         MUST NEVER be set in CI workflows. Release
+#                         verification at the bottom of this file fails
+#                         the build if dev artifacts leak into a release
+#                         image.
+ARG LIFEOS_BUILD_MODE=release
+
 RUN dnf -y install \
     rust cargo \
     openssl-devel \
@@ -1091,9 +1106,56 @@ RUN set -eux && \
     /usr/bin/whisper-cli -h >/dev/null && \
     /usr/bin/whisper-stream -h >/dev/null
 
+# --- Dev-mode artifacts (only installed when LIFEOS_BUILD_MODE=dev) ---
+#
+# See docs/operations/dev-mode.md for the full design. The guarantee:
+# release builds MUST NOT contain /etc/sudoers.d/lifeos-dev or the
+# lifeosd dev dropin. The verification block below enforces that.
+#
+# The COPY happens unconditionally into a /tmp staging area (COPY does
+# not support build-arg conditionals directly). The RUN that follows
+# either installs the files (dev mode) or deletes the staging (release
+# mode) — so release images have zero trace of the dev artifacts on
+# disk when the build completes.
+COPY image/files/etc/sudoers.d/lifeos-dev /tmp/lifeos-dev-staging/sudoers-dev
+COPY image/files/etc/systemd/user/lifeosd.service.d/10-dev-mode.conf /tmp/lifeos-dev-staging/10-dev-mode.conf
+
+RUN set -eu; \
+    if [ "${LIFEOS_BUILD_MODE}" = "dev" ]; then \
+        echo "[build] LIFEOS_BUILD_MODE=dev — installing dev sudoers whitelist and dropins"; \
+        install -D -m 440 -o root -g root \
+            /tmp/lifeos-dev-staging/sudoers-dev \
+            /etc/sudoers.d/lifeos-dev; \
+        /usr/sbin/visudo -c -f /etc/sudoers.d/lifeos-dev; \
+        install -D -m 644 -o root -g root \
+            /tmp/lifeos-dev-staging/10-dev-mode.conf \
+            /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf; \
+        mkdir -p /var/log/lifeos; \
+        echo "[build] dev mode artifacts installed"; \
+    elif [ "${LIFEOS_BUILD_MODE}" = "release" ]; then \
+        echo "[build] LIFEOS_BUILD_MODE=release — skipping dev artifacts"; \
+    else \
+        echo "FATAL: LIFEOS_BUILD_MODE must be 'release' or 'dev', got '${LIFEOS_BUILD_MODE}'"; \
+        exit 1; \
+    fi; \
+    rm -rf /tmp/lifeos-dev-staging
+
 # --- Verificación final ---
 # Wrapper reports WHICH check failed instead of a silent exit code.
 RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
+    if [ "${LIFEOS_BUILD_MODE:-release}" = "release" ]; then \
+        test ! -f /etc/sudoers.d/lifeos-dev || \
+            fail "dev sudoers leaked into release build"; \
+        test ! -f /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf || \
+            fail "dev dropin leaked into release build"; \
+        echo "[verify] release integrity OK — no dev affordances present"; \
+    else \
+        test -f /etc/sudoers.d/lifeos-dev || \
+            fail "dev sudoers missing from dev build"; \
+        test -f /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf || \
+            fail "dev dropin missing from dev build"; \
+        echo "[verify] dev integrity OK — sudo whitelist and dropin present"; \
+    fi; \
     test -x /usr/bin/mpv               || fail "/usr/bin/mpv"; \
     test -x /usr/bin/evince              || fail "/usr/bin/evince"; \
     test -x /usr/bin/keepassxc            || fail "/usr/bin/keepassxc"; \

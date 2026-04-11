@@ -1,0 +1,110 @@
+# LifeOS Developer Sudoers Policy
+# ═══════════════════════════════════════════════════════════════════════
+# ONLY installed when LIFEOS_BUILD_MODE=dev at image build time.
+# Release images do NOT contain this file — enforced by the final
+# verification block in image/Containerfile.
+#
+# This file grants passwordless execution of a narrow set of development
+# operations to the `lifeos` user. It is intended to let an AI assistant
+# (Claude Code) close the diagnose → fix → verify loop without human
+# intervention for every sudo call.
+#
+# REVOCATION (emergency):
+#     sudo rm /etc/sudoers.d/lifeos-dev
+#     sudo bootc switch --transport containers-storage localhost/lifeos:release
+#     sudo reboot
+#
+# AUDIT:
+#     sudo journalctl _COMM=sudo | grep lifeos
+#     sudo cat /var/log/lifeos/sudo-dev.log
+#
+# SCOPE — what is GRANTED:
+#   - systemctl lifecycle on LifeOS system services (start/stop/restart/reset-failed)
+#   - systemctl status read-only on any unit
+#   - install(1) into /etc/systemd/system/ from the lifeos repo checkout only
+#   - bootc switch to localhost/lifeos:{dev,release} only
+#   - bootc rollback and bootc status
+#   - journalctl read access for LifeOS services
+#
+# SCOPE — what is DENIED (intentionally, NEVER add these):
+#   - reboot / shutdown / halt
+#   - bootc upgrade --apply  (touches production deployment state)
+#   - bootc switch to any registry other than localhost containers-storage
+#   - dnf / rpm / rpm-ostree  (package installation)
+#   - Arbitrary file writes (cp, mv, tee, dd) to /etc, /usr, /boot
+#   - chmod / chown of system files
+#   - systemctl enable / disable / mask
+#   - journalctl --vacuum-* / --flush / --rotate
+#   - su / sudo to other users
+#   - mount / umount of anything
+#   - Any shell redirection via `sudo tee` or `sudo sh -c`
+# ═══════════════════════════════════════════════════════════════════════
+
+# Service lifecycle — start/stop/restart/reset-failed of known LifeOS units
+Cmnd_Alias LIFEOS_DEV_SVC_LIFECYCLE = \
+    /usr/bin/systemctl daemon-reload, \
+    /usr/bin/systemctl start llama-embeddings.service, \
+    /usr/bin/systemctl stop llama-embeddings.service, \
+    /usr/bin/systemctl restart llama-embeddings.service, \
+    /usr/bin/systemctl reset-failed llama-embeddings.service, \
+    /usr/bin/systemctl start llama-server.service, \
+    /usr/bin/systemctl stop llama-server.service, \
+    /usr/bin/systemctl restart llama-server.service, \
+    /usr/bin/systemctl reset-failed llama-server.service, \
+    /usr/bin/systemctl start nvidia-persistenced.service, \
+    /usr/bin/systemctl stop nvidia-persistenced.service, \
+    /usr/bin/systemctl restart nvidia-persistenced.service, \
+    /usr/bin/systemctl start whisper-stt.service, \
+    /usr/bin/systemctl stop whisper-stt.service, \
+    /usr/bin/systemctl restart whisper-stt.service, \
+    /usr/bin/systemctl reset-failed whisper-stt.service
+
+# Read-only status queries — any service (safe, no side effects)
+Cmnd_Alias LIFEOS_DEV_SVC_STATUS = \
+    /usr/bin/systemctl status *, \
+    /usr/bin/systemctl list-units --state=failed, \
+    /usr/bin/systemctl list-units --state=*, \
+    /usr/bin/systemctl is-active *, \
+    /usr/bin/systemctl is-failed *, \
+    /usr/bin/systemctl show *
+
+# File install — ONLY from the repo checkout, ONLY to /etc/systemd/system/
+# This is pinned to the absolute path of the repo so the AI cannot install
+# files from arbitrary locations.
+Cmnd_Alias LIFEOS_DEV_INSTALL = \
+    /usr/bin/install -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/system/*.service /etc/systemd/system/, \
+    /usr/bin/install -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/system/*.conf /etc/systemd/system/
+
+# bootc operations — ONLY local containers-storage, NO registry pulls,
+# NO upgrade --apply (that touches the production deployment state).
+Cmnd_Alias LIFEOS_DEV_BOOTC = \
+    /usr/bin/bootc switch --transport containers-storage localhost/lifeos\:dev, \
+    /usr/bin/bootc switch --transport containers-storage localhost/lifeos\:release, \
+    /usr/bin/bootc rollback, \
+    /usr/bin/bootc status
+
+# journalctl — read access for LifeOS services, no management flags
+Cmnd_Alias LIFEOS_DEV_JOURNAL = \
+    /usr/bin/journalctl -u llama-embeddings.service *, \
+    /usr/bin/journalctl -u llama-server.service *, \
+    /usr/bin/journalctl -u nvidia-persistenced.service *, \
+    /usr/bin/journalctl -u lifeosd.service *, \
+    /usr/bin/journalctl -u whisper-stt.service *, \
+    /usr/bin/journalctl -b --no-pager -n *, \
+    /usr/bin/journalctl -b -u * --no-pager
+
+# Grant to the lifeos user only, NOPASSWD for the above aliases.
+# Note: the user must exist on the target system; if the user is not
+# named "lifeos" this file will have no effect.
+lifeos ALL=(root) NOPASSWD: \
+    LIFEOS_DEV_SVC_LIFECYCLE, \
+    LIFEOS_DEV_SVC_STATUS, \
+    LIFEOS_DEV_INSTALL, \
+    LIFEOS_DEV_BOOTC, \
+    LIFEOS_DEV_JOURNAL
+
+# Audit — log every NOPASSWD invocation to the dedicated log file + journal.
+# log_output captures stdout/stderr of sudo-invoked commands for forensics.
+Defaults:lifeos log_output
+Defaults:lifeos !lecture
+Defaults:lifeos logfile=/var/log/lifeos/sudo-dev.log

@@ -3,7 +3,8 @@
 
 .PHONY: all build build-cli build-daemon test test-cli test-daemon test-integration \
         lint lint-cli lint-daemon fmt fmt-check audit audit-workspace audit-cli audit-daemon \
-        docker docker-build docker-lint docker-push clean install dev-setup help \
+        docker docker-build docker-build-release docker-build-dev \
+        docker-lint docker-push clean install dev-setup help \
         check-daemon-prereqs phase3-hardening phase45-lifecycle truth-alignment
 
 # =============================================================================
@@ -138,27 +139,86 @@ audit-daemon: audit-workspace
 # Docker/Container Targets
 # =============================================================================
 
-## Build OCI container image
+## Build OCI container image — default is release mode (matches CI)
 docker: docker-build docker-lint
 
-docker-build:
-	@echo "🐳 Building container image..."
+## Build release image (locked down, same as CI and ghcr.io)
+## Tagged localhost/lifeos:release
+docker-build: docker-build-release
+
+docker-build-release:
+	@echo "🐳 Building LifeOS RELEASE image (locked down, matches CI)"
 	@BUILD_DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
 	VCS_REF="$$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"; \
 	podman build \
+		--build-arg "LIFEOS_BUILD_MODE=release" \
 		--build-arg "BUILD_DATE=$$BUILD_DATE" \
 		--build-arg "VCS_REF=$$VCS_REF" \
-		-t lifeos:dev \
+		-t localhost/lifeos:release \
 		-f image/Containerfile \
 		.
+	@echo ""
+	@echo "✓ Release image built: localhost/lifeos:release"
+	@echo "  To test on this laptop (user-experience validation):"
+	@echo "    sudo bootc switch --transport containers-storage localhost/lifeos:release"
+	@echo "    sudo reboot"
+
+## Build DEVELOPER image (includes AI sudo whitelist — local laptop ONLY)
+## Tagged localhost/lifeos:dev — MUST NEVER be pushed to any registry.
+## See docs/operations/dev-mode.md for the full security contract.
+docker-build-dev:
+	@echo ""
+	@echo "⚠️  ╔══════════════════════════════════════════════════════════════╗"
+	@echo "⚠️  ║                 BUILDING LifeOS DEV IMAGE                    ║"
+	@echo "⚠️  ║                                                              ║"
+	@echo "⚠️  ║  This image contains /etc/sudoers.d/lifeos-dev which grants  ║"
+	@echo "⚠️  ║  NOPASSWD sudo to the lifeos user on a whitelist of commands ║"
+	@echo "⚠️  ║  so the AI assistant can operate autonomously during         ║"
+	@echo "⚠️  ║  development.                                                ║"
+	@echo "⚠️  ║                                                              ║"
+	@echo "⚠️  ║  DO NOT PUSH this image to any registry.                     ║"
+	@echo "⚠️  ║  DO NOT SHARE this image.                                    ║"
+	@echo "⚠️  ║  DO NOT RUN this image on a machine that is not your         ║"
+	@echo "⚠️  ║  personal development laptop.                                ║"
+	@echo "⚠️  ║                                                              ║"
+	@echo "⚠️  ║  Full design: docs/operations/dev-mode.md                    ║"
+	@echo "⚠️  ╚══════════════════════════════════════════════════════════════╝"
+	@echo ""
+	@BUILD_DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+	VCS_REF="$$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)-dev"; \
+	podman build \
+		--build-arg "LIFEOS_BUILD_MODE=dev" \
+		--build-arg "BUILD_DATE=$$BUILD_DATE" \
+		--build-arg "VCS_REF=$$VCS_REF" \
+		-t localhost/lifeos:dev \
+		-f image/Containerfile \
+		.
+	@echo ""
+	@echo "✓ Dev image built: localhost/lifeos:dev"
+	@echo ""
+	@echo "  To activate dev mode on this laptop:"
+	@echo "    sudo bootc switch --transport containers-storage localhost/lifeos:dev"
+	@echo "    sudo reboot"
+	@echo ""
+	@echo "  After reboot, verify dev mode is active:"
+	@echo "    test -f /etc/sudoers.d/lifeos-dev && echo 'DEV MODE ACTIVE'"
+	@echo "    sudo -l"
+	@echo ""
+	@echo "  To return to release mode later:"
+	@echo "    sudo bootc switch --transport containers-storage localhost/lifeos:release"
+	@echo "    sudo reboot"
+	@echo ""
+	@echo "  To revoke dev powers without rebooting:"
+	@echo "    sudo rm /etc/sudoers.d/lifeos-dev"
 
 docker-lint:
 	@echo "🔍 Linting container image..."
-	podman run --rm lifeos:dev bootc container lint || true
+	podman run --rm localhost/lifeos:release bootc container lint || true
 
 docker-push:
 	@echo "📤 Pushing container image..."
-	podman push lifeos:dev ghcr.io/hectormr/lifeos:latest
+	@echo "NOTE: only release-mode images are pushed. Dev images NEVER leave this laptop."
+	podman push localhost/lifeos:release ghcr.io/hectormr206/lifeos:latest
 
 # =============================================================================
 # Development Targets
