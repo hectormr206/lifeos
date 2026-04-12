@@ -97,6 +97,7 @@ mod str_utils;
 mod supervisor;
 mod system;
 mod system_tuner;
+mod thermal_manager;
 mod task_queue;
 mod telegram_bridge;
 mod telegram_tools;
@@ -795,6 +796,11 @@ async fn main() -> anyhow::Result<()> {
         config_store: Arc::new(config_store::ConfigStore::new(&data_dir)),
         circuit_breaker: Arc::new(circuit_breaker::CircuitBreaker::new()),
     });
+
+    // Apply gentle boot default (95% on laptops, 100% on desktops).
+    // The reactive thermal manager loop below will adjust dynamically
+    // based on actual CPU temperature once it starts.
+    thermal_manager::apply_boot_default();
 
     // Initialize config store (creates checkpoint directories).
     if let Err(e) = state.config_store.init().await {
@@ -1881,6 +1887,19 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Start reactive thermal manager (reads actual CPU temp, adjusts cap dynamically)
+    let thermal_mgr = Arc::new(thermal_manager::ThermalManager::new());
+    let thermal_handle = {
+        let tm = thermal_mgr.clone();
+        tokio::spawn(async move { tm.run_loop().await })
+    };
+
+    // Attach thermal manager to Game Guard so it can switch to Gaming mode
+    if let Some(ref gg) = state.game_guard {
+        let g = gg.read().await;
+        g.set_thermal_manager(thermal_mgr.clone()).await;
+    }
+
     // Start GPU Game Guard loop (auto-offload LLM to RAM when gaming)
     let game_guard_handle = if let Some(ref gg) = state.game_guard {
         let game_guard_clone = gg.clone();
@@ -1890,6 +1909,26 @@ async fn main() -> anyhow::Result<()> {
         }))
     } else {
         None
+    };
+
+    // ── Shared cross-bridge instances ──────────────────────────────────
+    //
+    // ConversationHistory, UserModel, and CronStore must be shared across
+    // ALL bridges (Telegram, SimpleX, Matrix, Email) so that Axi has the
+    // same context regardless of which channel the user writes from.
+    // Previously each bridge created its own instance — this caused
+    // conversation context, user preferences, and cron jobs to be siloed
+    // per channel and invisible to other channels.
+    #[cfg(feature = "telegram")]
+    let shared_history = Arc::new(telegram_tools::ConversationHistory::new());
+    #[cfg(feature = "telegram")]
+    let shared_cron_store = Arc::new(telegram_tools::CronStore::new());
+    #[cfg(feature = "telegram")]
+    let shared_user_model = {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+        let model = user_model::UserModel::load_from_dir(&data_dir).await;
+        Arc::new(RwLock::new(model))
     };
 
     // Start Telegram bridge if configured
@@ -1902,16 +1941,12 @@ async fn main() -> anyhow::Result<()> {
             let notify_rx = state.supervisor.subscribe();
             let ss = Some(state.session_store.clone());
             let eb = Some(state.event_bus.clone());
-            // Load user model for personalization (Fase AQ)
-            let um = {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
-                let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
-                let model = user_model::UserModel::load_from_dir(&data_dir).await;
-                Arc::new(RwLock::new(model))
-            };
+            let um = shared_user_model.clone();
             let ma = meeting_archive.clone();
             let mast = shared_meeting_assistant.clone();
             let cal = state.calendar.clone();
+            let hist = shared_history.clone();
+            let cron = shared_cron_store.clone();
             Some(tokio::spawn(async move {
                 telegram_bridge::run_telegram_bot(
                     tg_config,
@@ -1925,6 +1960,8 @@ async fn main() -> anyhow::Result<()> {
                     Some(ma),
                     Some(mast),
                     Some(cal),
+                    hist,
+                    cron,
                 )
                 .await;
             }))
@@ -1972,17 +2009,14 @@ async fn main() -> anyhow::Result<()> {
             let router = state.llm_router.clone();
             let memory = Some(state.memory_plane_manager.clone());
             let ss = Some(state.session_store.clone());
-            let um = {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
-                let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
-                let model = user_model::UserModel::load_from_dir(&data_dir).await;
-                Some(Arc::new(RwLock::new(model)))
-            };
+            let um = Some(shared_user_model.clone());
             let ma = Some(meeting_archive.clone());
             let mast = Some(shared_meeting_assistant.clone());
             let cal = Some(state.calendar.clone());
+            let hist = shared_history.clone();
+            let cron = shared_cron_store.clone();
             Some(tokio::spawn(async move {
-                simplex_bridge::run_simplex_bridge(tq, router, memory, ss, um, ma, mast, cal).await;
+                simplex_bridge::run_simplex_bridge(tq, router, memory, ss, um, ma, mast, cal, hist, cron).await;
             }))
         } else {
             info!("SimpleX bridge: CLI WebSocket not reachable on port 5226, skipping");
@@ -2071,6 +2105,7 @@ async fn main() -> anyhow::Result<()> {
     sensory_handle.abort();
     state.supervisor.stop();
     supervisor_handle.abort();
+    thermal_handle.abort();
     if let Some(h) = game_guard_handle {
         h.abort();
     }

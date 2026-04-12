@@ -1,4 +1,10 @@
-# Allow lifeos user to control CPU performance scaling for Game Guard thermal management.
-# This enables the daemon to switch between Normal (90%), Gaming (95%), and Full (100%)
-# profiles without requiring sudo or NoNewPrivileges exceptions.
+# Allow lifeos user to control CPU performance scaling for thermal management.
+# This enables the daemon's reactive thermal manager to adjust caps dynamically
+# without requiring sudo or NoNewPrivileges exceptions.
+
+# Intel pstate — single global knob
 SUBSYSTEM=="module", KERNEL=="intel_pstate", RUN+="/bin/chmod 0666 /sys/devices/system/cpu/intel_pstate/max_perf_pct /sys/devices/system/cpu/intel_pstate/no_turbo"
+
+# AMD pstate + generic cpufreq — per-policy scaling_max_freq
+# Applied when any cpufreq policy appears (covers AMD pstate, acpi-cpufreq, etc.)
+SUBSYSTEM=="cpu", ACTION=="add", RUN+="/bin/bash -c 'for f in /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq; do [ -f \"$f\" ] && chmod 0666 \"$f\"; done'"
