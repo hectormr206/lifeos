@@ -187,6 +187,7 @@ docker-build-dev:
 	@BUILD_DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
 	VCS_REF="$$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)-dev"; \
 	podman build \
+		--network=host \
 		--build-arg "LIFEOS_BUILD_MODE=dev" \
 		--build-arg "BUILD_DATE=$$BUILD_DATE" \
 		--build-arg "VCS_REF=$$VCS_REF" \
