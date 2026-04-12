@@ -861,7 +861,7 @@ mod inner {
         // Emit telegram_message event for dashboard feed
         if let Some(ref bus) = ctx.event_bus {
             let _ = bus.send(crate::events::DaemonEvent::TelegramMessage {
-                text: crate::str_utils::truncate_bytes_safe(text, 200).to_string(),
+                text: crate::str_utils::truncate_bytes_safe(&text, 200).to_string(),
                 from: format!("{}", chat_id.0),
             });
         }
@@ -1137,7 +1137,7 @@ mod inner {
                 }
 
                 let task_id = uuid::Uuid::new_v4().to_string();
-                let desc = crate::str_utils::truncate_bytes_safe(text, 80).to_string();
+                let desc = crate::str_utils::truncate_bytes_safe(&text, 80).to_string();
                 ctx.worker_pool
                     .register(task_id.clone(), chat_id.0, desc)
                     .await;

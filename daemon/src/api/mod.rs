@@ -1937,8 +1937,32 @@ async fn get_simplex_invite(
     // we don't need QR redundancy for tamper-detection, and lower ECL
     // means smaller/denser QRs that fit more data — the full simplex:/
     // URI is ~300-400 bytes, near the upper bound of Version-10 QR.
+    // qrcodegen 1.8.0 doesn't ship to_svg_string on QrCode. Render
+    // manually from the module grid — each cell is a 1×1 rect, padded
+    // by `border` white modules on each side for scanner margin.
     let qr_svg = match qrcodegen::QrCode::encode_text(&link, qrcodegen::QrCodeEcc::Low) {
-        Ok(qr) => qr.to_svg_string(2),
+        Ok(qr) => {
+            let border = 2i32;
+            let s = qr.size();
+            let full = s + border * 2;
+            let mut svg = format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {full} {full}\">\
+                 <rect width=\"{full}\" height=\"{full}\" fill=\"#fff\"/>"
+            );
+            for y in 0..s {
+                for x in 0..s {
+                    if qr.get_module(x, y) {
+                        svg.push_str(&format!(
+                            "<rect x=\"{}\" y=\"{}\" width=\"1\" height=\"1\" fill=\"#000\"/>",
+                            x + border,
+                            y + border
+                        ));
+                    }
+                }
+            }
+            svg.push_str("</svg>");
+            svg
+        }
         Err(e) => {
             log::warn!("[simplex] Failed to encode QR: {}", e);
             String::new()
