@@ -19,12 +19,6 @@ function apiHeaders() {
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
-const orb = $('#axi-orb');
-const stateLabel = $('#axi-state-label');
-const stateReason = $('#axi-reason');
-const feedbackBar = $('#feedback-bar');
-const feedbackStage = $('#feedback-stage');
-const feedbackTps = $('#feedback-tps');
 const connectionBadge = $('#connection-badge');
 const activityFeed = $('#activity-feed');
 const feedCountEl = $('#feed-count');
@@ -59,12 +53,6 @@ const dashboardState = {
   bootMode,
 };
 
-// --- Aura map ---
-const AURA_MAP = {
-  idle: 'aura-green', listening: 'aura-cyan', thinking: 'aura-yellow',
-  speaking: 'aura-blue', watching: 'aura-teal', error: 'aura-red',
-  offline: 'aura-gray', night: 'aura-indigo',
-};
 const STATE_LABELS = {
   idle: 'En espera', listening: 'Escuchando...', thinking: 'Pensando...',
   speaking: 'Hablando...', watching: 'Observando...', error: 'Error',
@@ -287,9 +275,6 @@ function updateOrb(state, aura, reason) {
   const key = (state || 'offline').toLowerCase();
   dashboardState.axiState = key;
   dashboardState.axiReason = reason || '';
-  orb.className = 'orb ' + (AURA_MAP[key] || 'aura-gray');
-  stateLabel.textContent = STATE_LABELS[key] || key;
-  if (reason !== undefined) stateReason.textContent = reason || '';
   renderHero();
 }
 
@@ -534,14 +519,6 @@ function handleEvent(event) {
     case 'feedback_update':
       dashboardState.lastSignal = `Feedback ${event.data.stage || 'actualizado'}`;
       dashboardState.lastSignalAt = new Date().toISOString();
-      if (event.data.stage) {
-        feedbackBar.classList.remove('hidden');
-        feedbackStage.textContent = event.data.stage;
-        feedbackTps.textContent = event.data.tokens_per_second
-          ? `${event.data.tokens_per_second.toFixed(1)} tok/s` : '';
-      } else {
-        feedbackBar.classList.add('hidden');
-      }
       renderHero();
       break;
     case 'window_changed':
@@ -1683,6 +1660,10 @@ async function refreshKeyStatus() {
     const data = await res.json();
     const keys = data.keys || {};
     const map = {
+      'ANTHROPIC_API_KEY': 'anthropic',
+      'OPENAI_API_KEY': 'openai',
+      'GEMINI_API_KEY': 'gemini',
+      'ZAI_API_KEY': 'zai',
       'CEREBRAS_API_KEY': 'cerebras',
       'GROQ_API_KEY': 'groq',
       'OPENROUTER_API_KEY': 'openrouter',
@@ -1692,10 +1673,16 @@ async function refreshKeyStatus() {
     for (const [env, name] of Object.entries(map)) {
       const el = $(`#key-status-${name}`);
       if (!el) continue;
-      const configured = !!keys[env];
+      const info = keys[env] || {};
+      const configured = !!info.configured;
       el.textContent = configured ? '\u2705' : '\u274C';
       el.classList.toggle('ok', configured);
       el.classList.toggle('missing', !configured);
+      // Show masked hint as placeholder so user knows the saved value
+      const input = $(`#key-${name}`);
+      if (input && configured && info.hint) {
+        input.placeholder = info.hint;
+      }
     }
   } catch (e) { /* silent */ }
 }
@@ -3136,7 +3123,7 @@ function initTabs() {
   nav.className = 'dashboard-tabs';
 
   const tabs = [
-    { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['safe-mode-banner', 'hero-panel', 'orb-section', 'controls-section', 'status-section', 'chat-section'] },
+    { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['safe-mode-banner', 'hero-panel', 'controls-section', 'status-section', 'chat-section'] },
     { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'workers-section', 'metrics-section', 'sched-section', 'meetings-section', 'conversations-section', 'feed-section'] },
     { id: 'tab-memory', icon: '&#128450;', label: 'Memoria', keywords: ['memory-section'] },
     { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'doctor-section', 'health-section', 'battery-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'services-section', 'settings-section'] }

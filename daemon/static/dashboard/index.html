@@ -76,18 +76,6 @@
         <p id="boot-sequence" class="boot-sequence hidden" aria-live="polite"></p>
       </div>
       <div class="hero-core">
-        <div class="orb-section hero-orb-section">
-          <div id="axi-orb" class="orb aura-gray">
-            <span class="orb-inner">Axi</span>
-          </div>
-          <p id="axi-state-label" class="state-label">Offline</p>
-          <p id="axi-reason" class="state-reason"></p>
-          <div id="feedback-bar" class="feedback-bar hidden">
-            <span id="feedback-stage"></span>
-            <span id="feedback-tps"></span>
-          </div>
-        </div>
-
         <div class="hero-telemetry">
           <div class="telemetry-row">
             <span>Audio</span>
@@ -383,6 +371,26 @@
       <div class="providers-config">
         <h3>Configurar API Keys</h3>
         <div class="provider-key-form">
+          <div class="key-row">
+            <label>Anthropic</label>
+            <input type="password" id="key-anthropic" placeholder="sk-ant-..." data-env="ANTHROPIC_API_KEY">
+            <span class="key-status" id="key-status-anthropic">?</span>
+          </div>
+          <div class="key-row">
+            <label>OpenAI</label>
+            <input type="password" id="key-openai" placeholder="sk-..." data-env="OPENAI_API_KEY">
+            <span class="key-status" id="key-status-openai">?</span>
+          </div>
+          <div class="key-row">
+            <label>Google (Gemini)</label>
+            <input type="password" id="key-gemini" placeholder="AIza..." data-env="GEMINI_API_KEY">
+            <span class="key-status" id="key-status-gemini">?</span>
+          </div>
+          <div class="key-row">
+            <label>ZAI</label>
+            <input type="password" id="key-zai" placeholder="zai-..." data-env="ZAI_API_KEY">
+            <span class="key-status" id="key-status-zai">?</span>
+          </div>
           <div class="key-row">
             <label>Cerebras</label>
             <input type="password" id="key-cerebras" placeholder="csk-..." data-env="CEREBRAS_API_KEY">

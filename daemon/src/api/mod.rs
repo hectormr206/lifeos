@@ -183,6 +183,16 @@ pub struct ApiState {
     pub wake_word_detector: Option<Arc<crate::wake_word::WakeWordDetector>>,
     pub skill_registry: SkillRegistry,
     pub user_model: Arc<RwLock<UserModel>>,
+    // Agentic chat infrastructure (shared with Telegram/SimpleX/Matrix bridges)
+    #[cfg(feature = "telegram")]
+    pub conversation_history: Arc<crate::telegram_tools::ConversationHistory>,
+    #[cfg(feature = "telegram")]
+    pub cron_store: Arc<crate::telegram_tools::CronStore>,
+    #[cfg(feature = "telegram")]
+    pub sdd_store: Arc<crate::telegram_tools::SddStore>,
+    pub session_store: Arc<crate::session_store::SessionStore>,
+    #[cfg(feature = "telegram")]
+    pub meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -10936,9 +10946,13 @@ async fn post_timezone(
 
 // ==================== API KEYS MANAGEMENT ====================
 
-/// Get the status of configured API keys (configured/not configured, never the actual values).
+/// Get the status of configured API keys with masked hints (never the full values).
 async fn get_api_keys_status() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let keys = [
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "ZAI_API_KEY",
         "CEREBRAS_API_KEY",
         "GROQ_API_KEY",
         "OPENROUTER_API_KEY",
@@ -10954,12 +10968,28 @@ async fn get_api_keys_status() -> Result<Json<serde_json::Value>, (StatusCode, J
     let status: serde_json::Map<String, serde_json::Value> = keys
         .iter()
         .map(|&k| {
-            let configured = std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false);
-            (k.to_string(), serde_json::json!(configured))
+            let val = std::env::var(k).ok().filter(|v| !v.is_empty());
+            let configured = val.is_some();
+            let hint = val.map(|v| mask_api_key(&v)).unwrap_or_default();
+            (k.to_string(), serde_json::json!({ "configured": configured, "hint": hint }))
         })
         .collect();
 
     Ok(Json(serde_json::json!({ "keys": status })))
+}
+
+/// Mask an API key showing only a prefix and suffix for user confirmation.
+/// Example: "csk-abc123xyz789" → "csk-ab...789"
+fn mask_api_key(value: &str) -> String {
+    let len = value.len();
+    if len <= 6 {
+        return "*".repeat(len);
+    }
+    let prefix_len = if len > 20 { 6 } else { 4 };
+    let suffix_len = 4;
+    let prefix = &value[..prefix_len];
+    let suffix = &value[len - suffix_len..];
+    format!("{}...{}", prefix, suffix)
 }
 
 /// Save API keys to the user env file and reload them into the process.
@@ -10967,6 +10997,10 @@ async fn post_api_keys(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let allowed_keys = [
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "ZAI_API_KEY",
         "CEREBRAS_API_KEY",
         "GROQ_API_KEY",
         "OPENROUTER_API_KEY",
@@ -11250,12 +11284,11 @@ async fn post_llm_chat(
     State(state): State<ApiState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    use crate::llm_router::{ChatMessage, RouterRequest, TaskComplexity};
-    use crate::privacy_filter::SensitivityLevel;
-
-    let messages: Vec<ChatMessage> = body
+    // Extract user message from the messages array (last user message)
+    let messages = body
         .get("messages")
-        .and_then(|m| serde_json::from_value(m.clone()).ok())
+        .and_then(|m| m.as_array())
+        .cloned()
         .unwrap_or_default();
 
     if messages.is_empty() {
@@ -11269,50 +11302,98 @@ async fn post_llm_chat(
         ));
     }
 
-    let complexity = body
-        .get("complexity")
-        .and_then(|c| serde_json::from_value::<TaskComplexity>(c.clone()).ok());
+    // Get the last user message text
+    let user_text = messages
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+        .and_then(|m| m.get("content").and_then(|c| c.as_str()))
+        .unwrap_or("")
+        .to_string();
 
-    let sensitivity = body
-        .get("sensitivity")
-        .and_then(|s| serde_json::from_value::<SensitivityLevel>(s.clone()).ok());
-
-    let preferred_provider = body
-        .get("provider")
-        .and_then(|p| p.as_str())
-        .map(String::from);
-
-    let max_tokens = body
-        .get("max_tokens")
-        .and_then(|t| t.as_u64())
-        .and_then(|t| u32::try_from(t).ok());
-
-    let request = RouterRequest {
-        messages,
-        complexity,
-        sensitivity,
-        preferred_provider,
-        max_tokens,
-        task_type: None,
-    };
-
-    let router = state.llm_router.read().await;
-    match router.chat(&request).await {
-        Ok(response) => Ok(Json(serde_json::json!({
-            "text": response.text,
-            "provider": response.provider,
-            "model": response.model,
-            "tokens_used": response.tokens_used,
-            "latency_ms": response.latency_ms,
-        }))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
+    if user_text.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
             Json(ApiError {
-                error: "llm_routing_failed".into(),
-                message: format!("LLM routing failed: {}", e),
-                code: 500,
+                error: "bad_request".into(),
+                message: "No user message content found".into(),
+                code: 400,
             }),
-        )),
+        ));
+    }
+
+    // Use the full agentic chat loop (same as Telegram/SimpleX)
+    #[cfg(feature = "telegram")]
+    {
+        use crate::telegram_tools::{self, RateLimiter, SddStore, ToolContext};
+
+        /// Fixed chat_id for the dashboard channel (conversation history key).
+        const DASHBOARD_CHAT_ID: i64 = 0x4441_5348_0000_0001; // "DASH0001"
+
+        let tool_ctx = ToolContext {
+            router: state.llm_router.clone(),
+            task_queue: state.task_queue.clone(),
+            memory: Some(state.memory_plane_manager.clone()),
+            history: state.conversation_history.clone(),
+            cron_store: state.cron_store.clone(),
+            sdd_store: state.sdd_store.clone(),
+            session_store: Some(state.session_store.clone()),
+            user_model: Some(state.user_model.clone()),
+            meeting_archive: Some(state.meeting_archive.clone()),
+            meeting_assistant: state.meeting_assistant.clone(),
+            calendar: Some(state.calendar.clone()),
+            rate_limiter: RateLimiter::new(),
+        };
+
+        let (reply, _screenshot) =
+            telegram_tools::agentic_chat(&tool_ctx, DASHBOARD_CHAT_ID, &user_text, None).await;
+
+        Ok(Json(serde_json::json!({
+            "text": reply,
+            "provider": "axi",
+            "model": "agentic",
+            "tokens_used": 0,
+            "latency_ms": 0,
+        })))
+    }
+
+    // Fallback when telegram feature is not enabled — basic router call
+    #[cfg(not(feature = "telegram"))]
+    {
+        use crate::llm_router::{ChatMessage, RouterRequest};
+
+        let chat_messages: Vec<ChatMessage> = serde_json::from_value(
+            serde_json::Value::Array(messages),
+        )
+        .unwrap_or_default();
+
+        let request = RouterRequest {
+            messages: chat_messages,
+            complexity: None,
+            sensitivity: None,
+            preferred_provider: None,
+            max_tokens: None,
+            task_type: None,
+        };
+
+        let router = state.llm_router.read().await;
+        match router.chat(&request).await {
+            Ok(response) => Ok(Json(serde_json::json!({
+                "text": response.text,
+                "provider": response.provider,
+                "model": response.model,
+                "tokens_used": response.tokens_used,
+                "latency_ms": response.latency_ms,
+            }))),
+            Err(e) => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: "llm_routing_failed".into(),
+                    message: format!("LLM routing failed: {}", e),
+                    code: 500,
+                }),
+            )),
+        }
     }
 }
 
