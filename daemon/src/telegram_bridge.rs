@@ -856,12 +856,12 @@ mod inner {
             return Ok(());
         }
 
-        info!("Telegram [{}]: {}", chat_id, &text[..text.len().min(100)]);
+        info!("Telegram [{}]: {}", chat_id, crate::str_utils::truncate_bytes_safe(&text, 100));
 
         // Emit telegram_message event for dashboard feed
         if let Some(ref bus) = ctx.event_bus {
             let _ = bus.send(crate::events::DaemonEvent::TelegramMessage {
-                text: text[..text.len().min(200)].to_string(),
+                text: crate::str_utils::truncate_bytes_safe(text, 200).to_string(),
                 from: format!("{}", chat_id.0),
             });
         }
@@ -939,7 +939,7 @@ mod inner {
                     if ctx.worker_pool.cancel(&tid).await {
                         bot.send_message(
                             chat_id,
-                            format!("Tarea cancelada: {}", &desc[..desc.len().min(60)]),
+                            format!("Tarea cancelada: {}", crate::str_utils::truncate_bytes_safe(&desc, 60)),
                         )
                         .await?;
                     } else {
@@ -990,7 +990,7 @@ mod inner {
             }
 
             let task_id = uuid::Uuid::new_v4().to_string();
-            let desc = format!("trust: {}", &task_text[..task_text.len().min(60)]);
+            let desc = format!("trust: {}", crate::str_utils::truncate_bytes_safe(&task_text, 60));
             ctx.worker_pool
                 .register(task_id.clone(), chat_id.0, desc)
                 .await;
@@ -1137,7 +1137,7 @@ mod inner {
                 }
 
                 let task_id = uuid::Uuid::new_v4().to_string();
-                let desc = text[..text.len().min(80)].to_string();
+                let desc = crate::str_utils::truncate_bytes_safe(text, 80).to_string();
                 ctx.worker_pool
                     .register(task_id.clone(), chat_id.0, desc)
                     .await;
@@ -1347,14 +1347,14 @@ mod inner {
 
             info!(
                 "Telegram voice transcribed: {}",
-                &transcription[..transcription.len().min(80)]
+                crate::str_utils::truncate_bytes_safe(&transcription, 80)
             );
             worker_bot
                 .send_message(
                     chat_id,
                     format!(
                         "(tu dijiste: {})\n\nProcesando...",
-                        &transcription[..transcription.len().min(200)]
+                        crate::str_utils::truncate_bytes_safe(&transcription, 200)
                     ),
                 )
                 .await
@@ -2526,7 +2526,9 @@ mod inner {
             if let Some(mut stdin) = child.stdin.take() {
                 use tokio::io::AsyncWriteExt;
                 stdin
-                    .write_all(clean_text[..clean_text.len().min(500)].as_bytes())
+                    .write_all(
+                        crate::str_utils::truncate_bytes_safe(&clean_text, 500).as_bytes(),
+                    )
                     .await
                     .ok();
                 drop(stdin);
@@ -2587,7 +2589,7 @@ mod inner {
                 "es",
                 "-w",
                 &wav_path.to_string_lossy(),
-                &clean_text[..clean_text.len().min(500)],
+                crate::str_utils::truncate_bytes_safe(&clean_text, 500),
             ])
             .output()
             .await;

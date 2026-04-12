@@ -417,7 +417,7 @@ impl SessionStore {
             "Resume esta conversacion en maximo 500 palabras, conservando: \
              decisiones tomadas, datos importantes, contexto del usuario, \
              y cualquier compromiso o tarea pendiente:\n\n{}",
-            &old_text[..old_text.len().min(8000)]
+            crate::str_utils::truncate_bytes_safe(&old_text, 8000)
         );
 
         let request = crate::llm_router::RouterRequest {

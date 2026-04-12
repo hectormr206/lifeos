@@ -10422,7 +10422,10 @@ async fn get_calendar_reminders(
 fn meeting_to_summary_json(m: &crate::meeting_archive::MeetingRecord) -> serde_json::Value {
     // Truncate transcript for list views to keep payloads light.
     let transcript_preview = if m.transcript.len() > 400 {
-        format!("{}…", &m.transcript[..400])
+        format!(
+            "{}…",
+            crate::str_utils::truncate_bytes_safe(&m.transcript, 400)
+        )
     } else {
         m.transcript.clone()
     };

@@ -330,7 +330,7 @@ mod inner {
                                 log::debug!(
                                     "[simplex_bridge] Unparseable event: {} — {}",
                                     e,
-                                    &text[..text.len().min(200)]
+                                    crate::str_utils::truncate_bytes_safe(&text, 200)
                                 );
                                 continue;
                             }

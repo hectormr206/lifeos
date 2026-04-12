@@ -286,7 +286,7 @@ impl MeetingAssistant {
                             let content = if let Some(ref s) = summary {
                                 format!(
                                     "## Transcripcion\n\n{}\n\n## Resumen\n\n{}",
-                                    &diarized[..diarized.len().min(4000)],
+                                    crate::str_utils::truncate_bytes_safe(&diarized, 4000),
                                     s
                                 )
                             } else {
@@ -857,7 +857,7 @@ impl MeetingAssistant {
             (quien, que, cuando)\n\n\
             ## Preguntas Sin Resolver\n\
             (lista, si las hay)",
-            &transcript[..transcript.len().min(6000)]
+            crate::str_utils::truncate_bytes_safe(&transcript, 6000)
         );
 
         let request = crate::llm_router::RouterRequest {
@@ -1057,7 +1057,7 @@ impl MeetingAssistant {
                         let content = if let Some(ref s) = summary {
                             format!(
                                 "## Transcripcion\n\n{}\n\n## Resumen\n\n{}",
-                                &diarized[..diarized.len().min(4000)],
+                                crate::str_utils::truncate_bytes_safe(&diarized, 4000),
                                 s
                             )
                         } else {
@@ -1450,7 +1450,11 @@ impl MeetingAssistant {
 
         let summary_block = match summary {
             Some(s) if !s.is_empty() => {
-                let preview = if s.len() > 500 { &s[..500] } else { s };
+                let preview = if s.len() > 500 {
+                    crate::str_utils::truncate_bytes_safe(s, 500)
+                } else {
+                    s
+                };
                 format!("\nResumen:\n{}\n", preview)
             }
             _ => "\nResumen: No disponible\n".to_string(),
@@ -1870,7 +1874,7 @@ async fn detect_browser_meeting_by_title() -> Option<String> {
                 info!(
                     "[meeting] Browser meeting detected: {} (title: {})",
                     app_name,
-                    &title[..title.len().min(60)]
+                    crate::str_utils::truncate_bytes_safe(&title, 60)
                 );
                 return Some(app_name.to_string());
             }

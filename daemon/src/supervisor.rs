@@ -604,7 +604,7 @@ impl Supervisor {
         if Self::objective_is_dangerous(&task.objective) {
             let msg = format!(
                 "BLOCKED: '{}' contains a dangerous command pattern. Execute manually if intended.",
-                &task.objective[..task.objective.len().min(100)]
+                crate::str_utils::truncate_bytes_safe(&task.objective, 100)
             );
             warn!("{}", msg);
             // Cancel permanently — do NOT use mark_failed (which retries)
@@ -738,7 +738,7 @@ impl Supervisor {
                                         objective: format!(
                                             "{}\n\nDiff:\n{}",
                                             task.objective,
-                                            &diff[..diff.len().min(1500)]
+                                            crate::str_utils::truncate_bytes_safe(&diff, 1500)
                                         ),
                                         result: commit_msg,
                                         steps_total,
@@ -754,7 +754,7 @@ impl Supervisor {
                                     branch,
                                     &format!(
                                         "feat: {}",
-                                        &task.objective[..task.objective.len().min(60)]
+                                        crate::str_utils::truncate_bytes_safe(&task.objective, 60)
                                     ),
                                     &format!(
                                         "Autonomously implemented by Axi supervisor.\n\n\
@@ -913,7 +913,7 @@ impl Supervisor {
             if Self::objective_is_dangerous(&objective) {
                 let msg = format!(
                     "BLOCKED: '{}' contains a dangerous command pattern.",
-                    &objective[..objective.len().min(100)]
+                    crate::str_utils::truncate_bytes_safe(&objective, 100)
                 );
                 warn!("{}", msg);
                 let _ = queue.cancel(&task_id);
@@ -1356,7 +1356,7 @@ impl Supervisor {
              Tarea: {}\n\
              Resultado:\n{}",
             objective,
-            &raw_result[..raw_result.len().min(3000)]
+            crate::str_utils::truncate_bytes_safe(&raw_result, 3000)
         );
 
         let request = RouterRequest {
@@ -1387,7 +1387,7 @@ impl Supervisor {
             "Tarea: {}\nEstado: {}\nDetalle: {}\nMeta: {}\nFecha: {}",
             objective,
             status,
-            &detail[..detail.len().min(2000)],
+            crate::str_utils::truncate_bytes_safe(&detail, 2000),
             meta,
             chrono::Local::now().to_rfc3339(),
         );
@@ -1417,7 +1417,7 @@ impl Supervisor {
             debug!(
                 "Memory writeback: {} — {}",
                 status,
-                &objective[..objective.len().min(60)]
+                crate::str_utils::truncate_bytes_safe(&objective, 60)
             );
         }
     }
@@ -1658,7 +1658,7 @@ impl Supervisor {
             Ok(format!(
                 "Files containing '{}':\n{}",
                 query,
-                &stdout[..stdout.len().min(3000)]
+                crate::str_utils::truncate_bytes_safe(&stdout, 3000)
             ))
         }
     }
@@ -1816,7 +1816,10 @@ impl Supervisor {
                     Ok(if stdout.is_empty() {
                         "(sandbox command completed with no output)".into()
                     } else if stdout.len() > 4000 {
-                        format!("{}...\n[truncated]", &stdout[..4000])
+                        format!(
+                            "{}...\n[truncated]",
+                            crate::str_utils::truncate_bytes_safe(&stdout, 4000)
+                        )
                     } else {
                         stdout.to_string()
                     })
@@ -1858,7 +1861,7 @@ impl Supervisor {
                     context.push_str(&format!(
                         "- [{}] {}\n",
                         r.entry.kind,
-                        &r.entry.content[..r.entry.content.len().min(200)]
+                        crate::str_utils::truncate_bytes_safe(&r.entry.content, 200)
                     ));
                 }
                 context
@@ -2070,7 +2073,7 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::WriteFile { path, .. } => format!("write_file: {}", path),
             StepAction::FlatpakInstall { app_id } => format!("flatpak_install: {}", app_id),
             StepAction::TypeText { text } => {
-                format!("type_text: {}...", &text[..text.len().min(40)])
+                format!("type_text: {}...", crate::str_utils::truncate_bytes_safe(&text, 40))
             }
             StepAction::SendKeys { combo } => format!("send_keys: {}", combo),
             StepAction::BrowserClick { url, selector } => {
@@ -2165,7 +2168,7 @@ Always end with a "respond" step summarizing what was done."#,
                 if content.len() > 8000 {
                     Ok(format!(
                         "{}...\n[truncated, {} bytes total]",
-                        &content[..8000],
+                        crate::str_utils::truncate_bytes_safe(&content, 8000),
                         content.len()
                     ))
                 } else {
@@ -2206,7 +2209,7 @@ Always end with a "respond" step summarizing what was done."#,
                                 .join("\n");
                             result_msg.push_str(&format!(
                                 "\n[cargo check: FAILED]\n{}",
-                                &errors[..errors.len().min(500)]
+                                crate::str_utils::truncate_bytes_safe(&errors, 500)
                             ));
                         }
                         Err(_) => {} // cargo not available, skip
@@ -2334,7 +2337,7 @@ Error:
 Respond ONLY with a JSON object (no markdown):
 {{"description": "...", "action": {{"type": "...", ...}}, "expected_outcome": "..."}}"#,
             step_json,
-            &error[..error.len().min(500)]
+            crate::str_utils::truncate_bytes_safe(&error, 500)
         );
 
         let request = RouterRequest {
@@ -2390,7 +2393,10 @@ Respond ONLY with a JSON object (no markdown):
             let result = if stdout.is_empty() {
                 "(no output)".to_string()
             } else if stdout.len() > 4000 {
-                format!("{}...\n[truncated]", &stdout[..4000])
+                format!(
+                    "{}...\n[truncated]",
+                    crate::str_utils::truncate_bytes_safe(&stdout, 4000)
+                )
             } else {
                 stdout.to_string()
             };

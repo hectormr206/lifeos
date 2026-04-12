@@ -2997,7 +2997,7 @@ impl MemoryPlaneManager {
                 "{}. [{}] {} (id: {})\n",
                 i + 1,
                 entry.kind,
-                &entry.content[..entry.content.len().min(100)],
+                crate::str_utils::truncate_bytes_safe(&entry.content, 100),
                 entry.entry_id
             ));
         }

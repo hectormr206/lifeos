@@ -1676,10 +1676,10 @@ async fn main() -> anyhow::Result<()> {
                             } => {
                                 let action = format!(
                                     "task_completed:{}",
-                                    &objective[..objective.len().min(80)]
+                                    crate::str_utils::truncate_bytes_safe(&objective, 80)
                                 );
                                 let context =
-                                    format!("result={}", &result[..result.len().min(120)]);
+                                    format!("result={}", crate::str_utils::truncate_bytes_safe(&result, 120));
                                 if let Err(e) = learner.record_action(&action, &context) {
                                     warn!("[workflow_learner] Failed to record completion: {e}");
                                 }
@@ -1707,9 +1707,9 @@ async fn main() -> anyhow::Result<()> {
                             } => {
                                 let action = format!(
                                     "task_failed:{}",
-                                    &objective[..objective.len().min(80)]
+                                    crate::str_utils::truncate_bytes_safe(&objective, 80)
                                 );
-                                let context = format!("error={}", &error[..error.len().min(120)]);
+                                let context = format!("error={}", crate::str_utils::truncate_bytes_safe(&error, 120));
                                 if let Err(e) = learner.record_action(&action, &context) {
                                     warn!("[workflow_learner] Failed to record failure: {e}");
                                 }

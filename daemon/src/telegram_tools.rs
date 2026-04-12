@@ -1177,7 +1177,7 @@ REGLAS FIRMES:
                     summary_parts.push(format!(
                         "[{}]: {}",
                         msg.role,
-                        &content[..content.len().min(150)]
+                        crate::str_utils::truncate_bytes_safe(&content, 150)
                     ));
                 }
 
@@ -1185,8 +1185,9 @@ REGLAS FIRMES:
 
                 // Update the entry with the compacted summary
                 if let Some(entry) = chats.get_mut(&chat_id) {
-                    entry.compacted_summary =
-                        Some(new_summary[..new_summary.len().min(2000)].to_string());
+                    entry.compacted_summary = Some(
+                        crate::str_utils::truncate_bytes_safe(&new_summary, 2000).to_string(),
+                    );
                 }
 
                 self.persist_locked(&chats);
@@ -1217,7 +1218,7 @@ REGLAS FIRMES:
                 "Compacta este resumen de conversacion en maximo 3 oraciones. \
                  Conserva: decisiones, preferencias del usuario, tareas pendientes, \
                  y contexto clave. Descarta saludos y relleno.\n\n{}",
-                &raw[..raw.len().min(3000)]
+                crate::str_utils::truncate_bytes_safe(&raw, 3000)
             );
 
             let request = RouterRequest {
@@ -2537,7 +2538,7 @@ REGLAS FIRMES:
                         "[Resultado de {}]: {}\n{}",
                         r.tool,
                         if r.success { "OK" } else { "ERROR" },
-                        &r.output[..r.output.len().min(3000)]
+                        crate::str_utils::truncate_bytes_safe(&r.output, 3000)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -2624,12 +2625,12 @@ REGLAS FIRMES:
 
         let mut result = String::new();
         if !stdout.is_empty() {
-            result.push_str(&stdout[..stdout.len().min(4000)]);
+            result.push_str(crate::str_utils::truncate_bytes_safe(&stdout, 4000));
         }
         if !stderr.is_empty() {
             result.push_str(&format!(
                 "\n[stderr]: {}",
-                &stderr[..stderr.len().min(1000)]
+                crate::str_utils::truncate_bytes_safe(&stderr, 1000)
             ));
         }
         result.push_str(&format!("\n[exit: {}]", exit));
@@ -7824,7 +7825,7 @@ REGLAS FIRMES:
             .execute(ComputerUseAction::TypeText { text: text.into() }, false)
             .await?;
         if result.success {
-            Ok(format!("Texto escrito: '{}'", &text[..text.len().min(50)]))
+            Ok(format!("Texto escrito: '{}'", crate::str_utils::truncate_bytes_safe(&text, 50)))
         } else {
             Ok(format!("Error escribiendo texto: {}", result.stderr))
         }
@@ -7904,7 +7905,7 @@ REGLAS FIRMES:
             Ok(format!(
                 "Error instalando {}: {}",
                 name,
-                &stderr[..stderr.len().min(500)]
+                crate::str_utils::truncate_bytes_safe(&stderr, 500)
             ))
         }
     }
@@ -7936,7 +7937,7 @@ REGLAS FIRMES:
                 result.push_str(&format!(
                     "\n- [{}] {}",
                     status.as_str().unwrap_or("?"),
-                    &t.objective[..t.objective.len().min(60)],
+                    crate::str_utils::truncate_bytes_safe(&t.objective, 60),
                 ));
             }
         }
@@ -8005,7 +8006,7 @@ REGLAS FIRMES:
                 Ok(format!(
                     "Screenshot: {}\n\nHTML (sin vision):\n{}",
                     screenshot_path,
-                    &html[..html.len().min(3000)]
+                    crate::str_utils::truncate_bytes_safe(&html, 3000)
                 ))
             }
         }
@@ -8238,7 +8239,7 @@ REGLAS FIRMES:
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 Ok(format!(
                     "Tailscale no disponible: {}",
-                    &stderr[..stderr.len().min(200)]
+                    crate::str_utils::truncate_bytes_safe(&stderr, 200)
                 ))
             }
             Err(_) => Ok("Tailscale no esta instalado.".into()),
@@ -8290,7 +8291,7 @@ REGLAS FIRMES:
             ))
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Ok(format!("Error: {}", &stderr[..stderr.len().min(300)]))
+            Ok(format!("Error: {}", crate::str_utils::truncate_bytes_safe(&stderr, 300)))
         }
     }
 
@@ -8423,13 +8424,13 @@ REGLAS FIRMES:
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         if output.status.success() {
-            Ok(stdout[..stdout.len().min(4000)].to_string())
+            Ok(crate::str_utils::truncate_bytes_safe(&stdout, 4000).to_string())
         } else {
             Ok(format!(
                 "Skill '{}' fallo:\n{}\n{}",
                 skill_name,
-                &stdout[..stdout.len().min(2000)],
-                &stderr[..stderr.len().min(500)]
+                crate::str_utils::truncate_bytes_safe(&stdout, 2000),
+                crate::str_utils::truncate_bytes_safe(&stderr, 500)
             ))
         }
     }
@@ -8865,7 +8866,7 @@ REGLAS FIRMES:
                 } else {
                     format!(
                         "Resultado de la fase anterior:\n{}",
-                        &prev_output[..prev_output.len().min(3000)]
+                        crate::str_utils::truncate_bytes_safe(&prev_output, 3000)
                     )
                 }
             );
@@ -8946,7 +8947,7 @@ REGLAS FIRMES:
                     .take(3)
                     .collect::<Vec<_>>()
                     .join("-"),
-                &result[..result.len().min(2000)]
+                crate::str_utils::truncate_bytes_safe(&result, 2000)
             );
             mem.add_entry("architecture", "user", &tags, Some("sdd"), 80, &summary)
                 .await
@@ -9037,7 +9038,7 @@ REGLAS FIRMES:
         Some(format!(
             "SDD abortado en fase {}. Resultado parcial guardado en memoria.\n\n{}",
             session.current_phase,
-            &session.accumulated_result[..session.accumulated_result.len().min(2000)]
+            crate::str_utils::truncate_bytes_safe(&session.accumulated_result, 2000)
         ))
     }
 
@@ -9059,7 +9060,7 @@ REGLAS FIRMES:
             conversation.push_str(&format!(
                 "[{}]: {}\n",
                 role,
-                &content[..content.len().min(200)]
+                crate::str_utils::truncate_bytes_safe(&content, 200)
             ));
         }
 
