@@ -58,6 +58,21 @@ ARG LIFEOS_IMAGE_VARIANT=nvidia
 #                         image.
 ARG LIFEOS_BUILD_MODE=release
 
+# Tune dnf for fast package downloads. Default dnf5 ships with
+# max_parallel_downloads=3 which bottlenecks heavily on the Fedora
+# mirror network — builder stage pulls ~500 transitive packages and
+# on Hector's connection individual mirrors were delivering 9 KiB/s,
+# stretching STEP 11 past 90 minutes. Raising the parallel ceiling
+# to 20 and enabling fastestmirror cut download time by ~3-5x.
+# minrate=1k gives dnf permission to drop a stalled mirror after a
+# sane threshold instead of hanging indefinitely on a dead CDN.
+RUN printf '%s\n' \
+        'max_parallel_downloads=20' \
+        'fastestmirror=True' \
+        'minrate=1k' \
+        'timeout=30' \
+        >> /etc/dnf/dnf.conf
+
 RUN dnf -y install \
     rust cargo \
     openssl-devel \
@@ -310,6 +325,17 @@ ARG LIFEOS_NVIDIA_KMOD_CERT_DER_B64=""
 # the final stage, and the RUN block with `set -eu` crashes on unset var.
 ARG LIFEOS_IMAGE_VARIANT=nvidia
 ARG LIFEOS_BUILD_MODE=release
+
+# Tune dnf for fast package downloads — see comment in builder stage
+# (line ~59) for rationale. This stage pulls the entire LifeOS runtime
+# closure (COSMIC + pipewire + nvidia userspace + ~1500 transitive deps)
+# and was the single biggest contributor to 60-90min build times.
+RUN printf '%s\n' \
+        'max_parallel_downloads=20' \
+        'fastestmirror=True' \
+        'minrate=1k' \
+        'timeout=30' \
+        >> /etc/dnf/dnf.conf
 
 # --- Repositorios adicionales (COSMIC y RPMFusion) ---
 RUN dnf -y install dnf5-plugins && \
