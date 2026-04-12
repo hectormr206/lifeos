@@ -801,6 +801,11 @@ COPY image/files/etc/polkit-1/rules.d/50-lifeos-llama-server.rules /etc/polkit-1
 COPY image/files/etc/sudoers.d/lifeos-axi /etc/sudoers.d/lifeos-axi
 RUN chmod 0440 /etc/sudoers.d/lifeos-axi
 
+# --- Thermal management (laptop auto-cap) ---
+COPY image/files/etc/systemd/system/lifeos-thermal.service /usr/lib/systemd/system/lifeos-thermal.service
+COPY image/files/etc/tmpfiles.d/lifeos-thermal.conf /usr/lib/tmpfiles.d/lifeos-thermal.conf
+COPY image/files/etc/udev/rules.d/90-lifeos-thermal.rules /usr/lib/udev/rules.d/90-lifeos-thermal.rules
+
 # --- Security hardening (Fase AU — Security by Default) ---
 # Kernel hardening sysctl (CIS Benchmark Level 1)
 COPY image/files/etc/sysctl.d/90-lifeos-hardening.conf /etc/sysctl.d/90-lifeos-hardening.conf
@@ -950,6 +955,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/system/timers.target.wants \
              /usr/lib/systemd/system/sockets.target.wants \
              /usr/lib/systemd/user/default.target.wants && \
+    ln -sf /usr/lib/systemd/system/lifeos-thermal.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-thermal.service && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
     ln -sf /usr/lib/systemd/system/conduit.service /usr/lib/systemd/system/multi-user.target.wants/conduit.service && \

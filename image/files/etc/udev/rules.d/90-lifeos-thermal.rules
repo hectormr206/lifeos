@@ -1,0 +1,4 @@
+# Allow lifeos user to control CPU performance scaling for Game Guard thermal management.
+# This enables the daemon to switch between Normal (90%), Gaming (95%), and Full (100%)
+# profiles without requiring sudo or NoNewPrivileges exceptions.
+SUBSYSTEM=="module", KERNEL=="intel_pstate", RUN+="/bin/chmod 0666 /sys/devices/system/cpu/intel_pstate/max_perf_pct /sys/devices/system/cpu/intel_pstate/no_turbo"

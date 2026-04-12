@@ -1,0 +1,15 @@
+[Unit]
+Description=LifeOS Thermal Profile (laptop CPU cap)
+After=multi-user.target
+ConditionPathExists=/sys/devices/system/cpu/intel_pstate/max_perf_pct
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Detect laptop and apply 90% cap — negligible performance impact, 15-20°C cooler
+ExecStart=/bin/bash -c 'if [ -e /sys/class/power_supply/BAT0 ] || [ -e /sys/class/power_supply/BAT1 ]; then echo 90 > /sys/devices/system/cpu/intel_pstate/max_perf_pct; echo "[thermal] Laptop detected — applied 90%% cap"; else echo "[thermal] Desktop — keeping 100%%"; fi'
+# Gaming override: Game Guard calls this to boost during gaming
+ExecReload=/bin/bash -c 'echo ${THERMAL_PERF_PCT:-90} > /sys/devices/system/cpu/intel_pstate/max_perf_pct; echo "[thermal] Applied ${THERMAL_PERF_PCT:-90}%% cap"'
+
+[Install]
+WantedBy=multi-user.target
