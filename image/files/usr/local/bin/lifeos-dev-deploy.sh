@@ -60,6 +60,11 @@ $allowed || die "Destination not in allowed paths: $DEST (allowed: ${ALLOWED_DES
 # Deploy
 mkdir -p "$(dirname "$DEST")"
 cp "$SRC" "$DEST"
-chmod 644 "$DEST"
+# Preserve executable bit from source; default to 644 for configs
+if [ -x "$SRC" ]; then
+    chmod 755 "$DEST"
+else
+    chmod 644 "$DEST"
+fi
 
 log "Deployed: $SRC -> $DEST"

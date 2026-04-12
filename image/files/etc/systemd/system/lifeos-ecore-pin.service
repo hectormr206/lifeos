@@ -6,30 +6,20 @@ Before=whisper-stt.service llama-embeddings.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# Detect E-cores and apply cpuset to the background slice.
-# On non-hybrid CPUs this sets all CPUs (no restriction).
+# Detect E-cores via the standalone script and apply cpuset to the
+# background slice. On non-hybrid CPUs this sets all CPUs (no restriction).
 ExecStart=/bin/bash -c '\
-  MIN=999999999; MAX=0; \
-  declare -A FTQ; \
-  for d in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do \
-    [ -f "$$d/cpuinfo_max_freq" ] || continue; \
-    ID=$$(basename "$$(dirname "$$d")" | sed "s/cpu//"); \
-    F=$$(cat "$$d/cpuinfo_max_freq"); \
-    FTQ[$$F]="$${FTQ[$$F]:-} $$ID"; \
-    [ "$$F" -gt "$$MAX" ] && MAX=$$F; \
-    [ "$$F" -lt "$$MIN" ] && MIN=$$F; \
-  done; \
-  if [ "$$MIN" -lt "$$MAX" ]; then \
-    ECORES=""; \
-    for ID in $${FTQ[$$MIN]}; do \
-      ECORES="$${ECORES:+$$ECORES,}$$ID"; \
-    done; \
+  SCRIPT=/usr/local/bin/lifeos-detect-ecores.sh; \
+  [ -x "$$SCRIPT" ] || SCRIPT=/etc/lifeos/lifeos-detect-ecores.sh; \
+  if [ -x "$$SCRIPT" ]; then \
+    ECORES=$$($$SCRIPT); \
   else \
     ECORES="0-$$(($$(nproc)-1))"; \
+    echo "[ecore-pin] No detect script found — using all CPUs"; \
   fi; \
-  echo "[ecore-pin] E-cores: $$ECORES"; \
-  systemctl set-property lifeos-background.slice AllowedCPUs="$$ECORES" 2>/dev/null || \
-    echo "[ecore-pin] Could not set AllowedCPUs"'
+  echo "[ecore-pin] E-cores: $${ECORES}"; \
+  systemctl set-property lifeos-background.slice AllowedCPUs="$${ECORES}" 2>/dev/null || \
+    echo "[ecore-pin] Could not set AllowedCPUs (cgroup v2 required)"'
 
 [Install]
 WantedBy=multi-user.target

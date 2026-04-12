@@ -547,7 +547,7 @@ RUN dnf -y install \
     wlsunset \
     linux-firmware \
     aide firewalld audit \
-    powertop \
+    powertop zram-generator \
     pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
     python3-mako \
     anaconda-core anaconda-dracut \
@@ -1365,7 +1365,18 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /etc/profile.d/lifeos-terminal.sh || fail "lifeos-terminal.sh"; \
     test -f /etc/fish/conf.d/lifeos-terminal.fish || fail "lifeos-terminal.fish"; \
     test -f /usr/share/applications/firefox-lifeos.desktop || fail "firefox-lifeos.desktop"; \
-    test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1 || fail "expected exactly 1 firefox .desktop file"
+    test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1 || fail "expected exactly 1 firefox .desktop file"; \
+    test -f /usr/lib/bootc/kargs.d/70-lifeos-zswap.toml || fail "70-lifeos-zswap.toml"; \
+    test -f /etc/systemd/zram-generator.conf || fail "zram-generator.conf"; \
+    test -f /usr/lib/udev/rules.d/85-lifeos-power-epp.rules || fail "85-lifeos-power-epp.rules"; \
+    test -f /usr/lib/systemd/system/lifeos-power-profile.service || fail "lifeos-power-profile.service"; \
+    test -f /usr/lib/systemd/system/lifeos-powertune.service || fail "lifeos-powertune.service"; \
+    test -f /usr/lib64/firefox/distribution/policies.json || fail "firefox distribution/policies.json"; \
+    test -f /usr/lib/systemd/system/lifeos-background.slice || fail "lifeos-background.slice"; \
+    test -f /usr/lib/systemd/system/lifeos-ecore-pin.service || fail "lifeos-ecore-pin.service"; \
+    test -x /usr/local/bin/lifeos-detect-ecores.sh || fail "lifeos-detect-ecores.sh"; \
+    test -f /usr/lib/systemd/system/whisper-stt.service.d/20-lifeos-background.conf || fail "whisper-stt 20-lifeos-background.conf"; \
+    test -f /usr/lib/systemd/system/llama-embeddings.service.d/20-lifeos-background.conf || fail "llama-embeddings 20-lifeos-background.conf"
 
 # nonempty-boot is intentionally skipped: /boot/efi content is required for bootc-image-builder ISO generation.
 RUN dnf clean all && rm -f /var/log/dnf5.log* /var/cache/ldconfig/aux-cache && bootc container lint --skip nonempty-boot
