@@ -5,8 +5,19 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# StateDirectory creates /var/lib/lifeos/simplex with the right owner
+# BEFORE systemd sets up the mount namespace, so ReadWritePaths always
+# resolves even on a fresh image. Without this the unit used to crash
+# in a 226/NAMESPACE loop until somebody mkdir'd the path by hand.
+StateDirectory=lifeos/simplex
 ExecStartPre=/usr/local/bin/lifeos-simplex-setup.sh
-ExecStart=/usr/local/bin/simplex-chat -p 5226 -d /var/lib/lifeos/simplex
+# `-d` is a file PREFIX for the SQLite databases, not a directory — so
+# passing `/var/lib/lifeos/simplex` produced `/var/lib/lifeos/simplex_chat.db`
+# OUTSIDE the ReadWritePaths sandbox and simplex-chat died with
+# "ErrorCan'tOpen ... unable to open database file" on every boot.
+# Point it at a prefix INSIDE the state dir so every *.db file lands
+# inside the writable mount.
+ExecStart=/usr/local/bin/simplex-chat -p 5226 -d /var/lib/lifeos/simplex/bot -y --create-bot-display-name Axi
 Restart=always
 RestartSec=10
 TimeoutStartSec=30
