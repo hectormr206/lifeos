@@ -22,7 +22,7 @@ Environment=VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
 Environment=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
 ExecCondition=/usr/local/bin/lifeos-llama-preflight.sh
 ExecStartPre=/usr/local/bin/lifeos-ai-setup.sh
-ExecStartPre=/bin/sh -c 'for i in $(seq 1 15); do if /usr/sbin/llama-server --list-devices 2>&1 | grep -q "NVIDIA GeForce"; then exit 0; fi; sleep 2; done; exit 0'
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do if /usr/sbin/llama-server --list-devices 2>&1 | grep -q "NVIDIA GeForce"; then echo "[preflight] GPU ready after $((i*2))s"; exit 0; fi; sleep 2; done; echo "[preflight] GPU not found after 120s — will retry via Restart="; exit 1'
 #
 # Flag groups (in order):
 #   1. Model + I/O — paths, host, port, alias.
@@ -75,8 +75,8 @@ ExecStart=/usr/sbin/llama-server \
 Restart=always
 RestartSec=10
 TimeoutStartSec=120
-StartLimitInterval=300
-StartLimitBurst=3
+StartLimitInterval=600
+StartLimitBurst=10
 
 # Logging
 StandardOutput=journal
