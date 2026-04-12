@@ -2169,6 +2169,10 @@ async fn start_api_server(state: Arc<DaemonState>) {
         game_guard: state.game_guard.clone(),
         wake_word_detector: state.wake_word_detector.clone(),
         skill_registry: skill_generator::SkillRegistry::from_defaults(),
+        // Share the SAME user_model instance used by Telegram/SimpleX bridges
+        #[cfg(feature = "telegram")]
+        user_model: shared_user_model.clone(),
+        #[cfg(not(feature = "telegram"))]
         user_model: {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
             let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
@@ -2176,6 +2180,16 @@ async fn start_api_server(state: Arc<DaemonState>) {
                 user_model::UserModel::load_from_dir(&data_dir).await,
             ))
         },
+        // Agentic chat infrastructure — same instances as all bridges
+        #[cfg(feature = "telegram")]
+        conversation_history: shared_history.clone(),
+        #[cfg(feature = "telegram")]
+        cron_store: shared_cron_store.clone(),
+        #[cfg(feature = "telegram")]
+        sdd_store: Arc::new(telegram_tools::SddStore::new()),
+        session_store: state.session_store.clone(),
+        #[cfg(feature = "telegram")]
+        meeting_assistant: Some(shared_meeting_assistant.clone()),
     };
 
     // Perform initial skill registry load and start file watcher
