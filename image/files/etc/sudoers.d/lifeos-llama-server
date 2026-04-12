@@ -1,3 +1,0 @@
-# Allow wheel group members to manage llama-server GPU layers without password.
-# Used by Game Guard to offload LLM from VRAM to RAM when gaming.
-%wheel ALL=(root) NOPASSWD: /usr/local/bin/lifeos-llama-gpu-layers.sh

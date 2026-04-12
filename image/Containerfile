@@ -761,6 +761,8 @@ COPY image/files/usr/local/bin/lifeos-generate-wakeword.sh     /usr/local/bin/li
 COPY image/files/usr/local/bin/lifeos-speaker-embedding.py     /usr/local/bin/lifeos-speaker-embedding.py
 COPY image/files/usr/local/bin/lifeos-diarize.py               /usr/local/bin/lifeos-diarize.py
 COPY image/files/usr/local/bin/lifeos-sentinel.sh              /usr/local/bin/lifeos-sentinel.sh
+COPY image/files/usr/local/bin/lifeos-libreoffice-verify.py   /usr/local/bin/lifeos-libreoffice-verify.py
+COPY image/files/usr/local/bin/lifeos-dev-deploy.sh           /usr/local/bin/lifeos-dev-deploy.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-apply-default-layout.sh \
              /usr/local/bin/lifeos-cosmic-snapshot \
@@ -782,7 +784,9 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-speaker-embedding.py \
              /usr/local/bin/lifeos-diarize.py \
              /usr/local/bin/lifeos-check \
-             /usr/local/bin/lifeos-sentinel.sh
+             /usr/local/bin/lifeos-sentinel.sh \
+             /usr/local/bin/lifeos-libreoffice-verify.py \
+             /usr/local/bin/lifeos-dev-deploy.sh
 
 # --- Pre-trained wake word model (works from first boot) ---
 # Generate synthetic "Axi" samples with espeak-ng and build the rustpotter .rpw model.
@@ -800,6 +804,12 @@ COPY image/files/etc/polkit-1/rules.d/40-lifeos-axi.rules /etc/polkit-1/rules.d/
 COPY image/files/etc/polkit-1/rules.d/50-lifeos-llama-server.rules /etc/polkit-1/rules.d/50-lifeos-llama-server.rules
 COPY image/files/etc/sudoers.d/lifeos-axi /etc/sudoers.d/lifeos-axi
 RUN chmod 0440 /etc/sudoers.d/lifeos-axi
+
+# --- Thermal management (laptop auto-cap) ---
+# --- Battery management (laptop charge threshold persistence + smart charging) ---
+COPY image/files/etc/systemd/system/lifeos-battery.service /usr/lib/systemd/system/lifeos-battery.service
+COPY image/files/etc/systemd/system/lifeos-smart-charge.service /usr/lib/systemd/system/lifeos-smart-charge.service
+COPY image/files/etc/systemd/system/lifeos-smart-charge.timer /usr/lib/systemd/system/lifeos-smart-charge.timer
 
 # --- Thermal management (laptop auto-cap) ---
 COPY image/files/etc/systemd/system/lifeos-thermal.service /usr/lib/systemd/system/lifeos-thermal.service
@@ -898,9 +908,12 @@ COPY image/files/etc/systemd/system/conduit.service /usr/lib/systemd/system/cond
 COPY image/files/usr/local/bin/lifeos-matrix-setup.sh /usr/local/bin/lifeos-matrix-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-matrix-setup.sh
 COPY image/files/etc/systemd/system/simplex-chat.service /usr/lib/systemd/system/simplex-chat.service
+COPY image/files/etc/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf /usr/lib/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf
 COPY image/files/usr/local/bin/lifeos-simplex-setup.sh /usr/local/bin/lifeos-simplex-setup.sh
 RUN chmod +x /usr/local/bin/lifeos-simplex-setup.sh
 COPY image/files/etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf /etc/systemd/system/nvidia-persistenced.service.d/10-lifeos-conditions.conf
+# Dev-mode NVIDIA signed modules loader (no-op on release builds — gated by ConditionPathExists)
+COPY image/files/etc/systemd/system/lifeos-nvidia-signed-modules.service /usr/lib/systemd/system/lifeos-nvidia-signed-modules.service
 COPY image/files/etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf /etc/systemd/system/systemd-remount-fs.service.d/10-skip-on-overlay.conf
 # Dashboard access: only via Axi tray icon → "Abrir Dashboard"
 # COPY image/files/etc/xdg/autostart/lifeos-axi-experience.desktop /etc/xdg/autostart/lifeos-axi-experience.desktop
@@ -956,6 +969,9 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/system/sockets.target.wants \
              /usr/lib/systemd/user/default.target.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-thermal.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-thermal.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-battery.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-battery.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-smart-charge.timer /usr/lib/systemd/system/timers.target.wants/lifeos-smart-charge.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-nvidia-signed-modules.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-nvidia-signed-modules.service && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
     ln -sf /usr/lib/systemd/system/conduit.service /usr/lib/systemd/system/multi-user.target.wants/conduit.service && \
