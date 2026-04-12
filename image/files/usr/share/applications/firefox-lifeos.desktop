@@ -6,7 +6,7 @@ GenericName=Web Browser
 GenericName[es]=Navegador web
 Comment=Browse the World Wide Web
 Comment[es]=Navegue por la web
-Exec=/usr/bin/firefox --name=firefox-wayland %u
+Exec=env MOZ_ENABLE_WAYLAND=1 MOZ_DRM_DEVICE=/dev/dri/renderD128 /usr/bin/firefox --name=firefox-wayland %u
 Icon=firefox
 Terminal=false
 Type=Application

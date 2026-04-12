@@ -488,7 +488,12 @@ RUN flatpak remote-add --if-not-exists --system flathub \
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \
     firefox \
+    intel-media-driver \
+    libva-utils \
     && dnf clean all
+
+# Firefox VA-API hardware video decode (saves ~400% CPU on video playback)
+COPY image/files/usr/lib64/firefox/distribution/policies.json /usr/lib64/firefox/distribution/policies.json
 
 # Download uBlock Origin extension for global installation
 # This is installed as a "distributed extension" that cannot be uninstalled by users
@@ -542,6 +547,7 @@ RUN dnf -y install \
     wlsunset \
     linux-firmware \
     aide firewalld audit \
+    powertop \
     pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
     python3-mako \
     anaconda-core anaconda-dracut \
@@ -731,6 +737,10 @@ COPY image/files/etc/containers/containers.conf /etc/containers/containers.conf
 COPY image/files/etc/containers/storage.conf /etc/containers/storage.conf
 COPY image/files/usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml /usr/lib/bootc/kargs.d/50-lifeos-nvidia-prefer-proprietary.toml
 COPY image/files/usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml
+COPY image/files/usr/lib/bootc/kargs.d/70-lifeos-zswap.toml /usr/lib/bootc/kargs.d/70-lifeos-zswap.toml
+
+# --- Memory efficiency: zram compressed swap + zswap cache ---
+COPY image/files/etc/systemd/zram-generator.conf /etc/systemd/zram-generator.conf
 
 # Firefox desktop entry with Wayland flags
 COPY image/files/usr/share/applications/firefox-lifeos.desktop /usr/share/applications/firefox-lifeos.desktop
@@ -815,6 +825,11 @@ COPY image/files/etc/systemd/system/lifeos-smart-charge.timer /usr/lib/systemd/s
 COPY image/files/etc/systemd/system/lifeos-thermal.service /usr/lib/systemd/system/lifeos-thermal.service
 COPY image/files/etc/tmpfiles.d/lifeos-thermal.conf /usr/lib/tmpfiles.d/lifeos-thermal.conf
 COPY image/files/etc/udev/rules.d/90-lifeos-thermal.rules /usr/lib/udev/rules.d/90-lifeos-thermal.rules
+
+# --- Power efficiency: dynamic EPP switching (AC vs battery) ---
+COPY image/files/etc/udev/rules.d/85-lifeos-power-epp.rules /usr/lib/udev/rules.d/85-lifeos-power-epp.rules
+COPY image/files/etc/systemd/system/lifeos-power-profile.service /usr/lib/systemd/system/lifeos-power-profile.service
+COPY image/files/etc/systemd/system/lifeos-powertune.service /usr/lib/systemd/system/lifeos-powertune.service
 
 # --- Security hardening (Fase AU — Security by Default) ---
 # Kernel hardening sysctl (CIS Benchmark Level 1)
@@ -969,6 +984,8 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
              /usr/lib/systemd/system/sockets.target.wants \
              /usr/lib/systemd/user/default.target.wants && \
     ln -sf /usr/lib/systemd/system/lifeos-thermal.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-thermal.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-power-profile.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-power-profile.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-powertune.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-powertune.service && \
     ln -sf /usr/lib/systemd/system/lifeos-battery.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-battery.service && \
     ln -sf /usr/lib/systemd/system/lifeos-smart-charge.timer /usr/lib/systemd/system/timers.target.wants/lifeos-smart-charge.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-nvidia-signed-modules.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-nvidia-signed-modules.service && \

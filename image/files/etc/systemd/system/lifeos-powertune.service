@@ -1,0 +1,21 @@
+[Unit]
+Description=LifeOS Power Auto-Tune (USB/SATA/PCI autosuspend)
+After=multi-user.target
+# Run after power profile so EPP is already set correctly
+After=lifeos-power-profile.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# powertop --auto-tune enables all "Good" power-saving tunables:
+# - USB autosuspend on all devices
+# - SATA link power management
+# - PCI runtime power management
+# - Audio codec power save
+# - Wi-Fi power save
+#
+# These are safe on modern hardware and collectively save 2-5W idle.
+ExecStart=/usr/sbin/powertop --auto-tune
+
+[Install]
+WantedBy=multi-user.target

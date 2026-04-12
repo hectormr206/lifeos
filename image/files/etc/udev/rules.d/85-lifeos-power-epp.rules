@@ -1,0 +1,17 @@
+# LifeOS — Dynamic Energy Performance Preference switching.
+#
+# On AC: balance_performance (responsive, uses P-cores freely)
+# On battery: balance_power (prefers E-cores, conservative boosting)
+#
+# This is the single biggest software lever for battery life on Intel
+# hybrid CPUs. The EPP hint tells intel_pstate how aggressively to
+# boost — balance_power alone can save 20-30% power on battery.
+#
+# Works on any Intel CPU with HWP (Hardware P-states) support.
+# AMD equivalent (amd-pstate EPP) uses the same sysfs path.
+
+# AC plugged in → responsive
+SUBSYSTEM=="power_supply", ATTR{type}=="Mains", ATTR{online}=="1", RUN+="/bin/bash -c 'for f in /sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference; do [ -f \"$f\" ] && echo balance_performance > \"$f\"; done'"
+
+# AC unplugged → efficient
+SUBSYSTEM=="power_supply", ATTR{type}=="Mains", ATTR{online}=="0", RUN+="/bin/bash -c 'for f in /sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference; do [ -f \"$f\" ] && echo balance_power > \"$f\"; done'"
