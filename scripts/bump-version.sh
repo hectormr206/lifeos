@@ -61,6 +61,19 @@ echo "Updating files..."
 sed -i "/^\[workspace.package\]/,/^\[/ s/^version = \"${CURRENT//./\\.}\"$/version = \"$NEW\"/" Cargo.toml
 echo "  ✓ Cargo.toml [workspace.package].version"
 
+# Cargo.lock pins an exact version per workspace crate; --locked
+# container builds reject any Cargo.toml ↔ Cargo.lock drift. Keep the
+# two in sync by rewriting each workspace package entry in place. We
+# only touch the three LifeOS crates (life, lifeosd,
+# lifeos-integration-tests) so the 500+ external dependency pins stay
+# byte-identical.
+if [[ -f Cargo.lock ]]; then
+    for pkg in life lifeosd lifeos-integration-tests; do
+        sed -i "/^name = \"${pkg}\"\$/ { n; s/^version = \"${CURRENT//./\\.}\"\$/version = \"$NEW\"/ }" Cargo.lock
+    done
+    echo "  ✓ Cargo.lock workspace package versions"
+fi
+
 echo ""
 echo "Version bumped: $CURRENT → $NEW"
 echo ""
