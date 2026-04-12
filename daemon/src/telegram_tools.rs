@@ -2304,7 +2304,10 @@ REGLAS FIRMES:
                     if let Ok(results) = mem.search_entries(query, 3, None).await {
                         for r in &results {
                             let snippet = if r.entry.content.len() > 300 {
-                                format!("{}...", &r.entry.content[..300])
+                                format!(
+                                    "{}...",
+                                    crate::str_utils::truncate_bytes_safe(&r.entry.content, 300)
+                                )
                             } else {
                                 r.entry.content.clone()
                             };
@@ -2670,12 +2673,11 @@ REGLAS FIRMES:
                         result.push_str("Fuentes:\n");
                         for item in results.iter().take(5) {
                             let snippet = item["content"].as_str().unwrap_or("");
-                            let end = 200.min(snippet.len());
                             result.push_str(&format!(
                                 "- {} ({})\n  {}\n",
                                 item["title"].as_str().unwrap_or(""),
                                 item["url"].as_str().unwrap_or(""),
-                                &snippet[..end]
+                                crate::str_utils::truncate_bytes_safe(snippet, 200)
                             ));
                         }
                     }
@@ -3000,7 +3002,13 @@ REGLAS FIRMES:
                             .iter()
                             .map(|r| {
                                 let snippet = if r.entry.content.len() > 500 {
-                                    format!("{}...", &r.entry.content[..500])
+                                    format!(
+                                        "{}...",
+                                        crate::str_utils::truncate_bytes_safe(
+                                            &r.entry.content,
+                                            500
+                                        )
+                                    )
                                 } else {
                                     r.entry.content.clone()
                                 };
@@ -3071,7 +3079,10 @@ REGLAS FIRMES:
                         .iter()
                         .map(|r| {
                             let snippet = if r.entry.content.len() > 500 {
-                                format!("{}...", &r.entry.content[..500])
+                                format!(
+                                    "{}...",
+                                    crate::str_utils::truncate_bytes_safe(&r.entry.content, 500)
+                                )
                             } else {
                                 r.entry.content.clone()
                             };
@@ -8770,7 +8781,10 @@ REGLAS FIRMES:
                                     e.kind,
                                     local_time,
                                     if e.content.len() > 100 {
-                                        format!("{}...", &e.content[..100])
+                                        format!(
+                                            "{}...",
+                                            crate::str_utils::truncate_bytes_safe(&e.content, 100)
+                                        )
                                     } else {
                                         e.content.clone()
                                     }
@@ -10362,7 +10376,13 @@ max_context = 128000
                             .iter()
                             .map(|r| {
                                 let snippet = if r.entry.content.len() > 400 {
-                                    format!("{}...", &r.entry.content[..400])
+                                    format!(
+                                        "{}...",
+                                        crate::str_utils::truncate_bytes_safe(
+                                            &r.entry.content,
+                                            400
+                                        )
+                                    )
                                 } else {
                                     r.entry.content.clone()
                                 };
@@ -10470,7 +10490,10 @@ max_context = 128000
                     if let Some(r) = results.first() {
                         mem.mark_permanent(&r.entry.entry_id).await?;
                         let snippet = if r.entry.content.len() > 100 {
-                            format!("{}...", &r.entry.content[..100])
+                            format!(
+                                "{}...",
+                                crate::str_utils::truncate_bytes_safe(&r.entry.content, 100)
+                            )
                         } else {
                             r.entry.content.clone()
                         };
@@ -10594,7 +10617,10 @@ max_context = 128000
         for m in &meetings {
             let duration_min = m.duration_secs / 60;
             let summary_preview = if m.summary.len() > 120 {
-                format!("{}...", &m.summary[..120])
+                format!(
+                    "{}...",
+                    crate::str_utils::truncate_bytes_safe(&m.summary, 120)
+                )
             } else if m.summary.is_empty() {
                 "(sin resumen)".to_string()
             } else {
@@ -10639,7 +10665,10 @@ max_context = 128000
         for m in &meetings {
             let duration_min = m.duration_secs / 60;
             let summary_preview = if m.summary.len() > 200 {
-                format!("{}...", &m.summary[..200])
+                format!(
+                    "{}...",
+                    crate::str_utils::truncate_bytes_safe(&m.summary, 200)
+                )
             } else if m.summary.is_empty() {
                 "(sin resumen)".to_string()
             } else {

@@ -640,7 +640,7 @@ fn truncate_error(body: &str) -> String {
     if cleaned.len() <= 200 {
         return cleaned;
     }
-    format!("{}...", &cleaned[..200])
+    format!("{}...", crate::str_utils::truncate_bytes_safe(&cleaned, 200))
 }
 
 fn consume_stream_sse_line(

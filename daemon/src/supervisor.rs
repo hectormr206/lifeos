@@ -1323,7 +1323,7 @@ impl Supervisor {
                 .unwrap_or("step");
             let icon = if r.success { "OK" } else { "FAIL" };
             let output_preview = if r.output.len() > 500 {
-                format!("{}...", &r.output[..500])
+                format!("{}...", crate::str_utils::truncate_bytes_safe(&r.output, 500))
             } else {
                 r.output.clone()
             };
@@ -1483,7 +1483,7 @@ impl Supervisor {
         if text.len() > 6000 {
             Ok(format!(
                 "{}...\n[truncated, {} chars]",
-                &text[..6000],
+                crate::str_utils::truncate_bytes_safe(&text, 6000),
                 text.len()
             ))
         } else {
@@ -1588,7 +1588,10 @@ impl Supervisor {
         if stdout.is_empty() {
             Ok(format!("No files found matching '{}'", pattern))
         } else if stdout.len() > 4000 {
-            Ok(format!("{}...\n[truncated]", &stdout[..4000]))
+            Ok(format!(
+                "{}...\n[truncated]",
+                crate::str_utils::truncate_bytes_safe(&stdout, 4000)
+            ))
         } else {
             Ok(stdout.to_string())
         }

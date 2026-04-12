@@ -93,6 +93,7 @@ mod skill_registry;
 mod speaker_id;
 mod sqlite_protection;
 mod storage_housekeeping;
+mod str_utils;
 mod supervisor;
 mod system;
 mod system_tuner;

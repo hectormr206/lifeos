@@ -2477,7 +2477,10 @@ fn truncate_for_ledger(value: String) -> String {
     if value.len() <= LIMIT {
         value
     } else {
-        format!("{}...[truncated]", &value[..LIMIT])
+        format!(
+            "{}...[truncated]",
+            crate::str_utils::truncate_bytes_safe(&value, LIMIT)
+        )
     }
 }
 
