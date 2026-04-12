@@ -271,6 +271,7 @@ impl Default for ApiConfig {
         post_notification,
         get_system_info,
         post_system_command,
+        get_simplex_invite,
         run_accessibility_audit,
         get_accessibility_settings,
     ),
@@ -295,6 +296,7 @@ impl Default for ApiConfig {
             Notification,
             SystemInfo,
             CommandRequest,
+            SimplexInviteResponse,
             ApiError,
             UpdateChannelResponse,
             SetUpdateChannelRequest,
@@ -1265,6 +1267,8 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/system/resources", get(get_system_resources))
         .route("/system/info", get(get_system_info))
         .route("/system/command", post(post_system_command))
+        // SimpleX invite (link + QR SVG for dashboard scanning)
+        .route("/simplex/invite", get(get_simplex_invite))
         // Health endpoints
         .route("/health", get(get_health_status))
         // Safe mode endpoints
@@ -1875,6 +1879,77 @@ async fn post_system_command(
 
     // Execute command
     Ok(StatusCode::OK)
+}
+
+/// SimpleX invite response — link plus ready-to-render QR SVG.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct SimplexInviteResponse {
+    /// True when a cached invite link exists on disk. False means the
+    /// simplex-chat service hasn't been set up yet or the bridge hasn't
+    /// negotiated a link.
+    pub exists: bool,
+    /// The canonical invite link, or an empty string when `exists` is
+    /// false. Long form used when the user prefers to paste.
+    pub link: String,
+    /// SVG source (not base64, not data-url) ready to drop into
+    /// `<div>`.innerHTML. Empty string when `exists` is false.
+    pub qr_svg: String,
+}
+
+/// GET /api/v1/simplex/invite — expose the SimpleX pairing link and a
+/// pre-rendered QR SVG for the dashboard to display without bundling a
+/// client-side QR library. The link is generated once at simplex_bridge
+/// startup and persisted to /var/lib/lifeos/simplex-invite-link.
+#[utoipa::path(
+    get,
+    path = "/api/v1/simplex/invite",
+    responses(
+        (status = 200, description = "Invite and QR", body = SimplexInviteResponse),
+    ),
+    tag = "simplex"
+)]
+async fn get_simplex_invite(
+    State(_state): State<ApiState>,
+) -> Result<Json<SimplexInviteResponse>, (StatusCode, Json<ApiError>)> {
+    const INVITE_PATH: &str = "/var/lib/lifeos/simplex-invite-link";
+
+    let link = match std::fs::read_to_string(INVITE_PATH) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => {
+            return Ok(Json(SimplexInviteResponse {
+                exists: false,
+                link: String::new(),
+                qr_svg: String::new(),
+            }));
+        }
+    };
+
+    if link.is_empty() {
+        return Ok(Json(SimplexInviteResponse {
+            exists: false,
+            link: String::new(),
+            qr_svg: String::new(),
+        }));
+    }
+
+    // Generate QR at error-correction level LOW. LOW is deliberate here:
+    // SimpleX links are already authenticated by the E2E handshake, so
+    // we don't need QR redundancy for tamper-detection, and lower ECL
+    // means smaller/denser QRs that fit more data — the full simplex:/
+    // URI is ~300-400 bytes, near the upper bound of Version-10 QR.
+    let qr_svg = match qrcodegen::QrCode::encode_text(&link, qrcodegen::QrCodeEcc::Low) {
+        Ok(qr) => qr.to_svg_string(2),
+        Err(e) => {
+            log::warn!("[simplex] Failed to encode QR: {}", e);
+            String::new()
+        }
+    };
+
+    Ok(Json(SimplexInviteResponse {
+        exists: true,
+        link,
+        qr_svg,
+    }))
 }
 
 /// Get health status

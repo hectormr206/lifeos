@@ -85,6 +85,9 @@ rustpotter = { version = "3", optional = true, default-features = false }
 # rust-mcp-sdk = { version = "0.9", optional = true }
 # System tray icon (StatusNotifierItem — works with COSMIC, KDE, GNOME+extension)
 ksni = { version = "0.2", optional = true }
+# QR code generator for SimpleX invitation links served by the dashboard.
+# Pure Rust, zero runtime dependencies, MIT licensed (Project Nayuki).
+qrcodegen = "1.8.0"
 # COSMIC desktop control (GPL-3.0 — only compiled with "cosmic" feature)
 cosmic-protocols = { version = "0.2", optional = true, default-features = false, features = ["client"] }
 cosmic-client-toolkit = { version = "0.2", optional = true }

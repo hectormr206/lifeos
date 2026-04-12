@@ -570,6 +570,31 @@
       </div>
     </section>
 
+    <!-- SimpleX invite — show QR so the user can connect their phone to Axi -->
+    <section class="simplex-section" id="simplex-section">
+      <h2>SimpleX — conectar tu telefono</h2>
+      <p class="setting-hint" style="margin-bottom:12px">
+        Escanea este QR con la app SimpleX Chat en tu telefono para conectarte al bot Axi de esta LifeOS.
+        Cada laptop tiene su propio QR unico — identidades criptograficas independientes sin servidor central.
+      </p>
+      <div class="simplex-grid">
+        <div class="simplex-qr-wrap">
+          <div class="simplex-qr" id="simplex-qr" aria-label="Codigo QR del bot SimpleX Axi">
+            <span class="setting-hint">Generando...</span>
+          </div>
+          <div class="simplex-state" id="simplex-state">—</div>
+        </div>
+        <div class="simplex-link-wrap">
+          <label for="simplex-link-text">Link (copia y pega si el QR no funciona)</label>
+          <textarea id="simplex-link-text" readonly rows="4" placeholder="El bot SimpleX todavia no ha generado un link de invitacion..."></textarea>
+          <div class="simplex-actions">
+            <button type="button" class="quick-action-btn" id="simplex-copy-btn">Copiar link</button>
+            <button type="button" class="quick-action-btn" id="simplex-refresh-btn">Refrescar</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Battery -->
     <section class="battery-section hidden" id="battery-section">
       <h2>Bateria</h2>

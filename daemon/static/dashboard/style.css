@@ -1107,6 +1107,80 @@ section { scroll-margin-top: 92px; }
   border-color: rgba(0, 0, 0, 0.06);
 }
 
+/* SimpleX invite QR section — paired QR + link/copy for connecting a phone. */
+.simplex-section {
+  padding: 1.5rem;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  margin-bottom: 1.5rem;
+}
+.simplex-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .simplex-grid { grid-template-columns: 1fr; }
+}
+.simplex-qr-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+.simplex-qr {
+  width: 100%;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+.simplex-qr svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.simplex-state {
+  font-size: 0.85rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+  text-align: center;
+}
+.simplex-link-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.simplex-link-wrap label {
+  font-size: 0.85rem;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+#simplex-link-text {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-primary, #fff);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  resize: vertical;
+}
+[data-theme="light"] #simplex-link-text {
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--text-primary, #111);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+.simplex-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .gameguard-section {
   padding: 1.5rem;
   background: var(--bg-card);

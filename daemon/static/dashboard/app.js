@@ -1176,7 +1176,70 @@ async function fetchInitialState() {
     addFeedItem('&#9888;', 'Error al cargar estado inicial: ' + err.message);
     renderHero();
   }
+
+  // Load the SimpleX invite QR lazily — failures shouldn't block the
+  // rest of the dashboard since the feature is opt-in.
+  loadSimplexInvite().catch((err) => {
+    console.warn('[simplex] invite load failed:', err);
+  });
 }
+
+// --- SimpleX invite QR + link -------------------------------------------
+async function loadSimplexInvite() {
+  const qrBox = document.getElementById('simplex-qr');
+  const linkBox = document.getElementById('simplex-link-text');
+  const stateBox = document.getElementById('simplex-state');
+  if (!qrBox || !linkBox || !stateBox) return;
+
+  try {
+    const resp = await api('GET', '/simplex/invite');
+    if (!resp || !resp.exists) {
+      qrBox.innerHTML = '<span class="setting-hint">Sin link todavia</span>';
+      linkBox.value = '';
+      stateBox.textContent = 'simplex-chat aun no ha generado una invitacion. Revisa que el servicio este activo.';
+      return;
+    }
+    // The daemon already rendered a full SVG string so we can drop it
+    // straight in. Trusted source (same-origin) — no sanitization needed.
+    if (resp.qr_svg) {
+      qrBox.innerHTML = resp.qr_svg;
+    } else {
+      qrBox.innerHTML = '<span class="setting-hint">QR no disponible</span>';
+    }
+    linkBox.value = resp.link || '';
+    stateBox.textContent = 'Escanea con SimpleX Chat en tu telefono para conectarte a Axi';
+  } catch (err) {
+    console.error('[simplex] load failed:', err);
+    qrBox.innerHTML = '<span class="setting-hint">Error al cargar QR</span>';
+    stateBox.textContent = 'Error: ' + (err.message || err);
+  }
+}
+
+// Wire up the copy + refresh buttons once at module load.
+document.addEventListener('DOMContentLoaded', () => {
+  const copyBtn = document.getElementById('simplex-copy-btn');
+  const refreshBtn = document.getElementById('simplex-refresh-btn');
+  const linkBox = document.getElementById('simplex-link-text');
+  if (copyBtn && linkBox) {
+    copyBtn.addEventListener('click', async () => {
+      if (!linkBox.value) return;
+      try {
+        await navigator.clipboard.writeText(linkBox.value);
+        const prev = copyBtn.textContent;
+        copyBtn.textContent = 'Copiado!';
+        setTimeout(() => { copyBtn.textContent = prev; }, 1500);
+      } catch (_) {
+        linkBox.select();
+        document.execCommand('copy');
+      }
+    });
+  }
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      loadSimplexInvite().catch((err) => console.warn('[simplex] refresh failed:', err));
+    });
+  }
+});
 
 // --- Periodic full state refresh (catch anything SSE missed) ---
 async function refreshFullState() {
