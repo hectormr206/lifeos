@@ -18,6 +18,7 @@ REPO_BASE="/var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files"
 
 # Allowed destination prefixes (least-privilege)
 ALLOWED_DESTS=(
+    "/var/lib/lifeos/"
     "/etc/systemd/"
     "/etc/udev/rules.d/"
     "/etc/tmpfiles.d/"
