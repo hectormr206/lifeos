@@ -773,6 +773,7 @@ COPY image/files/usr/local/bin/lifeos-diarize.py               /usr/local/bin/li
 COPY image/files/usr/local/bin/lifeos-sentinel.sh              /usr/local/bin/lifeos-sentinel.sh
 COPY image/files/usr/local/bin/lifeos-libreoffice-verify.py   /usr/local/bin/lifeos-libreoffice-verify.py
 COPY image/files/usr/local/bin/lifeos-dev-deploy.sh           /usr/local/bin/lifeos-dev-deploy.sh
+COPY image/files/usr/local/bin/lifeos-detect-ecores.sh        /usr/local/bin/lifeos-detect-ecores.sh
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-apply-default-layout.sh \
              /usr/local/bin/lifeos-cosmic-snapshot \
@@ -796,7 +797,8 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-check \
              /usr/local/bin/lifeos-sentinel.sh \
              /usr/local/bin/lifeos-libreoffice-verify.py \
-             /usr/local/bin/lifeos-dev-deploy.sh
+             /usr/local/bin/lifeos-dev-deploy.sh \
+             /usr/local/bin/lifeos-detect-ecores.sh
 
 # --- Pre-trained wake word model (works from first boot) ---
 # Generate synthetic "Axi" samples with espeak-ng and build the rustpotter .rpw model.
@@ -830,6 +832,12 @@ COPY image/files/etc/udev/rules.d/90-lifeos-thermal.rules /usr/lib/udev/rules.d/
 COPY image/files/etc/udev/rules.d/85-lifeos-power-epp.rules /usr/lib/udev/rules.d/85-lifeos-power-epp.rules
 COPY image/files/etc/systemd/system/lifeos-power-profile.service /usr/lib/systemd/system/lifeos-power-profile.service
 COPY image/files/etc/systemd/system/lifeos-powertune.service /usr/lib/systemd/system/lifeos-powertune.service
+
+# --- E-core pinning: background tasks run on efficiency cores only ---
+COPY image/files/etc/systemd/system/lifeos-background.slice /usr/lib/systemd/system/lifeos-background.slice
+COPY image/files/etc/systemd/system/lifeos-ecore-pin.service /usr/lib/systemd/system/lifeos-ecore-pin.service
+COPY image/files/etc/systemd/system/whisper-stt.service.d/20-lifeos-background.conf /usr/lib/systemd/system/whisper-stt.service.d/20-lifeos-background.conf
+COPY image/files/etc/systemd/system/llama-embeddings.service.d/20-lifeos-background.conf /usr/lib/systemd/system/llama-embeddings.service.d/20-lifeos-background.conf
 
 # --- Security hardening (Fase AU — Security by Default) ---
 # Kernel hardening sysctl (CIS Benchmark Level 1)
@@ -986,6 +994,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-thermal.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-thermal.service && \
     ln -sf /usr/lib/systemd/system/lifeos-power-profile.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-power-profile.service && \
     ln -sf /usr/lib/systemd/system/lifeos-powertune.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-powertune.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-ecore-pin.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-ecore-pin.service && \
     ln -sf /usr/lib/systemd/system/lifeos-battery.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-battery.service && \
     ln -sf /usr/lib/systemd/system/lifeos-smart-charge.timer /usr/lib/systemd/system/timers.target.wants/lifeos-smart-charge.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-nvidia-signed-modules.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-nvidia-signed-modules.service && \

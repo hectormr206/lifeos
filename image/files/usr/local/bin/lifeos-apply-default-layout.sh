@@ -38,6 +38,7 @@ COSMIC_GROUPS=(
     "com.system76.CosmicTheme.Mode/v1"
     "com.system76.CosmicTk/v1"
     "com.system76.CosmicSettings.FontConfig/v1"
+    "com.system76.CosmicIdle/v1"
 )
 
 # Copy a single file from skel to user dir if and only if the destination

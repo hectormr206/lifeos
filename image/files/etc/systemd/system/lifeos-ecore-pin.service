@@ -1,0 +1,35 @@
+[Unit]
+Description=LifeOS E-Core Pin — restrict background slice to efficiency cores
+After=multi-user.target
+Before=whisper-stt.service llama-embeddings.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Detect E-cores and apply cpuset to the background slice.
+# On non-hybrid CPUs this sets all CPUs (no restriction).
+ExecStart=/bin/bash -c '\
+  MIN=999999999; MAX=0; \
+  declare -A FTQ; \
+  for d in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do \
+    [ -f "$$d/cpuinfo_max_freq" ] || continue; \
+    ID=$$(basename "$$(dirname "$$d")" | sed "s/cpu//"); \
+    F=$$(cat "$$d/cpuinfo_max_freq"); \
+    FTQ[$$F]="$${FTQ[$$F]:-} $$ID"; \
+    [ "$$F" -gt "$$MAX" ] && MAX=$$F; \
+    [ "$$F" -lt "$$MIN" ] && MIN=$$F; \
+  done; \
+  if [ "$$MIN" -lt "$$MAX" ]; then \
+    ECORES=""; \
+    for ID in $${FTQ[$$MIN]}; do \
+      ECORES="$${ECORES:+$$ECORES,}$$ID"; \
+    done; \
+  else \
+    ECORES="0-$$(($$(nproc)-1))"; \
+  fi; \
+  echo "[ecore-pin] E-cores: $$ECORES"; \
+  systemctl set-property lifeos-background.slice AllowedCPUs="$$ECORES" 2>/dev/null || \
+    echo "[ecore-pin] Could not set AllowedCPUs"'
+
+[Install]
+WantedBy=multi-user.target
