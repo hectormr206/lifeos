@@ -68,9 +68,9 @@ ARG LIFEOS_BUILD_MODE=release
 # sane threshold instead of hanging indefinitely on a dead CDN.
 RUN printf '%s\n' \
         'max_parallel_downloads=20' \
-        'fastestmirror=True' \
-        'minrate=1k' \
-        'timeout=30' \
+        'minrate=5k' \
+        'timeout=20' \
+        'deltarpm=False' \
         >> /etc/dnf/dnf.conf
 
 RUN dnf -y install \
@@ -332,9 +332,9 @@ ARG LIFEOS_BUILD_MODE=release
 # and was the single biggest contributor to 60-90min build times.
 RUN printf '%s\n' \
         'max_parallel_downloads=20' \
-        'fastestmirror=True' \
-        'minrate=1k' \
-        'timeout=30' \
+        'minrate=5k' \
+        'timeout=20' \
+        'deltarpm=False' \
         >> /etc/dnf/dnf.conf
 
 # --- Repositorios adicionales (COSMIC y RPMFusion) ---
