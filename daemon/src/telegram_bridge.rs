@@ -218,6 +218,8 @@ mod inner {
         meeting_archive: Option<Arc<crate::meeting_archive::MeetingArchive>>,
         meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
         calendar: Option<Arc<crate::calendar::CalendarManager>>,
+        history: Arc<ConversationHistory>,
+        cron_store: Arc<CronStore>,
     ) {
         info!("Starting Telegram bridge (natural language mode)...");
 
@@ -355,9 +357,7 @@ mod inner {
             }
         });
 
-        // Shared state for conversation history, cron, and SDD sessions
-        let history = Arc::new(ConversationHistory::new());
-        let cron_store = Arc::new(CronStore::new());
+        // SDD store is bridge-local (ephemeral, no cross-bridge need).
         let sdd_store = Arc::new(SddStore::new());
         let rate_limiter = RateLimiter::new();
 
