@@ -74,3 +74,11 @@
 
 # === RPM VERIFICATION (security_ai.rs system integrity) ===
 %wheel ALL=(root) NOPASSWD: /usr/bin/rpm -V *
+
+# === SYSTEMCTL RESET-FAILED (recover from start-limit-hit) ===
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed *
+
+# === DEV DEPLOYMENT (sync repo changes to live system) ===
+# Validated script: source must be under image/files/, dest under allowed paths only.
+# Enables AI assistant to apply fixes to both repo AND live system in one turn.
+%wheel ALL=(root) NOPASSWD: /var/lib/lifeos/lifeos-dev-deploy.sh
