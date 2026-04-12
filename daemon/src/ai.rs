@@ -561,9 +561,17 @@ impl AiManager {
         const FALLBACK_DIM: usize = 96;
         let mut embedding = vec![0.0f32; FALLBACK_DIM];
 
-        let normalized = text.to_lowercase();
-        for i in 0..normalized.len().saturating_sub(2) {
-            let trigram = &normalized[i..i + 3];
+        // Iterate by CHARACTERS, not bytes. The old implementation did
+        // `&normalized[i..i + 3]` with `i` from `0..normalized.len()`, which
+        // crashes with "byte index is not a char boundary" the moment the
+        // input contains multi-byte UTF-8 (accents, ñ, °, em-dash, etc).
+        // In production Hector's screen OCR included "24°c" and the hash
+        // embedding panic-killed the tokio task that runs the screen capture
+        // + vision pipeline — screen capture silently stopped and never
+        // recovered until the daemon was restarted.
+        let normalized: Vec<char> = text.to_lowercase().chars().collect();
+        for window in normalized.windows(3) {
+            let trigram: String = window.iter().collect();
             let mut hasher = DefaultHasher::new();
             trigram.hash(&mut hasher);
             let idx = (hasher.finish() as usize) % FALLBACK_DIM;
