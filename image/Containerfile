@@ -831,6 +831,9 @@ COPY image/files/etc/udev/rules.d/90-lifeos-thermal.rules /usr/lib/udev/rules.d/
 # --- Power efficiency: dynamic EPP switching (AC vs battery) ---
 COPY image/files/etc/udev/rules.d/85-lifeos-power-epp.rules /usr/lib/udev/rules.d/85-lifeos-power-epp.rules
 COPY image/files/etc/systemd/system/lifeos-power-profile.service /usr/lib/systemd/system/lifeos-power-profile.service
+# Mask Fedora's power-profiles-daemon — it fights with our custom EPP management
+# (lifeos-power-profile.service + 85-lifeos-power-epp.rules handle EPP directly).
+RUN ln -sf /dev/null /usr/lib/systemd/system/power-profiles-daemon.service 2>/dev/null || true
 COPY image/files/etc/systemd/system/lifeos-powertune.service /usr/lib/systemd/system/lifeos-powertune.service
 
 # --- E-core pinning: background tasks run on efficiency cores only ---
@@ -1376,7 +1379,9 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /usr/lib/systemd/system/lifeos-ecore-pin.service || fail "lifeos-ecore-pin.service"; \
     test -x /usr/local/bin/lifeos-detect-ecores.sh || fail "lifeos-detect-ecores.sh"; \
     test -f /usr/lib/systemd/system/whisper-stt.service.d/20-lifeos-background.conf || fail "whisper-stt 20-lifeos-background.conf"; \
-    test -f /usr/lib/systemd/system/llama-embeddings.service.d/20-lifeos-background.conf || fail "llama-embeddings 20-lifeos-background.conf"
+    test -f /usr/lib/systemd/system/llama-embeddings.service.d/20-lifeos-background.conf || fail "llama-embeddings 20-lifeos-background.conf"; \
+    test -x /usr/local/bin/lifeos-dev-deploy.sh || fail "lifeos-dev-deploy.sh"; \
+    test -x /usr/local/bin/lifeos-apply-default-layout.sh || fail "lifeos-apply-default-layout.sh"
 
 # nonempty-boot is intentionally skipped: /boot/efi content is required for bootc-image-builder ISO generation.
 RUN dnf clean all && rm -f /var/log/dnf5.log* /var/cache/ldconfig/aux-cache && bootc container lint --skip nonempty-boot
