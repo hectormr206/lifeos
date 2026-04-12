@@ -113,7 +113,10 @@ Cmnd_Alias LIFEOS_DEV_KMOD = \
     /usr/sbin/depmod, \
     /usr/sbin/depmod *, \
     /usr/sbin/modinfo *, \
-    /usr/bin/kmod *
+    /usr/bin/kmod *, \
+    /usr/bin/chcon -t modules_object_t /var/lib/lifeos/signed-nvidia/*.ko, \
+    /usr/bin/mokutil --list-enrolled, \
+    /usr/bin/mokutil --import /var/home/lifeos/.config/lifeos/nvidia-secureboot/*.der
 
 # ───────────────────────────────────────────────────────────────────────
 # 4. NVIDIA GPU diagnostics
@@ -186,6 +189,12 @@ Cmnd_Alias LIFEOS_DEV_INSTALL_DROPINS = \
     /usr/bin/install -D -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/system/simplex-chat.service.d/*.conf /etc/systemd/system/simplex-chat.service.d/*.conf, \
     /usr/bin/install -D -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/systemd/user/lifeosd.service.d/*.conf /etc/systemd/user/lifeosd.service.d/
 
+# AI model installation — allows staging downloaded .gguf models from
+# the user's local cache into the system models directory where
+# llama-server expects them. Source is pinned to the user cache path.
+Cmnd_Alias LIFEOS_DEV_INSTALL_MODELS = \
+    /usr/bin/install -m 644 /var/home/lifeos/.local/share/lifeos/models/*.gguf /var/lib/lifeos/models/
+
 # Module autoload and options
 Cmnd_Alias LIFEOS_DEV_INSTALL_MODULES = \
     /usr/bin/install -m 644 /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/etc/modules-load.d/*.conf /etc/modules-load.d/, \
@@ -246,6 +255,7 @@ lifeos ALL=(root) NOPASSWD: \
     LIFEOS_DEV_INSTALL_UNITS, \
     LIFEOS_DEV_INSTALL_DROPINS, \
     LIFEOS_DEV_INSTALL_MODULES, \
+    LIFEOS_DEV_INSTALL_MODELS, \
     LIFEOS_DEV_INSTALL_SUDOERS, \
     LIFEOS_DEV_RM, \
     LIFEOS_DEV_BOOTC, \
