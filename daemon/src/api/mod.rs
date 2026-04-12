@@ -3104,6 +3104,7 @@ async fn run_voice_session(
                 language: payload.language,
                 voice_model: payload.voice_model,
                 playback: payload.playback.unwrap_or(true),
+                triggered_by_wake_word: true,
             },
         )
         .await
