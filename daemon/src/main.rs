@@ -1358,7 +1358,19 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
             if !alerts.is_empty() {
+                // Include the alert descriptions — logging just the count for
+                // months made it impossible to tell whether the monitor was
+                // catching a real intrusion or firing on benign background
+                // noise. Log at DEBUG so the journal isn't flooded, and
+                // emit a single WARN with the count on every cycle.
                 warn!("[security_ai] {} alerts detected this cycle", alerts.len());
+                for alert in &alerts {
+                    log::debug!(
+                        "[security_ai] alert {:?}: {}",
+                        alert.severity,
+                        alert.description
+                    );
+                }
             }
         }
     });
