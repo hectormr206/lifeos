@@ -34,6 +34,8 @@ ALLOWED_DESTS=(
     "/usr/lib/udev/rules.d/"
     "/usr/lib/tmpfiles.d/"
     "/usr/local/bin/"
+    "/etc/xdg-desktop-portal/"
+    "/var/lib/flatpak/"
 )
 
 log() { logger -t lifeos-dev-deploy "$*"; echo "$*"; }

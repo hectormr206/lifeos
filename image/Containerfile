@@ -485,6 +485,9 @@ RUN flatpak remote-add --if-not-exists --system flathub \
         com.vintagetechie.CosmicExtAppletTempest 2>/dev/null || \
     echo "INFO: COSMIC applets not available during build; user can install from COSMIC Store"
 
+# --- Flatpak: global Wayland-first overrides (avoid XWayland overhead) ---
+COPY image/files/var/lib/flatpak/overrides/global /var/lib/flatpak/overrides/global
+
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \
     firefox \
@@ -556,6 +559,9 @@ RUN dnf -y install \
     glibc-langpack-es glibc-langpack-en \
     langpacks-es langpacks-en \
     && dnf clean all
+
+# --- Pre-generate fontconfig cache (avoids cold-cache delay on first boot) ---
+RUN fc-cache -f -v > /dev/null 2>&1 || true
 
 # --- Speaker identification runtime (WeSpeaker ONNX) ---
 RUN dnf -y install python3-pip python3-numpy && \
@@ -828,6 +834,9 @@ COPY image/files/etc/systemd/system/lifeos-thermal.service /usr/lib/systemd/syst
 COPY image/files/etc/tmpfiles.d/lifeos-thermal.conf /usr/lib/tmpfiles.d/lifeos-thermal.conf
 COPY image/files/etc/udev/rules.d/90-lifeos-thermal.rules /usr/lib/udev/rules.d/90-lifeos-thermal.rules
 
+# --- I/O scheduler: NVMe=none, SSD=mq-deadline, HDD=bfq ---
+COPY image/files/etc/udev/rules.d/60-lifeos-io-scheduler.rules /usr/lib/udev/rules.d/60-lifeos-io-scheduler.rules
+
 # --- Power efficiency: dynamic EPP switching (AC vs battery) ---
 COPY image/files/etc/udev/rules.d/85-lifeos-power-epp.rules /usr/lib/udev/rules.d/85-lifeos-power-epp.rules
 COPY image/files/etc/systemd/system/lifeos-power-profile.service /usr/lib/systemd/system/lifeos-power-profile.service
@@ -889,6 +898,7 @@ COPY image/files/etc/systemd/system/spice-vdagentd.service.d/10-lifeos-vm-only.c
 
 # xdg-desktop-portal LifeOS integration
 COPY files/usr/share/xdg-desktop-portal/portals/lifeos.portal /usr/share/xdg-desktop-portal/portals/lifeos.portal
+COPY image/files/etc/xdg-desktop-portal/portals.conf /etc/xdg-desktop-portal/portals.conf
 
 # Copiar configuración inicial si no existe
 RUN cp -n /etc/lifeos/lifeos.toml.default /etc/lifeos/lifeos.toml || true
@@ -1021,6 +1031,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
+    ln -sf /usr/lib/systemd/system/fstrim.timer /usr/lib/systemd/system/timers.target.wants/fstrim.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer /usr/lib/systemd/system/timers.target.wants/lifeos-maintenance-cleanup.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-aide-check.timer && \
