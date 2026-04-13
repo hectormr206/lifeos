@@ -29,10 +29,12 @@ ISO_LOG_KEEP_DAYS="${ISO_LOG_KEEP_DAYS:-14}"
 DEV_PROJECT_DIRS="${DEV_PROJECT_DIRS:-/var/home/lifeos/personalProjects/gama/lifeos}"
 DEV_TARGET_PRUNE_ON_HIGH_DISK="${DEV_TARGET_PRUNE_ON_HIGH_DISK:-true}"
 DEV_TARGET_PRUNE_THRESHOLD="${DEV_TARGET_PRUNE_THRESHOLD:-92}"
+RUST_INCREMENTAL_KEEP_DAYS="${RUST_INCREMENTAL_KEEP_DAYS:-7}"
+PODMAN_IMAGE_KEEP_LATEST="${PODMAN_IMAGE_KEEP_LATEST:-2}"
 
 TMP_PURGE_DAYS="${TMP_PURGE_DAYS:-3}"
-PODMAN_PRUNE_ENABLED="${PODMAN_PRUNE_ENABLED:-false}"
-PODMAN_PRUNE_IMAGES="${PODMAN_PRUNE_IMAGES:-false}"
+PODMAN_PRUNE_ENABLED="${PODMAN_PRUNE_ENABLED:-true}"
+PODMAN_PRUNE_IMAGES="${PODMAN_PRUNE_IMAGES:-true}"
 PODMAN_PRUNE_UNTIL="${PODMAN_PRUNE_UNTIL:-168h}"
 BOOTC_CLEANUP_ENABLED="${BOOTC_CLEANUP_ENABLED:-true}"
 FLATPAK_PRUNE_ENABLED="${FLATPAK_PRUNE_ENABLED:-true}"
@@ -184,6 +186,23 @@ cleanup_dev_targets_on_high_disk() {
     done
 }
 
+cleanup_rust_incremental() {
+    local dir
+    for dir in ${DEV_PROJECT_DIRS}; do
+        local inc_dir="${dir}/target/debug/incremental"
+        [ -d "${inc_dir}" ] || continue
+        if is_build_busy; then
+            log "Skipping Rust incremental prune — build tools active"
+            return 0
+        fi
+        local count
+        count="$(find "${inc_dir}" -maxdepth 1 -type d -mtime "+${RUST_INCREMENTAL_KEEP_DAYS}" 2>/dev/null | wc -l)"
+        [ "${count}" -gt 0 ] || return 0
+        log "Pruning ${count} stale Rust incremental dirs (>${RUST_INCREMENTAL_KEEP_DAYS}d)"
+        find "${inc_dir}" -maxdepth 1 -type d -mtime "+${RUST_INCREMENTAL_KEEP_DAYS}" -exec rm -rf {} + 2>/dev/null || true
+    done
+}
+
 cleanup_tmp() {
     log "Cleaning stale temporary build directories in /var/tmp"
     find /var/tmp -mindepth 1 -maxdepth 1 -type d \
@@ -195,11 +214,40 @@ cleanup_podman() {
     [ "${PODMAN_PRUNE_ENABLED}" = "true" ] || return 0
     command -v podman >/dev/null 2>&1 || return 0
     log "Pruning podman stale build/runtime data"
+
+    # Clean dangling images and old containers/builders
     if [ "${PODMAN_PRUNE_IMAGES}" = "true" ]; then
         run_cmd podman image prune -f
     fi
     run_cmd podman container prune -f --filter "until=${PODMAN_PRUNE_UNTIL}"
     run_cmd podman builder prune -f --filter "until=${PODMAN_PRUNE_UNTIL}"
+
+    # Remove old tagged lifeos images, keeping only the N most recent
+    if [ "${PODMAN_PRUNE_IMAGES}" = "true" ]; then
+        local keep="${PODMAN_IMAGE_KEEP_LATEST}"
+        local images
+        mapfile -t images < <(
+            podman images --filter "reference=localhost/lifeos" --format '{{.CreatedAt}}\t{{.ID}}\t{{.Repository}}:{{.Tag}}' 2>/dev/null \
+                | sort -r | awk -F'\t' "NR > ${keep} {print \$2}"
+        )
+        if [ "${#images[@]}" -gt 0 ]; then
+            log "Removing ${#images[@]} old localhost/lifeos images (keeping ${keep})"
+            for img in "${images[@]}"; do
+                [ -n "${img}" ] && run_cmd podman rmi -f "${img}"
+            done
+        fi
+        # Remove ghcr.io cached pulls (re-downloadable)
+        mapfile -t ghcr_images < <(
+            podman images --filter "reference=ghcr.io/hectormr206/lifeos" --format '{{.CreatedAt}}\t{{.ID}}' 2>/dev/null \
+                | sort -r | awk -F'\t' "NR > ${keep} {print \$2}"
+        )
+        if [ "${#ghcr_images[@]}" -gt 0 ]; then
+            log "Removing ${#ghcr_images[@]} old GHCR cached images (keeping ${keep})"
+            for img in "${ghcr_images[@]}"; do
+                [ -n "${img}" ] && run_cmd podman rmi -f "${img}"
+            done
+        fi
+    fi
 }
 
 cleanup_bootc() {
@@ -236,6 +284,7 @@ main() {
     cleanup_runner
     cleanup_iso_outputs
     cleanup_dev_targets_on_high_disk
+    cleanup_rust_incremental
     cleanup_tmp
     cleanup_podman
     cleanup_bootc
