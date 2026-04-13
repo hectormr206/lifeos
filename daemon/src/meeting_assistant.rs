@@ -915,21 +915,50 @@ impl MeetingAssistant {
         transcript: &str,
         router: &Arc<RwLock<crate::llm_router::LlmRouter>>,
     ) -> Result<String> {
+        let truncated = crate::str_utils::truncate_bytes_safe(&transcript, 6000);
         let prompt = format!(
-            "Eres un asistente que resume reuniones. Genera un resumen estructurado de esta transcripcion:\n\n\
-            {}\n\n\
-            Formato del resumen:\n\
-            ## Resumen Ejecutivo\n\
-            (3-5 bullet points)\n\n\
-            ## Temas Discutidos\n\
-            (lista)\n\n\
-            ## Decisiones Tomadas\n\
-            (lista)\n\n\
-            ## Action Items\n\
-            (quien, que, cuando)\n\n\
-            ## Preguntas Sin Resolver\n\
-            (lista, si las hay)",
-            crate::str_utils::truncate_bytes_safe(&transcript, 6000)
+            "Sos un asistente de documentación de reuniones. Tu trabajo es extraer información \
+             EXCLUSIVAMENTE de la transcripción proporcionada. Este documento sirve como evidencia \
+             formal de lo discutido.\n\n\
+             ## REGLAS CRÍTICAS\n\
+             - NUNCA inventes información que no esté en la transcripción.\n\
+             - Si algo no se discutió, NO incluyas esa sección.\n\
+             - Marcá información incierta con [?].\n\
+             - Distinguí entre lo que se DIJO explícitamente vs lo que se PUEDE INFERIR del contexto.\n\
+             - Si la transcripción es muy corta o ininteligible, decilo honestamente.\n\
+             - Usá español rioplatense.\n\n\
+             ## TRANSCRIPCIÓN\n\n\
+             {truncated}\n\n\
+             ## FORMATO DE SALIDA\n\
+             Generá SOLO las secciones que tengan contenido real extraído de la transcripción.\n\
+             Omití completamente las secciones sin contenido.\n\n\
+             ### Secciones disponibles (incluir solo si aplica):\n\n\
+             ## Resumen Ejecutivo\n\
+             - 3-5 bullet points del contenido principal\n\n\
+             ## Participantes Identificados\n\
+             - Speaker N: [nombre si se mencionó, o \"No identificado\"]\n\
+             - Rol/relación si se puede inferir del contexto (marcar con [inferido])\n\n\
+             ## Temas Discutidos\n\
+             - Tema 1: resumen de lo hablado\n\
+             - Tema 2: ...\n\n\
+             ## Decisiones Tomadas\n\
+             - Decisión y quién la tomó (si se identificó)\n\n\
+             ## Action Items (Tareas Pendientes)\n\
+             | Responsable | Tarea | Fecha límite | Prioridad |\n\
+             |-------------|-------|--------------|----------|\n\
+             (solo si se mencionaron tareas explícitamente)\n\n\
+             ## Información Financiera\n\
+             - Montos, pagos, cobros, presupuestos, ventas mencionados explícitamente\n\
+             (solo si se discutieron cifras o temas financieros)\n\n\
+             ## Próximos Pasos\n\
+             - Próxima reunión (fecha/hora si se mencionó)\n\
+             - Seguimientos acordados\n\n\
+             ## Preguntas Sin Resolver\n\
+             - Temas que quedaron pendientes de respuesta\n\n\
+             ## Contexto Adicional\n\
+             - Tipo de reunión inferido: (trabajo/personal/entrevista/ventas/etc.) [inferido]\n\
+             - Tono general de la reunión\n\
+             - Documentos o recursos mencionados"
         );
 
         let request = crate::llm_router::RouterRequest {
@@ -940,7 +969,7 @@ impl MeetingAssistant {
             complexity: Some(crate::llm_router::TaskComplexity::Complex),
             sensitivity: None,
             preferred_provider: None,
-            max_tokens: Some(2048),
+            max_tokens: Some(4096),
             task_type: None,
         };
 
@@ -1626,16 +1655,18 @@ impl MeetingAssistant {
         };
 
         let markdown = format!(
-            "# Reunion: {title}\n\n\
+            "# Reunión: {title}\n\n\
              **Fecha:** {date_prefix}\n\
-             **Duracion:** {duration_str}\n\
+             **Duración:** {duration_str}\n\
              **App:** {app_name}\n\
              **Participantes:** {participants_str}\n\n\
-             ## Resumen\n\n\
+             ---\n\n\
              {summary_section}\n\n\
-             ## Action Items\n\n\
+             ---\n\n\
+             ## Action Items (extraídos manualmente)\n\n\
              {action_items_md}\n\n\
-             ## Transcript\n\n\
+             ---\n\n\
+             ## Transcripción Completa\n\n\
              {diarized_transcript}\n"
         );
 

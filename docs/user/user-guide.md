@@ -142,7 +142,7 @@ LifeOS can automatically detect when you join a video call and assist with recor
 
 The assistant is enabled by default. Set `LIFEOS_MEETING_ASSISTANT=0` to disable it. Real-time captions during a call are opt-in via `LIFEOS_MEETING_CAPTIONS=1`.
 
-Stable CLI commands for querying meeting history and archives will be documented once the interface is finalized.
+**Dashboard UI:** The "Reuniones" section in the LifeOS dashboard (under the Operaciones tab) shows all recorded meetings with summaries, action items, screenshots, and full transcripts. You can search meetings by content, filter by time period (this week / this month / all), and export any meeting as Markdown. Click a meeting card to see its full detail view, including a screenshot gallery with click-to-enlarge.
 
 ## Vision/OCR
 

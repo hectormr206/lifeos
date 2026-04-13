@@ -1613,6 +1613,13 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/dashboard/bootstrap", get(dashboard_bootstrap))
         .with_state(state.clone());
 
+    // Meeting screenshots/files — served from the meetings data directory.
+    // No auth required because the server is local-only (127.0.0.1).
+    let meetings_data_dir = std::env::var("LIFEOS_DATA_DIR")
+        .unwrap_or_else(|_| "/var/lib/lifeos".to_string());
+    let meetings_files_dir = format!("{}/meetings", meetings_data_dir);
+    let meetings_service = ServeDir::new(&meetings_files_dir);
+
     // Prometheus metrics endpoint — no auth required (standard practice)
     let metrics_route = Router::new()
         .route("/metrics", get(handle_metrics))
@@ -1625,6 +1632,7 @@ pub fn create_router(state: ApiState) -> Router {
         .merge(metrics_route)
         .merge(dashboard_bootstrap_route)
         .nest_service("/dashboard", dashboard_service)
+        .nest_service("/meetings-files", meetings_service)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state)
 }

@@ -818,7 +818,7 @@
       .meeting-detail-meta span { white-space: nowrap; }
       .meeting-detail-section { margin-bottom: 16px; }
       .meeting-detail-section h4 { font-size: 0.9rem; color: var(--accent); margin-bottom: 8px; }
-      .meeting-detail-summary { font-size: 0.9rem; line-height: 1.5; color: var(--text); white-space: pre-wrap; }
+      .meeting-detail-summary { font-size: 0.9rem; line-height: 1.5; color: var(--text); }
       .meeting-detail-participants { font-size: 0.9rem; color: var(--text-muted); }
       .meeting-detail-transcript { max-height: 400px; overflow-y: auto; font-size: 0.85rem; line-height: 1.4; }
       .transcript-line { padding: 4px 8px; border-left: 3px solid; margin: 2px 0; border-radius: 2px; }
@@ -841,6 +841,36 @@
       .meeting-detail-footer { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
       .meetings-list .task-item { cursor: pointer; transition: background 0.2s; }
       .meetings-list .task-item:hover { background: var(--bg-card-hover); }
+
+      /* Screenshot lightbox */
+      .screenshot-lightbox {
+        display: none; position: fixed; inset: 0; z-index: 9999;
+        background: rgba(0,0,0,0.85); backdrop-filter: blur(6px);
+        align-items: center; justify-content: center; cursor: zoom-out;
+      }
+      .screenshot-lightbox-img {
+        max-width: 92vw; max-height: 92vh; border-radius: 8px;
+        box-shadow: 0 8px 40px rgba(0,0,0,0.5); object-fit: contain;
+      }
+      .meeting-screenshots img { cursor: zoom-in; transition: transform 0.2s, box-shadow 0.2s; }
+      .meeting-screenshots img:hover { transform: scale(1.05); box-shadow: 0 4px 16px rgba(0,212,170,0.2); }
+
+      /* Collapsible transcript */
+      .transcript-collapsible { border: none; }
+      .transcript-toggle {
+        cursor: pointer; color: var(--accent); font-size: 0.9rem; font-weight: 600;
+        padding: 6px 0; list-style: none; user-select: none;
+      }
+      .transcript-toggle::-webkit-details-marker { display: none; }
+      .transcript-toggle::before { content: '\25B6 '; font-size: 0.7em; transition: transform 0.2s; display: inline-block; }
+      details[open] .transcript-toggle::before { transform: rotate(90deg); }
+      .transcript-content { margin-top: 8px; }
+
+      /* Markdown in summary */
+      .meeting-detail-summary ul { padding-left: 20px; margin: 4px 0; }
+      .meeting-detail-summary li { margin: 2px 0; list-style: disc; }
+      .meeting-detail-summary h4 { font-size: 0.95rem; }
+      .meeting-detail-summary h5 { font-size: 0.88rem; color: var(--text); margin: 6px 0 2px; }
     </style>
 
     <!-- Calendar -->

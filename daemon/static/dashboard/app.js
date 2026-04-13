@@ -2548,6 +2548,72 @@ if (doctorRunBtn) {
   });
 }
 
+// ==================== MEETINGS HELPERS ====================
+
+/** Convert an absolute screenshot path to a served URL via /meetings-files/ */
+function meetingFileUrl(absolutePath) {
+  if (!absolutePath) return '';
+  // Strip the data_dir + /meetings/ prefix, leaving just the filename
+  // Paths look like: /var/lib/lifeos/meetings/meeting-20260413-143000-screenshot-1.png
+  const meetingsPrefix = '/meetings/';
+  const idx = absolutePath.lastIndexOf(meetingsPrefix);
+  if (idx !== -1) {
+    const filename = absolutePath.substring(idx + meetingsPrefix.length);
+    return '/meetings-files/' + encodeURIComponent(filename);
+  }
+  // Fallback: try just the basename
+  const parts = absolutePath.split('/');
+  return '/meetings-files/' + encodeURIComponent(parts[parts.length - 1]);
+}
+
+/** Lightweight screenshot lightbox */
+window.openScreenshotLightbox = function(url) {
+  let overlay = document.getElementById('screenshot-lightbox');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'screenshot-lightbox';
+    overlay.className = 'screenshot-lightbox';
+    overlay.innerHTML = '<img class="screenshot-lightbox-img" alt="Captura ampliada">';
+    overlay.addEventListener('click', () => { overlay.style.display = 'none'; });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const lb = document.getElementById('screenshot-lightbox');
+        if (lb) lb.style.display = 'none';
+      }
+    });
+    document.body.appendChild(overlay);
+  }
+  const img = overlay.querySelector('img');
+  img.src = url;
+  overlay.style.display = 'flex';
+};
+
+/** Render basic markdown: bold, italic, lists, line breaks */
+function renderSimpleMarkdown(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+  // Bold: **text** or __text__
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  // Italic: *text* or _text_
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/(?<!\w)_(.+?)_(?!\w)/g, '<em>$1</em>');
+  // Unordered list items: - item or * item at start of line
+  html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+  // Headers: ## text or ### text
+  html = html.replace(/^###\s+(.+)$/gm, '<h5>$1</h5>');
+  html = html.replace(/^##\s+(.+)$/gm, '<h4 style="color:var(--accent);margin:8px 0 4px">$1</h4>');
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  // Clean up <br> inside ul
+  html = html.replace(/<br><ul>/g, '<ul>');
+  html = html.replace(/<\/ul><br>/g, '</ul>');
+  html = html.replace(/<\/li><br><li>/g, '</li><li>');
+  return html;
+}
+
 // ==================== MEETINGS (BB.5 + BB.10 + BB.11) ====================
 
 let meetingsCache = []; // cached meeting list for client-side filtering
@@ -2853,9 +2919,12 @@ window.showMeetingDetail = async function(meetingId) {
     }
   }
 
-  // Summary
+  // Summary — render basic markdown
   const summaryEl = $('#md-summary');
-  if (summaryEl) summaryEl.textContent = meeting.summary || 'Sin resumen disponible';
+  if (summaryEl) {
+    const rawSummary = meeting.summary || 'Sin resumen disponible';
+    summaryEl.innerHTML = renderSimpleMarkdown(rawSummary);
+  }
 
   // Action items
   const actionsEl = $('#md-action-items');
@@ -2871,17 +2940,20 @@ window.showMeetingDetail = async function(meetingId) {
     }
   }
 
-  // Transcript
+  // Transcript — collapsible
   const transcriptEl = $('#md-transcript');
   const transcriptSection = $('#md-transcript-section');
   const diarized = meeting.diarized_transcript || '';
   const plainTranscript = meeting.transcript || '';
   if (transcriptEl) {
+    let transcriptHtml = '';
     if (diarized) {
-      transcriptEl.innerHTML = renderTranscript(diarized);
-      if (transcriptSection) transcriptSection.style.display = '';
+      transcriptHtml = renderTranscript(diarized);
     } else if (plainTranscript) {
-      transcriptEl.innerHTML = `<div class="transcript-line speaker-1"><span class="speaker-name">[Transcripcion]</span> ${escapeHtml(plainTranscript)}</div>`;
+      transcriptHtml = `<div class="transcript-line speaker-1"><span class="speaker-name">[Transcripcion]</span> ${escapeHtml(plainTranscript)}</div>`;
+    }
+    if (transcriptHtml) {
+      transcriptEl.innerHTML = `<details class="transcript-collapsible"><summary class="transcript-toggle">Mostrar transcripcion completa</summary><div class="transcript-content">${transcriptHtml}</div></details>`;
       if (transcriptSection) transcriptSection.style.display = '';
     } else {
       transcriptEl.innerHTML = '<span style="color:var(--text-muted)">Sin transcripcion disponible</span>';
@@ -2889,15 +2961,16 @@ window.showMeetingDetail = async function(meetingId) {
     }
   }
 
-  // Screenshots
+  // Screenshots — convert absolute paths to the served /meetings-files/ URL
   const screenshotsEl = $('#md-screenshots');
   const screenshotsSection = $('#md-screenshots-section');
   const paths = meeting.screenshot_paths || [];
   if (screenshotsEl && screenshotsSection) {
     if (paths.length > 0) {
-      screenshotsEl.innerHTML = paths.map(p =>
-        `<img src="${escapeHtml(p)}" alt="Captura" loading="lazy" onerror="this.style.display='none'">`
-      ).join('');
+      screenshotsEl.innerHTML = paths.map(p => {
+        const url = meetingFileUrl(p);
+        return `<img src="${escapeHtml(url)}" alt="Captura" loading="lazy" onclick="openScreenshotLightbox('${escapeHtml(url)}')" onerror="this.style.display='none'">`;
+      }).join('');
       screenshotsSection.style.display = '';
     } else {
       screenshotsSection.style.display = 'none';
