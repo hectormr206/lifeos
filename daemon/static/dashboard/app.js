@@ -2588,10 +2588,12 @@ window.openScreenshotLightbox = function(url) {
   overlay.style.display = 'flex';
 };
 
-/** Render basic markdown: bold, italic, lists, line breaks */
+/** Render basic markdown: bold, italic, lists, tables, hrs, line breaks */
 function renderSimpleMarkdown(text) {
   if (!text) return '';
   let html = escapeHtml(text);
+  // Horizontal rule: --- or *** or ___ (full line) — must run before bold/italic
+  html = html.replace(/^[\-\*_]{3,}\s*$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
   // Bold: **text** or __text__
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
@@ -2600,17 +2602,49 @@ function renderSimpleMarkdown(text) {
   html = html.replace(/(?<!\w)_(.+?)_(?!\w)/g, '<em>$1</em>');
   // Unordered list items: - item or * item at start of line
   html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
+  // Ordered list items: 1. item
+  html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
   // Wrap consecutive <li> in <ul>
   html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
-  // Headers: ## text or ### text
+  // Headers: # text, ## text, ### text (order matters: ### before ## before #)
+  html = html.replace(/^####\s+(.+)$/gm, '<h6 style="font-size:0.85rem;color:var(--text);margin:4px 0 2px">$1</h6>');
   html = html.replace(/^###\s+(.+)$/gm, '<h5>$1</h5>');
   html = html.replace(/^##\s+(.+)$/gm, '<h4 style="color:var(--accent);margin:8px 0 4px">$1</h4>');
+  html = html.replace(/^#\s+(.+)$/gm, '<h4 style="color:var(--accent);margin:10px 0 4px;font-size:1rem">$1</h4>');
+
+  // Markdown tables: detect consecutive lines starting with |
+  html = html.replace(/((?:^\|.+\|\s*$\n?){2,})/gm, function(tableBlock) {
+    const rows = tableBlock.trim().split('\n').filter(r => r.trim());
+    if (rows.length < 2) return tableBlock;
+    let tableHtml = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:8px 0">';
+    rows.forEach((row, ri) => {
+      // Skip separator rows like |---|---|
+      if (/^\|[\s\-:]+\|$/.test(row.trim()) || /^\|(\s*[\-:]+\s*\|)+\s*$/.test(row.trim())) return;
+      const cells = row.split('|').filter((_, i, a) => i > 0 && i < a.length - 1);
+      const tag = ri === 0 ? 'th' : 'td';
+      const style = ri === 0
+        ? 'style="text-align:left;padding:4px 8px;border-bottom:2px solid var(--border);color:var(--accent);font-weight:600"'
+        : 'style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)"';
+      tableHtml += '<tr>' + cells.map(c => `<${tag} ${style}>${c.trim()}</${tag}>`).join('') + '</tr>';
+    });
+    tableHtml += '</table>';
+    return tableHtml;
+  });
+
   // Line breaks
   html = html.replace(/\n/g, '<br>');
   // Clean up <br> inside ul
   html = html.replace(/<br><ul>/g, '<ul>');
   html = html.replace(/<\/ul><br>/g, '</ul>');
   html = html.replace(/<\/li><br><li>/g, '</li><li>');
+  // Clean up <br> around tables
+  html = html.replace(/<br><table/g, '<table');
+  html = html.replace(/<\/table><br>/g, '</table>');
+  // Clean up <br> around hr and block elements
+  html = html.replace(/<br><hr/g, '<hr');
+  html = html.replace(/<hr([^>]*)><br>/g, '<hr$1>');
+  html = html.replace(/<br>(<h[1-6])/g, '$1');
+  html = html.replace(/(<\/h[1-6]>)<br>/g, '$1');
   return html;
 }
 
@@ -3187,57 +3221,58 @@ function renderConversations(convos) {
   });
 }
 
-// --- Tabs Initialization ---
-function initTabs() {
-  const main = document.querySelector('main');
-  if (!main) return;
+// --- Sidebar Navigation ---
+function initSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  const hamburger = document.getElementById('hamburger-btn');
+  if (!sidebar) return;
 
-  const nav = document.createElement('nav');
-  nav.className = 'dashboard-tabs';
-
-  const tabs = [
-    { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['safe-mode-banner', 'hero-panel', 'controls-section', 'status-section', 'chat-section'] },
-    { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'workers-section', 'metrics-section', 'sched-section', 'meetings-section', 'conversations-section', 'feed-section'] },
-    { id: 'tab-memory', icon: '&#128450;', label: 'Memoria', keywords: ['memory-section'] },
-    { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'doctor-section', 'health-section', 'battery-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'services-section', 'settings-section'] }
-  ];
-
-  const tabContents = document.createElement('div');
-  tabContents.className = 'tab-contents';
-
-  const children = Array.from(main.children);
-
-  tabs.forEach((tab, index) => {
-    const btn = document.createElement('button');
-    btn.className = 'tab-btn' + (index === 0 ? ' active' : '');
-    btn.innerHTML = `<span style="margin-right:4px">${tab.icon}</span> ${tab.label}`;
-    btn.dataset.target = tab.id;
-
-    const content = document.createElement('div');
-    content.id = tab.id;
-    content.className = 'tab-pane' + (index === 0 ? ' active' : '');
-
-    children.forEach(child => {
-      if (tab.keywords.some(kw => (child.className && child.className.includes(kw)) || (child.id && child.id.includes(kw)))) {
-        content.appendChild(child);
-      }
-    });
-
+  document.querySelectorAll('.sidebar-nav-item').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      const section = btn.dataset.section;
+      if (!section) return;
+      document.querySelectorAll('.sidebar-nav-item').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      content.classList.add('active');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
+      const target = document.getElementById('section-' + section);
+      if (target) target.classList.add('active');
+      if (window.innerWidth <= 768) {
+        sidebar.classList.remove('open');
+        overlay.classList.remove('visible');
+      }
+      const main = document.querySelector('main');
+      if (main) main.scrollTop = 0;
     });
-
-    nav.appendChild(btn);
-    tabContents.appendChild(content);
   });
 
-  main.insertBefore(nav, main.firstChild);
-  main.appendChild(tabContents);
+  if (hamburger) {
+    hamburger.addEventListener('click', () => {
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('visible');
+    });
+  }
+  if (overlay) {
+    overlay.addEventListener('click', () => {
+      sidebar.classList.remove('open');
+      overlay.classList.remove('visible');
+    });
+  }
+
+  // Sync mobile connection badge
+  const connBadge = document.getElementById('connection-badge');
+  const connBadgeMobile = document.getElementById('connection-badge-mobile');
+  if (connBadge && connBadgeMobile) {
+    const observer = new MutationObserver(() => {
+      connBadgeMobile.textContent = connBadge.textContent;
+      connBadgeMobile.className = connBadge.className;
+    });
+    observer.observe(connBadge, { attributes: true, childList: true, characterData: true });
+  }
 }
+
+// Keep old name as alias so nothing breaks
+function initTabs() { initSidebar(); }
 
 // --- Calendar ---
 const calendarGrid = $('#calendar-grid');

@@ -916,56 +916,74 @@ impl MeetingAssistant {
         router: &Arc<RwLock<crate::llm_router::LlmRouter>>,
     ) -> Result<String> {
         let truncated = crate::str_utils::truncate_bytes_safe(&transcript, 6000);
-        let prompt = format!(
-            "Sos un asistente de documentación de reuniones. Tu trabajo es extraer información \
-             EXCLUSIVAMENTE de la transcripción proporcionada. Este documento sirve como evidencia \
-             formal de lo discutido.\n\n\
-             ## REGLAS CRÍTICAS\n\
-             - NUNCA inventes información que no esté en la transcripción.\n\
-             - Si algo no se discutió, NO incluyas esa sección.\n\
-             - Marcá información incierta con [?].\n\
-             - Distinguí entre lo que se DIJO explícitamente vs lo que se PUEDE INFERIR del contexto.\n\
-             - Si la transcripción es muy corta o ininteligible, decilo honestamente.\n\
-             - Usá español rioplatense.\n\n\
-             ## TRANSCRIPCIÓN\n\n\
-             {truncated}\n\n\
-             ## FORMATO DE SALIDA\n\
-             Generá SOLO las secciones que tengan contenido real extraído de la transcripción.\n\
-             Omití completamente las secciones sin contenido.\n\n\
-             ### Secciones disponibles (incluir solo si aplica):\n\n\
-             ## Resumen Ejecutivo\n\
-             - 3-5 bullet points del contenido principal\n\n\
-             ## Participantes Identificados\n\
-             - Speaker N: [nombre si se mencionó, o \"No identificado\"]\n\
-             - Rol/relación si se puede inferir del contexto (marcar con [inferido])\n\n\
-             ## Temas Discutidos\n\
-             - Tema 1: resumen de lo hablado\n\
-             - Tema 2: ...\n\n\
-             ## Decisiones Tomadas\n\
-             - Decisión y quién la tomó (si se identificó)\n\n\
-             ## Action Items (Tareas Pendientes)\n\
-             | Responsable | Tarea | Fecha límite | Prioridad |\n\
-             |-------------|-------|--------------|----------|\n\
-             (solo si se mencionaron tareas explícitamente)\n\n\
-             ## Información Financiera\n\
-             - Montos, pagos, cobros, presupuestos, ventas mencionados explícitamente\n\
-             (solo si se discutieron cifras o temas financieros)\n\n\
-             ## Próximos Pasos\n\
-             - Próxima reunión (fecha/hora si se mencionó)\n\
-             - Seguimientos acordados\n\n\
-             ## Preguntas Sin Resolver\n\
-             - Temas que quedaron pendientes de respuesta\n\n\
-             ## Contexto Adicional\n\
-             - Tipo de reunión inferido: (trabajo/personal/entrevista/ventas/etc.) [inferido]\n\
-             - Tono general de la reunión\n\
-             - Documentos o recursos mencionados"
-        );
+
+        let system_prompt = "\
+Sos un asistente de documentación de reuniones. Tu trabajo es extraer información \
+EXCLUSIVAMENTE de la transcripción proporcionada. Este documento sirve como evidencia \
+formal de lo discutido.
+
+## REGLAS CRÍTICAS (leer ANTES de procesar la transcripción)
+- NUNCA inventes información que no esté en la transcripción.
+- Si algo no se discutió, NO incluyas esa sección — omitila por completo.
+- Marcá información incierta con [?].
+- Distinguí entre lo que se DIJO explícitamente vs lo que se PUEDE INFERIR del contexto.
+- Si la transcripción es muy corta o ininteligible, decilo honestamente.
+- Usá español rioplatense (voseo, expresiones argentinas).
+
+## FORMATO DE SALIDA
+Generá SOLO las secciones que tengan contenido real extraído de la transcripción.
+Omití completamente las secciones sin contenido.
+
+### Secciones disponibles (incluir solo si aplica):
+
+## Resumen Ejecutivo
+- 3-5 bullet points del contenido principal
+
+## Participantes Identificados
+- Speaker N: [nombre si se mencionó, o \"No identificado\"]
+- Rol/relación si se puede inferir del contexto (marcar con [inferido])
+
+## Temas Discutidos
+- Tema 1: resumen de lo hablado
+- Tema 2: ...
+
+## Decisiones Tomadas
+- Decisión y quién la tomó (si se identificó)
+
+## Action Items (Tareas Pendientes)
+Usá EXACTAMENTE este formato para cada tarea:
+- [ ] Responsable: Descripción de la tarea (fecha límite si se mencionó)
+(solo si se mencionaron tareas explícitamente)
+
+## Información Financiera
+- Montos, pagos, cobros, presupuestos, ventas mencionados explícitamente
+(solo si se discutieron cifras o temas financieros)
+
+## Próximos Pasos
+- Próxima reunión (fecha/hora si se mencionó)
+- Seguimientos acordados
+
+## Preguntas Sin Resolver
+- Temas que quedaron pendientes de respuesta
+
+## Contexto Adicional
+- Tipo de reunión inferido: (trabajo/personal/entrevista/ventas/etc.) [inferido]
+- Tono general de la reunión
+- Documentos o recursos mencionados";
+
+        let user_message = format!("## TRANSCRIPCIÓN\n\n{truncated}");
 
         let request = crate::llm_router::RouterRequest {
-            messages: vec![crate::llm_router::ChatMessage {
-                role: "user".into(),
-                content: serde_json::Value::String(prompt),
-            }],
+            messages: vec![
+                crate::llm_router::ChatMessage {
+                    role: "system".into(),
+                    content: serde_json::Value::String(system_prompt.to_string()),
+                },
+                crate::llm_router::ChatMessage {
+                    role: "user".into(),
+                    content: serde_json::Value::String(user_message),
+                },
+            ],
             complexity: Some(crate::llm_router::TaskComplexity::Complex),
             sensitivity: None,
             preferred_provider: None,
@@ -1654,6 +1672,26 @@ impl MeetingAssistant {
                 .join("\n")
         };
 
+        // Build screenshot markdown references
+        let screenshots_md: String = if export.screenshot_paths.is_empty() {
+            String::new()
+        } else {
+            let refs: Vec<String> = export
+                .screenshot_paths
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| {
+                    let src = PathBuf::from(p);
+                    src.file_name()
+                        .map(|f| format!("![Captura {}]({})", i + 1, f.to_string_lossy()))
+                })
+                .collect();
+            format!(
+                "---\n\n## Capturas de Pantalla\n\n{}\n\n",
+                refs.join("\n\n")
+            )
+        };
+
         let markdown = format!(
             "# Reunión: {title}\n\n\
              **Fecha:** {date_prefix}\n\
@@ -1663,8 +1701,9 @@ impl MeetingAssistant {
              ---\n\n\
              {summary_section}\n\n\
              ---\n\n\
-             ## Action Items (extraídos manualmente)\n\n\
+             ## Action Items\n\n\
              {action_items_md}\n\n\
+             {screenshots_md}\
              ---\n\n\
              ## Transcripción Completa\n\n\
              {diarized_transcript}\n"
@@ -2261,7 +2300,7 @@ async fn resolve_whisper_binary() -> Result<String> {
 /// Looks for lines starting with bullet points, task markers, or numbered items
 /// that indicate tasks assigned during the meeting.
 fn extract_action_items(summary: &str) -> Vec<crate::meeting_archive::ActionItem> {
-    // Task marker prefixes recognized in meeting transcripts.
+    // Task marker prefixes recognized in meeting summaries.
     const TASK_PREFIXES: &[&str] = &["- [ ]", "* [ ]", "PENDIENTE:", "Pendiente:"];
     const TASK_PREFIXES_UPPER: &[&str] = &["ACTION:"];
     // "T-O-D-O" split to avoid linter false positive on the literal.
@@ -2270,8 +2309,60 @@ fn extract_action_items(summary: &str) -> Vec<crate::meeting_archive::ActionItem
     let todo_lower = String::from("to") + "do";
 
     let mut items = Vec::new();
+    let mut in_action_table = false;
+
     for line in summary.lines() {
         let trimmed = line.trim();
+
+        // Detect the start of an action items table (markdown table format).
+        // The LLM may use table format even though we request checkbox format.
+        if trimmed.contains("Responsable") && trimmed.contains("Tarea") && trimmed.starts_with('|')
+        {
+            in_action_table = true;
+            continue;
+        }
+
+        // Skip table separator lines (e.g. |---|---|---|---|)
+        if in_action_table && trimmed.starts_with('|') && trimmed.contains("---") {
+            continue;
+        }
+
+        // Parse table data rows: | Responsable | Tarea | Fecha | Prioridad |
+        if in_action_table && trimmed.starts_with('|') {
+            let cols: Vec<&str> = trimmed
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim())
+                .collect();
+            if cols.len() >= 2 {
+                let who = if cols[0].is_empty() || cols[0] == "-" {
+                    "unknown".to_string()
+                } else {
+                    cols[0].to_string()
+                };
+                let what = cols[1].to_string();
+                let when = cols
+                    .get(2)
+                    .filter(|v| !v.is_empty() && **v != "-" && **v != "N/A")
+                    .map(|v| v.to_string());
+                if !what.is_empty() && what != "-" {
+                    items.push(crate::meeting_archive::ActionItem {
+                        who,
+                        what,
+                        when,
+                        completed: false,
+                    });
+                }
+            }
+            continue;
+        }
+
+        // End of table when we hit a non-table line
+        if in_action_table && !trimmed.starts_with('|') {
+            in_action_table = false;
+        }
+
+        // Check for checkbox/prefix action items
         let upper = trimmed.to_uppercase();
         let is_action = TASK_PREFIXES.iter().any(|p| trimmed.starts_with(p))
             || TASK_PREFIXES_UPPER.iter().any(|p| upper.starts_with(p))
@@ -2294,31 +2385,48 @@ fn extract_action_items(summary: &str) -> Vec<crate::meeting_archive::ActionItem
                 .trim_start_matches("Pendiente:")
                 .trim();
 
-            let (who, what) = if let Some(rest) = content.strip_prefix('@') {
-                // "@Alice: do X"
-                if let Some(colon_pos) = rest.find(':') {
-                    (
-                        rest[..colon_pos].trim().to_string(),
-                        rest[colon_pos + 1..].trim().to_string(),
-                    )
+            // Parse "Responsable: Tarea (fecha límite)" format
+            let (who, what, when) = if let Some(colon_pos) = content.find(':') {
+                let candidate_who = content[..colon_pos].trim().trim_start_matches('@');
+                // Only treat as who:what if the who part is short (a name, not a sentence)
+                if !candidate_who.is_empty() && candidate_who.len() <= 40 {
+                    let rest = content[colon_pos + 1..].trim();
+                    // Extract optional parenthesized deadline at the end
+                    let (task, deadline) = extract_parenthesized_deadline(rest);
+                    (candidate_who.to_string(), task, deadline)
                 } else {
-                    ("unknown".to_string(), content.to_string())
+                    ("unknown".to_string(), content.to_string(), None)
                 }
             } else {
-                ("unknown".to_string(), content.to_string())
+                ("unknown".to_string(), content.to_string(), None)
             };
 
             if !what.is_empty() {
                 items.push(crate::meeting_archive::ActionItem {
                     who,
                     what,
-                    when: None,
+                    when,
                     completed: false,
                 });
             }
         }
     }
     items
+}
+
+/// Extract a parenthesized deadline from the end of an action item string.
+/// e.g. "Preparar informe (viernes)" → ("Preparar informe", Some("viernes"))
+fn extract_parenthesized_deadline(s: &str) -> (String, Option<String>) {
+    if let Some(open) = s.rfind('(') {
+        if s.ends_with(')') {
+            let task = s[..open].trim().to_string();
+            let deadline = s[open + 1..s.len() - 1].trim().to_string();
+            if !deadline.is_empty() {
+                return (task, Some(deadline));
+            }
+        }
+    }
+    (s.to_string(), None)
 }
 
 async fn resolve_whisper_model() -> Result<String> {

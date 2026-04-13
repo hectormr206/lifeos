@@ -9,1079 +9,608 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <div class="header-left">
-      <h1>LifeOS <span class="badge badge-beta" title="LifeOS esta en beta: cambios rapidos, posibles regresiones">Beta</span></h1>
-      <span class="header-subtitle">AI-first control plane de Axi</span>
-    </div>
-    <div class="header-right">
-      <div class="time-display">
-        <span id="header-clock" class="time-clock">--:--</span>
-        <span id="header-tz" class="time-tz"></span>
-      </div>
-      <span id="connection-badge" class="badge badge-offline">Desconectado</span>
-      <span id="ws-badge" class="badge badge-ws badge-offline" title="WebSocket">WS</span>
-      <button id="theme-toggle" class="icon-btn" title="Cambiar tema">&#9789;</button>
-    </div>
-  </header>
+  <!-- Mobile hamburger overlay -->
+  <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
-  <main>
-    <!-- Safe Mode Banner -->
-    <div id="safe-mode-banner" class="safe-mode-banner">
-      <span class="safe-mode-icon">&#9888;</span>
-      <span class="safe-mode-text">Axi esta en <strong>modo seguro</strong> tras crashes repetidos. Responde mensajes pero no ejecuta acciones autonomas.</span>
-      <button class="safe-mode-exit-btn" id="safe-mode-exit">Salir de modo seguro</button>
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="sidebar-logo">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <circle cx="14" cy="14" r="12" stroke="#00D4AA" stroke-width="2" fill="none"/>
+          <circle cx="14" cy="14" r="4" fill="#00D4AA"/>
+          <line x1="14" y1="2" x2="14" y2="8" stroke="#00D4AA" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="14" y1="20" x2="14" y2="26" stroke="#00D4AA" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="2" y1="14" x2="8" y2="14" stroke="#00D4AA" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="20" y1="14" x2="26" y2="14" stroke="#00D4AA" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span class="sidebar-brand-text">LifeOS</span>
+      </div>
+      <span class="badge badge-beta" title="LifeOS esta en beta">Beta</span>
     </div>
 
-    <section class="hero-panel">
-      <div class="hero-copy">
-        <p class="hero-kicker">AI-first orchestration</p>
-        <h2>Axi piensa, observa y actua en tiempo real</h2>
-        <p id="hero-summary" class="hero-summary" aria-live="polite">Conectando telemetria segura...</p>
+    <nav class="sidebar-nav">
+      <button class="sidebar-nav-item active" data-section="inicio">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 7.5L9 2l7 5.5V15a1.5 1.5 0 01-1.5 1.5h-11A1.5 1.5 0 012 15V7.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M6.5 16.5V9.5h5v7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Inicio</span>
+      </button>
+      <button class="sidebar-nav-item" data-section="chat">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 11.5a1.5 1.5 0 01-1.5 1.5H5l-3 3V3.5A1.5 1.5 0 013.5 2h11A1.5 1.5 0 0116 3.5v8z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Axi Chat</span>
+      </button>
+      <button class="sidebar-nav-item" data-section="reuniones">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="3.5" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M2 7h14M6 2v3M12 2v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>Reuniones</span>
+      </button>
+      <button class="sidebar-nav-item" data-section="config">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M14.7 11.2a1.2 1.2 0 00.24 1.32l.04.04a1.45 1.45 0 11-2.05 2.05l-.04-.04a1.2 1.2 0 00-1.32-.24 1.2 1.2 0 00-.73 1.1v.12a1.45 1.45 0 11-2.9 0v-.06a1.2 1.2 0 00-.78-1.1 1.2 1.2 0 00-1.32.24l-.04.04a1.45 1.45 0 11-2.05-2.05l.04-.04a1.2 1.2 0 00.24-1.32 1.2 1.2 0 00-1.1-.73H3.5a1.45 1.45 0 010-2.9h.06a1.2 1.2 0 001.1-.78 1.2 1.2 0 00-.24-1.32l-.04-.04a1.45 1.45 0 112.05-2.05l.04.04a1.2 1.2 0 001.32.24h.06a1.2 1.2 0 00.73-1.1V3.5a1.45 1.45 0 012.9 0v.06a1.2 1.2 0 00.73 1.1 1.2 1.2 0 001.32-.24l.04-.04a1.45 1.45 0 112.05 2.05l-.04.04a1.2 1.2 0 00-.24 1.32v.06a1.2 1.2 0 001.1.73h.12a1.45 1.45 0 010 2.9h-.06a1.2 1.2 0 00-1.1.73z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Configuracion</span>
+      </button>
+      <button class="sidebar-nav-item" data-section="sistema">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="2" width="14" height="10" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 15h6M9 12v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>Sistema</span>
+      </button>
+    </nav>
 
-        <div class="hero-stats">
-          <div class="hero-stat">
-            <span>Estado</span>
-            <strong id="hero-mode">—</strong>
-          </div>
-          <div class="hero-stat">
-            <span>Conexion</span>
-            <strong id="hero-connection">—</strong>
-          </div>
-          <div class="hero-stat">
-            <span>Contexto</span>
-            <strong id="hero-context">—</strong>
-          </div>
-          <div class="hero-stat">
-            <span>Ultima señal</span>
-            <strong id="hero-last-event">—</strong>
-          </div>
-        </div>
-
-        <div class="hero-chips">
-          <span id="hero-chip-state" class="hero-chip">Estado: —</span>
-          <span id="hero-chip-sensors" class="hero-chip">Sensores: —</span>
-          <span id="hero-chip-meeting" class="hero-chip">Reunion: —</span>
-          <span id="hero-chip-presence" class="hero-chip">Presencia: —</span>
-        </div>
-
-        <div class="hero-actions" role="group" aria-label="Acciones rapidas seguras">
-          <button type="button" class="quick-action-btn" data-quick-action="open-controls">Abrir controles</button>
-          <button type="button" class="quick-action-btn" data-quick-action="focus-audio">Ver oido</button>
-          <button type="button" class="quick-action-btn" data-quick-action="run-audio-test">Probar oido</button>
-          <button type="button" class="quick-action-btn" data-quick-action="run-screen-test">Captura segura</button>
-          <button type="button" class="quick-action-btn quick-action-secondary" data-quick-action="refresh-state">Refrescar estado</button>
-        </div>
-
-        <p id="boot-sequence" class="boot-sequence hidden" aria-live="polite"></p>
+    <div class="sidebar-footer">
+      <div class="sidebar-status">
+        <span id="connection-badge" class="badge badge-offline">Desconectado</span>
+        <span id="ws-badge" class="badge badge-ws badge-offline" title="WebSocket">WS</span>
       </div>
-      <div class="hero-core">
-        <div class="hero-telemetry">
-          <div class="telemetry-row">
-            <span>Audio</span>
-            <strong id="hero-telemetry-audio">—</strong>
-          </div>
-          <div class="telemetry-row">
-            <span>Pantalla</span>
-            <strong id="hero-telemetry-screen">—</strong>
-          </div>
-          <div class="telemetry-row">
-            <span>Camara</span>
-            <strong id="hero-telemetry-camera">—</strong>
-          </div>
-          <div class="telemetry-row">
-            <span>Wake word</span>
-            <strong id="hero-telemetry-wakeword">axi</strong>
-          </div>
+      <div class="sidebar-footer-actions">
+        <div class="time-display">
+          <span id="header-clock" class="time-clock">--:--</span>
+          <span id="header-tz" class="time-tz"></span>
         </div>
+        <button id="theme-toggle" class="icon-btn" title="Cambiar tema">&#9789;</button>
       </div>
-    </section>
+    </div>
+  </aside>
 
-    <!-- Sensory Controls -->
-    <section class="controls-section">
-      <h2>Sentidos</h2>
-      <div class="controls-grid">
+  <!-- Main Content Area -->
+  <div class="main-wrapper">
+    <!-- Top bar (mobile) -->
+    <header class="topbar">
+      <button class="hamburger-btn" id="hamburger-btn" aria-label="Menu">
+        <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M3 6h16M3 11h16M3 16h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <span class="topbar-title">LifeOS</span>
+      <div class="topbar-right">
+        <span id="connection-badge-mobile" class="badge badge-offline">Desconectado</span>
+      </div>
+    </header>
 
-        <!-- Oido -->
-        <div class="control-card" data-sensor="audio">
-          <div class="control-header clickable">
-            <span class="control-icon">&#127908;</span>
-            <span class="control-name">Oido</span>
-            <span class="diag-dot" id="dot-audio"></span>
-            <span class="expand-chevron">&#9660;</span>
-          </div>
-          <p id="audio-status" class="control-status">—</p>
-          <label class="toggle" onclick="event.stopPropagation()">
-            <input type="checkbox" id="toggle-audio">
-            <span class="slider"></span>
-          </label>
-          <div class="diagnostic-panel" id="diag-audio">
-            <div class="diag-details">
-              <div class="diag-row"><span class="diag-label">STT servicio</span><span class="diag-value" id="d-audio-stt">—</span></div>
-              <div class="diag-row"><span class="diag-label">Binario STT</span><span class="diag-value" id="d-audio-binary">—</span></div>
-              <div class="diag-row"><span class="diag-label">Captura audio</span><span class="diag-value" id="d-audio-capture">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultimo texto</span><span class="diag-value" id="d-audio-transcript">—</span></div>
-              <div class="diag-row"><span class="diag-label">Latencia</span><span class="diag-value" id="d-audio-latency">—</span></div>
-              <div class="diag-row"><span class="diag-label">TTS motor</span><span class="diag-value" id="d-audio-tts">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultima escucha</span><span class="diag-value" id="d-audio-last">—</span></div>
-              <div class="diag-row diag-error-row hidden" id="d-audio-error-row"><span class="diag-label">Error</span><span class="diag-value diag-error-text" id="d-audio-error">—</span></div>
+    <main>
+      <!-- ==================== SECTION: Inicio ==================== -->
+      <div class="content-section active" id="section-inicio">
+        <div id="safe-mode-banner" class="safe-mode-banner">
+          <span class="safe-mode-icon">&#9888;</span>
+          <span class="safe-mode-text">Axi esta en <strong>modo seguro</strong> tras crashes repetidos. Responde mensajes pero no ejecuta acciones autonomas.</span>
+          <button class="safe-mode-exit-btn" id="safe-mode-exit">Salir de modo seguro</button>
+        </div>
+
+        <section class="hero-panel">
+          <div class="hero-copy">
+            <p class="hero-kicker">AI-first orchestration</p>
+            <h2>Axi piensa, observa y actua en tiempo real</h2>
+            <p id="hero-summary" class="hero-summary" aria-live="polite">Conectando telemetria segura...</p>
+            <div class="hero-stats">
+              <div class="hero-stat"><span>Estado</span><strong id="hero-mode">—</strong></div>
+              <div class="hero-stat"><span>Conexion</span><strong id="hero-connection">—</strong></div>
+              <div class="hero-stat"><span>Contexto</span><strong id="hero-context">—</strong></div>
+              <div class="hero-stat"><span>Ultima señal</span><strong id="hero-last-event">—</strong></div>
             </div>
-            <button class="diag-test-btn" data-test="audio">&#9654; Probar Oido</button>
-            <p class="diag-test-result" id="test-result-audio"></p>
-          </div>
-        </div>
-
-        <!-- Always-On -->
-        <div class="control-card" data-sensor="always-on">
-          <div class="control-header clickable">
-            <span class="control-icon">&#128483;</span>
-            <span class="control-name">Always-On</span>
-            <span class="diag-dot" id="dot-always-on"></span>
-            <span class="expand-chevron">&#9660;</span>
-          </div>
-          <p id="always-on-status" class="control-status">—</p>
-          <label class="toggle" onclick="event.stopPropagation()">
-            <input type="checkbox" id="toggle-always-on">
-            <span class="slider"></span>
-          </label>
-          <div class="diagnostic-panel" id="diag-always-on">
-            <div class="diag-details">
-              <div class="diag-row"><span class="diag-label">Wake word</span><span class="diag-value" id="d-ao-word">—</span></div>
-              <div class="diag-row"><span class="diag-label">Modelo rustpotter</span><span class="diag-value" id="d-ao-model">—</span></div>
-              <div class="diag-row"><span class="diag-label">Fuente</span><span class="diag-value" id="d-ao-source">—</span></div>
-              <div class="diag-row"><span class="diag-label">Sesion activa</span><span class="diag-value" id="d-ao-active">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultimo hotword</span><span class="diag-value" id="d-ao-last-hotword">—</span></div>
-              <div class="diag-row"><span class="diag-label">Interrupciones</span><span class="diag-value" id="d-ao-bargein">—</span></div>
+            <div class="hero-chips">
+              <span id="hero-chip-state" class="hero-chip">Estado: —</span>
+              <span id="hero-chip-sensors" class="hero-chip">Sensores: —</span>
+              <span id="hero-chip-meeting" class="hero-chip">Reunion: —</span>
+              <span id="hero-chip-presence" class="hero-chip">Presencia: —</span>
             </div>
-            <p class="diag-hint">Di "<strong id="d-ao-hint-word">axi</strong>" para probar la deteccion</p>
-          </div>
-        </div>
-
-        <!-- Habla / TTS -->
-        <div class="control-card" data-sensor="tts">
-          <div class="control-header clickable">
-            <span class="control-icon">&#128264;</span>
-            <span class="control-name">Habla</span>
-            <span class="diag-dot" id="dot-tts"></span>
-            <span class="expand-chevron">&#9660;</span>
-          </div>
-          <p id="tts-status" class="control-status">—</p>
-          <label class="toggle" onclick="event.stopPropagation()">
-            <input type="checkbox" id="toggle-tts">
-            <span class="slider"></span>
-          </label>
-          <div class="diagnostic-panel" id="diag-tts">
-            <div class="diag-details">
-              <div class="diag-row"><span class="diag-label">Backend TTS</span><span class="diag-value" id="d-tts-binary">—</span></div>
-              <div class="diag-row"><span class="diag-label">Modelo</span><span class="diag-value" id="d-tts-model">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultimo motor</span><span class="diag-value" id="d-tts-engine">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultimo reproductor</span><span class="diag-value" id="d-tts-backend">—</span></div>
-              <div class="diag-row"><span class="diag-label">Estado</span><span class="diag-value" id="d-tts-enabled">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultima respuesta</span><span class="diag-value diag-value-long" id="d-tts-last">—</span></div>
+            <div class="hero-actions" role="group" aria-label="Acciones rapidas seguras">
+              <button type="button" class="quick-action-btn" data-quick-action="open-controls">Abrir controles</button>
+              <button type="button" class="quick-action-btn" data-quick-action="focus-audio">Ver oido</button>
+              <button type="button" class="quick-action-btn" data-quick-action="run-audio-test">Probar oido</button>
+              <button type="button" class="quick-action-btn" data-quick-action="run-screen-test">Captura segura</button>
+              <button type="button" class="quick-action-btn quick-action-secondary" data-quick-action="refresh-state">Refrescar estado</button>
             </div>
-            <button class="diag-test-btn" data-test="tts">&#128264; Probar Habla</button>
-            <p class="diag-test-result" id="test-result-tts"></p>
+            <p id="boot-sequence" class="boot-sequence hidden" aria-live="polite"></p>
           </div>
-        </div>
-
-        <!-- Escritorio -->
-        <div class="control-card" data-sensor="screen">
-          <div class="control-header clickable">
-            <span class="control-icon">&#128421;</span>
-            <span class="control-name">Escritorio</span>
-            <span class="diag-dot" id="dot-screen"></span>
-            <span class="expand-chevron">&#9660;</span>
-          </div>
-          <p id="screen-status" class="control-status">—</p>
-          <label class="toggle" onclick="event.stopPropagation()">
-            <input type="checkbox" id="toggle-screen">
-            <span class="slider"></span>
-          </label>
-          <div class="diagnostic-panel" id="diag-screen">
-            <div class="diag-details">
-              <div class="diag-row"><span class="diag-label">Captura disponible</span><span class="diag-value" id="d-screen-available">—</span></div>
-              <div class="diag-row"><span class="diag-label">Tesseract OCR</span><span class="diag-value" id="d-screen-ocr">—</span></div>
-              <div class="diag-row"><span class="diag-label">Vision multimodal</span><span class="diag-value" id="d-screen-multimodal">—</span></div>
-              <div class="diag-row"><span class="diag-label">App activa</span><span class="diag-value" id="d-screen-app">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultimo resumen</span><span class="diag-value diag-value-long" id="d-screen-summary">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultimo OCR</span><span class="diag-value diag-value-long" id="d-screen-ocrtext">—</span></div>
-              <div class="diag-row"><span class="diag-label">Latencia vision</span><span class="diag-value" id="d-screen-latency">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultima captura</span><span class="diag-value" id="d-screen-last">—</span></div>
-              <div class="diag-row diag-error-row hidden" id="d-screen-error-row"><span class="diag-label">Error</span><span class="diag-value diag-error-text" id="d-screen-error">—</span></div>
-            </div>
-            <button class="diag-test-btn" data-test="screen">&#128247; Capturar Pantalla</button>
-            <p class="diag-test-result" id="test-result-screen"></p>
-          </div>
-        </div>
-
-        <!-- Camara -->
-        <div class="control-card" data-sensor="camera">
-          <div class="control-header clickable">
-            <span class="control-icon">&#128247;</span>
-            <span class="control-name">Camara</span>
-            <span class="diag-dot" id="dot-camera"></span>
-            <span class="expand-chevron">&#9660;</span>
-          </div>
-          <p id="camera-status" class="control-status">—</p>
-          <label class="toggle" onclick="event.stopPropagation()">
-            <input type="checkbox" id="toggle-camera">
-            <span class="slider"></span>
-          </label>
-          <div class="diagnostic-panel" id="diag-camera">
-            <div class="diag-details">
-              <div class="diag-row"><span class="diag-label">Dispositivo</span><span class="diag-value" id="d-cam-device">—</span></div>
-              <div class="diag-row"><span class="diag-label">Binario captura</span><span class="diag-value" id="d-cam-binary">—</span></div>
-              <div class="diag-row"><span class="diag-label">Disponible</span><span class="diag-value" id="d-cam-available">—</span></div>
-              <div class="diag-row"><span class="diag-label">Consentimiento</span><span class="diag-value" id="d-cam-consent">—</span></div>
-              <div class="diag-row"><span class="diag-label">Reunion activa</span><span class="diag-value" id="d-cam-meeting">—</span></div>
-              <div class="diag-row"><span class="diag-label">Camara ocupada</span><span class="diag-value" id="d-cam-busy">—</span></div>
-              <div class="diag-row"><span class="diag-label">Usuario</span><span class="diag-value" id="d-cam-userstate">—</span></div>
-              <div class="diag-row"><span class="diag-label">Personas</span><span class="diag-value" id="d-cam-people">—</span></div>
-              <div class="diag-row"><span class="diag-label">Escena</span><span class="diag-value diag-value-long" id="d-cam-scene">—</span></div>
-              <div class="diag-row"><span class="diag-label">Ultima deteccion</span><span class="diag-value" id="d-cam-last">—</span></div>
-              <div class="diag-row diag-alert-row hidden" id="d-cam-fatigue-row"><span class="diag-label">Alerta</span><span class="diag-value diag-warn-text">Fatiga detectada</span></div>
-              <div class="diag-row diag-alert-row hidden" id="d-cam-posture-row"><span class="diag-label">Alerta</span><span class="diag-value diag-warn-text">Postura incorrecta</span></div>
-            </div>
-            <button class="diag-test-btn" data-test="camera">&#128247; Capturar Camara</button>
-            <p class="diag-test-result" id="test-result-camera"></p>
-          </div>
-        </div>
-
-      </div>
-      <button id="kill-switch" class="kill-switch-btn">KILL SWITCH</button>
-    </section>
-
-    <!-- Status Cards -->
-    <section class="status-section">
-      <h2>Estado</h2>
-      <div class="status-grid">
-        <div class="status-card">
-          <h3>Ventana Activa</h3>
-          <p id="current-app" class="status-value">—</p>
-          <p id="current-window" class="status-detail">—</p>
-        </div>
-        <div class="status-card">
-          <h3>Reunion</h3>
-          <p id="meeting-status" class="status-value">Sin reunion</p>
-          <p id="meeting-app" class="status-detail"></p>
-        </div>
-        <div class="status-card">
-          <h3>Presencia</h3>
-          <p id="presence-status" class="status-value">—</p>
-          <p id="presence-detail" class="status-detail"></p>
-        </div>
-        <div class="status-card">
-          <h3>Ultimo Comando</h3>
-          <p id="last-transcript" class="status-value">—</p>
-          <p id="last-response" class="status-detail"></p>
-        </div>
-      </div>
-    </section>
-
-    <!-- Supervisor & Tasks -->
-    <section class="supervisor-section">
-      <h2>Supervisor <span id="supervisor-badge" class="badge badge-offline">Detenido</span></h2>
-      <div class="supervisor-grid">
-        <div class="supervisor-summary">
-          <div class="hero-stats">
-            <div class="hero-stat"><span>Pendientes</span><strong id="sv-pending">0</strong></div>
-            <div class="hero-stat"><span>Corriendo</span><strong id="sv-running">0</strong></div>
-            <div class="hero-stat"><span>Completadas</span><strong id="sv-completed">0</strong></div>
-            <div class="hero-stat"><span>Fallidas</span><strong id="sv-failed">0</strong></div>
-          </div>
-        </div>
-        <div class="task-list" id="task-list">
-          <p class="task-empty">Sin tareas recientes</p>
-        </div>
-        <div class="supervisor-actions">
-          <button type="button" class="quick-action-btn" data-quick-action="refresh-tasks">Refrescar tareas</button>
-          <button type="button" class="quick-action-btn" data-quick-action="trigger-heartbeat">Heartbeat manual</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- Active Workers -->
-    <section class="workers-section">
-      <h2>Workers Activos <span id="workers-count" class="feed-count">0</span></h2>
-      <div class="workers-grid" id="workers-grid">
-        <p class="task-empty">Sin workers activos</p>
-      </div>
-    </section>
-
-    <!-- Chat with Axi -->
-    <section class="chat-section">
-      <h2>Chat con Axi</h2>
-      <div class="chat-container">
-        <div class="chat-messages" id="chat-messages">
-          <div class="chat-msg chat-msg-axi">Hola, soy Axi. Escribe algo o usa /do para crear tareas.</div>
-        </div>
-        <form class="chat-input-form" id="chat-form">
-          <input type="text" id="chat-input" placeholder="Escribe un mensaje o /do <tarea>..." autocomplete="off">
-          <button type="submit" class="chat-send-btn">Enviar</button>
-        </form>
-      </div>
-    </section>
-
-    <!-- Conversation History -->
-    <section class="conversations-section">
-      <h2>Historial de Conversaciones</h2>
-      <div class="conversation-list" id="conversation-list">
-        <p class="task-empty">Cargando conversaciones...</p>
-      </div>
-    </section>
-
-    <!-- System Resources -->
-    <section class="resources-section">
-      <h2>Recursos del Sistema</h2>
-      <div class="resources-grid" id="resources-grid">
-        <p class="task-empty">Cargando recursos...</p>
-      </div>
-    </section>
-
-    <!-- LLM Providers -->
-    <section class="providers-section">
-      <h2>Proveedores LLM <button type="button" class="quick-action-btn" id="reload-providers-btn" style="margin-left:8px;font-size:0.75rem;padding:6px 12px;">Recargar proveedores</button></h2>
-      <div class="providers-grid" id="providers-grid">
-        <p class="task-empty">Cargando proveedores...</p>
-      </div>
-
-      <!-- Add Provider Form -->
-      <div class="add-provider-form">
-        <h4>Agregar Proveedor</h4>
-        <div class="add-provider-fields">
-          <input type="text" id="new-provider-name" placeholder="Nombre (ej: my-groq)">
-          <input type="text" id="new-provider-base" placeholder="API Base (ej: https://api.groq.com/openai)">
-          <input type="text" id="new-provider-model" placeholder="Modelo (ej: llama-3.3-70b)">
-          <input type="text" id="new-provider-key-env" placeholder="Env var API key (ej: GROQ_API_KEY)">
-          <select id="new-provider-tier">
-            <option value="free">Free</option>
-            <option value="cheap">Cheap</option>
-            <option value="premium">Premium</option>
-          </select>
-          <select id="new-provider-privacy">
-            <option value="high">High (ZDR)</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-          </select>
-          <button type="button" class="quick-action-btn" id="add-provider-btn">Agregar</button>
-        </div>
-        <p class="setting-hint" id="add-provider-hint">Agrega un nuevo proveedor LLM compatible con OpenAI API.</p>
-      </div>
-
-      <div class="providers-config">
-        <h3>Configurar API Keys</h3>
-        <div class="provider-key-form">
-          <div class="key-row">
-            <label>Anthropic</label>
-            <input type="password" id="key-anthropic" placeholder="sk-ant-..." data-env="ANTHROPIC_API_KEY">
-            <span class="key-status" id="key-status-anthropic">?</span>
-          </div>
-          <div class="key-row">
-            <label>OpenAI</label>
-            <input type="password" id="key-openai" placeholder="sk-..." data-env="OPENAI_API_KEY">
-            <span class="key-status" id="key-status-openai">?</span>
-          </div>
-          <div class="key-row">
-            <label>Google (Gemini)</label>
-            <input type="password" id="key-gemini" placeholder="AIza..." data-env="GEMINI_API_KEY">
-            <span class="key-status" id="key-status-gemini">?</span>
-          </div>
-          <div class="key-row">
-            <label>ZAI</label>
-            <input type="password" id="key-zai" placeholder="zai-..." data-env="ZAI_API_KEY">
-            <span class="key-status" id="key-status-zai">?</span>
-          </div>
-          <div class="key-row">
-            <label>Cerebras</label>
-            <input type="password" id="key-cerebras" placeholder="csk-..." data-env="CEREBRAS_API_KEY">
-            <span class="key-status" id="key-status-cerebras">?</span>
-          </div>
-          <div class="key-row">
-            <label>Groq</label>
-            <input type="password" id="key-groq" placeholder="gsk_..." data-env="GROQ_API_KEY">
-            <span class="key-status" id="key-status-groq">?</span>
-          </div>
-          <div class="key-row">
-            <label>OpenRouter</label>
-            <input type="password" id="key-openrouter" placeholder="sk-or-..." data-env="OPENROUTER_API_KEY">
-            <span class="key-status" id="key-status-openrouter">?</span>
-          </div>
-          <div class="key-row">
-            <label>Telegram Bot Token</label>
-            <input type="password" id="key-telegram" placeholder="123456:ABC-DEF..." data-env="LIFEOS_TELEGRAM_BOT_TOKEN">
-            <span class="key-status" id="key-status-telegram">?</span>
-          </div>
-          <div class="key-row">
-            <label>Telegram Chat ID</label>
-            <input type="text" id="key-telegram-chatid" placeholder="Tu chat ID numerico" data-env="LIFEOS_TELEGRAM_CHAT_ID">
-            <span class="key-status" id="key-status-telegram-chatid">?</span>
-          </div>
-        </div>
-        <button type="button" class="quick-action-btn" id="save-keys-btn">Guardar Keys</button>
-        <p class="setting-hint" id="keys-hint">Configura tus keys aqui. Se activan inmediatamente sin reiniciar.</p>
-        <details style="margin-top:8px;">
-          <summary style="cursor:pointer; color:var(--accent); font-size:0.85em;">Como configurar Telegram?</summary>
-          <ol style="font-size:0.8em; color:#aaa; margin-top:6px; padding-left:20px;">
-            <li>Abre Telegram y busca <strong>@BotFather</strong></li>
-            <li>Envia <code>/newbot</code> y sigue las instrucciones</li>
-            <li>Copia el token (ej: <code>123456:ABC-DEF...</code>) y pegalo arriba</li>
-            <li>Para tu Chat ID: envia cualquier mensaje a <strong>@userinfobot</strong> y copia el numero</li>
-            <li>Guarda y listo — Axi respondera por Telegram</li>
-          </ol>
-        </details>
-      </div>
-    </section>
-
-    <!-- Local AI Configuration -->
-    <section class="localai-section">
-      <h2>AI Local</h2>
-      <div class="localai-grid">
-        <div class="localai-status">
-          <div class="hero-stats">
-            <div class="hero-stat"><span>Modelo activo</span><strong id="ai-active-model">—</strong></div>
-            <div class="hero-stat"><span>Estado</span><strong id="ai-server-status">—</strong></div>
-          </div>
-          <div class="hero-stat" style="margin-top:12px">
-            <span>GPU</span>
-            <strong id="ai-gpu-name">—</strong>
-          </div>
-        </div>
-
-        <div class="localai-config">
-          <h3>Configuracion</h3>
-          <div class="setting-item">
-            <label for="ai-ctx-slider">Contexto (tokens)</label>
-            <input type="range" id="ai-ctx-slider" min="2048" max="32768" step="1024" value="16384">
-            <span id="ai-ctx-value">16384</span>
-          </div>
-          <div class="setting-item">
-            <label for="ai-gpu-layers">GPU Layers</label>
-            <input type="range" id="ai-gpu-layers" min="0" max="99" value="99">
-            <span id="ai-gpu-layers-value">99 (todas)</span>
-          </div>
-          <div class="setting-item">
-            <label for="ai-threads">CPU Threads</label>
-            <input type="range" id="ai-threads" min="1" max="24" value="4">
-            <span id="ai-threads-value">4</span>
-          </div>
-        </div>
-
-        <div class="localai-models">
-          <h3>Modelos disponibles</h3>
-          <div class="models-grid" id="models-grid">
-            <p class="task-empty">Cargando modelos...</p>
-          </div>
-        </div>
-
-        <div class="localai-catalog">
-          <h3>Descargar modelos</h3>
-          <p class="setting-hint">Selecciona un modelo para descargarlo al almacenamiento local.</p>
-          <div class="catalog-grid" id="catalog-grid">
-            <div class="catalog-item" data-model="Qwen3.5-0.8B-Q4_K_M" data-size="600">
-              <span class="catalog-name">Qwen3.5-0.8B</span>
-              <span class="catalog-size">~600 MB</span>
-              <span class="catalog-desc">Ultra ligero, solo OCR/clasificacion</span>
-            </div>
-            <div class="catalog-item" data-model="Qwen3.5-2B-Q4_K_M" data-size="1280">
-              <span class="catalog-name">Qwen3.5-2B</span>
-              <span class="catalog-size">~1.3 GB</span>
-              <span class="catalog-desc">Vision basica, limitado para conversacion</span>
-            </div>
-            <div class="catalog-item" data-model="Qwen3.5-4B-Q4_K_M" data-size="2500">
-              <span class="catalog-name">Qwen3.5-4B (recomendado)</span>
-              <span class="catalog-size">~2.7 GB</span>
-              <span class="catalog-desc">Vision + conversacion, equilibrio ideal</span>
-            </div>
-            <div class="catalog-item" data-model="Qwen3.5-9B-Q4_K_M" data-size="5500">
-              <span class="catalog-name">Qwen3.5-9B</span>
-              <span class="catalog-size">~5.5 GB</span>
-              <span class="catalog-desc">Maximo calidad local</span>
+          <div class="hero-core">
+            <div class="hero-telemetry">
+              <div class="telemetry-row"><span>Audio</span><strong id="hero-telemetry-audio">—</strong></div>
+              <div class="telemetry-row"><span>Pantalla</span><strong id="hero-telemetry-screen">—</strong></div>
+              <div class="telemetry-row"><span>Camara</span><strong id="hero-telemetry-camera">—</strong></div>
+              <div class="telemetry-row"><span>Wake word</span><strong id="hero-telemetry-wakeword">axi</strong></div>
             </div>
           </div>
-        </div>
-      </div>
-    </section>
+        </section>
 
-    <!-- System Health -->
-    <section class="health-section">
-      <h2>Salud del Sistema</h2>
-      <div class="health-grid" id="health-grid">
-        <div class="health-item">
-          <span class="health-dot" id="health-dot-cpu-temp"></span>
-          <span class="health-label">CPU Temp</span>
-          <span class="health-value" id="health-cpu-temp">—</span>
-        </div>
-        <div class="health-item">
-          <span class="health-dot" id="health-dot-gpu-temp"></span>
-          <span class="health-label">GPU Temp</span>
-          <span class="health-value" id="health-gpu-temp">—</span>
-        </div>
-        <div class="health-item">
-          <span class="health-dot" id="health-dot-ssd"></span>
-          <span class="health-label">SSD Health</span>
-          <span class="health-value" id="health-ssd">—</span>
-        </div>
-        <div class="health-item">
-          <span class="health-dot" id="health-dot-battery"></span>
-          <span class="health-label">Battery Health</span>
-          <span class="health-value" id="health-battery">—</span>
-        </div>
-        <div class="health-item">
-          <span class="health-dot" id="health-dot-disk"></span>
-          <span class="health-label">Disk Usage</span>
-          <span class="health-value" id="health-disk">—</span>
-        </div>
-        <div class="health-item">
-          <span class="health-dot" id="health-dot-ram"></span>
-          <span class="health-label">RAM Usage</span>
-          <span class="health-value" id="health-ram">—</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- Doctor Health Checks -->
-    <section class="doctor-section">
-      <h2>Doctor <span id="doctor-badge" class="badge badge-offline">Sin datos</span></h2>
-      <div class="doctor-grid" id="doctor-grid">
-        <p class="task-empty">Ejecutando diagnostico...</p>
-      </div>
-      <div class="doctor-actions">
-        <button type="button" class="quick-action-btn" id="doctor-run-btn">Ejecutar diagnostico</button>
-      </div>
-      <p class="doctor-timestamp" id="doctor-timestamp"></p>
-    </section>
-
-    <!-- Service Status -->
-    <section class="services-section">
-      <h2>Servicios</h2>
-      <div class="health-grid" id="services-grid">
-        <div class="health-item">
-          <span class="health-dot" id="svc-dot-daemon"></span>
-          <span class="health-label">Axi (daemon)</span>
-          <span class="health-value" id="svc-daemon">—</span>
-        </div>
-        <div class="health-item">
-          <span class="health-dot" id="svc-dot-llm"></span>
-          <span class="health-label">LLM Server</span>
-          <span class="health-value" id="svc-llm">—</span>
-        </div>
-        <div class="health-item">
-          <span class="health-dot" id="svc-dot-stt"></span>
-          <span class="health-label">Voz (STT)</span>
-          <span class="health-value" id="svc-stt">—</span>
-        </div>
-        <div class="health-item">
-          <span class="health-dot" id="svc-dot-telegram"></span>
-          <span class="health-label">Telegram</span>
-          <span class="health-value" id="svc-telegram">—</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- SimpleX invite — show QR so the user can connect their phone to Axi -->
-    <section class="simplex-section" id="simplex-section">
-      <h2>SimpleX — conectar tu telefono</h2>
-      <p class="setting-hint" style="margin-bottom:12px">
-        Escanea este QR con la app SimpleX Chat en tu telefono para conectarte al bot Axi de esta LifeOS.
-        Cada laptop tiene su propio QR unico — identidades criptograficas independientes sin servidor central.
-      </p>
-      <div class="simplex-grid">
-        <div class="simplex-qr-wrap">
-          <div class="simplex-qr" id="simplex-qr" aria-label="Codigo QR del bot SimpleX Axi">
-            <span class="setting-hint">Generando...</span>
-          </div>
-          <div class="simplex-state" id="simplex-state">—</div>
-        </div>
-        <div class="simplex-link-wrap">
-          <label for="simplex-link-text">Link (copia y pega si el QR no funciona)</label>
-          <textarea id="simplex-link-text" readonly rows="4" placeholder="El bot SimpleX todavia no ha generado un link de invitacion..."></textarea>
-          <div class="simplex-actions">
-            <button type="button" class="quick-action-btn" id="simplex-copy-btn">Copiar link</button>
-            <button type="button" class="quick-action-btn" id="simplex-refresh-btn">Refrescar</button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Battery -->
-    <section class="battery-section hidden" id="battery-section">
-      <h2>Bateria</h2>
-      <div class="battery-grid">
-        <div class="battery-info">
-          <div class="hero-stats">
-            <div class="hero-stat"><span>Carga</span><strong id="bat-charge">—</strong></div>
-            <div class="hero-stat"><span>Salud</span><strong id="bat-health">—</strong></div>
-            <div class="hero-stat"><span>Ciclos</span><strong id="bat-cycles">—</strong></div>
-          </div>
-          <div class="hero-stats" style="margin-top:12px">
-            <div class="hero-stat"><span>Perfil energia</span><strong id="bat-profile">—</strong></div>
-            <div class="hero-stat"><span>Fabricante</span><strong id="bat-vendor">—</strong></div>
-          </div>
-        </div>
-        <div class="battery-threshold">
-          <div class="setting-item">
-            <label for="bat-threshold-slider">Umbral de carga (%)</label>
-            <input type="range" id="bat-threshold-slider" min="50" max="100" step="5" value="80">
-            <span id="bat-threshold-value">80%</span>
-          </div>
-          <button type="button" class="quick-action-btn" id="bat-threshold-save">Aplicar umbral</button>
-          <p class="setting-hint">Limita la carga maxima para prolongar la vida util de la bateria.</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- Game Guard -->
-    <section class="gameguard-section">
-      <h2>GPU Game Guard</h2>
-      <div class="gameguard-grid">
-        <div class="gameguard-status">
-          <div class="hero-stats">
-            <div class="hero-stat"><span>LLM Mode</span><strong id="gg-llm-mode">—</strong></div>
-            <div class="hero-stat"><span>Juego detectado</span><strong id="gg-game-name">Ninguno</strong></div>
-          </div>
-          <p id="gg-game-detail" class="setting-hint" style="margin-top:8px"></p>
-        </div>
-        <div class="gameguard-toggles">
-          <div class="setting-item">
-            <label>Game Guard (auto-offload a RAM)</label>
-            <div class="inline-setting-row">
-              <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-game-guard" checked><span class="slider"></span></label>
-              <span id="gg-guard-status" class="setting-inline-value">Activo</span>
+        <section class="controls-section">
+          <h2>Sentidos</h2>
+          <div class="controls-grid">
+            <div class="control-card" data-sensor="audio">
+              <div class="control-header clickable">
+                <span class="control-icon">&#127908;</span>
+                <span class="control-name">Oido</span>
+                <span class="diag-dot" id="dot-audio"></span>
+                <span class="expand-chevron">&#9660;</span>
+              </div>
+              <p id="audio-status" class="control-status">—</p>
+              <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-audio"><span class="slider"></span></label>
+              <div class="diagnostic-panel" id="diag-audio">
+                <div class="diag-details">
+                  <div class="diag-row"><span class="diag-label">STT servicio</span><span class="diag-value" id="d-audio-stt">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Binario STT</span><span class="diag-value" id="d-audio-binary">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Captura audio</span><span class="diag-value" id="d-audio-capture">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultimo texto</span><span class="diag-value" id="d-audio-transcript">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Latencia</span><span class="diag-value" id="d-audio-latency">—</span></div>
+                  <div class="diag-row"><span class="diag-label">TTS motor</span><span class="diag-value" id="d-audio-tts">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultima escucha</span><span class="diag-value" id="d-audio-last">—</span></div>
+                  <div class="diag-row diag-error-row hidden" id="d-audio-error-row"><span class="diag-label">Error</span><span class="diag-value diag-error-text" id="d-audio-error">—</span></div>
+                </div>
+                <button class="diag-test-btn" data-test="audio">&#9654; Probar Oido</button>
+                <p class="diag-test-result" id="test-result-audio"></p>
+              </div>
             </div>
-            <p class="setting-hint">Libera VRAM automaticamente cuando detecta un juego.</p>
-          </div>
-          <div class="setting-item">
-            <label>Game Assistant (Axi como copiloto)</label>
-            <div class="inline-setting-row">
-              <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-game-assistant" checked><span class="slider"></span></label>
-              <span id="gg-assistant-status" class="setting-inline-value">Activo</span>
+            <div class="control-card" data-sensor="always-on">
+              <div class="control-header clickable">
+                <span class="control-icon">&#128483;</span>
+                <span class="control-name">Always-On</span>
+                <span class="diag-dot" id="dot-always-on"></span>
+                <span class="expand-chevron">&#9660;</span>
+              </div>
+              <p id="always-on-status" class="control-status">—</p>
+              <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-always-on"><span class="slider"></span></label>
+              <div class="diagnostic-panel" id="diag-always-on">
+                <div class="diag-details">
+                  <div class="diag-row"><span class="diag-label">Wake word</span><span class="diag-value" id="d-ao-word">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Modelo rustpotter</span><span class="diag-value" id="d-ao-model">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Fuente</span><span class="diag-value" id="d-ao-source">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Sesion activa</span><span class="diag-value" id="d-ao-active">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultimo hotword</span><span class="diag-value" id="d-ao-last-hotword">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Interrupciones</span><span class="diag-value" id="d-ao-bargein">—</span></div>
+                </div>
+                <p class="diag-hint">Di "<strong id="d-ao-hint-word">axi</strong>" para probar la deteccion</p>
+              </div>
             </div>
-            <p class="setting-hint">Pide ayuda durante el juego via voz o Telegram. Solo usa providers ZDR.</p>
+            <div class="control-card" data-sensor="tts">
+              <div class="control-header clickable">
+                <span class="control-icon">&#128264;</span>
+                <span class="control-name">Habla</span>
+                <span class="diag-dot" id="dot-tts"></span>
+                <span class="expand-chevron">&#9660;</span>
+              </div>
+              <p id="tts-status" class="control-status">—</p>
+              <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-tts"><span class="slider"></span></label>
+              <div class="diagnostic-panel" id="diag-tts">
+                <div class="diag-details">
+                  <div class="diag-row"><span class="diag-label">Backend TTS</span><span class="diag-value" id="d-tts-binary">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Modelo</span><span class="diag-value" id="d-tts-model">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultimo motor</span><span class="diag-value" id="d-tts-engine">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultimo reproductor</span><span class="diag-value" id="d-tts-backend">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Estado</span><span class="diag-value" id="d-tts-enabled">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultima respuesta</span><span class="diag-value diag-value-long" id="d-tts-last">—</span></div>
+                </div>
+                <button class="diag-test-btn" data-test="tts">&#128264; Probar Habla</button>
+                <p class="diag-test-result" id="test-result-tts"></p>
+              </div>
+            </div>
+            <div class="control-card" data-sensor="screen">
+              <div class="control-header clickable">
+                <span class="control-icon">&#128421;</span>
+                <span class="control-name">Escritorio</span>
+                <span class="diag-dot" id="dot-screen"></span>
+                <span class="expand-chevron">&#9660;</span>
+              </div>
+              <p id="screen-status" class="control-status">—</p>
+              <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-screen"><span class="slider"></span></label>
+              <div class="diagnostic-panel" id="diag-screen">
+                <div class="diag-details">
+                  <div class="diag-row"><span class="diag-label">Captura disponible</span><span class="diag-value" id="d-screen-available">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Tesseract OCR</span><span class="diag-value" id="d-screen-ocr">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Vision multimodal</span><span class="diag-value" id="d-screen-multimodal">—</span></div>
+                  <div class="diag-row"><span class="diag-label">App activa</span><span class="diag-value" id="d-screen-app">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultimo resumen</span><span class="diag-value diag-value-long" id="d-screen-summary">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultimo OCR</span><span class="diag-value diag-value-long" id="d-screen-ocrtext">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Latencia vision</span><span class="diag-value" id="d-screen-latency">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultima captura</span><span class="diag-value" id="d-screen-last">—</span></div>
+                  <div class="diag-row diag-error-row hidden" id="d-screen-error-row"><span class="diag-label">Error</span><span class="diag-value diag-error-text" id="d-screen-error">—</span></div>
+                </div>
+                <button class="diag-test-btn" data-test="screen">&#128247; Capturar Pantalla</button>
+                <p class="diag-test-result" id="test-result-screen"></p>
+              </div>
+            </div>
+            <div class="control-card" data-sensor="camera">
+              <div class="control-header clickable">
+                <span class="control-icon">&#128247;</span>
+                <span class="control-name">Camara</span>
+                <span class="diag-dot" id="dot-camera"></span>
+                <span class="expand-chevron">&#9660;</span>
+              </div>
+              <p id="camera-status" class="control-status">—</p>
+              <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-camera"><span class="slider"></span></label>
+              <div class="diagnostic-panel" id="diag-camera">
+                <div class="diag-details">
+                  <div class="diag-row"><span class="diag-label">Dispositivo</span><span class="diag-value" id="d-cam-device">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Binario captura</span><span class="diag-value" id="d-cam-binary">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Disponible</span><span class="diag-value" id="d-cam-available">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Consentimiento</span><span class="diag-value" id="d-cam-consent">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Reunion activa</span><span class="diag-value" id="d-cam-meeting">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Camara ocupada</span><span class="diag-value" id="d-cam-busy">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Usuario</span><span class="diag-value" id="d-cam-userstate">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Personas</span><span class="diag-value" id="d-cam-people">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Escena</span><span class="diag-value diag-value-long" id="d-cam-scene">—</span></div>
+                  <div class="diag-row"><span class="diag-label">Ultima deteccion</span><span class="diag-value" id="d-cam-last">—</span></div>
+                  <div class="diag-row diag-alert-row hidden" id="d-cam-fatigue-row"><span class="diag-label">Alerta</span><span class="diag-value diag-warn-text">Fatiga detectada</span></div>
+                  <div class="diag-row diag-alert-row hidden" id="d-cam-posture-row"><span class="diag-label">Alerta</span><span class="diag-value diag-warn-text">Postura incorrecta</span></div>
+                </div>
+                <button class="diag-test-btn" data-test="camera">&#128247; Capturar Camara</button>
+                <p class="diag-test-result" id="test-result-camera"></p>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-    </section>
+          <button id="kill-switch" class="kill-switch-btn">KILL SWITCH</button>
+        </section>
 
-    <!-- Agent Metrics -->
-    <section class="metrics-section">
-      <h2>Metricas de Agentes</h2>
-      <div class="metrics-summary" id="metrics-summary">
-        <div class="hero-stats">
-          <div class="hero-stat"><span>Total tareas</span><strong id="met-total">0</strong></div>
-          <div class="hero-stat"><span>Completadas</span><strong id="met-completed">0</strong></div>
-          <div class="hero-stat"><span>Fallidas</span><strong id="met-failed">0</strong></div>
-          <div class="hero-stat"><span>Tasa exito</span><strong id="met-rate">—</strong></div>
-        </div>
-        <div class="metrics-roles" id="metrics-roles"></div>
-      </div>
-    </section>
-
-    <!-- Scheduled Tasks -->
-    <section class="sched-section">
-      <h2>Tareas Programadas</h2>
-      <div class="sched-list" id="sched-list">
-        <p class="task-empty">Sin tareas programadas</p>
-      </div>
-      <div class="sched-add">
-        <input type="text" id="sched-objective" placeholder="Que quieres que haga...">
-        <select id="sched-type">
-          <option value="interval">Cada N minutos</option>
-          <option value="daily">Diario a una hora</option>
-        </select>
-        <input type="text" id="sched-param" placeholder="30 (minutos) o 09:00 (hora)">
-        <button type="button" class="quick-action-btn" id="sched-add-btn">Programar</button>
-      </div>
-    </section>
-
-    <!-- Memory Plane -->
-    <section class="memory-section">
-      <h2>Memoria de Axi</h2>
-      <div class="memory-stats" id="memory-stats">
-        <div class="hero-stats">
-          <div class="hero-stat"><span>Entradas</span><strong id="mem-total">0</strong></div>
-          <div class="hero-stat"><span>Decisiones</span><strong id="mem-decisions">0</strong></div>
-          <div class="hero-stat"><span>Eventos</span><strong id="mem-events">0</strong></div>
-          <div class="hero-stat"><span>Notas</span><strong id="mem-notes">0</strong></div>
-        </div>
-      </div>
-      <div class="memory-search">
-        <input type="text" id="memory-search-input" placeholder="Buscar en la memoria...">
-        <button type="button" class="quick-action-btn" id="memory-search-btn">Buscar</button>
-      </div>
-      <div class="memory-entries" id="memory-entries">
-        <p class="task-empty">Busca algo o carga las entradas recientes</p>
-      </div>
-    </section>
-
-    <!-- Reuniones Recientes -->
-    <section class="meetings-section">
-      <h2>Reuniones Recientes</h2>
-      <div class="meetings-stats" id="meeting-stats">
-        <div class="hero-stats">
-          <div class="hero-stat"><span>Total reuniones</span><strong id="mtg-total">0</strong></div>
-          <div class="hero-stat"><span>Horas totales</span><strong id="mtg-hours">0h</strong></div>
-          <div class="hero-stat"><span>Duracion promedio</span><strong id="mtg-avg">0m</strong></div>
-          <div class="hero-stat"><span>Participante frecuente</span><strong id="mtg-top-participant">—</strong></div>
-        </div>
-      </div>
-
-      <!-- BB.11: Filter bar -->
-      <div class="meeting-filter-bar" id="meeting-filter-bar">
-        <button class="meeting-filter-btn active" data-period="week">Esta semana</button>
-        <button class="meeting-filter-btn" data-period="month">Este mes</button>
-        <button class="meeting-filter-btn" data-period="all">Todo</button>
-        <input type="text" id="meeting-search-input" class="meeting-search-input" placeholder="Buscar en reuniones..." autocomplete="off">
-      </div>
-
-      <div class="meetings-list" id="meetings-list">
-        <p class="task-empty">Sin datos de reuniones</p>
-      </div>
-      <div class="meetings-load-more" id="meetings-load-more" style="display:none; text-align:center; margin-top:12px;">
-        <button type="button" class="quick-action-btn" id="meetings-load-more-btn">Cargar mas</button>
-      </div>
-      <div class="meetings-actions">
-        <h3>Action Items Pendientes</h3>
-        <div class="action-items-list" id="meeting-action-items">
-          <p class="task-empty">Sin action items pendientes</p>
-        </div>
-      </div>
-
-      <!-- BB.10: Meeting detail overlay -->
-      <div class="meeting-detail" id="meeting-detail" style="display:none;">
-        <div class="meeting-detail-header">
-          <button class="meeting-detail-close" id="meeting-detail-close" title="Cerrar">&times;</button>
-          <h3 id="md-title" class="meeting-detail-title">—</h3>
-          <div class="meeting-detail-meta">
-            <span id="md-date" class="meeting-detail-date">—</span>
-            <span id="md-duration" class="meeting-detail-duration">—</span>
-            <span id="md-app" class="meeting-detail-app">—</span>
+        <section class="status-section">
+          <h2>Estado</h2>
+          <div class="status-grid">
+            <div class="status-card"><h3>Ventana Activa</h3><p id="current-app" class="status-value">—</p><p id="current-window" class="status-detail">—</p></div>
+            <div class="status-card"><h3>Reunion</h3><p id="meeting-status" class="status-value">Sin reunion</p><p id="meeting-app" class="status-detail"></p></div>
+            <div class="status-card"><h3>Presencia</h3><p id="presence-status" class="status-value">—</p><p id="presence-detail" class="status-detail"></p></div>
+            <div class="status-card"><h3>Ultimo Comando</h3><p id="last-transcript" class="status-value">—</p><p id="last-response" class="status-detail"></p></div>
           </div>
-        </div>
-        <div class="meeting-detail-body">
-          <div class="meeting-detail-section" id="md-participants-section">
-            <h4>Participantes</h4>
-            <div id="md-participants" class="meeting-detail-participants">No detectados</div>
+        </section>
+
+        <section class="supervisor-section">
+          <h2>Supervisor <span id="supervisor-badge" class="badge badge-offline">Detenido</span></h2>
+          <div class="supervisor-grid">
+            <div class="supervisor-summary">
+              <div class="hero-stats">
+                <div class="hero-stat"><span>Pendientes</span><strong id="sv-pending">0</strong></div>
+                <div class="hero-stat"><span>Corriendo</span><strong id="sv-running">0</strong></div>
+                <div class="hero-stat"><span>Completadas</span><strong id="sv-completed">0</strong></div>
+                <div class="hero-stat"><span>Fallidas</span><strong id="sv-failed">0</strong></div>
+              </div>
+            </div>
+            <div class="task-list" id="task-list"><p class="task-empty">Sin tareas recientes</p></div>
+            <div class="supervisor-actions">
+              <button type="button" class="quick-action-btn" data-quick-action="refresh-tasks">Refrescar tareas</button>
+              <button type="button" class="quick-action-btn" data-quick-action="trigger-heartbeat">Heartbeat manual</button>
+            </div>
           </div>
-          <div class="meeting-detail-section" id="md-summary-section">
-            <h4>Resumen</h4>
-            <div id="md-summary" class="meeting-detail-summary">—</div>
-          </div>
-          <div class="meeting-detail-section" id="md-actions-section">
-            <h4>Action Items</h4>
-            <div id="md-action-items" class="meeting-detail-action-items">Sin action items</div>
-          </div>
-          <div class="meeting-detail-section" id="md-transcript-section">
-            <h4>Transcripcion</h4>
-            <div id="md-transcript" class="meeting-detail-transcript">Sin transcripcion</div>
-          </div>
-          <div class="meeting-detail-section" id="md-screenshots-section" style="display:none;">
-            <h4>Capturas</h4>
-            <div id="md-screenshots" class="meeting-screenshots"></div>
-          </div>
-        </div>
-        <div class="meeting-detail-footer">
-          <button type="button" class="quick-action-btn" id="md-export-btn">Exportar como Markdown</button>
-        </div>
+        </section>
+
+        <section class="workers-section">
+          <h2>Workers Activos <span id="workers-count" class="feed-count">0</span></h2>
+          <div class="workers-grid" id="workers-grid"><p class="task-empty">Sin workers activos</p></div>
+        </section>
+
+        <section class="feed-section">
+          <h2>Actividad <span id="feed-count" class="feed-count">0</span></h2>
+          <div id="activity-feed" class="activity-feed"></div>
+        </section>
       </div>
-    </section>
 
-    <style>
-      /* BB.10 & BB.11 — Meeting detail and filters */
-      .meeting-filter-bar { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
-      .meeting-filter-btn {
-        padding: 4px 12px; border-radius: 4px; cursor: pointer;
-        background: var(--bg-card); color: var(--text-muted); border: 1px solid var(--border);
-        font-size: 0.85rem; transition: var(--transition);
-      }
-      .meeting-filter-btn:hover { background: var(--bg-card-hover); }
-      .meeting-filter-btn.active { background: var(--accent); color: #0F0F1B; border-color: var(--accent); font-weight: bold; }
-      .meeting-search-input {
-        flex: 1; min-width: 160px;
-        background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text);
-        padding: var(--input-padding); border-radius: var(--input-radius); font-size: var(--input-font);
-      }
-      .meeting-search-input:focus { outline: none; border-color: var(--input-focus); }
-      .meeting-detail {
-        background: var(--bg-card); border-radius: var(--radius); padding: 20px;
-        border: 1px solid var(--border); margin-top: 16px; position: relative;
-        animation: fadeInDetail 0.2s ease;
-      }
-      @keyframes fadeInDetail { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-      .meeting-detail-header { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
-      .meeting-detail-close {
-        position: absolute; top: 12px; right: 16px; background: none; border: none;
-        color: var(--text-muted); font-size: 1.5rem; cursor: pointer; line-height: 1;
-      }
-      .meeting-detail-close:hover { color: var(--danger); }
-      .meeting-detail-title { font-size: 1.1rem; margin-bottom: 6px; color: var(--text); }
-      .meeting-detail-meta { display: flex; gap: 12px; font-size: 0.85rem; color: var(--text-muted); flex-wrap: wrap; }
-      .meeting-detail-meta span { white-space: nowrap; }
-      .meeting-detail-section { margin-bottom: 16px; }
-      .meeting-detail-section h4 { font-size: 0.9rem; color: var(--accent); margin-bottom: 8px; }
-      .meeting-detail-summary { font-size: 0.9rem; line-height: 1.5; color: var(--text); }
-      .meeting-detail-participants { font-size: 0.9rem; color: var(--text-muted); }
-      .meeting-detail-transcript { max-height: 400px; overflow-y: auto; font-size: 0.85rem; line-height: 1.4; }
-      .transcript-line { padding: 4px 8px; border-left: 3px solid; margin: 2px 0; border-radius: 2px; }
-      .speaker-1 { border-left-color: var(--accent, #00D4AA); }
-      .speaker-2 { border-left-color: #FF6B9D; }
-      .speaker-3 { border-left-color: #3282B8; }
-      .speaker-4 { border-left-color: #F0C420; }
-      .speaker-5 { border-left-color: #9B59B6; }
-      .speaker-6 { border-left-color: #E67E22; }
-      .speaker-name { font-weight: bold; }
-      .timestamp { opacity: 0.5; font-size: 0.85em; margin-left: 4px; }
-      .meeting-detail-action-items { font-size: 0.9rem; }
-      .action-item { display: flex; gap: 8px; align-items: start; padding: 4px 0; }
-      .action-item input[type="checkbox"] { accent-color: var(--accent); margin-top: 3px; }
-      .action-item-who { font-weight: bold; color: var(--accent-2); min-width: 60px; }
-      .action-item-what { flex: 1; color: var(--text); }
-      .action-item-when { font-size: 0.8em; color: var(--text-muted); white-space: nowrap; }
-      .meeting-screenshots { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
-      .meeting-screenshots img { width: 100%; border-radius: 4px; cursor: pointer; }
-      .meeting-detail-footer { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
-      .meetings-list .task-item { cursor: pointer; transition: background 0.2s; }
-      .meetings-list .task-item:hover { background: var(--bg-card-hover); }
-
-      /* Screenshot lightbox */
-      .screenshot-lightbox {
-        display: none; position: fixed; inset: 0; z-index: 9999;
-        background: rgba(0,0,0,0.85); backdrop-filter: blur(6px);
-        align-items: center; justify-content: center; cursor: zoom-out;
-      }
-      .screenshot-lightbox-img {
-        max-width: 92vw; max-height: 92vh; border-radius: 8px;
-        box-shadow: 0 8px 40px rgba(0,0,0,0.5); object-fit: contain;
-      }
-      .meeting-screenshots img { cursor: zoom-in; transition: transform 0.2s, box-shadow 0.2s; }
-      .meeting-screenshots img:hover { transform: scale(1.05); box-shadow: 0 4px 16px rgba(0,212,170,0.2); }
-
-      /* Collapsible transcript */
-      .transcript-collapsible { border: none; }
-      .transcript-toggle {
-        cursor: pointer; color: var(--accent); font-size: 0.9rem; font-weight: 600;
-        padding: 6px 0; list-style: none; user-select: none;
-      }
-      .transcript-toggle::-webkit-details-marker { display: none; }
-      .transcript-toggle::before { content: '\25B6 '; font-size: 0.7em; transition: transform 0.2s; display: inline-block; }
-      details[open] .transcript-toggle::before { transform: rotate(90deg); }
-      .transcript-content { margin-top: 8px; }
-
-      /* Markdown in summary */
-      .meeting-detail-summary ul { padding-left: 20px; margin: 4px 0; }
-      .meeting-detail-summary li { margin: 2px 0; list-style: disc; }
-      .meeting-detail-summary h4 { font-size: 0.95rem; }
-      .meeting-detail-summary h5 { font-size: 0.88rem; color: var(--text); margin: 6px 0 2px; }
-    </style>
-
-    <!-- Calendar -->
-    <section class="calendar-section">
-      <h2>&#128197; Calendario</h2>
-      <div class="calendar-container">
-        <div class="calendar-mini">
-          <div class="calendar-header-row">
-            <span id="calendar-month-label" class="calendar-month-label"></span>
+      <!-- ==================== SECTION: Axi Chat ==================== -->
+      <div class="content-section" id="section-chat">
+        <section class="chat-section chat-fullheight">
+          <h2>Chat con Axi</h2>
+          <div class="chat-container">
+            <div class="chat-messages" id="chat-messages">
+              <div class="chat-msg chat-msg-axi">Hola, soy Axi. Escribe algo o usa /do para crear tareas.</div>
+            </div>
+            <form class="chat-input-form" id="chat-form">
+              <input type="text" id="chat-input" placeholder="Escribe un mensaje o /do <tarea>..." autocomplete="off">
+              <button type="submit" class="chat-send-btn">Enviar</button>
+            </form>
           </div>
-          <div class="calendar-grid" id="calendar-grid">
-            <span class="calendar-day-header">L</span>
-            <span class="calendar-day-header">M</span>
-            <span class="calendar-day-header">M</span>
-            <span class="calendar-day-header">J</span>
-            <span class="calendar-day-header">V</span>
-            <span class="calendar-day-header">S</span>
-            <span class="calendar-day-header">D</span>
-          </div>
-        </div>
-        <div class="calendar-events">
-          <h3>Eventos de hoy</h3>
-          <div class="calendar-today-events" id="calendar-today-events">
-            <p class="task-empty">Sin eventos hoy</p>
-          </div>
-          <h3 style="margin-top:16px;">Proximos eventos</h3>
-          <div class="calendar-upcoming-events" id="calendar-upcoming-events">
-            <p class="task-empty">Sin eventos proximos</p>
-          </div>
-        </div>
-        <div class="calendar-add">
-          <h3>Agregar evento</h3>
-          <form id="calendar-add-form" class="calendar-add-form">
-            <input type="text" id="cal-event-title" placeholder="Titulo del evento..." required>
-            <input type="datetime-local" id="cal-event-date" required>
-            <button type="submit" class="quick-action-btn">Agregar</button>
-          </form>
-        </div>
+        </section>
+        <section class="conversations-section">
+          <h2>Historial de Conversaciones</h2>
+          <div class="conversation-list" id="conversation-list"><p class="task-empty">Cargando conversaciones...</p></div>
+        </section>
       </div>
-    </section>
 
-    <style>
-      .calendar-section { margin-top: 24px; }
-      .calendar-container {
-        display: grid;
-        grid-template-columns: 280px 1fr;
-        gap: 24px;
-      }
-      @media (max-width: 700px) {
-        .calendar-container { grid-template-columns: 1fr; }
-      }
-      .calendar-mini {
-        background: var(--lifeos-surface, #1A1A2E);
-        border-radius: 12px;
-        padding: 16px;
-      }
-      .calendar-header-row {
-        text-align: center;
-        margin-bottom: 12px;
-      }
-      .calendar-month-label {
-        font-weight: bold;
-        font-size: 1rem;
-        color: var(--lifeos-primary, #00D4AA);
-      }
-      .calendar-grid {
-        display: grid;
-        grid-template-columns: repeat(7, 1fr);
-        gap: 2px;
-        text-align: center;
-        font-size: 0.85rem;
-      }
-      .calendar-day-header {
-        font-weight: bold;
-        font-size: 0.75rem;
-        opacity: 0.6;
-        padding: 4px;
-      }
-      .calendar-day {
-        padding: 4px;
-        border-radius: 4px;
-        position: relative;
-        cursor: default;
-      }
-      .calendar-today {
-        background: var(--lifeos-primary, #00D4AA);
-        color: #0F0F1B;
-        font-weight: bold;
-        border-radius: 50%;
-      }
-      .calendar-has-event::after {
-        content: '';
-        display: block;
-        width: 4px;
-        height: 4px;
-        background: var(--lifeos-primary, #00D4AA);
-        border-radius: 50%;
-        margin: 2px auto 0;
-      }
-      .calendar-other-month {
-        opacity: 0.3;
-      }
-      .calendar-events h3 {
-        font-size: 0.95rem;
-        margin-bottom: 8px;
-      }
-      .calendar-event-item {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 0;
-        border-bottom: 1px solid rgba(255,255,255,0.06);
-        font-size: 0.9rem;
-      }
-      .calendar-event-time {
-        color: var(--lifeos-primary, #00D4AA);
-        font-weight: bold;
-        min-width: 50px;
-      }
-      .calendar-event-title {
-        flex: 1;
-      }
-      .calendar-event-badge {
-        font-size: 0.7rem;
-        background: var(--lifeos-primary, #00D4AA);
-        color: #0F0F1B;
-        padding: 2px 6px;
-        border-radius: 8px;
-        font-weight: bold;
-      }
-      .calendar-add-form {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        align-items: center;
-      }
-      .calendar-add-form input[type="text"] {
-        flex: 1;
-        min-width: 150px;
-      }
-      .calendar-add-form input[type="datetime-local"] {
-        min-width: 180px;
-      }
-      .calendar-add {
-        grid-column: 1 / -1;
-        margin-top: 8px;
-      }
-      .calendar-add h3 {
-        font-size: 0.95rem;
-        margin-bottom: 8px;
-      }
-    </style>
-
-    <!-- Vida Plena (Wellness) -->
-    <section class="vida-plena-section">
-      <h2>Vida Plena</h2>
-      <div id="vida-plena-summary" class="vida-plena-grid">
-        <p class="task-empty">Cargando resumen...</p>
-      </div>
-      <div id="vida-plena-pillars" class="vida-plena-pillars"></div>
-      <div id="vida-plena-habits" class="vida-plena-habits"></div>
-      <div id="vida-plena-mood" class="vida-plena-mood"></div>
-    </section>
-
-    <!-- Activity Feed -->
-    <section class="feed-section">
-      <h2>Actividad <span id="feed-count" class="feed-count">0</span></h2>
-      <div id="activity-feed" class="activity-feed"></div>
-    </section>
-
-    <!-- Settings -->
-    <section class="settings-section">
-      <h2>Configuracion</h2>
-      <div class="settings-grid">
-        <div class="setting-item">
-          <label for="wake-word-input">Wake Word</label>
-          <input type="text" id="wake-word-input" value="axi" placeholder="axi">
-          <button id="wake-word-save" class="btn-small">Guardar</button>
-        </div>
-        <!-- Wake word training -->
-        <div class="setting-item" style="grid-column: 1 / -1;">
-          <label>Entrenar Wake Word</label>
-          <p class="setting-hint" id="ww-hint">Graba al menos 3 muestras diciendo "Axi" para crear el modelo de deteccion por voz.</p>
-          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
-            <button id="ww-record" class="btn-small" style="background:#e74c3c;">Grabar muestra (2.5s)</button>
-            <button id="ww-train" class="btn-small" style="background:#27ae60;" disabled>Entrenar modelo</button>
-            <button id="ww-delete" class="btn-small" style="background:#555;">Borrar muestras</button>
-            <span id="ww-status" style="font-size:0.85em; color:#aaa;">Cargando...</span>
+      <!-- ==================== SECTION: Reuniones ==================== -->
+      <div class="content-section" id="section-reuniones">
+        <section class="meetings-section">
+          <h2>Reuniones Recientes</h2>
+          <div class="meetings-stats" id="meeting-stats">
+            <div class="hero-stats">
+              <div class="hero-stat"><span>Total reuniones</span><strong id="mtg-total">0</strong></div>
+              <div class="hero-stat"><span>Horas totales</span><strong id="mtg-hours">0h</strong></div>
+              <div class="hero-stat"><span>Duracion promedio</span><strong id="mtg-avg">0m</strong></div>
+              <div class="hero-stat"><span>Participante frecuente</span><strong id="mtg-top-participant">—</strong></div>
+            </div>
           </div>
-          <div id="ww-samples" style="margin-top:8px; font-size:0.8em; color:#999;"></div>
-        </div>
-
-        <div class="setting-item">
-          <label for="interval-slider">Intervalo captura (s)</label>
-          <input type="range" id="interval-slider" min="5" max="30" value="10">
-          <span id="interval-value">10s</span>
-        </div>
-        <div class="setting-item">
-          <label for="toggle-widget">Widget flotante</label>
-          <div class="inline-setting-row">
-            <label class="toggle" onclick="event.stopPropagation()">
-              <input type="checkbox" id="toggle-widget">
-              <span class="slider"></span>
-            </label>
-            <span id="widget-status" class="setting-inline-value">Oculto</span>
+          <div class="meeting-filter-bar" id="meeting-filter-bar">
+            <button class="meeting-filter-btn active" data-period="week">Esta semana</button>
+            <button class="meeting-filter-btn" data-period="month">Este mes</button>
+            <button class="meeting-filter-btn" data-period="all">Todo</button>
+            <input type="text" id="meeting-search-input" class="meeting-search-input" placeholder="Buscar en reuniones..." autocomplete="off">
           </div>
-          <p id="widget-note" class="setting-hint">Arrastra la orb en el escritorio para moverla. Click abre este panel.</p>
-        </div>
+          <div class="meetings-list" id="meetings-list"><p class="task-empty">Sin datos de reuniones</p></div>
+          <div class="meetings-load-more" id="meetings-load-more" style="display:none; text-align:center; margin-top:12px;">
+            <button type="button" class="quick-action-btn" id="meetings-load-more-btn">Cargar mas</button>
+          </div>
+          <div class="meetings-actions">
+            <h3>Action Items Pendientes</h3>
+            <div class="action-items-list" id="meeting-action-items"><p class="task-empty">Sin action items pendientes</p></div>
+          </div>
+          <div class="meeting-detail" id="meeting-detail" style="display:none;">
+            <div class="meeting-detail-header">
+              <button class="meeting-detail-close" id="meeting-detail-close" title="Cerrar">&times;</button>
+              <h3 id="md-title" class="meeting-detail-title">—</h3>
+              <div class="meeting-detail-meta">
+                <span id="md-date" class="meeting-detail-date">—</span>
+                <span id="md-duration" class="meeting-detail-duration">—</span>
+                <span id="md-app" class="meeting-detail-app">—</span>
+              </div>
+            </div>
+            <div class="meeting-detail-body">
+              <div class="meeting-detail-section" id="md-participants-section"><h4>Participantes</h4><div id="md-participants" class="meeting-detail-participants">No detectados</div></div>
+              <div class="meeting-detail-section" id="md-summary-section"><h4>Resumen</h4><div id="md-summary" class="meeting-detail-summary">—</div></div>
+              <div class="meeting-detail-section" id="md-actions-section"><h4>Action Items</h4><div id="md-action-items" class="meeting-detail-action-items">Sin action items</div></div>
+              <div class="meeting-detail-section" id="md-transcript-section"><h4>Transcripcion</h4><div id="md-transcript" class="meeting-detail-transcript">Sin transcripcion</div></div>
+              <div class="meeting-detail-section" id="md-screenshots-section" style="display:none;"><h4>Capturas</h4><div id="md-screenshots" class="meeting-screenshots"></div></div>
+            </div>
+            <div class="meeting-detail-footer">
+              <button type="button" class="quick-action-btn" id="md-export-btn">Exportar como Markdown</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="calendar-section">
+          <h2>Calendario</h2>
+          <div class="calendar-container">
+            <div class="calendar-mini">
+              <div class="calendar-header-row"><span id="calendar-month-label" class="calendar-month-label"></span></div>
+              <div class="calendar-grid" id="calendar-grid">
+                <span class="calendar-day-header">L</span><span class="calendar-day-header">M</span><span class="calendar-day-header">M</span>
+                <span class="calendar-day-header">J</span><span class="calendar-day-header">V</span><span class="calendar-day-header">S</span><span class="calendar-day-header">D</span>
+              </div>
+            </div>
+            <div class="calendar-events">
+              <h3>Eventos de hoy</h3>
+              <div class="calendar-today-events" id="calendar-today-events"><p class="task-empty">Sin eventos hoy</p></div>
+              <h3 style="margin-top:16px;">Proximos eventos</h3>
+              <div class="calendar-upcoming-events" id="calendar-upcoming-events"><p class="task-empty">Sin eventos proximos</p></div>
+            </div>
+            <div class="calendar-add">
+              <h3>Agregar evento</h3>
+              <form id="calendar-add-form" class="calendar-add-form">
+                <input type="text" id="cal-event-title" placeholder="Titulo del evento..." required>
+                <input type="datetime-local" id="cal-event-date" required>
+                <button type="submit" class="quick-action-btn">Agregar</button>
+              </form>
+            </div>
+          </div>
+        </section>
       </div>
-    </section>
-  </main>
+
+      <!-- ==================== SECTION: Configuracion ==================== -->
+      <div class="content-section" id="section-config">
+        <section class="providers-section">
+          <h2>Proveedores LLM <button type="button" class="quick-action-btn" id="reload-providers-btn" style="margin-left:8px;font-size:0.75rem;padding:6px 12px;">Recargar proveedores</button></h2>
+          <div class="providers-grid" id="providers-grid"><p class="task-empty">Cargando proveedores...</p></div>
+          <div class="add-provider-form">
+            <h4>Agregar Proveedor</h4>
+            <div class="add-provider-fields">
+              <input type="text" id="new-provider-name" placeholder="Nombre (ej: my-groq)">
+              <input type="text" id="new-provider-base" placeholder="API Base (ej: https://api.groq.com/openai)">
+              <input type="text" id="new-provider-model" placeholder="Modelo (ej: llama-3.3-70b)">
+              <input type="text" id="new-provider-key-env" placeholder="Env var API key (ej: GROQ_API_KEY)">
+              <select id="new-provider-tier"><option value="free">Free</option><option value="cheap">Cheap</option><option value="premium">Premium</option></select>
+              <select id="new-provider-privacy"><option value="high">High (ZDR)</option><option value="medium">Medium</option><option value="low">Low</option></select>
+              <button type="button" class="quick-action-btn" id="add-provider-btn">Agregar</button>
+            </div>
+            <p class="setting-hint" id="add-provider-hint">Agrega un nuevo proveedor LLM compatible con OpenAI API.</p>
+          </div>
+          <div class="providers-config">
+            <h3>Configurar API Keys</h3>
+            <div class="provider-key-form">
+              <div class="key-row"><label>Anthropic</label><input type="password" id="key-anthropic" placeholder="sk-ant-..." data-env="ANTHROPIC_API_KEY"><span class="key-status" id="key-status-anthropic">?</span></div>
+              <div class="key-row"><label>OpenAI</label><input type="password" id="key-openai" placeholder="sk-..." data-env="OPENAI_API_KEY"><span class="key-status" id="key-status-openai">?</span></div>
+              <div class="key-row"><label>Google (Gemini)</label><input type="password" id="key-gemini" placeholder="AIza..." data-env="GEMINI_API_KEY"><span class="key-status" id="key-status-gemini">?</span></div>
+              <div class="key-row"><label>ZAI</label><input type="password" id="key-zai" placeholder="zai-..." data-env="ZAI_API_KEY"><span class="key-status" id="key-status-zai">?</span></div>
+              <div class="key-row"><label>Cerebras</label><input type="password" id="key-cerebras" placeholder="csk-..." data-env="CEREBRAS_API_KEY"><span class="key-status" id="key-status-cerebras">?</span></div>
+              <div class="key-row"><label>Groq</label><input type="password" id="key-groq" placeholder="gsk_..." data-env="GROQ_API_KEY"><span class="key-status" id="key-status-groq">?</span></div>
+              <div class="key-row"><label>OpenRouter</label><input type="password" id="key-openrouter" placeholder="sk-or-..." data-env="OPENROUTER_API_KEY"><span class="key-status" id="key-status-openrouter">?</span></div>
+              <div class="key-row"><label>Telegram Bot Token</label><input type="password" id="key-telegram" placeholder="123456:ABC-DEF..." data-env="LIFEOS_TELEGRAM_BOT_TOKEN"><span class="key-status" id="key-status-telegram">?</span></div>
+              <div class="key-row"><label>Telegram Chat ID</label><input type="text" id="key-telegram-chatid" placeholder="Tu chat ID numerico" data-env="LIFEOS_TELEGRAM_CHAT_ID"><span class="key-status" id="key-status-telegram-chatid">?</span></div>
+            </div>
+            <button type="button" class="quick-action-btn" id="save-keys-btn">Guardar Keys</button>
+            <p class="setting-hint" id="keys-hint">Configura tus keys aqui. Se activan inmediatamente sin reiniciar.</p>
+            <details style="margin-top:8px;">
+              <summary style="cursor:pointer; color:var(--accent); font-size:0.85em;">Como configurar Telegram?</summary>
+              <ol style="font-size:0.8em; color:#aaa; margin-top:6px; padding-left:20px;">
+                <li>Abre Telegram y busca <strong>@BotFather</strong></li>
+                <li>Envia <code>/newbot</code> y sigue las instrucciones</li>
+                <li>Copia el token (ej: <code>123456:ABC-DEF...</code>) y pegalo arriba</li>
+                <li>Para tu Chat ID: envia cualquier mensaje a <strong>@userinfobot</strong> y copia el numero</li>
+                <li>Guarda y listo — Axi respondera por Telegram</li>
+              </ol>
+            </details>
+          </div>
+        </section>
+        <section class="localai-section">
+          <h2>AI Local</h2>
+          <div class="localai-grid">
+            <div class="localai-status">
+              <div class="hero-stats">
+                <div class="hero-stat"><span>Modelo activo</span><strong id="ai-active-model">—</strong></div>
+                <div class="hero-stat"><span>Estado</span><strong id="ai-server-status">—</strong></div>
+              </div>
+              <div class="hero-stat" style="margin-top:12px"><span>GPU</span><strong id="ai-gpu-name">—</strong></div>
+            </div>
+            <div class="localai-config">
+              <h3>Configuracion</h3>
+              <div class="setting-item"><label for="ai-ctx-slider">Contexto (tokens)</label><input type="range" id="ai-ctx-slider" min="2048" max="32768" step="1024" value="16384"><span id="ai-ctx-value">16384</span></div>
+              <div class="setting-item"><label for="ai-gpu-layers">GPU Layers</label><input type="range" id="ai-gpu-layers" min="0" max="99" value="99"><span id="ai-gpu-layers-value">99 (todas)</span></div>
+              <div class="setting-item"><label for="ai-threads">CPU Threads</label><input type="range" id="ai-threads" min="1" max="24" value="4"><span id="ai-threads-value">4</span></div>
+            </div>
+            <div class="localai-models"><h3>Modelos disponibles</h3><div class="models-grid" id="models-grid"><p class="task-empty">Cargando modelos...</p></div></div>
+            <div class="localai-catalog">
+              <h3>Descargar modelos</h3>
+              <p class="setting-hint">Selecciona un modelo para descargarlo al almacenamiento local.</p>
+              <div class="catalog-grid" id="catalog-grid">
+                <div class="catalog-item" data-model="Qwen3.5-0.8B-Q4_K_M" data-size="600"><span class="catalog-name">Qwen3.5-0.8B</span><span class="catalog-size">~600 MB</span><span class="catalog-desc">Ultra ligero, solo OCR/clasificacion</span></div>
+                <div class="catalog-item" data-model="Qwen3.5-2B-Q4_K_M" data-size="1280"><span class="catalog-name">Qwen3.5-2B</span><span class="catalog-size">~1.3 GB</span><span class="catalog-desc">Vision basica, limitado para conversacion</span></div>
+                <div class="catalog-item" data-model="Qwen3.5-4B-Q4_K_M" data-size="2500"><span class="catalog-name">Qwen3.5-4B (recomendado)</span><span class="catalog-size">~2.7 GB</span><span class="catalog-desc">Vision + conversacion, equilibrio ideal</span></div>
+                <div class="catalog-item" data-model="Qwen3.5-9B-Q4_K_M" data-size="5500"><span class="catalog-name">Qwen3.5-9B</span><span class="catalog-size">~5.5 GB</span><span class="catalog-desc">Maximo calidad local</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="simplex-section" id="simplex-section">
+          <h2>SimpleX — conectar tu telefono</h2>
+          <p class="setting-hint" style="margin-bottom:12px">Escanea este QR con la app SimpleX Chat en tu telefono para conectarte al bot Axi de esta LifeOS.</p>
+          <div class="simplex-grid">
+            <div class="simplex-qr-wrap"><div class="simplex-qr" id="simplex-qr" aria-label="Codigo QR del bot SimpleX Axi"><span class="setting-hint">Generando...</span></div><div class="simplex-state" id="simplex-state">—</div></div>
+            <div class="simplex-link-wrap">
+              <label for="simplex-link-text">Link (copia y pega si el QR no funciona)</label>
+              <textarea id="simplex-link-text" readonly rows="4" placeholder="El bot SimpleX todavia no ha generado un link de invitacion..."></textarea>
+              <div class="simplex-actions"><button type="button" class="quick-action-btn" id="simplex-copy-btn">Copiar link</button><button type="button" class="quick-action-btn" id="simplex-refresh-btn">Refrescar</button></div>
+            </div>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h2>Configuracion General</h2>
+          <div class="settings-grid">
+            <div class="setting-item"><label for="wake-word-input">Wake Word</label><input type="text" id="wake-word-input" value="axi" placeholder="axi"><button id="wake-word-save" class="btn-small">Guardar</button></div>
+            <div class="setting-item" style="grid-column: 1 / -1;">
+              <label>Entrenar Wake Word</label>
+              <p class="setting-hint" id="ww-hint">Graba al menos 3 muestras diciendo "Axi" para crear el modelo de deteccion por voz.</p>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                <button id="ww-record" class="btn-small" style="background:#e74c3c;">Grabar muestra (2.5s)</button>
+                <button id="ww-train" class="btn-small" style="background:#27ae60;" disabled>Entrenar modelo</button>
+                <button id="ww-delete" class="btn-small" style="background:#555;">Borrar muestras</button>
+                <span id="ww-status" style="font-size:0.85em; color:#aaa;">Cargando...</span>
+              </div>
+              <div id="ww-samples" style="margin-top:8px; font-size:0.8em; color:#999;"></div>
+            </div>
+            <div class="setting-item"><label for="interval-slider">Intervalo captura (s)</label><input type="range" id="interval-slider" min="5" max="30" value="10"><span id="interval-value">10s</span></div>
+            <div class="setting-item">
+              <label for="toggle-widget">Widget flotante</label>
+              <div class="inline-setting-row"><label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-widget"><span class="slider"></span></label><span id="widget-status" class="setting-inline-value">Oculto</span></div>
+              <p id="widget-note" class="setting-hint">Arrastra la orb en el escritorio para moverla. Click abre este panel.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- ==================== SECTION: Sistema ==================== -->
+      <div class="content-section" id="section-sistema">
+        <section class="resources-section"><h2>Recursos del Sistema</h2><div class="resources-grid" id="resources-grid"><p class="task-empty">Cargando recursos...</p></div></section>
+        <section class="health-section">
+          <h2>Salud del Sistema</h2>
+          <div class="health-grid" id="health-grid">
+            <div class="health-item"><span class="health-dot" id="health-dot-cpu-temp"></span><span class="health-label">CPU Temp</span><span class="health-value" id="health-cpu-temp">—</span></div>
+            <div class="health-item"><span class="health-dot" id="health-dot-gpu-temp"></span><span class="health-label">GPU Temp</span><span class="health-value" id="health-gpu-temp">—</span></div>
+            <div class="health-item"><span class="health-dot" id="health-dot-ssd"></span><span class="health-label">SSD Health</span><span class="health-value" id="health-ssd">—</span></div>
+            <div class="health-item"><span class="health-dot" id="health-dot-battery"></span><span class="health-label">Battery Health</span><span class="health-value" id="health-battery">—</span></div>
+            <div class="health-item"><span class="health-dot" id="health-dot-disk"></span><span class="health-label">Disk Usage</span><span class="health-value" id="health-disk">—</span></div>
+            <div class="health-item"><span class="health-dot" id="health-dot-ram"></span><span class="health-label">RAM Usage</span><span class="health-value" id="health-ram">—</span></div>
+          </div>
+        </section>
+        <section class="doctor-section">
+          <h2>Doctor <span id="doctor-badge" class="badge badge-offline">Sin datos</span></h2>
+          <div class="doctor-grid" id="doctor-grid"><p class="task-empty">Ejecutando diagnostico...</p></div>
+          <div class="doctor-actions"><button type="button" class="quick-action-btn" id="doctor-run-btn">Ejecutar diagnostico</button></div>
+          <p class="doctor-timestamp" id="doctor-timestamp"></p>
+        </section>
+        <section class="services-section">
+          <h2>Servicios</h2>
+          <div class="health-grid" id="services-grid">
+            <div class="health-item"><span class="health-dot" id="svc-dot-daemon"></span><span class="health-label">Axi (daemon)</span><span class="health-value" id="svc-daemon">—</span></div>
+            <div class="health-item"><span class="health-dot" id="svc-dot-llm"></span><span class="health-label">LLM Server</span><span class="health-value" id="svc-llm">—</span></div>
+            <div class="health-item"><span class="health-dot" id="svc-dot-stt"></span><span class="health-label">Voz (STT)</span><span class="health-value" id="svc-stt">—</span></div>
+            <div class="health-item"><span class="health-dot" id="svc-dot-telegram"></span><span class="health-label">Telegram</span><span class="health-value" id="svc-telegram">—</span></div>
+          </div>
+        </section>
+        <section class="battery-section hidden" id="battery-section">
+          <h2>Bateria</h2>
+          <div class="battery-grid">
+            <div class="battery-info">
+              <div class="hero-stats">
+                <div class="hero-stat"><span>Carga</span><strong id="bat-charge">—</strong></div>
+                <div class="hero-stat"><span>Salud</span><strong id="bat-health">—</strong></div>
+                <div class="hero-stat"><span>Ciclos</span><strong id="bat-cycles">—</strong></div>
+              </div>
+              <div class="hero-stats" style="margin-top:12px">
+                <div class="hero-stat"><span>Perfil energia</span><strong id="bat-profile">—</strong></div>
+                <div class="hero-stat"><span>Fabricante</span><strong id="bat-vendor">—</strong></div>
+              </div>
+            </div>
+            <div class="battery-threshold">
+              <div class="setting-item"><label for="bat-threshold-slider">Umbral de carga (%)</label><input type="range" id="bat-threshold-slider" min="50" max="100" step="5" value="80"><span id="bat-threshold-value">80%</span></div>
+              <button type="button" class="quick-action-btn" id="bat-threshold-save">Aplicar umbral</button>
+              <p class="setting-hint">Limita la carga maxima para prolongar la vida util de la bateria.</p>
+            </div>
+          </div>
+        </section>
+        <section class="gameguard-section">
+          <h2>GPU Game Guard</h2>
+          <div class="gameguard-grid">
+            <div class="gameguard-status">
+              <div class="hero-stats">
+                <div class="hero-stat"><span>LLM Mode</span><strong id="gg-llm-mode">—</strong></div>
+                <div class="hero-stat"><span>Juego detectado</span><strong id="gg-game-name">Ninguno</strong></div>
+              </div>
+              <p id="gg-game-detail" class="setting-hint" style="margin-top:8px"></p>
+            </div>
+            <div class="gameguard-toggles">
+              <div class="setting-item"><label>Game Guard (auto-offload a RAM)</label><div class="inline-setting-row"><label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-game-guard" checked><span class="slider"></span></label><span id="gg-guard-status" class="setting-inline-value">Activo</span></div><p class="setting-hint">Libera VRAM automaticamente cuando detecta un juego.</p></div>
+              <div class="setting-item"><label>Game Assistant (Axi como copiloto)</label><div class="inline-setting-row"><label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-game-assistant" checked><span class="slider"></span></label><span id="gg-assistant-status" class="setting-inline-value">Activo</span></div><p class="setting-hint">Pide ayuda durante el juego via voz o Telegram. Solo usa providers ZDR.</p></div>
+            </div>
+          </div>
+        </section>
+        <section class="metrics-section">
+          <h2>Metricas de Agentes</h2>
+          <div class="metrics-summary" id="metrics-summary">
+            <div class="hero-stats">
+              <div class="hero-stat"><span>Total tareas</span><strong id="met-total">0</strong></div>
+              <div class="hero-stat"><span>Completadas</span><strong id="met-completed">0</strong></div>
+              <div class="hero-stat"><span>Fallidas</span><strong id="met-failed">0</strong></div>
+              <div class="hero-stat"><span>Tasa exito</span><strong id="met-rate">—</strong></div>
+            </div>
+            <div class="metrics-roles" id="metrics-roles"></div>
+          </div>
+        </section>
+        <section class="sched-section">
+          <h2>Tareas Programadas</h2>
+          <div class="sched-list" id="sched-list"><p class="task-empty">Sin tareas programadas</p></div>
+          <div class="sched-add">
+            <input type="text" id="sched-objective" placeholder="Que quieres que haga...">
+            <select id="sched-type"><option value="interval">Cada N minutos</option><option value="daily">Diario a una hora</option></select>
+            <input type="text" id="sched-param" placeholder="30 (minutos) o 09:00 (hora)">
+            <button type="button" class="quick-action-btn" id="sched-add-btn">Programar</button>
+          </div>
+        </section>
+        <section class="memory-section">
+          <h2>Memoria de Axi</h2>
+          <div class="memory-stats" id="memory-stats">
+            <div class="hero-stats">
+              <div class="hero-stat"><span>Entradas</span><strong id="mem-total">0</strong></div>
+              <div class="hero-stat"><span>Decisiones</span><strong id="mem-decisions">0</strong></div>
+              <div class="hero-stat"><span>Eventos</span><strong id="mem-events">0</strong></div>
+              <div class="hero-stat"><span>Notas</span><strong id="mem-notes">0</strong></div>
+            </div>
+          </div>
+          <div class="memory-search"><input type="text" id="memory-search-input" placeholder="Buscar en la memoria..."><button type="button" class="quick-action-btn" id="memory-search-btn">Buscar</button></div>
+          <div class="memory-entries" id="memory-entries"><p class="task-empty">Busca algo o carga las entradas recientes</p></div>
+        </section>
+        <section class="vida-plena-section">
+          <h2>Vida Plena</h2>
+          <div id="vida-plena-summary" class="vida-plena-grid"><p class="task-empty">Cargando resumen...</p></div>
+          <div id="vida-plena-pillars" class="vida-plena-pillars"></div>
+          <div id="vida-plena-habits" class="vida-plena-habits"></div>
+          <div id="vida-plena-mood" class="vida-plena-mood"></div>
+        </section>
+      </div>
+    </main>
+  </div>
 
   <script src="app.js"></script>
 </body>
