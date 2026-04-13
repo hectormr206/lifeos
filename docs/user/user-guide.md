@@ -93,6 +93,57 @@ life intents always-on classify "axi open terminal"
 life intents model-route critical --preferred-model Qwen3.5-9B-Q4_K_M.gguf
 ```
 
+## Wake Word Detection (experimental)
+
+Axi listens for a wake word so you can trigger the assistant hands-free. The default wake word is **"Axi"**.
+
+**How it works:** The daemon uses [rustpotter](https://github.com/GiviMAD/rustpotter) for on-device keyword spotting. Audio is streamed from the microphone via PipeWire (`pw-record`) and processed entirely on your machine — no audio data ever leaves the device.
+
+**Enabling it:**
+
+```bash
+life intents always-on enable --wake-word "axi"
+```
+
+**Pre-trained model:** A pre-built model for "Axi" ships with the image at `/usr/share/lifeos/models/rustpotter/axi.rpw`. On first use it is copied to `/var/lib/lifeos/models/rustpotter/axi.rpw` so you can refine it without touching the read-only image.
+
+**Training a custom wake word:** If you want to use a different word or improve accuracy for your voice, record enrollment samples and train:
+
+```bash
+life intents always-on train-wake-word
+```
+
+After training, the detector hot-reloads the new model without a restart.
+
+**Privacy note:** Detection runs fully locally. The microphone is only open while always-on mode is active; disable it at any time with `life intents always-on disable`.
+
+> **Note:** Wake word detection is experimental. False-positive rate depends on microphone quality and ambient noise. Accuracy improves after custom enrollment.
+
+## Meeting Assistant (experimental)
+
+> **Status: experimental — behavior and output quality are still being validated.**
+
+LifeOS can automatically detect when you join a video call and assist with recording, transcription, and summarization. No manual trigger is needed; detection is passive.
+
+**Detection signals (combined for confidence):**
+
+- PipeWire audio streams from known conferencing apps (Zoom, Google Meet, Microsoft Teams, Discord, Slack Huddle, Jitsi, WebEx)
+- Webcam usage (`/dev/video0` held by a browser or meeting app)
+- Window title patterns matching active meeting state
+
+**Processing pipeline:**
+
+1. **Detect** — meeting start is identified from the signals above
+2. **Record** — system audio (and optionally mic) captured via PipeWire
+3. **Transcribe** — local Whisper STT processes the audio after the call ends; no audio sent to external services
+4. **Diarize** — speaker segments are identified and, if speaker profiles exist, labeled by name
+5. **Summarize** — LLM generates a summary, action items, and key points
+6. **Archive** — results stored locally in SQLite; raw audio deleted by default after successful processing (set `LIFEOS_KEEP_MEETING_AUDIO=1` to retain it)
+
+The assistant is enabled by default. Set `LIFEOS_MEETING_ASSISTANT=0` to disable it. Real-time captions during a call are opt-in via `LIFEOS_MEETING_CAPTIONS=1`.
+
+Stable CLI commands for querying meeting history and archives will be documented once the interface is finalized.
+
 ## Vision/OCR
 
 OCR from existing image:
