@@ -89,13 +89,17 @@ pub mod inner {
             // how the tray used to spawn "múltiples ventanas de error".
             // xdg-open is last because it dispatches through MIME handlers
             // which can silently fail in COSMIC if the portal is misconfigured.
+            // --name=firefox-wayland MUST match StartupWMClass in
+            // firefox-lifeos.desktop so COSMIC associates the window with
+            // the correct dock icon instead of showing a broken generic one.
             let openers: &[(&str, &[&str])] = &[
-                ("firefox", &["-P", "lifeos.default", "--new-tab"]),
+                ("firefox", &["--name=firefox-wayland", "-P", "lifeos.default", "--new-tab"]),
                 (
                     "flatpak",
                     &[
                         "run",
                         "org.mozilla.firefox",
+                        "--name=firefox-wayland",
                         "-P",
                         "lifeos.default",
                         "--new-tab",

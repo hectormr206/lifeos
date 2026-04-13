@@ -66,9 +66,9 @@ while [ "${i}" -lt 45 ]; do
         if command -v firefox >/dev/null 2>&1; then
             lifeos_profile="${HOME}/.mozilla/firefox/lifeos.default"
             if [ -d "${lifeos_profile}" ]; then
-                firefox --profile "${lifeos_profile}" --no-remote "${dashboard_url}" >/dev/null 2>&1 &
+                firefox --name=firefox-wayland --profile "${lifeos_profile}" --no-remote "${dashboard_url}" >/dev/null 2>&1 &
             else
-                firefox -P LifeOS --no-remote "${dashboard_url}" >/dev/null 2>&1 &
+                firefox --name=firefox-wayland -P LifeOS --no-remote "${dashboard_url}" >/dev/null 2>&1 &
             fi
             exit 0
         fi
