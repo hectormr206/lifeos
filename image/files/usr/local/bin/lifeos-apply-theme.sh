@@ -216,8 +216,8 @@ COMP="$HOME/.config/cosmic/com.system76.CosmicComp/v1"
 write_if_absent "$COMP/active_hint" "true"
 
 # ── 5. Wallpaper (COSMIC currently expects raster assets via cosmic-bg) ──
-WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-default.png"
-[ ! -f "$WALLPAPER" ] && WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-axi-night.png"
+WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-axi-night.png"
+[ ! -f "$WALLPAPER" ] && WALLPAPER="/usr/share/backgrounds/lifeos/lifeos-default.png"
 if [ -f "$WALLPAPER" ]; then
     BG_DIR="$HOME/.config/cosmic/com.system76.CosmicBackground/v1"
     # Check BEFORE write_background_entry so we know if we actually wrote
