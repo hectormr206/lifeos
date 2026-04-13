@@ -38,6 +38,32 @@
   --sidebar-border: rgba(0, 0, 0, 0.08);
 }
 
+[data-theme="light"] body {
+  background:
+    radial-gradient(circle at top left, rgba(0, 212, 170, 0.06), transparent 30%),
+    radial-gradient(circle at top right, rgba(99, 230, 255, 0.04), transparent 28%),
+    linear-gradient(180deg, #f0f0f5 0%, #e4e4ee 100%);
+}
+
+[data-theme="light"] body::before {
+  background: radial-gradient(circle, rgba(0, 212, 170, 0.08), transparent 68%);
+}
+
+[data-theme="light"] body::after {
+  background: radial-gradient(circle, rgba(0, 212, 170, 0.04), transparent 70%);
+}
+
+[data-theme="light"] .hero-panel {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(240, 240, 245, 0.82)),
+    radial-gradient(circle at top right, rgba(0, 212, 170, 0.08), transparent 38%);
+  border-color: rgba(0, 212, 170, 0.12);
+}
+
+[data-theme="light"] .hero-summary {
+  color: rgba(26, 26, 46, 0.85);
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
@@ -330,8 +356,13 @@ body {
   min-height: 0;
 }
 .chat-fullheight .chat-container {
-  height: calc(100vh - 200px);
+  height: calc(100vh - 180px);
   min-height: 400px;
+}
+@media (max-width: 768px) {
+  .chat-fullheight .chat-container {
+    height: calc(100vh - 220px);
+  }
 }
 
 /* Header — removed, replaced by sidebar */
@@ -383,48 +414,6 @@ main {
   width: 100%;
 }
 
-/* === Tabs Navigation === */
-.dashboard-tabs {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 8px;
-  padding: 6px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: calc(var(--radius) * 1.2);
-  overflow-x: auto;
-  scrollbar-width: none;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-}
-[data-theme="light"] .dashboard-tabs { background: rgba(0, 0, 0, 0.04); border-color: rgba(0,0,0,0.06); }
-.dashboard-tabs::-webkit-scrollbar { display: none; }
-
-.tab-btn {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: 0.95rem;
-  font-weight: 600;
-  padding: 10px 20px;
-  cursor: pointer;
-  border-radius: var(--radius);
-  transition: all var(--transition);
-  white-space: nowrap;
-  flex: 1;
-  text-align: center;
-}
-.tab-btn:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
-[data-theme="light"] .tab-btn:hover { background: rgba(0, 0, 0, 0.05); }
-
-.tab-btn.active {
-  color: #fff;
-  background: linear-gradient(180deg, rgba(0, 212, 170, 1), rgba(0, 180, 144, 1));
-  box-shadow: 0 4px 12px rgba(0, 212, 170, 0.3);
-}
-
-.tab-contents { width: 100%; }
-.tab-pane { display: none; flex-direction: column; gap: 24px; animation: fadeIn 0.4s ease; }
-.tab-pane.active { display: flex; }
-
 h2 {
   font-size: 1.1rem;
   font-weight: 600;
@@ -434,7 +423,10 @@ h2 {
   letter-spacing: 0.05em;
 }
 
-section { scroll-margin-top: 92px; }
+section { scroll-margin-top: 24px; }
+@media (max-width: 768px) {
+  section { scroll-margin-top: 60px; }
+}
 
 /* Hero */
 .hero-panel {
@@ -2122,7 +2114,14 @@ details[open] .transcript-toggle::before { transform: rotate(90deg); }
 .transcript-content { margin-top: 8px; }
 
 /* ===================== Calendar ===================== */
-.calendar-section { margin-top: 24px; }
+.calendar-section {
+  margin-top: 24px;
+  padding: 1.5rem;
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  margin-bottom: 1.5rem;
+}
 .calendar-container {
   display: grid;
   grid-template-columns: 280px 1fr;
@@ -2174,4 +2173,15 @@ details[open] .transcript-toggle::before { transform: rotate(90deg); }
   border-radius: var(--radius);
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
   margin-bottom: 1.5rem;
+}
+.meetings-actions {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.meetings-actions h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  color: var(--text);
 }

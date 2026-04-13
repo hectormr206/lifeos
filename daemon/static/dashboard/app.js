@@ -1130,6 +1130,7 @@ async function fetchInitialState() {
       // Update all health dots from initial data
       populateAudioDiag(sensory, null);
       populateAlwaysOnDiag(sensory);
+      populateTtsDiag(sensory);
       populateScreenDiag(sensory);
       populateCameraDiag(sensory);
     }
@@ -1258,6 +1259,7 @@ async function refreshFullState() {
         switch (sensor) {
           case 'audio': populateAudioDiag(sensory, diagCache.stt); break;
           case 'always-on': populateAlwaysOnDiag(sensory); break;
+          case 'tts': populateTtsDiag(sensory); break;
           case 'screen': populateScreenDiag(sensory); break;
           case 'camera': populateCameraDiag(sensory); break;
         }
@@ -1265,6 +1267,7 @@ async function refreshFullState() {
       // Always update health dots
       populateAudioDiag(sensory, diagCache.stt);
       populateAlwaysOnDiag(sensory);
+      populateTtsDiag(sensory);
       populateScreenDiag(sensory);
       populateCameraDiag(sensory);
       renderHero();
