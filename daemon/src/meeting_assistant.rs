@@ -202,29 +202,21 @@ impl MeetingAssistant {
         }
 
         // Strategy 1: Check PipeWire/PulseAudio for conferencing app audio streams
-        // DIAG: trace each detection strategy to find hangs
-        info!("[meeting] detect: checking audio...");
+        // Strategy 1: Check PipeWire/PulseAudio for conferencing app audio streams
         let audio_meeting = detect_meeting_audio().await;
-        info!("[meeting] detect: audio={:?}", audio_meeting);
 
         // Strategy 2: Check sway/COSMIC compositor window titles for meeting patterns
         let window_meeting = if audio_meeting.is_none() {
-            info!("[meeting] detect: checking window titles...");
-            let wm = detect_meeting_by_window_title().await;
-            info!("[meeting] detect: window={:?}", wm);
-            wm
+            detect_meeting_by_window_title().await
         } else {
             None
         };
 
         // Strategy 3: Check if camera is in use by a conferencing app
-        info!("[meeting] detect: checking camera...");
         let camera_in_use = detect_camera_in_use().await;
-        info!("[meeting] detect: camera={}", camera_in_use);
 
         // Strategy 4: Direct /proc scan as last resort (catches all browser meetings)
         let proc_meeting = if audio_meeting.is_none() && window_meeting.is_none() && !camera_in_use {
-            info!("[meeting] detect: checking /proc cmdline fallback...");
             if let Some(titles) = collect_titles_from_proc().await {
                 let mut found = None;
                 for title in &titles {
@@ -236,10 +228,8 @@ impl MeetingAssistant {
                     if t.contains("webex.com") { found = Some("WebEx".to_string()); break; }
                     if t.contains("discord.com") { found = Some("Discord".to_string()); break; }
                 }
-                info!("[meeting] detect: /proc={:?}", found);
                 found
             } else {
-                info!("[meeting] detect: /proc=None");
                 None
             }
         } else {
@@ -1891,8 +1881,6 @@ async fn detect_meeting_audio() -> Option<String> {
         }
     }
 
-    info!("[meeting] pactl combined text length: {}, contains 'chromium': {}", text.len(), text.contains("chromium"));
-
     if text.is_empty() {
         return None;
     }
@@ -2123,22 +2111,11 @@ async fn collect_titles_from_proc() -> Option<Vec<String>> {
         .await
         .ok()?;
 
-    let stdout_str = String::from_utf8_lossy(&output.stdout);
-    let stderr_str = String::from_utf8_lossy(&output.stderr);
-    info!(
-        "[meeting] /proc grep: exit={}, stdout_len={}, stderr_len={}, stdout={:?}",
-        output.status.code().unwrap_or(-1),
-        stdout_str.len(),
-        stderr_str.len(),
-        stdout_str.chars().take(200).collect::<String>()
-    );
-
     if !output.status.success() || output.stdout.is_empty() {
         return None;
     }
 
-    // If we found any match in /proc cmdlines, extract the URL pattern
-    let stdout = stdout_str;
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let mut titles = Vec::new();
     for line in stdout.lines() {
         // Read the actual cmdline to extract the URL
@@ -2231,18 +2208,9 @@ async fn detect_camera_in_use() -> bool {
     let output = Command::new("fuser").arg("/dev/video0").output().await.ok();
 
     match output {
-        Some(o) => {
-            let result = o.status.success() && (!o.stdout.is_empty() || !o.stderr.is_empty());
-            info!(
-                "[meeting] fuser: exit={}, stdout_len={}, stderr_len={}, result={}",
-                o.status.code().unwrap_or(-1), o.stdout.len(), o.stderr.len(), result
-            );
-            result
-        }
-        None => {
-            info!("[meeting] fuser: command failed to execute");
-            false
-        }
+        // fuser writes PIDs to STDERR (not stdout), so check both
+        Some(o) => o.status.success() && (!o.stdout.is_empty() || !o.stderr.is_empty()),
+        None => false,
     }
 }
 
