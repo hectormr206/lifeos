@@ -33,6 +33,7 @@ ALLOWED_DESTS=(
     "/usr/lib/systemd/system/"
     "/usr/lib/udev/rules.d/"
     "/usr/lib/tmpfiles.d/"
+    "/usr/local/bin/"
 )
 
 log() { logger -t lifeos-dev-deploy "$*"; echo "$*"; }
