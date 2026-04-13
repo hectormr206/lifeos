@@ -1,6 +1,45 @@
 // LifeOS Dashboard — API client, SSE listener, diagnostics, UI logic
 'use strict';
 
+// --- Single-instance guard ---
+// Prevents multiple dashboard tabs. If one is already open, the new tab
+// transfers its token (if any) and closes itself.
+(function singleInstanceGuard() {
+  const ch = new BroadcastChannel('lifeos-dashboard');
+  const params = new URLSearchParams(location.search);
+  const newToken = params.get('token') || '';
+
+  // Ask if another tab is already open
+  let answered = false;
+  ch.postMessage({ type: 'ping', token: newToken });
+
+  ch.onmessage = (e) => {
+    if (e.data.type === 'ping') {
+      // Another tab is trying to open — send it a pong so it closes
+      // Accept its token if it has one (fresher than ours)
+      if (e.data.token) {
+        sessionStorage.setItem('lifeos_token', e.data.token);
+        token = e.data.token;
+      }
+      ch.postMessage({ type: 'pong' });
+      // Flash the tab title to signal we're here
+      const orig = document.title;
+      document.title = '▶ LifeOS Dashboard';
+      setTimeout(() => { document.title = orig; }, 2000);
+      window.focus();
+    } else if (e.data.type === 'pong' && !answered) {
+      // Another tab answered — we're the duplicate, close ourselves
+      answered = true;
+      window.close();
+      // window.close() only works for JS-opened windows; if it fails,
+      // redirect to a helpful message instead of showing a second dashboard
+      setTimeout(() => {
+        document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#aaa;font-family:Inter,sans-serif;flex-direction:column;gap:12px"><h2>Dashboard ya abierto en otra pestaña</h2><p>Podés cerrar esta pestaña.</p></div>';
+      }, 300);
+    }
+  };
+})();
+
 // --- Token management ---
 const params = new URLSearchParams(location.search);
 const bootMode = params.get('boot') === '1';
