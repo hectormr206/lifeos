@@ -35,7 +35,7 @@ ALLOWED_DESTS=(
     "/usr/lib/tmpfiles.d/"
     "/usr/local/bin/"
     "/etc/xdg-desktop-portal/"
-    "/var/lib/flatpak/"
+    "/var/lib/flatpak/overrides/"
 )
 
 log() { logger -t lifeos-dev-deploy "$*"; echo "$*"; }

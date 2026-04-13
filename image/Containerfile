@@ -561,7 +561,7 @@ RUN dnf -y install \
     && dnf clean all
 
 # --- Pre-generate fontconfig cache (avoids cold-cache delay on first boot) ---
-RUN fc-cache -f -v > /dev/null 2>&1 || true
+RUN fc-cache -f 2>&1 | tail -5 || true
 
 # --- Speaker identification runtime (WeSpeaker ONNX) ---
 RUN dnf -y install python3-pip python3-numpy && \
@@ -1382,7 +1382,11 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test "$(find /usr/share/applications -maxdepth 1 -type f -name '*firefox*.desktop' | wc -l)" -eq 1 || fail "expected exactly 1 firefox .desktop file"; \
     test -f /usr/lib/bootc/kargs.d/70-lifeos-zswap.toml || fail "70-lifeos-zswap.toml"; \
     test -f /etc/systemd/zram-generator.conf || fail "zram-generator.conf"; \
+    test -f /usr/lib/udev/rules.d/60-lifeos-io-scheduler.rules || fail "60-lifeos-io-scheduler.rules"; \
     test -f /usr/lib/udev/rules.d/85-lifeos-power-epp.rules || fail "85-lifeos-power-epp.rules"; \
+    test -f /etc/xdg-desktop-portal/portals.conf || fail "portals.conf"; \
+    test -f /var/lib/flatpak/overrides/global || fail "flatpak overrides/global"; \
+    test -L /usr/lib/systemd/system/timers.target.wants/fstrim.timer || fail "fstrim.timer symlink"; \
     test -f /usr/lib/systemd/system/lifeos-power-profile.service || fail "lifeos-power-profile.service"; \
     test -f /usr/lib/systemd/system/lifeos-powertune.service || fail "lifeos-powertune.service"; \
     test -f /usr/lib64/firefox/distribution/policies.json || fail "firefox distribution/policies.json"; \
