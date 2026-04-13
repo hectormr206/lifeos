@@ -266,6 +266,87 @@ body {
   background: var(--accent);
 }
 
+/* ===================== Submenu System ===================== */
+.sidebar-nav-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-nav-item.has-submenu {
+  padding-right: 32px;
+}
+
+.submenu-chevron {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: 0.5;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.sidebar-nav-group.expanded > .sidebar-nav-item .submenu-chevron {
+  transform: translateY(-50%) rotate(180deg);
+  opacity: 0.8;
+}
+
+.sidebar-submenu {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+}
+
+.sidebar-nav-group.expanded > .sidebar-submenu {
+  max-height: 400px;
+}
+
+.sidebar-submenu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 14px 7px 44px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 400;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+  position: relative;
+  border-left: 2px solid transparent;
+  margin-left: 8px;
+}
+
+.sidebar-submenu-item:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+[data-theme="light"] .sidebar-submenu-item:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.sidebar-submenu-item.active {
+  color: var(--accent);
+  font-weight: 500;
+  border-left-color: var(--accent);
+  background: rgba(0, 212, 170, 0.06);
+}
+
+.sidebar-nav-item.parent-active {
+  color: var(--accent);
+}
+
+.sidebar-nav-item.parent-active svg {
+  opacity: 1;
+  color: var(--accent);
+}
+
 .sidebar-footer {
   padding: 12px 16px 16px;
   border-top: 1px solid var(--sidebar-border);
@@ -349,6 +430,16 @@ body {
 }
 .content-section.active {
   display: flex;
+}
+
+/* Subsection filtering: when a content-section has subsection-filtered,
+   only show matching [data-subsection] children */
+.content-section.active.subsection-filtered > [data-subsection] {
+  display: none;
+}
+.content-section.active.subsection-filtered > [data-subsection].subsection-visible {
+  display: block;
+  animation: fadeIn 0.2s ease;
 }
 
 /* Chat full height when active */

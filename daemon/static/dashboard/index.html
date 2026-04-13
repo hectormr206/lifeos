@@ -38,18 +38,51 @@
         <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M15.5 11.5a1.5 1.5 0 01-1.5 1.5H5l-3 3V3.5A1.5 1.5 0 013.5 2h11A1.5 1.5 0 0116 3.5v8z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>Axi Chat</span>
       </button>
-      <button class="sidebar-nav-item" data-section="reuniones">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="3.5" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M2 7h14M6 2v3M12 2v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <span>Reuniones</span>
-      </button>
-      <button class="sidebar-nav-item" data-section="config">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M14.7 11.2a1.2 1.2 0 00.24 1.32l.04.04a1.45 1.45 0 11-2.05 2.05l-.04-.04a1.2 1.2 0 00-1.32-.24 1.2 1.2 0 00-.73 1.1v.12a1.45 1.45 0 11-2.9 0v-.06a1.2 1.2 0 00-.78-1.1 1.2 1.2 0 00-1.32.24l-.04.04a1.45 1.45 0 11-2.05-2.05l.04-.04a1.2 1.2 0 00.24-1.32 1.2 1.2 0 00-1.1-.73H3.5a1.45 1.45 0 010-2.9h.06a1.2 1.2 0 001.1-.78 1.2 1.2 0 00-.24-1.32l-.04-.04a1.45 1.45 0 112.05-2.05l.04.04a1.2 1.2 0 001.32.24h.06a1.2 1.2 0 00.73-1.1V3.5a1.45 1.45 0 012.9 0v.06a1.2 1.2 0 00.73 1.1 1.2 1.2 0 001.32-.24l.04-.04a1.45 1.45 0 112.05 2.05l-.04.04a1.2 1.2 0 00-.24 1.32v.06a1.2 1.2 0 001.1.73h.12a1.45 1.45 0 010 2.9h-.06a1.2 1.2 0 00-1.1.73z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span>Configuracion</span>
-      </button>
-      <button class="sidebar-nav-item" data-section="sistema">
-        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="2" width="14" height="10" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 15h6M9 12v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <span>Sistema</span>
-      </button>
+
+      <div class="sidebar-nav-group">
+        <button class="sidebar-nav-item has-submenu" data-section="reuniones">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="3.5" width="14" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M2 7h14M6 2v3M12 2v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span>Reuniones</span>
+          <span class="submenu-chevron"></span>
+        </button>
+        <div class="sidebar-submenu">
+          <button class="sidebar-submenu-item" data-parent="reuniones" data-subsection-target="historial">Historial</button>
+          <button class="sidebar-submenu-item" data-parent="reuniones" data-subsection-target="calendario">Calendario</button>
+        </div>
+      </div>
+
+      <div class="sidebar-nav-group">
+        <button class="sidebar-nav-item has-submenu" data-section="config">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="2.5" stroke="currentColor" stroke-width="1.5"/><path d="M14.7 11.2a1.2 1.2 0 00.24 1.32l.04.04a1.45 1.45 0 11-2.05 2.05l-.04-.04a1.2 1.2 0 00-1.32-.24 1.2 1.2 0 00-.73 1.1v.12a1.45 1.45 0 11-2.9 0v-.06a1.2 1.2 0 00-.78-1.1 1.2 1.2 0 00-1.32.24l-.04.04a1.45 1.45 0 11-2.05-2.05l.04-.04a1.2 1.2 0 00.24-1.32 1.2 1.2 0 00-1.1-.73H3.5a1.45 1.45 0 010-2.9h.06a1.2 1.2 0 001.1-.78 1.2 1.2 0 00-.24-1.32l-.04-.04a1.45 1.45 0 112.05-2.05l.04.04a1.2 1.2 0 001.32.24h.06a1.2 1.2 0 00.73-1.1V3.5a1.45 1.45 0 012.9 0v.06a1.2 1.2 0 00.73 1.1 1.2 1.2 0 001.32-.24l.04-.04a1.45 1.45 0 112.05 2.05l-.04.04a1.2 1.2 0 00-.24 1.32v.06a1.2 1.2 0 001.1.73h.12a1.45 1.45 0 010 2.9h-.06a1.2 1.2 0 00-1.1.73z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Configuracion</span>
+          <span class="submenu-chevron"></span>
+        </button>
+        <div class="sidebar-submenu">
+          <button class="sidebar-submenu-item" data-parent="config" data-subsection-target="proveedores">Proveedores IA</button>
+          <button class="sidebar-submenu-item" data-parent="config" data-subsection-target="apikeys">API Keys</button>
+          <button class="sidebar-submenu-item" data-parent="config" data-subsection-target="localai">IA Local</button>
+          <button class="sidebar-submenu-item" data-parent="config" data-subsection-target="simplex">SimpleX</button>
+          <button class="sidebar-submenu-item" data-parent="config" data-subsection-target="general">General</button>
+        </div>
+      </div>
+
+      <div class="sidebar-nav-group">
+        <button class="sidebar-nav-item has-submenu" data-section="sistema">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="2" y="2" width="14" height="10" rx="1.5" stroke="currentColor" stroke-width="1.5"/><path d="M6 15h6M9 12v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span>Sistema</span>
+          <span class="submenu-chevron"></span>
+        </button>
+        <div class="sidebar-submenu">
+          <button class="sidebar-submenu-item" data-parent="sistema" data-subsection-target="recursos">Recursos</button>
+          <button class="sidebar-submenu-item" data-parent="sistema" data-subsection-target="salud">Salud</button>
+          <button class="sidebar-submenu-item" data-parent="sistema" data-subsection-target="servicios">Servicios</button>
+          <button class="sidebar-submenu-item" data-parent="sistema" data-subsection-target="energia">Energia</button>
+          <button class="sidebar-submenu-item" data-parent="sistema" data-subsection-target="seguridad">Seguridad</button>
+          <button class="sidebar-submenu-item" data-parent="sistema" data-subsection-target="tareas">Tareas</button>
+          <button class="sidebar-submenu-item" data-parent="sistema" data-subsection-target="memoria">Memoria</button>
+          <button class="sidebar-submenu-item" data-parent="sistema" data-subsection-target="bienestar">Bienestar</button>
+        </div>
+      </div>
     </nav>
 
     <div class="sidebar-footer">
@@ -314,7 +347,7 @@
 
       <!-- ==================== SECTION: Reuniones ==================== -->
       <div class="content-section" id="section-reuniones">
-        <section class="meetings-section">
+        <section class="meetings-section" data-subsection="historial">
           <h2>Reuniones Recientes</h2>
           <div class="meetings-stats" id="meeting-stats">
             <div class="hero-stats">
@@ -361,7 +394,7 @@
           </div>
         </section>
 
-        <section class="calendar-section">
+        <section class="calendar-section" data-subsection="calendario">
           <h2>Calendario</h2>
           <div class="calendar-container">
             <div class="calendar-mini">
@@ -391,7 +424,7 @@
 
       <!-- ==================== SECTION: Configuracion ==================== -->
       <div class="content-section" id="section-config">
-        <section class="providers-section">
+        <section class="providers-section" data-subsection="proveedores">
           <h2>Proveedores LLM <button type="button" class="quick-action-btn" id="reload-providers-btn" style="margin-left:8px;font-size:0.75rem;padding:6px 12px;">Recargar proveedores</button></h2>
           <div class="providers-grid" id="providers-grid"><p class="task-empty">Cargando proveedores...</p></div>
           <div class="add-provider-form">
@@ -407,8 +440,10 @@
             </div>
             <p class="setting-hint" id="add-provider-hint">Agrega un nuevo proveedor LLM compatible con OpenAI API.</p>
           </div>
+        </section>
+        <section class="providers-section" data-subsection="apikeys">
           <div class="providers-config">
-            <h3>Configurar API Keys</h3>
+            <h2>API Keys</h2>
             <div class="provider-key-form">
               <div class="key-row"><label>Anthropic</label><input type="password" id="key-anthropic" placeholder="sk-ant-..." data-env="ANTHROPIC_API_KEY"><span class="key-status" id="key-status-anthropic">?</span></div>
               <div class="key-row"><label>OpenAI</label><input type="password" id="key-openai" placeholder="sk-..." data-env="OPENAI_API_KEY"><span class="key-status" id="key-status-openai">?</span></div>
@@ -434,7 +469,7 @@
             </details>
           </div>
         </section>
-        <section class="localai-section">
+        <section class="localai-section" data-subsection="localai">
           <h2>AI Local</h2>
           <div class="localai-grid">
             <div class="localai-status">
@@ -463,7 +498,7 @@
             </div>
           </div>
         </section>
-        <section class="simplex-section" id="simplex-section">
+        <section class="simplex-section" id="simplex-section" data-subsection="simplex">
           <h2>SimpleX — conectar tu telefono</h2>
           <p class="setting-hint" style="margin-bottom:12px">Escanea este QR con la app SimpleX Chat en tu telefono para conectarte al bot Axi de esta LifeOS.</p>
           <div class="simplex-grid">
@@ -475,7 +510,7 @@
             </div>
           </div>
         </section>
-        <section class="settings-section">
+        <section class="settings-section" data-subsection="general">
           <h2>Configuracion General</h2>
           <div class="settings-grid">
             <div class="setting-item"><label for="wake-word-input">Wake Word</label><input type="text" id="wake-word-input" value="axi" placeholder="axi"><button id="wake-word-save" class="btn-small">Guardar</button></div>
@@ -502,8 +537,8 @@
 
       <!-- ==================== SECTION: Sistema ==================== -->
       <div class="content-section" id="section-sistema">
-        <section class="resources-section"><h2>Recursos del Sistema</h2><div class="resources-grid" id="resources-grid"><p class="task-empty">Cargando recursos...</p></div></section>
-        <section class="health-section">
+        <section class="resources-section" data-subsection="recursos"><h2>Recursos del Sistema</h2><div class="resources-grid" id="resources-grid"><p class="task-empty">Cargando recursos...</p></div></section>
+        <section class="health-section" data-subsection="salud">
           <h2>Salud del Sistema</h2>
           <div class="health-grid" id="health-grid">
             <div class="health-item"><span class="health-dot" id="health-dot-cpu-temp"></span><span class="health-label">CPU Temp</span><span class="health-value" id="health-cpu-temp">—</span></div>
@@ -514,13 +549,13 @@
             <div class="health-item"><span class="health-dot" id="health-dot-ram"></span><span class="health-label">RAM Usage</span><span class="health-value" id="health-ram">—</span></div>
           </div>
         </section>
-        <section class="doctor-section">
+        <section class="doctor-section" data-subsection="salud">
           <h2>Doctor <span id="doctor-badge" class="badge badge-offline">Sin datos</span></h2>
           <div class="doctor-grid" id="doctor-grid"><p class="task-empty">Ejecutando diagnostico...</p></div>
           <div class="doctor-actions"><button type="button" class="quick-action-btn" id="doctor-run-btn">Ejecutar diagnostico</button></div>
           <p class="doctor-timestamp" id="doctor-timestamp"></p>
         </section>
-        <section class="services-section">
+        <section class="services-section" data-subsection="servicios">
           <h2>Servicios</h2>
           <div class="health-grid" id="services-grid">
             <div class="health-item"><span class="health-dot" id="svc-dot-daemon"></span><span class="health-label">Axi (daemon)</span><span class="health-value" id="svc-daemon">—</span></div>
@@ -529,7 +564,7 @@
             <div class="health-item"><span class="health-dot" id="svc-dot-telegram"></span><span class="health-label">Telegram</span><span class="health-value" id="svc-telegram">—</span></div>
           </div>
         </section>
-        <section class="battery-section hidden" id="battery-section">
+        <section class="battery-section hidden" id="battery-section" data-subsection="energia">
           <h2>Bateria</h2>
           <div class="battery-grid">
             <div class="battery-info">
@@ -550,7 +585,7 @@
             </div>
           </div>
         </section>
-        <section class="gameguard-section">
+        <section class="gameguard-section" data-subsection="seguridad">
           <h2>GPU Game Guard</h2>
           <div class="gameguard-grid">
             <div class="gameguard-status">
@@ -566,7 +601,7 @@
             </div>
           </div>
         </section>
-        <section class="metrics-section">
+        <section class="metrics-section" data-subsection="tareas">
           <h2>Metricas de Agentes</h2>
           <div class="metrics-summary" id="metrics-summary">
             <div class="hero-stats">
@@ -578,7 +613,7 @@
             <div class="metrics-roles" id="metrics-roles"></div>
           </div>
         </section>
-        <section class="sched-section">
+        <section class="sched-section" data-subsection="tareas">
           <h2>Tareas Programadas</h2>
           <div class="sched-list" id="sched-list"><p class="task-empty">Sin tareas programadas</p></div>
           <div class="sched-add">
@@ -588,7 +623,7 @@
             <button type="button" class="quick-action-btn" id="sched-add-btn">Programar</button>
           </div>
         </section>
-        <section class="memory-section">
+        <section class="memory-section" data-subsection="memoria">
           <h2>Memoria de Axi</h2>
           <div class="memory-stats" id="memory-stats">
             <div class="hero-stats">
@@ -601,7 +636,7 @@
           <div class="memory-search"><input type="text" id="memory-search-input" placeholder="Buscar en la memoria..."><button type="button" class="quick-action-btn" id="memory-search-btn">Buscar</button></div>
           <div class="memory-entries" id="memory-entries"><p class="task-empty">Busca algo o carga las entradas recientes</p></div>
         </section>
-        <section class="vida-plena-section">
+        <section class="vida-plena-section" data-subsection="bienestar">
           <h2>Vida Plena</h2>
           <div id="vida-plena-summary" class="vida-plena-grid"><p class="task-empty">Cargando resumen...</p></div>
           <div id="vida-plena-pillars" class="vida-plena-pillars"></div>

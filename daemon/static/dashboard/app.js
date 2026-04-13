@@ -3231,21 +3231,131 @@ function initSidebar() {
   const hamburger = document.getElementById('hamburger-btn');
   if (!sidebar) return;
 
-  document.querySelectorAll('.sidebar-nav-item').forEach(btn => {
+  function closeMobileSidebar() {
+    if (window.innerWidth <= 768) {
+      sidebar.classList.remove('open');
+      overlay.classList.remove('visible');
+    }
+  }
+
+  function clearAllActive() {
+    document.querySelectorAll('.sidebar-nav-item').forEach(b => {
+      b.classList.remove('active');
+      b.classList.remove('parent-active');
+    });
+    document.querySelectorAll('.sidebar-submenu-item').forEach(b => b.classList.remove('active'));
+  }
+
+  function showSection(sectionId) {
+    document.querySelectorAll('.content-section').forEach(s => {
+      s.classList.remove('active');
+      s.classList.remove('subsection-filtered');
+    });
+    const target = document.getElementById('section-' + sectionId);
+    if (target) {
+      target.classList.add('active');
+      // Clear any subsection visibility
+      target.querySelectorAll('[data-subsection]').forEach(el => el.classList.remove('subsection-visible'));
+    }
+    const main = document.querySelector('main');
+    if (main) main.scrollTop = 0;
+  }
+
+  function showSubsection(sectionId, subsectionName) {
+    const target = document.getElementById('section-' + sectionId);
+    if (!target) return;
+    // Show the parent content-section
+    document.querySelectorAll('.content-section').forEach(s => {
+      s.classList.remove('active');
+      s.classList.remove('subsection-filtered');
+    });
+    target.classList.add('active');
+    target.classList.add('subsection-filtered');
+    // Show only matching subsection elements
+    target.querySelectorAll('[data-subsection]').forEach(el => {
+      if (el.dataset.subsection === subsectionName) {
+        el.classList.add('subsection-visible');
+      } else {
+        el.classList.remove('subsection-visible');
+      }
+    });
+    const main = document.querySelector('main');
+    if (main) main.scrollTop = 0;
+  }
+
+  // Direct nav items (no submenu) — Inicio, Axi Chat
+  document.querySelectorAll('.sidebar-nav-item:not(.has-submenu)').forEach(btn => {
     btn.addEventListener('click', () => {
       const section = btn.dataset.section;
       if (!section) return;
-      document.querySelectorAll('.sidebar-nav-item').forEach(b => b.classList.remove('active'));
+      clearAllActive();
       btn.classList.add('active');
-      document.querySelectorAll('.content-section').forEach(s => s.classList.remove('active'));
-      const target = document.getElementById('section-' + section);
-      if (target) target.classList.add('active');
-      if (window.innerWidth <= 768) {
-        sidebar.classList.remove('open');
-        overlay.classList.remove('visible');
+      // Collapse all submenu groups
+      document.querySelectorAll('.sidebar-nav-group').forEach(g => g.classList.remove('expanded'));
+      showSection(section);
+      closeMobileSidebar();
+    });
+  });
+
+  // Parent items with submenus
+  document.querySelectorAll('.sidebar-nav-item.has-submenu').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const section = btn.dataset.section;
+      if (!section) return;
+      const group = btn.closest('.sidebar-nav-group');
+      if (!group) return;
+
+      const wasExpanded = group.classList.contains('expanded');
+
+      if (wasExpanded) {
+        // Collapse this group
+        group.classList.remove('expanded');
+      } else {
+        // Expand this group, collapse others
+        document.querySelectorAll('.sidebar-nav-group').forEach(g => g.classList.remove('expanded'));
+        group.classList.add('expanded');
+
+        // Auto-select first child if no child is currently active
+        const activeChild = group.querySelector('.sidebar-submenu-item.active');
+        if (!activeChild) {
+          const firstChild = group.querySelector('.sidebar-submenu-item');
+          if (firstChild) {
+            firstChild.click();
+            return; // The child click handler takes care of everything
+          }
+        } else {
+          // Re-show the active child's subsection
+          clearAllActive();
+          btn.classList.add('parent-active');
+          activeChild.classList.add('active');
+          showSubsection(section, activeChild.dataset.subsectionTarget);
+        }
       }
-      const main = document.querySelector('main');
-      if (main) main.scrollTop = 0;
+    });
+  });
+
+  // Submenu items
+  document.querySelectorAll('.sidebar-submenu-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const parentSection = btn.dataset.parent;
+      const subsection = btn.dataset.subsectionTarget;
+      if (!parentSection || !subsection) return;
+
+      clearAllActive();
+
+      // Set parent as parent-active
+      const parentBtn = document.querySelector(`.sidebar-nav-item[data-section="${parentSection}"]`);
+      if (parentBtn) parentBtn.classList.add('parent-active');
+
+      // Set this submenu item as active
+      btn.classList.add('active');
+
+      // Ensure the group is expanded
+      const group = btn.closest('.sidebar-nav-group');
+      if (group) group.classList.add('expanded');
+
+      showSubsection(parentSection, subsection);
+      closeMobileSidebar();
     });
   });
 
