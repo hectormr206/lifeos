@@ -2,6 +2,8 @@
 
 This guide covers installing LifeOS on bare metal or virtual machines.
 
+LifeOS is an immutable, AI-native Linux distribution built on Fedora bootc. It ships with **COSMIC Desktop**, a modern Wayland-native desktop environment developed by System76 (the team behind Pop!\_OS), designed for speed, composability, and a clean user experience.
+
 ## Table of Contents
 
 1. [System Requirements](#system-requirements)
@@ -9,7 +11,8 @@ This guide covers installing LifeOS on bare metal or virtual machines.
 3. [Create Bootable Media](#create-bootable-media)
 4. [Installation](#installation)
 5. [Post-Installation](#post-installation)
-6. [Troubleshooting](#troubleshooting)
+6. [Security Defaults](#security-defaults)
+7. [Troubleshooting](#troubleshooting)
 
 ## System Requirements
 
@@ -116,7 +119,7 @@ Using Rufus:
 The guided installer will:
 1. Detect your hardware
 2. Ask you to select the destination disk explicitly
-3. Set up disk partitions (BTRFS)
+3. Set up disk partitions
 4. Install the base system
 5. Configure user account
 6. Install bootloader
@@ -149,14 +152,16 @@ inst.text
 The installer will create:
 - `/boot` - 1 GB (EFI + boot files)
 - `/boot/efi` - 512 MB (EFI System Partition)
-- `/` - Remaining space (BTRFS with subvolumes)
+- `/` - Remaining space (managed by bootc — uses composefs for the immutable OS root; user data lives on BTRFS or EXT4)
 
 #### Manual Partitioning
 
 For advanced users, manual partitioning supports:
-- BTRFS (recommended)
+- BTRFS (recommended for user data — enables snapshots)
 - LVM + EXT4
 - Encryption (LUKS)
+
+> **Note:** The OS root (`/usr`) is immutable and managed by bootc via composefs. You don't choose a filesystem for it — bootc handles this automatically. Your choice of BTRFS/EXT4 applies to `/home` and `/var` partitions.
 - Dual boot
 
 ### 4. User Setup
@@ -293,6 +298,23 @@ life ai pull qwen3.5-4b
 
 # Check status
 life ai status --verbose
+```
+
+## Security Defaults
+
+LifeOS ships with security hardening enabled out of the box — no manual setup required.
+
+| Feature | Details |
+|---------|---------|
+| **Sysctl hardening** | CIS Benchmark Level 1 kernel parameters applied at boot |
+| **firewalld** | Custom `lifeos` zone active by default; only essential ports open |
+| **auditd** | System call auditing enabled; logs at `/var/log/audit/` |
+| **DNS-over-TLS** | systemd-resolved configured with Quad9 (`9.9.9.9`) and Cloudflare (`1.1.1.1`) as upstream resolvers |
+
+These defaults are baked into the OS image and survive updates. You can review or adjust firewall rules with:
+
+```bash
+sudo firewall-cmd --list-all --zone=lifeos
 ```
 
 ## Troubleshooting

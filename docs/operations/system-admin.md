@@ -7,29 +7,57 @@ This guide is for system administrators managing LifeOS deployments.
 ### System Components
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        LifeOS System                         │
-├─────────────────────────────────────────────────────────────┤
-│  User Space                                                  │
-│  ├── life CLI           - User interface                     │
-│  ├── lifeosd            - Main user-session daemon           │
-│  └── llama-server       - AI inference engine (llama.cpp)    │
-├─────────────────────────────────────────────────────────────┤
-│  Service Ownership                                           │
-│  ├── lifeosd.service    - User service (canonical runtime)   │
-│  ├── llama-server.service - System service (canonical runtime) │
-│  └── lifeos-update-check.service - System update probe       │
-├─────────────────────────────────────────────────────────────┤
-│  bootc (Image-based Updates)                                 │
-│  ├── booted deployment  - Currently running system           │
-│  ├── staged deployment  - Update ready to apply              │
-│  └── rollback deployment - Previous working version          │
-├─────────────────────────────────────────────────────────────┤
-│  composefs (Immutable /usr)                                  │
-│  ├── /usr               - Read-only system files             │
-│  ├── /etc               - Configuration (writable)           │
-│  └── /var               - Variable data (writable)           │
-└─────────────────────────────────────────────────────────────┘
+LifeOS System Services
+│
+├── Core (user session)
+│   └── lifeosd.service                    user    AI daemon, API server, event bus
+│
+├── AI Runtime (system)
+│   ├── llama-server.service               system  Local LLM inference (llama.cpp)
+│   ├── llama-embeddings.service           system  Vector embeddings
+│   └── whisper-stt.service                system  Speech-to-text
+│
+├── Communication
+│   ├── simplex-chat.service               system  SimpleX messaging bridge
+│   └── conduit.service                    system  Matrix homeserver
+│
+├── Maintenance Timers
+│   ├── lifeos-maintenance-cleanup.timer   system  Every 12h — podman/Flatpak/Rust cache cleanup
+│   ├── lifeos-flatpak-update.timer        system  Daily — unattended Flatpak updates
+│   ├── lifeos-btrfs-snapshot.timer        system  Periodic BTRFS snapshots
+│   ├── lifeos-aide-check.timer            system  File integrity checks
+│   ├── lifeos-update-check.timer          system  Daily bootc update check
+│   ├── lifeos-smart-charge.timer          system  Battery health management
+│   └── fstrim.timer                       system  Weekly SSD TRIM
+│
+├── Boot Services
+│   ├── lifeos-first-boot.service          system  Initial setup (runs once)
+│   ├── lifeos-flatpak-nvidia-sync.service system  GPU driver ↔ Flatpak GL sync
+│   ├── lifeos-security-baseline.service   system  CIS hardening baseline
+│   ├── lifeos-sentinel.service            system  System monitoring
+│   └── lifeos-cosmic-greeter-branding.service system Login screen branding
+│
+├── Hardware Management
+│   ├── lifeos-thermal.service             system  Thermal throttling
+│   ├── lifeos-power-profile.service       system  EPP switching
+│   ├── lifeos-powertune.service           system  Power optimization
+│   ├── lifeos-ecore-pin.service           system  Efficiency core pinning
+│   ├── lifeos-battery.service             system  Battery monitoring
+│   ├── lifeos-nvidia-signed-modules.service system Nvidia kernel modules
+│   └── nvidia-persistenced.service        system  GPU context persistence
+│
+└── Display Manager
+    └── cosmic-greeter.service             system  COSMIC login screen
+
+System image (bootc / composefs)
+  ├── booted deployment   — currently running system
+  ├── staged deployment   — update ready to apply on next boot
+  └── rollback deployment — previous working version
+
+Filesystem ownership
+  ├── /usr   — read-only (composefs)
+  ├── /etc   — configuration (writable, persisted)
+  └── /var   — variable data, logs, caches (writable, persisted)
 ```
 
 ### File System Layout

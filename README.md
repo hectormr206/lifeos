@@ -1,6 +1,6 @@
 # LifeOS
 
-![Beta](https://img.shields.io/badge/status-beta-orange?style=for-the-badge) ![Version](https://img.shields.io/badge/version-0.4.0-teal?style=for-the-badge)
+![Beta](https://img.shields.io/badge/status-beta-orange?style=for-the-badge) ![Version](https://img.shields.io/badge/version-0.4.1-teal?style=for-the-badge)
 
 **AI-native Linux distribution built on Fedora bootc (immutable) with COSMIC Desktop.**
 
@@ -25,10 +25,14 @@ LifeOS is built in Mexico and developed in the open for users, contributors, and
 - **Immutable + rollback base** (`integrated in repo`) - bootc-style atomic updates and rollback shape the platform direction, while install/update validation is still an active focus
 - **Desktop control tooling** (`integrated in repo`) - the repo includes tools for windows, apps, clipboard, browser, LibreOffice, COSMIC desktop, and accessibility trees
 - **Provider routing** (`integrated in repo`) - multiple LLM providers are wired with privacy-aware routing policies
-- **Interaction surfaces** - Telegram is the clearest current remote path; local voice and broader desktop surfaces exist, but some remain experimental or are still being re-validated
+- **Interaction surfaces** - Telegram and SimpleX are the current remote paths; SimpleX (`simplex_bridge.rs` + `simplex-chat.service`) gives Axi the same capabilities as Telegram on a privacy-first, serverless messenger (`integrated in repo`); local voice and broader desktop surfaces exist but some remain experimental or are still being re-validated
 - **Reliability layers** (`integrated in repo`) - watchdog, sentinel, circuit breaker, safe mode, and config rollback exist, but not every repair flow is equally mature
 - **Security baseline** (`integrated in repo`) - the image ships firewalld, auditd, DNS-over-TLS, SSH hardening, and related guardrails; broader hardening claims should be read as a baseline, not as a finished benchmark story
 - **GPU Game Guard** (`validated on host`) - GPU offload policy exists and recent false positives were fixed, but it stays under ongoing validation after daemon/runtime changes
+- **Flatpak auto-update** (`validated on host`) - updates run automatically with guards for active gaming sessions, battery level, and metered network connections
+- **Nvidia GL extension auto-sync** (`validated on host`) - host driver version is detected on boot and the matching GL extension layer is applied automatically; no manual intervention after driver updates
+- **Automated maintenance cleanup** (`integrated in repo`) - scheduled cleanup of podman image layers, Rust build cache, and orphaned Flatpak runtimes to keep disk usage in check
+- **Speaker identification** (`experimental / partial`) - WeSpeaker ONNX model is integrated for speaker diarization; end-to-end product path is still being completed
 
 ## Quick Start
 

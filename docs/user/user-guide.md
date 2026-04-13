@@ -40,11 +40,21 @@ Exit toolbox with:
 exit
 ```
 
+## Desktop Environment
+
+LifeOS uses **COSMIC Desktop** — a Wayland-native, GPU-accelerated desktop built by System76. It launches automatically after login. No configuration needed; it works out of the box with both integrated and discrete GPUs.
+
+Keyboard shortcut reference: open the COSMIC Settings app → **Keyboard** → **Shortcuts**.
+
 ## Assistant Channels
 
-- Terminal: `life assistant ask "..."`.
-- Launcher: `life assistant install-launcher`.
-- Overlay: `life assistant open`.
+Axi (the LifeOS AI assistant) is reachable through multiple channels:
+
+- **Terminal:** `life assistant ask "..."`.
+- **Launcher:** `life assistant install-launcher` — adds a system-wide launcher shortcut.
+- **Overlay:** `life assistant open` — floating overlay on the COSMIC desktop.
+- **Telegram:** Connect your bot token in Settings → AI → Telegram to chat with Axi from your phone or any Telegram client.
+- **SimpleX:** For privacy-first messaging without phone numbers or identifiers. Configure in Settings → AI → SimpleX. Axi responds through a SimpleX address you control — no account required on the server side.
 
 ## Memory and Context
 
@@ -110,4 +120,19 @@ life intents defense repair --actor user://local/default
 life intents heartbeat enable --interval 300
 life intents heartbeat tick
 life intents heartbeat status
+```
+
+## Automatic System Maintenance
+
+LifeOS handles routine maintenance without user intervention:
+
+- **Flatpak auto-updates:** Installed Flatpak apps update daily in the background. Updates are skipped automatically when the system is on battery, on a metered connection, or running a game to avoid interruptions.
+- **NVIDIA GL extension sync:** On systems with NVIDIA GPUs, OpenGL and Vulkan extension compatibility layers are synced with the active host driver on every boot. You do not need to manually reinstall or reconfigure GPU components after a driver update.
+- **System cleanup:** Old bootc deployment images, orphaned Flatpak runtimes, and stale cache files are cleaned up automatically on a weekly schedule. Disk usage stays bounded without manual `flatpak uninstall --unused` runs.
+
+To check the last maintenance run or trigger it manually:
+
+```bash
+life maintenance status
+life maintenance run
 ```
