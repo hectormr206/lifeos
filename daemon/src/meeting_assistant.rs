@@ -101,6 +101,11 @@ const MEETING_QUALIFIER_PATTERNS: &[(&str, &[&str])] = &[
     ("Slack Huddle", &["Huddle"]),
 ];
 
+/// How many consecutive "no meeting" ticks are needed before ending a meeting.
+/// At 15s per tick, 4 ticks = 60 seconds of grace period. This prevents
+/// premature meeting-end when audio momentarily drops (silence, muted mic).
+const MEETING_END_GRACE_TICKS: u8 = 4;
+
 pub struct MeetingAssistant {
     data_dir: PathBuf,
     enabled: bool,
@@ -126,6 +131,8 @@ pub struct MeetingAssistant {
     caption_buffer: Arc<RwLock<Vec<CaptionEntry>>>,
     /// Sender to signal the caption background task to stop (BB.8).
     caption_stop_tx: Option<tokio::sync::watch::Sender<bool>>,
+    /// Consecutive ticks where no meeting was detected (grace period counter).
+    no_meeting_ticks: u8,
 }
 
 impl MeetingAssistant {
@@ -156,6 +163,7 @@ impl MeetingAssistant {
                 .unwrap_or(false),
             caption_buffer: Arc::new(RwLock::new(Vec::new())),
             caption_stop_tx: None,
+            no_meeting_ticks: 0,
         }
     }
 
@@ -214,6 +222,7 @@ impl MeetingAssistant {
 
         if detected && !self.state.detected {
             // Meeting just started
+            self.no_meeting_ticks = 0;
             let app = app_name.clone().unwrap_or_else(|| "Unknown".into());
             info!("[meeting] Meeting detected: {} — starting recording", app);
             self.state.detected = true;
@@ -224,8 +233,27 @@ impl MeetingAssistant {
             self.start_recording().await?;
             // Start real-time captions if enabled (BB.8)
             self.start_captions().await;
+        } else if detected && self.state.detected {
+            // Meeting still active — reset grace counter
+            self.no_meeting_ticks = 0;
+            // Update app name if we now have a better one (e.g. went from "Unknown" to "Google Meet")
+            if app_name.is_some() && self.state.app_name.as_deref() == Some("Unknown") {
+                info!("[meeting] App identified: {}", app_name.as_deref().unwrap_or("?"));
+                self.state.app_name = app_name;
+            }
         } else if !detected && self.state.detected {
-            // Meeting ended — stop captions (BB.8)
+            // No meeting signal this tick — increment grace counter
+            self.no_meeting_ticks += 1;
+            if self.no_meeting_ticks < MEETING_END_GRACE_TICKS {
+                info!(
+                    "[meeting] No signal tick {}/{} — grace period (user may be switching apps)",
+                    self.no_meeting_ticks, MEETING_END_GRACE_TICKS
+                );
+                return Ok(true); // Still "in meeting" during grace period
+            }
+
+            // Grace period exhausted — meeting truly ended
+            self.no_meeting_ticks = 0;
             self.stop_captions().await;
             let duration = self.state.duration_secs;
             let screenshot_count = self.state.screenshot_paths.len();
@@ -234,14 +262,24 @@ impl MeetingAssistant {
                 duration / 60,
                 screenshot_count
             );
-            self.stop_recording();
+
+            // Stop recording and WAIT for dual-channel merge before transcribing
+            let merged_path = self.stop_recording_and_merge().await;
             self.state.detected = false;
             self.state.recording = false;
             self.state.manual_meeting = false;
 
+            // Use the merged path (or original if merge wasn't needed)
+            let path = merged_path
+                .or_else(|| self.state.recording_path.clone())
+                .unwrap_or_default();
+            if path.is_empty() {
+                warn!("[meeting] No recording path available for processing");
+                return Ok(false);
+            }
+
             // Trigger transcription + summarization pipeline
-            if let Some(ref recording_path) = self.state.recording_path {
-                let path = recording_path.clone();
+            {
                 info!("[meeting] Processing completed meeting: {}", path);
 
                 // 1. Transcribe with Whisper
@@ -585,8 +623,7 @@ impl MeetingAssistant {
         }
         self.recording_process = None;
 
-        // Kill dual-channel processes (if any) and merge (BB.3)
-        let has_dual = self.mic_process.is_some() && self.system_process.is_some();
+        // Kill dual-channel processes
         if let Some(ref mut child) = self.mic_process {
             let _ = child.start_kill();
         }
@@ -595,29 +632,6 @@ impl MeetingAssistant {
             let _ = child.start_kill();
         }
         self.system_process = None;
-
-        // If dual-channel was active, merge files in a background task
-        if has_dual {
-            let mic_path = self.state.mic_recording_path.clone();
-            let system_path = self.state.system_recording_path.clone();
-            let combined_path = self.state.recording_path.clone();
-
-            tokio::spawn(async move {
-                if let (Some(mic), Some(sys), Some(combined)) =
-                    (mic_path, system_path, combined_path)
-                {
-                    if let Err(e) = merge_dual_channels(&mic, &sys, &combined).await {
-                        warn!("[meeting] Dual-channel merge failed, trying mic-only fallback: {e}");
-                        // Fallback: copy mic recording as the combined file
-                        if let Err(e2) = tokio::fs::copy(&mic, &combined).await {
-                            warn!("[meeting] Mic fallback copy also failed: {e2}");
-                        }
-                    } else {
-                        info!("[meeting] Dual-channel audio merged successfully");
-                    }
-                }
-            });
-        }
 
         // Emit recording stopped event via the event bus
         if let Some(ref tx) = self.event_bus {
@@ -628,6 +642,41 @@ impl MeetingAssistant {
         }
 
         self.state.recording = false;
+    }
+
+    /// Stop recording and AWAIT the dual-channel merge before returning.
+    /// This ensures the WAV file exists before transcription starts.
+    async fn stop_recording_and_merge(&mut self) -> Option<String> {
+        let has_dual = self.mic_process.is_some() && self.system_process.is_some();
+        self.stop_recording();
+
+        if !has_dual {
+            return self.state.recording_path.clone();
+        }
+
+        // Wait for merge synchronously (not in background) so the WAV exists for Whisper
+        let mic_path = self.state.mic_recording_path.clone();
+        let system_path = self.state.system_recording_path.clone();
+        let combined_path = self.state.recording_path.clone();
+
+        if let (Some(mic), Some(sys), Some(ref combined)) =
+            (mic_path, system_path, combined_path.clone())
+        {
+            // Small delay to let pw-record flush buffers to disk
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            if let Err(e) = merge_dual_channels(&mic, &sys, &combined).await {
+                warn!("[meeting] Dual-channel merge failed, trying mic-only fallback: {e}");
+                if let Err(e2) = tokio::fs::copy(&mic, &combined).await {
+                    warn!("[meeting] Mic fallback copy also failed: {e2}");
+                    return None;
+                }
+            } else {
+                info!("[meeting] Dual-channel audio merged successfully");
+            }
+        }
+
+        combined_path
     }
 
     /// Transcribe a completed meeting recording using Whisper.
