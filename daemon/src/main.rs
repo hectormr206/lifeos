@@ -896,14 +896,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Start API server if enabled
-    let api_handle = if config.enable_api {
-        info!("Starting REST API server on {}", config.api_bind_address);
-        Some(tokio::spawn(start_api_server(state.clone())))
-    } else {
-        info!("REST API server disabled");
-        None
-    };
+    // API server is started later (after shared variables are initialized)
 
     // Start D-Bus service
     let dbus_handle = tokio::spawn(async move {
@@ -1923,7 +1916,6 @@ async fn main() -> anyhow::Result<()> {
     let shared_history = Arc::new(telegram_tools::ConversationHistory::new());
     #[cfg(feature = "telegram")]
     let shared_cron_store = Arc::new(telegram_tools::CronStore::new());
-    #[cfg(feature = "telegram")]
     let shared_user_model = {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
         let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
@@ -2045,6 +2037,23 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "telegram"))]
     let _email_handle: Option<tokio::task::JoinHandle<()>> = None;
 
+    // Start API server if enabled (must be after shared variables are initialized)
+    let api_handle = if config.enable_api {
+        info!("Starting REST API server on {}", config.api_bind_address);
+        let bridge_state = SharedBridgeState {
+            user_model: shared_user_model.clone(),
+            meeting_assistant: shared_meeting_assistant.clone(),
+            #[cfg(feature = "telegram")]
+            conversation_history: shared_history.clone(),
+            #[cfg(feature = "telegram")]
+            cron_store: shared_cron_store.clone(),
+        };
+        Some(tokio::spawn(start_api_server(state.clone(), bridge_state)))
+    } else {
+        info!("REST API server disabled");
+        None
+    };
+
     // Notify systemd that the daemon is fully initialized
     notify_ready();
     info!("Notified systemd: READY=1");
@@ -2131,8 +2140,19 @@ async fn main() -> anyhow::Result<()> {
     std::process::exit(0)
 }
 
+/// Shared infrastructure passed from main to the API server so that all
+/// bridges (Telegram, SimpleX, API) use the same instances.
+struct SharedBridgeState {
+    user_model: Arc<RwLock<user_model::UserModel>>,
+    meeting_assistant: Arc<tokio::sync::RwLock<meeting_assistant::MeetingAssistant>>,
+    #[cfg(feature = "telegram")]
+    conversation_history: Arc<telegram_tools::ConversationHistory>,
+    #[cfg(feature = "telegram")]
+    cron_store: Arc<telegram_tools::CronStore>,
+}
+
 /// Start REST API server
-async fn start_api_server(state: Arc<DaemonState>) {
+async fn start_api_server(state: Arc<DaemonState>, shared: SharedBridgeState) {
     let api_state = api::ApiState {
         data_dir: state.data_dir.clone(),
         system_monitor: state.system_monitor.clone(),
@@ -2169,27 +2189,16 @@ async fn start_api_server(state: Arc<DaemonState>) {
         game_guard: state.game_guard.clone(),
         wake_word_detector: state.wake_word_detector.clone(),
         skill_registry: skill_generator::SkillRegistry::from_defaults(),
-        // Share the SAME user_model instance used by Telegram/SimpleX bridges
+        user_model: shared.user_model.clone(),
         #[cfg(feature = "telegram")]
-        user_model: shared_user_model.clone(),
-        #[cfg(not(feature = "telegram"))]
-        user_model: {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
-            let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
-            Arc::new(RwLock::new(
-                user_model::UserModel::load_from_dir(&data_dir).await,
-            ))
-        },
-        // Agentic chat infrastructure — same instances as all bridges
+        conversation_history: shared.conversation_history.clone(),
         #[cfg(feature = "telegram")]
-        conversation_history: shared_history.clone(),
-        #[cfg(feature = "telegram")]
-        cron_store: shared_cron_store.clone(),
+        cron_store: shared.cron_store.clone(),
         #[cfg(feature = "telegram")]
         sdd_store: Arc::new(telegram_tools::SddStore::new()),
         session_store: state.session_store.clone(),
         #[cfg(feature = "telegram")]
-        meeting_assistant: Some(shared_meeting_assistant.clone()),
+        meeting_assistant: Some(shared.meeting_assistant.clone()),
     };
 
     // Perform initial skill registry load and start file watcher
