@@ -3372,6 +3372,56 @@ function initSidebar() {
     });
   }
 
+  // --- Persist active section across reloads ---
+  function saveNavState(section, subsection) {
+    const state = { section };
+    if (subsection) state.subsection = subsection;
+    localStorage.setItem('lifeos_nav', JSON.stringify(state));
+    // Update URL hash without triggering navigation
+    const hash = subsection ? `${section}/${subsection}` : section;
+    history.replaceState(null, '', `#${hash}`);
+  }
+
+  // Patch all nav handlers to persist state
+  document.querySelectorAll('.sidebar-nav-item:not(.has-submenu)').forEach(btn => {
+    btn.addEventListener('click', () => saveNavState(btn.dataset.section));
+  });
+  document.querySelectorAll('.sidebar-submenu-item').forEach(btn => {
+    btn.addEventListener('click', () => saveNavState(btn.dataset.parent, btn.dataset.subsectionTarget));
+  });
+
+  // Restore saved state on load
+  function restoreNavState() {
+    // Priority: URL hash > localStorage > default (inicio)
+    let section = null, subsection = null;
+    const hash = location.hash.replace('#', '');
+    if (hash) {
+      const parts = hash.split('/');
+      section = parts[0];
+      subsection = parts[1] || null;
+    } else {
+      try {
+        const saved = JSON.parse(localStorage.getItem('lifeos_nav'));
+        if (saved && saved.section) {
+          section = saved.section;
+          subsection = saved.subsection || null;
+        }
+      } catch (_) {}
+    }
+    if (!section) return; // Default inicio is already shown
+
+    if (subsection) {
+      // Find and click the submenu item
+      const subBtn = document.querySelector(`.sidebar-submenu-item[data-parent="${section}"][data-subsection-target="${subsection}"]`);
+      if (subBtn) { subBtn.click(); return; }
+    }
+    // Click the main nav item
+    const navBtn = document.querySelector(`.sidebar-nav-item[data-section="${section}"]`);
+    if (navBtn) navBtn.click();
+  }
+
+  restoreNavState();
+
   // Sync mobile connection badge
   const connBadge = document.getElementById('connection-badge');
   const connBadgeMobile = document.getElementById('connection-badge-mobile');
