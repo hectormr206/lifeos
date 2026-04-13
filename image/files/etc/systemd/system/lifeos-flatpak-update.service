@@ -1,0 +1,19 @@
+[Unit]
+Description=LifeOS Flatpak Auto-Update
+After=network-online.target
+Wants=network-online.target
+ConditionACPower=true
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lifeos-flatpak-update.sh
+StandardOutput=journal
+StandardError=journal
+Nice=15
+IOSchedulingClass=idle
+
+# Security hardening
+NoNewPrivileges=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/flatpak

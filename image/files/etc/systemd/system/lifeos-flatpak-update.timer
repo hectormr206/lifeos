@@ -1,0 +1,10 @@
+[Unit]
+Description=LifeOS Flatpak Auto-Update Timer
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
