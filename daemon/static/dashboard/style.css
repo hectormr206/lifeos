@@ -2296,6 +2296,40 @@ details[open] .transcript-toggle::before { transform: rotate(90deg); }
   scrollbar-color: rgba(0, 0, 0, 0.12) transparent;
   box-shadow: 1px 0 0 var(--border);
 }
+[data-theme="light"] .sidebar-nav-item {
+  color: #374151;
+}
+[data-theme="light"] .sidebar-nav-item.active,
+[data-theme="light"] .sidebar-nav-item.parent-active {
+  background: rgba(0, 140, 110, 0.1);
+  color: #047857;
+}
+[data-theme="light"] .sidebar-nav-item.active svg,
+[data-theme="light"] .sidebar-nav-item.parent-active svg {
+  color: #047857;
+}
+[data-theme="light"] .sidebar-nav-item.active::before,
+[data-theme="light"] .sidebar-nav-item.parent-active::before {
+  background: #047857;
+}
+[data-theme="light"] .sidebar-submenu-item {
+  color: #6b7280;
+}
+[data-theme="light"] .sidebar-submenu-item.active {
+  color: #047857;
+  background: rgba(0, 140, 110, 0.08);
+  border-left-color: #047857;
+}
+[data-theme="light"] .sidebar-brand-name {
+  color: #1a1a2e;
+}
+[data-theme="light"] .sidebar-brand-tag {
+  color: #6b7280;
+  border-color: #d1d5db;
+}
+[data-theme="light"] .sidebar-footer {
+  border-top-color: #e5e7eb;
+}
 
 /* --- Icon buttons --- */
 [data-theme="light"] .icon-btn {
