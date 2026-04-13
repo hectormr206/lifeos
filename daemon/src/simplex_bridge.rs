@@ -358,6 +358,40 @@ mod inner {
         let _ = std::fs::create_dir_all(DOWNLOADS_DIR);
     }
 
+    /// Set the Axi profile (display name, description, avatar) on SimpleX.
+    /// Runs on every connect to ensure the profile is always correct.
+    async fn ensure_axi_profile(ws: &mut WsSink) {
+        // Set display name + description
+        if let Err(e) = send_command(ws, "/profile Axi LifeOS AI Assistant").await {
+            warn!("[simplex_bridge] Failed to set profile name: {}", e);
+        }
+
+        // Set avatar from the LifeOS icon (if available)
+        let avatar_paths = [
+            "/usr/share/icons/LifeOS/512x512/apps/lifeos-axi.png",
+            "/usr/share/icons/LifeOS/scalable/apps/lifeos-axi.svg",
+        ];
+        for path in &avatar_paths {
+            if let Ok(data) = std::fs::read(path) {
+                use base64::Engine;
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                let ext = if path.ends_with(".svg") { "svg+xml" } else { "png" };
+                let uri = format!("data:image/{};base64,{}", ext, b64);
+                let cmd = format!("/set profile image {}", uri);
+                match send_command(ws, &cmd).await {
+                    Ok(_) => {
+                        info!("[simplex_bridge] Axi avatar set from {}", path);
+                        return;
+                    }
+                    Err(e) => {
+                        warn!("[simplex_bridge] Failed to set avatar from {}: {}", path, e);
+                    }
+                }
+            }
+        }
+        info!("[simplex_bridge] No avatar file found, skipping profile image");
+    }
+
     /// Send a text message to a SimpleX contact by display name.
     async fn send_message(ws: &mut WsSink, display_name: &str, text: &str) -> anyhow::Result<()> {
         let cmd = format!("@{} {}", display_name, text);
@@ -652,6 +686,7 @@ mod inner {
                     let (mut sink, mut stream) = ws_stream.split();
 
                     ensure_invite_link(&mut sink).await;
+                    ensure_axi_profile(&mut sink).await;
 
                     let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
                     ping_interval.tick().await;
