@@ -47,6 +47,23 @@ sudo bash scripts/build-iso.sh
 - **User cannot run sudo** — provide commands for user to run manually
 - **Daemon auth:** All `/api/v1/*` need `x-bootstrap-token` or `x-api-key` header
 
+## Documentation Sync Rule
+
+**When changing code, ALWAYS update docs in the same commit.** This is mandatory, not optional.
+
+| If you change... | Update... |
+|---|---|
+| New systemd service/timer | `docs/operations/system-admin.md` (service diagram) |
+| New feature in daemon | `docs/user/user-guide.md` + `README.md` feature list |
+| New CLI command | `docs/user/user-guide.md` |
+| Containerfile (new package/service) | `docs/user/installation.md` if user-visible |
+| Telegram/SimpleX bridge | `docs/operations/telegram-features.md` or `simplex-features.md` |
+| Security config | `docs/user/installation.md` Security Defaults section |
+| Architecture change | `docs/architecture/` relevant file |
+| Version bump | `README.md` badge + `docs/architecture/update-channels.md` examples |
+
+If unsure whether docs need updating: **they do.**
+
 ## Navigation — Find What You Need
 
 Instead of reading everything, use `docs/README.md` as index:

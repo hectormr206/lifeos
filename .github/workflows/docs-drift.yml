@@ -1,0 +1,55 @@
+name: Docs Drift Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check-docs-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for documentation drift
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+
+          CODE_PATTERNS="^daemon/src/|^cli/src/|^image/Containerfile|^image/files/etc/systemd/|^image/files/usr/local/bin/"
+          DOC_PATTERNS="^docs/|^README.md"
+
+          changed_files=$(git diff --name-only "$BASE" "$HEAD")
+
+          code_changed=$(echo "$changed_files" | grep -cE "$CODE_PATTERNS" || true)
+          docs_changed=$(echo "$changed_files" | grep -cE "$DOC_PATTERNS" || true)
+
+          if [ "$code_changed" -gt 0 ] && [ "$docs_changed" -eq 0 ]; then
+            echo "::warning::Code changed ($code_changed files) without documentation updates."
+            echo ""
+            echo "## ⚠️ Documentation Drift Detected" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "This PR changes **$code_changed code files** but no documentation." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Code files changed:" >> "$GITHUB_STEP_SUMMARY"
+            echo "$changed_files" | grep -E "$CODE_PATTERNS" | head -20 | while read -r f; do
+              echo "- \`$f\`" >> "$GITHUB_STEP_SUMMARY"
+            done
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Consider updating:** \`docs/user/\`, \`docs/operations/\`, \`README.md\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "If docs are intentionally unchanged, add \`docs-ok\` label to this PR." >> "$GITHUB_STEP_SUMMARY"
+
+            # Check for docs-ok label to allow bypass
+            if [ "${{ contains(github.event.pull_request.labels.*.name, 'docs-ok') }}" = "true" ]; then
+              echo "docs-ok label found — skipping enforcement"
+              exit 0
+            fi
+
+            # Fail the check (blocks merge)
+            exit 1
+          fi
+
+          echo "✅ Documentation is in sync (or no code changes detected)."
+          echo "## ✅ Documentation Check Passed" >> "$GITHUB_STEP_SUMMARY"
