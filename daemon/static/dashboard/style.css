@@ -489,6 +489,9 @@ body {
   height: 36px;
   border-radius: 8px;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   transition: transform var(--transition), background var(--transition), border-color var(--transition);
 }
 .icon-btn:hover {

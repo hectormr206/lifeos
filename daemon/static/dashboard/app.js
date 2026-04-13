@@ -1090,14 +1090,29 @@ $('#interval-slider').addEventListener('change', async (e) => {
 });
 
 // --- Theme toggle ---
+function updateThemeIcon() {
+  const isDark = document.documentElement.dataset.theme !== 'light';
+  const moon = document.getElementById('theme-icon-moon');
+  const sun = document.getElementById('theme-icon-sun');
+  if (moon) moon.style.display = isDark ? 'block' : 'none';
+  if (sun) sun.style.display = isDark ? 'none' : 'block';
+}
 $('#theme-toggle').addEventListener('click', () => {
   const html = document.documentElement;
   const next = html.dataset.theme === 'dark' ? 'light' : 'dark';
   html.dataset.theme = next;
   localStorage.setItem('lifeos-theme', next);
+  updateThemeIcon();
 });
 const savedTheme = localStorage.getItem('lifeos-theme');
 if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+updateThemeIcon();
+
+// --- Clean token from URL (security: don't leave it in browser history) ---
+if (params.get('token')) {
+  const cleanUrl = location.pathname + (location.hash || '');
+  history.replaceState(null, '', cleanUrl);
+}
 
 // ==================== INITIAL FETCH ====================
 
