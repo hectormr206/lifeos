@@ -130,7 +130,7 @@ Some([
 PANEL_CENTER
 cat > "$PANEL/plugins_wings" << 'PANEL_WINGS'
 Some(([
-    "com.system76.CosmicPanelWorkspacesButton",
+    "com.system76.CosmicAppletWorkspaces",
     "com.system76.CosmicPanelAppButton",
 ], [
     "com.system76.CosmicAppletInputSources",
