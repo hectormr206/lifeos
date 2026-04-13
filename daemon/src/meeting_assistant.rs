@@ -202,23 +202,56 @@ impl MeetingAssistant {
         }
 
         // Strategy 1: Check PipeWire/PulseAudio for conferencing app audio streams
+        // DIAG: trace each detection strategy to find hangs
+        info!("[meeting] detect: checking audio...");
         let audio_meeting = detect_meeting_audio().await;
+        info!("[meeting] detect: audio={:?}", audio_meeting);
 
         // Strategy 2: Check sway/COSMIC compositor window titles for meeting patterns
         let window_meeting = if audio_meeting.is_none() {
-            detect_meeting_by_window_title().await
+            info!("[meeting] detect: checking window titles...");
+            let wm = detect_meeting_by_window_title().await;
+            info!("[meeting] detect: window={:?}", wm);
+            wm
         } else {
             None
         };
 
         // Strategy 3: Check if camera is in use by a conferencing app
+        info!("[meeting] detect: checking camera...");
         let camera_in_use = detect_camera_in_use().await;
+        info!("[meeting] detect: camera={}", camera_in_use);
+
+        // Strategy 4: Direct /proc scan as last resort (catches all browser meetings)
+        let proc_meeting = if audio_meeting.is_none() && window_meeting.is_none() && !camera_in_use {
+            info!("[meeting] detect: checking /proc cmdline fallback...");
+            if let Some(titles) = collect_titles_from_proc().await {
+                let mut found = None;
+                for title in &titles {
+                    let t = title.to_lowercase();
+                    if t.contains("meet.google.com") { found = Some("Google Meet".to_string()); break; }
+                    if t.contains("zoom.us") { found = Some("Zoom".to_string()); break; }
+                    if t.contains("teams.microsoft.com") || t.contains("teams.live.com") { found = Some("Microsoft Teams".to_string()); break; }
+                    if t.contains("meet.jit.si") { found = Some("Jitsi".to_string()); break; }
+                    if t.contains("webex.com") { found = Some("WebEx".to_string()); break; }
+                    if t.contains("discord.com") { found = Some("Discord".to_string()); break; }
+                }
+                info!("[meeting] detect: /proc={:?}", found);
+                found
+            } else {
+                info!("[meeting] detect: /proc=None");
+                None
+            }
+        } else {
+            None
+        };
 
         let detected = audio_meeting.is_some()
             || window_meeting.is_some()
             || camera_in_use
+            || proc_meeting.is_some()
             || self.state.manual_meeting;
-        let app_name = audio_meeting.or(window_meeting);
+        let app_name = audio_meeting.or(window_meeting).or(proc_meeting);
 
         if detected && !self.state.detected {
             // Meeting just started
@@ -1831,18 +1864,38 @@ async fn merge_dual_channels(mic_path: &str, system_path: &str, output_path: &st
 // ── Meeting detection helpers ───────────────────────────────────────────────
 
 /// Detect if a conferencing app has an active audio stream via PipeWire/PulseAudio.
+/// Checks both sink-inputs (speaker audio) and source-outputs (mic input) for
+/// broader coverage — some calls have audio output but mic is the stronger signal.
 async fn detect_meeting_audio() -> Option<String> {
-    let output = Command::new("pactl")
+    // Gather both sink-inputs (audio out) and source-outputs (mic in)
+    let sink = Command::new("pactl")
         .args(["list", "sink-inputs"])
         .output()
         .await
-        .ok()?;
+        .ok();
+    let source = Command::new("pactl")
+        .args(["list", "source-outputs"])
+        .output()
+        .await
+        .ok();
 
-    if !output.status.success() {
-        return None;
+    let mut text = String::new();
+    if let Some(ref o) = sink {
+        if o.status.success() {
+            text.push_str(&String::from_utf8_lossy(&o.stdout).to_lowercase());
+        }
+    }
+    if let Some(ref o) = source {
+        if o.status.success() {
+            text.push_str(&String::from_utf8_lossy(&o.stdout).to_lowercase());
+        }
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+    info!("[meeting] pactl combined text length: {}, contains 'chromium': {}", text.len(), text.contains("chromium"));
+
+    if text.is_empty() {
+        return None;
+    }
 
     // Strategy A: Direct match — native conferencing apps (Zoom, Teams desktop, etc.)
     for (app_name, patterns) in CONFERENCING_APPS {
@@ -1874,9 +1927,24 @@ async fn detect_meeting_audio() -> Option<String> {
         if detect_camera_in_use().await {
             return Some("Web Meeting".into());
         }
+        // Fallback 2: browser has BOTH audio output AND mic input → very likely a call
+        // This catches Flatpak browsers on COSMIC where /proc and fuser don't work
+        if has_browser_mic_input(&text) {
+            return Some("Web Meeting".into());
+        }
     }
 
     None
+}
+
+/// Check if a browser has an active microphone input (source-output).
+/// Having both audio output (sink-input) and mic input strongly indicates a call.
+fn has_browser_mic_input(pactl_text: &str) -> bool {
+    // source-outputs section contains "chromium input" or "firefox input" etc.
+    pactl_text.contains("chromium input")
+        || pactl_text.contains("firefox input")
+        || pactl_text.contains("chrome input")
+        || pactl_text.contains("brave input")
 }
 
 /// Detect a meeting running inside a browser by checking window titles.
@@ -2044,21 +2112,33 @@ async fn collect_titles_wlrctl() -> Option<Vec<String>> {
 /// Last resort: scan /proc for browser processes with meeting URLs in command line.
 /// This works even when compositor APIs are unavailable (e.g., Flatpak browsers).
 async fn collect_titles_from_proc() -> Option<Vec<String>> {
+    // Use a temp file with the pattern to avoid self-matching (grep's own
+    // cmdline contains the search string, causing false positives).
     let output = Command::new("sh")
         .args([
             "-c",
-            "grep -rl 'meet.google.com\\|zoom.us\\|teams.microsoft.com\\|teams.live.com\\|meet.jit.si\\|webex.com' /proc/*/cmdline 2>/dev/null | head -5",
+            "for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < \"$f\" 2>/dev/null | grep -qi 'meet\\.google\\.com\\|zoom\\.us\\|teams\\.microsoft\\.com\\|teams\\.live\\.com\\|meet\\.jit\\.si\\|webex\\.com\\|discord\\.com/channels' && echo \"$f\"; done | head -5",
         ])
         .output()
         .await
         .ok()?;
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    let stderr_str = String::from_utf8_lossy(&output.stderr);
+    info!(
+        "[meeting] /proc grep: exit={}, stdout_len={}, stderr_len={}, stdout={:?}",
+        output.status.code().unwrap_or(-1),
+        stdout_str.len(),
+        stderr_str.len(),
+        stdout_str.chars().take(200).collect::<String>()
+    );
 
     if !output.status.success() || output.stdout.is_empty() {
         return None;
     }
 
     // If we found any match in /proc cmdlines, extract the URL pattern
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = stdout_str;
     let mut titles = Vec::new();
     for line in stdout.lines() {
         // Read the actual cmdline to extract the URL
@@ -2151,8 +2231,18 @@ async fn detect_camera_in_use() -> bool {
     let output = Command::new("fuser").arg("/dev/video0").output().await.ok();
 
     match output {
-        Some(o) => o.status.success() && !o.stdout.is_empty(),
-        None => false,
+        Some(o) => {
+            let result = o.status.success() && (!o.stdout.is_empty() || !o.stderr.is_empty());
+            info!(
+                "[meeting] fuser: exit={}, stdout_len={}, stderr_len={}, result={}",
+                o.status.code().unwrap_or(-1), o.stdout.len(), o.stderr.len(), result
+            );
+            result
+        }
+        None => {
+            info!("[meeting] fuser: command failed to execute");
+            false
+        }
     }
 }
 

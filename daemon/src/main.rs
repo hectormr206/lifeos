@@ -1265,6 +1265,7 @@ async fn main() -> anyhow::Result<()> {
     let meeting_loop_assistant = shared_meeting_assistant.clone();
     let _meeting_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(15));
+        info!("[meeting] Detection loop started (every 15s)");
         loop {
             interval.tick().await;
             let mut assistant = meeting_loop_assistant.write().await;
@@ -1287,7 +1288,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok(false) => {}
                 Err(e) => {
-                    log::debug!("Meeting detection error: {}", e);
+                    warn!("[meeting] Detection error: {}", e);
                 }
             }
         }
