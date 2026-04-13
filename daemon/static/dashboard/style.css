@@ -26,42 +26,52 @@
 }
 
 [data-theme="light"] {
-  --bg: #f0f0f5;
+  --bg: #f8f9fa;
   --bg-card: #ffffff;
-  --bg-card-hover: #f8f8ff;
+  --bg-card-hover: #f3f4f6;
   --text: #1a1a2e;
-  --text-muted: #666680;
-  --border: #d0d0e0;
-  --input-bg: rgba(240, 240, 245, 0.8);
+  --text-muted: #6b7280;
+  --border: #e5e7eb;
+  --input-bg: #f3f4f6;
   --input-border: rgba(0, 0, 0, 0.12);
-  --sidebar-bg: #e8e8f0;
-  --sidebar-border: rgba(0, 0, 0, 0.08);
+  --sidebar-bg: #f0f2f5;
+  --sidebar-border: #e5e7eb;
+  --accent-2: #0ea5e9;
 }
 
 [data-theme="light"] body {
   background:
-    radial-gradient(circle at top left, rgba(0, 212, 170, 0.06), transparent 30%),
-    radial-gradient(circle at top right, rgba(99, 230, 255, 0.04), transparent 28%),
-    linear-gradient(180deg, #f0f0f5 0%, #e4e4ee 100%);
+    radial-gradient(circle at top left, rgba(0, 212, 170, 0.04), transparent 30%),
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.03), transparent 28%),
+    linear-gradient(180deg, #f8f9fa 0%, #f0f2f5 100%);
 }
 
 [data-theme="light"] body::before {
-  background: radial-gradient(circle, rgba(0, 212, 170, 0.08), transparent 68%);
+  background: radial-gradient(circle, rgba(0, 212, 170, 0.05), transparent 68%);
 }
 
 [data-theme="light"] body::after {
-  background: radial-gradient(circle, rgba(0, 212, 170, 0.04), transparent 70%);
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.03), transparent 70%);
 }
 
 [data-theme="light"] .hero-panel {
   background:
-    linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(240, 240, 245, 0.82)),
-    radial-gradient(circle at top right, rgba(0, 212, 170, 0.08), transparent 38%);
-  border-color: rgba(0, 212, 170, 0.12);
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(248, 249, 250, 0.9)),
+    radial-gradient(circle at top right, rgba(0, 212, 170, 0.06), transparent 38%);
+  border-color: rgba(0, 212, 170, 0.15);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .hero-panel::before {
+  background: radial-gradient(circle, rgba(0, 212, 170, 0.08), transparent 68%);
+}
+
+[data-theme="light"] .hero-panel::after {
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.04), transparent 70%);
 }
 
 [data-theme="light"] .hero-summary {
-  color: rgba(26, 26, 46, 0.85);
+  color: rgba(26, 26, 46, 0.75);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -2278,3 +2288,282 @@ details[open] .transcript-toggle::before { transform: rotate(90deg); }
   margin-bottom: 0.75rem;
   color: var(--text);
 }
+
+/* ===================== LIGHT THEME — Comprehensive Overrides ===================== */
+
+/* --- Sidebar --- */
+[data-theme="light"] .sidebar {
+  scrollbar-color: rgba(0, 0, 0, 0.12) transparent;
+  box-shadow: 1px 0 0 var(--border);
+}
+
+/* --- Icon buttons --- */
+[data-theme="light"] .icon-btn {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .icon-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 212, 170, 0.4);
+}
+
+/* --- Badges --- */
+[data-theme="light"] .badge-offline { background: rgba(255, 71, 87, 0.10); color: #dc2626; border-color: rgba(255, 71, 87, 0.25); }
+[data-theme="light"] .badge-online { background: rgba(0, 212, 170, 0.10); color: #059669; border-color: rgba(0, 212, 170, 0.25); }
+[data-theme="light"] .badge-ok { background: rgba(0, 212, 170, 0.10); color: #059669; border-color: rgba(0, 212, 170, 0.25); }
+[data-theme="light"] .badge-beta { background: rgba(255, 165, 2, 0.10); color: #d97706; border-color: rgba(255, 165, 2, 0.30); }
+[data-theme="light"] .badge-warn { background: rgba(255, 165, 2, 0.10); color: #d97706; border-color: rgba(255, 165, 2, 0.30); }
+
+/* --- Hero stats, chips, telemetry --- */
+[data-theme="light"] .hero-stat {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+[data-theme="light"] .hero-chip {
+  background: rgba(0, 0, 0, 0.03);
+}
+[data-theme="light"] .hero-chip.chip-ok {
+  color: #059669;
+  border-color: rgba(5, 150, 105, 0.25);
+  background: rgba(5, 150, 105, 0.06);
+}
+[data-theme="light"] .hero-chip.chip-warn {
+  color: #d97706;
+  border-color: rgba(217, 119, 6, 0.25);
+  background: rgba(217, 119, 6, 0.06);
+}
+[data-theme="light"] .hero-chip.chip-error {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.25);
+  background: rgba(220, 38, 38, 0.06);
+}
+[data-theme="light"] .hero-chip.chip-neutral {
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .hero-telemetry {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+/* --- Quick action buttons --- */
+[data-theme="light"] .quick-action-btn {
+  background: linear-gradient(180deg, rgba(0, 212, 170, 0.12), rgba(0, 212, 170, 0.06));
+  border-color: rgba(0, 212, 170, 0.25);
+  color: var(--text);
+}
+[data-theme="light"] .quick-action-btn:hover {
+  background: linear-gradient(180deg, rgba(0, 212, 170, 0.18), rgba(0, 212, 170, 0.10));
+  border-color: rgba(0, 212, 170, 0.45);
+}
+[data-theme="light"] .quick-action-secondary {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+/* --- Control cards --- */
+[data-theme="light"] .control-card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* --- Sections with box-shadow --- */
+[data-theme="light"] .supervisor-section,
+[data-theme="light"] .chat-section,
+[data-theme="light"] .os-config-section,
+[data-theme="light"] .resources-section,
+[data-theme="light"] .health-section,
+[data-theme="light"] .battery-section,
+[data-theme="light"] .simplex-section,
+[data-theme="light"] .gameguard-section,
+[data-theme="light"] .providers-section,
+[data-theme="light"] .models-section,
+[data-theme="light"] .metrics-section,
+[data-theme="light"] .memory-section,
+[data-theme="light"] .localai-section,
+[data-theme="light"] .sched-section,
+[data-theme="light"] .settings-section,
+[data-theme="light"] .doctor-section,
+[data-theme="light"] .conversations-section,
+[data-theme="light"] .services-section,
+[data-theme="light"] .vida-plena-section,
+[data-theme="light"] .calendar-section,
+[data-theme="light"] .meetings-section,
+[data-theme="light"] .workers-section {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--border);
+}
+
+/* --- Chat interface --- */
+[data-theme="light"] .chat-messages {
+  background: var(--bg);
+}
+[data-theme="light"] .chat-msg-axi {
+  background: #e8e8ee;
+  color: var(--text);
+}
+[data-theme="light"] .chat-msg-user {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* --- OS cards, resource items, model cards, metric cards, sched items,
+       provider cards, memory entries, task items, conversation items,
+       worker cards — all use var(--bg) which resolves correctly,
+       but some use hardcoded rgba --- */
+[data-theme="light"] .os-card,
+[data-theme="light"] .resource-item,
+[data-theme="light"] .resource-card,
+[data-theme="light"] .model-card,
+[data-theme="light"] .metric-role-card,
+[data-theme="light"] .sched-item,
+[data-theme="light"] .provider-card,
+[data-theme="light"] .memory-entry,
+[data-theme="light"] .task-item,
+[data-theme="light"] .conversation-item,
+[data-theme="light"] .worker-card,
+[data-theme="light"] .catalog-item {
+  background: #f3f4f6;
+}
+
+/* --- Diagnostic hint uses var(--bg) — fine, but confirm card bg --- */
+[data-theme="light"] .diag-hint {
+  background: #f3f4f6;
+}
+
+/* --- Toggle slider (unchecked state) --- */
+[data-theme="light"] .slider {
+  background: #c4c4cc;
+}
+[data-theme="light"] .provider-toggle .slider {
+  background: #c4c4cc;
+}
+
+/* --- Doctor checks --- */
+[data-theme="light"] .doctor-check {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+/* --- Game Guard toggle cards --- */
+[data-theme="light"] .gameguard-toggles .setting-item {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+/* --- Add provider form --- */
+[data-theme="light"] .add-provider-form {
+  background: rgba(0, 0, 0, 0.02);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+/* --- Key status indicator --- */
+[data-theme="light"] .key-status {
+  background: rgba(0, 0, 0, 0.03);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+/* --- Local AI config slider dividers --- */
+[data-theme="light"] .localai-config .setting-item {
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+/* --- Vida Plena cards --- */
+[data-theme="light"] .vida-plena-card {
+  background: #f3f4f6;
+}
+[data-theme="light"] .habit-item,
+[data-theme="light"] .mood-item {
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+/* --- Calendar --- */
+[data-theme="light"] .calendar-today {
+  background: var(--accent);
+  color: #fff;
+}
+[data-theme="light"] .calendar-event-badge {
+  background: var(--accent);
+  color: #fff;
+}
+[data-theme="light"] .calendar-event-item {
+  border-bottom-color: rgba(0, 0, 0, 0.06);
+}
+
+/* --- Meeting filter buttons --- */
+[data-theme="light"] .meeting-filter-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* --- Transcript messages --- */
+[data-theme="light"] .transcript-msg-user {
+  background: rgba(0, 212, 170, 0.10);
+}
+[data-theme="light"] .transcript-msg-axi {
+  background: #eeeef4;
+}
+
+/* --- Screenshot lightbox --- */
+[data-theme="light"] .screenshot-lightbox {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* --- Safe mode banner --- */
+[data-theme="light"] .safe-mode-banner {
+  background: linear-gradient(135deg, rgba(255, 165, 2, 0.08), rgba(255, 71, 87, 0.05));
+  border-color: rgba(255, 165, 2, 0.30);
+  color: #92400e;
+}
+[data-theme="light"] .safe-mode-banner .safe-mode-exit-btn {
+  border-color: rgba(255, 165, 2, 0.35);
+  background: rgba(255, 165, 2, 0.10);
+  color: #92400e;
+}
+[data-theme="light"] .safe-mode-banner .safe-mode-exit-btn:hover {
+  background: rgba(255, 165, 2, 0.20);
+}
+
+/* --- SimpleX state text uses hardcoded color fallback --- */
+[data-theme="light"] .simplex-state {
+  color: var(--text-muted);
+}
+[data-theme="light"] .simplex-link-wrap label {
+  color: var(--text-muted);
+}
+
+/* --- Sidebar overlay --- */
+[data-theme="light"] .sidebar-overlay {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* --- Mobile sidebar shadow --- */
+@media (max-width: 768px) {
+  [data-theme="light"] .sidebar.open {
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.12);
+  }
+}
+
+/* --- Scrollbar styling for light theme --- */
+[data-theme="light"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+}
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* --- Resource bar background --- */
+[data-theme="light"] .resource-bar {
+  background: #e5e7eb;
+}
+
+/* --- Feed count badge --- */
+[data-theme="light"] .feed-count {
+  background: linear-gradient(180deg, rgba(0, 212, 170, 1), rgba(0, 180, 144, 1));
+  color: #fff;
+}
+
+/* --- Worker status badges (these use rgba with good contrast already) --- */
