@@ -64,8 +64,9 @@ $allowed || die "Destination not in allowed paths: $DEST (allowed: ${ALLOWED_DES
 # Deploy
 mkdir -p "$(dirname "$DEST")"
 cp "$SRC" "$DEST"
-# Preserve executable bit from source; default to 644 for configs
-if [ -x "$SRC" ]; then
+# Files going to bin dirs are always executable; everything else is 644.
+# This avoids depending on the source's +x bit which git often strips.
+if [[ "$DEST" == /usr/local/bin/* ]] || [[ "$DEST" == /usr/lib/systemd/system/* ]] || [ -x "$SRC" ]; then
     chmod 755 "$DEST"
 else
     chmod 644 "$DEST"

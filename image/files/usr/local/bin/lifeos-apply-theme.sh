@@ -121,15 +121,15 @@ fi
 
 echo "[lifeos-theme] Applying LifeOS visual identity v${CURRENT_VERSION} (preserve user config)..."
 
-# ── 1. Import LifeOS dark theme (accent, colors, frosted glass, corners) ──
-# NOTE: cosmic-settings import is additive/compositor-managed, safe to run.
+# ── 1. Import LifeOS Dark theme (accent teal, frosted glass, window hints) ──
+# cosmic-settings import is additive/compositor-managed, safe to run on every apply.
 if [ -f "$THEME_DIR/lifeos-dark.ron" ]; then
     cosmic-settings appearance import "$THEME_DIR/lifeos-dark.ron" 2>/dev/null && \
-        echo "[lifeos-theme] Dark theme applied" || \
+        echo "[lifeos-theme] LifeOS Dark color theme applied" || \
         echo "[lifeos-theme] Theme import failed (non-fatal)"
 fi
 
-# ── 2. Panel: floating, semi-transparent, rounded ──
+# ── 2. Panel: full-width, edge-to-edge, no floating ──
 PANEL_CONTAINER="$HOME/.config/cosmic/com.system76.CosmicPanel/v1"
 write_if_absent_stdin "$PANEL_CONTAINER/entries" << 'PANEL_ENTRIES'
 [
@@ -143,26 +143,30 @@ write_if_absent "$PANEL/background" "ThemeDefault"
 write_if_absent "$PANEL/keyboard_interactivity" "OnDemand"
 write_if_absent "$PANEL/autohover_delay_ms" "Some(500)"
 write_if_absent "$PANEL/exclusive_zone" "true"
-write_if_absent "$PANEL/opacity" "0.85"
-write_if_absent "$PANEL/expand_to_edges" "false"
-write_if_absent "$PANEL/border_radius" "12"
+write_if_absent "$PANEL/opacity" "0.65"
+write_if_absent "$PANEL/expand_to_edges" "true"
+write_if_absent "$PANEL/border_radius" "0"
 write_if_absent "$PANEL/padding" "0"
 write_if_absent "$PANEL/padding_overlap" "0.5"
+write_if_absent "$PANEL/size" "XS"
 write_if_absent "$PANEL/size_center" "None"
 write_if_absent "$PANEL/size_wings" "None"
 write_if_absent "$PANEL/spacing" "4"
-write_if_absent "$PANEL/anchor_gap" "true"
-write_if_absent "$PANEL/margin" "4"
+write_if_absent "$PANEL/anchor_gap" "false"
+write_if_absent "$PANEL/margin" "0"
+write_if_absent "$PANEL/autohide" "None"
 write_if_absent_stdin "$PANEL/plugins_center" << 'PANEL_CENTER'
 Some([
+    "com.vintagetechie.CosmicExtAppletTempest",
     "com.system76.CosmicAppletTime",
+    "io.github.cosmic_utils.minimon-applet",
 ])
 PANEL_CENTER
 write_if_absent_stdin "$PANEL/plugins_wings" << 'PANEL_WINGS'
 Some(([
     "com.system76.CosmicAppletWorkspaces",
-    "com.system76.CosmicPanelAppButton",
 ], [
+    "io.github.cosmic_utils.cosmic-ext-applet-clipboard-manager",
     "com.system76.CosmicAppletInputSources",
     "com.system76.CosmicAppletA11y",
     "com.system76.CosmicAppletStatusArea",
@@ -176,40 +180,38 @@ Some(([
 ]))
 PANEL_WINGS
 
-# ── 3. Dock: floating, transparent, rounded, auto-hide ──
+# ── 3. Dock: full-width, edge-to-edge, no autohide ──
 DOCK="$HOME/.config/cosmic/com.system76.CosmicPanel.Dock/v1"
 write_if_absent "$DOCK/background" "ThemeDefault"
 write_if_absent "$DOCK/keyboard_interactivity" "OnDemand"
 write_if_absent "$DOCK/autohover_delay_ms" "Some(500)"
 write_if_absent "$DOCK/exclusive_zone" "false"
-write_if_absent "$DOCK/opacity" "0.75"
+write_if_absent "$DOCK/opacity" "0.65"
 write_if_absent "$DOCK/size" "L"
-write_if_absent "$DOCK/expand_to_edges" "false"
-write_if_absent "$DOCK/border_radius" "160"
+write_if_absent "$DOCK/expand_to_edges" "true"
+write_if_absent "$DOCK/border_radius" "0"
+write_if_absent "$DOCK/padding" "4"
 write_if_absent "$DOCK/padding_overlap" "0.5"
 write_if_absent "$DOCK/size_center" "None"
 write_if_absent "$DOCK/size_wings" "None"
-write_if_absent "$DOCK/anchor_gap" "true"
-write_if_absent "$DOCK/margin" "4"
+write_if_absent "$DOCK/anchor_gap" "false"
+write_if_absent "$DOCK/margin" "0"
 write_if_absent "$DOCK/spacing" "0"
-write_if_absent_stdin "$DOCK/autohide" << 'AUTOHIDE'
-Some((
-    wait_time: 1000,
-    transition_time: 200,
-    handle_size: 4,
-    unhide_delay: 200,
-))
-AUTOHIDE
+write_if_absent "$DOCK/autohide" "None"
 write_if_absent_stdin "$DOCK/plugins_center" << 'DOCK_CENTER'
 Some([
+    "com.system76.CosmicAppList",
+])
+DOCK_CENTER
+write_if_absent_stdin "$DOCK/plugins_wings" << 'DOCK_WINGS'
+Some(([
     "com.system76.CosmicPanelLauncherButton",
     "com.system76.CosmicPanelWorkspacesButton",
     "com.system76.CosmicPanelAppButton",
-    "com.system76.CosmicAppList",
+], [
     "com.system76.CosmicAppletMinimize",
-])
-DOCK_CENTER
-write_if_absent "$DOCK/plugins_wings" "None"
+]))
+DOCK_WINGS
 
 # ── 4. Compositor: active hint enabled ──
 COMP="$HOME/.config/cosmic/com.system76.CosmicComp/v1"
@@ -253,7 +255,7 @@ MODE_DIR="$HOME/.config/cosmic/com.system76.CosmicTheme.Mode/v1"
 write_if_absent "$MODE_DIR/is_dark" "true"
 
 # ── 8. Icon theme ──
-write_if_absent "$TK_DIR/icon_theme" '"LifeOS"'
+write_if_absent "$TK_DIR/icon_theme" '"Pop"'
 
 echo "[lifeos-theme] LifeOS identity applied successfully (v${CURRENT_VERSION})"
 
