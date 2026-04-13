@@ -488,6 +488,11 @@ RUN flatpak remote-add --if-not-exists --system flathub \
 # --- Flatpak: global Wayland-first overrides (avoid XWayland overhead) ---
 COPY image/files/var/lib/flatpak/overrides/global /var/lib/flatpak/overrides/global
 
+# --- Flatpak: Nvidia GL extension sync (matches host driver on every boot) ---
+COPY image/files/usr/local/bin/lifeos-flatpak-nvidia-sync.sh /usr/local/bin/lifeos-flatpak-nvidia-sync.sh
+RUN chmod +x /usr/local/bin/lifeos-flatpak-nvidia-sync.sh
+COPY image/files/etc/systemd/system/lifeos-flatpak-nvidia-sync.service /usr/lib/systemd/system/lifeos-flatpak-nvidia-sync.service
+
 # --- Flatpak: unattended auto-update (daily, with gaming/battery/metered guards) ---
 COPY image/files/usr/local/bin/lifeos-flatpak-update.sh /usr/local/bin/lifeos-flatpak-update.sh
 RUN chmod +x /usr/local/bin/lifeos-flatpak-update.sh
@@ -1041,6 +1046,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer /usr/lib/systemd/system/timers.target.wants/lifeos-maintenance-cleanup.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-flatpak-update.timer /usr/lib/systemd/system/timers.target.wants/lifeos-flatpak-update.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-flatpak-nvidia-sync.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-flatpak-nvidia-sync.service && \
     ln -sf /usr/lib/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-aide-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
@@ -1396,6 +1402,7 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -L /usr/lib/systemd/system/timers.target.wants/fstrim.timer || fail "fstrim.timer symlink"; \
     test -x /usr/local/bin/lifeos-flatpak-update.sh || fail "lifeos-flatpak-update.sh"; \
     test -L /usr/lib/systemd/system/timers.target.wants/lifeos-flatpak-update.timer || fail "lifeos-flatpak-update.timer symlink"; \
+    test -x /usr/local/bin/lifeos-flatpak-nvidia-sync.sh || fail "lifeos-flatpak-nvidia-sync.sh"; \
     test -f /usr/lib/systemd/system/lifeos-power-profile.service || fail "lifeos-power-profile.service"; \
     test -f /usr/lib/systemd/system/lifeos-powertune.service || fail "lifeos-powertune.service"; \
     test -f /usr/lib64/firefox/distribution/policies.json || fail "firefox distribution/policies.json"; \
