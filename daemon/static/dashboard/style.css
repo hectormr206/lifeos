@@ -1958,8 +1958,7 @@ section { scroll-margin-top: 24px; }
   gap: 0.5rem;
   align-items: center;
 }
-.add-provider-fields input,
-.add-provider-fields select {
+.add-provider-fields input {
   flex: 1;
   min-width: 160px;
 }
