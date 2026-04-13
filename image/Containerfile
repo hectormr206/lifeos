@@ -580,10 +580,18 @@ RUN dnf -y install python3-pip python3-numpy && \
     python3 -c "import onnxruntime; print('onnxruntime', onnxruntime.__version__)" && \
     dnf clean all
 
-# --- Aplicaciones Nativas Esenciales ---
-RUN dnf -y install \
-    mpv evince keepassxc loupe \
-    && dnf clean all
+# --- Aplicaciones de Escritorio (Flatpak — auto-update via lifeos-flatpak-update.timer) ---
+# mpv, evince, keepassxc, loupe moved from RPM to Flatpak for independent updates.
+# Installed at first boot; if flathub is not reachable during build, user gets them on first login.
+RUN flatpak remote-add --if-not-exists --system flathub \
+        https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null || true && \
+    flatpak install --system -y --noninteractive flathub \
+        io.mpv.Mpv \
+        org.gnome.Evince \
+        org.keepassxc.KeePassXC \
+        org.gnome.Loupe \
+        2>/dev/null || \
+    echo "INFO: Desktop apps will be installed on first boot via flatpak"
 
 # bootc-image-builder expects EFI binaries under /boot/efi/EFI/fedora when producing installer ISOs.
 # Fedora 42 exposed these via /usr/lib/bootupd/updates/EFI/fedora, while newer bootc images
