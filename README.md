@@ -1,6 +1,6 @@
 # LifeOS
 
-![Beta](https://img.shields.io/badge/status-beta-orange?style=for-the-badge) ![Version](https://img.shields.io/badge/version-0.4.1-teal?style=for-the-badge)
+![Beta](https://img.shields.io/badge/status-beta-orange?style=for-the-badge) ![Version](https://img.shields.io/badge/version-0.5.0-teal?style=for-the-badge)
 
 **AI-native Linux distribution built on Fedora bootc (immutable) with COSMIC Desktop.**
 
