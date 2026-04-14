@@ -317,6 +317,18 @@ These defaults are baked into the OS image and survive updates. You can review o
 sudo firewall-cmd --list-all --zone=lifeos
 ```
 
+### Sudoers NOPASSWD Policy
+
+LifeOS uses a least-privilege sudoers drop-in at `/etc/sudoers.d/lifeos-axi`. Only explicit, narrowly scoped commands are allowed without a password prompt — never a blanket `ALL` rule. Entries relevant to the AI-driven self-deploy workflow:
+
+| Command | Purpose |
+|---------|---------|
+| `/usr/local/bin/lifeos-dev-deploy.sh *` | Deploy daemon/CLI binaries and unit files from the repo onto the live system (validated paths only) |
+| `/usr/bin/udevadm control --reload` | Re-apply udev rules after `lifeos-dev-deploy.sh` syncs a new rules file |
+| `/usr/bin/udevadm trigger --subsystem-match=cpu *` | Re-trigger CPU subsystem events (e.g. after thermal rule updates), wildcard constrained to the `--action=` suffix |
+
+All three are wheel-group only and audited by `auditd`. See the canonical list and rationale in `image/files/etc/sudoers.d/lifeos-axi`.
+
 ## Troubleshooting
 
 ### Installation Issues

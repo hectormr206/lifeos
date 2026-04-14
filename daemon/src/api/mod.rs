@@ -178,6 +178,7 @@ pub struct ApiState {
     pub calendar: Arc<crate::calendar::CalendarManager>,
     pub meeting_archive: Arc<crate::meeting_archive::MeetingArchive>,
     pub event_bus: tokio::sync::broadcast::Sender<crate::events::DaemonEvent>,
+    pub security_alert_buffer: crate::security_ai::AlertBuffer,
     pub config: ApiConfig,
     pub game_guard: Option<Arc<RwLock<crate::game_guard::GameGuard>>>,
     pub wake_word_detector: Option<Arc<crate::wake_word::WakeWordDetector>>,
@@ -1613,6 +1614,13 @@ pub fn create_router(state: ApiState) -> Router {
         .route("/dashboard/bootstrap", get(dashboard_bootstrap))
         .with_state(state.clone());
 
+    // Read-only security alerts feed — no auth, localhost-only (same policy
+    // as the dashboard bootstrap endpoint). Exposes the in-memory ring
+    // buffer populated by the security_ai monitor every 30s.
+    let security_alerts_route = Router::new()
+        .route("/api/security/alerts", get(get_security_alerts))
+        .with_state(state.clone());
+
     // Meeting screenshots/files — served from the meetings data directory.
     // No auth required because the server is local-only (127.0.0.1).
     let meetings_data_dir =
@@ -1631,6 +1639,7 @@ pub fn create_router(state: ApiState) -> Router {
         .merge(ws_route)
         .merge(metrics_route)
         .merge(dashboard_bootstrap_route)
+        .merge(security_alerts_route)
         .nest_service("/dashboard", dashboard_service)
         .nest_service("/meetings-files", meetings_service)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
@@ -1665,6 +1674,26 @@ async fn dashboard_bootstrap(
         token: state.config.api_key.clone(),
         auth_required: state.config.api_key.is_some(),
     }))
+}
+
+async fn get_security_alerts(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    if !state.config.bind_address.ip().is_loopback() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "Security alerts are only available on localhost".to_string(),
+                code: 403,
+            }),
+        ));
+    }
+    let alerts = crate::security_ai::recent_alerts(&state.security_alert_buffer);
+    Ok(Json(serde_json::json!({
+        "alerts": alerts,
+        "count": alerts.len(),
+    })))
 }
 
 async fn require_bootstrap_token(
@@ -6265,7 +6294,7 @@ async fn get_available_updates(
     let channel = format!("{:?}", scheduler.get_channel().await);
     let mut checker = crate::updates::UpdateChecker::new();
 
-    match checker.check_for_updates().await {
+    match checker.check_for_updates_cached_first().await {
         Ok(result) if result.available => Ok(Json(AvailableUpdatesResponse {
             updates: vec![AvailableVersionInfo {
                 version: result.new_version,
@@ -6362,7 +6391,7 @@ async fn check_for_updates(
     let channel = format!("{:?}", scheduler.get_channel().await);
     let mut checker = crate::updates::UpdateChecker::new();
 
-    match checker.check_for_updates().await {
+    match checker.check_for_updates_cached_first().await {
         Ok(result) if result.available => Ok(Json(AvailableUpdatesResponse {
             updates: vec![AvailableVersionInfo {
                 version: result.new_version,
@@ -6503,7 +6532,7 @@ async fn get_update_status(
     let scheduler = UpdateScheduler::new(PathBuf::from("/var/lib/lifeos"));
     let status = scheduler.get_status().await;
     let mut checker = crate::updates::UpdateChecker::new();
-    let available_versions = match checker.check_for_updates().await {
+    let available_versions = match checker.check_for_updates_cached_first().await {
         Ok(result) if result.available => 1,
         _ => 0,
     };

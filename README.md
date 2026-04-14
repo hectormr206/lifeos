@@ -1,6 +1,6 @@
 # LifeOS
 
-![Beta](https://img.shields.io/badge/status-beta-orange?style=for-the-badge) ![Version](https://img.shields.io/badge/version-0.5.0-teal?style=for-the-badge)
+![Beta](https://img.shields.io/badge/status-beta-orange?style=for-the-badge) ![Version](https://img.shields.io/badge/version-0.5.1-teal?style=for-the-badge)
 
 **AI-native Linux distribution built on Fedora bootc (immutable) with COSMIC Desktop.**
 
@@ -27,7 +27,7 @@ LifeOS is built in Mexico and developed in the open for users, contributors, and
 - **Provider routing** (`integrated in repo`) - multiple LLM providers are wired with privacy-aware routing policies
 - **Interaction surfaces** - SimpleX is the privacy-first remote channel (`simplex_bridge.rs` + `simplex-chat.service`, E2E encrypted, no phone number required); the local dashboard (`http://127.0.0.1:8081/dashboard`) is the in-host web UI (`integrated in repo`); local voice and broader desktop surfaces exist but some remain experimental or are still being re-validated
 - **Reliability layers** (`integrated in repo`) - watchdog, sentinel, circuit breaker, safe mode, and config rollback exist, but not every repair flow is equally mature
-- **Security baseline** (`integrated in repo`) - the image ships firewalld, auditd, DNS-over-TLS, SSH hardening, and related guardrails; broader hardening claims should be read as a baseline, not as a finished benchmark story
+- **Security baseline** (`integrated in repo`) - the image ships firewalld, auditd, DNS-over-TLS, SSH hardening, and related guardrails; broader hardening claims should be read as a baseline, not as a finished benchmark story. A read-only `GET /api/security/alerts` endpoint (localhost-only, no auth) exposes the in-memory ring buffer of recent security monitor events for the dashboard
 - **GPU Game Guard** (`validated on host`) - GPU offload policy exists and recent false positives were fixed, but it stays under ongoing validation after daemon/runtime changes
 - **Flatpak auto-update** (`validated on host`) - updates run automatically with guards for active gaming sessions, battery level, and metered network connections
 - **Nvidia GL extension auto-sync** (`validated on host`) - host driver version is detected on boot and the matching GL extension layer is applied automatically; no manual intervention after driver updates

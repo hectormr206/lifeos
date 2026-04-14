@@ -19,6 +19,7 @@ REPO_BASE="/var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files"
 # Allowed destination prefixes (least-privilege)
 ALLOWED_DESTS=(
     "/var/lib/lifeos/"
+    "/etc/sudoers.d/lifeos-"
     "/etc/systemd/"
     "/etc/udev/rules.d/"
     "/etc/tmpfiles.d/"
@@ -63,13 +64,26 @@ $allowed || die "Destination not in allowed paths: $DEST (allowed: ${ALLOWED_DES
 
 # Deploy
 mkdir -p "$(dirname "$DEST")"
-cp "$SRC" "$DEST"
-# Files going to bin dirs are always executable; everything else is 644.
-# This avoids depending on the source's +x bit which git often strips.
-if [[ "$DEST" == /usr/local/bin/* ]] || [[ "$DEST" == /usr/lib/systemd/system/* ]] || [ -x "$SRC" ]; then
-    chmod 755 "$DEST"
+
+if [[ "$DEST" == /etc/sudoers.d/* ]]; then
+    # Sudoers: validate syntax on source FIRST. If invalid, abort without
+    # touching the existing dest (deletion would lock us out of sudo).
+    if ! /usr/sbin/visudo -c -f "$SRC" >/dev/null 2>&1; then
+        die "sudoers syntax check failed for $SRC — existing $DEST untouched"
+    fi
+    # Atomic replace via temp file
+    cp "$SRC" "${DEST}.tmp"
+    chown root:root "${DEST}.tmp"
+    chmod 440 "${DEST}.tmp"
+    mv -f "${DEST}.tmp" "$DEST"
 else
-    chmod 644 "$DEST"
+    cp "$SRC" "$DEST"
+    # Files going to bin dirs are always executable; everything else is 644.
+    if [[ "$DEST" == /usr/local/bin/* ]] || [[ "$DEST" == /usr/lib/systemd/system/* ]] || [ -x "$SRC" ]; then
+        chmod 755 "$DEST"
+    else
+        chmod 644 "$DEST"
+    fi
 fi
 
 log "Deployed: $SRC -> $DEST"

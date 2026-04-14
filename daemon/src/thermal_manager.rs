@@ -99,6 +99,28 @@ fn detect_cpu_driver() -> Option<CpuDriver> {
     None
 }
 
+/// Check whether the driver's perf-cap sysfs entries are writable by the
+/// current process. We run as an unprivileged user and rely on udev rules
+/// (90-lifeos-thermal.rules) to chmod these to 0666. If the rule never fired
+/// (intel_pstate built-in instead of module, fresh install without reboot,
+/// etc.) every write would fail — so we probe ONCE at startup and disable
+/// the reactive loop cleanly instead of spamming errors every tick.
+fn driver_is_writable(driver: CpuDriver) -> bool {
+    let paths: &[&str] = match driver {
+        CpuDriver::IntelPstate => &["/sys/devices/system/cpu/intel_pstate/max_perf_pct"],
+        CpuDriver::AmdPstate | CpuDriver::GenericCpufreq => {
+            &["/sys/devices/system/cpu/cpufreq/policy0/scaling_max_freq"]
+        }
+    };
+    paths.iter().all(|p| {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(p)
+            .map(|_| true)
+            .unwrap_or(false)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Temperature reading
 // ---------------------------------------------------------------------------
@@ -332,15 +354,33 @@ impl ThermalManager {
         {
             let inner = self.inner.read().await;
             if !inner.is_laptop {
-                info!("[thermal] desktop detected — thermal manager inactive (100%% cap)");
+                info!("[thermal] desktop detected — thermal manager inactive (100% cap)");
                 return;
             }
-            if inner.cpu_driver.is_none() {
-                warn!("[thermal] no supported CPU driver found — thermal manager inactive");
-                return;
-            }
+            let driver = match inner.cpu_driver {
+                Some(d) => d,
+                None => {
+                    warn!("[thermal] no supported CPU driver found — thermal manager inactive");
+                    return;
+                }
+            };
             if inner.thermal_zone.is_none() {
                 warn!("[thermal] no CPU thermal zone found — thermal manager inactive");
+                return;
+            }
+            // Probe writability ONCE. Running as unprivileged user relies on the
+            // udev rule in 90-lifeos-thermal.rules to chmod these to 0666. If the
+            // rule did not fire, writes will fail every tick — disable the loop
+            // instead of spamming logs.
+            if !driver_is_writable(driver) {
+                let uid = unsafe { libc::getuid() };
+                warn!(
+                    "[thermal] sysfs perf-cap path not writable by uid={} for driver={:?} — \
+                     thermal manager inactive. Ensure 90-lifeos-thermal.rules has applied \
+                     (udevadm trigger --subsystem-match=cpu) and that lifeos-thermal.service \
+                     ran on boot.",
+                    uid, driver
+                );
                 return;
             }
         }
@@ -509,6 +549,18 @@ pub fn apply_boot_default() {
             return;
         }
     };
+
+    // Running unprivileged: if sysfs is not writable (udev rule did not fire or
+    // system-level lifeos-thermal.service did not run) there is nothing we can
+    // do from user-session. Log once and skip — do NOT attempt a write that
+    // will always fail.
+    if !driver_is_writable(driver) {
+        info!(
+            "[thermal] boot default skipped: sysfs not writable (expected — \
+             system-level lifeos-thermal.service handles boot cap)"
+        );
+        return;
+    }
 
     // 95% is a gentle default — the reactive loop will tighten if needed
     if let Err(e) = apply_perf_cap(driver, 95) {

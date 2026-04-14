@@ -467,6 +467,7 @@ pub struct DaemonState {
     pub wake_word_detector: Option<Arc<wake_word::WakeWordDetector>>,
     pub wake_word_notify: Arc<tokio::sync::Notify>,
     pub event_bus: tokio::sync::broadcast::Sender<events::DaemonEvent>,
+    pub security_alert_buffer: security_ai::AlertBuffer,
     pub session_store: Arc<session_store::SessionStore>,
     pub game_guard: Option<Arc<RwLock<game_guard::GameGuard>>>,
     pub skill_registry_v2: Arc<skill_registry::SkillRegistry>,
@@ -762,6 +763,7 @@ async fn main() -> anyhow::Result<()> {
         wake_word_detector,
         wake_word_notify: wake_word_notify.clone(),
         event_bus: event_tx,
+        security_alert_buffer: security_ai::new_alert_buffer(),
         session_store: shared_session_store,
         game_guard: Some(Arc::new(RwLock::new(game_guard::GameGuard::new(
             game_guard::GameGuardConfig {
@@ -1350,6 +1352,7 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Security AI: threat monitoring every 30s ---
     let security_event_bus = state.event_bus.clone();
+    let security_alert_buffer_task = state.security_alert_buffer.clone();
     let _security_ai_handle = tokio::spawn(async move {
         let mut daemon = security_ai::SecurityAiDaemon::new();
         let mut interval = tokio::time::interval(Duration::from_secs(30));
@@ -1361,6 +1364,7 @@ async fn main() -> anyhow::Result<()> {
             alerts.extend(daemon.check_anomalous_processes().await);
             alerts.extend(daemon.check_unauthorized_file_access().await);
             alerts.extend(daemon.check_system_integrity().await);
+            security_ai::push_alerts(&security_alert_buffer_task, &alerts);
             for alert in &alerts {
                 let priority = match alert.severity {
                     security_ai::AlertSeverity::Emergency
@@ -2149,6 +2153,7 @@ async fn start_api_server(state: Arc<DaemonState>, shared: SharedBridgeState) {
         session_store: state.session_store.clone(),
         #[cfg(feature = "messaging")]
         meeting_assistant: Some(shared.meeting_assistant.clone()),
+        security_alert_buffer: state.security_alert_buffer.clone(),
     };
 
     // Perform initial skill registry load and start file watcher
@@ -2280,74 +2285,81 @@ async fn run_health_checks(state: Arc<DaemonState>) {
     }
 }
 
-/// Run periodic update checks
+/// Run periodic update checks by reading the cached state file written by the
+/// system-level `lifeos-update-check.service` (which runs daily as root via a
+/// systemd timer). The user daemon never calls `bootc` directly, because
+/// `bootc status` requires root even for read-only access.
 async fn run_update_checks(state: Arc<DaemonState>) {
-    // Skip update checks when bootc status is not accessible (needs root).
-    let bootc_ok = std::process::Command::new("bootc")
-        .args(["status", "--json"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    if !bootc_ok {
-        info!("Update checks disabled (bootc status not accessible — run as root or via systemd)");
-        return;
-    }
-
     // Wait 10 minutes after boot before first check to avoid slowing startup
+    // and to give the system timer a chance to populate the cache on fresh
+    // installs.
     tokio::time::sleep(Duration::from_secs(600)).await;
 
     let mut interval = tokio::time::interval(state.config.update_check_interval);
+    let mut last_notified_version: Option<String> = None;
+    let mut warned_missing_cache = false;
 
     loop {
         interval.tick().await;
 
-        debug!("Checking for updates...");
+        debug!("Checking for updates (from cached state)...");
 
         let mut update_checker = state.update_checker.write().await;
-        match update_checker.check_for_updates().await {
-            Ok(result) => {
+        match update_checker.check_from_cached_state() {
+            Ok(Some(result)) => {
+                warned_missing_cache = false;
+
                 if result.available {
                     info!(
                         "Update available: {} -> {}",
                         result.current_version, result.new_version
                     );
 
-                    // Desktop notification via notify-rust
-                    if let Err(e) = state
-                        .notification_manager
-                        .send_update_notification(&result.new_version)
-                        .await
-                    {
-                        error!("Failed to send update notification: {}", e);
-                    }
+                    // Only notify once per distinct new_version to avoid spam
+                    // on every poll.
+                    let should_notify =
+                        last_notified_version.as_deref() != Some(result.new_version.as_str());
 
-                    // Broadcast on event bus so dashboard/SimpleX/SSE subscribers see it
-                    let _ = state.event_bus.send(events::DaemonEvent::Notification {
-                        priority: "info".into(),
-                        message: format!(
-                            "Actualizacion de LifeOS disponible ({} -> {}). Ejecuta 'bootc upgrade' para actualizar.",
-                            result.current_version, result.new_version
-                        ),
-                    });
-
-                    // Auto-update if enabled
-                    if state.config.enable_auto_updates {
-                        info!("Auto-updates enabled, staging update...");
-                        if let Err(e) = update_checker.stage_update().await {
-                            error!("Failed to stage update: {}", e);
+                    if should_notify {
+                        // Desktop notification via notify-rust
+                        if let Err(e) = state
+                            .notification_manager
+                            .send_update_notification(&result.new_version)
+                            .await
+                        {
+                            error!("Failed to send update notification: {}", e);
                         }
+
+                        // Broadcast on event bus so dashboard/SimpleX/SSE subscribers see it
+                        let _ = state.event_bus.send(events::DaemonEvent::Notification {
+                            priority: "info".into(),
+                            message: format!(
+                                "Actualizacion de LifeOS disponible ({} -> {}). Ejecuta 'bootc upgrade' para actualizar.",
+                                result.current_version, result.new_version
+                            ),
+                        });
+
+                        last_notified_version = Some(result.new_version.clone());
                     }
                 } else {
                     debug!("No updates available");
+                    last_notified_version = None;
                 }
 
                 // Update last check timestamp
                 *state.last_update_check.write().await = Some(chrono::Local::now());
             }
+            Ok(None) => {
+                if !warned_missing_cache {
+                    info!(
+                        "Update state cache not yet available at {} — waiting for lifeos-update-check.service to run",
+                        updates::UPDATE_STATE_CACHE_PATH
+                    );
+                    warned_missing_cache = true;
+                }
+            }
             Err(e) => {
-                error!("Update check failed: {}", e);
+                error!("Update check failed (cached state): {}", e);
             }
         }
     }

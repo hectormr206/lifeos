@@ -31,6 +31,12 @@
 %wheel ALL=(root) NOPASSWD: /usr/bin/bootc upgrade
 %wheel ALL=(root) NOPASSWD: /usr/bin/bootc upgrade --apply
 %wheel ALL=(root) NOPASSWD: /usr/bin/bootc rollback
+%wheel ALL=(root) NOPASSWD: /usr/bin/bootc switch --transport containers-storage localhost/lifeos\:dev
+%wheel ALL=(root) NOPASSWD: /usr/bin/bootc switch --transport containers-storage localhost/lifeos\:stable
+%wheel ALL=(root) NOPASSWD: /usr/bin/bootc usr-overlay
+# Load LifeOS images from user-storage tar into root containers-storage so bootc can see them
+%wheel ALL=(root) NOPASSWD: /usr/bin/podman load -i /tmp/lifeos-dev.tar
+%wheel ALL=(root) NOPASSWD: /usr/bin/podman load -i /tmp/lifeos-stable.tar
 
 # === FLATPAK SYSTEM INSTALLS ===
 # axi_tools.rs, security_daemon.rs, proactive.rs
@@ -82,3 +88,10 @@
 # Validated script: source must be under image/files/, dest under allowed paths only.
 # Enables AI assistant to apply fixes to both repo AND live system in one turn.
 %wheel ALL=(root) NOPASSWD: /var/lib/lifeos/lifeos-dev-deploy.sh
+%wheel ALL=(root) NOPASSWD: /usr/local/bin/lifeos-dev-deploy.sh *
+
+# === UDEV RELOAD (AI-driven dev workflow — re-apply rules after deploy) ===
+# Needed after lifeos-dev-deploy.sh syncs new udev rules to /etc/udev/rules.d/.
+# Wildcard on trigger allows --action=add/change/remove without broadening scope.
+%wheel ALL=(root) NOPASSWD: /usr/bin/udevadm control --reload
+%wheel ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --subsystem-match=cpu *
