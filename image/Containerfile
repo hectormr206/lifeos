@@ -129,7 +129,7 @@ RUN set -eux && \
 # ============================================================================
 FROM fedora:${FEDORA_MAJOR} AS llama-builder
 
-RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel glslc && \
+RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel glslc spirv-headers && \
     dnf clean all
 
 RUN set -eux && \
