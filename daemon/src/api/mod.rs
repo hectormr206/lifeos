@@ -1615,8 +1615,8 @@ pub fn create_router(state: ApiState) -> Router {
 
     // Meeting screenshots/files — served from the meetings data directory.
     // No auth required because the server is local-only (127.0.0.1).
-    let meetings_data_dir = std::env::var("LIFEOS_DATA_DIR")
-        .unwrap_or_else(|_| "/var/lib/lifeos".to_string());
+    let meetings_data_dir =
+        std::env::var("LIFEOS_DATA_DIR").unwrap_or_else(|_| "/var/lib/lifeos".to_string());
     let meetings_files_dir = format!("{}/meetings", meetings_data_dir);
     let meetings_service = ServeDir::new(&meetings_files_dir);
 
@@ -10979,7 +10979,10 @@ async fn get_api_keys_status() -> Result<Json<serde_json::Value>, (StatusCode, J
             let val = std::env::var(k).ok().filter(|v| !v.is_empty());
             let configured = val.is_some();
             let hint = val.map(|v| mask_api_key(&v)).unwrap_or_default();
-            (k.to_string(), serde_json::json!({ "configured": configured, "hint": hint }))
+            (
+                k.to_string(),
+                serde_json::json!({ "configured": configured, "hint": hint }),
+            )
         })
         .collect();
 
@@ -11370,10 +11373,8 @@ async fn post_llm_chat(
     {
         use crate::llm_router::{ChatMessage, RouterRequest};
 
-        let chat_messages: Vec<ChatMessage> = serde_json::from_value(
-            serde_json::Value::Array(messages),
-        )
-        .unwrap_or_default();
+        let chat_messages: Vec<ChatMessage> =
+            serde_json::from_value(serde_json::Value::Array(messages)).unwrap_or_default();
 
         let request = RouterRequest {
             messages: chat_messages,

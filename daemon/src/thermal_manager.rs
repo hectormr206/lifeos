@@ -52,11 +52,11 @@ const GAMING_SHIFT_MC: i64 = 5_000; // 5°C
 // ---------------------------------------------------------------------------
 
 const THERMAL_STEPS: &[(i64, u32)] = &[
-    (92_000, 65),  // Emergency: protect hardware
-    (87_000, 75),  // Critical: aggressive reduction
-    (80_000, 85),  // Hot: meaningful but tolerable reduction
-    (72_000, 95),  // Warm: barely noticeable
-    (0, 100),      // Cool: no cap
+    (92_000, 65), // Emergency: protect hardware
+    (87_000, 75), // Critical: aggressive reduction
+    (80_000, 85), // Hot: meaningful but tolerable reduction
+    (72_000, 95), // Warm: barely noticeable
+    (0, 100),     // Cool: no cap
 ];
 
 // ---------------------------------------------------------------------------
@@ -130,10 +130,7 @@ fn find_cpu_thermal_zone() -> Option<String> {
         let type_path = format!("/sys/class/thermal/{}/type", name);
         if let Ok(zone_type) = fs::read_to_string(&type_path) {
             let zone_type = zone_type.trim();
-            if let Some(priority) = CPU_THERMAL_ZONE_TYPES
-                .iter()
-                .position(|&t| t == zone_type)
-            {
+            if let Some(priority) = CPU_THERMAL_ZONE_TYPES.iter().position(|&t| t == zone_type) {
                 candidates.push((priority, name));
             }
         }
@@ -147,11 +144,14 @@ fn find_cpu_thermal_zone() -> Option<String> {
 /// Read the current CPU temperature in millidegrees Celsius.
 fn read_cpu_temp(zone: &str) -> Result<i64> {
     let path = format!("/sys/class/thermal/{}/temp", zone);
-    let raw = fs::read_to_string(&path)
-        .with_context(|| format!("failed to read {}", path))?;
-    raw.trim()
-        .parse::<i64>()
-        .with_context(|| format!("failed to parse temperature from {}: '{}'", path, raw.trim()))
+    let raw = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path))?;
+    raw.trim().parse::<i64>().with_context(|| {
+        format!(
+            "failed to parse temperature from {}: '{}'",
+            path,
+            raw.trim()
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -186,14 +186,8 @@ fn apply_scaling_max_freq_pct(pct: u32) -> Result<()> {
         if !name.starts_with("policy") {
             continue;
         }
-        let max_path = format!(
-            "/sys/devices/system/cpu/cpufreq/{}/cpuinfo_max_freq",
-            name
-        );
-        let target_path = format!(
-            "/sys/devices/system/cpu/cpufreq/{}/scaling_max_freq",
-            name
-        );
+        let max_path = format!("/sys/devices/system/cpu/cpufreq/{}/cpuinfo_max_freq", name);
+        let target_path = format!("/sys/devices/system/cpu/cpufreq/{}/scaling_max_freq", name);
 
         let max_freq: u64 = fs::read_to_string(&max_path)
             .unwrap_or_default()
@@ -351,7 +345,8 @@ impl ThermalManager {
             HYSTERESIS_MC / 1000
         );
 
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(POLL_INTERVAL_SECS));
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(POLL_INTERVAL_SECS));
 
         loop {
             interval.tick().await;

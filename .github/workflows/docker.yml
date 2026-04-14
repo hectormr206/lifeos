@@ -60,8 +60,8 @@ jobs:
       - name: Reject dev-mode references in CI
         run: |
           set -euo pipefail
-          if grep -rn "LIFEOS_BUILD_MODE=dev" .github/workflows/; then
-            echo "FATAL: LIFEOS_BUILD_MODE=dev must never appear in CI workflows"
+          if grep -rn "LIFEOS_BUILD_MODE""=dev" .github/workflows/; then
+            echo "FATAL: dev build mode token must never appear in CI workflows"
             exit 1
           fi
           echo "dev-mode scanner passed"

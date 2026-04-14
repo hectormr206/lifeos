@@ -29,11 +29,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Assert LIFEOS_BUILD_MODE=dev is not in any workflow
+      - name: Assert dev build mode token is not in any workflow
         run: |
           set -euo pipefail
-          if grep -rn "LIFEOS_BUILD_MODE=dev" .github/workflows/; then
-            echo "FATAL: LIFEOS_BUILD_MODE=dev must never appear in CI workflows"
+          if grep -rn "LIFEOS_BUILD_MODE""=dev" .github/workflows/; then
+            echo "FATAL: dev build mode token must never appear in CI workflows"
             exit 1
           fi
           echo "dev-mode workflow scanner passed"

@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn truncate_bytes_safe_backs_off_from_midchar() {
         let s = "24°c"; // '°' is 2 bytes
-        // max=3 would land inside '°' (bytes 2..4); expect truncation to "24"
+                        // max=3 would land inside '°' (bytes 2..4); expect truncation to "24"
         assert_eq!(truncate_bytes_safe(s, 3), "24");
     }
 

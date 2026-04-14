@@ -77,14 +77,24 @@ const NON_GAME_GPU_PROCESSES: &[&str] = &[
 
 /// Process names that are launchers (not games themselves)
 const LAUNCHER_PROCESSES: &[&str] = &[
-    "steam", "steamwebhelper", "lutris", "heroic", "bottles",
-    "minigalaxy", "itch",
+    "steam",
+    "steamwebhelper",
+    "lutris",
+    "heroic",
+    "bottles",
+    "minigalaxy",
+    "itch",
 ];
 
 /// Processes that often appear alongside games, but are not the game binary itself.
 const SUPPORT_PROCESS_NAMES: &[&str] = &[
-    "gamescope", "mangohud", "proton", "pressure-luftw", "reaper",
-    "steam-runtime-", "gamemoded",
+    "gamescope",
+    "mangohud",
+    "proton",
+    "pressure-luftw",
+    "reaper",
+    "steam-runtime-",
+    "gamemoded",
 ];
 
 /// Processes that MAY indicate a game but are ambiguous on their own.
@@ -126,7 +136,7 @@ const GAME_PROCESS_NAMES: &[&str] = &[
     "eldenring.exe",
     "GTA5.exe",
     "HorizonZeroDaw",
-    "javaw",          // Minecraft
+    "javaw", // Minecraft
     // Halo series
     "HaloInfinite.e",
     "MCC-Win64-Ship",
@@ -269,10 +279,7 @@ impl GameGuard {
     }
 
     /// Attach the thermal manager so Game Guard can switch thermal modes.
-    pub async fn set_thermal_manager(
-        &self,
-        tm: Arc<crate::thermal_manager::ThermalManager>,
-    ) {
+    pub async fn set_thermal_manager(&self, tm: Arc<crate::thermal_manager::ThermalManager>) {
         let mut inner = self.inner.write().await;
         inner.thermal_manager = Some(tm);
         info!("[game_guard] thermal manager attached");
@@ -407,7 +414,8 @@ impl GameGuard {
                         // Tell thermal manager to enter gaming mode (relaxed
                         // thresholds — accepts 5°C hotter before throttling).
                         if let Some(ref tm) = inner.thermal_manager {
-                            tm.set_mode(crate::thermal_manager::ThermalMode::Gaming).await;
+                            tm.set_mode(crate::thermal_manager::ThermalMode::Gaming)
+                                .await;
                         }
                     }
                     Err(e) => {
@@ -427,7 +435,8 @@ impl GameGuard {
                         inner.last_game = None;
                         // Restore normal reactive thermal management.
                         if let Some(ref tm) = inner.thermal_manager {
-                            tm.set_mode(crate::thermal_manager::ThermalMode::Normal).await;
+                            tm.set_mode(crate::thermal_manager::ThermalMode::Normal)
+                                .await;
                         }
                     }
                     Err(e) => {

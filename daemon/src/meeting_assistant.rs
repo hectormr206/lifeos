@@ -216,17 +216,36 @@ impl MeetingAssistant {
         let camera_in_use = detect_camera_in_use().await;
 
         // Strategy 4: Direct /proc scan as last resort (catches all browser meetings)
-        let proc_meeting = if audio_meeting.is_none() && window_meeting.is_none() && !camera_in_use {
+        let proc_meeting = if audio_meeting.is_none() && window_meeting.is_none() && !camera_in_use
+        {
             if let Some(titles) = collect_titles_from_proc().await {
                 let mut found = None;
                 for title in &titles {
                     let t = title.to_lowercase();
-                    if t.contains("meet.google.com") { found = Some("Google Meet".to_string()); break; }
-                    if t.contains("zoom.us") { found = Some("Zoom".to_string()); break; }
-                    if t.contains("teams.microsoft.com") || t.contains("teams.live.com") { found = Some("Microsoft Teams".to_string()); break; }
-                    if t.contains("meet.jit.si") { found = Some("Jitsi".to_string()); break; }
-                    if t.contains("webex.com") { found = Some("WebEx".to_string()); break; }
-                    if t.contains("discord.com") { found = Some("Discord".to_string()); break; }
+                    if t.contains("meet.google.com") {
+                        found = Some("Google Meet".to_string());
+                        break;
+                    }
+                    if t.contains("zoom.us") {
+                        found = Some("Zoom".to_string());
+                        break;
+                    }
+                    if t.contains("teams.microsoft.com") || t.contains("teams.live.com") {
+                        found = Some("Microsoft Teams".to_string());
+                        break;
+                    }
+                    if t.contains("meet.jit.si") {
+                        found = Some("Jitsi".to_string());
+                        break;
+                    }
+                    if t.contains("webex.com") {
+                        found = Some("WebEx".to_string());
+                        break;
+                    }
+                    if t.contains("discord.com") {
+                        found = Some("Discord".to_string());
+                        break;
+                    }
                 }
                 found
             } else {
@@ -261,7 +280,10 @@ impl MeetingAssistant {
             self.no_meeting_ticks = 0;
             // Update app name if we now have a better one (e.g. went from "Unknown" to "Google Meet")
             if app_name.is_some() && self.state.app_name.as_deref() == Some("Unknown") {
-                info!("[meeting] App identified: {}", app_name.as_deref().unwrap_or("?"));
+                info!(
+                    "[meeting] App identified: {}",
+                    app_name.as_deref().unwrap_or("?")
+                );
                 self.state.app_name = app_name;
             }
         } else if !detected && self.state.detected {

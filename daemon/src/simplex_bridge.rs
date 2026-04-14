@@ -33,12 +33,12 @@ mod inner {
     use tokio::sync::{Mutex, RwLock};
     use tokio_tungstenite::connect_async;
 
-    use crate::llm_router::LlmRouter;
-    use crate::memory_plane::MemoryPlaneManager;
-    use crate::task_queue::TaskQueue;
     use crate::axi_tools::{
         self, ConversationHistory, CronStore, RateLimiter, SddStore, ToolContext,
     };
+    use crate::llm_router::LlmRouter;
+    use crate::memory_plane::MemoryPlaneManager;
+    use crate::task_queue::TaskQueue;
 
     /// WebSocket endpoint for the SimpleX CLI headless API.
     const SIMPLEX_WS_URL: &str = "ws://127.0.0.1:5226";
@@ -99,9 +99,7 @@ mod inner {
         /// Call invitation received — we can't answer in headless mode but
         /// we inform the user.
         #[serde(rename = "callInvitation")]
-        CallInvitation {
-            contact: Option<ContactInfo>,
-        },
+        CallInvitation { contact: Option<ContactInfo> },
         /// Catch-all for events we don't handle yet.
         #[serde(other)]
         Other,
@@ -173,9 +171,7 @@ mod inner {
     #[serde(tag = "type")]
     enum MsgContent {
         #[serde(rename = "text")]
-        Text {
-            text: Option<String>,
-        },
+        Text { text: Option<String> },
         #[serde(rename = "image")]
         Image {
             text: Option<String>,
@@ -195,13 +191,9 @@ mod inner {
             duration: Option<u64>,
         },
         #[serde(rename = "file")]
-        File {
-            text: Option<String>,
-        },
+        File { text: Option<String> },
         #[serde(rename = "link")]
-        Link {
-            text: Option<String>,
-        },
+        Link { text: Option<String> },
         #[serde(other)]
         Unknown,
     }
@@ -399,7 +391,11 @@ mod inner {
             if let Ok(data) = std::fs::read(path) {
                 use base64::Engine;
                 let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                let ext = if path.ends_with(".svg") { "svg+xml" } else { "png" };
+                let ext = if path.ends_with(".svg") {
+                    "svg+xml"
+                } else {
+                    "png"
+                };
                 let uri = format!("data:image/{};base64,{}", ext, b64);
                 let cmd = format!("/set profile image {}", uri);
                 match send_command(ws, &cmd).await {
@@ -427,10 +423,7 @@ mod inner {
     async fn send_file(ws: &mut WsSink, display_name: &str, path: &str) -> anyhow::Result<()> {
         let cmd = format!("/f @{} {}", display_name, path);
         send_command(ws, &cmd).await?;
-        info!(
-            "[simplex_bridge] Sent file to {}: {}",
-            display_name, path
-        );
+        info!("[simplex_bridge] Sent file to {}: {}", display_name, path);
         Ok(())
     }
 
@@ -536,7 +529,9 @@ mod inner {
         // Convert to WAV first (voice notes may be OGG/OPUS)
         let wav_path = format!("{}.wav", path);
         let ffmpeg = Command::new("ffmpeg")
-            .args(["-y", "-i", path, "-ar", "16000", "-ac", "1", "-f", "wav", &wav_path])
+            .args([
+                "-y", "-i", path, "-ar", "16000", "-ac", "1", "-f", "wav", &wav_path,
+            ])
             .output()
             .await;
 
@@ -547,12 +542,7 @@ mod inner {
         };
 
         let output = Command::new(whisper)
-            .args([
-                "-m", model,
-                "-f", input_path,
-                "-l", "es",
-                "--no-timestamps",
-            ])
+            .args(["-m", model, "-f", input_path, "-l", "es", "--no-timestamps"])
             .output()
             .await
             .ok()?;
@@ -591,8 +581,14 @@ mod inner {
         );
         let output = Command::new("ffmpeg")
             .args([
-                "-y", "-f", "v4l2", "-i", "/dev/video0",
-                "-frames:v", "1", &path,
+                "-y",
+                "-f",
+                "v4l2",
+                "-i",
+                "/dev/video0",
+                "-frames:v",
+                "1",
+                &path,
             ])
             .output()
             .await
@@ -614,10 +610,7 @@ mod inner {
         );
 
         // Try grim (Wayland) first, then gnome-screenshot
-        let result = Command::new("grim")
-            .arg(&path)
-            .output()
-            .await;
+        let result = Command::new("grim").arg(&path).output().await;
 
         if result.map(|o| o.status.success()).unwrap_or(false) && Path::new(&path).exists() {
             return Some(path);
@@ -638,18 +631,41 @@ mod inner {
     /// Detect natural language requests for a camera photo.
     fn wants_camera(lower: &str) -> bool {
         let camera_patterns = [
-            "toma una foto", "tomá una foto", "toma foto", "tomá foto",
-            "sacá una foto", "saca una foto", "sacá foto", "saca foto",
-            "foto de la cámara", "foto de la camara", "foto con la cámara",
-            "foto con la camara", "mandame una foto", "mándame una foto",
-            "envíame una foto", "enviame una foto", "mandame foto",
-            "qué ves por la cámara", "que ves por la camara",
-            "qué ve la cámara", "que ve la camara",
-            "muéstrame la cámara", "muestrame la camara",
-            "enseñame la cámara", "enséñame la cámara",
-            "webcam", "foto webcam", "captura cámara", "captura camara",
-            "take a photo", "take photo", "camera photo", "send me a photo",
-            "show me the camera", "what does the camera see",
+            "toma una foto",
+            "tomá una foto",
+            "toma foto",
+            "tomá foto",
+            "sacá una foto",
+            "saca una foto",
+            "sacá foto",
+            "saca foto",
+            "foto de la cámara",
+            "foto de la camara",
+            "foto con la cámara",
+            "foto con la camara",
+            "mandame una foto",
+            "mándame una foto",
+            "envíame una foto",
+            "enviame una foto",
+            "mandame foto",
+            "qué ves por la cámara",
+            "que ves por la camara",
+            "qué ve la cámara",
+            "que ve la camara",
+            "muéstrame la cámara",
+            "muestrame la camara",
+            "enseñame la cámara",
+            "enséñame la cámara",
+            "webcam",
+            "foto webcam",
+            "captura cámara",
+            "captura camara",
+            "take a photo",
+            "take photo",
+            "camera photo",
+            "send me a photo",
+            "show me the camera",
+            "what does the camera see",
         ];
         camera_patterns.iter().any(|p| lower.contains(p))
     }
@@ -657,18 +673,31 @@ mod inner {
     /// Detect natural language requests for a screenshot.
     fn wants_screenshot(lower: &str) -> bool {
         let screen_patterns = [
-            "captura de pantalla", "screenshot", "captura pantalla",
-            "mandame la pantalla", "mándame la pantalla",
-            "enviame la pantalla", "envíame la pantalla",
-            "qué hay en mi pantalla", "que hay en mi pantalla",
-            "qué hay en la pantalla", "que hay en la pantalla",
-            "muéstrame la pantalla", "muestrame la pantalla",
-            "enseñame la pantalla", "enséñame la pantalla",
-            "qué se ve en la pantalla", "que se ve en la pantalla",
-            "mandame un screenshot", "mándame un screenshot",
-            "foto de la pantalla", "foto de pantalla",
-            "show me the screen", "send me a screenshot",
-            "what's on my screen", "show me my screen",
+            "captura de pantalla",
+            "screenshot",
+            "captura pantalla",
+            "mandame la pantalla",
+            "mándame la pantalla",
+            "enviame la pantalla",
+            "envíame la pantalla",
+            "qué hay en mi pantalla",
+            "que hay en mi pantalla",
+            "qué hay en la pantalla",
+            "que hay en la pantalla",
+            "muéstrame la pantalla",
+            "muestrame la pantalla",
+            "enseñame la pantalla",
+            "enséñame la pantalla",
+            "qué se ve en la pantalla",
+            "que se ve en la pantalla",
+            "mandame un screenshot",
+            "mándame un screenshot",
+            "foto de la pantalla",
+            "foto de pantalla",
+            "show me the screen",
+            "send me a screenshot",
+            "what's on my screen",
+            "show me my screen",
         ];
         screen_patterns.iter().any(|p| lower.contains(p))
     }
@@ -676,12 +705,11 @@ mod inner {
     /// Extract display name from a ChatItem.
     fn extract_display_name(item: &ChatItem) -> Option<String> {
         match &item.chat_info {
-            Some(ChatInfo::Direct { contact: Some(c) }) => {
-                c.local_display_name
-                    .as_ref()
-                    .filter(|n| !n.is_empty())
-                    .cloned()
-            }
+            Some(ChatInfo::Direct { contact: Some(c) }) => c
+                .local_display_name
+                .as_ref()
+                .filter(|n| !n.is_empty())
+                .cloned(),
             _ => None,
         }
     }
@@ -886,8 +914,7 @@ mod inner {
                                 );
                                 let valid_scheme = link.starts_with("simplex://")
                                     || link.starts_with("simplex:/")
-                                    || (link.starts_with("https://")
-                                        && link.contains(".simplex."));
+                                    || (link.starts_with("https://") && link.contains(".simplex."));
                                 if link.is_empty() || link.len() > 2000 {
                                     warn!("[simplex_bridge] Invalid invite link length");
                                 } else if !valid_scheme {
@@ -960,7 +987,12 @@ mod inner {
                                                         None,
                                                     )
                                                     .await;
-                                                    let _ = send_message(&mut sink, &display_name, &reply).await;
+                                                    let _ = send_message(
+                                                        &mut sink,
+                                                        &display_name,
+                                                        &reply,
+                                                    )
+                                                    .await;
                                                 }
                                                 None => {
                                                     let _ = send_message(
@@ -972,7 +1004,10 @@ mod inner {
                                                 }
                                             }
                                         }
-                                        PendingAction::ProcessImage { display_name, caption } => {
+                                        PendingAction::ProcessImage {
+                                            display_name,
+                                            caption,
+                                        } => {
                                             // Use the full-res downloaded file
                                             if let Some(b64) = file_to_base64(&path).await {
                                                 let prompt = if caption.is_empty() {
@@ -987,7 +1022,9 @@ mod inner {
                                                     Some(&b64),
                                                 )
                                                 .await;
-                                                let _ = send_message(&mut sink, &display_name, &reply).await;
+                                                let _ =
+                                                    send_message(&mut sink, &display_name, &reply)
+                                                        .await;
                                             }
                                         }
                                     }
@@ -1041,10 +1078,8 @@ mod inner {
                                     // messages (reminders) can find a target.
                                     remember_contact(&display_name);
 
-                                    let msg_content = inner
-                                        .content
-                                        .as_ref()
-                                        .and_then(|c| c.msg_content.as_ref());
+                                    let msg_content =
+                                        inner.content.as_ref().and_then(|c| c.msg_content.as_ref());
 
                                     let msg_content = match msg_content {
                                         Some(mc) => mc,
@@ -1069,8 +1104,11 @@ mod inner {
                                             let lower = msg_text.trim().to_lowercase();
 
                                             // ── Help / Menu ──
-                                            if lower == "/help" || lower == "/menu" || lower == "/ayuda"
-                                                || lower == "/start" || lower == "?"
+                                            if lower == "/help"
+                                                || lower == "/menu"
+                                                || lower == "/ayuda"
+                                                || lower == "/start"
+                                                || lower == "?"
                                             {
                                                 let help = "\
 📱 *Axi — SimpleX*
@@ -1099,17 +1137,26 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
 
 📞 *Llamadas*
   No disponibles todavía (limitación del CLI)";
-                                                let _ = send_message(&mut sink, &display_name, help).await;
+                                                let _ =
+                                                    send_message(&mut sink, &display_name, help)
+                                                        .await;
                                                 continue;
                                             }
 
                                             // ── Camera: commands + natural language ──
-                                            if lower == "/foto" || lower == "/camera" || lower == "/cam"
+                                            if lower == "/foto"
+                                                || lower == "/camera"
+                                                || lower == "/cam"
                                                 || wants_camera(&lower)
                                             {
                                                 match capture_camera_photo().await {
                                                     Some(path) => {
-                                                        let _ = send_file(&mut sink, &display_name, &path).await;
+                                                        let _ = send_file(
+                                                            &mut sink,
+                                                            &display_name,
+                                                            &path,
+                                                        )
+                                                        .await;
                                                     }
                                                     None => {
                                                         let _ = send_message(&mut sink, &display_name, "No pude capturar la foto de la cámara.").await;
@@ -1119,15 +1166,27 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                             }
 
                                             // ── Screenshot: commands + natural language ──
-                                            if lower == "/pantalla" || lower == "/screenshot" || lower == "/screen"
+                                            if lower == "/pantalla"
+                                                || lower == "/screenshot"
+                                                || lower == "/screen"
                                                 || wants_screenshot(&lower)
                                             {
                                                 match capture_screenshot().await {
                                                     Some(path) => {
-                                                        let _ = send_file(&mut sink, &display_name, &path).await;
+                                                        let _ = send_file(
+                                                            &mut sink,
+                                                            &display_name,
+                                                            &path,
+                                                        )
+                                                        .await;
                                                     }
                                                     None => {
-                                                        let _ = send_message(&mut sink, &display_name, "No pude capturar la pantalla.").await;
+                                                        let _ = send_message(
+                                                            &mut sink,
+                                                            &display_name,
+                                                            "No pude capturar la pantalla.",
+                                                        )
+                                                        .await;
                                                     }
                                                 }
                                                 continue;
@@ -1141,7 +1200,9 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                             )
                                             .await;
 
-                                            match send_message(&mut sink, &display_name, &reply).await {
+                                            match send_message(&mut sink, &display_name, &reply)
+                                                .await
+                                            {
                                                 Ok(()) => {
                                                     info!(
                                                         "[simplex_bridge] Reply sent to {} ({} chars)",
@@ -1169,7 +1230,9 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                             // Try inline base64 thumbnail first for quick response
                                             let mut responded = false;
                                             if let Some(data_uri) = image {
-                                                if let Some(path) = save_data_uri_to_file(data_uri).await {
+                                                if let Some(path) =
+                                                    save_data_uri_to_file(data_uri).await
+                                                {
                                                     if let Some(b64) = file_to_base64(&path).await {
                                                         let prompt = if caption.is_empty() {
                                                             "El usuario envió esta imagen. Descríbela y responde.".to_string()
@@ -1183,14 +1246,21 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                             Some(&b64),
                                                         )
                                                         .await;
-                                                        let _ = send_message(&mut sink, &display_name, &reply).await;
+                                                        let _ = send_message(
+                                                            &mut sink,
+                                                            &display_name,
+                                                            &reply,
+                                                        )
+                                                        .await;
                                                         responded = true;
                                                     }
                                                 }
                                             }
 
                                             // Also accept the full-res file if available
-                                            if let Some(file_id) = inner.file.as_ref().and_then(|f| f.file_id) {
+                                            if let Some(file_id) =
+                                                inner.file.as_ref().and_then(|f| f.file_id)
+                                            {
                                                 if responded {
                                                     // Already responded with thumbnail — just download for archive
                                                     let _ = accept_file(&mut sink, file_id).await;
@@ -1227,7 +1297,9 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                 duration.unwrap_or(0)
                                             );
 
-                                            if let Some(file_id) = inner.file.as_ref().and_then(|f| f.file_id) {
+                                            if let Some(file_id) =
+                                                inner.file.as_ref().and_then(|f| f.file_id)
+                                            {
                                                 {
                                                     let mut guard = pending_files.lock().await;
                                                     guard.insert(
@@ -1279,7 +1351,9 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                             // Process the thumbnail if available
                                             let caption = text.as_deref().unwrap_or("").to_string();
                                             if let Some(data_uri) = image {
-                                                if let Some(path) = save_data_uri_to_file(data_uri).await {
+                                                if let Some(path) =
+                                                    save_data_uri_to_file(data_uri).await
+                                                {
                                                     if let Some(b64) = file_to_base64(&path).await {
                                                         let prompt = if caption.is_empty() {
                                                             format!(
@@ -1296,7 +1370,12 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                             Some(&b64),
                                                         )
                                                         .await;
-                                                        let _ = send_message(&mut sink, &display_name, &reply).await;
+                                                        let _ = send_message(
+                                                            &mut sink,
+                                                            &display_name,
+                                                            &reply,
+                                                        )
+                                                        .await;
                                                         continue;
                                                     }
                                                 }
@@ -1319,7 +1398,9 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                             );
 
                                             // Auto-accept the file
-                                            if let Some(file_id) = inner.file.as_ref().and_then(|f| f.file_id) {
+                                            if let Some(file_id) =
+                                                inner.file.as_ref().and_then(|f| f.file_id)
+                                            {
                                                 let _ = accept_file(&mut sink, file_id).await;
                                             }
 

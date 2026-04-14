@@ -1216,9 +1216,8 @@ REGLAS FIRMES:
 
                 // Update the entry with the compacted summary
                 if let Some(entry) = chats.get_mut(&chat_id) {
-                    entry.compacted_summary = Some(
-                        crate::str_utils::truncate_bytes_safe(&new_summary, 2000).to_string(),
-                    );
+                    entry.compacted_summary =
+                        Some(crate::str_utils::truncate_bytes_safe(&new_summary, 2000).to_string());
                 }
 
                 self.persist_locked(&chats);
@@ -7898,7 +7897,10 @@ REGLAS FIRMES:
             .execute(ComputerUseAction::TypeText { text: text.into() }, false)
             .await?;
         if result.success {
-            Ok(format!("Texto escrito: '{}'", crate::str_utils::truncate_bytes_safe(&text, 50)))
+            Ok(format!(
+                "Texto escrito: '{}'",
+                crate::str_utils::truncate_bytes_safe(&text, 50)
+            ))
         } else {
             Ok(format!("Error escribiendo texto: {}", result.stderr))
         }
@@ -8364,7 +8366,10 @@ REGLAS FIRMES:
             ))
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Ok(format!("Error: {}", crate::str_utils::truncate_bytes_safe(&stderr, 300)))
+            Ok(format!(
+                "Error: {}",
+                crate::str_utils::truncate_bytes_safe(&stderr, 300)
+            ))
         }
     }
 

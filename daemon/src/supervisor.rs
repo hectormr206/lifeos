@@ -1323,7 +1323,10 @@ impl Supervisor {
                 .unwrap_or("step");
             let icon = if r.success { "OK" } else { "FAIL" };
             let output_preview = if r.output.len() > 500 {
-                format!("{}...", crate::str_utils::truncate_bytes_safe(&r.output, 500))
+                format!(
+                    "{}...",
+                    crate::str_utils::truncate_bytes_safe(&r.output, 500)
+                )
             } else {
                 r.output.clone()
             };
@@ -2073,7 +2076,10 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::WriteFile { path, .. } => format!("write_file: {}", path),
             StepAction::FlatpakInstall { app_id } => format!("flatpak_install: {}", app_id),
             StepAction::TypeText { text } => {
-                format!("type_text: {}...", crate::str_utils::truncate_bytes_safe(&text, 40))
+                format!(
+                    "type_text: {}...",
+                    crate::str_utils::truncate_bytes_safe(&text, 40)
+                )
             }
             StepAction::SendKeys { combo } => format!("send_keys: {}", combo),
             StepAction::BrowserClick { url, selector } => {

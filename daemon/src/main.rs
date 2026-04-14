@@ -28,6 +28,7 @@ mod async_workers;
 mod atspi_layer;
 mod audio_frontend;
 mod autonomous_agent;
+mod axi_tools;
 mod axi_tray;
 mod backup_monitor;
 mod battery_manager;
@@ -95,10 +96,9 @@ mod str_utils;
 mod supervisor;
 mod system;
 mod system_tuner;
-mod thermal_manager;
 mod task_queue;
-mod axi_tools;
 mod telemetry;
+mod thermal_manager;
 mod time_context;
 mod translation;
 mod tuf;
@@ -1155,15 +1155,14 @@ async fn main() -> anyhow::Result<()> {
                         .find_map(|tok| tok.strip_prefix("__chat:").and_then(|s| s.parse().ok()));
 
                     if let Some(cid) = chat_id {
-                        let _ =
-                            calendar_state
-                                .event_bus
-                                .send(events::DaemonEvent::ReminderDue {
-                                    chat_id: cid,
-                                    title: event.title.clone(),
-                                    event_id: event.id.clone(),
-                                    start_time: event.start_time.clone(),
-                                });
+                        let _ = calendar_state
+                            .event_bus
+                            .send(events::DaemonEvent::ReminderDue {
+                                chat_id: cid,
+                                title: event.title.clone(),
+                                event_id: event.id.clone(),
+                                start_time: event.start_time.clone(),
+                            });
                         // Record the reminder so it doesn't re-fire every minute.
                         let _ = calendar_state.calendar.record_reminder(
                             &event.id,
@@ -1695,8 +1694,10 @@ async fn main() -> anyhow::Result<()> {
                                     "task_completed:{}",
                                     crate::str_utils::truncate_bytes_safe(&objective, 80)
                                 );
-                                let context =
-                                    format!("result={}", crate::str_utils::truncate_bytes_safe(&result, 120));
+                                let context = format!(
+                                    "result={}",
+                                    crate::str_utils::truncate_bytes_safe(&result, 120)
+                                );
                                 if let Err(e) = learner.record_action(&action, &context) {
                                     warn!("[workflow_learner] Failed to record completion: {e}");
                                 }
@@ -1726,7 +1727,10 @@ async fn main() -> anyhow::Result<()> {
                                     "task_failed:{}",
                                     crate::str_utils::truncate_bytes_safe(&objective, 80)
                                 );
-                                let context = format!("error={}", crate::str_utils::truncate_bytes_safe(&error, 120));
+                                let context = format!(
+                                    "error={}",
+                                    crate::str_utils::truncate_bytes_safe(&error, 120)
+                                );
                                 if let Err(e) = learner.record_action(&action, &context) {
                                     warn!("[workflow_learner] Failed to record failure: {e}");
                                 }
@@ -1963,7 +1967,20 @@ async fn main() -> anyhow::Result<()> {
             let cron = shared_cron_store.clone();
             let ev = state.event_bus.clone();
             Some(tokio::spawn(async move {
-                simplex_bridge::run_simplex_bridge(tq, router, memory, ss, um, ma, mast, cal, hist, cron, Some(ev)).await;
+                simplex_bridge::run_simplex_bridge(
+                    tq,
+                    router,
+                    memory,
+                    ss,
+                    um,
+                    ma,
+                    mast,
+                    cal,
+                    hist,
+                    cron,
+                    Some(ev),
+                )
+                .await;
             }))
         } else {
             info!("SimpleX bridge: CLI WebSocket not reachable on port 5226, skipping");

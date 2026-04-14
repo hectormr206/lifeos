@@ -782,8 +782,8 @@ fn is_real_rpm_integrity_violation(line: &str) -> bool {
     // and mode (pos 1 = 'M'). Anything else is noise for a security monitor.
     let flag_bytes = flags.as_bytes();
     let has_digest_change = flag_bytes.get(2).copied() == Some(b'5');
-    let has_mode_change = flag_bytes.first().copied() == Some(b'S')
-        || flag_bytes.get(1).copied() == Some(b'M');
+    let has_mode_change =
+        flag_bytes.first().copied() == Some(b'S') || flag_bytes.get(1).copied() == Some(b'M');
     // Note: pos 0 is 'S' (size). Genuine tampering almost always flips
     // digest, so digest alone is sufficient — mode/size are kept for extra
     // safety on odd edge cases.

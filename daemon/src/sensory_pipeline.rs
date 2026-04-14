@@ -4223,11 +4223,7 @@ async fn duck_system_audio(duck: bool) {
             if let Some((idx_str, vol_str)) = line.split_once(':') {
                 if let (Ok(idx), Ok(vol)) = (idx_str.parse::<u32>(), vol_str.parse::<u64>()) {
                     let _ = Command::new("pactl")
-                        .args([
-                            "set-sink-input-volume",
-                            &idx.to_string(),
-                            &vol.to_string(),
-                        ])
+                        .args(["set-sink-input-volume", &idx.to_string(), &vol.to_string()])
                         .output()
                         .await;
                 }

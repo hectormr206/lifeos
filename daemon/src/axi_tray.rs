@@ -93,7 +93,15 @@ pub mod inner {
             // firefox-lifeos.desktop so COSMIC associates the window with
             // the correct dock icon instead of showing a broken generic one.
             let openers: &[(&str, &[&str])] = &[
-                ("firefox", &["--name=firefox-wayland", "-P", "lifeos.default", "--new-tab"]),
+                (
+                    "firefox",
+                    &[
+                        "--name=firefox-wayland",
+                        "-P",
+                        "lifeos.default",
+                        "--new-tab",
+                    ],
+                ),
                 (
                     "flatpak",
                     &[
