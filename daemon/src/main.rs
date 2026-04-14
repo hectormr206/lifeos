@@ -344,16 +344,11 @@ GROQ_API_KEY=
 # OpenRouter (multiple providers)
 OPENROUTER_API_KEY=
 
-# Email (opcional, para bridge de email)
+# Email (opcional — outbound notifications via dashboard/agent tools)
 LIFEOS_EMAIL_IMAP_HOST=
 LIFEOS_EMAIL_IMAP_USER=
 LIFEOS_EMAIL_IMAP_PASS=
 LIFEOS_EMAIL_SMTP_HOST=
-# Email conversacional (auto-reply via agentic loop, requiere telegram feature)
-LIFEOS_EMAIL_CONVERSATIONAL=false
-LIFEOS_EMAIL_ALLOWED_SENDERS=
-LIFEOS_EMAIL_POLL_SECS=300
-LIFEOS_EMAIL_MAX_REPLIES_PER_HOUR=10
 
 # WhatsApp Cloud API (opcional)
 LIFEOS_WHATSAPP_TOKEN=
@@ -1977,25 +1972,6 @@ async fn main() -> anyhow::Result<()> {
     };
     #[cfg(not(feature = "messaging"))]
     let _simplex_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start conversational email bridge if configured (requires telegram feature
-    // because it reuses the agentic chat infrastructure from telegram_tools).
-    #[cfg(feature = "messaging")]
-    let _email_handle = {
-        if let Some(email_config) = email_bridge::ConversationalEmailConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let memory = Some(state.memory_plane_manager.clone());
-            Some(tokio::spawn(async move {
-                email_bridge::run_conversational_email_loop(email_config, tq, router, memory).await;
-            }))
-        } else {
-            info!("Email bridge: LIFEOS_EMAIL_CONVERSATIONAL not enabled, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "messaging"))]
-    let _email_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start API server if enabled (must be after shared variables are initialized)
     let api_handle = if config.enable_api {
