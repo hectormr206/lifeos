@@ -2093,6 +2093,7 @@ async fn main() -> anyhow::Result<()> {
 /// bridges (SimpleX, API) use the same instances.
 struct SharedBridgeState {
     user_model: Arc<RwLock<user_model::UserModel>>,
+    #[allow(dead_code)]
     meeting_assistant: Arc<tokio::sync::RwLock<meeting_assistant::MeetingAssistant>>,
     #[cfg(feature = "messaging")]
     conversation_history: Arc<axi_tools::ConversationHistory>,
