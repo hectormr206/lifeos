@@ -134,7 +134,7 @@ RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel vulk
 
 # Pin llama.cpp to a stable tag. Upstream master sometimes ships broken Vulkan
 # shaders that fail to build. Update periodically after verifying tag builds.
-ARG LLAMA_CPP_TAG=b8700
+ARG LLAMA_CPP_TAG=b8701
 RUN set -eux && \
     echo ">>> Building llama-server from source (Vulkan-enabled, pinned ${LLAMA_CPP_TAG})..." && \
     git clone https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
