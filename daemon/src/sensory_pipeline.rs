@@ -5481,11 +5481,9 @@ fn contains_wake_word(transcript: &str, wake_word: &str) -> bool {
     if wake_word == "axi" {
         let variants = [
             "axi", "aksi", "axie", "aksie", "acsi", "ahxi",
-            // Spanish Whisper mishearings — only phonetically close
-            // variants that are NOT common Spanish words. Removed:
-            // "asi", "ahi", "ahsi", "aquí", "oxy" — too many false
-            // positives in normal conversation.
-            "exi", "acci",
+            // Spanish Whisper mishearings observed in our own transcripts.
+            // Keep this list tight and biased toward explicit wake invocations.
+            "exi", "acci", "ahsi", "aquí", "oxi",
         ];
         return variants.iter().any(|v| transcript.contains(v));
     }
