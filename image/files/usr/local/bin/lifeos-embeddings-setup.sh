@@ -4,10 +4,14 @@
 # Ensures the nomic-embed-text-v1.5 GGUF model is present so the
 # llama-embeddings.service can serve real semantic embeddings on port 8083.
 #
-# Called as ExecStartPre by llama-embeddings.service.  Exits 0 when the
-# model is ready (so ExecStart can proceed) or 1 when it is not (download
-# failed, offline boot, auto-manage disabled).  In the failure case systemd
-# skips ExecStart and MemoryPlaneManager falls back to the hash embedding.
+# Called as ExecCondition by llama-embeddings.service. Exit code contract:
+#   0       → model ready, start the service (llama-server will run)
+#   1-254   → skip cleanly (systemd considers the unit successful, no failure)
+#   255     → hard failure (reported to systemd as failed)
+#
+# With this contract, a missing model + LIFEOS_AI_AUTO_MANAGE_MODELS=false
+# is a clean skip — MemoryPlaneManager then falls back to hash embedding
+# without polluting the journal with "Failed Units: 1".
 #
 # Re-running is idempotent: the model is downloaded only when missing.
 set -euo pipefail

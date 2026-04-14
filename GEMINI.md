@@ -17,7 +17,7 @@ cargo test -p lifeosd test_name   # Single test
 - **Rust 2021**, `anyhow` for errors, `tokio` async runtime
 - **Formatting:** `cargo fmt` before commit, clippy with `-D warnings`
 - **Immutability:** `/usr` is read-only. State goes to `/var/`, `/etc/`, `/home/`
-- **No dead code:** Every new module must be wired to Telegram/API/event bus/supervisor
+- **No dead code:** Every new module must be wired to SimpleX/API/event bus/supervisor
 - **AI:** Local `llama-server` on `:8082` (Qwen3.5-4B). LLM router with 13+ providers
 
 ## Find Documentation
@@ -39,6 +39,6 @@ All docs are organized in `docs/`. Read `docs/README.md` for the full index.
 | `daemon/src/main.rs` | Daemon entry, background tasks, signal handling |
 | `daemon/src/api/mod.rs` | REST API (Axum) — 224+ route handlers |
 | `daemon/src/llm_router.rs` | Multi-provider LLM routing with privacy filtering |
-| `daemon/src/telegram_tools.rs` | Agentic chat loop + 33 tools |
+| `daemon/src/axi_tools.rs` | Shared agentic chat engine + tools (used by SimpleX + dashboard) |
 | `daemon/src/supervisor.rs` | Autonomous task execution |
 | `image/Containerfile` | OS image build definition |

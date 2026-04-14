@@ -167,9 +167,6 @@ CEREBRAS_API_KEY=
 GROQ_API_KEY=
 # OpenRouter (FREE models, mixed privacy)
 OPENROUTER_API_KEY=
-# Telegram Bot (optional, for remote control)
-LIFEOS_TELEGRAM_BOT_TOKEN=
-LIFEOS_TELEGRAM_CHAT_ID=
 ENVEOF
         chmod 600 /etc/lifeos/llm-providers.env
         log_success "LLM providers config created at /etc/lifeos/llm-providers.env"
@@ -459,6 +456,31 @@ verify_installation() {
     return $issues
 }
 
+# Install desktop apps via Flatpak (if not already installed during image build)
+install_desktop_apps() {
+    log "Checking Flatpak desktop apps..."
+
+    local APPS=(
+        "io.mpv.Mpv"
+        "org.gnome.Evince"
+        "org.keepassxc.KeePassXC"
+        "org.gnome.Loupe"
+    )
+
+    for app in "${APPS[@]}"; do
+        if flatpak info --system "$app" &>/dev/null; then
+            log_success "$app already installed"
+        else
+            log "Installing $app..."
+            if flatpak install --system -y --noninteractive flathub "$app" 2>/dev/null; then
+                log_success "$app installed"
+            else
+                log_warn "$app installation failed (will retry on next flatpak update)"
+            fi
+        fi
+    done
+}
+
 # Mark first boot as complete
 mark_complete() {
     local timestamp
@@ -497,6 +519,7 @@ main() {
     apply_default_desktop_layout
     configure_gpu
     setup_ai
+    install_desktop_apps
     start_services
     setup_completion
     verify_installation || true

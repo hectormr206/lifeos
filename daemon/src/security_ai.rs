@@ -522,26 +522,41 @@ impl SecurityAiDaemon {
 
                     // rpm -V returns non-zero if files differ; stdout lists changes.
                     if !out.status.success() && !stdout.trim().is_empty() {
-                        let changed_files: Vec<String> = stdout
+                        // Filter to REAL integrity violations. rpm -V reports a
+                        // 9-column flag string: S.5.....T. where each position
+                        // means {S}ize, {M}ode, {5}digest, {D}evice, {L}ink,
+                        // {U}ser, {G}roup, {T}ime, ca{P}abilities. On bootc
+                        // systems ostree rewrites mtimes on deploy so every
+                        // package shows "T"-only changes — that's benign noise.
+                        // Config files marked `c` (e.g. /etc/sudoers) are
+                        // expected to be edited locally so mode/digest diffs
+                        // on them are also not security events.
+                        // Real violations for a SECURITY monitor are:
+                        //   - digest (5) diff on a non-config file, OR
+                        //   - mode (M) diff on a non-config file
+                        // Everything else is either expected customization or
+                        // bootc-specific mtime rewrites.
+                        let real_changes: Vec<String> = stdout
                             .lines()
-                            .filter(|l| !l.trim().is_empty())
+                            .filter(|line| !line.trim().is_empty())
+                            .filter(|line| is_real_rpm_integrity_violation(line))
                             .map(|l| l.to_string())
                             .collect();
 
-                        if !changed_files.is_empty() {
+                        if !real_changes.is_empty() {
                             alerts.push(SecurityAlert {
                                 id: Uuid::new_v4().to_string(),
                                 severity: AlertSeverity::Emergency,
                                 alert_type: AlertType::IntegrityViolation,
                                 description: format!(
-                                    "Package '{}' has modified files ({} changes)",
+                                    "Package '{}' has modified files ({} real changes)",
                                     pkg,
-                                    changed_files.len()
+                                    real_changes.len()
                                 ),
                                 process_name: None,
                                 process_pid: None,
                                 remote_addr: None,
-                                evidence: changed_files,
+                                evidence: real_changes,
                                 action_taken: String::new(),
                                 timestamp: Utc::now(),
                             });
@@ -723,6 +738,56 @@ fn is_system_process(name: &str) -> bool {
     ];
 
     SYSTEM_PROCS.iter().any(|p| name.contains(p))
+}
+
+/// Decide whether a `rpm -V` output line represents a REAL integrity
+/// violation worth alerting on.
+///
+/// rpm -V output format: `SM5DLUGTP c /path/to/file`, where each of the
+/// first characters is either `.` (matches) or a letter denoting the kind
+/// of difference. After the 9 flag characters there's optionally a file
+/// attribute marker (`c` = config, `d` = doc, `l` = license, `r` = readme,
+/// `g` = ghost), then the path.
+///
+/// On bootc systems ostree rewrites file mtimes at deploy time so every
+/// file in every package shows `.......T.` — mtime-only changes that are
+/// purely cosmetic. `/etc/machine-id` is regenerated on first boot
+/// (`.M.......`). Config files (the `c` attribute) are expected to be
+/// customized by the sysadmin so any change there is not a security event.
+///
+/// A REAL integrity violation is: a digest (5) or mode (M) change on a
+/// non-config file. That's the signature of a tampered binary.
+fn is_real_rpm_integrity_violation(line: &str) -> bool {
+    // Expect at least "FLAGS ATTR? PATH"
+    let trimmed = line.trim_start();
+    let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
+    let flags = match parts.next() {
+        Some(f) if f.len() >= 8 => f,
+        _ => return false,
+    };
+    let rest = parts.next().unwrap_or("");
+
+    // If the rest starts with a single attribute letter followed by
+    // whitespace, this is a config/doc/license/etc file — skip.
+    let mut rest_chars = rest.chars();
+    let is_config_like = match (rest_chars.next(), rest_chars.next()) {
+        (Some(attr), Some(next)) => matches!(attr, 'c' | 'd' | 'l' | 'r' | 'g') && next == ' ',
+        _ => false,
+    };
+    if is_config_like {
+        return false;
+    }
+
+    // Flag chars at fixed positions. We only care about digest (pos 2 = '5')
+    // and mode (pos 1 = 'M'). Anything else is noise for a security monitor.
+    let flag_bytes = flags.as_bytes();
+    let has_digest_change = flag_bytes.get(2).copied() == Some(b'5');
+    let has_mode_change =
+        flag_bytes.first().copied() == Some(b'S') || flag_bytes.get(1).copied() == Some(b'M');
+    // Note: pos 0 is 'S' (size). Genuine tampering almost always flips
+    // digest, so digest alone is sufficient — mode/size are kept for extra
+    // safety on odd edge cases.
+    has_digest_change || has_mode_change
 }
 
 /// Extract process name from ss output field like `users:(("firefox",pid=1234,fd=56))`.

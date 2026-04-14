@@ -7,7 +7,7 @@ AI-native Linux distribution (Fedora bootc + COSMIC Desktop). Three Rust crates:
 | Crate | Binary | Purpose |
 |-------|--------|---------|
 | `cli/` | `life` | CLI for user interaction |
-| `daemon/` | `lifeosd` | User-session daemon: REST API, AI, Telegram, supervisor |
+| `daemon/` | `lifeosd` | User-session daemon: REST API, AI, SimpleX, supervisor |
 | `tests/` | — | Integration tests |
 
 Plus: `image/` (OS container), `scripts/` (automation), `docs/` (documentation).
@@ -24,7 +24,7 @@ cargo fmt --manifest-path daemon/Cargo.toml       # Format
 
 ## Rules for New Code
 
-1. **No orphaned modules** — register in `main.rs`, wire to Telegram/API/event bus
+1. **No orphaned modules** — register in `main.rs`, wire to SimpleX/API/event bus/supervisor
 2. **Use `anyhow::Result`** for all fallible functions
 3. **Run `cargo fmt` + `clippy`** before committing
 4. **`/usr` is read-only** at runtime (bootc immutable) — state goes to `/var/` or `/home/`
@@ -63,7 +63,7 @@ docs/archive/           ← Deprecated docs (historical only)
 When adding a new daemon module:
 
 - [ ] `mod new_module;` in `main.rs` (no `#[allow(dead_code)]`)
-- [ ] At least ONE runtime path: Telegram tool, API endpoint, background loop, or supervisor action
+- [ ] At least ONE runtime path: SimpleX tool, API endpoint, background loop, or supervisor action
 - [ ] If it stores data: use MemoryPlane (encrypted) or existing SQLite DBs
 - [ ] If it needs LLM: receive `LlmRouter` reference
 - [ ] If it produces user-facing data: send notification via event bus

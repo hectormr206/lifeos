@@ -1,0 +1,11 @@
+# Enable zswap compressed RAM cache to reduce SSD writes and improve
+# memory pressure handling. Uses zstd for better compression ratio
+# than the default lzo. Max pool = 25% of RAM.
+#
+# On a 96GB laptop this means up to ~24GB compressed cache before
+# hitting disk swap. On 16GB machines the benefit is even larger.
+kargs = [
+  "zswap.enabled=1",
+  "zswap.compressor=zstd",
+  "zswap.max_pool_percent=25",
+]

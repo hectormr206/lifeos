@@ -138,45 +138,29 @@ impl AiManager {
         false
     }
 
-    /// Start llama-server
-    pub async fn start_server(&self) -> anyhow::Result<()> {
-        let models = self.list_models().await?;
-        let active_model = self.active_model().await;
-        let selected_model = match models
-            .iter()
-            .find(|m| active_model.as_deref() == Some(m.name.as_str()))
-            .or_else(|| models.first())
-        {
-            Some(m) => m.name.clone(),
-            None => anyhow::bail!("No models found in /var/lib/lifeos/models"),
-        };
-
-        let model_path = format!("/var/lib/lifeos/models/{}", selected_model);
-
-        Command::new("llama-server")
-            .env("GGML_BACKEND_PATH", "/usr/lib64")
-            .args(["-m", &model_path, "--port", "8082", "-c", "4096"])
-            .spawn()?;
-
-        Ok(())
-    }
-
-    /// Stop llama-server
-    pub async fn stop_server(&self) -> anyhow::Result<()> {
-        Command::new("killall").args(["llama-server"]).output()?;
-
-        Ok(())
-    }
-
     // ==================== API-Required Methods ====================
 
-    /// Check if llama-server is running
+    /// Check if llama-server is running and responsive.
+    ///
+    /// The old implementation used `killall -0 llama-server`, but when
+    /// llama-server runs as a system service while lifeosd runs in the user
+    /// scope, the signal-0 probe fails with EPERM ("Operación no permitida")
+    /// and reports the server as down even though it is serving traffic.
+    /// Hitting `/health` is both permission-free and a better signal: it
+    /// confirms the server can actually answer requests, not just that a
+    /// process with the matching name exists.
     pub async fn is_running(&self) -> bool {
-        Command::new("killall")
-            .args(["-0", "llama-server"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(500))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        match client.get("http://127.0.0.1:8082/health").send().await {
+            Ok(resp) => resp.status().is_success(),
+            Err(_) => false,
+        }
     }
 
     /// Get the currently active model
@@ -577,9 +561,17 @@ impl AiManager {
         const FALLBACK_DIM: usize = 96;
         let mut embedding = vec![0.0f32; FALLBACK_DIM];
 
-        let normalized = text.to_lowercase();
-        for i in 0..normalized.len().saturating_sub(2) {
-            let trigram = &normalized[i..i + 3];
+        // Iterate by CHARACTERS, not bytes. The old implementation did
+        // `&normalized[i..i + 3]` with `i` from `0..normalized.len()`, which
+        // crashes with "byte index is not a char boundary" the moment the
+        // input contains multi-byte UTF-8 (accents, ñ, °, em-dash, etc).
+        // In production Hector's screen OCR included "24°c" and the hash
+        // embedding panic-killed the tokio task that runs the screen capture
+        // + vision pipeline — screen capture silently stopped and never
+        // recovered until the daemon was restarted.
+        let normalized: Vec<char> = text.to_lowercase().chars().collect();
+        for window in normalized.windows(3) {
+            let trigram: String = window.iter().collect();
             let mut hasher = DefaultHasher::new();
             trigram.hash(&mut hasher);
             let idx = (hasher.finish() as usize) % FALLBACK_DIM;
@@ -648,7 +640,10 @@ fn truncate_error(body: &str) -> String {
     if cleaned.len() <= 200 {
         return cleaned;
     }
-    format!("{}...", &cleaned[..200])
+    format!(
+        "{}...",
+        crate::str_utils::truncate_bytes_safe(&cleaned, 200)
+    )
 }
 
 fn consume_stream_sse_line(

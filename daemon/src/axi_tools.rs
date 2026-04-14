@@ -11,7 +11,7 @@
 //! - Browser automation via CDP (Chrome DevTools Protocol)
 //! - Cron jobs with cron expressions and timezone
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 pub mod inner {
     use anyhow::Result;
     use log::{info, warn};
@@ -94,8 +94,33 @@ REGLAS DE TIEMPO:
 - SIEMPRE usa la hora del [Contexto temporal] mostrado arriba. NUNCA inventes una hora.
 - Cuando el usuario diga "manana", "en 2 horas", "el lunes", calcula la fecha/hora EXACTA.
 - SIEMPRE confirma la hora calculada: "Te recuerdo el lunes 31 de marzo a las 15:00 (CST)."
-- Para programar tareas usa la herramienta cron_add con la hora EXACTA en formato cron.
 - Si no estas seguro de la hora que quiere el usuario, PREGUNTA.
+
+REGLAS DE RECORDATORIOS (CRITICAS — obligatorio usar herramienta):
+- Si el usuario dice "recuerdame", "avisame", "a las X recordame", "en N minutos dime", etc., DEBES llamar la herramienta reminder_add INMEDIATAMENTE. NUNCA digas "programado" sin haber ejecutado la herramienta.
+- Para un recordatorio ONE-SHOT (una sola vez), usa reminder_add — NO uses cron_add.
+- Para tareas RECURRENTES ("todos los dias a las 7", "cada lunes"), usa cron_add.
+- Si no ejecutaste la herramienta, NO afirmes que el recordatorio quedo programado — es una mentira.
+- Despues de ejecutar reminder_add, confirma al usuario el ID y la hora exacta devuelta por la herramienta.
+
+EJEMPLOS OBLIGATORIOS de recordatorios:
+
+Usuario: "Recuerdame en 1 minuto que te diga hola"
+Tu respuesta DEBE empezar con el tool call:
+<tool>
+<name>reminder_add</name>
+<args>{"in_minutes": 1, "message": "te diga hola"}</args>
+</tool>
+(Despues de ver el resultado, confirmas al usuario.)
+
+Usuario: "Avisame a las 17:00 que me tengo que ir a banar"
+Tu respuesta DEBE empezar con el tool call:
+<tool>
+<name>reminder_add</name>
+<args>{"when": "17:00", "message": "Ir a banarse"}</args>
+</tool>
+
+NUNCA respondas "Listo, te recordaré" sin haber emitido un <tool>...</tool> para reminder_add PRIMERO.
 
 Cuando el usuario te pida algo que requiera una accion real, usa las herramientas. Si es solo conversacion, responde directamente.
 
@@ -777,6 +802,12 @@ REGLAS FIRMES:
 20. **cron_remove** — Elimina una tarea cron por nombre.
     args: {"name": "briefing matutino"}
 
+20b. **reminder_add** — Programa un recordatorio UNA SOLA VEZ. Usar para "recuerdame a las X", "avisame en N minutos", "manana a las Y". NO usar para recurrentes (esos son cron_add).
+    args: {"when": "17:00", "message": "Ir a banarse"}
+    o:   {"when": "2026-04-13 17:00", "message": "Ir a banarse"}
+    o:   {"in_minutes": 30, "message": "Estirar las piernas"}
+    IMPORTANTE: Si el usuario dice "recuerdame a las 5" y ya pasaron las 5 de hoy, la herramienta lo programa para manana automaticamente.
+
 21. **smart_home** — Controla dispositivos de domótica via Home Assistant.
     args: {"action": "turn_on", "entity": "light.sala"}
     Acciones: turn_on, turn_off, toggle, status, list_entities
@@ -1177,7 +1208,7 @@ REGLAS FIRMES:
                     summary_parts.push(format!(
                         "[{}]: {}",
                         msg.role,
-                        &content[..content.len().min(150)]
+                        crate::str_utils::truncate_bytes_safe(content, 150)
                     ));
                 }
 
@@ -1186,7 +1217,7 @@ REGLAS FIRMES:
                 // Update the entry with the compacted summary
                 if let Some(entry) = chats.get_mut(&chat_id) {
                     entry.compacted_summary =
-                        Some(new_summary[..new_summary.len().min(2000)].to_string());
+                        Some(crate::str_utils::truncate_bytes_safe(&new_summary, 2000).to_string());
                 }
 
                 self.persist_locked(&chats);
@@ -1217,7 +1248,7 @@ REGLAS FIRMES:
                 "Compacta este resumen de conversacion en maximo 3 oraciones. \
                  Conserva: decisiones, preferencias del usuario, tareas pendientes, \
                  y contexto clave. Descarta saludos y relleno.\n\n{}",
-                &raw[..raw.len().min(3000)]
+                crate::str_utils::truncate_bytes_safe(&raw, 3000)
             );
 
             let request = RouterRequest {
@@ -1244,6 +1275,7 @@ REGLAS FIRMES:
         }
 
         /// Clear history for a chat, returning messages for session summary.
+        #[allow(dead_code)]
         pub async fn clear(&self, chat_id: i64) -> Vec<ChatMessage> {
             let mut chats = self.chats.write().await;
             let entry = chats.remove(&chat_id);
@@ -1413,6 +1445,7 @@ REGLAS FIRMES:
             removed
         }
 
+        #[allow(dead_code)]
         pub async fn mark_run(&self, name: &str) {
             let mut jobs = self.jobs.write().await;
             if let Some(job) = jobs.iter_mut().find(|j| j.name == name) {
@@ -1432,6 +1465,7 @@ REGLAS FIRMES:
 
         /// Check which cron jobs should run now based on their cron expression.
         /// Simple cron matching: "min hour dom mon dow" (5-field).
+        #[allow(dead_code)]
         pub async fn due_jobs(&self) -> Vec<CronJob> {
             let now = chrono::Local::now();
             let jobs = self.jobs.read().await;
@@ -1452,6 +1486,7 @@ REGLAS FIRMES:
     }
 
     /// Simple 5-field cron expression matcher.
+    #[allow(dead_code)]
     fn cron_matches(expr: &str, now: &chrono::DateTime<chrono::Local>) -> bool {
         use chrono::Datelike;
         use chrono::Timelike;
@@ -1474,6 +1509,7 @@ REGLAS FIRMES:
             .all(|(field, value)| field_matches(field, *value))
     }
 
+    #[allow(dead_code)]
     fn field_matches(field: &str, value: u32) -> bool {
         if field == "*" {
             return true;
@@ -1507,6 +1543,7 @@ REGLAS FIRMES:
     // -----------------------------------------------------------------------
 
     /// Read the user's HEARTBEAT.md checklist, or return a default one.
+    #[allow(dead_code)]
     pub async fn load_heartbeat_checklist() -> String {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
         let paths = [
@@ -1533,6 +1570,7 @@ REGLAS FIRMES:
     }
 
     /// Run a heartbeat cycle: evaluate checklist with LLM + system data.
+    #[allow(dead_code)]
     pub async fn run_heartbeat(ctx: &ToolContext) -> Option<String> {
         let checklist = load_heartbeat_checklist().await;
         let alerts = proactive::check_all(None, None).await;
@@ -1665,6 +1703,7 @@ REGLAS FIRMES:
             sessions.insert(session.id.clone(), session);
         }
 
+        #[allow(dead_code)]
         pub async fn remove(&self, id: &str) -> Option<SddSession> {
             self.sessions.write().await.remove(id)
         }
@@ -1823,6 +1862,16 @@ REGLAS FIRMES:
             "que guardaste",
             "que sabes de",
             "que recuerdas",
+            "que conoces",
+            "que conoces de",
+            "quien soy",
+            "conoces de mi",
+            "sabes de mi",
+            "recuerdas de mi",
+            "what do you know",
+            "who am i",
+            "tell me about me",
+            "sobre mi",
         ];
         keywords.iter().any(|kw| lower.contains(kw))
     }
@@ -1907,7 +1956,7 @@ REGLAS FIRMES:
 
     pub async fn execute_tool(call: &ToolCall, ctx: &ToolContext, chat_id: i64) -> ToolResult {
         info!(
-            "[telegram_tools] Executing tool: {} args={}",
+            "[axi_tools] Executing tool: {} args={}",
             call.name, call.args
         );
 
@@ -2146,6 +2195,7 @@ REGLAS FIRMES:
             "health_status" => execute_health_status().await,
             "calendar_today" => execute_calendar_today(ctx).await,
             "calendar_add" => execute_calendar_add(&call.args, ctx).await,
+            "reminder_add" => execute_reminder_add(&call.args, ctx, chat_id).await,
             "current_context" => execute_current_context().await,
             "current_mode" => execute_current_mode().await,
             "learned_patterns" => execute_learned_patterns().await,
@@ -2295,16 +2345,50 @@ REGLAS FIRMES:
         }
 
         // Proactive context recall: append to system prompt (not as separate message)
+        let is_identity_question = {
+            let l = user_text.to_lowercase();
+            l.contains("que sabes de mi")
+                || l.contains("que conoces de mi")
+                || l.contains("conoces de mi")
+                || l.contains("sabes de mi")
+                || l.contains("quien soy")
+                || l.contains("sobre mi")
+                || l.contains("what do you know")
+                || l.contains("who am i")
+                || l.contains("tell me about me")
+        };
         if is_new_session || needs_memory_recall(user_text) {
             if let Some(memory) = &ctx.memory {
                 let mem = memory.read().await;
-                let recall_queries = [user_text, "session_summary"];
+                // For identity questions, broaden the recall to pull in
+                // everything we've ever learned about the user — not just
+                // what matches their current sentence.
+                let identity_queries: &[&str] = &[
+                    "usuario",
+                    "preferencias",
+                    "Hector",
+                    "proyectos",
+                    "discovery",
+                    "preference",
+                    "trabajo",
+                    "perfil",
+                ];
+                let recall_queries: Vec<&str> = if is_identity_question {
+                    let mut v = vec![user_text, "session_summary"];
+                    v.extend_from_slice(identity_queries);
+                    v
+                } else {
+                    vec![user_text, "session_summary"]
+                };
                 let mut context_block = String::new();
                 for query in &recall_queries {
                     if let Ok(results) = mem.search_entries(query, 3, None).await {
                         for r in &results {
                             let snippet = if r.entry.content.len() > 300 {
-                                format!("{}...", &r.entry.content[..300])
+                                format!(
+                                    "{}...",
+                                    crate::str_utils::truncate_bytes_safe(&r.entry.content, 300)
+                                )
                             } else {
                                 r.entry.content.clone()
                             };
@@ -2377,7 +2461,7 @@ REGLAS FIRMES:
             let response = match router.chat(&request).await {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("[telegram_tools] LLM call failed round {}: {}", round, e);
+                    warn!("[axi_tools] LLM call failed round {}: {}", round, e);
                     return (format!("Error conectando con el LLM: {}", e), None);
                 }
             };
@@ -2534,7 +2618,7 @@ REGLAS FIRMES:
                         "[Resultado de {}]: {}\n{}",
                         r.tool,
                         if r.success { "OK" } else { "ERROR" },
-                        &r.output[..r.output.len().min(3000)]
+                        crate::str_utils::truncate_bytes_safe(&r.output, 3000)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -2549,7 +2633,7 @@ REGLAS FIRMES:
             });
 
             info!(
-                "[telegram_tools] Round {}: {} tools executed, continuing...",
+                "[axi_tools] Round {}: {} tools executed, continuing...",
                 round,
                 tool_results.len()
             );
@@ -2621,12 +2705,12 @@ REGLAS FIRMES:
 
         let mut result = String::new();
         if !stdout.is_empty() {
-            result.push_str(&stdout[..stdout.len().min(4000)]);
+            result.push_str(crate::str_utils::truncate_bytes_safe(&stdout, 4000));
         }
         if !stderr.is_empty() {
             result.push_str(&format!(
                 "\n[stderr]: {}",
-                &stderr[..stderr.len().min(1000)]
+                crate::str_utils::truncate_bytes_safe(&stderr, 1000)
             ));
         }
         result.push_str(&format!("\n[exit: {}]", exit));
@@ -2670,12 +2754,11 @@ REGLAS FIRMES:
                         result.push_str("Fuentes:\n");
                         for item in results.iter().take(5) {
                             let snippet = item["content"].as_str().unwrap_or("");
-                            let end = 200.min(snippet.len());
                             result.push_str(&format!(
                                 "- {} ({})\n  {}\n",
                                 item["title"].as_str().unwrap_or(""),
                                 item["url"].as_str().unwrap_or(""),
-                                &snippet[..end]
+                                crate::str_utils::truncate_bytes_safe(snippet, 200)
                             ));
                         }
                     }
@@ -3000,7 +3083,13 @@ REGLAS FIRMES:
                             .iter()
                             .map(|r| {
                                 let snippet = if r.entry.content.len() > 500 {
-                                    format!("{}...", &r.entry.content[..500])
+                                    format!(
+                                        "{}...",
+                                        crate::str_utils::truncate_bytes_safe(
+                                            &r.entry.content,
+                                            500
+                                        )
+                                    )
                                 } else {
                                     r.entry.content.clone()
                                 };
@@ -3071,7 +3160,10 @@ REGLAS FIRMES:
                         .iter()
                         .map(|r| {
                             let snippet = if r.entry.content.len() > 500 {
-                                format!("{}...", &r.entry.content[..500])
+                                format!(
+                                    "{}...",
+                                    crate::str_utils::truncate_bytes_safe(&r.entry.content, 500)
+                                )
                             } else {
                                 r.entry.content.clone()
                             };
@@ -7813,7 +7905,10 @@ REGLAS FIRMES:
             .execute(ComputerUseAction::TypeText { text: text.into() }, false)
             .await?;
         if result.success {
-            Ok(format!("Texto escrito: '{}'", &text[..text.len().min(50)]))
+            Ok(format!(
+                "Texto escrito: '{}'",
+                crate::str_utils::truncate_bytes_safe(text, 50)
+            ))
         } else {
             Ok(format!("Error escribiendo texto: {}", result.stderr))
         }
@@ -7893,7 +7988,7 @@ REGLAS FIRMES:
             Ok(format!(
                 "Error instalando {}: {}",
                 name,
-                &stderr[..stderr.len().min(500)]
+                crate::str_utils::truncate_bytes_safe(&stderr, 500)
             ))
         }
     }
@@ -7925,7 +8020,7 @@ REGLAS FIRMES:
                 result.push_str(&format!(
                     "\n- [{}] {}",
                     status.as_str().unwrap_or("?"),
-                    &t.objective[..t.objective.len().min(60)],
+                    crate::str_utils::truncate_bytes_safe(&t.objective, 60),
                 ));
             }
         }
@@ -7994,7 +8089,7 @@ REGLAS FIRMES:
                 Ok(format!(
                     "Screenshot: {}\n\nHTML (sin vision):\n{}",
                     screenshot_path,
-                    &html[..html.len().min(3000)]
+                    crate::str_utils::truncate_bytes_safe(&html, 3000)
                 ))
             }
         }
@@ -8227,7 +8322,7 @@ REGLAS FIRMES:
                 let stderr = String::from_utf8_lossy(&o.stderr);
                 Ok(format!(
                     "Tailscale no disponible: {}",
-                    &stderr[..stderr.len().min(200)]
+                    crate::str_utils::truncate_bytes_safe(&stderr, 200)
                 ))
             }
             Err(_) => Ok("Tailscale no esta instalado.".into()),
@@ -8279,7 +8374,10 @@ REGLAS FIRMES:
             ))
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Ok(format!("Error: {}", &stderr[..stderr.len().min(300)]))
+            Ok(format!(
+                "Error: {}",
+                crate::str_utils::truncate_bytes_safe(&stderr, 300)
+            ))
         }
     }
 
@@ -8412,13 +8510,13 @@ REGLAS FIRMES:
         let stderr = String::from_utf8_lossy(&output.stderr);
 
         if output.status.success() {
-            Ok(stdout[..stdout.len().min(4000)].to_string())
+            Ok(crate::str_utils::truncate_bytes_safe(&stdout, 4000).to_string())
         } else {
             Ok(format!(
                 "Skill '{}' fallo:\n{}\n{}",
                 skill_name,
-                &stdout[..stdout.len().min(2000)],
-                &stderr[..stderr.len().min(500)]
+                crate::str_utils::truncate_bytes_safe(&stdout, 2000),
+                crate::str_utils::truncate_bytes_safe(&stderr, 500)
             ))
         }
     }
@@ -8770,7 +8868,10 @@ REGLAS FIRMES:
                                     e.kind,
                                     local_time,
                                     if e.content.len() > 100 {
-                                        format!("{}...", &e.content[..100])
+                                        format!(
+                                            "{}...",
+                                            crate::str_utils::truncate_bytes_safe(&e.content, 100)
+                                        )
                                     } else {
                                         e.content.clone()
                                     }
@@ -8851,7 +8952,7 @@ REGLAS FIRMES:
                 } else {
                     format!(
                         "Resultado de la fase anterior:\n{}",
-                        &prev_output[..prev_output.len().min(3000)]
+                        crate::str_utils::truncate_bytes_safe(&prev_output, 3000)
                     )
                 }
             );
@@ -8932,7 +9033,7 @@ REGLAS FIRMES:
                     .take(3)
                     .collect::<Vec<_>>()
                     .join("-"),
-                &result[..result.len().min(2000)]
+                crate::str_utils::truncate_bytes_safe(result, 2000)
             );
             mem.add_entry("architecture", "user", &tags, Some("sdd"), 80, &summary)
                 .await
@@ -8999,6 +9100,7 @@ REGLAS FIRMES:
     }
 
     /// Continue an SDD session after user approval.
+    #[allow(dead_code)]
     pub async fn sdd_continue(
         ctx: &ToolContext,
         sdd_id: &str,
@@ -9017,13 +9119,14 @@ REGLAS FIRMES:
     }
 
     /// Abort an SDD session — save what was done to memory.
+    #[allow(dead_code)]
     pub async fn sdd_abort(ctx: &ToolContext, sdd_id: &str) -> Option<String> {
         let session = ctx.sdd_store.remove(sdd_id).await?;
         sdd_save_to_memory(ctx, &session.task, &session.accumulated_result).await;
         Some(format!(
             "SDD abortado en fase {}. Resultado parcial guardado en memoria.\n\n{}",
             session.current_phase,
-            &session.accumulated_result[..session.accumulated_result.len().min(2000)]
+            crate::str_utils::truncate_bytes_safe(&session.accumulated_result, 2000)
         ))
     }
 
@@ -9032,6 +9135,7 @@ REGLAS FIRMES:
     // -----------------------------------------------------------------------
 
     // Auto-save a session summary when conversation is cleared or expires
+    #[allow(dead_code)]
     pub async fn save_session_summary(ctx: &ToolContext, chat_id: i64, messages: &[ChatMessage]) {
         if messages.is_empty() {
             return;
@@ -9045,7 +9149,7 @@ REGLAS FIRMES:
             conversation.push_str(&format!(
                 "[{}]: {}\n",
                 role,
-                &content[..content.len().min(200)]
+                crate::str_utils::truncate_bytes_safe(content, 200)
             ));
         }
 
@@ -9514,7 +9618,7 @@ max_context = 128000
             std::fs::write(&file_path, &output)?;
         }
 
-        info!("[telegram_tools] Exported conversation to {}", file_path);
+        info!("[axi_tools] Exported conversation to {}", file_path);
 
         // Return __SEND_FILE__ marker so telegram_bridge sends it to the user
         Ok(format!("__SEND_FILE__:{}", file_path))
@@ -10244,6 +10348,88 @@ max_context = 128000
         }
     }
 
+    /// Single-shot reminder: computes target datetime from relative/absolute
+    /// inputs and stores as a calendar event with a 0-minute reminder offset
+    /// (fires exactly at `when`). Delivery is handled by the reminder dispatch
+    /// loop, which routes back to the chat channel that created it.
+    ///
+    /// Accepts any of:
+    ///   - {"when": "17:00", "message": "..."} (today; if already past, tomorrow)
+    ///   - {"when": "2026-04-13 17:00", "message": "..."}
+    ///   - {"in_minutes": 30, "message": "..."}
+    async fn execute_reminder_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+        chat_id: i64,
+    ) -> Result<String> {
+        use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+
+        let message = args["message"]
+            .as_str()
+            .or_else(|| args["title"].as_str())
+            .or_else(|| args["body"].as_str())
+            .unwrap_or("Recordatorio")
+            .to_string();
+
+        let now = Local::now();
+
+        // Resolve target datetime from inputs
+        let target = if let Some(mins) = args["in_minutes"].as_i64() {
+            now + chrono::Duration::minutes(mins)
+        } else if let Some(when) = args["when"].as_str() {
+            // Try full "YYYY-MM-DD HH:MM"
+            if let Ok(dt) = NaiveDateTime::parse_from_str(when, "%Y-%m-%d %H:%M") {
+                Local.from_local_datetime(&dt).single().unwrap_or(now)
+            } else if let Ok(t) = NaiveTime::parse_from_str(when, "%H:%M") {
+                // Today at HH:MM, or tomorrow if already past
+                let today = now.date_naive().and_time(t);
+                let dt = Local.from_local_datetime(&today).single().unwrap_or(now);
+                if dt <= now {
+                    dt + chrono::Duration::days(1)
+                } else {
+                    dt
+                }
+            } else if let Ok(d) = NaiveDate::parse_from_str(when, "%Y-%m-%d") {
+                let dt = d.and_hms_opt(9, 0, 0).unwrap_or_default();
+                Local.from_local_datetime(&dt).single().unwrap_or(now)
+            } else {
+                return Ok(format!(
+                    "No entiendo el formato '{}'. Usa: {{\"when\": \"17:00\", \"message\": \"texto\"}} o {{\"in_minutes\": 30, \"message\": \"texto\"}}",
+                    when
+                ));
+            }
+        } else {
+            return Ok(
+                "Necesito saber cuando. Ejemplo: {\"when\": \"17:00\", \"message\": \"Ir a banarse\"} o {\"in_minutes\": 30, \"message\": \"...\"}"
+                    .into(),
+            );
+        };
+
+        // Persist as a calendar event that fires at `target` (reminder_minutes=0)
+        let start_time = target.format("%Y-%m-%d %H:%M").to_string();
+        let chat_tag = format!("__chat:{}", chat_id);
+
+        if let Some(ref cal) = ctx.calendar {
+            match cal.add_event(
+                &message,
+                &start_time,
+                None,
+                &chat_tag, // stash chat_id in description so dispatcher can route back
+                Some(0),
+                None,
+                None,
+            ) {
+                Ok(event) => Ok(format!(
+                    "Recordatorio programado para {} — \"{}\" (id: {})",
+                    start_time, message, event.id
+                )),
+                Err(e) => Ok(format!("Error creando recordatorio: {}", e)),
+            }
+        } else {
+            Ok("Calendario no disponible — no puedo programar el recordatorio.".into())
+        }
+    }
+
     /// BA.3 — Current context (work/personal/gaming/etc).
     async fn execute_current_context() -> Result<String> {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
@@ -10362,7 +10548,13 @@ max_context = 128000
                             .iter()
                             .map(|r| {
                                 let snippet = if r.entry.content.len() > 400 {
-                                    format!("{}...", &r.entry.content[..400])
+                                    format!(
+                                        "{}...",
+                                        crate::str_utils::truncate_bytes_safe(
+                                            &r.entry.content,
+                                            400
+                                        )
+                                    )
                                 } else {
                                     r.entry.content.clone()
                                 };
@@ -10470,7 +10662,10 @@ max_context = 128000
                     if let Some(r) = results.first() {
                         mem.mark_permanent(&r.entry.entry_id).await?;
                         let snippet = if r.entry.content.len() > 100 {
-                            format!("{}...", &r.entry.content[..100])
+                            format!(
+                                "{}...",
+                                crate::str_utils::truncate_bytes_safe(&r.entry.content, 100)
+                            )
                         } else {
                             r.entry.content.clone()
                         };
@@ -10594,7 +10789,10 @@ max_context = 128000
         for m in &meetings {
             let duration_min = m.duration_secs / 60;
             let summary_preview = if m.summary.len() > 120 {
-                format!("{}...", &m.summary[..120])
+                format!(
+                    "{}...",
+                    crate::str_utils::truncate_bytes_safe(&m.summary, 120)
+                )
             } else if m.summary.is_empty() {
                 "(sin resumen)".to_string()
             } else {
@@ -10639,7 +10837,10 @@ max_context = 128000
         for m in &meetings {
             let duration_min = m.duration_secs / 60;
             let summary_preview = if m.summary.len() > 200 {
-                format!("{}...", &m.summary[..200])
+                format!(
+                    "{}...",
+                    crate::str_utils::truncate_bytes_safe(&m.summary, 200)
+                )
             } else if m.summary.is_empty() {
                 "(sin resumen)".to_string()
             } else {
@@ -10686,5 +10887,5 @@ max_context = 128000
     }
 }
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 pub use inner::*;

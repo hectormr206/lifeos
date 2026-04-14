@@ -1,0 +1,45 @@
+[Unit]
+Description=LifeOS Thermal Boot Default (laptop CPU cap)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Safe boot default for ANY laptop — applies a gentle 95% cap until the
+# daemon's reactive thermal manager takes over (reads actual CPU temp and
+# adjusts dynamically). Works with both Intel and AMD pstate drivers.
+#
+# On desktops (no battery) this is a no-op.
+# The reactive loop in lifeosd replaces this within seconds of daemon start.
+ExecStart=/bin/bash -c '\
+  IS_LAPTOP=false; \
+  [ -e /sys/class/power_supply/BAT0 ] || [ -e /sys/class/power_supply/BAT1 ] && IS_LAPTOP=true; \
+  if ! $IS_LAPTOP; then echo "[thermal] Desktop — no cap needed"; exit 0; fi; \
+  if [ -f /sys/devices/system/cpu/intel_pstate/max_perf_pct ]; then \
+    echo 95 > /sys/devices/system/cpu/intel_pstate/max_perf_pct; \
+    echo "[thermal] Laptop + intel_pstate — boot default 95%%"; \
+  elif [ -d /sys/devices/system/cpu/cpufreq/policy0 ]; then \
+    for p in /sys/devices/system/cpu/cpufreq/policy*/; do \
+      MAX=$(cat ${p}cpuinfo_max_freq 2>/dev/null || echo 0); \
+      [ "$MAX" -gt 0 ] && echo $(( MAX * 95 / 100 )) > ${p}scaling_max_freq 2>/dev/null; \
+    done; \
+    echo "[thermal] Laptop + cpufreq — boot default 95%%"; \
+  else \
+    echo "[thermal] Laptop but no known CPU driver — skipping"; \
+  fi'
+# Gaming override: lifeosd thermal_manager handles this dynamically now.
+# This ExecReload is kept for manual emergency use only.
+ExecReload=/bin/bash -c '\
+  PCT=${THERMAL_PERF_PCT:-95}; \
+  if [ -f /sys/devices/system/cpu/intel_pstate/max_perf_pct ]; then \
+    echo $PCT > /sys/devices/system/cpu/intel_pstate/max_perf_pct; \
+  elif [ -d /sys/devices/system/cpu/cpufreq/policy0 ]; then \
+    for p in /sys/devices/system/cpu/cpufreq/policy*/; do \
+      MAX=$(cat ${p}cpuinfo_max_freq 2>/dev/null || echo 0); \
+      [ "$MAX" -gt 0 ] && echo $(( MAX * PCT / 100 )) > ${p}scaling_max_freq 2>/dev/null; \
+    done; \
+  fi; \
+  echo "[thermal] Applied ${PCT}%% cap"'
+
+[Install]
+WantedBy=multi-user.target

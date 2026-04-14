@@ -28,6 +28,7 @@ mod async_workers;
 mod atspi_layer;
 mod audio_frontend;
 mod autonomous_agent;
+mod axi_tools;
 mod axi_tray;
 mod backup_monitor;
 mod battery_manager;
@@ -53,11 +54,9 @@ mod health_tracking;
 #[cfg(feature = "homeassistant")]
 mod home_assistant;
 mod lab;
-#[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+#[cfg_attr(not(feature = "messaging"), allow(dead_code))]
 mod llm_debate;
 mod llm_router;
-#[cfg(feature = "telegram")]
-mod matrix_bridge;
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
 mod meeting_archive;
@@ -86,26 +85,26 @@ mod self_improving;
 mod sensory_memory;
 mod sensory_pipeline;
 mod session_store;
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 mod simplex_bridge;
 mod skill_generator;
 mod skill_registry;
 mod speaker_id;
 mod sqlite_protection;
 mod storage_housekeeping;
+mod str_utils;
 mod supervisor;
 mod system;
 mod system_tuner;
 mod task_queue;
-mod telegram_bridge;
-mod telegram_tools;
 mod telemetry;
+mod thermal_manager;
 mod time_context;
 mod translation;
 mod tuf;
 mod update_scheduler;
 mod updates;
-#[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+#[cfg_attr(not(feature = "messaging"), allow(dead_code))]
 mod user_model;
 mod visual_comfort;
 mod wake_word;
@@ -345,32 +344,17 @@ GROQ_API_KEY=
 # OpenRouter (multiple providers)
 OPENROUTER_API_KEY=
 
-# Telegram Bot (obten tu token de @BotFather)
-LIFEOS_TELEGRAM_BOT_TOKEN=
-LIFEOS_TELEGRAM_CHAT_ID=
-
-# Email (opcional, para bridge de email)
+# Email (opcional — outbound notifications via dashboard/agent tools)
 LIFEOS_EMAIL_IMAP_HOST=
 LIFEOS_EMAIL_IMAP_USER=
 LIFEOS_EMAIL_IMAP_PASS=
 LIFEOS_EMAIL_SMTP_HOST=
-# Email conversacional (auto-reply via agentic loop, requiere telegram feature)
-LIFEOS_EMAIL_CONVERSATIONAL=false
-LIFEOS_EMAIL_ALLOWED_SENDERS=
-LIFEOS_EMAIL_POLL_SECS=300
-LIFEOS_EMAIL_MAX_REPLIES_PER_HOUR=10
 
 # WhatsApp Cloud API (opcional)
 LIFEOS_WHATSAPP_TOKEN=
 LIFEOS_WHATSAPP_PHONE_ID=
 LIFEOS_WHATSAPP_VERIFY_TOKEN=
 LIFEOS_WHATSAPP_ALLOWED_NUMBERS=
-
-# Matrix/Element (opcional)
-LIFEOS_MATRIX_HOMESERVER=
-LIFEOS_MATRIX_USER_ID=
-LIFEOS_MATRIX_ACCESS_TOKEN=
-LIFEOS_MATRIX_ROOM_IDS=
 
 # Signal (opcional, requiere signal-cli daemon)
 LIFEOS_SIGNAL_CLI_URL=http://127.0.0.1:8086
@@ -388,7 +372,7 @@ LIFEOS_HA_TOKEN=
                     std::os::unix::fs::PermissionsExt::from_mode(0o600),
                 );
                 info!(
-                    "Created LLM providers template at {} — edit it to enable Telegram, Cerebras, etc.",
+                    "Created LLM providers template at {} — edit it to enable Cerebras, Groq, etc.",
                     system_env.display()
                 );
             }
@@ -655,6 +639,18 @@ async fn main() -> anyhow::Result<()> {
         task_queue::TaskQueue::new(std::path::Path::new("/tmp/lifeos"))
             .expect("fallback task queue must work")
     }));
+    // Sweep tasks orphaned by a previous crash or restart. Any task still
+    // Running when a new daemon starts up was owned by a worker that no
+    // longer exists, so it cannot possibly finish. A 60-second floor keeps
+    // the sweep away from tasks started by a previous daemon seconds ago
+    // that may still have in-flight state flushed to disk. Without this,
+    // Hector ended up with tasks stuck in "running" for 17 days and the
+    // proactive alert kept firing about them forever.
+    match shared_tq.clear_stuck(60) {
+        Ok(0) => {}
+        Ok(n) => info!("[startup] cleared {} orphaned running task(s)", n),
+        Err(e) => warn!("[startup] failed to clear orphaned running tasks: {}", e),
+    }
     let shared_ai_manager = Arc::new(ai::AiManager::new());
     let shared_memory = Arc::new(RwLock::new(
         MemoryPlaneManager::with_ai_manager(data_dir.clone(), Some(shared_ai_manager.clone()))
@@ -783,6 +779,11 @@ async fn main() -> anyhow::Result<()> {
         circuit_breaker: Arc::new(circuit_breaker::CircuitBreaker::new()),
     });
 
+    // Apply gentle boot default (95% on laptops, 100% on desktops).
+    // The reactive thermal manager loop below will adjust dynamically
+    // based on actual CPU temperature once it starts.
+    thermal_manager::apply_boot_default();
+
     // Initialize config store (creates checkpoint directories).
     if let Err(e) = state.config_store.init().await {
         warn!("Failed to initialize ConfigStore: {}", e);
@@ -877,14 +878,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // Start API server if enabled
-    let api_handle = if config.enable_api {
-        info!("Starting REST API server on {}", config.api_bind_address);
-        Some(tokio::spawn(start_api_server(state.clone())))
-    } else {
-        info!("REST API server disabled");
-        None
-    };
+    // API server is started later (after shared variables are initialized)
 
     // Start D-Bus service
     let dbus_handle = tokio::spawn(async move {
@@ -967,7 +961,6 @@ async fn main() -> anyhow::Result<()> {
                 while !display_ready {
                     if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok()
                     {
-                        display_ready = true;
                         break;
                     }
                     // Try to discover Wayland socket dynamically
@@ -1140,7 +1133,13 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Calendar reminder check — every 60s checks for due reminders
+    // Calendar reminder check — every 60s checks for due reminders.
+    //
+    // Reminders created by Axi via `reminder_add` stash the originating chat_id
+    // in the event description as `__chat:<id>`. When we see that tag we emit a
+    // `ReminderDue` event so the channel bridges (SimpleX, dashboard)
+    // can route the notification back to the chat that asked for it. Reminders
+    // without a chat tag fall through to the old desktop Notification path.
     let calendar_state = state.clone();
     let _calendar_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -1148,15 +1147,43 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             if let Ok(reminders) = calendar_state.calendar.due_reminders() {
                 for event in &reminders {
-                    let _ = calendar_state
-                        .event_bus
-                        .send(events::DaemonEvent::Notification {
-                            priority: "info".into(),
-                            message: format!(
-                                "Recordatorio: {} a las {}",
-                                event.title, event.start_time
-                            ),
-                        });
+                    // Parse routing tag from description, if any.
+                    let chat_id: Option<i64> = event
+                        .description
+                        .split_whitespace()
+                        .find_map(|tok| tok.strip_prefix("__chat:").and_then(|s| s.parse().ok()));
+
+                    if let Some(cid) = chat_id {
+                        let _ = calendar_state
+                            .event_bus
+                            .send(events::DaemonEvent::ReminderDue {
+                                chat_id: cid,
+                                title: event.title.clone(),
+                                event_id: event.id.clone(),
+                                start_time: event.start_time.clone(),
+                            });
+                        // Record the reminder so it doesn't re-fire every minute.
+                        let _ = calendar_state.calendar.record_reminder(
+                            &event.id,
+                            &event.title,
+                            "chat",
+                        );
+                    } else {
+                        let _ = calendar_state
+                            .event_bus
+                            .send(events::DaemonEvent::Notification {
+                                priority: "info".into(),
+                                message: format!(
+                                    "Recordatorio: {} a las {}",
+                                    event.title, event.start_time
+                                ),
+                            });
+                        let _ = calendar_state.calendar.record_reminder(
+                            &event.id,
+                            &event.title,
+                            "desktop",
+                        );
+                    }
                 }
             }
         }
@@ -1253,6 +1280,7 @@ async fn main() -> anyhow::Result<()> {
     let meeting_loop_assistant = shared_meeting_assistant.clone();
     let _meeting_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(15));
+        info!("[meeting] Detection loop started (every 15s)");
         loop {
             interval.tick().await;
             let mut assistant = meeting_loop_assistant.write().await;
@@ -1275,7 +1303,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok(false) => {}
                 Err(e) => {
-                    log::debug!("Meeting detection error: {}", e);
+                    warn!("[meeting] Detection error: {}", e);
                 }
             }
         }
@@ -1346,7 +1374,19 @@ async fn main() -> anyhow::Result<()> {
                 });
             }
             if !alerts.is_empty() {
+                // Include the alert descriptions — logging just the count for
+                // months made it impossible to tell whether the monitor was
+                // catching a real intrusion or firing on benign background
+                // noise. Log at DEBUG so the journal isn't flooded, and
+                // emit a single WARN with the count on every cycle.
                 warn!("[security_ai] {} alerts detected this cycle", alerts.len());
+                for alert in &alerts {
+                    log::debug!(
+                        "[security_ai] alert {:?}: {}",
+                        alert.severity,
+                        alert.description
+                    );
+                }
             }
         }
     });
@@ -1651,10 +1691,12 @@ async fn main() -> anyhow::Result<()> {
                             } => {
                                 let action = format!(
                                     "task_completed:{}",
-                                    &objective[..objective.len().min(80)]
+                                    crate::str_utils::truncate_bytes_safe(objective, 80)
                                 );
-                                let context =
-                                    format!("result={}", &result[..result.len().min(120)]);
+                                let context = format!(
+                                    "result={}",
+                                    crate::str_utils::truncate_bytes_safe(result, 120)
+                                );
                                 if let Err(e) = learner.record_action(&action, &context) {
                                     warn!("[workflow_learner] Failed to record completion: {e}");
                                 }
@@ -1682,9 +1724,12 @@ async fn main() -> anyhow::Result<()> {
                             } => {
                                 let action = format!(
                                     "task_failed:{}",
-                                    &objective[..objective.len().min(80)]
+                                    crate::str_utils::truncate_bytes_safe(objective, 80)
                                 );
-                                let context = format!("error={}", &error[..error.len().min(120)]);
+                                let context = format!(
+                                    "error={}",
+                                    crate::str_utils::truncate_bytes_safe(error, 120)
+                                );
                                 if let Err(e) = learner.record_action(&action, &context) {
                                     warn!("[workflow_learner] Failed to record failure: {e}");
                                 }
@@ -1856,6 +1901,19 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Start reactive thermal manager (reads actual CPU temp, adjusts cap dynamically)
+    let thermal_mgr = Arc::new(thermal_manager::ThermalManager::new());
+    let thermal_handle = {
+        let tm = thermal_mgr.clone();
+        tokio::spawn(async move { tm.run_loop().await })
+    };
+
+    // Attach thermal manager to Game Guard so it can switch to Gaming mode
+    if let Some(ref gg) = state.game_guard {
+        let g = gg.read().await;
+        g.set_thermal_manager(thermal_mgr.clone()).await;
+    }
+
     // Start GPU Game Guard loop (auto-offload LLM to RAM when gaming)
     let game_guard_handle = if let Some(ref gg) = state.game_guard {
         let game_guard_clone = gg.clone();
@@ -1867,109 +1925,86 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    // Start Telegram bridge if configured
-    #[cfg(feature = "telegram")]
-    let telegram_handle = {
-        if let Some(tg_config) = telegram_bridge::TelegramConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let memory = Some(state.memory_plane_manager.clone());
-            let notify_rx = state.supervisor.subscribe();
-            let ss = Some(state.session_store.clone());
-            let eb = Some(state.event_bus.clone());
-            // Load user model for personalization (Fase AQ)
-            let um = {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
-                let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
-                let model = user_model::UserModel::load_from_dir(&data_dir).await;
-                Arc::new(RwLock::new(model))
-            };
-            let ma = meeting_archive.clone();
-            let mast = shared_meeting_assistant.clone();
-            let cal = state.calendar.clone();
-            Some(tokio::spawn(async move {
-                telegram_bridge::run_telegram_bot(
-                    tg_config,
-                    tq,
-                    router,
-                    memory,
-                    notify_rx,
-                    ss,
-                    eb,
-                    Some(um),
-                    Some(ma),
-                    Some(mast),
-                    Some(cal),
-                )
-                .await;
-            }))
-        } else {
-            info!("Telegram bridge: LIFEOS_TELEGRAM_BOT_TOKEN not set, skipping");
-            None
-        }
+    // ── Shared cross-bridge instances ──────────────────────────────────
+    //
+    // ConversationHistory, UserModel, and CronStore must be shared across
+    // ALL bridges (SimpleX, Email) so that Axi has the
+    // same context regardless of which channel the user writes from.
+    // Previously each bridge created its own instance — this caused
+    // conversation context, user preferences, and cron jobs to be siloed
+    // per channel and invisible to other channels.
+    #[cfg(feature = "messaging")]
+    let shared_history = Arc::new(axi_tools::ConversationHistory::new());
+    #[cfg(feature = "messaging")]
+    let shared_cron_store = Arc::new(axi_tools::CronStore::new());
+    let shared_user_model = {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+        let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
+        let model = user_model::UserModel::load_from_dir(&data_dir).await;
+        Arc::new(RwLock::new(model))
     };
-    #[cfg(not(feature = "telegram"))]
-    let telegram_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Matrix bridge if Conduit credentials exist (requires telegram feature
-    // because it reuses the agentic chat infrastructure from telegram_tools).
-    #[cfg(feature = "telegram")]
-    let _matrix_handle = {
-        if let Some(mx_config) = matrix_bridge::MatrixConfig::from_credentials_file() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let memory = Some(state.memory_plane_manager.clone());
-            Some(tokio::spawn(async move {
-                matrix_bridge::run_matrix_bridge(mx_config, tq, router, memory).await;
-            }))
-        } else {
-            info!(
-                "Matrix bridge: {} not found, skipping",
-                "/etc/lifeos/matrix-axi-credentials"
-            );
-            None
-        }
-    };
-    #[cfg(not(feature = "telegram"))]
-    let _matrix_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start SimpleX bridge if the CLI WebSocket is reachable (requires telegram
-    // feature because it reuses the agentic chat infrastructure from telegram_tools).
-    #[cfg(feature = "telegram")]
+    // feature because it reuses the agentic chat infrastructure from axi_tools).
+    //
+    // Parity note: SimpleX is our privacy-first primary channel, so it must have
+    // the SAME capability set as the former Telegram bridge. We pass ALL optional stores
+    // (session, user_model, meetings, calendar) so agentic tools that depend on
+    // them do not silently degrade when invoked through SimpleX.
+    #[cfg(feature = "messaging")]
     let _simplex_handle = {
         if simplex_bridge::is_simplex_available().await {
             let tq = state.task_queue.clone();
             let router = state.llm_router.clone();
             let memory = Some(state.memory_plane_manager.clone());
+            let ss = Some(state.session_store.clone());
+            let um = Some(shared_user_model.clone());
+            let ma = Some(meeting_archive.clone());
+            let mast = Some(shared_meeting_assistant.clone());
+            let cal = Some(state.calendar.clone());
+            let hist = shared_history.clone();
+            let cron = shared_cron_store.clone();
+            let ev = state.event_bus.clone();
             Some(tokio::spawn(async move {
-                simplex_bridge::run_simplex_bridge(tq, router, memory).await;
+                simplex_bridge::run_simplex_bridge(
+                    tq,
+                    router,
+                    memory,
+                    ss,
+                    um,
+                    ma,
+                    mast,
+                    cal,
+                    hist,
+                    cron,
+                    Some(ev),
+                )
+                .await;
             }))
         } else {
             info!("SimpleX bridge: CLI WebSocket not reachable on port 5226, skipping");
             None
         }
     };
-    #[cfg(not(feature = "telegram"))]
+    #[cfg(not(feature = "messaging"))]
     let _simplex_handle: Option<tokio::task::JoinHandle<()>> = None;
 
-    // Start conversational email bridge if configured (requires telegram feature
-    // because it reuses the agentic chat infrastructure from telegram_tools).
-    #[cfg(feature = "telegram")]
-    let _email_handle = {
-        if let Some(email_config) = email_bridge::ConversationalEmailConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let memory = Some(state.memory_plane_manager.clone());
-            Some(tokio::spawn(async move {
-                email_bridge::run_conversational_email_loop(email_config, tq, router, memory).await;
-            }))
-        } else {
-            info!("Email bridge: LIFEOS_EMAIL_CONVERSATIONAL not enabled, skipping");
-            None
-        }
+    // Start API server if enabled (must be after shared variables are initialized)
+    let api_handle = if config.enable_api {
+        info!("Starting REST API server on {}", config.api_bind_address);
+        let bridge_state = SharedBridgeState {
+            user_model: shared_user_model.clone(),
+            meeting_assistant: shared_meeting_assistant.clone(),
+            #[cfg(feature = "messaging")]
+            conversation_history: shared_history.clone(),
+            #[cfg(feature = "messaging")]
+            cron_store: shared_cron_store.clone(),
+        };
+        Some(tokio::spawn(start_api_server(state.clone(), bridge_state)))
+    } else {
+        info!("REST API server disabled");
+        None
     };
-    #[cfg(not(feature = "telegram"))]
-    let _email_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Notify systemd that the daemon is fully initialized
     notify_ready();
@@ -2031,10 +2066,8 @@ async fn main() -> anyhow::Result<()> {
     sensory_handle.abort();
     state.supervisor.stop();
     supervisor_handle.abort();
+    thermal_handle.abort();
     if let Some(h) = game_guard_handle {
-        h.abort();
-    }
-    if let Some(h) = telegram_handle {
         h.abort();
     }
     dbus_handle.abort();
@@ -2056,8 +2089,20 @@ async fn main() -> anyhow::Result<()> {
     std::process::exit(0)
 }
 
+/// Shared infrastructure passed from main to the API server so that all
+/// bridges (SimpleX, API) use the same instances.
+struct SharedBridgeState {
+    user_model: Arc<RwLock<user_model::UserModel>>,
+    #[allow(dead_code)]
+    meeting_assistant: Arc<tokio::sync::RwLock<meeting_assistant::MeetingAssistant>>,
+    #[cfg(feature = "messaging")]
+    conversation_history: Arc<axi_tools::ConversationHistory>,
+    #[cfg(feature = "messaging")]
+    cron_store: Arc<axi_tools::CronStore>,
+}
+
 /// Start REST API server
-async fn start_api_server(state: Arc<DaemonState>) {
+async fn start_api_server(state: Arc<DaemonState>, shared: SharedBridgeState) {
     let api_state = api::ApiState {
         data_dir: state.data_dir.clone(),
         system_monitor: state.system_monitor.clone(),
@@ -2094,13 +2139,16 @@ async fn start_api_server(state: Arc<DaemonState>) {
         game_guard: state.game_guard.clone(),
         wake_word_detector: state.wake_word_detector.clone(),
         skill_registry: skill_generator::SkillRegistry::from_defaults(),
-        user_model: {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
-            let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
-            Arc::new(RwLock::new(
-                user_model::UserModel::load_from_dir(&data_dir).await,
-            ))
-        },
+        user_model: shared.user_model.clone(),
+        #[cfg(feature = "messaging")]
+        conversation_history: shared.conversation_history.clone(),
+        #[cfg(feature = "messaging")]
+        cron_store: shared.cron_store.clone(),
+        #[cfg(feature = "messaging")]
+        sdd_store: Arc::new(axi_tools::SddStore::new()),
+        session_store: state.session_store.clone(),
+        #[cfg(feature = "messaging")]
+        meeting_assistant: Some(shared.meeting_assistant.clone()),
     };
 
     // Perform initial skill registry load and start file watcher
@@ -2275,7 +2323,7 @@ async fn run_update_checks(state: Arc<DaemonState>) {
                         error!("Failed to send update notification: {}", e);
                     }
 
-                    // Broadcast on event bus so dashboard/Telegram/SSE subscribers see it
+                    // Broadcast on event bus so dashboard/SimpleX/SSE subscribers see it
                     let _ = state.event_bus.send(events::DaemonEvent::Notification {
                         priority: "info".into(),
                         message: format!(

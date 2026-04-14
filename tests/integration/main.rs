@@ -292,6 +292,28 @@ fn test_terminal_tooling_defaults_are_baked_into_image() {
 }
 
 #[test]
+fn test_ci_workflows_do_not_embed_dev_build_mode_literal() {
+    let workflows_dir = project_root().join(".github/workflows");
+    let needle = "LIFEOS_BUILD_MODE=dev";
+
+    for entry in std::fs::read_dir(&workflows_dir).expect("Failed to read workflows directory") {
+        let path = entry.expect("Failed to read workflow entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("yml") {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&path).expect("Failed to read workflow file");
+        assert!(
+            !content.contains(needle),
+            "Workflow {:?} must not contain the literal dev build mode token",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("<unknown>")
+        );
+    }
+}
+
+#[test]
 fn test_phase2_contract_schemas_exist_and_parse() {
     let root = project_root();
     let schema_paths = [

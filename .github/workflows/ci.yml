@@ -19,6 +19,37 @@ env:
 
 jobs:
   # ============================================================================
+  # Job 0: Dev-mode guard — fails fast on any accidental dev-mode leakage
+  # See docs/operations/dev-mode.md for the full security contract.
+  # ============================================================================
+  dev-mode-guard:
+    name: Dev-mode guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Assert dev build mode token is not in any workflow
+        run: |
+          set -euo pipefail
+          if grep -rn "LIFEOS_BUILD_MODE""=dev" .github/workflows/; then
+            echo "FATAL: dev build mode token must never appear in CI workflows"
+            exit 1
+          fi
+          echo "dev-mode workflow scanner passed"
+
+      - name: Assert LIFEOS_BUILD_MODE default is release
+        run: |
+          set -euo pipefail
+          default="$(grep -E '^ARG LIFEOS_BUILD_MODE' image/Containerfile | head -1)"
+          if ! echo "$default" | grep -q 'LIFEOS_BUILD_MODE=release'; then
+            echo "FATAL: Containerfile default for LIFEOS_BUILD_MODE is not 'release'"
+            echo "Got: $default"
+            exit 1
+          fi
+          echo "Containerfile default check passed: $default"
+
+  # ============================================================================
   # Job 1: Build and Test CLI
   # ============================================================================
   build-cli:
@@ -116,19 +147,19 @@ jobs:
 
       - name: Run clippy
         working-directory: ./daemon
-        run: cargo clippy --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked -- -D warnings
+        run: cargo clippy --features "dbus,http-api,ui-overlay,wake-word,messaging" --locked -- -D warnings
 
       - name: Build daemon (debug)
         working-directory: ./daemon
-        run: cargo build --features "dbus,http-api,wake-word,telegram" --locked
+        run: cargo build --features "dbus,http-api,wake-word,messaging" --locked
 
       - name: Build daemon (release)
         working-directory: ./daemon
-        run: cargo build --release --features "dbus,http-api,wake-word,telegram" --locked
+        run: cargo build --release --features "dbus,http-api,wake-word,messaging" --locked
 
       - name: Run daemon tests
         working-directory: ./daemon
-        run: cargo test --features "dbus,http-api,wake-word,telegram" --locked
+        run: cargo test --features "dbus,http-api,wake-word,messaging" --locked
 
       - name: Upload daemon artifact
         uses: actions/upload-artifact@v4

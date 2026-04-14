@@ -8,6 +8,7 @@
 //! Feature-gated: compile with `--features homeassistant`.
 
 #[cfg(feature = "homeassistant")]
+#[allow(dead_code)]
 pub mod homeassistant {
     use log::{error, info, warn};
     use reqwest::{Client, StatusCode};

@@ -91,7 +91,7 @@ pub async fn execute(args: DoctorArgs) -> anyhow::Result<()> {
 
     if args.repair {
         println!();
-        run_repair(&client, &base, args.json).await?;
+        run_repair(&base, args.json).await?;
     }
 
     Ok(())
@@ -166,7 +166,7 @@ async fn try_post(client: &reqwest::Client, base: &str, path: &str) -> bool {
     }
 }
 
-async fn run_repair(client: &reqwest::Client, base: &str, json_mode: bool) -> anyhow::Result<()> {
+async fn run_repair(base: &str, json_mode: bool) -> anyhow::Result<()> {
     let total_steps = 6;
     let mut results: Vec<StepResult> = Vec::with_capacity(total_steps);
 
@@ -211,7 +211,15 @@ async fn run_repair(client: &reqwest::Client, base: &str, json_mode: bool) -> an
     }
 
     // --- Step 4: Check health ---
-    let healthy_after_restart = check_health(client, base).await;
+    // Rebuild the client AFTER the restart: lifeosd regenerates its
+    // bootstrap token on every start, so the `client` we were given at
+    // the top of execute() is stamped with the PRE-restart token and
+    // would always see HTTP 401 against the freshly-started daemon —
+    // causing step 4 to report "daemon not healthy after restart" even
+    // when the daemon is perfectly healthy and just answering with a
+    // new token.
+    let client_after_restart = crate::daemon_client::authenticated_client();
+    let healthy_after_restart = check_health(&client_after_restart, base).await;
     let step4 = if healthy_after_restart {
         StepResult::ok("Checking health")
     } else {
@@ -238,16 +246,17 @@ async fn run_repair(client: &reqwest::Client, base: &str, json_mode: bool) -> an
         }
         let mut sub_results: Vec<String> = Vec::new();
 
-        // Reset LLM router
-        if try_post(client, base, "/api/v1/ai/reset").await {
+        // Reset LLM router — use the post-restart client so the
+        // bootstrap token matches the daemon that's running now.
+        if try_post(&client_after_restart, base, "/api/v1/ai/reset").await {
             sub_results.push("llm-router: reset".into());
         }
         // Clear stuck tasks
-        if try_post(client, base, "/api/v1/tasks/clear-stuck").await {
+        if try_post(&client_after_restart, base, "/api/v1/tasks/clear-stuck").await {
             sub_results.push("stuck-tasks: cleared".into());
         }
         // Disable safe mode
-        if try_post(client, base, "/api/v1/safe-mode/exit").await {
+        if try_post(&client_after_restart, base, "/api/v1/safe-mode/exit").await {
             sub_results.push("safe-mode: disabled".into());
         }
 
@@ -278,7 +287,7 @@ async fn run_repair(client: &reqwest::Client, base: &str, json_mode: bool) -> an
     if !healthy_after_restart {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    let final_healthy = check_health(client, base).await;
+    let final_healthy = check_health(&client_after_restart, base).await;
     let step6 = if final_healthy {
         StepResult::ok("Verifying final state")
     } else {

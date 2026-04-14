@@ -1,0 +1,33 @@
+[Unit]
+Description=LifeOS Power Auto-Tune (USB/SATA/PCI autosuspend)
+After=multi-user.target
+# Run after power profile so EPP is already set correctly
+After=lifeos-power-profile.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# powertop --auto-tune enables all "Good" power-saving tunables:
+# - USB autosuspend on all devices
+# - SATA link power management
+# - PCI runtime power management
+# - Audio codec power save
+# - Wi-Fi power save
+#
+# Only applied on battery — on AC the latency tradeoff isn't worth it
+# (some USB mice/keyboards can miss first input after autosuspend).
+# Saves 2-5W idle on battery.
+ExecStart=/bin/bash -c '\
+  ON_AC=false; \
+  for ps in /sys/class/power_supply/AC* /sys/class/power_supply/ADP*; do \
+    [ -f "$${ps}/online" ] && [ "$$(cat $${ps}/online 2>/dev/null)" = "1" ] && ON_AC=true; \
+  done; \
+  if $$ON_AC; then \
+    echo "[powertune] On AC — skipping auto-tune (latency over savings)"; \
+  else \
+    /usr/sbin/powertop --auto-tune; \
+    echo "[powertune] On battery — auto-tune applied"; \
+  fi'
+
+[Install]
+WantedBy=multi-user.target

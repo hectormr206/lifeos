@@ -55,6 +55,28 @@ jobs:
             exit 1
           fi
 
+      # Dev-mode guard: CI must never build dev images. See
+      # docs/operations/dev-mode.md for the full contract.
+      - name: Reject dev-mode references in CI
+        run: |
+          set -euo pipefail
+          if grep -rn "LIFEOS_BUILD_MODE""=dev" .github/workflows/; then
+            echo "FATAL: dev build mode token must never appear in CI workflows"
+            exit 1
+          fi
+          echo "dev-mode scanner passed"
+
+      - name: Reject dev tags
+        run: |
+          set -euo pipefail
+          for tag in "latest" "${{ github.sha }}"; do
+            if echo "$tag" | grep -qE '(^|[-:])dev([-:]|$)'; then
+              echo "FATAL: refusing to build image with dev tag: $tag"
+              exit 1
+            fi
+          done
+          echo "tag guard passed"
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         id: build-and-push
@@ -66,12 +88,37 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           build-args: |
+            LIFEOS_BUILD_MODE=release
             LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64=${{ secrets.LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 }}
             LIFEOS_NVIDIA_KMOD_CERT_DER_B64=${{ secrets.LIFEOS_NVIDIA_KMOD_CERT_DER_B64 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
+
+      # Dev-mode leak check: verify the published image does NOT contain
+      # any dev affordances. Belt-and-suspenders over the Containerfile
+      # verification block — if somehow a dev file slipped in, this step
+      # fails the workflow before the image is consumed downstream.
+      - name: Verify no dev-mode artifacts in image
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          docker pull "${IMAGE}"
+          docker run --rm --entrypoint /bin/bash "${IMAGE}" -lc '
+            set -euo pipefail
+            if [ -f /etc/sudoers.d/lifeos-dev ]; then
+              echo "FATAL: /etc/sudoers.d/lifeos-dev present in release image"
+              exit 1
+            fi
+            if [ -f /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf ]; then
+              echo "FATAL: dev-mode dropin present in release image"
+              exit 1
+            fi
+            echo "dev-mode leak check passed"
+          '
 
       - name: Verify NVIDIA signing artifacts in image
         if: github.event_name != 'pull_request'

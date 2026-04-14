@@ -1,0 +1,17 @@
+[Unit]
+Description=LifeOS Flatpak Nvidia GL Extension Sync
+After=network-online.target
+Wants=network-online.target
+# Run after bootc applies an update (driver version may have changed)
+After=bootc-upgrade.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lifeos-flatpak-nvidia-sync.sh
+StandardOutput=journal
+StandardError=journal
+# Only run if Nvidia hardware is present
+ExecCondition=/bin/sh -c '[ -e /dev/nvidiactl ]'
+
+[Install]
+WantedBy=multi-user.target

@@ -57,16 +57,45 @@ const NON_GAME_GPU_PROCESSES: &[&str] = &[
     "hyprland",
     "waybar",
     "obs",
+    "obs-studio",
     "blender",
     "mpv",
     "vlc",
+    "signal",
+    "slack",
+    "spotify",
+    "thunderbird",
+    "gimp",
+    "krita",
+    "kdenlive",
+    "darktable",
+    "brave",
+    "nvidia-settin",
+    "nvtop",
+    "steamwebhelper",
 ];
 
 /// Process names that are launchers (not games themselves)
-const LAUNCHER_PROCESSES: &[&str] = &["steam", "steamwebhelper", "lutris", "heroic", "gamemoded"];
+const LAUNCHER_PROCESSES: &[&str] = &[
+    "steam",
+    "steamwebhelper",
+    "lutris",
+    "heroic",
+    "bottles",
+    "minigalaxy",
+    "itch",
+];
 
 /// Processes that often appear alongside games, but are not the game binary itself.
-const SUPPORT_PROCESS_NAMES: &[&str] = &["gamescope", "mangohud", "proton"];
+const SUPPORT_PROCESS_NAMES: &[&str] = &[
+    "gamescope",
+    "mangohud",
+    "proton",
+    "pressure-luftw",
+    "reaper",
+    "steam-runtime-",
+    "gamemoded",
+];
 
 /// Processes that MAY indicate a game but are ambiguous on their own.
 /// wineserver/wine can run for non-game Windows apps (Office, etc.).
@@ -76,6 +105,7 @@ const AMBIGUOUS_GAME_PROCESSES: &[&str] = &["wine", "wine64", "wineserver"];
 
 /// Process names that ALWAYS indicate a game is running (high confidence)
 const GAME_PROCESS_NAMES: &[&str] = &[
+    // Unreal Engine
     "UE4Game",
     "UE5Game",
     // Resident Evil series
@@ -87,6 +117,29 @@ const GAME_PROCESS_NAMES: &[&str] = &[
     "re4",
     "re2.exe",
     "re2",
+    // Valve titles
+    "hl2_linux",
+    "cs2",
+    "dota2",
+    "portal2_linux",
+    // Popular Linux-native games
+    "factorio",
+    "celeste",
+    "hollow_knight",
+    "Terraria.bin.x",
+    "valheim.x86_64",
+    "RocketLeague",
+    "Cyberpunk2077.",
+    "witcher3.exe",
+    "baldur.exe",
+    "bg3.exe",
+    "eldenring.exe",
+    "GTA5.exe",
+    "HorizonZeroDaw",
+    "javaw", // Minecraft
+    // Halo series
+    "HaloInfinite.e",
+    "MCC-Win64-Ship",
 ];
 
 /// Extremely generic executable names that only count as games when the
@@ -196,6 +249,7 @@ struct GameGuardInner {
     current_mode: LlmMode,
     last_game: Option<GameInfo>,
     last_check: DateTime<Utc>,
+    thermal_manager: Option<Arc<crate::thermal_manager::ThermalManager>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -217,10 +271,18 @@ impl GameGuard {
             current_mode,
             last_game: None,
             last_check: Utc::now(),
+            thermal_manager: None,
         };
         Self {
             inner: Arc::new(RwLock::new(inner)),
         }
+    }
+
+    /// Attach the thermal manager so Game Guard can switch thermal modes.
+    pub async fn set_thermal_manager(&self, tm: Arc<crate::thermal_manager::ThermalManager>) {
+        let mut inner = self.inner.write().await;
+        inner.thermal_manager = Some(tm);
+        info!("[game_guard] thermal manager attached");
     }
 
     /// Returns a snapshot of the current guard state.
@@ -346,22 +408,46 @@ impl GameGuard {
                     game.name, game.pid, game.detection_method
                 );
                 match persist_game_guard_override(inner.config.cpu_fallback_profile.as_ref()) {
-                    Ok(_) => {}
-                    Err(e) => warn!("[game_guard] persist_game_guard_override failed: {e}"),
+                    Ok(_) => {
+                        inner.current_mode = LlmMode::Cpu;
+                        inner.last_game = game_info;
+                        // Tell thermal manager to enter gaming mode (relaxed
+                        // thresholds — accepts 5°C hotter before throttling).
+                        if let Some(ref tm) = inner.thermal_manager {
+                            tm.set_mode(crate::thermal_manager::ThermalMode::Gaming)
+                                .await;
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "[game_guard] persist_game_guard_override FAILED — staying in GPU mode, will retry: {e}"
+                        );
+                    }
                 }
-                inner.current_mode = LlmMode::Cpu;
-                inner.last_game = game_info;
             }
 
             // No game and we're on CPU → restore GPU
             (None, LlmMode::Cpu) => {
                 info!("[game_guard] no game detected — restoring LLM to GPU");
                 match clear_game_guard_override_and_restart() {
-                    Ok(_) => {}
-                    Err(e) => warn!("[game_guard] clear_game_guard_override failed: {e}"),
+                    Ok(_) => {
+                        inner.current_mode = LlmMode::Gpu;
+                        inner.last_game = None;
+                        // Restore normal reactive thermal management.
+                        if let Some(ref tm) = inner.thermal_manager {
+                            tm.set_mode(crate::thermal_manager::ThermalMode::Normal)
+                                .await;
+                        }
+                    }
+                    Err(e) => {
+                        // Do NOT flip to Gpu mode if the restore failed — that
+                        // would leave llama-server on cpu_layers=0 while the
+                        // state claims GPU. Keep retrying on the next poll.
+                        error!(
+                            "[game_guard] clear_game_guard_override FAILED — staying in CPU mode, will retry: {e}"
+                        );
+                    }
                 }
-                inner.current_mode = LlmMode::Gpu;
-                inner.last_game = None;
             }
 
             // Game still running on CPU — update game info but don't restart
@@ -390,6 +476,26 @@ impl GameGuard {
             assistant_enabled: inner.config.game_assistant_enabled && inner.config.supported,
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Machine detection
+// ---------------------------------------------------------------------------
+
+/// Detect if the machine is a laptop (has a battery and portable chassis type).
+pub fn is_laptop() -> bool {
+    // Check for battery presence first (most reliable)
+    if std::path::Path::new("/sys/class/power_supply/BAT0").exists()
+        || std::path::Path::new("/sys/class/power_supply/BAT1").exists()
+    {
+        return true;
+    }
+    // Fallback: DMI chassis type (9=Laptop, 10=Notebook, 14=Sub Notebook)
+    if let Ok(chassis) = fs::read_to_string("/sys/class/dmi/id/chassis_type") {
+        let code: u32 = chassis.trim().parse().unwrap_or(0);
+        return matches!(code, 9 | 10 | 14);
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +571,11 @@ pub fn detect_gamemode_active() -> bool {
 
 fn gamemode_status_is_active(stdout: &str) -> bool {
     let normalized = stdout.trim().to_ascii_lowercase();
+    // Reject "active with 0 games registered" — that's gamemode running
+    // but no game actually using it (false positive).
+    if normalized.contains("0 games registered") || normalized.contains("0 clients") {
+        return false;
+    }
     !normalized.contains("inactive") && normalized.contains("active")
 }
 
@@ -827,7 +938,9 @@ fn read_proc_exe_path(pid: u32) -> Option<String> {
 }
 
 fn contains_game_install_marker(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
+    // Normalize Windows-style backslashes to forward slashes so Wine/Proton
+    // cmdline paths like "Z:\...\steamapps\common\..." match our markers.
+    let lower = value.replace('\\', "/").to_ascii_lowercase();
     GAME_INSTALL_PATH_MARKERS
         .iter()
         .any(|marker| lower.contains(marker))
@@ -965,6 +1078,16 @@ pub fn effective_gpu_layers(env_path: &str) -> Option<i32> {
 // ---------------------------------------------------------------------------
 
 /// Writes the Game Guard override env with a CPU fallback profile.
+/// Write the CPU fallback profile to disk and restart llama-server so the
+/// game has exclusive access to the GPU.
+///
+/// Interaction with VRAM retention (item #3 in the roadmap): llama-server
+/// now runs with `--mlock` and `LimitMEMLOCK=infinity`. When this function
+/// restarts the service with `gpu_layers=0`, the CPU-resident model weights
+/// (~3-4 GB for Qwen3.5-4B Q4) will be locked in RAM — which is desirable
+/// for CPU inference speed but means a few extra GB of RAM are committed
+/// while the game runs. On machines with 16 GB+ RAM this is fine; on
+/// lower-memory machines the runtime profile should pick a smaller model.
 pub fn persist_game_guard_override(profile: Option<&RuntimeSettings>) -> Result<()> {
     let profile = profile.cloned().unwrap_or(RuntimeSettings {
         ctx_size: 4096,

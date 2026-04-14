@@ -32,20 +32,37 @@ sudo bash scripts/build-iso.sh
 | Crate | Binary | Entry | Key dirs |
 |-------|--------|-------|----------|
 | `cli/` | `life` | `cli/src/main.rs` | `commands/`, `config/`, `daemon_client.rs` |
-| `daemon/` | `lifeosd` | `daemon/src/main.rs` | `api/`, `telegram_tools.rs`, `llm_router.rs`, `supervisor.rs` |
+| `daemon/` | `lifeosd` | `daemon/src/main.rs` | `api/`, `axi_tools.rs` (shared agentic chat), `llm_router.rs`, `supervisor.rs` |
 | `image/` | ISO | `image/Containerfile` | `image/files/` (systemd units, scripts, configs) |
 
 - **Daemon API:** Axum REST on `127.0.0.1:8081` + WebSocket at `/ws`. Auth: `x-bootstrap-token` header
 - **AI runtime:** llama-server on `:8082`, Qwen3.5-4B default, 13+ LLM providers via `llm_router.rs`
-- **Features:** `default = ["dbus", "http-api"]`, optional `ui-overlay` (GTK4), `telegram`, `slack`, `discord`
+- **Features:** `default = ["dbus", "http-api"]`, optional `ui-overlay` (GTK4), `messaging` (SimpleX bridge), `tray`
 
 ## Critical Constraints
 
 - **bootc:** `/usr` is read-only at runtime. All mutable state in `/var/` or `/home/`
-- **No `#[allow(dead_code)]`** on new modules — wire to Telegram/API/event bus/supervisor
+- **No `#[allow(dead_code)]`** on new modules — wire to SimpleX/API/event bus/supervisor
 - **Pre-commit hooks:** rustfmt + clippy. On push: cargo test + cargo audit
 - **User cannot run sudo** — provide commands for user to run manually
 - **Daemon auth:** All `/api/v1/*` need `x-bootstrap-token` or `x-api-key` header
+
+## Documentation Sync Rule
+
+**When changing code, ALWAYS update docs in the same commit.** This is mandatory, not optional.
+
+| If you change... | Update... |
+|---|---|
+| New systemd service/timer | `docs/operations/system-admin.md` (service diagram) |
+| New feature in daemon | `docs/user/user-guide.md` + `README.md` feature list |
+| New CLI command | `docs/user/user-guide.md` |
+| Containerfile (new package/service) | `docs/user/installation.md` if user-visible |
+| SimpleX bridge | `docs/operations/simplex-features.md` |
+| Security config | `docs/user/installation.md` Security Defaults section |
+| Architecture change | `docs/architecture/` relevant file |
+| Version bump | `README.md` badge + `docs/architecture/update-channels.md` examples |
+
+If unsure whether docs need updating: **they do.**
 
 ## Navigation — Find What You Need
 

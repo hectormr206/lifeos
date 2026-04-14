@@ -246,7 +246,7 @@ CREATE INDEX IF NOT EXISTS idx_health_attachments_type
 -- as the rest of memory.db.
 --
 -- All inserts via the BI.7 API also create a `growth_*` kind entry in
--- memory_entries (see telegram_tools.rs / API), which means BI.1's
+-- memory_entries (see axi_tools.rs / API), which means BI.1's
 -- auto-permanent contract makes these rows survive decay forever even if
 -- the user doesn't access them for years.
 
@@ -2997,7 +2997,7 @@ impl MemoryPlaneManager {
                 "{}. [{}] {} (id: {})\n",
                 i + 1,
                 entry.kind,
-                &entry.content[..entry.content.len().min(100)],
+                crate::str_utils::truncate_bytes_safe(&entry.content, 100),
                 entry.entry_id
             ));
         }
@@ -4675,7 +4675,7 @@ fn constant_time_eq_slice(a: &[u8], b: &[u8]) -> bool {
 //   * En crisis, Axi NUNCA improvisa "aqui estoy para ti" como UNICA
 //     respuesta. SIEMPRE entrega lineas de ayuda + recomienda
 //     contacto con profesional/911. La logica de UI vive en
-//     telegram_tools y referencia `crisis_resources_mx()`.
+//     axi_tools y referencia `crisis_resources_mx()`.
 
 /// One row in `mental_health_mood_log` — quick mood/energia/ansiedad
 /// check-in. La nota corta usa el cifrado por defecto del

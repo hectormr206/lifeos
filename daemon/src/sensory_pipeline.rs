@@ -509,6 +509,11 @@ pub struct VoiceLoopRequest {
     pub language: Option<String>,
     pub voice_model: Option<String>,
     pub playback: bool,
+    /// True when triggered by an explicit wake word from the user.
+    /// When false (continuous listen follow-up), the continuous
+    /// conversation window is NOT renewed — this prevents an infinite
+    /// loop where Axi's TTS output gets captured as a follow-up.
+    pub triggered_by_wake_word: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1067,6 +1072,30 @@ impl SensoryPipelineManager {
             return Ok(None);
         }
 
+        // Skip listening while Axi is speaking via TTS — the microphone
+        // would capture Axi's own voice and trigger a feedback loop.
+        {
+            let pb = self.playback.lock().await;
+            if pb.is_some() {
+                log::debug!("[always_on] Skipping cycle — TTS playback active");
+                return Ok(None);
+            }
+        }
+
+        // Post-playback cooldown: after TTS finishes, the room still has
+        // residual echo for a couple of seconds. Skip capture during that
+        // window to avoid feeding Axi's own voice back as user input.
+        if let Some(completed) = state.voice.last_completed_at {
+            let elapsed = (Utc::now() - completed).num_milliseconds().max(0) as u64;
+            if elapsed < 3000 {
+                log::debug!(
+                    "[always_on] Skipping cycle — {}ms post-TTS cooldown",
+                    elapsed
+                );
+                return Ok(None);
+            }
+        }
+
         if let Some(last_listen_at) = state.voice.last_listen_at {
             if ((Utc::now() - last_listen_at).num_seconds().max(0) as u64)
                 < ALWAYS_ON_CAPTURE_SECONDS
@@ -1217,6 +1246,7 @@ impl SensoryPipelineManager {
                     language: Some("es".to_string()),
                     voice_model: None,
                     playback: true,
+                    triggered_by_wake_word: wake_word_found,
                 },
             )
             .await?;
@@ -1301,6 +1331,7 @@ impl SensoryPipelineManager {
                                     language: Some("es".to_string()),
                                     voice_model: None,
                                     playback: true,
+                                    triggered_by_wake_word: true,
                                 },
                             )
                             .await?;
@@ -1328,6 +1359,7 @@ impl SensoryPipelineManager {
                                 language: Some("es".to_string()),
                                 voice_model: None,
                                 playback: true,
+                                triggered_by_wake_word: true,
                             },
                         )
                         .await?;
@@ -1379,6 +1411,7 @@ impl SensoryPipelineManager {
                         language: Some("es".to_string()),
                         voice_model: None,
                         playback: true,
+                        triggered_by_wake_word: true,
                     },
                 )
                 .await?;
@@ -1425,6 +1458,7 @@ impl SensoryPipelineManager {
                     language: Some("es".to_string()),
                     voice_model: None,
                     playback: true,
+                    triggered_by_wake_word: true,
                 },
             )
             .await?;
@@ -1743,9 +1777,22 @@ impl SensoryPipelineManager {
             if barge_in {
                 state.voice.barge_in_count += 1;
             }
-            // Enable continuous conversation: skip wake word for 30s after response.
-            state.voice.continuous_listen_until =
-                Some(Utc::now() + chrono::Duration::seconds(CONTINUOUS_CONVERSATION_SECS));
+            // Continuous conversation is DISABLED when TTS playback occurred.
+            // When Axi speaks aloud, the microphone inevitably captures the
+            // TTS audio. If we kept the continuous-listen window open, the
+            // pipeline would transcribe Axi's own voice as user input and
+            // respond again — creating an infinite voice loop.
+            //
+            // Continuous listen is only safe for text-only responses (no
+            // playback) where there is no risk of mic feedback.
+            if request.triggered_by_wake_word && !request.playback {
+                state.voice.continuous_listen_until =
+                    Some(Utc::now() + chrono::Duration::seconds(CONTINUOUS_CONVERSATION_SECS));
+            } else {
+                // Clear any existing continuous window to prevent stale
+                // windows from previous sessions causing loops.
+                state.voice.continuous_listen_until = None;
+            }
             state.gpu.tokens_per_second = tokens_per_second;
             state.last_error = None;
             state.last_updated_at = Some(Utc::now());
@@ -2517,6 +2564,7 @@ impl SensoryPipelineManager {
                         language: Some("es".to_string()),
                         voice_model: None,
                         playback: true,
+                        triggered_by_wake_word: true,
                     },
                 )
                 .await
@@ -4072,15 +4120,22 @@ fn split_tts_chunks(raw: &str) -> Vec<String> {
     chunks
 }
 
-/// Lower or restore system audio volume via PulseAudio/PipeWire.
+/// Duck or restore OTHER applications' audio while Axi speaks.
 ///
-/// When `duck` is true, saves the current sink name + volume and sets it to 30%.
-/// When `duck` is false, restores the saved volume ONLY if the same sink is still active.
-/// This prevents volume corruption when the user switches audio devices (e.g. BT headphones).
+/// Unlike the old approach (which changed the global sink volume and
+/// affected Axi's own voice), this operates on individual sink-inputs
+/// (per-app audio streams). Axi speaks at whatever volume the user has
+/// set on the system — only other apps (Spotify, Firefox, etc.) get
+/// lowered to `DUCK_RATIO` of their current volume, then restored.
+///
+/// This matches the Alexa/Google Home model: assistant speaks at the
+/// user's chosen volume, background audio ducks, then comes back.
 async fn duck_system_audio(duck: bool) {
-    /// File used to persist the original sink name and volume between duck and restore calls.
-    /// Format: "sink_name\nvolume_percent"
-    const DUCK_VOLUME_FILE: &str = "/tmp/lifeos-duck-volume";
+    /// File used to persist original sink-input volumes between duck/restore.
+    /// Format: one line per stream — "sink_input_index:original_volume"
+    const DUCK_VOLUME_FILE: &str = "/tmp/lifeos-duck-volumes";
+    /// How much to reduce other streams (0.3 = 30% of their current volume).
+    const DUCK_RATIO: f64 = 0.30;
 
     // Never duck during an active call — it would lower the call's audio.
     if duck && detect_active_meeting().await.is_some() {
@@ -4088,85 +4143,94 @@ async fn duck_system_audio(duck: bool) {
         return;
     }
 
-    // Helper: get the current default sink name
-    async fn get_default_sink() -> Option<String> {
-        let output = Command::new("pactl")
-            .args(["get-default-sink"])
+    /// List all sink-inputs and their volumes. Returns Vec<(index, volume_raw)>.
+    /// Uses `pactl list sink-inputs` and parses the output.
+    async fn list_sink_inputs() -> Vec<(u32, u64)> {
+        let output = match Command::new("pactl")
+            .args(["list", "sink-inputs"])
             .output()
             .await
-            .ok()?;
-        if output.status.success() {
-            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !name.is_empty() {
-                return Some(name);
+        {
+            Ok(o) if o.status.success() => o,
+            _ => return Vec::new(),
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut inputs = Vec::new();
+        let mut current_index: Option<u32> = None;
+
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            // "Sink Input #42"
+            if let Some(rest) = trimmed.strip_prefix("Sink Input #") {
+                current_index = rest.trim().parse().ok();
+            }
+            // "Volume: front-left: 42000 /  64% / ..."
+            if trimmed.starts_with("Volume:") {
+                if let Some(idx) = current_index {
+                    // Extract the first raw volume number (e.g. 42000)
+                    if let Some(raw) = trimmed
+                        .split_whitespace()
+                        .find(|w| w.parse::<u64>().is_ok())
+                    {
+                        if let Ok(vol) = raw.parse::<u64>() {
+                            inputs.push((idx, vol));
+                        }
+                    }
+                }
             }
         }
-        None
-    }
-
-    // Helper: get current volume percentage of the default sink
-    async fn get_sink_volume() -> Option<u32> {
-        let output = Command::new("pactl")
-            .args(["get-sink-volume", "@DEFAULT_SINK@"])
-            .output()
-            .await
-            .ok()?;
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            return stdout
-                .split('/')
-                .find(|part| part.trim().ends_with('%'))
-                .and_then(|part| part.trim().strip_suffix('%'))
-                .and_then(|val| val.trim().parse::<u32>().ok());
-        }
-        None
+        inputs
     }
 
     if duck {
-        let sink_name = get_default_sink().await.unwrap_or_default();
-        if let Some(pct) = get_sink_volume().await {
-            // Only duck if the volume is above the duck level.
-            if pct > 30 {
-                let save_data = format!("{}\n{}", sink_name, pct);
-                let _ = tokio::fs::write(DUCK_VOLUME_FILE, save_data).await;
-                let _ = Command::new("pactl")
-                    .args(["set-sink-volume", "@DEFAULT_SINK@", "30%"])
-                    .output()
-                    .await;
-            }
+        let inputs = list_sink_inputs().await;
+        if inputs.is_empty() {
+            return;
         }
+
+        // Save original volumes and duck each stream.
+        let mut save_lines = Vec::new();
+        for (idx, vol) in &inputs {
+            save_lines.push(format!("{}:{}", idx, vol));
+            let ducked = ((*vol as f64) * DUCK_RATIO) as u64;
+            let _ = Command::new("pactl")
+                .args([
+                    "set-sink-input-volume",
+                    &idx.to_string(),
+                    &ducked.to_string(),
+                ])
+                .output()
+                .await;
+        }
+        let _ = tokio::fs::write(DUCK_VOLUME_FILE, save_lines.join("\n")).await;
+        log::debug!(
+            "[duck] Ducked {} sink-input(s) to {:.0}%",
+            inputs.len(),
+            DUCK_RATIO * 100.0
+        );
     } else {
-        // Restore to the saved volume — but only if the same sink is still the default.
-        // If the user switched to a different device (e.g. BT headphones), do NOT touch volume.
-        if let Ok(saved) = tokio::fs::read_to_string(DUCK_VOLUME_FILE).await {
-            let mut lines = saved.trim().lines();
-            let saved_sink = lines.next().unwrap_or("").trim();
-            let saved_pct = lines.next().unwrap_or("").trim();
+        // Restore saved volumes.
+        let saved = match tokio::fs::read_to_string(DUCK_VOLUME_FILE).await {
+            Ok(s) => s,
+            Err(_) => return, // nothing to restore
+        };
 
-            if !saved_sink.is_empty() && !saved_pct.is_empty() {
-                let current_sink = get_default_sink().await.unwrap_or_default();
-
-                if current_sink == saved_sink {
-                    // Same sink — safe to restore volume
+        for line in saved.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some((idx_str, vol_str)) = line.split_once(':') {
+                if let (Ok(idx), Ok(vol)) = (idx_str.parse::<u32>(), vol_str.parse::<u64>()) {
                     let _ = Command::new("pactl")
-                        .args([
-                            "set-sink-volume",
-                            "@DEFAULT_SINK@",
-                            &format!("{}%", saved_pct),
-                        ])
+                        .args(["set-sink-input-volume", &idx.to_string(), &vol.to_string()])
                         .output()
                         .await;
-                } else {
-                    log::info!(
-                        "Audio sink changed ({} -> {}), skipping volume restore to avoid overwriting user's volume",
-                        saved_sink, current_sink
-                    );
                 }
             }
-            // else: corrupted/empty file — do nothing, don't fallback to 100%
         }
-        // else: no duck file — nothing to restore, do NOT set 100%
         let _ = tokio::fs::remove_file(DUCK_VOLUME_FILE).await;
+        log::debug!("[duck] Restored sink-input volumes");
     }
 }
 
@@ -5416,9 +5480,10 @@ fn contains_wake_word(transcript: &str, wake_word: &str) -> bool {
     // Check phonetic variants that Whisper commonly produces for "axi".
     if wake_word == "axi" {
         let variants = [
-            "axi", "aksi", "axie", "oxy", "aksie", "acsi", "ahxi", "asi", "ahi", "ahsi",
-            // Spanish Whisper mishearings
-            "exi", "oxi", "acci", "aquí",
+            "axi", "aksi", "axie", "aksie", "acsi", "ahxi",
+            // Spanish Whisper mishearings observed in our own transcripts.
+            // Keep this list tight and biased toward explicit wake invocations.
+            "exi", "acci", "ahsi", "aquí", "oxi",
         ];
         return variants.iter().any(|v| transcript.contains(v));
     }

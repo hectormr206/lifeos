@@ -65,7 +65,7 @@ La marca del sistema:
 La interfaz viva de la marca:
 
 - asistente
-- Telegram avatar
+- SimpleX avatar
 - tray icon
 - onboarding
 - overlays
@@ -121,7 +121,7 @@ Debe aparecer con distinta intensidad segun la superficie.
 
 - wallpaper default
 - landing page hero illustration
-- Telegram icon/avatar
+- SimpleX icon/avatar
 - onboarding
 - splash visuals
 
@@ -311,16 +311,19 @@ La formula recomendada para cada edicion regional es:
 
 ---
 
-## 10. Telegram y Axi
+## 10. SimpleX y Axi
 
 La recomendacion oficial es:
 
-- el icono principal de Telegram debe ser **Axi**
+- el icono/avatar del perfil de SimpleX debe ser **Axi**
 
 No el logo textual de LifeOS.
 No un icono generico.
 
-### Requisitos del avatar de Telegram
+El perfil de SimpleX se auto-configura en el primer arranque (nombre "Axi",
+avatar, descripcion) desde los assets versionados en la imagen.
+
+### Requisitos del avatar de SimpleX
 
 - close-up legible en tamaño pequeño
 - ojos claros y expresivos
@@ -393,7 +396,7 @@ Cada wallpaper oficial debe registrar:
 
 ### Etapa 1
 
-- fijar a Axi como icono oficial de Telegram
+- fijar a Axi como icono oficial del perfil SimpleX
 - definir wallpaper canonico `Axi Xochimilco`
 - actualizar landing para reflejar el sistema visual
 

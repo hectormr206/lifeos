@@ -1,0 +1,19 @@
+[Unit]
+Description=LifeOS Background Tasks (E-core pinned, low priority)
+Documentation=https://github.com/hectormr206/lifeos
+Before=slices.target
+
+[Slice]
+# CPU weight: background tasks get minimal CPU time when P-cores are busy.
+# 10 is very low (default is 100). Interactive tasks always win.
+CPUWeight=10
+
+# I/O weight: background tasks yield disk to interactive tasks.
+IOWeight=10
+
+# Memory pressure: background tasks are the first to be reclaimed.
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=80%
+
+# AllowedCPUs is set dynamically at boot by lifeos-ecore-pin.service
+# because E-core IDs vary across CPU models.

@@ -705,7 +705,7 @@ impl LlmRouter {
                 "{} returned {}: {}",
                 provider.name,
                 status,
-                &body[..body.len().min(200)]
+                crate::str_utils::truncate_bytes_safe(&body, 200)
             );
         }
 
@@ -801,7 +801,7 @@ impl LlmRouter {
             bail!(
                 "Gemini returned {}: {}",
                 status,
-                &body[..body.len().min(200)]
+                crate::str_utils::truncate_bytes_safe(&body, 200)
             );
         }
 

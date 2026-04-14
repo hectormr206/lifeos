@@ -1,0 +1,27 @@
+[Unit]
+Description=LifeOS Power Profile — set EPP based on power source
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# At boot: detect if on AC or battery and set EPP accordingly.
+# The udev rule handles live plug/unplug events after boot.
+# NOTE: All $ must be $$ for systemd specifier escaping.
+ExecStart=/bin/bash -c '\
+  ON_AC=false; \
+  for ps in /sys/class/power_supply/AC* /sys/class/power_supply/ADP*; do \
+    [ -f "$${ps}/online" ] && [ "$$(cat $${ps}/online 2>/dev/null)" = "1" ] && ON_AC=true; \
+  done; \
+  if $$ON_AC; then \
+    EPP=balance_performance; \
+  else \
+    EPP=balance_power; \
+  fi; \
+  for f in /sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference; do \
+    [ -f "$$f" ] && echo $$EPP > "$$f"; \
+  done; \
+  echo "[power] Boot EPP set to $$EPP (AC=$$ON_AC)"'
+
+[Install]
+WantedBy=multi-user.target

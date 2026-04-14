@@ -17,9 +17,15 @@ use log::{info, warn};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const SAFE_MODE_THRESHOLD: u32 = 3;
+const SAFE_MODE_THRESHOLD: u32 = 5;
 const BOOT_COUNT_FILE: &str = "boot_count";
-const STABLE_WINDOW_SECS: u64 = 600; // 10 minutes
+// 30 seconds: a daemon that has been up for 30s is clearly past its crash
+// window. The old value of 600s (10 min) meant that every routine restart
+// during dev work (daemon-reload, unit edit, binary swap) accumulated
+// toward the threshold forever, and boot_count grew into the thousands
+// without ever resetting — eventually tripping SAFE MODE on a perfectly
+// healthy system.
+const STABLE_WINDOW_SECS: u64 = 30;
 
 static SAFE_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 

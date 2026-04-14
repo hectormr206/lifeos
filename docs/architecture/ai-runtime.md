@@ -1276,11 +1276,12 @@ Implementacion concreta:
 - [x] Forzar pre-instalacion obligatoria de `uBlock Origin` para proteccion local-first out-of-the-box. _Implementado: extension bundle en `/usr/lib/firefox/distribution/extensions/` con Install/Lock policy._
 - [x] Sincronizar UI de Firefox con COSMIC / LifeOS (Wayland nativo, `userChrome.css`, bordes, y acentos). _Implementado: userChrome.css con design tokens + MOZ_ENABLE_WAYLAND=1 + desktop entry con flags._
 
-**Aplicaciones Nativas Esenciales (Imagen Base):**
+**Aplicaciones de Escritorio (Flatpak — auto-update independiente):**
 
-- [x] Incorporar `mpv` (RPM) como reproductor de video ultraligero y nativo para Wayland en la imagen OCI. _Implementado: dnf install en Containerfile._
-- [x] Incorporar `evince` (RPM) como visor de documentos/PDF estandar, robusto y facil de usar en la imagen OCI. _Implementado: dnf install en Containerfile._
-- [x] Incorporar `keepassxc` (RPM) como gestor de contrasenas offline cifrado, alineado con el principio de privacidad local-first. _Implementado: dnf install en Containerfile._
+- [x] `mpv` → Flatpak `io.mpv.Mpv` — reproductor de video. _Migrado de RPM a Flatpak para auto-actualizacion._
+- [x] `evince` → Flatpak `org.gnome.Evince` — visor de documentos/PDF. _Migrado de RPM a Flatpak._
+- [x] `keepassxc` → Flatpak `org.keepassxc.KeePassXC` — gestor de contrasenas offline. _Migrado de RPM a Flatpak._
+- [x] `loupe` → Flatpak `org.gnome.Loupe` — visor de imagenes. _Migrado de RPM a Flatpak._
 
 **Calidad y validacion:**
 
@@ -1306,7 +1307,7 @@ Implementacion concreta:
 - Visual comfort: 3 perfiles (Balanced/Focus/Vivid), Night Mode, deteccion Wayland
 - COSMIC: wallpapers, temas, lock screen, acento unificado
 - Firefox: 25+ enterprise policies, uBlock Origin pre-instalado, userChrome.css con tokens
-- Apps nativas: mpv, evince, keepassxc
+- Apps de escritorio (Flatpak): mpv, evince, keepassxc, loupe — auto-update independiente
 - WCAG 2.2 AA: audit CLI + API, 0 violaciones criticas
 
 ### Fase 3 (6-12 semanas): Hardening, dogfooding y cierre de producto

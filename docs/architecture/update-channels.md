@@ -169,7 +169,7 @@ All images are published to GitHub Container Registry:
 podman pull ghcr.io/hectormr206/lifeos:stable
 
 # Pull specific version
-podman pull ghcr.io/hectormr206/lifeos:v0.2.0
+podman pull ghcr.io/hectormr206/lifeos:v0.4.1
 
 # Pull candidate
 podman pull ghcr.io/hectormr206/lifeos:candidate
@@ -222,7 +222,7 @@ schedule = "daily"
 # Build stable
 podman build \
   --build-arg LIFEOS_CHANNEL=stable \
-  --build-arg LIFEOS_VERSION=0.2.0 \
+  --build-arg LIFEOS_VERSION=0.4.1 \
   --build-arg LIFEOS_PRELOAD_MODEL=false \
   -t lifeos:stable \
   -f image/Containerfile .
@@ -230,7 +230,7 @@ podman build \
 # Build candidate
 podman build \
   --build-arg LIFEOS_CHANNEL=candidate \
-  --build-arg LIFEOS_VERSION=0.2.0-beta \
+  --build-arg LIFEOS_VERSION=0.4.1-beta \
   --build-arg LIFEOS_PRELOAD_MODEL=false \
   -t lifeos:candidate \
   -f image/Containerfile .
@@ -266,8 +266,8 @@ The release workflow is defined in `.github/workflows/release-channels.yml`:
 
 ```bash
 # Create stable release (via tag)
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.4.1
+git push origin v0.4.1
 
 # Trigger manual candidate build
 gh workflow run release-channels.yml -f channel=candidate

@@ -9,7 +9,7 @@
 
 | Capa | Archivo | Retencion | Que guarda |
 |------|---------|-----------|------------|
-| **1. Historial in-memory** | `telegram_tools.rs` (ConversationHistory) | 48h, ultimos 15 mensajes | Conversacion activa en RAM. Compactacion automatica a resumen despues de 20 mensajes |
+| **1. Historial in-memory** | `axi_tools.rs` (ConversationHistory) | 48h, ultimos 15 mensajes | Conversacion activa en RAM. Compactacion automatica a resumen despues de 20 mensajes |
 | **2. SessionStore (JSONL)** | `session_store.rs` | 72h en disco, 24h al reiniciar (50 turnos) | Transcript completo por chat. Incluye mensajes automaticos (cron, notificaciones). Sobrevive reinicios del daemon. **No cifrado** — texto plano en JSONL; datos sensibles deben guardarse en el Memory Plane cifrado |
 | **3. Memory Plane (SQLite)** | `memory_plane.rs` | **Permanente** (encriptado AES-GCM-SIV) | Decisiones, eventos, preferencias, resúmenes de conversaciones. Busqueda semantica por embeddings (768 dims) |
 | **4. Knowledge Graph** | `knowledge_graph.rs` + tabla en memory.db | **Permanente** | Relaciones: "Hector trabaja en LifeOS", "suegro tiene dialisis los martes", "prefiere formato bullet" |
@@ -50,7 +50,7 @@
 
 ```
 1. Cron job se ejecuta o notificacion se genera
-2. Mensaje se envia a Telegram
+2. Mensaje se envia al canal activo (SimpleX o dashboard)
 3. Mensaje se graba en SessionStore como TranscriptTurn (role: "assistant")
    └── Prefijo: "[Cron: nombre]" o "[Notificacion automatica]"
 4. Cuando el usuario responde, el historial incluye el mensaje automatico
@@ -99,7 +99,7 @@ que sabes de, que recuerdas
 
 ---
 
-## Herramientas de memoria disponibles via Telegram
+## Herramientas de memoria disponibles via SimpleX y dashboard
 
 | # | Tool | Que hace |
 |---|------|---------|
@@ -129,7 +129,7 @@ que sabes de, que recuerdas
 /var/lib/lifeos/
 ├── memory.db                    # SQLite: memory_entries, knowledge_graph, procedural_memory
 ├── sessions/
-│   └── telegram_dm_316014621/
+│   └── simplex_dm_&lt;contact_id&gt;/
 │       ├── metadata.json        # Session metadata, compaction summary
 │       └── transcript.jsonl     # Linea por turno (user/assistant/tool)
 └── memory.key                   # Clave de encriptacion (fallback)

@@ -1,6 +1,45 @@
 // LifeOS Dashboard — API client, SSE listener, diagnostics, UI logic
 'use strict';
 
+// --- Single-instance guard ---
+// Prevents multiple dashboard tabs. If one is already open, the new tab
+// transfers its token (if any) and closes itself.
+(function singleInstanceGuard() {
+  const ch = new BroadcastChannel('lifeos-dashboard');
+  const params = new URLSearchParams(location.search);
+  const newToken = params.get('token') || '';
+
+  // Ask if another tab is already open
+  let answered = false;
+  ch.postMessage({ type: 'ping', token: newToken });
+
+  ch.onmessage = (e) => {
+    if (e.data.type === 'ping') {
+      // Another tab is trying to open — send it a pong so it closes
+      // Accept its token if it has one (fresher than ours)
+      if (e.data.token) {
+        sessionStorage.setItem('lifeos_token', e.data.token);
+        token = e.data.token;
+      }
+      ch.postMessage({ type: 'pong' });
+      // Flash the tab title to signal we're here
+      const orig = document.title;
+      document.title = '▶ LifeOS Dashboard';
+      setTimeout(() => { document.title = orig; }, 2000);
+      window.focus();
+    } else if (e.data.type === 'pong' && !answered) {
+      // Another tab answered — we're the duplicate, close ourselves
+      answered = true;
+      window.close();
+      // window.close() only works for JS-opened windows; if it fails,
+      // redirect to a helpful message instead of showing a second dashboard
+      setTimeout(() => {
+        document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#aaa;font-family:Inter,sans-serif;flex-direction:column;gap:12px"><h2>Dashboard ya abierto en otra pestaña</h2><p>Podés cerrar esta pestaña.</p></div>';
+      }, 300);
+    }
+  };
+})();
+
 // --- Token management ---
 const params = new URLSearchParams(location.search);
 const bootMode = params.get('boot') === '1';
@@ -19,12 +58,6 @@ function apiHeaders() {
 
 // --- DOM refs ---
 const $ = (sel) => document.querySelector(sel);
-const orb = $('#axi-orb');
-const stateLabel = $('#axi-state-label');
-const stateReason = $('#axi-reason');
-const feedbackBar = $('#feedback-bar');
-const feedbackStage = $('#feedback-stage');
-const feedbackTps = $('#feedback-tps');
 const connectionBadge = $('#connection-badge');
 const activityFeed = $('#activity-feed');
 const feedCountEl = $('#feed-count');
@@ -59,12 +92,6 @@ const dashboardState = {
   bootMode,
 };
 
-// --- Aura map ---
-const AURA_MAP = {
-  idle: 'aura-green', listening: 'aura-cyan', thinking: 'aura-yellow',
-  speaking: 'aura-blue', watching: 'aura-teal', error: 'aura-red',
-  offline: 'aura-gray', night: 'aura-indigo',
-};
 const STATE_LABELS = {
   idle: 'En espera', listening: 'Escuchando...', thinking: 'Pensando...',
   speaking: 'Hablando...', watching: 'Observando...', error: 'Error',
@@ -287,9 +314,6 @@ function updateOrb(state, aura, reason) {
   const key = (state || 'offline').toLowerCase();
   dashboardState.axiState = key;
   dashboardState.axiReason = reason || '';
-  orb.className = 'orb ' + (AURA_MAP[key] || 'aura-gray');
-  stateLabel.textContent = STATE_LABELS[key] || key;
-  if (reason !== undefined) stateReason.textContent = reason || '';
   renderHero();
 }
 
@@ -534,14 +558,6 @@ function handleEvent(event) {
     case 'feedback_update':
       dashboardState.lastSignal = `Feedback ${event.data.stage || 'actualizado'}`;
       dashboardState.lastSignalAt = new Date().toISOString();
-      if (event.data.stage) {
-        feedbackBar.classList.remove('hidden');
-        feedbackStage.textContent = event.data.stage;
-        feedbackTps.textContent = event.data.tokens_per_second
-          ? `${event.data.tokens_per_second.toFixed(1)} tok/s` : '';
-      } else {
-        feedbackBar.classList.add('hidden');
-      }
       renderHero();
       break;
     case 'window_changed':
@@ -1113,14 +1129,29 @@ $('#interval-slider').addEventListener('change', async (e) => {
 });
 
 // --- Theme toggle ---
+function updateThemeIcon() {
+  const isDark = document.documentElement.dataset.theme !== 'light';
+  const moon = document.getElementById('theme-icon-moon');
+  const sun = document.getElementById('theme-icon-sun');
+  if (moon) moon.style.display = isDark ? 'block' : 'none';
+  if (sun) sun.style.display = isDark ? 'none' : 'block';
+}
 $('#theme-toggle').addEventListener('click', () => {
   const html = document.documentElement;
   const next = html.dataset.theme === 'dark' ? 'light' : 'dark';
   html.dataset.theme = next;
   localStorage.setItem('lifeos-theme', next);
+  updateThemeIcon();
 });
 const savedTheme = localStorage.getItem('lifeos-theme');
 if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+updateThemeIcon();
+
+// --- Clean token from URL (security: don't leave it in browser history) ---
+if (params.get('token')) {
+  const cleanUrl = location.pathname + (location.hash || '');
+  history.replaceState(null, '', cleanUrl);
+}
 
 // ==================== INITIAL FETCH ====================
 
@@ -1153,6 +1184,7 @@ async function fetchInitialState() {
       // Update all health dots from initial data
       populateAudioDiag(sensory, null);
       populateAlwaysOnDiag(sensory);
+      populateTtsDiag(sensory);
       populateScreenDiag(sensory);
       populateCameraDiag(sensory);
     }
@@ -1176,19 +1208,91 @@ async function fetchInitialState() {
     addFeedItem('&#9888;', 'Error al cargar estado inicial: ' + err.message);
     renderHero();
   }
+
+  // Load the SimpleX invite QR lazily — failures shouldn't block the
+  // rest of the dashboard since the feature is opt-in.
+  loadSimplexInvite().catch((err) => {
+    console.warn('[simplex] invite load failed:', err);
+  });
 }
+
+// --- SimpleX invite QR + link -------------------------------------------
+async function loadSimplexInvite() {
+  const qrBox = document.getElementById('simplex-qr');
+  const linkBox = document.getElementById('simplex-link-text');
+  const stateBox = document.getElementById('simplex-state');
+  if (!qrBox || !linkBox || !stateBox) return;
+
+  try {
+    const resp = await api('GET', '/simplex/invite');
+    if (!resp || !resp.exists) {
+      qrBox.innerHTML = '<span class="setting-hint">Sin link todavia</span>';
+      linkBox.value = '';
+      stateBox.textContent = 'simplex-chat aun no ha generado una invitacion. Revisa que el servicio este activo.';
+      return;
+    }
+    // The daemon already rendered a full SVG string so we can drop it
+    // straight in. Trusted source (same-origin) — no sanitization needed.
+    if (resp.qr_svg) {
+      qrBox.innerHTML = resp.qr_svg;
+    } else {
+      qrBox.innerHTML = '<span class="setting-hint">QR no disponible</span>';
+    }
+    linkBox.value = resp.link || '';
+    stateBox.textContent = 'Escanea con SimpleX Chat en tu telefono para conectarte a Axi';
+  } catch (err) {
+    console.error('[simplex] load failed:', err);
+    qrBox.innerHTML = '<span class="setting-hint">Error al cargar QR</span>';
+    stateBox.textContent = 'Error: ' + (err.message || err);
+  }
+}
+
+// Wire up the copy + refresh buttons once at module load.
+document.addEventListener('DOMContentLoaded', () => {
+  const copyBtn = document.getElementById('simplex-copy-btn');
+  const refreshBtn = document.getElementById('simplex-refresh-btn');
+  const linkBox = document.getElementById('simplex-link-text');
+  if (copyBtn && linkBox) {
+    copyBtn.addEventListener('click', async () => {
+      if (!linkBox.value) return;
+      try {
+        await navigator.clipboard.writeText(linkBox.value);
+        const prev = copyBtn.textContent;
+        copyBtn.textContent = 'Copiado!';
+        setTimeout(() => { copyBtn.textContent = prev; }, 1500);
+      } catch (_) {
+        linkBox.select();
+        document.execCommand('copy');
+      }
+    });
+  }
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', () => {
+      loadSimplexInvite().catch((err) => console.warn('[simplex] refresh failed:', err));
+    });
+  }
+});
 
 // --- Periodic full state refresh (catch anything SSE missed) ---
 async function refreshFullState() {
   try {
     await ensureBootstrapToken();
-    const [overlay, sensory, runtime, alwaysOn, context] = await Promise.all([
+    const [overlay, sensory, runtime, alwaysOn, context, sysStatus] = await Promise.all([
       api('GET', '/overlay/status'),
       api('GET', '/sensory/status'),
       api('GET', '/runtime/sensory'),
       api('GET', '/runtime/always-on'),
       api('GET', '/followalong/context'),
+      api('GET', '/system/status').catch(() => null),
     ]);
+
+    // Sync the clock's timezone with whatever the daemon reports. This is
+    // authoritative over the browser's detected timezone because the
+    // daemon knows the host's IANA zone, while the browser may be in a
+    // different environment (container, remote desktop, etc.).
+    if (sysStatus?.timezone) {
+      setServerTimezone(sysStatus.timezone);
+    }
 
     if (overlay?.axi_state) updateOrb(overlay.axi_state, null, overlay.reason || overlay.state_reason || overlay.axi_reason || '');
     updateOverlayDetails(overlay);
@@ -1209,6 +1313,7 @@ async function refreshFullState() {
         switch (sensor) {
           case 'audio': populateAudioDiag(sensory, diagCache.stt); break;
           case 'always-on': populateAlwaysOnDiag(sensory); break;
+          case 'tts': populateTtsDiag(sensory); break;
           case 'screen': populateScreenDiag(sensory); break;
           case 'camera': populateCameraDiag(sensory); break;
         }
@@ -1216,6 +1321,7 @@ async function refreshFullState() {
       // Always update health dots
       populateAudioDiag(sensory, diagCache.stt);
       populateAlwaysOnDiag(sensory);
+      populateTtsDiag(sensory);
       populateScreenDiag(sensory);
       populateCameraDiag(sensory);
       renderHero();
@@ -1611,6 +1717,10 @@ async function refreshKeyStatus() {
     const data = await res.json();
     const keys = data.keys || {};
     const map = {
+      'ANTHROPIC_API_KEY': 'anthropic',
+      'OPENAI_API_KEY': 'openai',
+      'GEMINI_API_KEY': 'gemini',
+      'ZAI_API_KEY': 'zai',
       'CEREBRAS_API_KEY': 'cerebras',
       'GROQ_API_KEY': 'groq',
       'OPENROUTER_API_KEY': 'openrouter',
@@ -1620,10 +1730,16 @@ async function refreshKeyStatus() {
     for (const [env, name] of Object.entries(map)) {
       const el = $(`#key-status-${name}`);
       if (!el) continue;
-      const configured = !!keys[env];
+      const info = keys[env] || {};
+      const configured = !!info.configured;
       el.textContent = configured ? '\u2705' : '\u274C';
       el.classList.toggle('ok', configured);
       el.classList.toggle('missing', !configured);
+      // Show masked hint as placeholder so user knows the saved value
+      const input = $(`#key-${name}`);
+      if (input && configured && info.hint) {
+        input.placeholder = info.hint;
+      }
     }
   } catch (e) { /* silent */ }
 }
@@ -2372,15 +2488,49 @@ if (safeModeExitBtn) {
 }
 
 // ==================== TIME & TIMEZONE DISPLAY ====================
+// The dashboard fetches the daemon's timezone via /system/status on load
+// and on each refreshFullState() cycle. Until it arrives we fall back to the
+// browser's detected timezone. This matters because the browser and the
+// daemon can disagree (e.g., container vs. host), and the user expects the
+// daemon's time.
 const headerClock = $('#header-clock');
 const headerTz = $('#header-tz');
-let detectedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+let serverTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
 function updateClock() {
-  const now = new Date();
-  const time = now.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  if (headerClock) headerClock.textContent = time;
-  if (headerTz && detectedTimezone) headerTz.textContent = detectedTimezone;
+  // Render the current wall-clock time in the daemon's IANA timezone.
+  // `Intl.DateTimeFormat` with `timeZone` option is the correct way to
+  // force a specific zone regardless of the browser's local setting.
+  try {
+    const now = new Date();
+    const time = new Intl.DateTimeFormat('es', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      timeZone: serverTimezone,
+    }).format(now);
+    if (headerClock) headerClock.textContent = time;
+    if (headerTz) headerTz.textContent = serverTimezone;
+  } catch (_err) {
+    // If serverTimezone is somehow invalid, fall back to browser local.
+    const time = new Date().toLocaleTimeString('es', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    });
+    if (headerClock) headerClock.textContent = time;
+  }
+}
+
+// Sync the displayed timezone to whatever the daemon reports. Called from
+// refreshFullState() after a successful /system/status fetch.
+function setServerTimezone(tz) {
+  if (tz && typeof tz === 'string' && tz !== serverTimezone) {
+    serverTimezone = tz;
+    updateClock();
+  }
 }
 
 // Update clock every second
@@ -2453,6 +2603,106 @@ if (doctorRunBtn) {
     await refreshDoctor();
     doctorRunBtn.textContent = 'Ejecutar diagnostico';
   });
+}
+
+// ==================== MEETINGS HELPERS ====================
+
+/** Convert an absolute screenshot path to a served URL via /meetings-files/ */
+function meetingFileUrl(absolutePath) {
+  if (!absolutePath) return '';
+  // Strip the data_dir + /meetings/ prefix, leaving just the filename
+  // Paths look like: /var/lib/lifeos/meetings/meeting-20260413-143000-screenshot-1.png
+  const meetingsPrefix = '/meetings/';
+  const idx = absolutePath.lastIndexOf(meetingsPrefix);
+  if (idx !== -1) {
+    const filename = absolutePath.substring(idx + meetingsPrefix.length);
+    return '/meetings-files/' + encodeURIComponent(filename);
+  }
+  // Fallback: try just the basename
+  const parts = absolutePath.split('/');
+  return '/meetings-files/' + encodeURIComponent(parts[parts.length - 1]);
+}
+
+/** Lightweight screenshot lightbox */
+window.openScreenshotLightbox = function(url) {
+  let overlay = document.getElementById('screenshot-lightbox');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'screenshot-lightbox';
+    overlay.className = 'screenshot-lightbox';
+    overlay.innerHTML = '<img class="screenshot-lightbox-img" alt="Captura ampliada">';
+    overlay.addEventListener('click', () => { overlay.style.display = 'none'; });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        const lb = document.getElementById('screenshot-lightbox');
+        if (lb) lb.style.display = 'none';
+      }
+    });
+    document.body.appendChild(overlay);
+  }
+  const img = overlay.querySelector('img');
+  img.src = url;
+  overlay.style.display = 'flex';
+};
+
+/** Render basic markdown: bold, italic, lists, tables, hrs, line breaks */
+function renderSimpleMarkdown(text) {
+  if (!text) return '';
+  let html = escapeHtml(text);
+  // Horizontal rule: --- or *** or ___ (full line) — must run before bold/italic
+  html = html.replace(/^[\-\*_]{3,}\s*$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:8px 0">');
+  // Bold: **text** or __text__
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  // Italic: *text* or _text_
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/(?<!\w)_(.+?)_(?!\w)/g, '<em>$1</em>');
+  // Unordered list items: - item or * item at start of line
+  html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
+  // Ordered list items: 1. item
+  html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> in <ul>
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+  // Headers: # text, ## text, ### text (order matters: ### before ## before #)
+  html = html.replace(/^####\s+(.+)$/gm, '<h6 style="font-size:0.85rem;color:var(--text);margin:4px 0 2px">$1</h6>');
+  html = html.replace(/^###\s+(.+)$/gm, '<h5>$1</h5>');
+  html = html.replace(/^##\s+(.+)$/gm, '<h4 style="color:var(--accent);margin:8px 0 4px">$1</h4>');
+  html = html.replace(/^#\s+(.+)$/gm, '<h4 style="color:var(--accent);margin:10px 0 4px;font-size:1rem">$1</h4>');
+
+  // Markdown tables: detect consecutive lines starting with |
+  html = html.replace(/((?:^\|.+\|\s*$\n?){2,})/gm, function(tableBlock) {
+    const rows = tableBlock.trim().split('\n').filter(r => r.trim());
+    if (rows.length < 2) return tableBlock;
+    let tableHtml = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:8px 0">';
+    rows.forEach((row, ri) => {
+      // Skip separator rows like |---|---|
+      if (/^\|[\s\-:]+\|$/.test(row.trim()) || /^\|(\s*[\-:]+\s*\|)+\s*$/.test(row.trim())) return;
+      const cells = row.split('|').filter((_, i, a) => i > 0 && i < a.length - 1);
+      const tag = ri === 0 ? 'th' : 'td';
+      const style = ri === 0
+        ? 'style="text-align:left;padding:4px 8px;border-bottom:2px solid var(--border);color:var(--accent);font-weight:600"'
+        : 'style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)"';
+      tableHtml += '<tr>' + cells.map(c => `<${tag} ${style}>${c.trim()}</${tag}>`).join('') + '</tr>';
+    });
+    tableHtml += '</table>';
+    return tableHtml;
+  });
+
+  // Line breaks
+  html = html.replace(/\n/g, '<br>');
+  // Clean up <br> inside ul
+  html = html.replace(/<br><ul>/g, '<ul>');
+  html = html.replace(/<\/ul><br>/g, '</ul>');
+  html = html.replace(/<\/li><br><li>/g, '</li><li>');
+  // Clean up <br> around tables
+  html = html.replace(/<br><table/g, '<table');
+  html = html.replace(/<\/table><br>/g, '</table>');
+  // Clean up <br> around hr and block elements
+  html = html.replace(/<br><hr/g, '<hr');
+  html = html.replace(/<hr([^>]*)><br>/g, '<hr$1>');
+  html = html.replace(/<br>(<h[1-6])/g, '$1');
+  html = html.replace(/(<\/h[1-6]>)<br>/g, '$1');
+  return html;
 }
 
 // ==================== MEETINGS (BB.5 + BB.10 + BB.11) ====================
@@ -2760,9 +3010,12 @@ window.showMeetingDetail = async function(meetingId) {
     }
   }
 
-  // Summary
+  // Summary — render basic markdown
   const summaryEl = $('#md-summary');
-  if (summaryEl) summaryEl.textContent = meeting.summary || 'Sin resumen disponible';
+  if (summaryEl) {
+    const rawSummary = meeting.summary || 'Sin resumen disponible';
+    summaryEl.innerHTML = renderSimpleMarkdown(rawSummary);
+  }
 
   // Action items
   const actionsEl = $('#md-action-items');
@@ -2778,17 +3031,20 @@ window.showMeetingDetail = async function(meetingId) {
     }
   }
 
-  // Transcript
+  // Transcript — collapsible
   const transcriptEl = $('#md-transcript');
   const transcriptSection = $('#md-transcript-section');
   const diarized = meeting.diarized_transcript || '';
   const plainTranscript = meeting.transcript || '';
   if (transcriptEl) {
+    let transcriptHtml = '';
     if (diarized) {
-      transcriptEl.innerHTML = renderTranscript(diarized);
-      if (transcriptSection) transcriptSection.style.display = '';
+      transcriptHtml = renderTranscript(diarized);
     } else if (plainTranscript) {
-      transcriptEl.innerHTML = `<div class="transcript-line speaker-1"><span class="speaker-name">[Transcripcion]</span> ${escapeHtml(plainTranscript)}</div>`;
+      transcriptHtml = `<div class="transcript-line speaker-1"><span class="speaker-name">[Transcripcion]</span> ${escapeHtml(plainTranscript)}</div>`;
+    }
+    if (transcriptHtml) {
+      transcriptEl.innerHTML = `<details class="transcript-collapsible"><summary class="transcript-toggle">Mostrar transcripcion completa</summary><div class="transcript-content">${transcriptHtml}</div></details>`;
       if (transcriptSection) transcriptSection.style.display = '';
     } else {
       transcriptEl.innerHTML = '<span style="color:var(--text-muted)">Sin transcripcion disponible</span>';
@@ -2796,15 +3052,16 @@ window.showMeetingDetail = async function(meetingId) {
     }
   }
 
-  // Screenshots
+  // Screenshots — convert absolute paths to the served /meetings-files/ URL
   const screenshotsEl = $('#md-screenshots');
   const screenshotsSection = $('#md-screenshots-section');
   const paths = meeting.screenshot_paths || [];
   if (screenshotsEl && screenshotsSection) {
     if (paths.length > 0) {
-      screenshotsEl.innerHTML = paths.map(p =>
-        `<img src="${escapeHtml(p)}" alt="Captura" loading="lazy" onerror="this.style.display='none'">`
-      ).join('');
+      screenshotsEl.innerHTML = paths.map(p => {
+        const url = meetingFileUrl(p);
+        return `<img src="${escapeHtml(url)}" alt="Captura" loading="lazy" onclick="openScreenshotLightbox('${escapeHtml(url)}')" onerror="this.style.display='none'">`;
+      }).join('');
       screenshotsSection.style.display = '';
     } else {
       screenshotsSection.style.display = 'none';
@@ -2961,10 +3218,17 @@ if (mdExportBtn) {
 // ==================== CONVERSATION HISTORY ====================
 const conversationList = $('#conversation-list');
 
-// TODO: GET /conversations and GET /sessions not yet implemented in backend.
-// Show placeholder until the conversation history API is available.
+// Conversation history is per-chat inside telegram_tools::ConversationHistory
+// and persisted to ~/.local/share/lifeos/conversation_history.json. Surfacing
+// it through a unified /conversations endpoint requires merging Telegram,
+// SimpleX, and Matrix bridges into a common format — tracked as item #5
+// (dashboard CRUD) in docs/operations/pending-items-roadmap.md.
 async function refreshConversations() {
-  if (conversationList) conversationList.innerHTML = '<p class="task-empty">Historial de conversaciones no disponible aun</p>';
+  if (conversationList) {
+    conversationList.innerHTML =
+      '<p class="task-empty">Historial unificado en desarrollo. '
+      + 'Usa <code>/telegram history</code> o <code>/simplex history</code> por ahora.</p>';
+  }
 }
 
 function renderConversations(convos) {
@@ -3014,57 +3278,218 @@ function renderConversations(convos) {
   });
 }
 
-// --- Tabs Initialization ---
-function initTabs() {
-  const main = document.querySelector('main');
-  if (!main) return;
+// --- Sidebar Navigation ---
+function initSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  const hamburger = document.getElementById('hamburger-btn');
+  if (!sidebar) return;
 
-  const nav = document.createElement('nav');
-  nav.className = 'dashboard-tabs';
+  function closeMobileSidebar() {
+    if (window.innerWidth <= 768) {
+      sidebar.classList.remove('open');
+      overlay.classList.remove('visible');
+    }
+  }
 
-  const tabs = [
-    { id: 'tab-home', icon: '&#127968;', label: 'Inicio', keywords: ['safe-mode-banner', 'hero-panel', 'orb-section', 'controls-section', 'status-section', 'chat-section'] },
-    { id: 'tab-agents', icon: '&#9881;', label: 'Operaciones', keywords: ['supervisor-section', 'workers-section', 'metrics-section', 'sched-section', 'meetings-section', 'conversations-section', 'feed-section'] },
-    { id: 'tab-memory', icon: '&#128450;', label: 'Memoria', keywords: ['memory-section'] },
-    { id: 'tab-system', icon: '&#128187;', label: 'Sistema & IA', keywords: ['os-config-section', 'resources-section', 'doctor-section', 'health-section', 'battery-section', 'localai-section', 'models-section', 'gameguard-section', 'providers-section', 'services-section', 'settings-section'] }
-  ];
+  function clearAllActive() {
+    document.querySelectorAll('.sidebar-nav-item').forEach(b => {
+      b.classList.remove('active');
+      b.classList.remove('parent-active');
+    });
+    document.querySelectorAll('.sidebar-submenu-item').forEach(b => b.classList.remove('active'));
+  }
 
-  const tabContents = document.createElement('div');
-  tabContents.className = 'tab-contents';
+  function showSection(sectionId) {
+    document.querySelectorAll('.content-section').forEach(s => {
+      s.classList.remove('active');
+      s.classList.remove('subsection-filtered');
+    });
+    const target = document.getElementById('section-' + sectionId);
+    if (target) {
+      target.classList.add('active');
+      // Clear any subsection visibility
+      target.querySelectorAll('[data-subsection]').forEach(el => el.classList.remove('subsection-visible'));
+    }
+    const main = document.querySelector('main');
+    if (main) main.scrollTop = 0;
+  }
 
-  const children = Array.from(main.children);
-
-  tabs.forEach((tab, index) => {
-    const btn = document.createElement('button');
-    btn.className = 'tab-btn' + (index === 0 ? ' active' : '');
-    btn.innerHTML = `<span style="margin-right:4px">${tab.icon}</span> ${tab.label}`;
-    btn.dataset.target = tab.id;
-
-    const content = document.createElement('div');
-    content.id = tab.id;
-    content.className = 'tab-pane' + (index === 0 ? ' active' : '');
-
-    children.forEach(child => {
-      if (tab.keywords.some(kw => (child.className && child.className.includes(kw)) || (child.id && child.id.includes(kw)))) {
-        content.appendChild(child);
+  function showSubsection(sectionId, subsectionName) {
+    const target = document.getElementById('section-' + sectionId);
+    if (!target) return;
+    // Show the parent content-section
+    document.querySelectorAll('.content-section').forEach(s => {
+      s.classList.remove('active');
+      s.classList.remove('subsection-filtered');
+    });
+    target.classList.add('active');
+    target.classList.add('subsection-filtered');
+    // Show only matching subsection elements
+    target.querySelectorAll('[data-subsection]').forEach(el => {
+      if (el.dataset.subsection === subsectionName) {
+        el.classList.add('subsection-visible');
+      } else {
+        el.classList.remove('subsection-visible');
       }
     });
+    const main = document.querySelector('main');
+    if (main) main.scrollTop = 0;
+  }
 
+  // Direct nav items (no submenu) — Inicio, Axi Chat
+  document.querySelectorAll('.sidebar-nav-item:not(.has-submenu)').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      const section = btn.dataset.section;
+      if (!section) return;
+      clearAllActive();
       btn.classList.add('active');
-      content.classList.add('active');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      // Collapse all submenu groups
+      document.querySelectorAll('.sidebar-nav-group').forEach(g => g.classList.remove('expanded'));
+      showSection(section);
+      closeMobileSidebar();
     });
-
-    nav.appendChild(btn);
-    tabContents.appendChild(content);
   });
 
-  main.insertBefore(nav, main.firstChild);
-  main.appendChild(tabContents);
+  // Parent items with submenus
+  document.querySelectorAll('.sidebar-nav-item.has-submenu').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const section = btn.dataset.section;
+      if (!section) return;
+      const group = btn.closest('.sidebar-nav-group');
+      if (!group) return;
+
+      const wasExpanded = group.classList.contains('expanded');
+
+      if (wasExpanded) {
+        // Collapse this group
+        group.classList.remove('expanded');
+      } else {
+        // Expand this group, collapse others
+        document.querySelectorAll('.sidebar-nav-group').forEach(g => g.classList.remove('expanded'));
+        group.classList.add('expanded');
+
+        // Auto-select first child if no child is currently active
+        const activeChild = group.querySelector('.sidebar-submenu-item.active');
+        if (!activeChild) {
+          const firstChild = group.querySelector('.sidebar-submenu-item');
+          if (firstChild) {
+            firstChild.click();
+            return; // The child click handler takes care of everything
+          }
+        } else {
+          // Re-show the active child's subsection
+          clearAllActive();
+          btn.classList.add('parent-active');
+          activeChild.classList.add('active');
+          showSubsection(section, activeChild.dataset.subsectionTarget);
+        }
+      }
+    });
+  });
+
+  // Submenu items
+  document.querySelectorAll('.sidebar-submenu-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const parentSection = btn.dataset.parent;
+      const subsection = btn.dataset.subsectionTarget;
+      if (!parentSection || !subsection) return;
+
+      clearAllActive();
+
+      // Set parent as parent-active
+      const parentBtn = document.querySelector(`.sidebar-nav-item[data-section="${parentSection}"]`);
+      if (parentBtn) parentBtn.classList.add('parent-active');
+
+      // Set this submenu item as active
+      btn.classList.add('active');
+
+      // Ensure the group is expanded
+      const group = btn.closest('.sidebar-nav-group');
+      if (group) group.classList.add('expanded');
+
+      showSubsection(parentSection, subsection);
+      closeMobileSidebar();
+    });
+  });
+
+  if (hamburger) {
+    hamburger.addEventListener('click', () => {
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('visible');
+    });
+  }
+  if (overlay) {
+    overlay.addEventListener('click', () => {
+      sidebar.classList.remove('open');
+      overlay.classList.remove('visible');
+    });
+  }
+
+  // --- Persist active section across reloads ---
+  function saveNavState(section, subsection) {
+    const state = { section };
+    if (subsection) state.subsection = subsection;
+    localStorage.setItem('lifeos_nav', JSON.stringify(state));
+    // Update URL hash without triggering navigation
+    const hash = subsection ? `${section}/${subsection}` : section;
+    history.replaceState(null, '', `#${hash}`);
+  }
+
+  // Patch all nav handlers to persist state
+  document.querySelectorAll('.sidebar-nav-item:not(.has-submenu)').forEach(btn => {
+    btn.addEventListener('click', () => saveNavState(btn.dataset.section));
+  });
+  document.querySelectorAll('.sidebar-submenu-item').forEach(btn => {
+    btn.addEventListener('click', () => saveNavState(btn.dataset.parent, btn.dataset.subsectionTarget));
+  });
+
+  // Restore saved state on load
+  function restoreNavState() {
+    // Priority: URL hash > localStorage > default (inicio)
+    let section = null, subsection = null;
+    const hash = location.hash.replace('#', '');
+    if (hash) {
+      const parts = hash.split('/');
+      section = parts[0];
+      subsection = parts[1] || null;
+    } else {
+      try {
+        const saved = JSON.parse(localStorage.getItem('lifeos_nav'));
+        if (saved && saved.section) {
+          section = saved.section;
+          subsection = saved.subsection || null;
+        }
+      } catch (_) {}
+    }
+    if (!section) return; // Default inicio is already shown
+
+    if (subsection) {
+      // Find and click the submenu item
+      const subBtn = document.querySelector(`.sidebar-submenu-item[data-parent="${section}"][data-subsection-target="${subsection}"]`);
+      if (subBtn) { subBtn.click(); return; }
+    }
+    // Click the main nav item
+    const navBtn = document.querySelector(`.sidebar-nav-item[data-section="${section}"]`);
+    if (navBtn) navBtn.click();
+  }
+
+  restoreNavState();
+
+  // Sync mobile connection badge
+  const connBadge = document.getElementById('connection-badge');
+  const connBadgeMobile = document.getElementById('connection-badge-mobile');
+  if (connBadge && connBadgeMobile) {
+    const observer = new MutationObserver(() => {
+      connBadgeMobile.textContent = connBadge.textContent;
+      connBadgeMobile.className = connBadge.className;
+    });
+    observer.observe(connBadge, { attributes: true, childList: true, characterData: true });
+  }
 }
+
+// Keep old name as alias so nothing breaks
+function initTabs() { initSidebar(); }
 
 // --- Calendar ---
 const calendarGrid = $('#calendar-grid');

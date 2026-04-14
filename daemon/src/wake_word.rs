@@ -118,7 +118,13 @@ mod inner {
         }
 
         /// Update the audio source (e.g. after BT connect/disconnect).
+        /// No-op when the new value matches the current one — without this
+        /// guard the sensory loop calls us every tick and pw-record is
+        /// SIGTERM'd every few seconds even when the source never changed.
         pub fn set_source(&self, source: Option<String>) {
+            if *self.source_tx.borrow() == source {
+                return;
+            }
             let _ = self.source_tx.send(source);
             self.signal_active_child(libc::SIGTERM, "source change");
         }

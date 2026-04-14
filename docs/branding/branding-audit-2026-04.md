@@ -246,7 +246,7 @@ Revisar todas las superficies nombradas como Axi para decidir si deben usar:
 Prioridad minima:
 
 - `.desktop` de Axi
-- Telegram avatar
+- SimpleX avatar
 - dashboard hero
 - tray-facing assets
 

@@ -101,6 +101,11 @@ const MEETING_QUALIFIER_PATTERNS: &[(&str, &[&str])] = &[
     ("Slack Huddle", &["Huddle"]),
 ];
 
+/// How many consecutive "no meeting" ticks are needed before ending a meeting.
+/// At 15s per tick, 4 ticks = 60 seconds of grace period. This prevents
+/// premature meeting-end when audio momentarily drops (silence, muted mic).
+const MEETING_END_GRACE_TICKS: u8 = 4;
+
 pub struct MeetingAssistant {
     data_dir: PathBuf,
     enabled: bool,
@@ -126,6 +131,8 @@ pub struct MeetingAssistant {
     caption_buffer: Arc<RwLock<Vec<CaptionEntry>>>,
     /// Sender to signal the caption background task to stop (BB.8).
     caption_stop_tx: Option<tokio::sync::watch::Sender<bool>>,
+    /// Consecutive ticks where no meeting was detected (grace period counter).
+    no_meeting_ticks: u8,
 }
 
 impl MeetingAssistant {
@@ -156,6 +163,7 @@ impl MeetingAssistant {
                 .unwrap_or(false),
             caption_buffer: Arc::new(RwLock::new(Vec::new())),
             caption_stop_tx: None,
+            no_meeting_ticks: 0,
         }
     }
 
@@ -194,6 +202,7 @@ impl MeetingAssistant {
         }
 
         // Strategy 1: Check PipeWire/PulseAudio for conferencing app audio streams
+        // Strategy 1: Check PipeWire/PulseAudio for conferencing app audio streams
         let audio_meeting = detect_meeting_audio().await;
 
         // Strategy 2: Check sway/COSMIC compositor window titles for meeting patterns
@@ -206,14 +215,56 @@ impl MeetingAssistant {
         // Strategy 3: Check if camera is in use by a conferencing app
         let camera_in_use = detect_camera_in_use().await;
 
+        // Strategy 4: Direct /proc scan as last resort (catches all browser meetings)
+        let proc_meeting = if audio_meeting.is_none() && window_meeting.is_none() && !camera_in_use
+        {
+            if let Some(titles) = collect_titles_from_proc().await {
+                let mut found = None;
+                for title in &titles {
+                    let t = title.to_lowercase();
+                    if t.contains("meet.google.com") {
+                        found = Some("Google Meet".to_string());
+                        break;
+                    }
+                    if t.contains("zoom.us") {
+                        found = Some("Zoom".to_string());
+                        break;
+                    }
+                    if t.contains("teams.microsoft.com") || t.contains("teams.live.com") {
+                        found = Some("Microsoft Teams".to_string());
+                        break;
+                    }
+                    if t.contains("meet.jit.si") {
+                        found = Some("Jitsi".to_string());
+                        break;
+                    }
+                    if t.contains("webex.com") {
+                        found = Some("WebEx".to_string());
+                        break;
+                    }
+                    if t.contains("discord.com") {
+                        found = Some("Discord".to_string());
+                        break;
+                    }
+                }
+                found
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let detected = audio_meeting.is_some()
             || window_meeting.is_some()
             || camera_in_use
+            || proc_meeting.is_some()
             || self.state.manual_meeting;
-        let app_name = audio_meeting.or(window_meeting);
+        let app_name = audio_meeting.or(window_meeting).or(proc_meeting);
 
         if detected && !self.state.detected {
             // Meeting just started
+            self.no_meeting_ticks = 0;
             let app = app_name.clone().unwrap_or_else(|| "Unknown".into());
             info!("[meeting] Meeting detected: {} — starting recording", app);
             self.state.detected = true;
@@ -224,8 +275,30 @@ impl MeetingAssistant {
             self.start_recording().await?;
             // Start real-time captions if enabled (BB.8)
             self.start_captions().await;
+        } else if detected && self.state.detected {
+            // Meeting still active — reset grace counter
+            self.no_meeting_ticks = 0;
+            // Update app name if we now have a better one (e.g. went from "Unknown" to "Google Meet")
+            if app_name.is_some() && self.state.app_name.as_deref() == Some("Unknown") {
+                info!(
+                    "[meeting] App identified: {}",
+                    app_name.as_deref().unwrap_or("?")
+                );
+                self.state.app_name = app_name;
+            }
         } else if !detected && self.state.detected {
-            // Meeting ended — stop captions (BB.8)
+            // No meeting signal this tick — increment grace counter
+            self.no_meeting_ticks += 1;
+            if self.no_meeting_ticks < MEETING_END_GRACE_TICKS {
+                info!(
+                    "[meeting] No signal tick {}/{} — grace period (user may be switching apps)",
+                    self.no_meeting_ticks, MEETING_END_GRACE_TICKS
+                );
+                return Ok(true); // Still "in meeting" during grace period
+            }
+
+            // Grace period exhausted — meeting truly ended
+            self.no_meeting_ticks = 0;
             self.stop_captions().await;
             let duration = self.state.duration_secs;
             let screenshot_count = self.state.screenshot_paths.len();
@@ -234,14 +307,24 @@ impl MeetingAssistant {
                 duration / 60,
                 screenshot_count
             );
-            self.stop_recording();
+
+            // Stop recording and WAIT for dual-channel merge before transcribing
+            let merged_path = self.stop_recording_and_merge().await;
             self.state.detected = false;
             self.state.recording = false;
             self.state.manual_meeting = false;
 
+            // Use the merged path (or original if merge wasn't needed)
+            let path = merged_path
+                .or_else(|| self.state.recording_path.clone())
+                .unwrap_or_default();
+            if path.is_empty() {
+                warn!("[meeting] No recording path available for processing");
+                return Ok(false);
+            }
+
             // Trigger transcription + summarization pipeline
-            if let Some(ref recording_path) = self.state.recording_path {
-                let path = recording_path.clone();
+            {
                 info!("[meeting] Processing completed meeting: {}", path);
 
                 // 1. Transcribe with Whisper
@@ -286,7 +369,7 @@ impl MeetingAssistant {
                             let content = if let Some(ref s) = summary {
                                 format!(
                                     "## Transcripcion\n\n{}\n\n## Resumen\n\n{}",
-                                    &diarized[..diarized.len().min(4000)],
+                                    crate::str_utils::truncate_bytes_safe(&diarized, 4000),
                                     s
                                 )
                             } else {
@@ -585,8 +668,7 @@ impl MeetingAssistant {
         }
         self.recording_process = None;
 
-        // Kill dual-channel processes (if any) and merge (BB.3)
-        let has_dual = self.mic_process.is_some() && self.system_process.is_some();
+        // Kill dual-channel processes
         if let Some(ref mut child) = self.mic_process {
             let _ = child.start_kill();
         }
@@ -595,29 +677,6 @@ impl MeetingAssistant {
             let _ = child.start_kill();
         }
         self.system_process = None;
-
-        // If dual-channel was active, merge files in a background task
-        if has_dual {
-            let mic_path = self.state.mic_recording_path.clone();
-            let system_path = self.state.system_recording_path.clone();
-            let combined_path = self.state.recording_path.clone();
-
-            tokio::spawn(async move {
-                if let (Some(mic), Some(sys), Some(combined)) =
-                    (mic_path, system_path, combined_path)
-                {
-                    if let Err(e) = merge_dual_channels(&mic, &sys, &combined).await {
-                        warn!("[meeting] Dual-channel merge failed, trying mic-only fallback: {e}");
-                        // Fallback: copy mic recording as the combined file
-                        if let Err(e2) = tokio::fs::copy(&mic, &combined).await {
-                            warn!("[meeting] Mic fallback copy also failed: {e2}");
-                        }
-                    } else {
-                        info!("[meeting] Dual-channel audio merged successfully");
-                    }
-                }
-            });
-        }
 
         // Emit recording stopped event via the event bus
         if let Some(ref tx) = self.event_bus {
@@ -628,6 +687,41 @@ impl MeetingAssistant {
         }
 
         self.state.recording = false;
+    }
+
+    /// Stop recording and AWAIT the dual-channel merge before returning.
+    /// This ensures the WAV file exists before transcription starts.
+    async fn stop_recording_and_merge(&mut self) -> Option<String> {
+        let has_dual = self.mic_process.is_some() && self.system_process.is_some();
+        self.stop_recording();
+
+        if !has_dual {
+            return self.state.recording_path.clone();
+        }
+
+        // Wait for merge synchronously (not in background) so the WAV exists for Whisper
+        let mic_path = self.state.mic_recording_path.clone();
+        let system_path = self.state.system_recording_path.clone();
+        let combined_path = self.state.recording_path.clone();
+
+        if let (Some(mic), Some(sys), Some(ref combined)) =
+            (mic_path, system_path, combined_path.clone())
+        {
+            // Small delay to let pw-record flush buffers to disk
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            if let Err(e) = merge_dual_channels(&mic, &sys, combined).await {
+                warn!("[meeting] Dual-channel merge failed, trying mic-only fallback: {e}");
+                if let Err(e2) = tokio::fs::copy(&mic, &combined).await {
+                    warn!("[meeting] Mic fallback copy also failed: {e2}");
+                    return None;
+                }
+            } else {
+                info!("[meeting] Dual-channel audio merged successfully");
+            }
+        }
+
+        combined_path
     }
 
     /// Transcribe a completed meeting recording using Whisper.
@@ -843,32 +937,79 @@ impl MeetingAssistant {
         transcript: &str,
         router: &Arc<RwLock<crate::llm_router::LlmRouter>>,
     ) -> Result<String> {
-        let prompt = format!(
-            "Eres un asistente que resume reuniones. Genera un resumen estructurado de esta transcripcion:\n\n\
-            {}\n\n\
-            Formato del resumen:\n\
-            ## Resumen Ejecutivo\n\
-            (3-5 bullet points)\n\n\
-            ## Temas Discutidos\n\
-            (lista)\n\n\
-            ## Decisiones Tomadas\n\
-            (lista)\n\n\
-            ## Action Items\n\
-            (quien, que, cuando)\n\n\
-            ## Preguntas Sin Resolver\n\
-            (lista, si las hay)",
-            &transcript[..transcript.len().min(6000)]
-        );
+        let truncated = crate::str_utils::truncate_bytes_safe(transcript, 6000);
+
+        let system_prompt = "\
+Sos un asistente de documentación de reuniones. Tu trabajo es extraer información \
+EXCLUSIVAMENTE de la transcripción proporcionada. Este documento sirve como evidencia \
+formal de lo discutido.
+
+## REGLAS CRÍTICAS (leer ANTES de procesar la transcripción)
+- NUNCA inventes información que no esté en la transcripción.
+- Si algo no se discutió, NO incluyas esa sección — omitila por completo.
+- Marcá información incierta con [?].
+- Distinguí entre lo que se DIJO explícitamente vs lo que se PUEDE INFERIR del contexto.
+- Si la transcripción es muy corta o ininteligible, decilo honestamente.
+- Usá español rioplatense (voseo, expresiones argentinas).
+
+## FORMATO DE SALIDA
+Generá SOLO las secciones que tengan contenido real extraído de la transcripción.
+Omití completamente las secciones sin contenido.
+
+### Secciones disponibles (incluir solo si aplica):
+
+## Resumen Ejecutivo
+- 3-5 bullet points del contenido principal
+
+## Participantes Identificados
+- Speaker N: [nombre si se mencionó, o \"No identificado\"]
+- Rol/relación si se puede inferir del contexto (marcar con [inferido])
+
+## Temas Discutidos
+- Tema 1: resumen de lo hablado
+- Tema 2: ...
+
+## Decisiones Tomadas
+- Decisión y quién la tomó (si se identificó)
+
+## Action Items (Tareas Pendientes)
+Usá EXACTAMENTE este formato para cada tarea:
+- [ ] Responsable: Descripción de la tarea (fecha límite si se mencionó)
+(solo si se mencionaron tareas explícitamente)
+
+## Información Financiera
+- Montos, pagos, cobros, presupuestos, ventas mencionados explícitamente
+(solo si se discutieron cifras o temas financieros)
+
+## Próximos Pasos
+- Próxima reunión (fecha/hora si se mencionó)
+- Seguimientos acordados
+
+## Preguntas Sin Resolver
+- Temas que quedaron pendientes de respuesta
+
+## Contexto Adicional
+- Tipo de reunión inferido: (trabajo/personal/entrevista/ventas/etc.) [inferido]
+- Tono general de la reunión
+- Documentos o recursos mencionados";
+
+        let user_message = format!("## TRANSCRIPCIÓN\n\n{truncated}");
 
         let request = crate::llm_router::RouterRequest {
-            messages: vec![crate::llm_router::ChatMessage {
-                role: "user".into(),
-                content: serde_json::Value::String(prompt),
-            }],
+            messages: vec![
+                crate::llm_router::ChatMessage {
+                    role: "system".into(),
+                    content: serde_json::Value::String(system_prompt.to_string()),
+                },
+                crate::llm_router::ChatMessage {
+                    role: "user".into(),
+                    content: serde_json::Value::String(user_message),
+                },
+            ],
             complexity: Some(crate::llm_router::TaskComplexity::Complex),
             sensitivity: None,
             preferred_provider: None,
-            max_tokens: Some(2048),
+            max_tokens: Some(4096),
             task_type: None,
         };
 
@@ -1057,7 +1198,7 @@ impl MeetingAssistant {
                         let content = if let Some(ref s) = summary {
                             format!(
                                 "## Transcripcion\n\n{}\n\n## Resumen\n\n{}",
-                                &diarized[..diarized.len().min(4000)],
+                                crate::str_utils::truncate_bytes_safe(&diarized, 4000),
                                 s
                             )
                         } else {
@@ -1450,7 +1591,11 @@ impl MeetingAssistant {
 
         let summary_block = match summary {
             Some(s) if !s.is_empty() => {
-                let preview = if s.len() > 500 { &s[..500] } else { s };
+                let preview = if s.len() > 500 {
+                    crate::str_utils::truncate_bytes_safe(s, 500)
+                } else {
+                    s
+                };
                 format!("\nResumen:\n{}\n", preview)
             }
             _ => "\nResumen: No disponible\n".to_string(),
@@ -1549,17 +1694,40 @@ impl MeetingAssistant {
                 .join("\n")
         };
 
+        // Build screenshot markdown references
+        let screenshots_md: String = if export.screenshot_paths.is_empty() {
+            String::new()
+        } else {
+            let refs: Vec<String> = export
+                .screenshot_paths
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| {
+                    let src = PathBuf::from(p);
+                    src.file_name()
+                        .map(|f| format!("![Captura {}]({})", i + 1, f.to_string_lossy()))
+                })
+                .collect();
+            format!(
+                "---\n\n## Capturas de Pantalla\n\n{}\n\n",
+                refs.join("\n\n")
+            )
+        };
+
         let markdown = format!(
-            "# Reunion: {title}\n\n\
+            "# Reunión: {title}\n\n\
              **Fecha:** {date_prefix}\n\
-             **Duracion:** {duration_str}\n\
+             **Duración:** {duration_str}\n\
              **App:** {app_name}\n\
              **Participantes:** {participants_str}\n\n\
-             ## Resumen\n\n\
+             ---\n\n\
              {summary_section}\n\n\
+             ---\n\n\
              ## Action Items\n\n\
              {action_items_md}\n\n\
-             ## Transcript\n\n\
+             {screenshots_md}\
+             ---\n\n\
+             ## Transcripción Completa\n\n\
              {diarized_transcript}\n"
         );
 
@@ -1778,18 +1946,36 @@ async fn merge_dual_channels(mic_path: &str, system_path: &str, output_path: &st
 // ── Meeting detection helpers ───────────────────────────────────────────────
 
 /// Detect if a conferencing app has an active audio stream via PipeWire/PulseAudio.
+/// Checks both sink-inputs (speaker audio) and source-outputs (mic input) for
+/// broader coverage — some calls have audio output but mic is the stronger signal.
 async fn detect_meeting_audio() -> Option<String> {
-    let output = Command::new("pactl")
+    // Gather both sink-inputs (audio out) and source-outputs (mic in)
+    let sink = Command::new("pactl")
         .args(["list", "sink-inputs"])
         .output()
         .await
-        .ok()?;
+        .ok();
+    let source = Command::new("pactl")
+        .args(["list", "source-outputs"])
+        .output()
+        .await
+        .ok();
 
-    if !output.status.success() {
-        return None;
+    let mut text = String::new();
+    if let Some(ref o) = sink {
+        if o.status.success() {
+            text.push_str(&String::from_utf8_lossy(&o.stdout).to_lowercase());
+        }
+    }
+    if let Some(ref o) = source {
+        if o.status.success() {
+            text.push_str(&String::from_utf8_lossy(&o.stdout).to_lowercase());
+        }
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+    if text.is_empty() {
+        return None;
+    }
 
     // Strategy A: Direct match — native conferencing apps (Zoom, Teams desktop, etc.)
     for (app_name, patterns) in CONFERENCING_APPS {
@@ -1821,9 +2007,24 @@ async fn detect_meeting_audio() -> Option<String> {
         if detect_camera_in_use().await {
             return Some("Web Meeting".into());
         }
+        // Fallback 2: browser has BOTH audio output AND mic input → very likely a call
+        // This catches Flatpak browsers on COSMIC where /proc and fuser don't work
+        if has_browser_mic_input(&text) {
+            return Some("Web Meeting".into());
+        }
     }
 
     None
+}
+
+/// Check if a browser has an active microphone input (source-output).
+/// Having both audio output (sink-input) and mic input strongly indicates a call.
+fn has_browser_mic_input(pactl_text: &str) -> bool {
+    // source-outputs section contains "chromium input" or "firefox input" etc.
+    pactl_text.contains("chromium input")
+        || pactl_text.contains("firefox input")
+        || pactl_text.contains("chrome input")
+        || pactl_text.contains("brave input")
 }
 
 /// Detect a meeting running inside a browser by checking window titles.
@@ -1870,7 +2071,7 @@ async fn detect_browser_meeting_by_title() -> Option<String> {
                 info!(
                     "[meeting] Browser meeting detected: {} (title: {})",
                     app_name,
-                    &title[..title.len().min(60)]
+                    crate::str_utils::truncate_bytes_safe(title, 60)
                 );
                 return Some(app_name.to_string());
             }
@@ -1991,10 +2192,12 @@ async fn collect_titles_wlrctl() -> Option<Vec<String>> {
 /// Last resort: scan /proc for browser processes with meeting URLs in command line.
 /// This works even when compositor APIs are unavailable (e.g., Flatpak browsers).
 async fn collect_titles_from_proc() -> Option<Vec<String>> {
+    // Use a temp file with the pattern to avoid self-matching (grep's own
+    // cmdline contains the search string, causing false positives).
     let output = Command::new("sh")
         .args([
             "-c",
-            "grep -rl 'meet.google.com\\|zoom.us\\|teams.microsoft.com\\|teams.live.com\\|meet.jit.si\\|webex.com' /proc/*/cmdline 2>/dev/null | head -5",
+            "for f in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < \"$f\" 2>/dev/null | grep -qi 'meet\\.google\\.com\\|zoom\\.us\\|teams\\.microsoft\\.com\\|teams\\.live\\.com\\|meet\\.jit\\.si\\|webex\\.com\\|discord\\.com/channels' && echo \"$f\"; done | head -5",
         ])
         .output()
         .await
@@ -2004,7 +2207,6 @@ async fn collect_titles_from_proc() -> Option<Vec<String>> {
         return None;
     }
 
-    // If we found any match in /proc cmdlines, extract the URL pattern
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut titles = Vec::new();
     for line in stdout.lines() {
@@ -2098,7 +2300,8 @@ async fn detect_camera_in_use() -> bool {
     let output = Command::new("fuser").arg("/dev/video0").output().await.ok();
 
     match output {
-        Some(o) => o.status.success() && !o.stdout.is_empty(),
+        // fuser writes PIDs to STDERR (not stdout), so check both
+        Some(o) => o.status.success() && (!o.stdout.is_empty() || !o.stderr.is_empty()),
         None => false,
     }
 }
@@ -2119,7 +2322,7 @@ async fn resolve_whisper_binary() -> Result<String> {
 /// Looks for lines starting with bullet points, task markers, or numbered items
 /// that indicate tasks assigned during the meeting.
 fn extract_action_items(summary: &str) -> Vec<crate::meeting_archive::ActionItem> {
-    // Task marker prefixes recognized in meeting transcripts.
+    // Task marker prefixes recognized in meeting summaries.
     const TASK_PREFIXES: &[&str] = &["- [ ]", "* [ ]", "PENDIENTE:", "Pendiente:"];
     const TASK_PREFIXES_UPPER: &[&str] = &["ACTION:"];
     // "T-O-D-O" split to avoid linter false positive on the literal.
@@ -2128,8 +2331,60 @@ fn extract_action_items(summary: &str) -> Vec<crate::meeting_archive::ActionItem
     let todo_lower = String::from("to") + "do";
 
     let mut items = Vec::new();
+    let mut in_action_table = false;
+
     for line in summary.lines() {
         let trimmed = line.trim();
+
+        // Detect the start of an action items table (markdown table format).
+        // The LLM may use table format even though we request checkbox format.
+        if trimmed.contains("Responsable") && trimmed.contains("Tarea") && trimmed.starts_with('|')
+        {
+            in_action_table = true;
+            continue;
+        }
+
+        // Skip table separator lines (e.g. |---|---|---|---|)
+        if in_action_table && trimmed.starts_with('|') && trimmed.contains("---") {
+            continue;
+        }
+
+        // Parse table data rows: | Responsable | Tarea | Fecha | Prioridad |
+        if in_action_table && trimmed.starts_with('|') {
+            let cols: Vec<&str> = trimmed
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim())
+                .collect();
+            if cols.len() >= 2 {
+                let who = if cols[0].is_empty() || cols[0] == "-" {
+                    "unknown".to_string()
+                } else {
+                    cols[0].to_string()
+                };
+                let what = cols[1].to_string();
+                let when = cols
+                    .get(2)
+                    .filter(|v| !v.is_empty() && **v != "-" && **v != "N/A")
+                    .map(|v| v.to_string());
+                if !what.is_empty() && what != "-" {
+                    items.push(crate::meeting_archive::ActionItem {
+                        who,
+                        what,
+                        when,
+                        completed: false,
+                    });
+                }
+            }
+            continue;
+        }
+
+        // End of table when we hit a non-table line
+        if in_action_table && !trimmed.starts_with('|') {
+            in_action_table = false;
+        }
+
+        // Check for checkbox/prefix action items
         let upper = trimmed.to_uppercase();
         let is_action = TASK_PREFIXES.iter().any(|p| trimmed.starts_with(p))
             || TASK_PREFIXES_UPPER.iter().any(|p| upper.starts_with(p))
@@ -2152,31 +2407,48 @@ fn extract_action_items(summary: &str) -> Vec<crate::meeting_archive::ActionItem
                 .trim_start_matches("Pendiente:")
                 .trim();
 
-            let (who, what) = if let Some(rest) = content.strip_prefix('@') {
-                // "@Alice: do X"
-                if let Some(colon_pos) = rest.find(':') {
-                    (
-                        rest[..colon_pos].trim().to_string(),
-                        rest[colon_pos + 1..].trim().to_string(),
-                    )
+            // Parse "Responsable: Tarea (fecha límite)" format
+            let (who, what, when) = if let Some(colon_pos) = content.find(':') {
+                let candidate_who = content[..colon_pos].trim().trim_start_matches('@');
+                // Only treat as who:what if the who part is short (a name, not a sentence)
+                if !candidate_who.is_empty() && candidate_who.len() <= 40 {
+                    let rest = content[colon_pos + 1..].trim();
+                    // Extract optional parenthesized deadline at the end
+                    let (task, deadline) = extract_parenthesized_deadline(rest);
+                    (candidate_who.to_string(), task, deadline)
                 } else {
-                    ("unknown".to_string(), content.to_string())
+                    ("unknown".to_string(), content.to_string(), None)
                 }
             } else {
-                ("unknown".to_string(), content.to_string())
+                ("unknown".to_string(), content.to_string(), None)
             };
 
             if !what.is_empty() {
                 items.push(crate::meeting_archive::ActionItem {
                     who,
                     what,
-                    when: None,
+                    when,
                     completed: false,
                 });
             }
         }
     }
     items
+}
+
+/// Extract a parenthesized deadline from the end of an action item string.
+/// e.g. "Preparar informe (viernes)" → ("Preparar informe", Some("viernes"))
+fn extract_parenthesized_deadline(s: &str) -> (String, Option<String>) {
+    if let Some(open) = s.rfind('(') {
+        if s.ends_with(')') {
+            let task = s[..open].trim().to_string();
+            let deadline = s[open + 1..s.len() - 1].trim().to_string();
+            if !deadline.is_empty() {
+                return (task, Some(deadline));
+            }
+        }
+    }
+    (s.to_string(), None)
 }
 
 async fn resolve_whisper_model() -> Result<String> {

@@ -71,8 +71,6 @@ csv = "1.3"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 sqlite-vec = "0.1"
 zerocopy = "0.8"
-# Telegram bot
-teloxide = { version = "0.13", features = ["macros"], optional = true }
 # Wake word detection (half pinned to avoid rand 0.8/0.9 conflict with candle-core 0.2)
 half = "=2.4.1"
 rustpotter = { version = "3", optional = true, default-features = false }
@@ -85,6 +83,9 @@ rustpotter = { version = "3", optional = true, default-features = false }
 # rust-mcp-sdk = { version = "0.9", optional = true }
 # System tray icon (StatusNotifierItem — works with COSMIC, KDE, GNOME+extension)
 ksni = { version = "0.2", optional = true }
+# QR code generator for SimpleX invitation links served by the dashboard.
+# Pure Rust, zero runtime dependencies, MIT licensed (Project Nayuki).
+qrcodegen = "1.8.0"
 # COSMIC desktop control (GPL-3.0 — only compiled with "cosmic" feature)
 cosmic-protocols = { version = "0.2", optional = true, default-features = false, features = ["client"] }
 cosmic-client-toolkit = { version = "0.2", optional = true }
@@ -98,6 +99,6 @@ cosmic = ["cosmic-protocols", "cosmic-client-toolkit", "wayland-client"]
 wake-word = ["rustpotter"]
 speaker-id = []
 # mcp-client = ["rust-mcp-sdk"]  # disabled until rustc 1.88+ in CI
-telegram = ["teloxide"]
+messaging = []
 homeassistant = []
 tray = ["ksni"]

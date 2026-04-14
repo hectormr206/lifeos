@@ -18,7 +18,7 @@
 //! reloads automatically.  An explicit reload can also be triggered via
 //! `POST /api/v1/skills/reload`.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -38,6 +38,17 @@ pub struct SkillManifest {
     pub last_used: Option<String>,
     pub use_count: u32,
     pub success_rate: f64,
+}
+
+/// Check if auto-execution of generated skills is opt-in enabled.
+///
+/// Defaults to OFF. Set `LIFEOS_SKILLS_AUTOEXEC_ENABLE=1` (or true/yes/on)
+/// to let the skill registry run bash scripts that LifeOS generated from
+/// task execution traces without a human approving the content first.
+fn skills_autoexec_enabled() -> bool {
+    std::env::var("LIFEOS_SKILLS_AUTOEXEC_ENABLE")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 pub struct SkillGenerator {
@@ -165,20 +176,65 @@ impl SkillGenerator {
     }
 
     /// Execute a skill by running its run.sh.
+    ///
+    /// SECURITY HARDENING (item #S3 in pending-items-roadmap.md):
+    /// - Auto-execution is gated behind LIFEOS_SKILLS_AUTOEXEC_ENABLE so
+    ///   a user must explicitly opt in before auto-generated skills run.
+    /// - A 60-second wall clock timeout prevents runaway scripts.
+    /// - Every execution is logged with the skill path + exit code so
+    ///   a post-incident audit can reconstruct what ran when.
+    ///
+    /// A proper fix — approval UI, sandboxing via bubblewrap or systemd
+    /// transient units with DynamicUser+ProtectSystem+ReadOnlyPaths, and
+    /// content validation on the generated script before first execution
+    /// — is the follow-up sprint for S3.
     pub async fn execute_skill(&self, skill_dir: &std::path::Path) -> Result<String> {
         let script = skill_dir.join("run.sh");
         if !script.exists() {
             anyhow::bail!("Skill script not found: {}", script.display());
         }
 
-        let output = tokio::process::Command::new("bash")
-            .arg(&script)
-            .output()
-            .await
-            .context("Failed to execute skill")?;
+        if !skills_autoexec_enabled() {
+            log::warn!(
+                "[skill_gen] execute_skill blocked — auto-exec disabled (set \
+                 LIFEOS_SKILLS_AUTOEXEC_ENABLE=1 to opt in): {}",
+                script.display()
+            );
+            anyhow::bail!(
+                "Skill auto-execution is disabled. Set \
+                 LIFEOS_SKILLS_AUTOEXEC_ENABLE=1 to opt in. This guard \
+                 exists because skills are generated from task execution \
+                 traces without a human review step, and executing them \
+                 blindly runs arbitrary bash as the daemon's user."
+            );
+        }
+
+        log::warn!(
+            "[skill_gen] EXECUTING skill (auto-exec opt-in): {}",
+            script.display()
+        );
+
+        let exec = tokio::process::Command::new("bash").arg(&script).output();
+        let output = match tokio::time::timeout(std::time::Duration::from_secs(60), exec).await {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => return Err(anyhow::Error::from(e).context("Failed to execute skill")),
+            Err(_) => {
+                log::warn!(
+                    "[skill_gen] skill timed out after 60s: {}",
+                    script.display()
+                );
+                anyhow::bail!("Skill timed out after 60 seconds");
+            }
+        };
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        log::info!(
+            "[skill_gen] skill finished: {} exit={:?}",
+            script.display(),
+            output.status.code()
+        );
 
         if output.status.success() {
             // Update use count and success rate
@@ -348,7 +404,7 @@ impl SkillRegistry {
                         continue;
                     }
                 }
-                // Also accept SKILL.md-style directories (telegram_tools compat)
+                // Also accept SKILL.md-style directories (axi_tools compat)
                 let skill_md = path.join("SKILL.md");
                 if skill_md.exists() {
                     if let Some(manifest) = Self::load_skill_md(&skill_md, &path).await {
@@ -390,7 +446,7 @@ impl SkillRegistry {
         toml::from_str::<SkillManifest>(&content).ok()
     }
 
-    /// Load a SKILL.md file (telegram_tools format) and convert to SkillManifest.
+    /// Load a SKILL.md file (axi_tools format) and convert to SkillManifest.
     async fn load_skill_md(
         skill_md: &std::path::Path,
         skill_dir: &std::path::Path,
@@ -452,8 +508,27 @@ impl SkillRegistry {
         }
 
         // Try SKILL.md command: field
+        //
+        // SECURITY NOTE (S3): the previous code happily parsed a `command:`
+        // line out of any SKILL.md file found in any of the configured
+        // skills directories (including user-writable ~/.config/lifeos/skills)
+        // and ran it through `sh -c`. That means any file that lands in a
+        // watched directory can execute arbitrary shell next time the skill
+        // is matched. We now gate this behind the same autoexec opt-in as
+        // run.sh and add a 60s timeout.
         let skill_md = skill_dir.join("SKILL.md");
         if skill_md.exists() {
+            if !skills_autoexec_enabled() {
+                log::warn!(
+                    "[skill_registry] SKILL.md command blocked — auto-exec disabled: {}",
+                    skill_md.display()
+                );
+                anyhow::bail!(
+                    "Skill auto-execution is disabled. Set \
+                     LIFEOS_SKILLS_AUTOEXEC_ENABLE=1 to opt in."
+                );
+            }
+
             let content = fs::read_to_string(&skill_md).await?;
             let command = content
                 .lines()
@@ -462,13 +537,25 @@ impl SkillRegistry {
                 .map(|s| s.trim().to_string())
                 .ok_or_else(|| anyhow::anyhow!("SKILL.md has no command: line"))?;
 
-            let output = tokio::process::Command::new("sh")
+            log::warn!(
+                "[skill_registry] EXECUTING SKILL.md command from {}: {}",
+                skill_md.display(),
+                command.chars().take(200).collect::<String>()
+            );
+
+            let exec = tokio::process::Command::new("sh")
                 .arg("-c")
                 .arg(&command)
                 .current_dir(&skill_dir)
-                .output()
-                .await
-                .context("Failed to execute SKILL.md command")?;
+                .output();
+            let output = match tokio::time::timeout(std::time::Duration::from_secs(60), exec).await
+            {
+                Ok(Ok(o)) => o,
+                Ok(Err(e)) => {
+                    return Err(anyhow::Error::from(e).context("Failed to execute SKILL.md command"))
+                }
+                Err(_) => anyhow::bail!("SKILL.md command timed out after 60 seconds"),
+            };
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             if output.status.success() {

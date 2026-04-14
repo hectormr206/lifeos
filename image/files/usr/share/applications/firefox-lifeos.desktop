@@ -6,7 +6,7 @@ GenericName=Web Browser
 GenericName[es]=Navegador web
 Comment=Browse the World Wide Web
 Comment[es]=Navegue por la web
-Exec=/usr/bin/firefox --name=firefox-wayland %u
+Exec=env MOZ_ENABLE_WAYLAND=1 MOZ_DRM_DEVICE=/dev/dri/renderD128 /usr/bin/firefox --name=firefox-wayland %u
 Icon=firefox
 Terminal=false
 Type=Application
@@ -22,9 +22,9 @@ X-Desktop-File-Install-Version=0.27
 [Desktop Action new-window]
 Name=Open a New Window
 Name[es]=Abrir una nueva ventana
-Exec=/usr/bin/firefox --name=firefox-wayland --new-window %u
+Exec=env MOZ_ENABLE_WAYLAND=1 MOZ_DRM_DEVICE=/dev/dri/renderD128 /usr/bin/firefox --name=firefox-wayland --new-window %u
 
 [Desktop Action new-private-window]
 Name=Open a New Private Window
 Name[es]=Abrir una nueva ventana privada
-Exec=/usr/bin/firefox --name=firefox-wayland --private-window %u
+Exec=env MOZ_ENABLE_WAYLAND=1 MOZ_DRM_DEVICE=/dev/dri/renderD128 /usr/bin/firefox --name=firefox-wayland --private-window %u

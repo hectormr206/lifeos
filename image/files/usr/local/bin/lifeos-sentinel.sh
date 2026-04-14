@@ -51,9 +51,31 @@ log() {
     fi
 }
 
+read_bootstrap_token() {
+    local token_path="/run/user/${LIFEOS_PRIMARY_UID}/lifeos/bootstrap.token"
+    if [ -r "$token_path" ]; then
+        cat "$token_path" 2>/dev/null
+    fi
+}
+
 check_health() {
+    # /api/v1/health is behind the bootstrap-token middleware. Sentinel
+    # runs as root (system service) and reads the token from the user's
+    # runtime dir each probe, so rotated tokens are picked up without
+    # needing a sentinel restart. If the token is missing (daemon not
+    # yet up) treat that as a probe failure so the escalation ladder
+    # still runs.
+    local token
+    token="$(read_bootstrap_token)"
+    if [ -z "$token" ]; then
+        echo "000"
+        return
+    fi
     local status
-    status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$API/api/v1/health" 2>/dev/null || echo "000")
+    status=$(curl -s -o /dev/null -w "%{http_code}" \
+        --max-time 5 \
+        -H "x-bootstrap-token: ${token}" \
+        "$API/api/v1/health" 2>/dev/null || echo "000")
     echo "$status"
 }
 
@@ -97,21 +119,12 @@ collect_recent_logs() {
     echo "$recent_logs"
 }
 
-send_telegram_alert() {
+send_critical_alert() {
+    # Telegram bridge removed — emit alert to journal/log only.
+    # Future: route to SimpleX or desktop notification once a
+    # system-level alerting channel is wired in.
     local message="$1"
-    # Read Telegram config directly from env file (bypass lifeosd)
-    local token=""
-    local chat_id=""
-    if [ -f /etc/lifeos/llm-providers.env ]; then
-        token=$(grep "^LIFEOS_TELEGRAM_BOT_TOKEN=" /etc/lifeos/llm-providers.env 2>/dev/null | cut -d= -f2 || true)
-        chat_id=$(grep "^LIFEOS_TELEGRAM_CHAT_ID=" /etc/lifeos/llm-providers.env 2>/dev/null | cut -d= -f2 || true)
-    fi
-    if [ -n "$token" ] && [ -n "$chat_id" ]; then
-        curl -s -X POST "https://api.telegram.org/bot${token}/sendMessage" \
-            -d "chat_id=${chat_id}" \
-            -d "text=${message}" \
-            --max-time 10 2>/dev/null || true
-    fi
+    log "ALERT: ${message}"
 }
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -141,7 +154,7 @@ while true; do
         # Check disk space before attempting restart — if disk is full, restarting won't help
         if ! check_disk_space; then
             local_logs=$(collect_recent_logs)
-            send_telegram_alert "⚠️ Sentinel: /var esta >=${DISK_THRESHOLD}% lleno. Reiniciar no ayudara. Libera espacio manualmente.
+            send_critical_alert "⚠️ Sentinel: /var esta >=${DISK_THRESHOLD}% lleno. Reiniciar no ayudara. Libera espacio manualmente.
 
 Logs recientes:
 ${local_logs}"
@@ -192,7 +205,7 @@ ${local_logs}"
         # Recovery failed — alert with debug context
         log "CRITICAL: lifeosd unable to recover after structured recovery"
         local_logs=$(collect_recent_logs)
-        send_telegram_alert "⚠️ Axi no puede recuperarse despues de 10 intentos + recuperacion estructurada.
+        send_critical_alert "⚠️ Axi no puede recuperarse despues de 10 intentos + recuperacion estructurada.
 
 Pasos ejecutados:
 1. llama-server detenido
