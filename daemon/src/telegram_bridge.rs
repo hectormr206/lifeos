@@ -4,7 +4,7 @@
 //! without requiring /commands. Supports: text, voice (STT+TTS), photos (vision),
 //! groups, push notifications, heartbeat proactive monitoring.
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 mod inner {
     use log::{error, info, warn};
     use std::collections::HashMap;
@@ -3152,7 +3152,7 @@ mod inner {
     }
 }
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 pub use inner::*;
 
 // When telegram feature is disabled, this module is intentionally empty.

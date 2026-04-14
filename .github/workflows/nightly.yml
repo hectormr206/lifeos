@@ -57,7 +57,7 @@ jobs:
       - name: Run full test suite
         run: |
           cd cli && cargo test --all-features --locked
-          cd ../daemon && cargo test --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked
+          cd ../daemon && cargo test --features "dbus,http-api,ui-overlay,wake-word,messaging" --locked
 
       - name: Build documentation
         run: |

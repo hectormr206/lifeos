@@ -8,7 +8,7 @@
 //! Activation: The bridge starts only when `/etc/lifeos/matrix-axi-credentials`
 //! exists (created by `lifeos-matrix-setup.sh` during Conduit first boot).
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 mod inner {
     use log::{error, info, warn};
     use serde::{Deserialize, Serialize};
@@ -418,12 +418,12 @@ mod inner {
 }
 
 // Re-export based on feature flag (same pattern as telegram_bridge.rs)
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 pub use inner::*;
 
 // Stub when telegram feature is disabled — all items are used
 // conditionally in main.rs behind the same feature gate.
-#[cfg(not(feature = "telegram"))]
+#[cfg(not(feature = "messaging"))]
 mod stubs {
     #[derive(Debug, Clone)]
     pub(crate) struct MatrixConfig;
@@ -445,5 +445,5 @@ mod stubs {
     }
 }
 
-#[cfg(not(feature = "telegram"))]
+#[cfg(not(feature = "messaging"))]
 pub(crate) use stubs::*;

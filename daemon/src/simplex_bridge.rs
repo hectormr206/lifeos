@@ -20,7 +20,7 @@
 //! Activation: The bridge starts only when the SimpleX CLI WebSocket is
 //! reachable on `ws://127.0.0.1:5226`.
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 mod inner {
     use futures_util::{SinkExt, StreamExt};
     use log::{error, info, warn};
@@ -1379,11 +1379,11 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
     }
 }
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 pub use inner::*;
 
 // Stub when telegram feature is disabled
-#[cfg(not(feature = "telegram"))]
+#[cfg(not(feature = "messaging"))]
 mod stubs {
     pub(crate) async fn run_simplex_bridge(
         _task_queue: std::sync::Arc<crate::task_queue::TaskQueue>,
@@ -1399,5 +1399,5 @@ mod stubs {
     }
 }
 
-#[cfg(not(feature = "telegram"))]
+#[cfg(not(feature = "messaging"))]
 pub(crate) use stubs::*;

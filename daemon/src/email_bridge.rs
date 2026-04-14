@@ -15,12 +15,12 @@
 //! - LIFEOS_EMAIL_POLL_SECS=300 — polling interval (default 5 min)
 
 use log::info;
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 use log::warn;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 use std::collections::HashSet;
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ impl EmailConfig {
 }
 
 /// Configuration for the conversational auto-reply loop.
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 #[derive(Debug, Clone)]
 pub struct ConversationalEmailConfig {
     pub email: EmailConfig,
@@ -74,7 +74,7 @@ pub struct ConversationalEmailConfig {
     pub max_replies_per_hour: u32,
 }
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 impl ConversationalEmailConfig {
     /// Build from env. Returns `None` when the feature is not enabled or email
     /// is not configured.
@@ -132,7 +132,7 @@ pub struct EmailSummary {
 }
 
 /// Extended email data returned by the conversational fetch script.
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct IncomingEmail {
     message_id: String,
@@ -207,7 +207,7 @@ except Exception as e:
 
 /// Fetch UNSEEN emails with full metadata (Message-ID, body, epoch).
 /// Returns them oldest-first so we reply in order.
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 async fn fetch_unseen_emails(config: &EmailConfig) -> anyhow::Result<Vec<IncomingEmail>> {
     let script = format!(
         r#"
@@ -366,7 +366,7 @@ except Exception as e:
 // ---------------------------------------------------------------------------
 
 /// Addresses that should never receive auto-replies.
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 fn is_noreply_address(addr: &str) -> bool {
     let lower = addr.to_lowercase();
     lower.contains("noreply")
@@ -387,7 +387,7 @@ fn is_noreply_address(addr: &str) -> bool {
 ///
 /// This is the email equivalent of `telegram_bridge::run_telegram_bot`.
 /// Requires the `telegram` feature because it reuses `telegram_tools::agentic_chat`.
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 pub async fn run_conversational_email_loop(
     config: ConversationalEmailConfig,
     task_queue: std::sync::Arc<crate::task_queue::TaskQueue>,
@@ -554,7 +554,7 @@ pub async fn run_conversational_email_loop(
 mod tests {
     use super::*;
 
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     #[test]
     fn test_noreply_detection() {
         assert!(is_noreply_address("noreply@github.com"));
@@ -566,7 +566,7 @@ mod tests {
         assert!(!is_noreply_address("john@gmail.com"));
     }
 
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     #[test]
     fn test_conversational_config_requires_allowed_senders() {
         // Without env vars set, should return None

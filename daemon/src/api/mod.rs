@@ -184,14 +184,14 @@ pub struct ApiState {
     pub skill_registry: SkillRegistry,
     pub user_model: Arc<RwLock<UserModel>>,
     // Agentic chat infrastructure (shared with Telegram/SimpleX/Matrix bridges)
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     pub conversation_history: Arc<crate::telegram_tools::ConversationHistory>,
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     pub cron_store: Arc<crate::telegram_tools::CronStore>,
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     pub sdd_store: Arc<crate::telegram_tools::SddStore>,
     pub session_store: Arc<crate::session_store::SessionStore>,
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     pub meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
 }
 
@@ -11189,7 +11189,7 @@ async fn get_messaging_channels() -> Result<Json<serde_json::Value>, (StatusCode
         serde_json::json!({
             "id": "telegram",
             "name": "Telegram",
-            "enabled": cfg!(feature = "telegram"),
+            "enabled": cfg!(feature = "messaging"),
             "configured": std::env::var("LIFEOS_TELEGRAM_BOT_TOKEN").map(|v| !v.is_empty()).unwrap_or(false),
             "status": if std::env::var("LIFEOS_TELEGRAM_BOT_TOKEN").map(|v| !v.is_empty()).unwrap_or(false) { "active" } else { "not_configured" },
         }),
@@ -11331,7 +11331,7 @@ async fn post_llm_chat(
     }
 
     // Use the full agentic chat loop (same as Telegram/SimpleX)
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     {
         use crate::telegram_tools::{self, RateLimiter, SddStore, ToolContext};
 
@@ -11366,7 +11366,7 @@ async fn post_llm_chat(
     }
 
     // Fallback when telegram feature is not enabled — basic router call
-    #[cfg(not(feature = "telegram"))]
+    #[cfg(not(feature = "messaging"))]
     {
         use crate::llm_router::{ChatMessage, RouterRequest};
 

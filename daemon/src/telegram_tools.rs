@@ -11,7 +11,7 @@
 //! - Browser automation via CDP (Chrome DevTools Protocol)
 //! - Cron jobs with cron expressions and timezone
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 pub mod inner {
     use anyhow::Result;
     use log::{info, warn};
@@ -10871,5 +10871,5 @@ max_context = 128000
     }
 }
 
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 pub use inner::*;

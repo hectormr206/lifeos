@@ -147,19 +147,19 @@ jobs:
 
       - name: Run clippy
         working-directory: ./daemon
-        run: cargo clippy --features "dbus,http-api,ui-overlay,wake-word,telegram" --locked -- -D warnings
+        run: cargo clippy --features "dbus,http-api,ui-overlay,wake-word,messaging" --locked -- -D warnings
 
       - name: Build daemon (debug)
         working-directory: ./daemon
-        run: cargo build --features "dbus,http-api,wake-word,telegram" --locked
+        run: cargo build --features "dbus,http-api,wake-word,messaging" --locked
 
       - name: Build daemon (release)
         working-directory: ./daemon
-        run: cargo build --release --features "dbus,http-api,wake-word,telegram" --locked
+        run: cargo build --release --features "dbus,http-api,wake-word,messaging" --locked
 
       - name: Run daemon tests
         working-directory: ./daemon
-        run: cargo test --features "dbus,http-api,wake-word,telegram" --locked
+        run: cargo test --features "dbus,http-api,wake-word,messaging" --locked
 
       - name: Upload daemon artifact
         uses: actions/upload-artifact@v4

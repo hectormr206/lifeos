@@ -118,7 +118,7 @@ COPY contracts/ contracts/
 RUN set -eux && \
     cargo build --release --locked -p life && \
     cargo build --release --locked -p lifeosd \
-        --features "dbus,http-api,ui-overlay,wake-word,speaker-id,telegram,tray" && \
+        --features "dbus,http-api,ui-overlay,wake-word,speaker-id,messaging,tray" && \
     install -D -m 0755 /build/target/release/life /out/life && \
     install -D -m 0755 /build/target/release/lifeosd /out/lifeosd && \
     install -D -m 0755 /build/target/release/lifeos-train-wakeword /out/lifeos-train-wakeword && \

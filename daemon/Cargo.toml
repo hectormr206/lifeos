@@ -101,6 +101,6 @@ cosmic = ["cosmic-protocols", "cosmic-client-toolkit", "wayland-client"]
 wake-word = ["rustpotter"]
 speaker-id = []
 # mcp-client = ["rust-mcp-sdk"]  # disabled until rustc 1.88+ in CI
-telegram = ["teloxide"]
+messaging = ["teloxide"]
 homeassistant = []
 tray = ["ksni"]

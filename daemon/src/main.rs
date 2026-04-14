@@ -53,10 +53,10 @@ mod health_tracking;
 #[cfg(feature = "homeassistant")]
 mod home_assistant;
 mod lab;
-#[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+#[cfg_attr(not(feature = "messaging"), allow(dead_code))]
 mod llm_debate;
 mod llm_router;
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 mod matrix_bridge;
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
@@ -86,7 +86,7 @@ mod self_improving;
 mod sensory_memory;
 mod sensory_pipeline;
 mod session_store;
-#[cfg(feature = "telegram")]
+#[cfg(feature = "messaging")]
 mod simplex_bridge;
 mod skill_generator;
 mod skill_registry;
@@ -107,7 +107,7 @@ mod translation;
 mod tuf;
 mod update_scheduler;
 mod updates;
-#[cfg_attr(not(feature = "telegram"), allow(dead_code))]
+#[cfg_attr(not(feature = "messaging"), allow(dead_code))]
 mod user_model;
 mod visual_comfort;
 mod wake_word;
@@ -1948,9 +1948,9 @@ async fn main() -> anyhow::Result<()> {
     // Previously each bridge created its own instance — this caused
     // conversation context, user preferences, and cron jobs to be siloed
     // per channel and invisible to other channels.
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     let shared_history = Arc::new(telegram_tools::ConversationHistory::new());
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     let shared_cron_store = Arc::new(telegram_tools::CronStore::new());
     let shared_user_model = {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
@@ -1960,7 +1960,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Start Telegram bridge if configured
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     let telegram_handle = {
         if let Some(tg_config) = telegram_bridge::TelegramConfig::from_env() {
             let tq = state.task_queue.clone();
@@ -1998,12 +1998,12 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-    #[cfg(not(feature = "telegram"))]
+    #[cfg(not(feature = "messaging"))]
     let telegram_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start Matrix bridge if Conduit credentials exist (requires telegram feature
     // because it reuses the agentic chat infrastructure from telegram_tools).
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     let _matrix_handle = {
         if let Some(mx_config) = matrix_bridge::MatrixConfig::from_credentials_file() {
             let tq = state.task_queue.clone();
@@ -2020,7 +2020,7 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-    #[cfg(not(feature = "telegram"))]
+    #[cfg(not(feature = "messaging"))]
     let _matrix_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start SimpleX bridge if the CLI WebSocket is reachable (requires telegram
@@ -2030,7 +2030,7 @@ async fn main() -> anyhow::Result<()> {
     // the SAME capability set as the Telegram bridge. We pass ALL optional stores
     // (session, user_model, meetings, calendar) so agentic tools that depend on
     // them do not silently degrade when invoked through SimpleX.
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     let _simplex_handle = {
         if simplex_bridge::is_simplex_available().await {
             let tq = state.task_queue.clone();
@@ -2052,12 +2052,12 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-    #[cfg(not(feature = "telegram"))]
+    #[cfg(not(feature = "messaging"))]
     let _simplex_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start conversational email bridge if configured (requires telegram feature
     // because it reuses the agentic chat infrastructure from telegram_tools).
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     let _email_handle = {
         if let Some(email_config) = email_bridge::ConversationalEmailConfig::from_env() {
             let tq = state.task_queue.clone();
@@ -2071,7 +2071,7 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-    #[cfg(not(feature = "telegram"))]
+    #[cfg(not(feature = "messaging"))]
     let _email_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start API server if enabled (must be after shared variables are initialized)
@@ -2080,9 +2080,9 @@ async fn main() -> anyhow::Result<()> {
         let bridge_state = SharedBridgeState {
             user_model: shared_user_model.clone(),
             meeting_assistant: shared_meeting_assistant.clone(),
-            #[cfg(feature = "telegram")]
+            #[cfg(feature = "messaging")]
             conversation_history: shared_history.clone(),
-            #[cfg(feature = "telegram")]
+            #[cfg(feature = "messaging")]
             cron_store: shared_cron_store.clone(),
         };
         Some(tokio::spawn(start_api_server(state.clone(), bridge_state)))
@@ -2182,9 +2182,9 @@ async fn main() -> anyhow::Result<()> {
 struct SharedBridgeState {
     user_model: Arc<RwLock<user_model::UserModel>>,
     meeting_assistant: Arc<tokio::sync::RwLock<meeting_assistant::MeetingAssistant>>,
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     conversation_history: Arc<telegram_tools::ConversationHistory>,
-    #[cfg(feature = "telegram")]
+    #[cfg(feature = "messaging")]
     cron_store: Arc<telegram_tools::CronStore>,
 }
 
@@ -2227,14 +2227,14 @@ async fn start_api_server(state: Arc<DaemonState>, shared: SharedBridgeState) {
         wake_word_detector: state.wake_word_detector.clone(),
         skill_registry: skill_generator::SkillRegistry::from_defaults(),
         user_model: shared.user_model.clone(),
-        #[cfg(feature = "telegram")]
+        #[cfg(feature = "messaging")]
         conversation_history: shared.conversation_history.clone(),
-        #[cfg(feature = "telegram")]
+        #[cfg(feature = "messaging")]
         cron_store: shared.cron_store.clone(),
-        #[cfg(feature = "telegram")]
+        #[cfg(feature = "messaging")]
         sdd_store: Arc::new(telegram_tools::SddStore::new()),
         session_store: state.session_store.clone(),
-        #[cfg(feature = "telegram")]
+        #[cfg(feature = "messaging")]
         meeting_assistant: Some(shared.meeting_assistant.clone()),
     };
 
