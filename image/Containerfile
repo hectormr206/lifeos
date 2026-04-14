@@ -615,15 +615,6 @@ RUN set -eux && \
 COPY --from=builder /out/lifeos-train-wakeword /usr/local/bin/lifeos-train-wakeword
 RUN chmod +x /usr/local/bin/lifeos-train-wakeword
 
-# --- Conduwuit Matrix Homeserver (Conduit fork, actively maintained) ---
-# Static musl binary from GitHub releases. Conduwuit is a Rust Matrix
-# homeserver — fork of Conduit with performance improvements (io_uring,
-# jemalloc). Update the version tag below when upgrading.
-ARG CONDUWUIT_VERSION=v0.4.6
-RUN curl -fSL -o /usr/sbin/conduit \
-    "https://github.com/x86pup/conduwuit/releases/download/${CONDUWUIT_VERSION}/static-x86_64-unknown-linux-musl" && \
-    chmod +x /usr/sbin/conduit
-
 # --- SimpleX Chat CLI (extracted in Ubuntu stage where dpkg works) ---
 COPY --from=simplex-extract /out/simplex-chat /usr/local/bin/simplex-chat
 
@@ -959,9 +950,6 @@ COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.service /usr/lib/
 COPY image/files/etc/systemd/system/lifeos-maintenance-cleanup.timer   /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer
 COPY image/files/etc/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/lifeos-security-baseline.service
 COPY image/files/etc/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/lifeos-sentinel.service
-COPY image/files/etc/systemd/system/conduit.service /usr/lib/systemd/system/conduit.service
-COPY image/files/usr/local/bin/lifeos-matrix-setup.sh /usr/local/bin/lifeos-matrix-setup.sh
-RUN chmod +x /usr/local/bin/lifeos-matrix-setup.sh
 COPY image/files/etc/systemd/system/simplex-chat.service /usr/lib/systemd/system/simplex-chat.service
 COPY image/files/etc/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf /usr/lib/systemd/system/simplex-chat.service.d/10-bootstrap-profile.conf
 COPY image/files/usr/local/bin/lifeos-simplex-setup.sh /usr/local/bin/lifeos-simplex-setup.sh
@@ -1032,7 +1020,6 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-nvidia-signed-modules.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-nvidia-signed-modules.service && \
     ln -sf /usr/lib/systemd/system/lifeos-security-baseline.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-security-baseline.service && \
     ln -sf /usr/lib/systemd/system/lifeos-sentinel.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-sentinel.service && \
-    ln -sf /usr/lib/systemd/system/conduit.service /usr/lib/systemd/system/multi-user.target.wants/conduit.service && \
     ln -sf /usr/lib/systemd/system/simplex-chat.service /usr/lib/systemd/system/multi-user.target.wants/simplex-chat.service && \
     # Canonical enablement: lifeosd starts from the graphical session target
     # so it waits for the display server to be ready (fixes the tray-icon

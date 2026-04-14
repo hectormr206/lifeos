@@ -56,8 +56,6 @@ mod lab;
 #[cfg_attr(not(feature = "messaging"), allow(dead_code))]
 mod llm_debate;
 mod llm_router;
-#[cfg(feature = "messaging")]
-mod matrix_bridge;
 mod mcp_server;
 #[allow(dead_code)] // Used via Telegram tools #80-83 + dashboard API
 mod meeting_archive;
@@ -362,12 +360,6 @@ LIFEOS_WHATSAPP_TOKEN=
 LIFEOS_WHATSAPP_PHONE_ID=
 LIFEOS_WHATSAPP_VERIFY_TOKEN=
 LIFEOS_WHATSAPP_ALLOWED_NUMBERS=
-
-# Matrix/Element (opcional)
-LIFEOS_MATRIX_HOMESERVER=
-LIFEOS_MATRIX_USER_ID=
-LIFEOS_MATRIX_ACCESS_TOKEN=
-LIFEOS_MATRIX_ROOM_IDS=
 
 # Signal (opcional, requiere signal-cli daemon)
 LIFEOS_SIGNAL_CLI_URL=http://127.0.0.1:8086
@@ -1938,7 +1930,7 @@ async fn main() -> anyhow::Result<()> {
     // ── Shared cross-bridge instances ──────────────────────────────────
     //
     // ConversationHistory, UserModel, and CronStore must be shared across
-    // ALL bridges (SimpleX, Matrix, Email) so that Axi has the
+    // ALL bridges (SimpleX, Email) so that Axi has the
     // same context regardless of which channel the user writes from.
     // Previously each bridge created its own instance — this caused
     // conversation context, user preferences, and cron jobs to be siloed
@@ -1953,28 +1945,6 @@ async fn main() -> anyhow::Result<()> {
         let model = user_model::UserModel::load_from_dir(&data_dir).await;
         Arc::new(RwLock::new(model))
     };
-
-    // Start Matrix bridge if Conduit credentials exist (requires messaging feature
-    // because it reuses the agentic chat infrastructure from telegram_tools).
-    #[cfg(feature = "messaging")]
-    let _matrix_handle = {
-        if let Some(mx_config) = matrix_bridge::MatrixConfig::from_credentials_file() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let memory = Some(state.memory_plane_manager.clone());
-            Some(tokio::spawn(async move {
-                matrix_bridge::run_matrix_bridge(mx_config, tq, router, memory).await;
-            }))
-        } else {
-            info!(
-                "Matrix bridge: {} not found, skipping",
-                "/etc/lifeos/matrix-axi-credentials"
-            );
-            None
-        }
-    };
-    #[cfg(not(feature = "messaging"))]
-    let _matrix_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Start SimpleX bridge if the CLI WebSocket is reachable (requires telegram
     // feature because it reuses the agentic chat infrastructure from telegram_tools).
