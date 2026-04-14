@@ -144,7 +144,7 @@ RUN set -eux && \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_BUILD_SERVER=ON && \
-    cmake --build /tmp/llama.cpp/build -j"$(nproc)" --target llama-server && \
+    cmake --build /tmp/llama.cpp/build -j2 --target llama-server && \
     BUILD_BIN="$(find /tmp/llama.cpp/build -name 'llama-server' -type f | head -1)" && \
     echo ">>> Binary found at: ${BUILD_BIN}" && \
     mkdir -p /out && \
