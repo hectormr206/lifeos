@@ -167,9 +167,6 @@ CEREBRAS_API_KEY=
 GROQ_API_KEY=
 # OpenRouter (FREE models, mixed privacy)
 OPENROUTER_API_KEY=
-# Telegram Bot (optional, for remote control)
-LIFEOS_TELEGRAM_BOT_TOKEN=
-LIFEOS_TELEGRAM_CHAT_ID=
 ENVEOF
         chmod 600 /etc/lifeos/llm-providers.env
         log_success "LLM providers config created at /etc/lifeos/llm-providers.env"

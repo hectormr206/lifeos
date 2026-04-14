@@ -32,7 +32,7 @@ sudo bash scripts/build-iso.sh
 | Crate | Binary | Entry | Key dirs |
 |-------|--------|-------|----------|
 | `cli/` | `life` | `cli/src/main.rs` | `commands/`, `config/`, `daemon_client.rs` |
-| `daemon/` | `lifeosd` | `daemon/src/main.rs` | `api/`, `telegram_tools.rs`, `llm_router.rs`, `supervisor.rs` |
+| `daemon/` | `lifeosd` | `daemon/src/main.rs` | `api/`, `telegram_tools.rs` (shared agentic chat), `llm_router.rs`, `supervisor.rs` |
 | `image/` | ISO | `image/Containerfile` | `image/files/` (systemd units, scripts, configs) |
 
 - **Daemon API:** Axum REST on `127.0.0.1:8081` + WebSocket at `/ws`. Auth: `x-bootstrap-token` header
@@ -57,7 +57,7 @@ sudo bash scripts/build-iso.sh
 | New feature in daemon | `docs/user/user-guide.md` + `README.md` feature list |
 | New CLI command | `docs/user/user-guide.md` |
 | Containerfile (new package/service) | `docs/user/installation.md` if user-visible |
-| Telegram/SimpleX bridge | `docs/operations/telegram-features.md` or `simplex-features.md` |
+| SimpleX bridge | `docs/operations/simplex-features.md` |
 | Security config | `docs/user/installation.md` Security Defaults section |
 | Architecture change | `docs/architecture/` relevant file |
 | Version bump | `README.md` badge + `docs/architecture/update-channels.md` examples |

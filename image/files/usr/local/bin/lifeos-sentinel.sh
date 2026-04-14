@@ -119,21 +119,12 @@ collect_recent_logs() {
     echo "$recent_logs"
 }
 
-send_telegram_alert() {
+send_critical_alert() {
+    # Telegram bridge removed — emit alert to journal/log only.
+    # Future: route to SimpleX or desktop notification once a
+    # system-level alerting channel is wired in.
     local message="$1"
-    # Read Telegram config directly from env file (bypass lifeosd)
-    local token=""
-    local chat_id=""
-    if [ -f /etc/lifeos/llm-providers.env ]; then
-        token=$(grep "^LIFEOS_TELEGRAM_BOT_TOKEN=" /etc/lifeos/llm-providers.env 2>/dev/null | cut -d= -f2 || true)
-        chat_id=$(grep "^LIFEOS_TELEGRAM_CHAT_ID=" /etc/lifeos/llm-providers.env 2>/dev/null | cut -d= -f2 || true)
-    fi
-    if [ -n "$token" ] && [ -n "$chat_id" ]; then
-        curl -s -X POST "https://api.telegram.org/bot${token}/sendMessage" \
-            -d "chat_id=${chat_id}" \
-            -d "text=${message}" \
-            --max-time 10 2>/dev/null || true
-    fi
+    log "ALERT: ${message}"
 }
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -163,7 +154,7 @@ while true; do
         # Check disk space before attempting restart — if disk is full, restarting won't help
         if ! check_disk_space; then
             local_logs=$(collect_recent_logs)
-            send_telegram_alert "⚠️ Sentinel: /var esta >=${DISK_THRESHOLD}% lleno. Reiniciar no ayudara. Libera espacio manualmente.
+            send_critical_alert "⚠️ Sentinel: /var esta >=${DISK_THRESHOLD}% lleno. Reiniciar no ayudara. Libera espacio manualmente.
 
 Logs recientes:
 ${local_logs}"
@@ -214,7 +205,7 @@ ${local_logs}"
         # Recovery failed — alert with debug context
         log "CRITICAL: lifeosd unable to recover after structured recovery"
         local_logs=$(collect_recent_logs)
-        send_telegram_alert "⚠️ Axi no puede recuperarse despues de 10 intentos + recuperacion estructurada.
+        send_critical_alert "⚠️ Axi no puede recuperarse despues de 10 intentos + recuperacion estructurada.
 
 Pasos ejecutados:
 1. llama-server detenido

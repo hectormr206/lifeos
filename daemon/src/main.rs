@@ -99,7 +99,6 @@ mod system;
 mod system_tuner;
 mod thermal_manager;
 mod task_queue;
-mod telegram_bridge;
 mod telegram_tools;
 mod telemetry;
 mod time_context;
@@ -347,10 +346,6 @@ GROQ_API_KEY=
 # OpenRouter (multiple providers)
 OPENROUTER_API_KEY=
 
-# Telegram Bot (obten tu token de @BotFather)
-LIFEOS_TELEGRAM_BOT_TOKEN=
-LIFEOS_TELEGRAM_CHAT_ID=
-
 # Email (opcional, para bridge de email)
 LIFEOS_EMAIL_IMAP_HOST=
 LIFEOS_EMAIL_IMAP_USER=
@@ -390,7 +385,7 @@ LIFEOS_HA_TOKEN=
                     std::os::unix::fs::PermissionsExt::from_mode(0o600),
                 );
                 info!(
-                    "Created LLM providers template at {} — edit it to enable Telegram, Cerebras, etc.",
+                    "Created LLM providers template at {} — edit it to enable Cerebras, Groq, etc.",
                     system_env.display()
                 );
             }
@@ -1156,7 +1151,7 @@ async fn main() -> anyhow::Result<()> {
     //
     // Reminders created by Axi via `reminder_add` stash the originating chat_id
     // in the event description as `__chat:<id>`. When we see that tag we emit a
-    // `ReminderDue` event so the channel bridges (Telegram, SimpleX, dashboard)
+    // `ReminderDue` event so the channel bridges (SimpleX, dashboard)
     // can route the notification back to the chat that asked for it. Reminders
     // without a chat tag fall through to the old desktop Notification path.
     let calendar_state = state.clone();
@@ -1943,7 +1938,7 @@ async fn main() -> anyhow::Result<()> {
     // ── Shared cross-bridge instances ──────────────────────────────────
     //
     // ConversationHistory, UserModel, and CronStore must be shared across
-    // ALL bridges (Telegram, SimpleX, Matrix, Email) so that Axi has the
+    // ALL bridges (SimpleX, Matrix, Email) so that Axi has the
     // same context regardless of which channel the user writes from.
     // Previously each bridge created its own instance — this caused
     // conversation context, user preferences, and cron jobs to be siloed
@@ -1959,49 +1954,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(RwLock::new(model))
     };
 
-    // Start Telegram bridge if configured
-    #[cfg(feature = "messaging")]
-    let telegram_handle = {
-        if let Some(tg_config) = telegram_bridge::TelegramConfig::from_env() {
-            let tq = state.task_queue.clone();
-            let router = state.llm_router.clone();
-            let memory = Some(state.memory_plane_manager.clone());
-            let notify_rx = state.supervisor.subscribe();
-            let ss = Some(state.session_store.clone());
-            let eb = Some(state.event_bus.clone());
-            let um = shared_user_model.clone();
-            let ma = meeting_archive.clone();
-            let mast = shared_meeting_assistant.clone();
-            let cal = state.calendar.clone();
-            let hist = shared_history.clone();
-            let cron = shared_cron_store.clone();
-            Some(tokio::spawn(async move {
-                telegram_bridge::run_telegram_bot(
-                    tg_config,
-                    tq,
-                    router,
-                    memory,
-                    notify_rx,
-                    ss,
-                    eb,
-                    Some(um),
-                    Some(ma),
-                    Some(mast),
-                    Some(cal),
-                    hist,
-                    cron,
-                )
-                .await;
-            }))
-        } else {
-            info!("Telegram bridge: LIFEOS_TELEGRAM_BOT_TOKEN not set, skipping");
-            None
-        }
-    };
-    #[cfg(not(feature = "messaging"))]
-    let telegram_handle: Option<tokio::task::JoinHandle<()>> = None;
-
-    // Start Matrix bridge if Conduit credentials exist (requires telegram feature
+    // Start Matrix bridge if Conduit credentials exist (requires messaging feature
     // because it reuses the agentic chat infrastructure from telegram_tools).
     #[cfg(feature = "messaging")]
     let _matrix_handle = {
@@ -2027,7 +1980,7 @@ async fn main() -> anyhow::Result<()> {
     // feature because it reuses the agentic chat infrastructure from telegram_tools).
     //
     // Parity note: SimpleX is our privacy-first primary channel, so it must have
-    // the SAME capability set as the Telegram bridge. We pass ALL optional stores
+    // the SAME capability set as the former Telegram bridge. We pass ALL optional stores
     // (session, user_model, meetings, calendar) so agentic tools that depend on
     // them do not silently degrade when invoked through SimpleX.
     #[cfg(feature = "messaging")]
@@ -2155,9 +2108,6 @@ async fn main() -> anyhow::Result<()> {
     if let Some(h) = game_guard_handle {
         h.abort();
     }
-    if let Some(h) = telegram_handle {
-        h.abort();
-    }
     dbus_handle.abort();
     portal_handle.abort();
 
@@ -2178,7 +2128,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Shared infrastructure passed from main to the API server so that all
-/// bridges (Telegram, SimpleX, API) use the same instances.
+/// bridges (SimpleX, API) use the same instances.
 struct SharedBridgeState {
     user_model: Arc<RwLock<user_model::UserModel>>,
     meeting_assistant: Arc<tokio::sync::RwLock<meeting_assistant::MeetingAssistant>>,
@@ -2410,7 +2360,7 @@ async fn run_update_checks(state: Arc<DaemonState>) {
                         error!("Failed to send update notification: {}", e);
                     }
 
-                    // Broadcast on event bus so dashboard/Telegram/SSE subscribers see it
+                    // Broadcast on event bus so dashboard/SimpleX/SSE subscribers see it
                     let _ = state.event_bus.send(events::DaemonEvent::Notification {
                         priority: "info".into(),
                         message: format!(
