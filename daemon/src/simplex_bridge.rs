@@ -36,7 +36,7 @@ mod inner {
     use crate::llm_router::LlmRouter;
     use crate::memory_plane::MemoryPlaneManager;
     use crate::task_queue::TaskQueue;
-    use crate::telegram_tools::{
+    use crate::axi_tools::{
         self, ConversationHistory, CronStore, RateLimiter, SddStore, ToolContext,
     };
 
@@ -953,7 +953,7 @@ mod inner {
                                                         display_name,
                                                         &transcript.chars().take(80).collect::<String>()
                                                     );
-                                                    let (reply, _) = telegram_tools::agentic_chat(
+                                                    let (reply, _) = axi_tools::agentic_chat(
                                                         &tool_ctx,
                                                         SIMPLEX_CHAT_ID,
                                                         &format!("[Mensaje de voz] {}", transcript),
@@ -980,7 +980,7 @@ mod inner {
                                                 } else {
                                                     caption
                                                 };
-                                                let (reply, _) = telegram_tools::agentic_chat(
+                                                let (reply, _) = axi_tools::agentic_chat(
                                                     &tool_ctx,
                                                     SIMPLEX_CHAT_ID,
                                                     &prompt,
@@ -1133,7 +1133,7 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                 continue;
                                             }
 
-                                            let (reply, _audio) = telegram_tools::agentic_chat(
+                                            let (reply, _audio) = axi_tools::agentic_chat(
                                                 &tool_ctx,
                                                 SIMPLEX_CHAT_ID,
                                                 msg_text,
@@ -1176,7 +1176,7 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                         } else {
                                                             caption.clone()
                                                         };
-                                                        let (reply, _) = telegram_tools::agentic_chat(
+                                                        let (reply, _) = axi_tools::agentic_chat(
                                                             &tool_ctx,
                                                             SIMPLEX_CHAT_ID,
                                                             &prompt,
@@ -1289,7 +1289,7 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                         } else {
                                                             caption
                                                         };
-                                                        let (reply, _) = telegram_tools::agentic_chat(
+                                                        let (reply, _) = axi_tools::agentic_chat(
                                                             &tool_ctx,
                                                             SIMPLEX_CHAT_ID,
                                                             &prompt,

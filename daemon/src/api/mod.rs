@@ -185,11 +185,11 @@ pub struct ApiState {
     pub user_model: Arc<RwLock<UserModel>>,
     // Agentic chat infrastructure (shared with Telegram/SimpleX/Matrix bridges)
     #[cfg(feature = "messaging")]
-    pub conversation_history: Arc<crate::telegram_tools::ConversationHistory>,
+    pub conversation_history: Arc<crate::axi_tools::ConversationHistory>,
     #[cfg(feature = "messaging")]
-    pub cron_store: Arc<crate::telegram_tools::CronStore>,
+    pub cron_store: Arc<crate::axi_tools::CronStore>,
     #[cfg(feature = "messaging")]
-    pub sdd_store: Arc<crate::telegram_tools::SddStore>,
+    pub sdd_store: Arc<crate::axi_tools::SddStore>,
     pub session_store: Arc<crate::session_store::SessionStore>,
     #[cfg(feature = "messaging")]
     pub meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
@@ -11333,7 +11333,7 @@ async fn post_llm_chat(
     // Use the full agentic chat loop (same as Telegram/SimpleX)
     #[cfg(feature = "messaging")]
     {
-        use crate::telegram_tools::{self, RateLimiter, SddStore, ToolContext};
+        use crate::axi_tools::{self, RateLimiter, SddStore, ToolContext};
 
         /// Fixed chat_id for the dashboard channel (conversation history key).
         const DASHBOARD_CHAT_ID: i64 = 0x4441_5348_0000_0001; // "DASH0001"
@@ -11354,7 +11354,7 @@ async fn post_llm_chat(
         };
 
         let (reply, _screenshot) =
-            telegram_tools::agentic_chat(&tool_ctx, DASHBOARD_CHAT_ID, &user_text, None).await;
+            axi_tools::agentic_chat(&tool_ctx, DASHBOARD_CHAT_ID, &user_text, None).await;
 
         Ok(Json(serde_json::json!({
             "text": reply,

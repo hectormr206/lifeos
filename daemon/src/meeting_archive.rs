@@ -3,7 +3,7 @@
 //! Persists meeting data (transcripts, summaries, action items, screenshots)
 //! in a local SQLite database for retrieval, search, and analytics.
 //!
-//! Wired to: telegram_tools.rs (tools #80-83), meeting_assistant.rs (auto-save),
+//! Wired to: axi_tools.rs (tools #80-83), meeting_assistant.rs (auto-save),
 //! dashboard (API endpoints), main.rs (initialization).
 
 use anyhow::{Context, Result};

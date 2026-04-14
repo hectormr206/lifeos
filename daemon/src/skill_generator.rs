@@ -404,7 +404,7 @@ impl SkillRegistry {
                         continue;
                     }
                 }
-                // Also accept SKILL.md-style directories (telegram_tools compat)
+                // Also accept SKILL.md-style directories (axi_tools compat)
                 let skill_md = path.join("SKILL.md");
                 if skill_md.exists() {
                     if let Some(manifest) = Self::load_skill_md(&skill_md, &path).await {
@@ -446,7 +446,7 @@ impl SkillRegistry {
         toml::from_str::<SkillManifest>(&content).ok()
     }
 
-    /// Load a SKILL.md file (telegram_tools format) and convert to SkillManifest.
+    /// Load a SKILL.md file (axi_tools format) and convert to SkillManifest.
     async fn load_skill_md(
         skill_md: &std::path::Path,
         skill_dir: &std::path::Path,

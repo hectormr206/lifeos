@@ -97,7 +97,7 @@ mod system;
 mod system_tuner;
 mod thermal_manager;
 mod task_queue;
-mod telegram_tools;
+mod axi_tools;
 mod telemetry;
 mod time_context;
 mod translation;
@@ -1931,9 +1931,9 @@ async fn main() -> anyhow::Result<()> {
     // conversation context, user preferences, and cron jobs to be siloed
     // per channel and invisible to other channels.
     #[cfg(feature = "messaging")]
-    let shared_history = Arc::new(telegram_tools::ConversationHistory::new());
+    let shared_history = Arc::new(axi_tools::ConversationHistory::new());
     #[cfg(feature = "messaging")]
-    let shared_cron_store = Arc::new(telegram_tools::CronStore::new());
+    let shared_cron_store = Arc::new(axi_tools::CronStore::new());
     let shared_user_model = {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
         let data_dir = std::path::PathBuf::from(format!("{}/.local/share/lifeos", home));
@@ -1942,7 +1942,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Start SimpleX bridge if the CLI WebSocket is reachable (requires telegram
-    // feature because it reuses the agentic chat infrastructure from telegram_tools).
+    // feature because it reuses the agentic chat infrastructure from axi_tools).
     //
     // Parity note: SimpleX is our privacy-first primary channel, so it must have
     // the SAME capability set as the former Telegram bridge. We pass ALL optional stores
@@ -2079,9 +2079,9 @@ struct SharedBridgeState {
     user_model: Arc<RwLock<user_model::UserModel>>,
     meeting_assistant: Arc<tokio::sync::RwLock<meeting_assistant::MeetingAssistant>>,
     #[cfg(feature = "messaging")]
-    conversation_history: Arc<telegram_tools::ConversationHistory>,
+    conversation_history: Arc<axi_tools::ConversationHistory>,
     #[cfg(feature = "messaging")]
-    cron_store: Arc<telegram_tools::CronStore>,
+    cron_store: Arc<axi_tools::CronStore>,
 }
 
 /// Start REST API server
@@ -2128,7 +2128,7 @@ async fn start_api_server(state: Arc<DaemonState>, shared: SharedBridgeState) {
         #[cfg(feature = "messaging")]
         cron_store: shared.cron_store.clone(),
         #[cfg(feature = "messaging")]
-        sdd_store: Arc::new(telegram_tools::SddStore::new()),
+        sdd_store: Arc::new(axi_tools::SddStore::new()),
         session_store: state.session_store.clone(),
         #[cfg(feature = "messaging")]
         meeting_assistant: Some(shared.meeting_assistant.clone()),

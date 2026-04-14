@@ -1949,7 +1949,7 @@ REGLAS FIRMES:
 
     pub async fn execute_tool(call: &ToolCall, ctx: &ToolContext, chat_id: i64) -> ToolResult {
         info!(
-            "[telegram_tools] Executing tool: {} args={}",
+            "[axi_tools] Executing tool: {} args={}",
             call.name, call.args
         );
 
@@ -2454,7 +2454,7 @@ REGLAS FIRMES:
             let response = match router.chat(&request).await {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("[telegram_tools] LLM call failed round {}: {}", round, e);
+                    warn!("[axi_tools] LLM call failed round {}: {}", round, e);
                     return (format!("Error conectando con el LLM: {}", e), None);
                 }
             };
@@ -2626,7 +2626,7 @@ REGLAS FIRMES:
             });
 
             info!(
-                "[telegram_tools] Round {}: {} tools executed, continuing...",
+                "[axi_tools] Round {}: {} tools executed, continuing...",
                 round,
                 tool_results.len()
             );
@@ -9602,7 +9602,7 @@ max_context = 128000
             std::fs::write(&file_path, &output)?;
         }
 
-        info!("[telegram_tools] Exported conversation to {}", file_path);
+        info!("[axi_tools] Exported conversation to {}", file_path);
 
         // Return __SEND_FILE__ marker so telegram_bridge sends it to the user
         Ok(format!("__SEND_FILE__:{}", file_path))

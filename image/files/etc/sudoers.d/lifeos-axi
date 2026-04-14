@@ -33,7 +33,7 @@
 %wheel ALL=(root) NOPASSWD: /usr/bin/bootc rollback
 
 # === FLATPAK SYSTEM INSTALLS ===
-# telegram_tools.rs, security_daemon.rs, proactive.rs
+# axi_tools.rs, security_daemon.rs, proactive.rs
 %wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub *
 %wheel ALL=(root) NOPASSWD: /usr/bin/flatpak uninstall --unused -y
 %wheel ALL=(root) NOPASSWD: /usr/bin/flatpak update --system -y --noninteractive
@@ -47,7 +47,7 @@
 # proactive.rs — firewall status check
 %wheel ALL=(root) NOPASSWD: /usr/sbin/nft list ruleset
 
-# === NETWORK SECURITY (service management — telegram_tools.rs service_manage) ===
+# === NETWORK SECURITY (service management — axi_tools.rs service_manage) ===
 %wheel ALL=(root) NOPASSWD: /usr/bin/systemctl start nftables.service
 %wheel ALL=(root) NOPASSWD: /usr/bin/systemctl stop nftables.service
 %wheel ALL=(root) NOPASSWD: /usr/bin/systemctl restart nftables.service
