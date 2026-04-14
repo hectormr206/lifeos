@@ -42,7 +42,7 @@ sudo bash scripts/build-iso.sh
 ## Critical Constraints
 
 - **bootc:** `/usr` is read-only at runtime. All mutable state in `/var/` or `/home/`
-- **No `#[allow(dead_code)]`** on new modules — wire to Telegram/API/event bus/supervisor
+- **No `#[allow(dead_code)]`** on new modules — wire to SimpleX/API/event bus/supervisor
 - **Pre-commit hooks:** rustfmt + clippy. On push: cargo test + cargo audit
 - **User cannot run sudo** — provide commands for user to run manually
 - **Daemon auth:** All `/api/v1/*` need `x-bootstrap-token` or `x-api-key` header

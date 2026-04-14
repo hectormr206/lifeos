@@ -23,7 +23,7 @@ These foundations are already present in the project today, but not all of them 
 - Local inference through the LifeOS AI runtime (`validated on host`)
 - Encrypted local memory foundations (`integrated in repo`)
 - Desktop control plane foundations (`integrated in repo`)
-- Remote interaction through Telegram (`validated on host`)
+- Remote interaction through SimpleX — privacy-first, E2E encrypted, no phone number required (`integrated in repo`)
 - Voice, vision, and automation groundwork (`experimental`)
 - Public branding and landing page foundations (`integrated in repo`)
 

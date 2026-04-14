@@ -1,6 +1,6 @@
 # Troubleshooting — Guia de Solucion de Problemas
 
-## Axi no responde en Telegram
+## Axi no responde en SimpleX o el dashboard
 
 **Diagnostico:**
 ```bash
@@ -44,7 +44,7 @@ sudo bootc rollback               # Volver a la version anterior
 Esto pasa cuando el daemon crasheo 3+ veces seguidas. Axi deja de hacer cambios autonomos por seguridad.
 
 **Para salir:**
-- Escribe "exit safe mode" en Telegram
+- Escribe "exit safe mode" en SimpleX o en el dashboard
 - O: `life safe-mode status`
 - O: `curl -X POST http://127.0.0.1:8081/api/v1/safe-mode/exit`
 

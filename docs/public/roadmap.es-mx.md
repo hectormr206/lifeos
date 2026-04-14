@@ -23,7 +23,7 @@ Estas bases ya existen hoy dentro del proyecto, pero no todas tienen la misma ma
 - inferencia local a traves del runtime de IA de LifeOS (`validada en host`)
 - bases de memoria local cifrada (`integrada en repo`)
 - bases del control plane de escritorio (`integrada en repo`)
-- interaccion remota por Telegram (`validada en host`)
+- interaccion remota por SimpleX — privacy-first, E2E encrypted, sin numero de telefono (`integrada en repo`)
 - bases de voz, vision y automatizacion (`experimental`)
 - branding publico y cimientos de la landing page (`integrada en repo`)
 

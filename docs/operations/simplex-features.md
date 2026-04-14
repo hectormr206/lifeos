@@ -12,9 +12,12 @@ the network. The connection is end-to-end encrypted and routed through
 SimpleX relay servers that never learn who is talking to whom.
 
 Axi connects to a local `simplex-chat` process running in headless/WebSocket
-mode on `ws://127.0.0.1:5226`. All messages are dispatched through the same
-agentic tool system used by the Telegram bridge — same LLM, same tools, same
-conversation memory.
+mode on `ws://127.0.0.1:5226`. All messages are dispatched through the shared
+agentic tool system in `daemon/src/axi_tools.rs` — same LLM, same tools, same
+conversation memory across SimpleX and the dashboard.
+
+On first connect, the SimpleX profile is auto-configured (name: **Axi**,
+avatar, description) so Axi appears with the correct identity out of the box.
 
 ## Setup
 
@@ -63,9 +66,9 @@ systemctl --user enable --now simplex-chat.service
 ### Chat
 
 Send any natural language message and Axi processes it through the full
-agentic loop — same LLM, same 80+ tools, same conversation history as
-Telegram. Conversation history is keyed separately so SimpleX and Telegram do
-not share context.
+agentic loop — same LLM, same 80+ tools, same conversation history shared
+with the local dashboard. Conversation history is keyed per-channel so
+SimpleX and the dashboard do not share context.
 
 ### Commands
 
@@ -92,7 +95,7 @@ so you know the file was accepted.
 
 > Note: TTS audio replies (voice output) are not sent back over SimpleX —
 > the bridge responds with text only. Voice output is available on the local
-> system and via Telegram.
+> system.
 
 ### Images
 
@@ -125,10 +128,11 @@ Axi captures your current screen using `grim` (Wayland) with a fallback to
 
 ### Cron tasks and system tools
 
-Because SimpleX uses the same `ToolContext` as Telegram, all 80+ tools are
-available via natural language — cron job creation, service management,
-system monitoring, memory plane queries, calendar, and so on. There is no
-feature difference at the tool layer.
+Because SimpleX uses the shared `ToolContext` from `axi_tools.rs`, all 80+
+tools are available via natural language — cron job creation, service
+management, system monitoring, memory plane queries, calendar, and so on.
+There is no feature difference at the tool layer between SimpleX and the
+dashboard.
 
 ### Incoming calls
 
@@ -136,22 +140,25 @@ SimpleX voice/video calls are not supported in headless CLI mode. If you
 initiate a call from the mobile app, Axi will reply with a message explaining
 the limitation and suggesting voice notes instead.
 
-## Privacy benefits over Telegram
+## Why SimpleX
 
-| Property | Telegram | SimpleX |
-|----------|----------|---------|
-| Phone number required | Yes | No |
-| Server-side account | Yes | No |
-| Persistent user ID | Yes | No — each contact uses ephemeral keys |
-| Metadata visible to server | Yes (sender/recipient) | No — server only routes encrypted blobs |
-| End-to-end encrypted by default | Optional (Secret Chats only) | Always |
-| Open protocol | No | Yes |
-| Self-hostable relay | No | Yes |
-| Local client required | No | Yes (simplex-chat binary) |
+SimpleX is the only remote chat channel shipped with LifeOS, chosen because
+it aligns with the local-first, privacy-first philosophy of the project:
 
-SimpleX is the preferred channel when privacy from third-party servers is a
-requirement. Telegram remains supported for convenience and for features that
-require a mobile-native client.
+| Property | SimpleX |
+|----------|---------|
+| Phone number required | No |
+| Server-side account | No |
+| Persistent user ID | No — each contact uses ephemeral keys |
+| Metadata visible to server | No — server only routes encrypted blobs |
+| End-to-end encrypted by default | Always |
+| Open protocol | Yes |
+| Self-hostable relay | Yes |
+| Local client required | Yes (simplex-chat binary) |
+
+For in-host interaction, use the dashboard at
+`http://127.0.0.1:8081/dashboard` — it is bound to localhost and not exposed
+to the network.
 
 ## Troubleshooting
 

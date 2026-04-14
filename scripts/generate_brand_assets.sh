@@ -199,16 +199,6 @@ cat << 'EOF' > "$ICON_DIR/apps/discord.svg"
 </svg>
 EOF
 
-# --- telegram: paper plane ---
-cat << 'EOF' > "$ICON_DIR/apps/telegram.svg"
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect x="48" y="48" width="416" height="416" rx="100" fill="#161830"/>
-  <path d="M128 256 L400 128 L300 400 L248 288 Z" fill="#00D4AA"/>
-  <line x1="400" y1="128" x2="248" y2="288" stroke="#161830" stroke-width="8"/>
-  <line x1="248" y1="288" x2="248" y2="380" stroke="#FF6B9D" stroke-width="8" stroke-linecap="round"/>
-</svg>
-EOF
-
 # --- code (VSCode): bracket pairs ---
 cat << 'EOF' > "$ICON_DIR/apps/code.svg"
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">

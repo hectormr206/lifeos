@@ -18,8 +18,7 @@ LifeOS System Services
 │   └── whisper-stt.service                system  Speech-to-text
 │
 ├── Communication
-│   ├── simplex-chat.service               system  SimpleX messaging bridge
-│   └── conduit.service                    system  Matrix homeserver
+│   └── simplex-chat.service               system  SimpleX messaging bridge (privacy-first, E2E)
 │
 ├── Maintenance Timers
 │   ├── lifeos-maintenance-cleanup.timer   system  Every 12h — podman/Flatpak/Rust cache cleanup

@@ -53,8 +53,8 @@ Axi (the LifeOS AI assistant) is reachable through multiple channels:
 - **Terminal:** `life assistant ask "..."`.
 - **Launcher:** `life assistant install-launcher` — adds a system-wide launcher shortcut.
 - **Overlay:** `life assistant open` — floating overlay on the COSMIC desktop.
-- **Telegram:** Connect your bot token in Settings → AI → Telegram to chat with Axi from your phone or any Telegram client.
-- **SimpleX:** For privacy-first messaging without phone numbers or identifiers. Configure in Settings → AI → SimpleX. Axi responds through a SimpleX address you control — no account required on the server side.
+- **Dashboard:** Open `http://127.0.0.1:8081/dashboard` in your browser for the local web UI (runs on localhost only, no external exposure).
+- **SimpleX:** The privacy-first remote channel — E2E encrypted, no phone number or email required, no account on the server side. Configure in Settings → AI → SimpleX. The SimpleX profile (Axi name, avatar, description) is auto-configured when you connect, so Axi shows up with the correct identity out of the box. Preferred remote channel — aligns with LifeOS's local-first, privacy-first philosophy.
 
 ## Memory and Context
 

@@ -178,7 +178,7 @@ make build-daemon
 # 4. Probar el daemon local manualmente
 systemctl --user stop lifeosd
 RUST_LOG=debug ./daemon/target/release/lifeosd
-# (probar endpoints, telegram, etc)
+# (probar endpoints, SimpleX, dashboard, etc)
 # Ctrl+C cuando termine
 
 # 5. Restaurar service oficial

@@ -33,7 +33,7 @@ Este documento es la **fuente unica de verdad** de todos los items criticos pend
 | 1 | 🔴 P0 | Axi tray icon + senses enable bug | pending | A |
 | 3 | 🔴 P0 | LLM model VRAM retention | pending | A (posible conflicto VRAM) |
 | 5 | 🔴 P0 | Dashboard audit (data, timezone, CRUD) | pending | 1 (UI depende del daemon) |
-| 4 | 🟡 P1 | SimpleX parity with Telegram | pending | — |
+| 4 | ✅ Done | SimpleX as sole remote chat channel | done | Telegram removed 2026-04-13 |
 | 2 | 🟡 P1 | Game Guard audit | pending | — |
 | S1 | 🟡 P1 | Security audit: self_improving.rs | pending | — |
 | S2 | 🟡 P1 | Security audit: mcp_server.rs | pending | — |
@@ -285,37 +285,20 @@ Las 7 rutas recortadas necesitan backend real:
 
 # Items P1 (importantes)
 
-## Item 4 — SimpleX parity con Telegram
+## Item 4 — SimpleX como canal remoto unico (cerrado)
 
-### Problema
+### Resolucion
 
-SimpleX fue elegido como canal privado primario. Telegram tiene 158+ tools registrados. SimpleX debe estar **al 100% de paridad** con Telegram, y agregar mas si es posible.
+2026-04-13: el bridge de Telegram, el bridge de Matrix y el loop de email
+conversacional fueron removidos. LifeOS ahora tiene solo dos canales de chat:
 
-### Plan de auditoria
+- **SimpleX** — remoto, privacy-first, E2E encriptado, sin numero de telefono
+- **Dashboard** — UI web local en `http://127.0.0.1:8081/dashboard`
 
-1. Listar todos los tools registrados en `daemon/src/telegram_tools.rs`
-2. Listar todos los tools en `daemon/src/simplex_bridge.rs` (o equivalente)
-3. Diff: que tools tiene Telegram que SimpleX no tiene
-4. Para cada tool faltante: portar a SimpleX
-5. Verificar: rate limiting, brute force protection, security hardening
-6. Tests E2E de cada tool via SimpleX
-
-### Archivos
-
-- `daemon/src/telegram_tools.rs`
-- `daemon/src/simplex_bridge.rs`
-- `daemon/src/main.rs` — registros
-
-### Criterios de exito
-
-- Cada tool de Telegram tiene equivalente en SimpleX
-- Security hardening identico (rate limit, whitelist, etc)
-- Tests automatizados por cada tool
-- Documentacion actualizada
-
-### Estimacion
-
-1-2 dias.
+El motor agentico compartido vive en `daemon/src/axi_tools.rs` (renombrado
+desde `telegram_tools.rs`). La feature flag es `messaging` (renombrada desde
+`telegram`). No hay paridad pendiente — SimpleX usa el mismo `ToolContext`
+que el dashboard, todos los tools estan disponibles en ambos canales.
 
 ---
 
