@@ -38,7 +38,7 @@ cleanup() {
         kill "${DAEMON_PID}" >/dev/null 2>&1 || true
         wait "${DAEMON_PID}" 2>/dev/null || true
     fi
-    rm -rf "${TMP_RUNTIME}" "${TMP_HOME}"
+    rm -rf "${TMP_RUNTIME}" "${TMP_HOME}" || true
 }
 trap cleanup EXIT
 
