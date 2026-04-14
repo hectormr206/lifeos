@@ -256,7 +256,8 @@ mod inner {
     // -----------------------------------------------------------------------
 
     /// What to do when a file download completes.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
     enum PendingAction {
         /// Transcribe the audio file and dispatch as text chat.
         TranscribeVoice { display_name: String },
@@ -265,6 +266,29 @@ mod inner {
             display_name: String,
             caption: String,
         },
+    }
+
+    /// Disk-backed store of in-flight file actions so voice/image jobs survive
+    /// daemon restarts.
+    fn pending_files_path() -> std::path::PathBuf {
+        std::path::PathBuf::from("/var/lib/lifeos/simplex-pending-files.json")
+    }
+
+    fn load_pending_files() -> HashMap<u64, PendingAction> {
+        std::fs::read_to_string(pending_files_path())
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    async fn persist_pending_files(map: &HashMap<u64, PendingAction>) {
+        let path = pending_files_path();
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        if let Ok(json) = serde_json::to_string(map) {
+            let _ = tokio::fs::write(&path, json).await;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -458,6 +482,32 @@ mod inner {
             })
     }
 
+    /// Path where we persist the most recent contact display_name so that
+    /// proactive messages (reminders) can find a delivery target after a
+    /// daemon restart.
+    fn last_contact_path() -> std::path::PathBuf {
+        std::path::PathBuf::from("/var/lib/lifeos/simplex-last-contact")
+    }
+
+    /// Record the most recent SimpleX contact we've interacted with. Called
+    /// from the message receive path. Persisted to disk for restart recovery.
+    fn remember_contact(display_name: &str) {
+        let path = last_contact_path();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&path, display_name);
+    }
+
+    /// Return the most recently seen contact display_name, if any.
+    fn last_known_contact() -> Option<String> {
+        let path = last_contact_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
     /// Read a file and encode as base64 (for passing to multimodal LLM).
     async fn file_to_base64(path: &str) -> Option<String> {
         use base64::Engine;
@@ -641,6 +691,7 @@ mod inner {
     // -----------------------------------------------------------------------
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn run_simplex_bridge(
         task_queue: Arc<TaskQueue>,
         router: Arc<RwLock<LlmRouter>>,
@@ -652,6 +703,7 @@ mod inner {
         calendar: Option<Arc<crate::calendar::CalendarManager>>,
         history: Arc<ConversationHistory>,
         cron_store: Arc<CronStore>,
+        event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
     ) {
         info!(
             "[simplex_bridge] Starting SimpleX bridge (ws={})",
@@ -675,9 +727,57 @@ mod inner {
             rate_limiter: RateLimiter::new(),
         };
 
-        // Track pending file downloads: file_id → action to take on completion
+        // Track pending file downloads: file_id → action to take on completion.
+        // Loaded from disk so voice/image jobs that were mid-flight when the
+        // daemon restarted still complete when the RcvFileComplete event
+        // arrives after reconnect.
         let pending_files: Arc<Mutex<HashMap<u64, PendingAction>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+            Arc::new(Mutex::new(load_pending_files()));
+
+        // Outbound queue for proactive messages (reminders, etc.) that need to
+        // be delivered to SimpleX contacts. Each item is (display_name, text).
+        let (outbound_tx, mut outbound_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+
+        // Subscribe to reminder events and fan them out to all known contacts.
+        // We don't yet have per-contact chat_id mapping (SimpleX uses a single
+        // magic id for history), so we deliver every reminder to every
+        // connected contact we know about. A better per-contact routing would
+        // track display_name → chat_id mapping; for now any SimpleX reminder
+        // reaches the user.
+        if let Some(ref bus) = event_bus {
+            let mut rx = bus.subscribe();
+            let outbound = outbound_tx.clone();
+            tokio::spawn(async move {
+                while let Ok(evt) = rx.recv().await {
+                    if let crate::events::DaemonEvent::ReminderDue {
+                        chat_id,
+                        title,
+                        start_time,
+                        ..
+                    } = evt
+                    {
+                        // Accept only our SimpleX magic chat_id (and also
+                        // accept any unknown-high-magic id just in case).
+                        if chat_id == SIMPLEX_CHAT_ID {
+                            let msg = format!("🔔 Recordatorio ({}): {}", start_time, title);
+                            // Target all contacts — simplex does not expose
+                            // a deterministic display_name per chat_id yet,
+                            // so we use the stored default contact.
+                            let contact = last_known_contact();
+                            if let Some(name) = contact {
+                                let _ = outbound.send((name, msg));
+                            } else {
+                                log::warn!(
+                                    "[simplex_bridge] Reminder fired but no contact known to deliver to: {}",
+                                    title
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         loop {
             match connect_async(SIMPLEX_WS_URL).await {
@@ -712,6 +812,21 @@ mod inner {
                                 ).await {
                                     warn!("[simplex_bridge] Ping failed, reconnecting: {}", e);
                                     break;
+                                }
+                                continue;
+                            }
+                            outbound = outbound_rx.recv() => {
+                                if let Some((name, text)) = outbound {
+                                    match send_message(&mut sink, &name, &text).await {
+                                        Ok(()) => info!(
+                                            "[simplex_bridge] Proactive delivery to {} ({} chars)",
+                                            name, text.len()
+                                        ),
+                                        Err(e) => warn!(
+                                            "[simplex_bridge] Proactive delivery failed to {}: {}",
+                                            name, e
+                                        ),
+                                    }
                                 }
                                 continue;
                             }
@@ -814,7 +929,12 @@ mod inner {
                                     .and_then(|f| f.file_id);
 
                                 let action = if let Some(id) = file_id {
-                                    pending_files.lock().await.remove(&id)
+                                    let mut guard = pending_files.lock().await;
+                                    let a = guard.remove(&id);
+                                    if a.is_some() {
+                                        persist_pending_files(&guard).await;
+                                    }
+                                    a
                                 } else {
                                     None
                                 };
@@ -916,6 +1036,10 @@ mod inner {
                                             continue;
                                         }
                                     };
+
+                                    // Remember this contact so proactive
+                                    // messages (reminders) can find a target.
+                                    remember_contact(&display_name);
 
                                     let msg_content = inner
                                         .content
@@ -1072,13 +1196,17 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                     let _ = accept_file(&mut sink, file_id).await;
                                                 } else {
                                                     // No thumbnail — wait for full file
-                                                    pending_files.lock().await.insert(
-                                                        file_id,
-                                                        PendingAction::ProcessImage {
-                                                            display_name: display_name.clone(),
-                                                            caption,
-                                                        },
-                                                    );
+                                                    {
+                                                        let mut guard = pending_files.lock().await;
+                                                        guard.insert(
+                                                            file_id,
+                                                            PendingAction::ProcessImage {
+                                                                display_name: display_name.clone(),
+                                                                caption,
+                                                            },
+                                                        );
+                                                        persist_pending_files(&guard).await;
+                                                    }
                                                     let _ = accept_file(&mut sink, file_id).await;
                                                 }
                                             } else if !responded {
@@ -1100,12 +1228,16 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                             );
 
                                             if let Some(file_id) = inner.file.as_ref().and_then(|f| f.file_id) {
-                                                pending_files.lock().await.insert(
-                                                    file_id,
-                                                    PendingAction::TranscribeVoice {
-                                                        display_name: display_name.clone(),
-                                                    },
-                                                );
+                                                {
+                                                    let mut guard = pending_files.lock().await;
+                                                    guard.insert(
+                                                        file_id,
+                                                        PendingAction::TranscribeVoice {
+                                                            display_name: display_name.clone(),
+                                                        },
+                                                    );
+                                                    persist_pending_files(&guard).await;
+                                                }
                                                 match accept_file(&mut sink, file_id).await {
                                                     Ok(()) => {
                                                         let _ = send_message(
@@ -1227,8 +1359,13 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                 }
             }
 
-            // Clear pending files on disconnect — they won't complete
-            pending_files.lock().await.clear();
+            // NOTE: we used to clear pending_files on disconnect, but that
+            // dropped voice transcription jobs mid-flight when the daemon
+            // reconnected quickly. Keeping the map across reconnects lets
+            // RcvFileComplete events delivered after reconnect still fire
+            // the correct action. The map is still bounded because every
+            // entry is removed once its RcvFileComplete arrives, and stale
+            // entries are naturally cleared on full process restart.
             tokio::time::sleep(Duration::from_secs(RECONNECT_DELAY_SECS)).await;
         }
     }

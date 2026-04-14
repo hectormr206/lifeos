@@ -446,6 +446,49 @@ mod inner {
             }
         });
 
+        // Reminder fan-out — listen for ReminderDue events and send them to
+        // the chat that originally asked for the reminder. We accept any chat
+        // id here; Telegram will silently fail non-Telegram ids (e.g. SimpleX
+        // magic ids) which is OK because those bridges have their own handler.
+        if let Some(ref bus) = event_bus {
+            let mut rx = bus.subscribe();
+            let reminder_bot = bot.clone();
+            tokio::spawn(async move {
+                while let Ok(evt) = rx.recv().await {
+                    if let crate::events::DaemonEvent::ReminderDue {
+                        chat_id,
+                        title,
+                        start_time,
+                        ..
+                    } = evt
+                    {
+                        // Only attempt delivery for chat_ids that look like
+                        // real Telegram IDs (positive user DMs or negative
+                        // group IDs, but not our magic constants).
+                        let abs = chat_id.unsigned_abs();
+                        let is_magic = abs > 0x1000_0000_0000;
+                        if is_magic {
+                            continue;
+                        }
+                        let msg = format!("🔔 Recordatorio ({}): {}", start_time, title);
+                        if let Err(e) =
+                            reminder_bot.send_message(ChatId(chat_id), &msg).await
+                        {
+                            warn!(
+                                "[reminder] Telegram delivery failed for chat {}: {}",
+                                chat_id, e
+                            );
+                        } else {
+                            info!(
+                                "[reminder] Delivered to Telegram chat {}: {}",
+                                chat_id, title
+                            );
+                        }
+                    }
+                }
+            });
+        }
+
         // Memory consolidation is handled centrally by the housekeeping
         // loop in main.rs (filter_garbage → boost_frequent → apply_decay →
         // dedup_similar → cross_link_recent → cluster_summary). Removed the

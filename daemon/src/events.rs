@@ -56,6 +56,17 @@ pub enum DaemonEvent {
         priority: String,
         message: String,
     },
+    /// A calendar reminder became due. Channel bridges (Telegram, SimpleX,
+    /// dashboard) subscribe to this and route the message back to the chat
+    /// whose `chat_id` matches the reminder. Desktop widgets ignore this.
+    ReminderDue {
+        /// The channel's chat_id that created the reminder (encoded in the
+        /// event's description field as `__chat:<id>`).
+        chat_id: i64,
+        title: String,
+        event_id: String,
+        start_time: String,
+    },
     MiniWidgetVisibilityChanged {
         visible: bool,
     },

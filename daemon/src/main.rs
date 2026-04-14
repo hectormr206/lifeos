@@ -1152,7 +1152,13 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Calendar reminder check — every 60s checks for due reminders
+    // Calendar reminder check — every 60s checks for due reminders.
+    //
+    // Reminders created by Axi via `reminder_add` stash the originating chat_id
+    // in the event description as `__chat:<id>`. When we see that tag we emit a
+    // `ReminderDue` event so the channel bridges (Telegram, SimpleX, dashboard)
+    // can route the notification back to the chat that asked for it. Reminders
+    // without a chat tag fall through to the old desktop Notification path.
     let calendar_state = state.clone();
     let _calendar_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -1160,15 +1166,44 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             if let Ok(reminders) = calendar_state.calendar.due_reminders() {
                 for event in &reminders {
-                    let _ = calendar_state
-                        .event_bus
-                        .send(events::DaemonEvent::Notification {
-                            priority: "info".into(),
-                            message: format!(
-                                "Recordatorio: {} a las {}",
-                                event.title, event.start_time
-                            ),
-                        });
+                    // Parse routing tag from description, if any.
+                    let chat_id: Option<i64> = event
+                        .description
+                        .split_whitespace()
+                        .find_map(|tok| tok.strip_prefix("__chat:").and_then(|s| s.parse().ok()));
+
+                    if let Some(cid) = chat_id {
+                        let _ =
+                            calendar_state
+                                .event_bus
+                                .send(events::DaemonEvent::ReminderDue {
+                                    chat_id: cid,
+                                    title: event.title.clone(),
+                                    event_id: event.id.clone(),
+                                    start_time: event.start_time.clone(),
+                                });
+                        // Record the reminder so it doesn't re-fire every minute.
+                        let _ = calendar_state.calendar.record_reminder(
+                            &event.id,
+                            &event.title,
+                            "chat",
+                        );
+                    } else {
+                        let _ = calendar_state
+                            .event_bus
+                            .send(events::DaemonEvent::Notification {
+                                priority: "info".into(),
+                                message: format!(
+                                    "Recordatorio: {} a las {}",
+                                    event.title, event.start_time
+                                ),
+                            });
+                        let _ = calendar_state.calendar.record_reminder(
+                            &event.id,
+                            &event.title,
+                            "desktop",
+                        );
+                    }
                 }
             }
         }
@@ -2008,8 +2043,9 @@ async fn main() -> anyhow::Result<()> {
             let cal = Some(state.calendar.clone());
             let hist = shared_history.clone();
             let cron = shared_cron_store.clone();
+            let ev = state.event_bus.clone();
             Some(tokio::spawn(async move {
-                simplex_bridge::run_simplex_bridge(tq, router, memory, ss, um, ma, mast, cal, hist, cron).await;
+                simplex_bridge::run_simplex_bridge(tq, router, memory, ss, um, ma, mast, cal, hist, cron, Some(ev)).await;
             }))
         } else {
             info!("SimpleX bridge: CLI WebSocket not reachable on port 5226, skipping");

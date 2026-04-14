@@ -94,8 +94,14 @@ REGLAS DE TIEMPO:
 - SIEMPRE usa la hora del [Contexto temporal] mostrado arriba. NUNCA inventes una hora.
 - Cuando el usuario diga "manana", "en 2 horas", "el lunes", calcula la fecha/hora EXACTA.
 - SIEMPRE confirma la hora calculada: "Te recuerdo el lunes 31 de marzo a las 15:00 (CST)."
-- Para programar tareas usa la herramienta cron_add con la hora EXACTA en formato cron.
 - Si no estas seguro de la hora que quiere el usuario, PREGUNTA.
+
+REGLAS DE RECORDATORIOS (CRITICAS — obligatorio usar herramienta):
+- Si el usuario dice "recuerdame", "avisame", "a las X recordame", "en N minutos dime", etc., DEBES llamar la herramienta reminder_add INMEDIATAMENTE. NUNCA digas "programado" sin haber ejecutado la herramienta.
+- Para un recordatorio ONE-SHOT (una sola vez), usa reminder_add — NO uses cron_add.
+- Para tareas RECURRENTES ("todos los dias a las 7", "cada lunes"), usa cron_add.
+- Si no ejecutaste la herramienta, NO afirmes que el recordatorio quedo programado — es una mentira.
+- Despues de ejecutar reminder_add, confirma al usuario el ID y la hora exacta devuelta por la herramienta.
 
 Cuando el usuario te pida algo que requiera una accion real, usa las herramientas. Si es solo conversacion, responde directamente.
 
@@ -776,6 +782,12 @@ REGLAS FIRMES:
 
 20. **cron_remove** — Elimina una tarea cron por nombre.
     args: {"name": "briefing matutino"}
+
+20b. **reminder_add** — Programa un recordatorio UNA SOLA VEZ. Usar para "recuerdame a las X", "avisame en N minutos", "manana a las Y". NO usar para recurrentes (esos son cron_add).
+    args: {"when": "17:00", "message": "Ir a banarse"}
+    o:   {"when": "2026-04-13 17:00", "message": "Ir a banarse"}
+    o:   {"in_minutes": 30, "message": "Estirar las piernas"}
+    IMPORTANTE: Si el usuario dice "recuerdame a las 5" y ya pasaron las 5 de hoy, la herramienta lo programa para manana automaticamente.
 
 21. **smart_home** — Controla dispositivos de domótica via Home Assistant.
     args: {"action": "turn_on", "entity": "light.sala"}
@@ -1824,6 +1836,16 @@ REGLAS FIRMES:
             "que guardaste",
             "que sabes de",
             "que recuerdas",
+            "que conoces",
+            "que conoces de",
+            "quien soy",
+            "conoces de mi",
+            "sabes de mi",
+            "recuerdas de mi",
+            "what do you know",
+            "who am i",
+            "tell me about me",
+            "sobre mi",
         ];
         keywords.iter().any(|kw| lower.contains(kw))
     }
@@ -2147,6 +2169,7 @@ REGLAS FIRMES:
             "health_status" => execute_health_status().await,
             "calendar_today" => execute_calendar_today(ctx).await,
             "calendar_add" => execute_calendar_add(&call.args, ctx).await,
+            "reminder_add" => execute_reminder_add(&call.args, ctx, chat_id).await,
             "current_context" => execute_current_context().await,
             "current_mode" => execute_current_mode().await,
             "learned_patterns" => execute_learned_patterns().await,
@@ -2296,10 +2319,41 @@ REGLAS FIRMES:
         }
 
         // Proactive context recall: append to system prompt (not as separate message)
+        let is_identity_question = {
+            let l = user_text.to_lowercase();
+            l.contains("que sabes de mi")
+                || l.contains("que conoces de mi")
+                || l.contains("conoces de mi")
+                || l.contains("sabes de mi")
+                || l.contains("quien soy")
+                || l.contains("sobre mi")
+                || l.contains("what do you know")
+                || l.contains("who am i")
+                || l.contains("tell me about me")
+        };
         if is_new_session || needs_memory_recall(user_text) {
             if let Some(memory) = &ctx.memory {
                 let mem = memory.read().await;
-                let recall_queries = [user_text, "session_summary"];
+                // For identity questions, broaden the recall to pull in
+                // everything we've ever learned about the user — not just
+                // what matches their current sentence.
+                let identity_queries: &[&str] = &[
+                    "usuario",
+                    "preferencias",
+                    "Hector",
+                    "proyectos",
+                    "discovery",
+                    "preference",
+                    "trabajo",
+                    "perfil",
+                ];
+                let recall_queries: Vec<&str> = if is_identity_question {
+                    let mut v = vec![user_text, "session_summary"];
+                    v.extend_from_slice(identity_queries);
+                    v
+                } else {
+                    vec![user_text, "session_summary"]
+                };
                 let mut context_block = String::new();
                 for query in &recall_queries {
                     if let Ok(results) = mem.search_entries(query, 3, None).await {
@@ -10256,6 +10310,88 @@ max_context = 128000
             }
         } else {
             Ok("Calendario no disponible.".into())
+        }
+    }
+
+    /// Single-shot reminder: computes target datetime from relative/absolute
+    /// inputs and stores as a calendar event with a 0-minute reminder offset
+    /// (fires exactly at `when`). Delivery is handled by the reminder dispatch
+    /// loop, which routes back to the chat channel that created it.
+    ///
+    /// Accepts any of:
+    ///   - {"when": "17:00", "message": "..."} (today; if already past, tomorrow)
+    ///   - {"when": "2026-04-13 17:00", "message": "..."}
+    ///   - {"in_minutes": 30, "message": "..."}
+    async fn execute_reminder_add(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+        chat_id: i64,
+    ) -> Result<String> {
+        use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+
+        let message = args["message"]
+            .as_str()
+            .or_else(|| args["title"].as_str())
+            .or_else(|| args["body"].as_str())
+            .unwrap_or("Recordatorio")
+            .to_string();
+
+        let now = Local::now();
+
+        // Resolve target datetime from inputs
+        let target = if let Some(mins) = args["in_minutes"].as_i64() {
+            now + chrono::Duration::minutes(mins)
+        } else if let Some(when) = args["when"].as_str() {
+            // Try full "YYYY-MM-DD HH:MM"
+            if let Ok(dt) = NaiveDateTime::parse_from_str(when, "%Y-%m-%d %H:%M") {
+                Local.from_local_datetime(&dt).single().unwrap_or(now)
+            } else if let Ok(t) = NaiveTime::parse_from_str(when, "%H:%M") {
+                // Today at HH:MM, or tomorrow if already past
+                let today = now.date_naive().and_time(t);
+                let dt = Local.from_local_datetime(&today).single().unwrap_or(now);
+                if dt <= now {
+                    dt + chrono::Duration::days(1)
+                } else {
+                    dt
+                }
+            } else if let Ok(d) = NaiveDate::parse_from_str(when, "%Y-%m-%d") {
+                let dt = d.and_hms_opt(9, 0, 0).unwrap_or_default();
+                Local.from_local_datetime(&dt).single().unwrap_or(now)
+            } else {
+                return Ok(format!(
+                    "No entiendo el formato '{}'. Usa: {{\"when\": \"17:00\", \"message\": \"texto\"}} o {{\"in_minutes\": 30, \"message\": \"texto\"}}",
+                    when
+                ));
+            }
+        } else {
+            return Ok(
+                "Necesito saber cuando. Ejemplo: {\"when\": \"17:00\", \"message\": \"Ir a banarse\"} o {\"in_minutes\": 30, \"message\": \"...\"}"
+                    .into(),
+            );
+        };
+
+        // Persist as a calendar event that fires at `target` (reminder_minutes=0)
+        let start_time = target.format("%Y-%m-%d %H:%M").to_string();
+        let chat_tag = format!("__chat:{}", chat_id);
+
+        if let Some(ref cal) = ctx.calendar {
+            match cal.add_event(
+                &message,
+                &start_time,
+                None,
+                &chat_tag, // stash chat_id in description so dispatcher can route back
+                Some(0),
+                None,
+                None,
+            ) {
+                Ok(event) => Ok(format!(
+                    "Recordatorio programado para {} — \"{}\" (id: {})",
+                    start_time, message, event.id
+                )),
+                Err(e) => Ok(format!("Error creando recordatorio: {}", e)),
+            }
+        } else {
+            Ok("Calendario no disponible — no puedo programar el recordatorio.".into())
         }
     }
 
