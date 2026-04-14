@@ -1278,9 +1278,8 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
             fail "sentinel dev-mode dropin missing from dev build"; \
         echo "[verify] dev integrity OK — sudo whitelist and dropins present"; \
     fi; \
-    test -x /usr/bin/mpv               || fail "/usr/bin/mpv"; \
-    test -x /usr/bin/evince              || fail "/usr/bin/evince"; \
-    test -x /usr/bin/keepassxc            || fail "/usr/bin/keepassxc"; \
+    # mpv/evince/keepassxc/loupe migrated from RPM to Flatpak (v0.5.0)
+    # Their Flatpak presence is verified at first-boot by install_desktop_apps()
     test -x /usr/bin/life                 || fail "/usr/bin/life"; \
     test -x /usr/bin/lifeosd              || fail "/usr/bin/lifeosd"; \
     test -x /usr/local/bin/cargo-audit    || fail "/usr/local/bin/cargo-audit"; \
