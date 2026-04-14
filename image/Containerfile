@@ -132,9 +132,12 @@ FROM fedora:${FEDORA_MAJOR} AS llama-builder
 RUN dnf install -y cmake make gcc-c++ git openssl-devel vulkan-loader-devel vulkan-headers glslc glslang && \
     dnf clean all
 
+# Pin llama.cpp to a stable tag. Upstream master sometimes ships broken Vulkan
+# shaders that fail to build. Update periodically after verifying tag builds.
+ARG LLAMA_CPP_TAG=b8700
 RUN set -eux && \
-    echo ">>> Building llama-server from source (Vulkan-enabled)..." && \
-    git clone --depth=1 https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
+    echo ">>> Building llama-server from source (Vulkan-enabled, pinned ${LLAMA_CPP_TAG})..." && \
+    git clone --depth=1 --branch "${LLAMA_CPP_TAG}" https://github.com/ggml-org/llama.cpp /tmp/llama.cpp && \
     cmake -S /tmp/llama.cpp -B /tmp/llama.cpp/build \
         -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF \
