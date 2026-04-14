@@ -961,7 +961,6 @@ async fn main() -> anyhow::Result<()> {
                 while !display_ready {
                     if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok()
                     {
-                        display_ready = true;
                         break;
                     }
                     // Try to discover Wayland socket dynamically
@@ -1692,11 +1691,11 @@ async fn main() -> anyhow::Result<()> {
                             } => {
                                 let action = format!(
                                     "task_completed:{}",
-                                    crate::str_utils::truncate_bytes_safe(&objective, 80)
+                                    crate::str_utils::truncate_bytes_safe(objective, 80)
                                 );
                                 let context = format!(
                                     "result={}",
-                                    crate::str_utils::truncate_bytes_safe(&result, 120)
+                                    crate::str_utils::truncate_bytes_safe(result, 120)
                                 );
                                 if let Err(e) = learner.record_action(&action, &context) {
                                     warn!("[workflow_learner] Failed to record completion: {e}");
@@ -1725,11 +1724,11 @@ async fn main() -> anyhow::Result<()> {
                             } => {
                                 let action = format!(
                                     "task_failed:{}",
-                                    crate::str_utils::truncate_bytes_safe(&objective, 80)
+                                    crate::str_utils::truncate_bytes_safe(objective, 80)
                                 );
                                 let context = format!(
                                     "error={}",
-                                    crate::str_utils::truncate_bytes_safe(&error, 120)
+                                    crate::str_utils::truncate_bytes_safe(error, 120)
                                 );
                                 if let Err(e) = learner.record_action(&action, &context) {
                                     warn!("[workflow_learner] Failed to record failure: {e}");

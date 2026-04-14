@@ -167,6 +167,7 @@ mod inner {
     ///
     /// SimpleX supports text, image, voice, video, file, and link content
     /// types. Each variant carries different fields.
+    #[allow(dead_code)]
     #[derive(Debug, Deserialize)]
     #[serde(tag = "type")]
     enum MsgContent {
@@ -198,6 +199,7 @@ mod inner {
         Unknown,
     }
 
+    #[allow(dead_code)]
     impl MsgContent {
         /// Extract the text/caption field from any content type.
         fn text(&self) -> Option<&str> {
@@ -214,6 +216,7 @@ mod inner {
     }
 
     /// File transfer metadata attached to media messages.
+    #[allow(dead_code)]
     #[derive(Debug, Clone, Deserialize)]
     struct FileTransferInfo {
         #[serde(rename = "fileId")]
@@ -1423,7 +1426,6 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                 }
                             }
                             SimplexResponse::Other => {}
-                            _ => {}
                         }
                     }
 

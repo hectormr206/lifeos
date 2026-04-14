@@ -263,6 +263,12 @@ pub struct ThermalManager {
     inner: Arc<RwLock<ThermalManagerInner>>,
 }
 
+impl Default for ThermalManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ThermalManager {
     /// Create a new thermal manager. Call `run_loop` to start monitoring.
     pub fn new() -> Self {

@@ -1359,7 +1359,7 @@ impl Supervisor {
              Tarea: {}\n\
              Resultado:\n{}",
             objective,
-            crate::str_utils::truncate_bytes_safe(&raw_result, 3000)
+            crate::str_utils::truncate_bytes_safe(raw_result, 3000)
         );
 
         let request = RouterRequest {
@@ -1390,7 +1390,7 @@ impl Supervisor {
             "Tarea: {}\nEstado: {}\nDetalle: {}\nMeta: {}\nFecha: {}",
             objective,
             status,
-            crate::str_utils::truncate_bytes_safe(&detail, 2000),
+            crate::str_utils::truncate_bytes_safe(detail, 2000),
             meta,
             chrono::Local::now().to_rfc3339(),
         );
@@ -1420,7 +1420,7 @@ impl Supervisor {
             debug!(
                 "Memory writeback: {} — {}",
                 status,
-                crate::str_utils::truncate_bytes_safe(&objective, 60)
+                crate::str_utils::truncate_bytes_safe(objective, 60)
             );
         }
     }
@@ -2078,7 +2078,7 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::TypeText { text } => {
                 format!(
                     "type_text: {}...",
-                    crate::str_utils::truncate_bytes_safe(&text, 40)
+                    crate::str_utils::truncate_bytes_safe(text, 40)
                 )
             }
             StepAction::SendKeys { combo } => format!("send_keys: {}", combo),
@@ -2343,7 +2343,7 @@ Error:
 Respond ONLY with a JSON object (no markdown):
 {{"description": "...", "action": {{"type": "...", ...}}, "expected_outcome": "..."}}"#,
             step_json,
-            crate::str_utils::truncate_bytes_safe(&error, 500)
+            crate::str_utils::truncate_bytes_safe(error, 500)
         );
 
         let request = RouterRequest {

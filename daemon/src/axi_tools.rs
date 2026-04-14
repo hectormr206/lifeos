@@ -1208,7 +1208,7 @@ REGLAS FIRMES:
                     summary_parts.push(format!(
                         "[{}]: {}",
                         msg.role,
-                        crate::str_utils::truncate_bytes_safe(&content, 150)
+                        crate::str_utils::truncate_bytes_safe(content, 150)
                     ));
                 }
 
@@ -1275,6 +1275,7 @@ REGLAS FIRMES:
         }
 
         /// Clear history for a chat, returning messages for session summary.
+        #[allow(dead_code)]
         pub async fn clear(&self, chat_id: i64) -> Vec<ChatMessage> {
             let mut chats = self.chats.write().await;
             let entry = chats.remove(&chat_id);
@@ -1444,6 +1445,7 @@ REGLAS FIRMES:
             removed
         }
 
+        #[allow(dead_code)]
         pub async fn mark_run(&self, name: &str) {
             let mut jobs = self.jobs.write().await;
             if let Some(job) = jobs.iter_mut().find(|j| j.name == name) {
@@ -1463,6 +1465,7 @@ REGLAS FIRMES:
 
         /// Check which cron jobs should run now based on their cron expression.
         /// Simple cron matching: "min hour dom mon dow" (5-field).
+        #[allow(dead_code)]
         pub async fn due_jobs(&self) -> Vec<CronJob> {
             let now = chrono::Local::now();
             let jobs = self.jobs.read().await;
@@ -1483,6 +1486,7 @@ REGLAS FIRMES:
     }
 
     /// Simple 5-field cron expression matcher.
+    #[allow(dead_code)]
     fn cron_matches(expr: &str, now: &chrono::DateTime<chrono::Local>) -> bool {
         use chrono::Datelike;
         use chrono::Timelike;
@@ -1505,6 +1509,7 @@ REGLAS FIRMES:
             .all(|(field, value)| field_matches(field, *value))
     }
 
+    #[allow(dead_code)]
     fn field_matches(field: &str, value: u32) -> bool {
         if field == "*" {
             return true;
@@ -1538,6 +1543,7 @@ REGLAS FIRMES:
     // -----------------------------------------------------------------------
 
     /// Read the user's HEARTBEAT.md checklist, or return a default one.
+    #[allow(dead_code)]
     pub async fn load_heartbeat_checklist() -> String {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
         let paths = [
@@ -1564,6 +1570,7 @@ REGLAS FIRMES:
     }
 
     /// Run a heartbeat cycle: evaluate checklist with LLM + system data.
+    #[allow(dead_code)]
     pub async fn run_heartbeat(ctx: &ToolContext) -> Option<String> {
         let checklist = load_heartbeat_checklist().await;
         let alerts = proactive::check_all(None, None).await;
@@ -1696,6 +1703,7 @@ REGLAS FIRMES:
             sessions.insert(session.id.clone(), session);
         }
 
+        #[allow(dead_code)]
         pub async fn remove(&self, id: &str) -> Option<SddSession> {
             self.sessions.write().await.remove(id)
         }
@@ -7899,7 +7907,7 @@ REGLAS FIRMES:
         if result.success {
             Ok(format!(
                 "Texto escrito: '{}'",
-                crate::str_utils::truncate_bytes_safe(&text, 50)
+                crate::str_utils::truncate_bytes_safe(text, 50)
             ))
         } else {
             Ok(format!("Error escribiendo texto: {}", result.stderr))
@@ -9025,7 +9033,7 @@ REGLAS FIRMES:
                     .take(3)
                     .collect::<Vec<_>>()
                     .join("-"),
-                crate::str_utils::truncate_bytes_safe(&result, 2000)
+                crate::str_utils::truncate_bytes_safe(result, 2000)
             );
             mem.add_entry("architecture", "user", &tags, Some("sdd"), 80, &summary)
                 .await
@@ -9092,6 +9100,7 @@ REGLAS FIRMES:
     }
 
     /// Continue an SDD session after user approval.
+    #[allow(dead_code)]
     pub async fn sdd_continue(
         ctx: &ToolContext,
         sdd_id: &str,
@@ -9110,6 +9119,7 @@ REGLAS FIRMES:
     }
 
     /// Abort an SDD session — save what was done to memory.
+    #[allow(dead_code)]
     pub async fn sdd_abort(ctx: &ToolContext, sdd_id: &str) -> Option<String> {
         let session = ctx.sdd_store.remove(sdd_id).await?;
         sdd_save_to_memory(ctx, &session.task, &session.accumulated_result).await;
@@ -9125,6 +9135,7 @@ REGLAS FIRMES:
     // -----------------------------------------------------------------------
 
     // Auto-save a session summary when conversation is cleared or expires
+    #[allow(dead_code)]
     pub async fn save_session_summary(ctx: &ToolContext, chat_id: i64, messages: &[ChatMessage]) {
         if messages.is_empty() {
             return;
@@ -9138,7 +9149,7 @@ REGLAS FIRMES:
             conversation.push_str(&format!(
                 "[{}]: {}\n",
                 role,
-                crate::str_utils::truncate_bytes_safe(&content, 200)
+                crate::str_utils::truncate_bytes_safe(content, 200)
             ));
         }
 

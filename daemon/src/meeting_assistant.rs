@@ -710,7 +710,7 @@ impl MeetingAssistant {
             // Small delay to let pw-record flush buffers to disk
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-            if let Err(e) = merge_dual_channels(&mic, &sys, &combined).await {
+            if let Err(e) = merge_dual_channels(&mic, &sys, combined).await {
                 warn!("[meeting] Dual-channel merge failed, trying mic-only fallback: {e}");
                 if let Err(e2) = tokio::fs::copy(&mic, &combined).await {
                     warn!("[meeting] Mic fallback copy also failed: {e2}");
@@ -937,7 +937,7 @@ impl MeetingAssistant {
         transcript: &str,
         router: &Arc<RwLock<crate::llm_router::LlmRouter>>,
     ) -> Result<String> {
-        let truncated = crate::str_utils::truncate_bytes_safe(&transcript, 6000);
+        let truncated = crate::str_utils::truncate_bytes_safe(transcript, 6000);
 
         let system_prompt = "\
 Sos un asistente de documentación de reuniones. Tu trabajo es extraer información \
@@ -2071,7 +2071,7 @@ async fn detect_browser_meeting_by_title() -> Option<String> {
                 info!(
                     "[meeting] Browser meeting detected: {} (title: {})",
                     app_name,
-                    crate::str_utils::truncate_bytes_safe(&title, 60)
+                    crate::str_utils::truncate_bytes_safe(title, 60)
                 );
                 return Some(app_name.to_string());
             }

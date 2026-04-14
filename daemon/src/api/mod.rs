@@ -11336,7 +11336,7 @@ async fn post_llm_chat(
     // Use the full agentic chat loop (same as Telegram/SimpleX)
     #[cfg(feature = "messaging")]
     {
-        use crate::axi_tools::{self, RateLimiter, SddStore, ToolContext};
+        use crate::axi_tools::{self, RateLimiter, ToolContext};
 
         /// Fixed chat_id for the dashboard channel (conversation history key).
         const DASHBOARD_CHAT_ID: i64 = 0x4441_5348_0000_0001; // "DASH0001"

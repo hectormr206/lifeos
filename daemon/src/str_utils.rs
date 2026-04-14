@@ -24,6 +24,7 @@ pub fn truncate_bytes_safe(s: &str, max: usize) -> &str {
 /// Return a prefix of `s` with at most `max` **characters** (not
 /// bytes). Useful when the caller wants a user-visible length limit
 /// rather than a byte budget.
+#[allow(dead_code)]
 pub fn truncate_chars(s: &str, max_chars: usize) -> &str {
     match s.char_indices().nth(max_chars) {
         Some((byte_idx, _)) => &s[..byte_idx],
