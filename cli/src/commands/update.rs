@@ -462,8 +462,7 @@ mod tests {
         let src = include_str!("update.rs");
         let cmd_with_apply = src
             .find("Command::new")
-            .map(|pos| src[pos..].find("\"--apply\"").map(|offset| pos + offset))
-            .flatten();
+            .and_then(|pos| src[pos..].find("\"--apply\"").map(|offset| pos + offset));
         assert!(
             cmd_with_apply.is_none(),
             "Found Command::new followed by --apply in update.rs — this would execute bootc upgrade --apply"
@@ -475,17 +474,14 @@ mod tests {
     fn test_rollback_body_has_no_process_command_shellout() {
         let src = include_str!("update.rs");
         // Search for Command::new("bootc").arg("rollback") pattern
-        let dangerous = src
-            .find("Command::new")
-            .map(|pos| {
-                let window = &src[pos..pos.min(src.len() - 1).saturating_add(200)];
-                if window.contains("\"rollback\"") {
-                    Some(pos)
-                } else {
-                    None
-                }
-            })
-            .flatten();
+        let dangerous = src.find("Command::new").and_then(|pos| {
+            let window = &src[pos..pos.min(src.len() - 1).saturating_add(200)];
+            if window.contains("\"rollback\"") {
+                Some(pos)
+            } else {
+                None
+            }
+        });
         assert!(
             dangerous.is_none(),
             "Found Command::new with rollback arg in update.rs — rollback arm must never execute"
