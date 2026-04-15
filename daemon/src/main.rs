@@ -87,6 +87,7 @@ mod sensory_pipeline;
 mod session_store;
 #[cfg(feature = "messaging")]
 mod simplex_bridge;
+mod single_instance;
 mod skill_generator;
 mod skill_registry;
 mod speaker_id;
@@ -509,13 +510,58 @@ fn notify_stopping() {
     }
 }
 
+fn print_usage() {
+    println!(
+        "Usage: lifeosd [OPTIONS]\n\n\
+         Options:\n  \
+         -V, --version    Print version and exit\n  \
+         -h, --help       Print this help and exit\n\n\
+         With no options, lifeosd runs as the LifeOS user-session daemon."
+    );
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Parse CLI flags BEFORE any side-effectful init (logging, D-Bus, tray).
+    // Running `lifeosd --version` must not spawn a second daemon.
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--version" | "-V" => {
+                println!("lifeosd {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "--help" | "-h" => {
+                print_usage();
+                return Ok(());
+            }
+            _ => {
+                // Unknown / positional args: fall through for backwards compat.
+            }
+        }
+    }
+
     // Initialize logging
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info,zbus=warn,tracing=warn"),
     )
     .init();
+
+    // Single-instance lock. Held for the lifetime of `main` via `_pidfile_guard`;
+    // releasing happens on drop (graceful or panic).
+    let _pidfile_guard = match single_instance::acquire_lock() {
+        Ok(single_instance::LockOutcome::Acquired(guard)) => Some(guard),
+        Ok(single_instance::LockOutcome::AlreadyRunning(pid)) => {
+            info!(
+                "Another lifeosd instance is already running (pid={}). Exiting.",
+                pid
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            warn!("Failed to acquire single-instance lock: {}. Continuing.", e);
+            None
+        }
+    };
 
     info!("╔══════════════════════════════════════════════════════════════╗");
     info!("║                                                              ║");
