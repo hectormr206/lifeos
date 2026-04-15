@@ -2348,6 +2348,7 @@ impl AgentRuntimeManager {
         write_atomic(&path, &serialized)
             .await
             .with_context(|| format!("Failed to write {}", path.display()))?;
+        crate::sqlite_protection::ensure_sensitive_perms(&path);
         Ok(())
     }
 

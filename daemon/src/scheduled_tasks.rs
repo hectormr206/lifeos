@@ -43,6 +43,7 @@ impl ScheduledTaskManager {
         let db_path = data_dir.join("scheduled_tasks.db");
         std::fs::create_dir_all(data_dir)?;
         let conn = Connection::open(&db_path)?;
+        crate::sqlite_protection::ensure_sensitive_perms(&db_path);
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS scheduled_tasks (

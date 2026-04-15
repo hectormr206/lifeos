@@ -1,10 +1,57 @@
-//! SQLite Protection — WAL mode, integrity checks, and hot backups.
+//! SQLite Protection — WAL mode, integrity checks, hot backups and perms.
 //!
-//! Ensures all SQLite databases are crash-resilient and can be verified/restored.
+//! Ensures all SQLite databases are crash-resilient, can be verified/restored,
+//! and are never world-readable (0o600 on owner, including WAL/SHM sidecars).
 
 use anyhow::{Context, Result};
 use log::{info, warn};
 use std::path::{Path, PathBuf};
+
+/// Tighten filesystem permissions to 0o600 (owner read/write only).
+///
+/// Call this right after opening or creating any file that may contain
+/// sensitive user data (SQLite DBs, agent state, tokens, etc.). It is
+/// idempotent and also fixes up historical files created as 0o644.
+/// Also walks the common SQLite sidecars (`-wal`, `-shm`, `.backup`) so
+/// the whole on-disk footprint is 0o600.
+///
+/// Unix-only. On non-unix this is a no-op.
+#[allow(clippy::needless_return)]
+pub fn ensure_sensitive_perms(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let apply = |p: &Path| {
+            if let Ok(md) = std::fs::metadata(p) {
+                let mut perms = md.permissions();
+                if perms.mode() & 0o777 != 0o600 {
+                    perms.set_mode(0o600);
+                    if let Err(e) = std::fs::set_permissions(p, perms) {
+                        log::warn!(
+                            "[sqlite] failed to chmod 0600 {}: {}",
+                            p.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        };
+        apply(path);
+        // SQLite sidecars
+        for suffix in ["-wal", "-shm", ".backup"] {
+            let mut sidecar = path.as_os_str().to_os_string();
+            sidecar.push(suffix);
+            let sp = std::path::PathBuf::from(sidecar);
+            if sp.exists() {
+                apply(&sp);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
 
 /// Run integrity check on a SQLite database.
 /// Returns Ok(true) if healthy, Ok(false) if corrupt.

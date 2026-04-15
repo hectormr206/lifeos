@@ -93,12 +93,14 @@ impl MeetingArchive {
         let db = Connection::open(db_path).context("Failed to open meeting archive database")?;
         db.execute_batch(SCHEMA)
             .context("Failed to initialize meeting archive schema")?;
+        crate::sqlite_protection::ensure_sensitive_perms(db_path);
         info!("Meeting archive DB initialized at {}", db_path.display());
         Ok(())
     }
 
     fn open_db(db_path: &Path) -> Result<Connection> {
         let db = Connection::open(db_path).context("Failed to open meeting archive database")?;
+        crate::sqlite_protection::ensure_sensitive_perms(db_path);
         Ok(db)
     }
 
