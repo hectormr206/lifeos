@@ -173,6 +173,38 @@ life intents heartbeat tick
 life intents heartbeat status
 ```
 
+## Security Alerts Feed
+
+The LifeOS security monitor keeps a rolling buffer of the 50 most recent security events (unexpected listeners, suspicious processes, etc.) and exposes them through a read-only HTTP endpoint. The endpoint is bound to localhost only (no external exposure) and requires no bootstrap token — same policy as the dashboard bootstrap endpoint.
+
+```bash
+curl http://127.0.0.1:8081/api/security/alerts
+```
+
+Sample response:
+
+```json
+{
+  "alerts": [
+    {
+      "id": "…",
+      "severity": "medium",
+      "alert_type": "…",
+      "description": "…",
+      "process_name": "…",
+      "process_pid": 1234,
+      "remote_addr": null,
+      "evidence": ["…"],
+      "action_taken": "logged",
+      "timestamp": "2026-04-14T12:34:56Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+The dashboard consumes this endpoint to render the "Seguridad" panel. If you are not on the host, the daemon returns `403` — the feed is not reachable remotely by design.
+
 ## Automatic System Maintenance
 
 LifeOS handles routine maintenance without user intervention:

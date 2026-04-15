@@ -1,10 +1,16 @@
 # Allow lifeos user to control CPU performance scaling for thermal management.
 # This enables the daemon's reactive thermal manager to adjust caps dynamically
 # without requiring sudo or NoNewPrivileges exceptions.
+#
+# Note: intel_pstate and cpufreq policy* nodes are virtual sysfs files, not
+# udev devices themselves. We hook on per-CPU "cpu" subsystem add/change
+# events (which DO fire at boot and on hotplug for every cpuN) and chmod the
+# runtime paths. The `test -f` guards make this safe when a driver is absent.
+#
+# Ownership: root:lifeos 0660 — least-privilege (ref: reference_sudo_policy).
+# The daemon runs as uid 1000 which is the primary member of group `lifeos`.
 
-# Intel pstate — single global knob
-SUBSYSTEM=="module", KERNEL=="intel_pstate", RUN+="/bin/chmod 0666 /sys/devices/system/cpu/intel_pstate/max_perf_pct /sys/devices/system/cpu/intel_pstate/no_turbo"
-
-# AMD pstate + generic cpufreq — per-policy scaling_max_freq
-# Applied when any cpufreq policy appears (covers AMD pstate, acpi-cpufreq, etc.)
-SUBSYSTEM=="cpu", ACTION=="add", RUN+="/bin/bash -c 'for f in /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq; do [ -f \"$f\" ] && chmod 0666 \"$f\"; done'"
+# Per-CPU event — fires for every cpu0..cpuN at boot and on hotplug.
+# We run the chmod unconditionally on each event; cost is negligible and
+# ensures the nodes are writable as soon as any CPU comes online.
+SUBSYSTEM=="cpu", ACTION=="add|change", RUN+="/bin/bash -c 'for f in /sys/devices/system/cpu/intel_pstate/max_perf_pct /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq; do [ -f \"$f\" ] && chgrp lifeos \"$f\" && chmod 0660 \"$f\"; done'"

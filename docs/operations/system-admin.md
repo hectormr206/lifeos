@@ -112,9 +112,20 @@ sudo systemctl status lifeosd
 
 ### Update Check Service
 
+LifeOS uses a **cache-first** update check flow to avoid running `bootc` from the unprivileged user daemon:
+
+1. `lifeos-update-check.service` (system-scope, oneshot, root) runs on a timer and invokes `/usr/local/bin/lifeos-update-check.sh`.
+2. The script shells out to `bootc status` + `bootc upgrade --check`, assembles a JSON payload with `jq`, and writes it **atomically** (temp file + rename) to `/var/lib/lifeos/update-state.json`.
+3. The user daemon (`lifeosd`) reads that file on demand — it never shells out to `bootc` itself. This keeps the daemon unprivileged and deterministic.
+4. Entries older than **48 hours** are treated as stale and surfaced as such in the API / dashboard.
+5. If a probe fails (no network, GHCR down), the previous cache is **preserved** rather than wiped, so the UI keeps showing the last known good state instead of "unknown".
+
 ```bash
 # Trigger the update probe manually
 sudo systemctl start lifeos-update-check.service
+
+# Inspect the cached payload the daemon reads
+cat /var/lib/lifeos/update-state.json
 
 # View probe logs
 journalctl -u lifeos-update-check.service

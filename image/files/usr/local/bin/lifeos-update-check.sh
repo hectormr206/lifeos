@@ -2,29 +2,105 @@
 # LifeOS Update Checker — runs daily via systemd timer.
 # Checks if a new bootc image is available and notifies via Axi.
 # Does NOT auto-apply — just informs the user.
+#
+# Also writes a cached state file at /var/lib/lifeos/update-state.json so the
+# unprivileged user daemon (lifeosd) can report update availability without
+# needing root to run `bootc status`.
 
 set -euo pipefail
 
 STATE_FILE="/var/lib/lifeos/last-update-check"
 NOTIFY_SENT="/var/lib/lifeos/update-notify-sent"
+CACHE_FILE="/var/lib/lifeos/update-state.json"
+CACHE_TMP="/var/lib/lifeos/update-state.json.tmp"
 
 mkdir -p /var/lib/lifeos
 
 echo "[update-check] Checking for LifeOS updates..."
 
-# Run bootc upgrade check (dry-run)
-UPDATE_OUTPUT=$(bootc upgrade --check 2>&1) || true
+# Resolve current booted version from bootc status (best-effort)
+CURRENT_VERSION="unknown"
+if STATUS_JSON=$(bootc status --format json 2>/dev/null); then
+    PARSED=$(printf '%s' "$STATUS_JSON" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    v=d.get("status",{}).get("booted",{}).get("image",{}).get("version") \
+        or d.get("status",{}).get("booted",{}).get("version") or ""
+    print(v)
+except Exception:
+    print("")' 2>/dev/null || true)
+    if [ -n "$PARSED" ]; then
+        CURRENT_VERSION="$PARSED"
+    fi
+fi
+
+write_cache() {
+    local available="$1"
+    local new_version="$2"
+    local error="${3:-}"
+    local checked_at
+    checked_at=$(date -Iseconds)
+    if [ -n "$error" ]; then
+        jq -n \
+            --arg cur "$CURRENT_VERSION" \
+            --arg nv "$new_version" \
+            --arg ts "$checked_at" \
+            --arg err "$error" \
+            --argjson av "$available" \
+            '{available:$av, current_version:$cur, new_version:$nv, checked_at:$ts, error:$err}' \
+            > "$CACHE_TMP"
+    else
+        jq -n \
+            --arg cur "$CURRENT_VERSION" \
+            --arg nv "$new_version" \
+            --arg ts "$checked_at" \
+            --argjson av "$available" \
+            '{available:$av, current_version:$cur, new_version:$nv, checked_at:$ts}' \
+            > "$CACHE_TMP"
+    fi
+    chmod 0644 "$CACHE_TMP"
+    mv -f "$CACHE_TMP" "$CACHE_FILE"
+}
+
+# Run bootc upgrade check (dry-run). Capture exit code separately so a failed
+# check (network, registry, auth) does NOT pin a false "available=true" in the
+# cache.
+set +e
+UPDATE_OUTPUT=$(bootc upgrade --check 2>&1)
+CHECK_RC=$?
+set -e
+
+if [ "$CHECK_RC" -ne 0 ]; then
+    echo "[update-check] bootc upgrade --check failed (rc=$CHECK_RC): $UPDATE_OUTPUT" >&2
+    # Do NOT clobber an existing cache with a spurious result. If there is no
+    # cache yet, write a conservative "false" entry annotated with the error so
+    # downstream readers can distinguish "nothing available" from "check failed".
+    if [ ! -f "$CACHE_FILE" ]; then
+        write_cache "false" "$CURRENT_VERSION" "check failed (rc=$CHECK_RC)"
+    fi
+    exit 0
+fi
 
 if echo "$UPDATE_OUTPUT" | grep -qi "no update available\|already at latest\|No changes"; then
     echo "[update-check] System is up to date"
     rm -f "$NOTIFY_SENT"
     date -Iseconds > "$STATE_FILE"
+    write_cache "false" "$CURRENT_VERSION"
     exit 0
 fi
 
 # There's an update available
 echo "[update-check] Update available!"
 echo "$UPDATE_OUTPUT"
+
+# Try to extract a version hint from the output (first token after "version")
+NEW_VERSION="newer"
+HINT=$(echo "$UPDATE_OUTPUT" | awk 'tolower($0) ~ /version/ {for (i=1;i<=NF;i++) if (tolower($i)=="version" && (i+1)<=NF) {print $(i+1); exit}}')
+if [ -n "${HINT:-}" ]; then
+    NEW_VERSION="$HINT"
+fi
+
+write_cache "true" "$NEW_VERSION"
 
 # Only notify once per available update (don't spam)
 if [ -f "$NOTIFY_SENT" ]; then

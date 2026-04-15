@@ -2,8 +2,39 @@
 //! Handles checking for and staging system updates
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+/// Path of the cached update state written by the system-level
+/// `lifeos-update-check.service` (runs as root via systemd timer).
+/// The unprivileged user daemon reads this file instead of shelling out to
+/// `bootc status`, which requires root.
+pub const UPDATE_STATE_CACHE_PATH: &str = "/var/lib/lifeos/update-state.json";
+
+/// Maximum age of the cached update state before it is considered stale. Past
+/// this threshold the cache is ignored (treated as missing) so we do not keep
+/// reporting "update available" indefinitely when the system timer is broken.
+const CACHE_STALE_AFTER: Duration = Duration::from_secs(48 * 3600);
+
+/// Tracks whether we have already logged a warning about a stale cache in this
+/// process, so a tight polling loop does not spam the journal.
+static STALE_CACHE_WARNED: AtomicBool = AtomicBool::new(false);
+/// Same idea for unreadable / unparseable cache files.
+static CACHE_READ_ERROR_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// Cached update state as written by `lifeos-update-check.sh`.
+#[derive(Debug, Clone, Deserialize)]
+struct CachedUpdateState {
+    available: bool,
+    #[serde(default)]
+    current_version: Option<String>,
+    #[serde(default)]
+    new_version: Option<String>,
+    #[serde(default)]
+    checked_at: Option<String>,
+}
 
 #[cfg(test)]
 mod updates_tests;
@@ -144,6 +175,93 @@ impl UpdateChecker {
         Ok(())
     }
 
+    /// Read update availability from the cached state file written by the
+    /// system-level `lifeos-update-check.service`. This avoids calling `bootc`
+    /// directly, which requires root privileges.
+    ///
+    /// Returns `Ok(None)` if the cache file does not yet exist (the system
+    /// timer may not have fired since boot). Returns `Err` if the file exists
+    /// but cannot be parsed.
+    pub fn check_from_cached_state(&mut self) -> anyhow::Result<Option<UpdateResult>> {
+        self.check_from_cached_state_at(Path::new(UPDATE_STATE_CACHE_PATH))
+    }
+
+    /// Like `check_from_cached_state`, but reads from an explicit path.
+    /// Separated for unit testing.
+    pub fn check_from_cached_state_at(
+        &mut self,
+        path: &Path,
+    ) -> anyhow::Result<Option<UpdateResult>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = std::fs::read_to_string(path)
+            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path.display(), e))?;
+        let cached: CachedUpdateState = serde_json::from_str(&raw)
+            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", path.display(), e))?;
+
+        let current_version = cached
+            .current_version
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let new_version = cached
+            .new_version
+            .clone()
+            .unwrap_or_else(|| current_version.clone());
+
+        // Reject stale caches: if the system timer has not refreshed the file
+        // within `CACHE_STALE_AFTER`, treat it as missing. This prevents a
+        // broken timer from pinning a false "update available" indefinitely.
+        if let Some(ts) = cached.checked_at.as_deref() {
+            if let Ok(checked_at) = chrono::DateTime::parse_from_rfc3339(ts) {
+                let age = chrono::Utc::now()
+                    .signed_duration_since(checked_at.with_timezone(&chrono::Utc));
+                if let Ok(age) = age.to_std() {
+                    if age > CACHE_STALE_AFTER && !STALE_CACHE_WARNED.swap(true, Ordering::Relaxed)
+                    {
+                        log::warn!(
+                            "Update state cache at {} is stale (checked_at={}, age={}s); \
+                             lifeos-update-check.service may be failing. Ignoring cache.",
+                            path.display(),
+                            ts,
+                            age.as_secs()
+                        );
+                        return Ok(None);
+                    }
+                    if age > CACHE_STALE_AFTER {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+
+        Ok(Some(UpdateResult {
+            available: cached.available,
+            current_version,
+            new_version,
+            changelog: None,
+            size_mb: None,
+        }))
+    }
+
+    /// Best-effort update check that reads the cached state file written by
+    /// the privileged system timer. When the cache is missing, stale, or
+    /// unreadable, returns a conservative "unknown / unavailable" result
+    /// instead of shelling out to `bootc`, which would require privileges the
+    /// unprivileged user daemon does not have.
+    pub async fn check_for_updates_cached_first(&mut self) -> anyhow::Result<UpdateResult> {
+        match self.check_from_cached_state() {
+            Ok(Some(result)) => Ok(result),
+            Ok(None) => Ok(unknown_update_result()),
+            Err(e) => {
+                if !CACHE_READ_ERROR_WARNED.swap(true, Ordering::Relaxed) {
+                    log::warn!("Failed to read cached update state: {e}");
+                }
+                Ok(unknown_update_result())
+            }
+        }
+    }
+
     /// Get update history
     pub async fn get_update_history(&self) -> anyhow::Result<Vec<UpdateHistoryEntry>> {
         // This would typically read from a log file or database
@@ -198,6 +316,16 @@ pub enum UpdateStatus {
     Success,
     Failed,
     RolledBack,
+}
+
+fn unknown_update_result() -> UpdateResult {
+    UpdateResult {
+        available: false,
+        current_version: "unknown".to_string(),
+        new_version: "unknown".to_string(),
+        changelog: None,
+        size_mb: None,
+    }
 }
 
 fn parse_version_from_output(output: &str) -> Option<String> {

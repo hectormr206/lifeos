@@ -9,11 +9,51 @@
 use chrono::{DateTime, Utc};
 use log::warn;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::fs;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+
+/// Maximum number of recent alerts retained in the in-memory ring buffer.
+pub const ALERT_BUFFER_CAP: usize = 50;
+
+/// Shared ring buffer of the most recent security alerts.
+///
+/// Populated by the security monitor task on each cycle and read by the
+/// dashboard API. A plain `std::sync::Mutex` is sufficient — critical
+/// sections are short and never cross an await point.
+pub type AlertBuffer = Arc<Mutex<VecDeque<SecurityAlert>>>;
+
+/// Create an empty alert buffer.
+pub fn new_alert_buffer() -> AlertBuffer {
+    Arc::new(Mutex::new(VecDeque::with_capacity(ALERT_BUFFER_CAP)))
+}
+
+/// Append alerts to the ring buffer, evicting the oldest entries to stay
+/// within `ALERT_BUFFER_CAP`.
+pub fn push_alerts(buffer: &AlertBuffer, alerts: &[SecurityAlert]) {
+    if alerts.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = buffer.lock() {
+        for alert in alerts {
+            if guard.len() == ALERT_BUFFER_CAP {
+                guard.pop_front();
+            }
+            guard.push_back(alert.clone());
+        }
+    }
+}
+
+/// Snapshot of the most recent alerts, newest last.
+pub fn recent_alerts(buffer: &AlertBuffer) -> Vec<SecurityAlert> {
+    buffer
+        .lock()
+        .map(|g| g.iter().cloned().collect())
+        .unwrap_or_default()
+}
 
 // ---------------------------------------------------------------------------
 // Core types

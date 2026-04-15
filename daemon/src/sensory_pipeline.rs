@@ -6087,9 +6087,9 @@ pub async fn calibrate_mic_threshold(source: Option<&str>) -> u32 {
                     "s16",
                     &tmp_path,
                 ]);
-                cmd.stderr(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null());
-                cmd.status().await
+                cmd.stderr(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped());
+                cmd.output().await.map(|o| (o.status, o.stderr))
             }
             ("parecord", Some(ref tb)) => {
                 let mut cmd = Command::new(tb);
@@ -6099,9 +6099,9 @@ pub async fn calibrate_mic_threshold(source: Option<&str>) -> u32 {
                     cmd.args(["-d", src]);
                 }
                 cmd.args(["--rate=16000", "--channels=1", "--format=s16le", &tmp_path]);
-                cmd.stderr(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null());
-                cmd.status().await
+                cmd.stderr(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped());
+                cmd.output().await.map(|o| (o.status, o.stderr))
             }
             _ => {
                 log::warn!("[calibration] no timeout binary or unsupported recorder");
@@ -6111,7 +6111,21 @@ pub async fn calibrate_mic_threshold(source: Option<&str>) -> u32 {
                 ))
             }
         };
-        result.map(|s| s.success()).unwrap_or(false)
+        match result {
+            Ok((status, _stderr)) if status.success() || status.code() == Some(124) => true,
+            Ok((status, stderr)) => {
+                let err_text = String::from_utf8_lossy(&stderr);
+                log::warn!(
+                    "[calibration] {program} exited with {status}: {}",
+                    err_text.trim()
+                );
+                false
+            }
+            Err(e) => {
+                log::warn!("[calibration] failed to spawn {program}: {e}");
+                false
+            }
+        }
     } else {
         false
     };
@@ -6398,6 +6412,19 @@ fn dirs_home() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
 }
 
+/// Heuristic: does pactl stderr indicate the server isn't ready yet (boot race)
+/// vs a permanent failure like missing binary or bad args?
+fn pactl_stderr_is_not_ready(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    s.contains("connection refused")
+        || s.contains("connection terminated")
+        || s.contains("no pulseaudio daemon")
+        || s.contains("no such file or directory")
+        || s.contains("failed to connect")
+        || s.contains("conexión rehusada")
+        || s.contains("no se pudo conectar")
+}
+
 /// Resolve the audio source for always-on wake word capture.
 /// When the default PulseAudio source is a Bluetooth device, this returns a
 /// non-Bluetooth alternative (internal mic) to avoid A2DP→HSP/HFP profile
@@ -6417,27 +6444,74 @@ async fn resolve_always_on_source() -> Option<String> {
         }
     }
 
-    // 2. Get the system default source (usually the built-in mic)
-    let info_output = Command::new("pactl").arg("info").output().await.ok()?;
-    if !info_output.status.success() {
-        return None;
-    }
-    let info = String::from_utf8_lossy(&info_output.stdout);
+    // At boot, `After=pipewire.service` only waits for the service to start, not
+    // for sources to be enumerable. Retry pactl up to 3 times with backoff when
+    // the failure looks like "server not ready yet".
+    let backoffs_ms = [500u64, 1000, 2000];
+    let mut attempt: usize = 0;
+    let (info_stdout, list_stdout) = loop {
+        // 2. Get the system default source (usually the built-in mic)
+        let info_output = match Command::new("pactl").arg("info").output().await {
+            Ok(o) => o,
+            Err(e) => {
+                log::warn!("[audio] failed to spawn `pactl info`: {e}");
+                return None;
+            }
+        };
+        if !info_output.status.success() {
+            let stderr = String::from_utf8_lossy(&info_output.stderr);
+            let retryable = pactl_stderr_is_not_ready(&stderr);
+            log::warn!(
+                "[audio] `pactl info` failed ({}): {}",
+                info_output.status,
+                stderr.trim()
+            );
+            if retryable && attempt < backoffs_ms.len() {
+                tokio::time::sleep(std::time::Duration::from_millis(backoffs_ms[attempt])).await;
+                attempt += 1;
+                continue;
+            }
+            return None;
+        }
+
+        // 3. List all non-monitor sources
+        let list_output = match Command::new("pactl")
+            .args(["list", "short", "sources"])
+            .output()
+            .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                log::warn!("[audio] failed to spawn `pactl list sources`: {e}");
+                return None;
+            }
+        };
+        if !list_output.status.success() {
+            let stderr = String::from_utf8_lossy(&list_output.stderr);
+            let retryable = pactl_stderr_is_not_ready(&stderr);
+            log::warn!(
+                "[audio] `pactl list short sources` failed ({}): {}",
+                list_output.status,
+                stderr.trim()
+            );
+            if retryable && attempt < backoffs_ms.len() {
+                tokio::time::sleep(std::time::Duration::from_millis(backoffs_ms[attempt])).await;
+                attempt += 1;
+                continue;
+            }
+            return None;
+        }
+
+        break (info_output.stdout, list_output.stdout);
+    };
+
+    let info = String::from_utf8_lossy(&info_stdout);
     let default_source = info
         .lines()
         .find(|l| l.starts_with("Default Source:") || l.starts_with("Fuente por defecto:"))
         .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_string()));
 
-    // 3. List all non-monitor sources
-    let list_output = Command::new("pactl")
-        .args(["list", "short", "sources"])
-        .output()
-        .await
-        .ok()?;
-    if !list_output.status.success() {
-        return None;
-    }
-    let list = String::from_utf8_lossy(&list_output.stdout);
+    let list = String::from_utf8_lossy(&list_stdout);
     let sources: Vec<String> = list
         .lines()
         .filter_map(|line| {
