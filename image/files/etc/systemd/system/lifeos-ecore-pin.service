@@ -1,6 +1,12 @@
 [Unit]
 Description=LifeOS E-Core Pin — restrict background slice to efficiency cores
-After=multi-user.target
+# NOTE: we MUST NOT order After=multi-user.target while also Before= units
+# that are WantedBy=multi-user.target — that creates an ordering cycle that
+# systemd breaks by deleting start jobs for llama-embeddings/whisper-stt.
+# Instead we order after basic.target (cgroups ready) and before the
+# background workloads themselves; multi-user.target still pulls us in
+# through the [Install] section.
+After=basic.target
 Before=whisper-stt.service llama-embeddings.service
 
 [Service]

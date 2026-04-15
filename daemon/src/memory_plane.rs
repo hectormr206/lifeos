@@ -1395,6 +1395,7 @@ impl MemoryPlaneManager {
             )));
         }
         let db = Connection::open(db_path).context("Failed to open memory database")?;
+        crate::sqlite_protection::ensure_sensitive_perms(db_path);
         Ok(db)
     }
 

@@ -58,6 +58,14 @@ docs/archive/           ← Deprecated docs (historical only)
 
 **Tip:** Use `grep -r "keyword" docs/` to find specific topics instead of reading entire files.
 
+## Developer Setup
+
+| Topic | Doc |
+|-------|-----|
+| Workstation bootstrap (dev sudo policy, RUST_LOG dropin, sentinel) | [`docs/operations/developer-bootstrap.md`](docs/operations/developer-bootstrap.md) |
+| Update check/stage/apply cycle | [`docs/operations/update-flow.md`](docs/operations/update-flow.md) |
+| Contributor quickstart | [`docs/contributor/bootstrap-dev.md`](docs/contributor/bootstrap-dev.md) |
+
 ## Module Integration Checklist
 
 When adding a new daemon module:

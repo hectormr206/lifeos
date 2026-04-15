@@ -23,8 +23,15 @@ use image::{DynamicImage, GenericImageView, Pixel};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+/// Set once we have logged the "camera capture binary unavailable" warning.
+/// Prevents flooding the journal when the capture binary is missing — the
+/// condition never changes at runtime, so one WARN at the first miss and
+/// DEBUG afterwards is the right policy.
+static CAMERA_BINARY_WARNED: AtomicBool = AtomicBool::new(false);
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -2389,10 +2396,36 @@ impl SensoryPipelineManager {
                     metrics.frame_path,
                 ),
                 Err(error) => {
-                    log::warn!(
-                        "[camera] presence capture failed; falling back to activity: {}",
-                        error
-                    );
+                    // The "binary unavailable" branch fires every cycle on
+                    // systems that don't ship fswebcam / grim / v4l2-ctl.
+                    // Log it ONCE at WARN (with the expected binaries) and
+                    // quiet afterwards. Other failure modes stay at WARN so
+                    // we still notice transient camera problems.
+                    let msg = error.to_string();
+                    let is_missing_binary = msg.contains("camera capture binary unavailable")
+                        || msg.contains("camera device unavailable");
+                    if is_missing_binary {
+                        if !CAMERA_BINARY_WARNED.swap(true, Ordering::Relaxed) {
+                            log::warn!(
+                                "[camera] presence capture disabled: {} \
+                                 (expected one of fswebcam/grim/v4l2-ctl on PATH \
+                                 and a camera device). Falling back to activity-based \
+                                 presence; further failures of this kind will be DEBUG.",
+                                error
+                            );
+                        } else {
+                            log::debug!(
+                                "[camera] presence capture still unavailable; \
+                                 activity fallback in use: {}",
+                                error
+                            );
+                        }
+                    } else {
+                        log::warn!(
+                            "[camera] presence capture failed; falling back to activity: {}",
+                            error
+                        );
+                    }
                     let (p, f, s) = presence_from_activity(follow_along).await;
                     (p, f, s, None)
                 }

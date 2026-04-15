@@ -80,3 +80,11 @@ Instead of reading everything, use `docs/README.md` as index:
 | Research (OpenClaw analysis) | `docs/research/openclaw/` |
 
 **Tip:** Use `grep` or `glob` to find specific files rather than reading entire directories.
+
+## Developer Setup
+
+| Topic | Doc |
+|-------|-----|
+| Workstation bootstrap (dev sudo policy, RUST_LOG dropin, sentinel) | `docs/operations/developer-bootstrap.md` |
+| Update check/stage/apply cycle | `docs/operations/update-flow.md` |
+| Contributor quickstart | `docs/contributor/bootstrap-dev.md` |

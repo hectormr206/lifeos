@@ -86,6 +86,11 @@
         "Amazon.com",
         "eBay"
       ]
+    },
+    "DNSOverHTTPS": {
+      "Enabled": true,
+      "ProviderURL": "https://mozilla.cloudflare-dns.com/dns-query",
+      "Locked": false
     }
   }
 }

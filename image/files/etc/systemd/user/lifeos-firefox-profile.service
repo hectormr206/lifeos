@@ -1,0 +1,14 @@
+[Unit]
+Description=LifeOS Firefox profile bootstrap (lifeos.default)
+Documentation=file:///usr/local/bin/lifeos-bootstrap-firefox-profile.sh
+After=graphical-session.target
+ConditionPathExists=!%h/.mozilla/firefox/lifeos.default/.lifeos-bootstrap-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/lifeos-bootstrap-firefox-profile.sh
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=default.target

@@ -19,35 +19,18 @@ env:
 
 jobs:
   # ============================================================================
-  # Job 0: Dev-mode guard — fails fast on any accidental dev-mode leakage
-  # See docs/operations/dev-mode.md for the full security contract.
+  # Job 0: Dev artifact guard — asserts no dev-mode files leaked into image/files
+  # See scripts/assert-no-dev-artifacts.sh for the six forbidden paths.
   # ============================================================================
-  dev-mode-guard:
-    name: Dev-mode guard
+  no-dev-artifacts:
+    name: No dev artifacts
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Assert dev build mode token is not in any workflow
-        run: |
-          set -euo pipefail
-          if grep -rn "LIFEOS_BUILD_MODE""=dev" .github/workflows/; then
-            echo "FATAL: dev build mode token must never appear in CI workflows"
-            exit 1
-          fi
-          echo "dev-mode workflow scanner passed"
-
-      - name: Assert LIFEOS_BUILD_MODE default is release
-        run: |
-          set -euo pipefail
-          default="$(grep -E '^ARG LIFEOS_BUILD_MODE' image/Containerfile | head -1)"
-          if ! echo "$default" | grep -q 'LIFEOS_BUILD_MODE=release'; then
-            echo "FATAL: Containerfile default for LIFEOS_BUILD_MODE is not 'release'"
-            echo "Got: $default"
-            exit 1
-          fi
-          echo "Containerfile default check passed: $default"
+      - name: Assert no dev artifacts in image/files
+        run: bash scripts/assert-no-dev-artifacts.sh image/files
 
   # ============================================================================
   # Job 1: Build and Test CLI
@@ -57,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -66,7 +49,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -99,7 +82,7 @@ jobs:
         run: cargo test --all-features --locked
 
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: life-cli-${{ github.sha }}
           path: target/release/life
@@ -114,7 +97,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -129,7 +112,7 @@ jobs:
         run: bash scripts/check-daemon-prereqs.sh
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -162,7 +145,7 @@ jobs:
         run: cargo test --features "dbus,http-api,wake-word,messaging" --locked
 
       - name: Upload daemon artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: lifeosd-${{ github.sha }}
           path: target/release/lifeosd
@@ -178,7 +161,7 @@ jobs:
     needs: [build-cli, build-daemon]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -186,7 +169,7 @@ jobs:
           toolchain: 1.85.1
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -196,13 +179,13 @@ jobs:
           key: ${{ runner.os }}-cargo-integration-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Download CLI artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: life-cli-${{ github.sha }}
           path: ./artifacts/
 
       - name: Download daemon artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: lifeosd-${{ github.sha }}
           path: ./artifacts/
@@ -221,7 +204,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -273,10 +256,10 @@ jobs:
     needs: [build-daemon]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download daemon artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: lifeosd-${{ github.sha }}
           path: ./artifacts/
@@ -301,7 +284,7 @@ jobs:
     needs: [build-cli, build-daemon]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -338,7 +321,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

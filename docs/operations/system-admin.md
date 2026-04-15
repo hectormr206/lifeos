@@ -25,7 +25,8 @@ LifeOS System Services
 │   ├── lifeos-flatpak-update.timer        system  Daily — unattended Flatpak updates
 │   ├── lifeos-btrfs-snapshot.timer        system  Periodic BTRFS snapshots
 │   ├── lifeos-aide-check.timer            system  File integrity checks
-│   ├── lifeos-update-check.timer          system  Daily bootc update check
+│   ├── lifeos-update-check.timer          system  Daily bootc update check (read-only probe)
+│   ├── lifeos-update-stage.timer          system  Weekly update stage (Sun 04:00 — downloads, no apply)
 │   ├── lifeos-smart-charge.timer          system  Battery health management
 │   └── fstrim.timer                       system  Weekly SSD TRIM
 │
@@ -130,6 +131,60 @@ cat /var/lib/lifeos/update-state.json
 # View probe logs
 journalctl -u lifeos-update-check.service
 ```
+
+### Update Stage Service and Timer
+
+`lifeos-update-stage.service` downloads and stages a new image deployment without
+applying it. The user controls when the staged deployment activates (reboot).
+
+**Schedule:** `lifeos-update-stage.timer` runs every Sunday at 04:00 UTC with a
+30-minute randomized delay (`RandomizedDelaySec=1800`) so all hosts do not hit GHCR
+simultaneously. The timer is persistent — if the host was offline at 04:00, the stage
+runs once on next boot.
+
+**What it does:**
+1. Reads `/var/lib/lifeos/update-state.json`. If `available=false`, exits without action.
+2. If the current staged digest already matches the remote digest: exits 0 (`already staged, no-op`).
+3. Runs `bootc upgrade` (no `--apply`) — downloads and stages the new deployment.
+4. Writes result to `/var/lib/lifeos/update-stage-state.json`.
+5. Emits a desktop notification and a POST to the Axi daemon API.
+
+**What it does NOT do:**
+- Does NOT run `bootc upgrade --apply`.
+- Does NOT trigger a reboot under any circumstances.
+- Does NOT use `set -x` (no credential leakage in journal).
+
+**Service properties:** `Type=oneshot`, `User=root`, `TimeoutStartSec=30m`,
+`ProtectHome=read-only`, `ProtectSystem=strict`, `ReadWritePaths=/var/lib/lifeos`.
+
+```bash
+# Trigger staging manually (e.g. after check reports update available)
+sudo systemctl start lifeos-update-stage.service
+
+# Inspect the stage state file
+cat /var/lib/lifeos/update-stage-state.json
+
+# View stage logs
+journalctl -u lifeos-update-stage.service
+
+# Check timer status
+systemctl list-timers lifeos-update-stage.timer
+```
+
+To override the cadence (e.g. stage daily instead of weekly):
+
+```bash
+sudo mkdir -p /etc/systemd/system/lifeos-update-stage.timer.d/
+sudo tee /etc/systemd/system/lifeos-update-stage.timer.d/10-cadence.conf > /dev/null <<'EOF'
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=1800
+EOF
+sudo systemctl daemon-reload
+```
+
+See [`docs/operations/update-flow.md`](update-flow.md) for the full check → stage → apply cycle.
 
 ### llama-server Service
 

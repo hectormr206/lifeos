@@ -1678,14 +1678,35 @@ async fn dashboard_bootstrap(
 
 async fn get_security_alerts(
     State(state): State<ApiState>,
+    request: Request<Body>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
-    if !state.config.bind_address.ip().is_loopback() {
+    // Require bootstrap token. Loopback is not a trust boundary.
+    let expected = match state.config.api_key.as_deref() {
+        Some(key) if !key.is_empty() => key,
+        _ => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiError {
+                    error: "ServiceUnavailable".to_string(),
+                    message: "Bootstrap token not configured on the daemon".to_string(),
+                    code: 503,
+                }),
+            ));
+        }
+    };
+    let provided = request
+        .headers()
+        .get("x-bootstrap-token")
+        .or_else(|| request.headers().get("x-api-key"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    if provided.is_empty() || provided != expected {
         return Err((
-            StatusCode::FORBIDDEN,
+            StatusCode::UNAUTHORIZED,
             Json(ApiError {
-                error: "Forbidden".to_string(),
-                message: "Security alerts are only available on localhost".to_string(),
-                code: 403,
+                error: "Unauthorized".to_string(),
+                message: "Missing or invalid bootstrap token".to_string(),
+                code: 401,
             }),
         ));
     }
@@ -1701,12 +1722,28 @@ async fn require_bootstrap_token(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<ApiError>)> {
+    // Token is REQUIRED unconditionally. Even on 127.0.0.1 we cannot trust
+    // peers, because:
+    //   * Any local user account can connect to loopback.
+    //   * Sandboxed apps (Flatpak with --share=network, browser tabs, etc.)
+    //     can reach 127.0.0.1.
+    // If no token is configured, fail closed — never grant access.
     let expected = match state.config.api_key.as_deref() {
-        Some(key) => key,
-        None => {
-            // No token configured — allow localhost access unconditionally.
-            // The server only binds to 127.0.0.1 so this is safe.
-            return Ok(next.run(request).await);
+        Some(key) if !key.is_empty() => key,
+        _ => {
+            log::error!(
+                "API request rejected: no bootstrap token configured. \
+                 Daemon must generate one at startup; check write access \
+                 to /run/user/<uid>/lifeos or /var/lib/lifeos."
+            );
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiError {
+                    error: "ServiceUnavailable".to_string(),
+                    message: "Bootstrap token not configured on the daemon".to_string(),
+                    code: 503,
+                }),
+            ));
         }
     };
 
@@ -1717,7 +1754,7 @@ async fn require_bootstrap_token(
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
 
-    if provided == expected {
+    if !provided.is_empty() && provided == expected {
         return Ok(next.run(request).await);
     }
 
@@ -1742,20 +1779,31 @@ async fn event_stream(
     Sse<impl futures_lite::Stream<Item = Result<Event, std::convert::Infallible>>>,
     (StatusCode, Json<ApiError>),
 > {
-    // Allow unauthenticated SSE on localhost (same policy as the REST middleware).
-    if !state.config.bind_address.ip().is_loopback() {
-        let expected = state.config.api_key.as_deref().unwrap_or_default();
-        let provided = params.get("token").map(|s| s.as_str()).unwrap_or_default();
-        if provided != expected {
+    // SSE auth is REQUIRED unconditionally. Loopback is not a trust boundary
+    // (see require_bootstrap_token for rationale).
+    let expected = match state.config.api_key.as_deref() {
+        Some(key) if !key.is_empty() => key,
+        _ => {
             return Err((
-                StatusCode::UNAUTHORIZED,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(ApiError {
-                    error: "Unauthorized".to_string(),
-                    message: "Missing or invalid token query parameter".to_string(),
-                    code: 401,
+                    error: "ServiceUnavailable".to_string(),
+                    message: "Bootstrap token not configured on the daemon".to_string(),
+                    code: 503,
                 }),
             ));
         }
+    };
+    let provided = params.get("token").map(|s| s.as_str()).unwrap_or_default();
+    if provided.is_empty() || provided != expected {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiError {
+                error: "Unauthorized".to_string(),
+                message: "Missing or invalid token query parameter".to_string(),
+                code: 401,
+            }),
+        ));
     }
 
     let rx = state.event_bus.subscribe();
@@ -11127,6 +11175,8 @@ async fn post_api_keys(
             }),
         ));
     }
+    // Contains API keys — must never be world-readable.
+    crate::sqlite_protection::ensure_sensitive_perms(&env_path);
 
     Ok(Json(serde_json::json!({
         "updated": updated_count,

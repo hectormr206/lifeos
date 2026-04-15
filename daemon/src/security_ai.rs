@@ -266,27 +266,17 @@ impl SecurityAiDaemon {
                     });
                 }
 
-                // Flag unknown processes connecting to uncommon high ports (>10000).
-                if peer_port > 10000 && proc_name.is_none() {
-                    alerts.push(SecurityAlert {
-                        id: Uuid::new_v4().to_string(),
-                        severity: AlertSeverity::Warning,
-                        alert_type: AlertType::SuspiciousConnection,
-                        description: format!(
-                            "Unknown process connecting to high port {}",
-                            peer_port
-                        ),
-                        process_name: None,
-                        process_pid: None,
-                        remote_addr: peer_ip,
-                        evidence: vec![
-                            format!("Peer: {}", peer_addr_full),
-                            format!("Full line: {}", line),
-                        ],
-                        action_taken: String::new(),
-                        timestamp: Utc::now(),
-                    });
-                }
+                // Previously this flagged every connection to a high port
+                // (>10000) where `ss -tnp` could not resolve the process
+                // name. On a desktop session that matches dozens of entirely
+                // benign flows per cycle (WebRTC, flatpak-sandboxed browsers,
+                // per-user daemons ss can't introspect without root). The
+                // signal-to-noise ratio was zero: one real mining connection
+                // is already caught by MINING_PORTS above, and a proc_name
+                // of None simply means "ss lacks permission to read
+                // /proc/<pid>/comm", NOT "malicious". Dropping this heuristic
+                // wholesale; revisit with a real anomaly model (baseline of
+                // expected peers per process) rather than a flat threshold.
             }
         }
 

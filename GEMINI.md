@@ -31,6 +31,8 @@ All docs are organized in `docs/`. Read `docs/README.md` for the full index.
 | Operations & runbooks | `docs/operations/` |
 | Branding & icons | `docs/branding/` |
 | Privacy analysis | `docs/privacy/` |
+| Developer workstation bootstrap | `docs/operations/developer-bootstrap.md` |
+| Update check/stage/apply flow | `docs/operations/update-flow.md` |
 
 ## Key Files
 

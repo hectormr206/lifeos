@@ -91,6 +91,7 @@ impl TaskQueue {
 
         let conn = Connection::open(&db_path)
             .with_context(|| format!("Failed to open task queue DB at {}", db_path.display()))?;
+        crate::sqlite_protection::ensure_sensitive_perms(&db_path);
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS tasks (

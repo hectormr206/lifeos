@@ -2,15 +2,17 @@
 # Canonical runtime truth is the booted/staged deployment reported by `bootc`
 # against GHCR. This file only describes local channel policy and guardrails.
 
+# RESERVED — not yet published. See proposal: unify-image-kill-dev-mode.
 [channels.stable]
 name = "stable"
 description = "Production-ready releases - recommended for most users"
 update_schedule = "weekly"
-auto_update = true
+auto_update = false
 require_signature = true
 require_sbom = true
 min_age_hours = 0
 
+# RESERVED — not yet published. See proposal: unify-image-kill-dev-mode.
 [channels.candidate]
 name = "candidate"
 description = "Pre-release testing - for users who want early access to features"
@@ -22,7 +24,7 @@ min_age_hours = 0
 
 [channels.edge]
 name = "edge"
-description = "Bleeding edge development - for testing and development only"
+description = "The single active channel — all pushes to main land here."
 update_schedule = "on-demand"
 auto_update = false
 require_signature = true

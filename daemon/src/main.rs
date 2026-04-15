@@ -1402,6 +1402,12 @@ async fn main() -> anyhow::Result<()> {
     let _security_ai_handle = tokio::spawn(async move {
         let mut daemon = security_ai::SecurityAiDaemon::new();
         let mut interval = tokio::time::interval(Duration::from_secs(30));
+        // De-dupe key: (alert_type, description). Each cycle we rebuild a
+        // fresh set of observed keys; we only WARN on transitions (newly
+        // appearing alerts) and INFO on cleared ones. This prevents the
+        // per-cycle log storm that used to flood journald.
+        use std::collections::HashSet;
+        let mut prev_keys: HashSet<String> = HashSet::new();
         loop {
             interval.tick().await;
             // Run all security checks
@@ -1411,7 +1417,17 @@ async fn main() -> anyhow::Result<()> {
             alerts.extend(daemon.check_unauthorized_file_access().await);
             alerts.extend(daemon.check_system_integrity().await);
             security_ai::push_alerts(&security_alert_buffer_task, &alerts);
+
+            // Fire notifications + compute the current key set for de-dupe.
+            let mut cur_keys: HashSet<String> = HashSet::new();
             for alert in &alerts {
+                let key = format!("{:?}|{}", alert.alert_type, alert.description);
+                cur_keys.insert(key.clone());
+                // Only notify on NEW alerts — avoids waking the user on the
+                // same recurring condition every 30s.
+                if prev_keys.contains(&key) {
+                    continue;
+                }
                 let priority = match alert.severity {
                     security_ai::AlertSeverity::Emergency
                     | security_ai::AlertSeverity::Critical => "critical",
@@ -1422,22 +1438,16 @@ async fn main() -> anyhow::Result<()> {
                     priority: priority.into(),
                     message: format!("[security] {}", alert.description),
                 });
+                warn!(
+                    "[security_ai] NEW alert {:?}: {}",
+                    alert.severity, alert.description
+                );
             }
-            if !alerts.is_empty() {
-                // Include the alert descriptions — logging just the count for
-                // months made it impossible to tell whether the monitor was
-                // catching a real intrusion or firing on benign background
-                // noise. Log at DEBUG so the journal isn't flooded, and
-                // emit a single WARN with the count on every cycle.
-                warn!("[security_ai] {} alerts detected this cycle", alerts.len());
-                for alert in &alerts {
-                    log::debug!(
-                        "[security_ai] alert {:?}: {}",
-                        alert.severity,
-                        alert.description
-                    );
-                }
+            // Report cleared alerts at INFO.
+            for cleared in prev_keys.difference(&cur_keys) {
+                log::info!("[security_ai] cleared: {}", cleared);
             }
+            prev_keys = cur_keys;
         }
     });
     info!("Security AI monitor started (every 30s)");

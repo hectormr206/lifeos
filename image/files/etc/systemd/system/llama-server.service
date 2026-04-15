@@ -39,9 +39,12 @@ ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do if /usr/sbin/llama-server --li
 #      (https://docs.unsloth.ai/basics/qwen3.5). These are server-level
 #      defaults; clients can still override them per-request.
 #   6. Reasoning — Qwen3.5 dense models ship reasoning ON by default. We
-#      disable it system-wide because LifeOS streams responses to Telegram /
-#      voice / dashboard where the <think>…</think> chatter hurts UX. Pass
-#      `reasoning_budget` per-request if you need it back.
+#      disable it system-wide (`--reasoning off`) because LifeOS streams
+#      responses to Telegram / voice / dashboard where the <think>…</think>
+#      chatter hurts UX. This is stronger than `--reasoning-budget 0`:
+#      the model never opens a thinking block at all — the jinja template
+#      honors `enable_thinking=false`. Pass `enable_thinking: true` (or a
+#      `/think` prefix in the user message) per-request if you need it back.
 #   7. Templates — `--jinja` enables the model's bundled chat template.
 ExecStart=/usr/sbin/llama-server \
     --model /var/lib/lifeos/models/${LIFEOS_AI_MODEL} \
@@ -70,7 +73,7 @@ ExecStart=/usr/sbin/llama-server \
     --min-p 0.0 \
     --presence-penalty 0.0 \
     --repeat-penalty 1.0 \
-    --reasoning-budget 0 \
+    --reasoning off \
     --jinja
 Restart=always
 RestartSec=10

@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -30,7 +30,7 @@ jobs:
         run: bash scripts/ci/install-linux-deps.sh daemon
 
       - name: Cache cargo dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/bin/
@@ -43,7 +43,8 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Install cargo-outdated
-        run: cargo install cargo-outdated --locked
+        # Pinned: newer cargo-outdated requires rustc >= 1.88; workspace pins 1.85.1.
+        run: cargo install cargo-outdated --version 0.18.0 --locked
 
       - name: Run security audit
         run: |
@@ -75,40 +76,22 @@ jobs:
       packages: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Podman
         run: bash scripts/ci/install-linux-deps.sh podman
 
-      - name: Reject dev-mode references in CI
-        run: |
-          set -euo pipefail
-          if grep -rn "LIFEOS_BUILD_MODE""=dev" .github/workflows/; then
-            echo "FATAL: dev build mode token must never appear in CI workflows"
-            exit 1
-          fi
+      - name: Assert no dev artifacts in image sources
+        run: bash scripts/assert-no-dev-artifacts.sh image/files
 
       - name: Build container image
         run: |
           podman build \
-            --build-arg LIFEOS_BUILD_MODE=release \
             -t lifeos:nightly \
             -f image/Containerfile .
 
-      - name: Verify no dev-mode artifacts in nightly image
-        run: |
-          podman run --rm --entrypoint /bin/bash lifeos:nightly -lc '
-            set -euo pipefail
-            if [ -f /etc/sudoers.d/lifeos-dev ]; then
-              echo "FATAL: /etc/sudoers.d/lifeos-dev present in release image"
-              exit 1
-            fi
-            if [ -f /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf ]; then
-              echo "FATAL: dev-mode dropin present in release image"
-              exit 1
-            fi
-            echo "dev-mode leak check passed"
-          '
+      - name: Assert no dev artifacts in built nightly image
+        run: bash scripts/assert-no-dev-artifacts.sh lifeos:nightly
 
       - name: Run container tests
         run: |
