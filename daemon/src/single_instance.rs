@@ -11,6 +11,9 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
+#[cfg(test)]
+mod single_instance_tests;
+
 /// Reasons lock acquisition can fail without being a hard error.
 pub enum LockOutcome {
     /// Lock acquired. Hold the guard for the process lifetime.
