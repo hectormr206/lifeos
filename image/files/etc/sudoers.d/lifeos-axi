@@ -1,7 +1,7 @@
 # LifeOS Axi — controlled sudo permissions for automated system management.
 # Each permission is audited and specific. No blanket root access.
 # Uses %wheel group so any user created during installation gets access.
-# Audit date: 2026-03-26 | Source: daemon/src/ privilege audit (26 locations)
+# Audit date: 2026-04-15 | Source: daemon/src/ privilege audit (wildcards removed)
 
 # === LLAMA-SERVER (Game Guard GPU offload) ===
 # game_guard.rs, agent_runtime.rs, sensory_pipeline.rs, api/mod.rs
@@ -38,9 +38,25 @@
 %wheel ALL=(root) NOPASSWD: /usr/bin/podman load -i /tmp/lifeos-dev.tar
 %wheel ALL=(root) NOPASSWD: /usr/bin/podman load -i /tmp/lifeos-stable.tar
 
-# === FLATPAK SYSTEM INSTALLS ===
+# === FLATPAK SYSTEM INSTALLS (curated allowlist — reverse-DNS exact match) ===
 # axi_tools.rs, security_daemon.rs, proactive.rs
-%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub *
+# Replaces wildcarded `flatpak install ... flathub *`. To add a new app,
+# append a new line here — no wildcards permitted.
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub com.discordapp.Discord
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub com.spotify.Client
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub com.slack.Slack
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub org.mozilla.firefox
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub org.gimp.GIMP
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub org.inkscape.Inkscape
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub org.libreoffice.LibreOffice
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub org.videolan.VLC
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub org.blender.Blender
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub com.obsproject.Studio
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub com.valvesoftware.Steam
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub org.signal.Signal
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub org.telegram.desktop
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub md.obsidian.Obsidian
+%wheel ALL=(root) NOPASSWD: /usr/bin/flatpak install --system -y --noninteractive flathub com.visualstudio.code
 %wheel ALL=(root) NOPASSWD: /usr/bin/flatpak uninstall --unused -y
 %wheel ALL=(root) NOPASSWD: /usr/bin/flatpak update --system -y --noninteractive
 
@@ -65,33 +81,71 @@
 %wheel ALL=(root) NOPASSWD: /usr/bin/systemctl enable firewalld.service
 %wheel ALL=(root) NOPASSWD: /usr/bin/systemctl disable firewalld.service
 
-# === NETWORK SECURITY (blocking — security_ai.rs) ===
-%wheel ALL=(root) NOPASSWD: /usr/sbin/nft add rule inet filter input ip saddr * drop
-%wheel ALL=(root) NOPASSWD: /usr/sbin/iptables -A INPUT -s * -j DROP
+# === NETWORK SECURITY (blocking via named set — security_ai.rs) ===
+# The nftables blocklist set `lifeos_banlist` is pre-created by
+# /etc/firewalld/zones/lifeos.xml (or the nftables ruleset). To blackhole a
+# source address, Axi adds/removes elements to this set only — no raw rule
+# creation allowed.
+%wheel ALL=(root) NOPASSWD: /usr/sbin/nft add element inet filter lifeos_banlist { *
+%wheel ALL=(root) NOPASSWD: /usr/sbin/nft delete element inet filter lifeos_banlist { *
+# (No /usr/sbin/iptables -A INPUT wildcard — iptables blocking deprecated.)
 
 # === SYSTEM TUNER (sysctl optimization — system_tuner.rs) ===
-%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w *
+# Enumerated from daemon/src/system_tuner.rs:166-170 (the only writable keys).
+# Adding a new tunable requires updating BOTH the daemon and this file.
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.swappiness=10
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.swappiness=30
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.swappiness=60
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.dirty_ratio=10
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.dirty_ratio=20
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.dirty_ratio=40
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.dirty_background_ratio=5
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.dirty_background_ratio=10
+%wheel ALL=(root) NOPASSWD: /usr/sbin/sysctl -w vm.dirty_background_ratio=20
 
 # === BATTERY MANAGER (charge thresholds — battery_manager.rs) ===
 %wheel ALL=(root) NOPASSWD: /usr/bin/tee /sys/class/power_supply/BAT*/charge_control_end_threshold
 
 # === PROCESS ISOLATION (security_ai.rs) ===
-%wheel ALL=(root) NOPASSWD: /usr/bin/kill -STOP *
+# Wildcard `kill -STOP *` removed — could target PID 1. Isolation now goes
+# through a vetted wrapper that reads a PID from a controlled file, verifies
+# the PID belongs to a LifeOS-managed unit (not systemd/init), and only then
+# sends SIGSTOP. The wrapper lives in /usr/local/bin and ignores any args.
+%wheel ALL=(root) NOPASSWD: /usr/local/bin/lifeos-isolate-process
 
 # === RPM VERIFICATION (security_ai.rs system integrity) ===
-%wheel ALL=(root) NOPASSWD: /usr/bin/rpm -V *
+# Enumerated from daemon/src/security_ai.rs:549-555 (critical_packages list).
+# Wildcard `rpm -V *` removed — no arbitrary package verification.
+%wheel ALL=(root) NOPASSWD: /usr/bin/rpm -V coreutils
+%wheel ALL=(root) NOPASSWD: /usr/bin/rpm -V systemd
+%wheel ALL=(root) NOPASSWD: /usr/bin/rpm -V openssh-server
+%wheel ALL=(root) NOPASSWD: /usr/bin/rpm -V shadow-utils
+%wheel ALL=(root) NOPASSWD: /usr/bin/rpm -V sudo
 
 # === SYSTEMCTL RESET-FAILED (recover from start-limit-hit) ===
-%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed *
+# Enumerated to LifeOS-managed units only.
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed llama-server.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed llama-embeddings.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed whisper-stt.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed lifeos-sentinel.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed lifeos-thermal.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed lifeos-power-profile.service
+%wheel ALL=(root) NOPASSWD: /usr/bin/systemctl reset-failed lifeos-ecore-pin.service
 
 # === DEV DEPLOYMENT (sync repo changes to live system) ===
-# Validated script: source must be under image/files/, dest under allowed paths only.
-# Enables AI assistant to apply fixes to both repo AND live system in one turn.
-%wheel ALL=(root) NOPASSWD: /var/lib/lifeos/lifeos-dev-deploy.sh
+# The script internally enforces:
+#   - Source MUST resolve inside /var/home/lifeos/personalProjects/gama/lifeos/lifeos/image/files/
+#   - Dest MUST be under a hard-coded ALLOWED_DESTS allowlist
+# Sudoers keeps the wildcard because the args ARE user-chosen paths; the
+# safety comes from the in-script validation (read-only allowlist). See
+# lifeos-dev-deploy.sh for the full check.
+%wheel ALL=(root) NOPASSWD: /var/lib/lifeos/lifeos-dev-deploy.sh *
 %wheel ALL=(root) NOPASSWD: /usr/local/bin/lifeos-dev-deploy.sh *
 
 # === UDEV RELOAD (AI-driven dev workflow — re-apply rules after deploy) ===
 # Needed after lifeos-dev-deploy.sh syncs new udev rules to /etc/udev/rules.d/.
-# Wildcard on trigger allows --action=add/change/remove without broadening scope.
 %wheel ALL=(root) NOPASSWD: /usr/bin/udevadm control --reload
-%wheel ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --subsystem-match=cpu *
+%wheel ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --subsystem-match=cpu
+%wheel ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --subsystem-match=cpu --action=add
+%wheel ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --subsystem-match=cpu --action=change
+%wheel ALL=(root) NOPASSWD: /usr/bin/udevadm trigger --subsystem-match=cpu --action=remove

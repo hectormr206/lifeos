@@ -9,8 +9,10 @@
 #
 # Ownership: root:lifeos 0660 — least-privilege (ref: reference_sudo_policy).
 # The daemon runs as uid 1000 which is the primary member of group `lifeos`.
+#
+# NOTE: udev's RUN= parser rejects `$` as anything but a udev substitution,
+# so we cannot inline a shell loop with `$f`. The real logic lives in
+# /usr/local/bin/lifeos-thermal-grant.sh — udev just invokes it.
 
 # Per-CPU event — fires for every cpu0..cpuN at boot and on hotplug.
-# We run the chmod unconditionally on each event; cost is negligible and
-# ensures the nodes are writable as soon as any CPU comes online.
-SUBSYSTEM=="cpu", ACTION=="add|change", RUN+="/bin/bash -c 'for f in /sys/devices/system/cpu/intel_pstate/max_perf_pct /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq; do [ -f \"$f\" ] && chgrp lifeos \"$f\" && chmod 0660 \"$f\"; done'"
+SUBSYSTEM=="cpu", ACTION=="add|change", RUN+="/usr/local/bin/lifeos-thermal-grant.sh"

@@ -801,6 +801,9 @@ COPY image/files/usr/local/bin/lifeos-sentinel.sh              /usr/local/bin/li
 COPY image/files/usr/local/bin/lifeos-libreoffice-verify.py   /usr/local/bin/lifeos-libreoffice-verify.py
 COPY image/files/usr/local/bin/lifeos-dev-deploy.sh           /usr/local/bin/lifeos-dev-deploy.sh
 COPY image/files/usr/local/bin/lifeos-detect-ecores.sh        /usr/local/bin/lifeos-detect-ecores.sh
+COPY image/files/usr/local/bin/lifeos-epp-switch.sh           /usr/local/bin/lifeos-epp-switch.sh
+COPY image/files/usr/local/bin/lifeos-thermal-grant.sh        /usr/local/bin/lifeos-thermal-grant.sh
+COPY image/files/usr/local/bin/lifeos-isolate-process.sh      /usr/local/bin/lifeos-isolate-process
 RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-apply-default-layout.sh \
              /usr/local/bin/lifeos-cosmic-snapshot \
@@ -825,7 +828,10 @@ RUN chmod +x /usr/local/bin/lifeos-first-boot.sh \
              /usr/local/bin/lifeos-sentinel.sh \
              /usr/local/bin/lifeos-libreoffice-verify.py \
              /usr/local/bin/lifeos-dev-deploy.sh \
-             /usr/local/bin/lifeos-detect-ecores.sh
+             /usr/local/bin/lifeos-detect-ecores.sh \
+             /usr/local/bin/lifeos-epp-switch.sh \
+             /usr/local/bin/lifeos-thermal-grant.sh \
+             /usr/local/bin/lifeos-isolate-process
 
 # --- Pre-trained wake word model (works from first boot) ---
 # Generate synthetic "Axi" samples with espeak-ng and build the rustpotter .rpw model.
@@ -853,6 +859,8 @@ COPY image/files/etc/systemd/system/lifeos-smart-charge.timer /usr/lib/systemd/s
 # --- Thermal management (laptop auto-cap) ---
 COPY image/files/etc/systemd/system/lifeos-thermal.service /usr/lib/systemd/system/lifeos-thermal.service
 COPY image/files/etc/tmpfiles.d/lifeos-thermal.conf /usr/lib/tmpfiles.d/lifeos-thermal.conf
+# Force 0600 on actions-runner/.env and llm-providers.env (token-bearing).
+COPY image/files/usr/lib/tmpfiles.d/lifeos-secrets.conf /usr/lib/tmpfiles.d/lifeos-secrets.conf
 COPY image/files/etc/udev/rules.d/90-lifeos-thermal.rules /usr/lib/udev/rules.d/90-lifeos-thermal.rules
 
 # --- I/O scheduler: NVMe=none, SSD=mq-deadline, HDD=bfq ---
@@ -910,6 +918,9 @@ COPY image/files/etc/modprobe.d/lifeos-blacklist.conf /etc/modprobe.d/lifeos-bla
 COPY image/files/etc/lifeos/aide.conf /etc/lifeos/aide.conf
 COPY image/files/etc/systemd/system/lifeos-aide-check.service /usr/lib/systemd/system/lifeos-aide-check.service
 COPY image/files/etc/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/lifeos-aide-check.timer
+# Authoritative preset so AIDE + sentinel + lifeos units stay enabled through
+# `systemctl preset-all` runs without relying on manual symlink farms.
+COPY image/files/usr/lib/systemd/system-preset/80-lifeos.preset /usr/lib/systemd/system-preset/80-lifeos.preset
 # GRUB password protection script
 COPY image/files/usr/local/bin/lifeos-grub-password.sh /usr/local/bin/lifeos-grub-password.sh
 RUN chmod +x /usr/local/bin/lifeos-grub-password.sh
@@ -1164,6 +1175,13 @@ RUN mkdir -p /usr/lib/sysusers.d /usr/lib/tmpfiles.d && \
     'g akmods -' \
     'u akmods - "User is used by akmods to build akmod packages" /var/cache/akmods/ -' \
     > /usr/lib/sysusers.d/wsdd.conf && \
+    # Dedicated unprivileged user for the GitHub Actions runner. No shell,
+    # no wheel, no sudo. Owns /var/lib/lifeos/actions-runner/. Workflow RCE
+    # can no longer escalate to the interactive `lifeos` user (uid 1000).
+    printf '%s\n' \
+    'g lifeos-runner -' \
+    'u lifeos-runner - "LifeOS GitHub Actions Runner" /var/lib/lifeos/actions-runner /usr/sbin/nologin' \
+    > /usr/lib/sysusers.d/lifeos-runner.conf && \
     printf '%s\n' \
     'L /var/lib/greetd/.config/systemd/user/xdg-desktop-portal.service - - - - /dev/null' \
     'd /var/lib/lifeos/models 0755 root root - -' \
