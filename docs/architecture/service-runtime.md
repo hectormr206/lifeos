@@ -48,6 +48,7 @@ journalctl -u llama-server -f
 - La imagen deja un symlink en `/usr/lib/systemd/system/lifeosd.service` apuntando a la user unit.
 - Ese alias **no cambia la verdad canonica**: `lifeosd` no se considera un servicio de sistema primario.
 - Su funcion actual es compatibilidad y debug rapido para operadores o scripts legacy que todavia inspeccionan `lifeosd.service` desde system scope.
+- **Drift conocido:** algunos hosts tienen `/etc/systemd/system/lifeosd.service -> /dev/null` (mask manual). Esa configuracion **no es canonica** y debe revertirse con `sudo systemctl unmask lifeosd.service` para restaurar el alias de debug/legacy. No hay ninguna parte de la imagen que instale ese mask; si aparece, es drift local y debe limpiarse.
 
 ### Fallback user para `llama-server`
 

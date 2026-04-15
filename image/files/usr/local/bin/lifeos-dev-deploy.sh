@@ -37,6 +37,9 @@ ALLOWED_DESTS=(
     "/usr/local/bin/"
     "/etc/xdg-desktop-portal/"
     "/var/lib/flatpak/overrides/"
+    "/etc/profile.d/lifeos-"
+    "/var/lib/AccountsService/icons/"
+    "/var/lib/AccountsService/users/"
 )
 
 log() { logger -t lifeos-dev-deploy "$*"; echo "$*"; }

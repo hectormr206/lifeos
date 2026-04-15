@@ -491,6 +491,11 @@ RUN flatpak remote-add --if-not-exists --system flathub \
         com.vintagetechie.CosmicExtAppletTempest 2>/dev/null || \
     echo "INFO: COSMIC applets not available during build; user can install from COSMIC Store"
 
+# --- Pre-create /usr/local/sbin (rpm-ostree tmpfiles tries to create it at boot,
+#     but /usr is read-only at runtime → cosmetic boot warning). Baking it into
+#     the image silences systemd-tmpfiles. See docs/operations/system-admin.md. ---
+RUN mkdir -p /usr/local/sbin && chmod 0755 /usr/local/sbin
+
 # --- Flatpak: global Wayland-first overrides (avoid XWayland overhead) ---
 COPY image/files/var/lib/flatpak/overrides/global /var/lib/flatpak/overrides/global
 

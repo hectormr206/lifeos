@@ -21,3 +21,13 @@ else
     mkdir -p "$GREETER_HOME"
     "$WALLPAPER_STATE_SYNC" "$GREETER_HOME" "$WALLPAPER"
 fi
+
+# Seed AccountsService icon for the `lifeos` user so cosmic-greeter can render
+# the avatar referenced by /var/lib/AccountsService/users/lifeos (Icon=…).
+# Silent no-op if the source asset is missing or the icon already present.
+ICON_SRC="/usr/share/icons/LifeOS/512x512/apps/lifeos-axi.png"
+ICON_DEST="/var/lib/AccountsService/icons/lifeos"
+if [ -f "$ICON_SRC" ] && [ ! -f "$ICON_DEST" ]; then
+    mkdir -p /var/lib/AccountsService/icons
+    install -m 0644 -o root -g root "$ICON_SRC" "$ICON_DEST"
+fi
