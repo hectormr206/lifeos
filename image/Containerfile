@@ -889,6 +889,11 @@ COPY image/files/usr/local/bin/lifeos-update-check.sh /usr/local/bin/lifeos-upda
 RUN chmod +x /usr/local/bin/lifeos-update-check.sh
 COPY image/files/etc/systemd/system/lifeos-update-check.service /usr/lib/systemd/system/lifeos-update-check.service
 COPY image/files/etc/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/lifeos-update-check.timer
+# Update stage — weekly fetch of new bootc image (no apply), triggers apply via CLI
+COPY image/files/usr/local/bin/lifeos-update-stage.sh /usr/local/bin/lifeos-update-stage.sh
+RUN chmod +x /usr/local/bin/lifeos-update-stage.sh
+COPY image/files/etc/systemd/system/lifeos-update-stage.service /usr/lib/systemd/system/lifeos-update-stage.service
+COPY image/files/etc/systemd/system/lifeos-update-stage.timer /usr/lib/systemd/system/lifeos-update-stage.timer
 # --- AU.3 — CIS Polish (Security by Default) ---
 # Login banner (CIS requirement)
 COPY image/files/etc/issue /etc/issue
@@ -1048,6 +1053,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/lifeos-flatpak-nvidia-sync.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-flatpak-nvidia-sync.service && \
     ln -sf /usr/lib/systemd/system/lifeos-aide-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-aide-check.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-update-check.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-check.timer && \
+    ln -sf /usr/lib/systemd/system/lifeos-update-stage.timer /usr/lib/systemd/system/timers.target.wants/lifeos-update-stage.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-first-boot.service /usr/lib/systemd/system/graphical.target.wants/lifeos-first-boot.service && \
     ln -sf /usr/lib/systemd/system/lifeos-cosmic-greeter-branding.service /usr/lib/systemd/system/graphical.target.wants/lifeos-cosmic-greeter-branding.service && \
     ln -sf /usr/lib/systemd/system/bluetooth.service      /usr/lib/systemd/system/multi-user.target.wants/bluetooth.service && \

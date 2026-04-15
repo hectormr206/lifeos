@@ -1,0 +1,16 @@
+[Unit]
+Description=LifeOS update stage (fetch bootc image without apply)
+After=network-online.target lifeos-update-check.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/lifeos-update-stage.sh
+TimeoutStartSec=30m
+NoNewPrivileges=true
+ProtectHome=read-only
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lifeos
+StandardOutput=journal
+StandardError=journal

@@ -149,19 +149,6 @@ Rollback image: ghcr.io/hectormr206/lifeos:edge-20260403-b369513
     }
 
     #[test]
-    fn test_update_result_struct() {
-        let result = UpdateResult {
-            would_update: true,
-            from_version: "v0.1.0".to_string(),
-            to_version: "v0.2.0".to_string(),
-            changes: vec!["Fix bug".to_string(), "Add feature".to_string()],
-        };
-
-        assert!(result.would_update);
-        assert_eq!(result.changes.len(), 2);
-    }
-
-    #[test]
     fn test_health_check_struct() {
         let check = HealthCheck {
             name: "bootc".to_string(),

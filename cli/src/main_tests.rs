@@ -71,31 +71,13 @@ mod tests {
     }
 
     #[test]
-    fn test_cli_parses_update_with_dry_run() {
-        let cli = Cli::parse_from(["life", "update", "--dry-run"]);
-        match cli.command.expect("Expected command") {
-            Commands::Update(args) => assert!(args.dry_run),
-            _ => panic!("Expected Update command"),
-        }
-    }
-
-    #[test]
-    fn test_cli_parses_update_with_dry_alias() {
-        let cli = Cli::parse_from(["life", "update", "--dry"]);
-        match cli.command.expect("Expected command") {
-            Commands::Update(args) => assert!(args.dry_run),
-            _ => panic!("Expected Update command"),
-        }
-    }
-
-    #[test]
     fn test_cli_parses_update_status_subcommand() {
         let cli = Cli::parse_from(["life", "update", "status"]);
         match cli.command.expect("Expected command") {
             Commands::Update(args) => {
                 assert!(matches!(
                     args.command,
-                    Some(commands::update::UpdateSubcommand::Status)
+                    Some(commands::update::UpdateSubcommand::Status { .. })
                 ));
             }
             _ => panic!("Expected Update command"),
@@ -268,29 +250,6 @@ mod tests {
     }
 
     #[test]
-    fn test_update_rejects_legacy_beta_channel_name() {
-        let result = Cli::try_parse_from(["life", "update", "--channel", "beta"]);
-        let cli = match result {
-            Ok(cli) => cli,
-            Err(err) => panic!("Expected clap parsing to succeed, got: {err}"),
-        };
-
-        match cli.command.expect("Expected command") {
-            Commands::Update(args) => {
-                let runtime = tokio::runtime::Runtime::new().expect("runtime");
-                let err = runtime
-                    .block_on(commands::update::execute(args))
-                    .expect_err("expected invalid beta channel to be rejected");
-                assert!(
-                    err.to_string().contains("unsupported channel 'beta'"),
-                    "unexpected error: {err}"
-                );
-            }
-            _ => panic!("Expected Update command"),
-        }
-    }
-
-    #[test]
     fn test_init_args_default() {
         let args = commands::init::InitArgs::default();
         assert!(!args.force);
@@ -310,8 +269,6 @@ mod tests {
     fn test_update_args_default() {
         let args = commands::update::UpdateArgs::default();
         assert!(args.command.is_none());
-        assert!(!args.dry_run);
-        assert_eq!(args.channel, None);
     }
 
     #[test]

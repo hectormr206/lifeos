@@ -32,6 +32,8 @@ enable lifeos-btrfs-snapshot.timer
 enable lifeos-maintenance-cleanup.timer
 enable lifeos-flatpak-update.timer
 enable lifeos-update-check.timer
+enable lifeos-update-stage.timer
+disable lifeos-update-stage.service
 
 # --- Messaging bridge ---
 enable simplex-chat.service

@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly stage of pending LifeOS updates
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+RandomizedDelaySec=1800
+Persistent=true
+Unit=lifeos-update-stage.service
+
+[Install]
+WantedBy=timers.target
