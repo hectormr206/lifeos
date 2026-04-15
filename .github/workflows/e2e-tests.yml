@@ -37,7 +37,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -49,7 +49,7 @@ jobs:
         run: bash scripts/ci/install-linux-deps.sh daemon
       
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -84,7 +84,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Check runner prerequisites
         id: host_prereqs
@@ -146,7 +146,7 @@ jobs:
       
       - name: Cache cargo
         if: steps.host_prereqs.outputs.ready == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -210,7 +210,7 @@ jobs:
       
       - name: Upload test logs
         if: always() && steps.host_prereqs.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bootc-test-logs-${{ github.sha }}
           path: /tmp/bootc-test-logs/
@@ -218,7 +218,7 @@ jobs:
       
       - name: Upload test results
         if: always() && steps.host_prereqs.outputs.ready == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-results-${{ github.sha }}
           path: |
@@ -239,7 +239,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -247,7 +247,7 @@ jobs:
           toolchain: 1.85.1
       
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -262,7 +262,7 @@ jobs:
       
       - name: Upload integration test logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: integration-test-logs-${{ github.sha }}
           path: |
