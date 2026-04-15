@@ -776,22 +776,22 @@ audio a la nube.
 
 ---
 
-## Post-session addition: LifeOS Dev Mode 🦎
+## Post-session addition: Developer Bootstrap (reemplaza dual-image)
 
-El desarrollador propuso (y fue implementado el 2026-04-11) una
-**arquitectura dual-image** que da a la IA autonomia total en la laptop
-del desarrollador (via sudo whitelist) sin cambiar el comportamiento
-de los builds publicos. Referencia: `docs/operations/dev-mode.md`.
+La arquitectura dual-image (`localhost/lifeos:dev`) fue reemplazada por el
+**developer bootstrap** — un script host-side que instala la sudo policy y
+dropins sin tocar la imagen. Ver
+[`docs/operations/developer-bootstrap.md`](developer-bootstrap.md).
 
-**Estado actual:**
-- Fase 1 ✅ — Containerfile + sudoers whitelist + Makefile targets
-- Fase 2 ✅ — CI guards (workflow scanners, tag guards, build-time verification, post-build inspection)
-- Fase 3 ⏳ — **Requiere accion manual del desarrollador**: `make docker-build-dev` + `sudo bootc switch --transport containers-storage localhost/lifeos:dev` + reboot
-- Fase 4 ✅ — Docs actualizados
-- Fase 5 ⬜ — Futuro: lifeos-dev-helper binario, dev endpoints en el daemon via feature flag, badge "DEV MODE" en dashboard
+**Estado actual (unify-image-kill-dev-mode):**
+- Fase 1 ✅ — Containerfile limpio (sin ARG de build-mode)
+- Fase 2 ✅ — `scripts/assert-no-dev-artifacts.sh` + CI guard + pre-commit hook
+- Fase 3 ✅ — `scripts/lifeos-dev-bootstrap.sh` con `--with-sentinel`
+- Fase 4 ✅ — Update stage: `lifeos-update-stage.sh` + service + timer
+- Fase 5 ✅ — CLI `life update {status,check,stage,apply,rollback}` refactorizado
+- Fase 6 ✅ — Docs migrados (`developer-bootstrap.md`, `update-flow.md`)
 
-Despues de Fase 3, la IA puede operar autonomo sobre el whitelist sin
-interrumpir al desarrollador por cada sudo.
+Para migrar: seguir los 9 pasos en `docs/operations/developer-bootstrap.md`.
 
 ## Deferred follow-ups (next sprints)
 

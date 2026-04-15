@@ -66,6 +66,8 @@ All documentation is organized in [`docs/`](docs/README.md):
 | Operations & runbooks | `docs/operations/` |
 | User guides | `docs/user/` |
 | Update channels | `docs/architecture/update-channels.md` |
+| Update check/stage/apply flow | `docs/operations/update-flow.md` |
+| Developer workstation setup | `docs/operations/developer-bootstrap.md` |
 | Contributing | `CONTRIBUTING.md`, `docs/contributor/` |
 | Branding & design | `docs/branding/` |
 | Privacy analysis | `docs/privacy/` |

@@ -4,12 +4,11 @@
 **Fecha:** 2026-04-11
 **Estado:** Aprobado
 
-> **Nota v1.2:** Este flujo se complementa con el de **dev-mode**
-> (`docs/operations/dev-mode.md`). Cuando tu laptop corre la imagen
-> `localhost/lifeos:dev`, la Fase 1-2 de este documento gana autonomia
-> total de la IA (sudo whitelist activo). Cuando corre
-> `localhost/lifeos:release`, todo sigue funcionando exactamente como
-> aca se describe — con intervencion manual en los pasos sudo.
+> **Nota v1.2 (actualizada):** Para configurar la laptop de desarrollo
+> (sudo policy, `RUST_LOG=debug`, sentinel), ver
+> [`docs/operations/developer-bootstrap.md`](developer-bootstrap.md).
+> El flujo aqui descripto aplica cuando corres
+> `ghcr.io/hectormr206/lifeos:edge` con el bootstrap instalado.
 
 ---
 

@@ -205,6 +205,71 @@ Sample response:
 
 The dashboard consumes this endpoint to render the "Seguridad" panel. If you are not on the host, the daemon returns `403` — the feed is not reachable remotely by design.
 
+## System Updates
+
+LifeOS updates use a **check → stage → apply** model. Nothing happens without your
+knowledge — the system downloads updates in the background but never reboots automatically.
+
+### Checking update status
+
+```bash
+life update status            # Human-readable summary
+life update status --json     # Structured JSON
+```
+
+Output includes the currently booted image digest, whether a newer image is available,
+and whether a deployment is already staged and ready to activate.
+
+### Checking for new updates
+
+```bash
+life update check
+```
+
+Triggers `lifeos-update-check.service`, which probes GHCR without downloading anything.
+Also runs automatically via `lifeos-update-check.timer` (daily).
+
+### Staging an update
+
+```bash
+life update stage
+```
+
+Triggers `lifeos-update-stage.service`, which downloads and stages the new deployment
+(via `bootc upgrade` without `--apply`). The current running system is not changed.
+Also runs automatically every Sunday at 04:00 via `lifeos-update-stage.timer`.
+
+### Activating a staged update
+
+`life update apply` prints the manual command — it never executes anything:
+
+```bash
+life update apply
+# Prints:
+#   sudo bootc upgrade --apply
+# Then reboot at your convenience.
+```
+
+Run the printed command when you are ready, then reboot to activate the new deployment.
+
+### Rolling back
+
+```bash
+life update rollback
+# Prints:
+#   sudo bootc rollback
+# Then reboot to activate the previous deployment.
+```
+
+`bootc` always keeps the last two deployments, so rollback is always available.
+
+### Full update reference
+
+See [`docs/operations/update-flow.md`](../operations/update-flow.md) for the complete
+check → stage → apply documentation, state file schemas, and dashboard interaction.
+
+---
+
 ## Automatic System Maintenance
 
 LifeOS handles routine maintenance without user intervention:

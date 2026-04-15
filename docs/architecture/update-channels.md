@@ -1,6 +1,7 @@
 # Update Channels
 
-LifeOS uses a multi-channel release system to balance stability with rapid iteration.
+LifeOS uses a single active release channel (`:edge`) with `stable` and `candidate`
+reserved for a future multi-channel split.
 
 ## Canonical Update Model
 
@@ -8,383 +9,192 @@ There is one operational truth for OS updates/releases in LifeOS:
 
 1. `bootc` is the runtime authority on the host.
 2. The signed GHCR image digest is the release artifact that `bootc` stages/boots.
-3. `channels/*.json` is CI publication metadata that points at the latest digest per channel.
-4. `/etc/lifeos/channels.toml` and `[updates]` in `lifeos.toml` only express local preference/policy.
+3. CI publishes every `main` push to `:edge`. No other channel is active today.
+4. `/etc/lifeos/channels.toml` and `[updates]` in `lifeos.toml` express local policy/preference.
 
-What is explicitly not canonical anymore:
+What is explicitly not canonical:
 
 - The old daemon-side simulated update catalog.
 - ISO download/install semantics for normal host updates.
 - Treating config defaults as proof of what image/version is actually installed.
-- Treating `life beta` as a separate release model. It is only legacy transition UX and
-  maps conceptually to the `candidate` pre-release channel.
+- Treating `life beta` as a separate release model. It is only legacy transition UX.
 
-If you only need operator-driven `stable` updates for your main laptop, follow the
-manual update runbook in this document.
+## Active Channel
 
-## Available Channels
+| Channel | Status | Purpose | Published on |
+|---------|--------|---------|-------------|
+| `edge`  | **Active** | All `main` branch pushes | Every push to `main` |
+| `stable` | Reserved | Production releases (future) | — not yet published |
+| `candidate` | Reserved | Pre-release testing (future) | — not yet published |
 
-| Channel   | Purpose                | Update Frequency | Stability | Recommended For        |
-|-----------|------------------------|------------------|-----------|------------------------|
-| `stable`  | Production releases    | Weekly           | Highest   | All users              |
-| `candidate` | Pre-release testing | Daily            | High      | Beta testers           |
-| `edge`    | Bleeding edge         | Every commit     | Variable  | Developers, testers    |
+`stable` and `candidate` jobs are scaffolded in CI but commented out.
+See `image/files/etc/lifeos/channels.toml` for the local preference file.
 
-## Channel Details
-
-### Stable
-
-- **Purpose**: Production-ready releases for general use
-- **Update Schedule**: Weekly (Mondays 4 AM UTC)
-- **Requirements**:
-  - All tests pass
-  - No critical bugs
-  - Cosign signature verified
-  - SBOM generated and verified
-  - Manual approval
-- **Host auto-stage**: Enabled by default
-- **Host auto-apply**: Disabled by default (manual apply policy)
-- **Tag format**: `vX.Y.Z` or `stable`
-
-### Candidate
-
-- **Purpose**: Pre-release builds for testing before stable promotion
-- **Update Schedule**: Daily builds
-- **Requirements**:
-  - All tests pass
-  - Cosign signature verified
-  - SBOM generated
-- **Auto-update**: Disabled
-- **Promotion to stable**: After 168 hours (1 week) without critical issues
-- **Tag format**: `candidate-YYYYMMDD-SHA`
-
-### Edge
-
-- **Purpose**: Latest development builds, potentially unstable
-- **Update Schedule**: Every push to main branch
-- **Requirements**:
-  - Build succeeds
-  - Cosign signature verified
-- **Auto-update**: Disabled
-- **Tag format**: `edge-YYYYMMDD-SHA`
-
-## Switching Channels
-
-### Using CLI
-
-```bash
-# Check current channel
-life status
-life update status
-
-# `life beta` is deprecated compatibility UX and is intentionally not the
-# canonical channel interface anymore.
-# There is no shipped `life channel set` command yet.
-# Switch channels explicitly with bootc. Then keep local preference aligned in
-# `/etc/lifeos/lifeos.toml`.
-sudo bootc switch ghcr.io/hectormr206/lifeos:stable
-sudo bootc switch ghcr.io/hectormr206/lifeos:candidate
-sudo bootc switch ghcr.io/hectormr206/lifeos:edge
-```
-
-### Manual Configuration
-
-Edit `/etc/lifeos/lifeos.toml` to keep local preference aligned with the image you switch to:
-
-```toml
-[updates]
-channel = "stable"
-auto_check = true
-auto_apply = false
-```
-
-## Update Workflow
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Edge      │────▶│  Candidate  │────▶│   Stable    │
-│ (every push)│     │   (daily)   │     │  (weekly)   │
-└─────────────┘     └─────────────┘     └─────────────┘
-                           │                   │
-                           │   168h min age    │
-                           │   + tests pass    │
-                           │   + no bugs       │
-                           └───────────────────┘
-```
+> **For developers:** The `:edge` image is the current production image for
+> developers and daily-driver users alike. See
+> [`docs/operations/developer-bootstrap.md`](../operations/developer-bootstrap.md)
+> for workstation setup.
 
 ## Host Update Policy (No Surprise Reboot)
 
-For daily-driver hosts, LifeOS uses an operator-driven update policy:
+LifeOS uses an **operator-driven** update policy:
 
-1. Automatic checks are allowed.
-2. Staging can be manual or daemon-assisted.
-3. `bootc upgrade --apply` is not used as the default background path.
-4. Reboot is user-initiated during a maintenance window.
+1. **Check** — `lifeos-update-check.timer` probes daily (read-only `bootc upgrade --check`).
+2. **Stage** — `lifeos-update-stage.timer` downloads weekly (Sunday 04:00 + 30 min jitter,
+   `bootc upgrade` without `--apply`). No deployment change occurs yet.
+3. **Apply** — the user decides when to activate. `life update apply` prints the manual
+   `sudo bootc upgrade --apply` command; it never executes it. Reboot is always user-initiated.
 
-Persisted controls on host:
+`bootc-fetch-apply-updates` is masked in the image (`/dev/null` symlinks) — LifeOS
+never auto-applies or auto-reboots.
 
-- `bootc-fetch-apply-updates` is masked via:
-  - `/etc/systemd/system/bootc-fetch-apply-updates.timer -> /dev/null`
-  - `/etc/systemd/system/bootc-fetch-apply-updates.service -> /dev/null`
-- `lifeosd` keeps staging-only behavior with:
-  - `/etc/lifeos/daemon.toml`
-  - `enable_auto_updates = true`
-
-Apply policy now (existing host):
+### Manual update runbook
 
 ```bash
-sudo systemctl mask --now bootc-fetch-apply-updates.timer bootc-fetch-apply-updates.service
-sudo systemctl status bootc-fetch-apply-updates.timer bootc-fetch-apply-updates.service
-```
-
-Manual update runbook (recommended):
-
-```bash
-# 1) Observe current state
+# 1. Check current state
 life update status
 sudo bootc status
 
-# 2) Check availability
-sudo bootc upgrade --check
+# 2. Check for new image (read-only)
+life update check
+# or: sudo systemctl start lifeos-update-check.service
 
-# 3) Stage update without forcing immediate apply
-sudo bootc upgrade
-sudo bootc status
+# 3. Stage the update (downloads without applying)
+life update stage
+# or: sudo systemctl start lifeos-update-stage.service
 
-# 4) Reboot when you decide
-sudo reboot
+# 4. Review what will be activated
+life update status
+
+# 5. Activate when ready (prints manual command)
+life update apply
+# Then run: sudo bootc upgrade --apply
+# Then reboot at your convenience.
 ```
 
-`life update` now follows the same canonical path: it stages with `bootc upgrade`
-and only reboots immediately if you pass `--now`.
+## Switching Channels / Images
 
-If you explicitly run `bootc upgrade --apply`, some environments may reboot immediately.
+Since `:edge` is the only active channel, "switching channels" means switching to
+a specific image tag or digest:
+
+```bash
+# Transient switch (reverts if you run bootc rollback after next reboot)
+sudo bootc switch --transient ghcr.io/hectormr206/lifeos:edge
+
+# Permanent switch (use after 24h stable validation)
+sudo bootc switch ghcr.io/hectormr206/lifeos:edge
+
+# Switch to a specific digest (pinning)
+sudo bootc switch ghcr.io/hectormr206/lifeos@sha256:<digest>
+```
+
+When `stable` and `candidate` are activated in the future, switching will use the
+same `bootc switch` mechanism:
+
+```bash
+# FUTURE — not yet published:
+# sudo bootc switch ghcr.io/hectormr206/lifeos:stable
+# sudo bootc switch ghcr.io/hectormr206/lifeos:candidate
+```
+
+## CLI Reference
+
+```bash
+life update status            # Merged view of check + stage state + booted image
+life update status --json     # Structured JSON output
+
+life update check             # Trigger lifeos-update-check.service
+life update stage             # Trigger lifeos-update-stage.service
+life update apply             # Print manual sudo command (NEVER executes)
+life update rollback          # Print manual rollback command (NEVER executes)
+```
+
+See [`docs/operations/update-flow.md`](../operations/update-flow.md) for the full
+check → stage → apply documentation including state file schemas.
 
 ## Container Images
 
-All images are published to GitHub Container Registry:
+All images are published to GitHub Container Registry (public, no auth required):
 
 ```bash
-# Pull stable
-podman pull ghcr.io/hectormr206/lifeos:stable
-
-# Pull specific version
-podman pull ghcr.io/hectormr206/lifeos:v0.4.1
-
-# Pull candidate
-podman pull ghcr.io/hectormr206/lifeos:candidate
-
-# Pull edge
+# Pull edge (only active channel)
 podman pull ghcr.io/hectormr206/lifeos:edge
+
+# Pull a specific digest
+podman pull ghcr.io/hectormr206/lifeos@sha256:<digest>
 ```
+
+`stable` and `candidate` tags are not published yet. Attempting to pull them will
+result in a 404 from GHCR.
 
 ## Verification
 
 All images are signed with Cosign. Verify before use:
 
 ```bash
-# Verify stable image
 cosign verify \
   --certificate-identity-regexp 'https://github.com/hectormr206/lifeos/*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/hectormr206/lifeos:stable
-
-# Verify with public key (if available)
-cosign verify --key cosign.pub ghcr.io/hectormr206/lifeos:stable
-```
-
-## SBOM (Software Bill of Materials)
-
-Stable and candidate releases include SBOMs in SPDX format:
-
-```bash
-# Download SBOM from GitHub Actions artifacts
-# Or extract from image:
-cosign download sbom ghcr.io/hectormr206/lifeos:stable
-```
-
-## Channel Configuration File
-
-The local update preference is typically stored in `/etc/lifeos/lifeos.toml`.
-This is preference, not proof of the currently booted image:
-
-```toml
-[updates]
-channel = "stable"
-auto_check = true
-auto_apply = false
-schedule = "daily"
-```
-
-## Building Channel-Specific Images
-
-```bash
-# Build stable
-podman build \
-  --build-arg LIFEOS_CHANNEL=stable \
-  --build-arg LIFEOS_VERSION=0.4.1 \
-  --build-arg LIFEOS_PRELOAD_MODEL=false \
-  -t lifeos:stable \
-  -f image/Containerfile .
-
-# Build candidate
-podman build \
-  --build-arg LIFEOS_CHANNEL=candidate \
-  --build-arg LIFEOS_VERSION=0.4.1-beta \
-  --build-arg LIFEOS_PRELOAD_MODEL=false \
-  -t lifeos:candidate \
-  -f image/Containerfile .
-
-# Build edge
-podman build \
-  --build-arg LIFEOS_CHANNEL=edge \
-  --build-arg LIFEOS_VERSION=dev-$(date +%Y%m%d) \
-  --build-arg LIFEOS_PRELOAD_MODEL=false \
-  -t lifeos:edge \
-  -f image/Containerfile .
-```
-
-To include the default GGUF model in the image, explicitly set:
-
-```bash
-podman build \
-  --build-arg LIFEOS_PRELOAD_MODEL=true \
-  -t lifeos:with-model \
-  -f image/Containerfile .
+  ghcr.io/hectormr206/lifeos:edge
 ```
 
 ## CI/CD Integration
 
-The release workflow is defined in `.github/workflows/release-channels.yml`:
+The release workflow is in `.github/workflows/release-channels.yml`:
 
-- **Scheduled**: Weekly stable release (Mondays 4 AM UTC)
-- **Tag push**: `v*` tags trigger stable release
-- **Main push**: Triggers edge build
-- **Manual**: Any channel via workflow_dispatch
-
-### Triggering Releases
-
-```bash
-# Create stable release (via tag)
-git tag v0.4.1
-git push origin v0.4.1
-
-# Trigger manual candidate build
-gh workflow run release-channels.yml -f channel=candidate
-
-# Trigger manual edge build
-gh workflow run release-channels.yml -f channel=edge
-```
+- **Main push** — triggers `:edge` build and publish.
+- **`v*` tag push** — reserved for future `stable` release; currently no-op.
+- **`stable` / `candidate` jobs** — scaffolded, commented out as `# TODO: reserved
+  for future multi-channel split`.
+- **Post-build gate** — `scripts/assert-no-dev-artifacts.sh` runs after the build
+  and before the push; any dev artifact in the image blocks the publish.
 
 ## Rollback
 
-If an update causes issues:
-
 ```bash
-# Rollback to previous deployment
-life rollback
+# Print rollback info and manual command
+life update rollback
 
-# Or pin a known-good image tag explicitly
-bootc switch ghcr.io/hectormr206/lifeos:<known-good-tag>
+# Execute rollback
+sudo bootc rollback
 ```
 
-## Security Considerations
-
-1. **Signature Verification**: All images are signed with Cosign
-2. **SBOM**: Software Bill of Materials for supply chain security
-3. **Registry Restrictions**: Only `ghcr.io` allowed by default
-4. **Required Labels**: Images must have channel, version, and build-date labels
+`bootc` retains at least the last two deployments. `bootc rollback` schedules the
+prior deployment for the next boot without rebooting immediately.
 
 ## Troubleshooting
 
-### Update Fails
+### `life update status` shows stale data
+
+The cached state is considered stale after 48 hours. Trigger a fresh check:
 
 ```bash
-# Check update status
-life update status
-sudo bootc status
-
-# View logs
-journalctl --user -u lifeosd -f
-
-# Manual update check
-life update --dry-run
-sudo bootc upgrade --check
+life update check
 ```
 
-Robust scripted path (recommended for large images/private GHCR):
+### Stage fails
 
 ```bash
-sudo ./scripts/update-lifeos.sh --channel stable --login-user <github_user> --apply --yes
+# View stage logs
+journalctl -u lifeos-update-stage.service
+
+# Inspect state file
+cat /var/lib/lifeos/update-stage-state.json
 ```
 
-The script writes a timestamped log, appends an automatic diagnostics snapshot on failures,
-and now prefers local `containers-storage` switching to avoid private-registry auth failures in `bootc switch`.
-It also supports non-interactive token login via:
-- `--login-token-env <VAR>`
-- `--login-token-file <PATH>`
-- or default env vars `LIFEOS_GHCR_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` / `CR_PAT`.
-- Note: `--apply` can trigger an immediate reboot on some bootc/systemd setups.
-
-### `podman pull` Stuck On `Copying blob ... done`
-
-When large images stall during extraction, use this deterministic recovery flow:
+### `podman pull` stalls on large images
 
 ```bash
-# 1) Reset corrupted container storage state (destructive for local images/containers)
-sudo podman system reset -f
-
-# 2) Pull image through skopeo archive path
-sudo skopeo copy docker://ghcr.io/hectormr206/lifeos:stable docker-archive:/var/tmp/lifeos.tar
-
-# 3) Load into podman local storage
+# Recovery: use skopeo archive path
+sudo skopeo copy docker://ghcr.io/hectormr206/lifeos:edge docker-archive:/var/tmp/lifeos.tar
 sudo podman load -i /var/tmp/lifeos.tar
-
-# 4) Cleanup
 sudo rm -f /var/tmp/lifeos.tar
 ```
 
-Notes:
-- Use `sudo setenforce 0` only for temporary diagnostics, then re-enable with `sudo setenforce 1`.
-- LifeOS now ships `/etc/containers/containers.conf` with `image_parallel_copies = 1` and `/etc/containers/storage.conf` with `driver = "overlay"` to reduce pull/extract deadlocks on some Btrfs systems.
-
-### Channel Switch Fails
-
-```bash
-# Verify local update preference
-grep '^channel' /etc/lifeos/lifeos.toml
-
-# Check network connectivity
-curl -I https://ghcr.io/v2/
-```
-
-If `bootc switch ghcr.io/...` fails with auth errors on private GHCR, use:
-
-```bash
-sudo ./scripts/update-lifeos.sh --channel stable --login-user <github_user> --switch --yes
-```
-
-If `podman login` succeeds but pull fails with `reading manifest ... denied`,
-verify access by inspecting the OCI manifest:
-
-```bash
-sudo podman manifest inspect docker://ghcr.io/hectormr206/lifeos:stable
-# or explicitly with token:
-sudo skopeo inspect --creds "<github_user>:<token>" docker://ghcr.io/hectormr206/lifeos:stable
-```
-
-Failure means token scope/access mismatch (`read:packages` missing or token not authorized for that package).
-
-Common pitfall:
-- If you rotated/recreated a PAT but still use `--login-token-file` (for example `/tmp/gh_pat.txt`), ensure the file was updated with the new token.
-- A stale token file typically surfaces as `HTTP 401 Bad credentials` or `403 Forbidden`.
-
-### Signature Verification Fails
+### Signature verification fails
 
 ```bash
 # Re-download cosign public key
 curl -o cosign.pub https://lifeos.io/keys/cosign.pub
-
-# Verify manually
-cosign verify --key cosign.pub ghcr.io/hectormr206/lifeos:stable
+cosign verify --key cosign.pub ghcr.io/hectormr206/lifeos:edge
 ```
