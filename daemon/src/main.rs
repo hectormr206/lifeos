@@ -1421,8 +1421,7 @@ async fn main() -> anyhow::Result<()> {
             // Fire notifications + compute the current key set for de-dupe.
             let mut cur_keys: HashSet<String> = HashSet::new();
             for alert in &alerts {
-                let key =
-                    format!("{:?}|{}", alert.alert_type, alert.description);
+                let key = format!("{:?}|{}", alert.alert_type, alert.description);
                 cur_keys.insert(key.clone());
                 // Only notify on NEW alerts — avoids waking the user on the
                 // same recurring condition every 30s.

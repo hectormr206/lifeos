@@ -27,11 +27,7 @@ pub fn ensure_sensitive_perms(path: &Path) {
                 if perms.mode() & 0o777 != 0o600 {
                     perms.set_mode(0o600);
                     if let Err(e) = std::fs::set_permissions(p, perms) {
-                        log::warn!(
-                            "[sqlite] failed to chmod 0600 {}: {}",
-                            p.display(),
-                            e
-                        );
+                        log::warn!("[sqlite] failed to chmod 0600 {}: {}", p.display(), e);
                     }
                 }
             }

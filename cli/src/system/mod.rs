@@ -603,7 +603,6 @@ pub async fn perform_rollback() -> anyhow::Result<()> {
     Ok(())
 }
 
-
 /// Perform recovery checks and repairs
 pub async fn perform_recovery() -> anyhow::Result<RecoveryReport> {
     let mut report = RecoveryReport {

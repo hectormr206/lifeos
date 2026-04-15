@@ -1740,8 +1740,7 @@ async fn require_bootstrap_token(
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ApiError {
                     error: "ServiceUnavailable".to_string(),
-                    message: "Bootstrap token not configured on the daemon"
-                        .to_string(),
+                    message: "Bootstrap token not configured on the daemon".to_string(),
                     code: 503,
                 }),
             ));

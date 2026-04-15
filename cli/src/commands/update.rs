@@ -7,8 +7,8 @@
 //! This is enforced by compile-time regression tests at the bottom of this
 //! module (`test_apply_never_shells_out`, `test_rollback_never_shells_out`).
 //! Any future PR that adds `process::Command` to those arms WILL fail CI.
-use clap::Subcommand;
 use clap::Args;
+use clap::Subcommand;
 use colored::Colorize;
 use serde::Deserialize;
 use std::fs;
@@ -17,8 +17,7 @@ use std::process::Command;
 
 // ─── State file paths (overridable via env for testing) ───────────────────────
 fn state_dir() -> String {
-    std::env::var("LIFEOS_STATE_DIR")
-        .unwrap_or_else(|_| "/var/lib/lifeos".to_string())
+    std::env::var("LIFEOS_STATE_DIR").unwrap_or_else(|_| "/var/lib/lifeos".to_string())
 }
 
 fn update_state_path() -> String {
@@ -168,7 +167,11 @@ async fn status(json: bool) -> anyhow::Result<()> {
             }
         }
         Some(false) => println!("  {}: {}", "Update available".bold(), "no".green()),
-        None => println!("  {}: {}", "Update available".bold(), "(not checked yet)".dimmed()),
+        None => println!(
+            "  {}: {}",
+            "Update available".bold(),
+            "(not checked yet)".dimmed()
+        ),
     }
     if let Some(t) = &check.checked_at {
         println!("  {}: {}", "Last checked".bold(), t.dimmed());
@@ -189,7 +192,11 @@ async fn status(json: bool) -> anyhow::Result<()> {
                 println!("  {}: {}", "Staged at".bold(), t.dimmed());
             }
             println!();
-            println!("  {} Run: {}", "To activate:".bold(), "sudo bootc upgrade --apply".cyan());
+            println!(
+                "  {} Run: {}",
+                "To activate:".bold(),
+                "sudo bootc upgrade --apply".cyan()
+            );
         }
         Some(false) => {
             println!("  {}: {}", "Staged".bold(), "no".yellow());
@@ -221,14 +228,21 @@ fn check() -> anyhow::Result<()> {
         }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            if stderr.contains("permission") || stderr.contains("Access denied") || stderr.contains("authentication") {
+            if stderr.contains("permission")
+                || stderr.contains("Access denied")
+                || stderr.contains("authentication")
+            {
                 eprintln!(
                     "{}: insufficient privilege to start system service. Try: {}",
                     "Error".red(),
                     "sudo systemctl start lifeos-update-check.service".cyan()
                 );
             } else {
-                eprintln!("{}: {}", "Failed to start check service".red(), stderr.trim());
+                eprintln!(
+                    "{}: {}",
+                    "Failed to start check service".red(),
+                    stderr.trim()
+                );
             }
             anyhow::bail!("systemctl start lifeos-update-check.service failed");
         }
@@ -247,18 +261,28 @@ fn stage() -> anyhow::Result<()> {
         .output();
     match output {
         Ok(o) if o.status.success() => {
-            println!("{}", "Stage service started. Check status with: life update status".green());
+            println!(
+                "{}",
+                "Stage service started. Check status with: life update status".green()
+            );
         }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            if stderr.contains("permission") || stderr.contains("Access denied") || stderr.contains("authentication") {
+            if stderr.contains("permission")
+                || stderr.contains("Access denied")
+                || stderr.contains("authentication")
+            {
                 eprintln!(
                     "{}: insufficient privilege to start system service. Try: {}",
                     "Error".red(),
                     "sudo systemctl start lifeos-update-stage.service".cyan()
                 );
             } else {
-                eprintln!("{}: {}", "Failed to start stage service".red(), stderr.trim());
+                eprintln!(
+                    "{}: {}",
+                    "Failed to start stage service".red(),
+                    stderr.trim()
+                );
             }
             anyhow::bail!("systemctl start lifeos-update-stage.service failed");
         }
@@ -281,7 +305,9 @@ fn apply() -> anyhow::Result<()> {
 
     match stage.staged_digest {
         None => {
-            println!("Nothing staged. Run `life update stage` first (or wait for the weekly timer).");
+            println!(
+                "Nothing staged. Run `life update stage` first (or wait for the weekly timer)."
+            );
             return Ok(());
         }
         Some(ref d) => {
@@ -321,7 +347,11 @@ fn rollback() -> anyhow::Result<()> {
     println!();
     match rollback_image {
         Some(ref img) => println!("  {}: {}", "Rollback slot".bold(), img.cyan()),
-        None => println!("  {}: {}", "Rollback slot".bold(), "(none — no prior deployment)".dimmed()),
+        None => println!(
+            "  {}: {}",
+            "Rollback slot".bold(),
+            "(none — no prior deployment)".dimmed()
+        ),
     }
 
     println!();
@@ -333,7 +363,8 @@ fn rollback() -> anyhow::Result<()> {
     println!();
     println!(
         "{}",
-        "Note: life update rollback never executes these commands — you run them manually.".dimmed()
+        "Note: life update rollback never executes these commands — you run them manually."
+            .dimmed()
     );
 
     Ok(())
@@ -444,14 +475,17 @@ mod tests {
     fn test_rollback_body_has_no_process_command_shellout() {
         let src = include_str!("update.rs");
         // Search for Command::new("bootc").arg("rollback") pattern
-        let dangerous = src.find("Command::new").map(|pos| {
-            let window = &src[pos..pos.min(src.len() - 1).saturating_add(200)];
-            if window.contains("\"rollback\"") {
-                Some(pos)
-            } else {
-                None
-            }
-        }).flatten();
+        let dangerous = src
+            .find("Command::new")
+            .map(|pos| {
+                let window = &src[pos..pos.min(src.len() - 1).saturating_add(200)];
+                if window.contains("\"rollback\"") {
+                    Some(pos)
+                } else {
+                    None
+                }
+            })
+            .flatten();
         assert!(
             dangerous.is_none(),
             "Found Command::new with rollback arg in update.rs — rollback arm must never execute"
@@ -474,13 +508,13 @@ mod tests {
             "last_stage_error": null
         }"#;
 
-        let check: serde_json::Value = serde_json::from_str(check_state)
-            .expect("check state JSON must be valid");
+        let check: serde_json::Value =
+            serde_json::from_str(check_state).expect("check state JSON must be valid");
         assert_eq!(check["available"], true);
         assert_eq!(check["current_version"], "sha256:abc123");
 
-        let stage: serde_json::Value = serde_json::from_str(stage_state)
-            .expect("stage state JSON must be valid");
+        let stage: serde_json::Value =
+            serde_json::from_str(stage_state).expect("stage state JSON must be valid");
         assert_eq!(stage["staged"], true);
         assert_eq!(stage["staged_digest"], "sha256:def456");
         assert!(stage["last_stage_error"].is_null());

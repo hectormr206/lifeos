@@ -9,8 +9,12 @@ There is one operational truth for OS updates/releases in LifeOS:
 
 1. `bootc` is the runtime authority on the host.
 2. The signed GHCR image digest is the release artifact that `bootc` stages/boots.
-3. CI publishes every `main` push to `:edge`. No other channel is active today.
-4. `/etc/lifeos/channels.toml` and `[updates]` in `lifeos.toml` express local policy/preference.
+3. `channels/*.json` is CI publication metadata that points at the latest digest per channel.
+4. `/etc/lifeos/channels.toml` and `[updates]` in `lifeos.toml` only express local preference/policy.
+
+Only `edge` is actively published today; `stable`/`candidate` are reserved.
+
+# There is no shipped `life channel set` command yet.
 
 What is explicitly not canonical:
 
