@@ -12,15 +12,6 @@ ERRORS=()
 pass() { echo "PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); ERRORS+=("$1"); }
 
-run_script() {
-    # Run script, capture exit code safely
-    set +e
-    bash "${SCRIPT}" "$@" 2>&1
-    _rc=$?
-    set -e
-    return "${_rc}"
-}
-
 get_rc() {
     set +e
     bash "${SCRIPT}" "$@" >/dev/null 2>&1
