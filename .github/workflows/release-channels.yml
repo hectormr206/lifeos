@@ -195,26 +195,12 @@ jobs:
           # Layer caching optimization deferred to future migration to
           # buildah/docker buildx with registry cache backend.
 
-          # Dev-mode guard: CI publishes only release images.
-          # See docs/operations/dev-mode.md.
-          if grep -rn "LIFEOS_BUILD_MODE""=dev" .github/workflows/; then
-            echo "FATAL: dev build mode token must never appear in CI workflows"
-            exit 1
-          fi
-          case "${{ needs.determine-channel.outputs.tag }}" in
-            *dev*|*-dev*|*dev-*)
-              echo "FATAL: refusing to publish image with dev-adjacent tag: ${{ needs.determine-channel.outputs.tag }}"
-              exit 1
-              ;;
-          esac
-
           podman build \
             -f image/Containerfile \
             -t "${LOCAL_IMAGE}" \
             --label org.opencontainers.image.source="https://github.com/${{ github.repository }}" \
             --label org.opencontainers.image.revision="${{ github.sha }}" \
             --label org.opencontainers.image.created="${{ steps.meta-build.outputs.build_date }}" \
-            --build-arg LIFEOS_BUILD_MODE=release \
             --build-arg LIFEOS_CHANNEL="${{ needs.determine-channel.outputs.channel }}" \
             --build-arg LIFEOS_VERSION="${{ needs.determine-channel.outputs.version }}" \
             --build-arg BUILD_DATE="${{ steps.meta-build.outputs.build_date }}" \
@@ -222,21 +208,6 @@ jobs:
             --build-arg LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64="${{ secrets.LIFEOS_NVIDIA_KMOD_SIGN_KEY_B64 }}" \
             --build-arg LIFEOS_NVIDIA_KMOD_CERT_DER_B64="${{ secrets.LIFEOS_NVIDIA_KMOD_CERT_DER_B64 }}" \
             .
-
-          # Verify no dev-mode artifacts in the built image before we
-          # push it to a public registry.
-          podman run --rm --entrypoint /bin/bash "${LOCAL_IMAGE}" -lc '
-            set -euo pipefail
-            if [ -f /etc/sudoers.d/lifeos-dev ]; then
-              echo "FATAL: /etc/sudoers.d/lifeos-dev present in release image"
-              exit 1
-            fi
-            if [ -f /etc/systemd/user/lifeosd.service.d/10-dev-mode.conf ]; then
-              echo "FATAL: dev-mode dropin present in release image"
-              exit 1
-            fi
-            echo "dev-mode leak check passed"
-          '
 
           podman run --rm --entrypoint /bin/bash "${LOCAL_IMAGE}" -lc '
             set -euo pipefail
@@ -260,6 +231,10 @@ jobs:
               echo "Verified NVIDIA signing in image (${mod}) signer=${signer}"
             fi
           '
+
+          # Assert no dev artifacts before pushing to public registry.
+          # Uses containers-storage: prefix to inspect the local image without pulling.
+          bash scripts/assert-no-dev-artifacts.sh "containers-storage:${LOCAL_IMAGE}"
 
           podman push --digestfile "${DIGEST_FILE}" "${LOCAL_IMAGE}" "docker://${IMAGE_BASE}:${TAG_PRIMARY}"
           podman push "${LOCAL_IMAGE}" "docker://${IMAGE_BASE}:${TAG_CHANNEL}"

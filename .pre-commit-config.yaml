@@ -23,18 +23,19 @@ repos:
       - id: mixed-line-ending
 
   # ============================================================================
-  # Dev-mode guard — refuse to commit LIFEOS_BUILD_MODE=dev references
-  # into CI workflows. See docs/operations/dev-mode.md for the full
-  # contract. Runs on any change to .github/workflows/*.yml.
+  # Dev artifact guard — assert no dev-mode files in image/files/ tree.
+  # Replaces the old reject-dev-mode-in-ci hook (unify-image-kill-dev-mode).
+  # Runs assert-no-dev-artifacts.sh against the image/files/ filesystem
+  # tree to catch staging-area violations before commit.
   # ============================================================================
   - repo: local
     hooks:
-      - id: reject-dev-mode-in-ci
-        name: Reject LIFEOS_BUILD_MODE=dev in CI workflows
-        entry: bash -c 'if grep -rn "LIFEOS_BUILD_MODE""=dev" .github/workflows/ 2>/dev/null; then echo "FATAL: LIFEOS_BUILD_MODE=dev must never appear in CI workflows"; exit 1; fi'
-        language: system
-        files: '^\.github/workflows/.*\.ya?ml$'
+      - id: assert-no-dev-artifacts
+        name: Assert no dev artifacts in image files
+        language: script
+        entry: bash scripts/assert-no-dev-artifacts.sh image/files
         pass_filenames: false
+        stages: [pre-commit]
 
   # ============================================================================
   # Rust Formatting and Linting

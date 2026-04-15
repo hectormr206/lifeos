@@ -292,23 +292,30 @@ fn test_terminal_tooling_defaults_are_baked_into_image() {
 }
 
 #[test]
-fn test_ci_workflows_do_not_embed_dev_build_mode_literal() {
-    let workflows_dir = project_root().join(".github/workflows");
-    let needle = "LIFEOS_BUILD_MODE=dev";
-
-    for entry in std::fs::read_dir(&workflows_dir).expect("Failed to read workflows directory") {
-        let path = entry.expect("Failed to read workflow entry").path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("yml") {
-            continue;
-        }
-
-        let content = std::fs::read_to_string(&path).expect("Failed to read workflow file");
+fn test_assert_no_dev_artifacts_script_exists_and_is_executable() {
+    let script = project_root().join("scripts/assert-no-dev-artifacts.sh");
+    assert!(
+        script.exists(),
+        "scripts/assert-no-dev-artifacts.sh must exist at repo root (task A1)"
+    );
+    let metadata = std::fs::metadata(&script).expect("could not stat assert-no-dev-artifacts.sh");
+    use std::os::unix::fs::PermissionsExt;
+    let mode = metadata.permissions().mode();
+    assert!(
+        mode & 0o111 != 0,
+        "scripts/assert-no-dev-artifacts.sh must be executable (chmod +x)"
+    );
+    // Optional: if env var LIFEOS_TEST_IMAGE is set, shell out and assert exit 0
+    if let Ok(image_ref) = std::env::var("LIFEOS_TEST_IMAGE") {
+        let status = std::process::Command::new("bash")
+            .args(["scripts/assert-no-dev-artifacts.sh", &image_ref])
+            .current_dir(project_root())
+            .status()
+            .expect("failed to run assert-no-dev-artifacts.sh");
         assert!(
-            !content.contains(needle),
-            "Workflow {:?} must not contain the literal dev build mode token",
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("<unknown>")
+            status.success(),
+            "assert-no-dev-artifacts.sh failed against {}",
+            image_ref
         );
     }
 }
