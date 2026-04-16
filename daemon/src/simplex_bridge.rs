@@ -984,18 +984,36 @@ mod inner {
                                         PendingAction::TranscribeVoice { display_name } => {
                                             match transcribe_audio(&path).await {
                                                 Some(transcript) => {
+                                                    // C-7 fix: no transcript content in
+                                                    // journald — length-only log. Previously
+                                                    // the first 80 chars landed in the
+                                                    // system journal alongside the
+                                                    // contact's display name.
                                                     info!(
-                                                        "[simplex_bridge] Voice transcribed from {}: {}",
+                                                        "[simplex_bridge] Voice transcribed from {} ({} chars)",
                                                         display_name,
-                                                        &transcript.chars().take(80).collect::<String>()
+                                                        transcript.chars().count()
                                                     );
-                                                    let (reply, _) = axi_tools::agentic_chat(
-                                                        &tool_ctx,
-                                                        SIMPLEX_CHAT_ID,
-                                                        &format!("[Mensaje de voz] {}", transcript),
-                                                        None,
-                                                    )
-                                                    .await;
+                                                    // C-6 fix: force sensitivity to Critical
+                                                    // so the LLM router pins to LOCAL tier
+                                                    // only. Voice notes are sensory artifacts
+                                                    // that must never leave the device
+                                                    // even when BYOK cloud providers are
+                                                    // configured.
+                                                    let (reply, _) =
+                                                        axi_tools::agentic_chat_with_sensitivity(
+                                                            &tool_ctx,
+                                                            SIMPLEX_CHAT_ID,
+                                                            &format!(
+                                                                "[Mensaje de voz] {}",
+                                                                transcript
+                                                            ),
+                                                            None,
+                                                            Some(
+                                                                crate::privacy_filter::SensitivityLevel::Critical,
+                                                            ),
+                                                        )
+                                                        .await;
                                                     let _ = send_message(
                                                         &mut sink,
                                                         &display_name,

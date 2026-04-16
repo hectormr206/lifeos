@@ -235,6 +235,19 @@ impl SpeakerIdManager {
                 if let Err(e) = std::fs::write(&path, data) {
                     warn!("Failed to save speaker profiles: {e}");
                 }
+                // Hearing audit C-13: 256-float voice embeddings are
+                // biometric PII. Chmod 0o600 after every save so the
+                // file stays owner-only even on a fresh write that
+                // inherits the umask default.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(md) = std::fs::metadata(&path) {
+                        let mut perms = md.permissions();
+                        perms.set_mode(0o600);
+                        let _ = std::fs::set_permissions(&path, perms);
+                    }
+                }
             }
             Err(e) => warn!("Failed to serialize speaker profiles: {e}"),
         }

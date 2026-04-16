@@ -2237,11 +2237,39 @@ REGLAS FIRMES:
     /// The agentic chat loop: sends message to LLM, parses tool calls,
     /// executes them, feeds results back, repeats until no more tool calls.
     /// Returns (final_response_text, optional_screenshot_path).
+    /// Forces the LLM router to pick a LOCAL-tier provider only,
+    /// regardless of message content. Used for voice transcripts and
+    /// any other channel where the message itself is a sensitive
+    /// sensor artifact (hearing audit C-6: a SimpleX voice note
+    /// previously went to any configured cloud BYOK provider).
     pub async fn agentic_chat(
         ctx: &ToolContext,
         chat_id: i64,
         user_text: &str,
         image_b64: Option<&str>,
+    ) -> (String, Option<String>) {
+        agentic_chat_inner(ctx, chat_id, user_text, image_b64, None).await
+    }
+
+    /// `force_sensitivity` variant — callers that know the message is
+    /// a sensory artifact (voice transcript, OCR output, etc.) can
+    /// clamp the router to local tier even when there's no image.
+    pub async fn agentic_chat_with_sensitivity(
+        ctx: &ToolContext,
+        chat_id: i64,
+        user_text: &str,
+        image_b64: Option<&str>,
+        force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
+    ) -> (String, Option<String>) {
+        agentic_chat_inner(ctx, chat_id, user_text, image_b64, force_sensitivity).await
+    }
+
+    async fn agentic_chat_inner(
+        ctx: &ToolContext,
+        chat_id: i64,
+        user_text: &str,
+        image_b64: Option<&str>,
+        force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
     ) -> (String, Option<String>) {
         // AQ.3 — Detect implicit preference feedback and update user model
         if let Some(ref um_arc) = ctx.user_model {
@@ -2478,11 +2506,16 @@ REGLAS FIRMES:
         // (Anthropic / OpenAI / Gemini) just because BYOK keys are
         // configured. `SensitivityLevel::Critical` maps to a providers
         // list of `[ProviderTier::Local]` in llm_router.
-        let sensitivity = if image_b64.is_some() {
+        //
+        // Callers that know the message is a sensor artifact (voice
+        // transcript, OCR output) can force this clamp via the
+        // `force_sensitivity` argument even when there's no image —
+        // used by simplex_bridge for voice notes (hearing audit C-6).
+        let sensitivity = force_sensitivity.or(if image_b64.is_some() {
             Some(crate::privacy_filter::SensitivityLevel::Critical)
         } else {
             None
-        };
+        });
 
         let mut screenshot_path: Option<String> = None;
 

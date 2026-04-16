@@ -622,7 +622,6 @@ impl MeetingAssistant {
                     .app_name
                     .clone()
                     .unwrap_or_else(|| "Unknown".into()),
-                recording_path: output_path.to_string_lossy().to_string(),
             });
         }
 
@@ -731,7 +730,6 @@ impl MeetingAssistant {
         // Emit recording stopped event via the event bus
         if let Some(ref tx) = self.event_bus {
             let _ = tx.send(crate::events::DaemonEvent::MeetingRecordingStopped {
-                recording_path: self.state.recording_path.clone(),
                 duration_secs: self.state.duration_secs,
             });
         }

@@ -9530,6 +9530,20 @@ async fn train_wake_word_model(
             .save_to_file(&model_path)
             .map_err(|e| format!("Failed to save model: {e}"))?;
 
+        // Hearing audit C-13: rustpotter model encodes MFCC statistics
+        // of the user's enrolled voice — biometric data. Prior behavior
+        // left the file world-readable (observed 0o644 root:root).
+        // Chmod 0o600 so only the daemon's uid can read.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(md) = std::fs::metadata(&model_path) {
+                let mut perms = md.permissions();
+                perms.set_mode(0o600);
+                let _ = std::fs::set_permissions(&model_path, perms);
+            }
+        }
+
         Ok::<_, String>(model_path)
     })
     .await
