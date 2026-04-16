@@ -122,49 +122,36 @@ check_filesystem() {
 }
 
 # ── OCI image mode ────────────────────────────────────────────────────────────
-# Uses `buildah from` + `buildah mount` to inspect the image rootfs without
-# executing the entrypoint. This is bootc-safe — bootc images have a special
-# entrypoint that `podman create` rejects. buildah's "working container" model
-# never runs processes, so it always succeeds.
+# Inspects an image by running `podman run --entrypoint /bin/bash` inside it
+# and probing the forbidden paths with `test -e`. This avoids both the
+# bootc-incompatible `podman create ... true` path AND the buildah/podman
+# storage mismatch that plagued a `buildah from` approach on rootless runners.
 check_oci_image() {
     local image_ref="$1"
-    local ctr=""
-    local mountpoint=""
     local offenders=()
     local rc=0
 
-    cleanup() {
-        if [ -n "${mountpoint}" ] && [ -n "${ctr}" ]; then
-            buildah umount "${ctr}" >/dev/null 2>&1 || true
-        fi
-        if [ -n "${ctr}" ]; then
-            buildah rm "${ctr}" >/dev/null 2>&1 || true
-        fi
-    }
-    trap cleanup RETURN
-
-    # `buildah from --pull=never` creates a working container from a local or
-    # referenced image without running its entrypoint. Capture stderr so real
-    # errors are visible (unlike the previous podman-create path).
-    if ! ctr=$(buildah from --pull=never "${image_ref}" 2>&1); then
-        echo "ERROR: could not create working container from image: ${image_ref}" >&2
-        echo "${ctr}" >&2
-        ctr=""
-        return 2
-    fi
-
-    if ! mountpoint=$(buildah mount "${ctr}" 2>&1); then
-        echo "ERROR: could not mount working container filesystem: ${image_ref}" >&2
-        echo "${mountpoint}" >&2
-        mountpoint=""
-        return 2
-    fi
-
+    # Build a bash probe that prints `found:<path>` for each forbidden path
+    # that exists inside the image. Unknown-size arrays are safe here because
+    # FORBIDDEN_PATHS is a fixed readonly list defined above.
+    local probe="set -e; "
     for rel_path in "${FORBIDDEN_PATHS[@]}"; do
-        if [ -e "${mountpoint}/${rel_path}" ]; then
-            offenders+=("/${rel_path}")
-        fi
+        probe+="test -e '/${rel_path}' && echo 'found:${rel_path}'; "
     done
+    probe+="true"
+
+    local probe_out
+    if ! probe_out=$(podman run --rm --entrypoint /bin/bash "${image_ref}" -lc "${probe}" 2>&1); then
+        echo "ERROR: could not run probe inside image: ${image_ref}" >&2
+        echo "${probe_out}" >&2
+        return 2
+    fi
+
+    while IFS= read -r line; do
+        case "${line}" in
+            found:*) offenders+=("/${line#found:}") ;;
+        esac
+    done <<< "${probe_out}"
 
     if [ "${#offenders[@]}" -gt 0 ]; then
         echo "FAILED: Dev artifacts found in image ${image_ref}:"
