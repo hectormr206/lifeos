@@ -2287,6 +2287,15 @@ impl AgentRuntimeManager {
 
     /// Enable all four senses (audio, screen, camera) for dashboard control panel.
     /// v2 only re-enabled audio; this adds screen + camera.
+    ///
+    /// POLICY: a migration MUST NOT override an explicit user disable. The
+    /// previous version of this function silently flipped
+    /// `screen_enabled=false` back to true on every daemon update, violating
+    /// the opt-in consent claim. We now detect a prior explicit disable
+    /// (the ledger records every toggle via `runtime_disable_camera` /
+    /// `runtime_disable_screen` actions) and skip the migration in that
+    /// case. If no disable is on record, the migration still fires
+    /// (first-run / upgrade from a pre-toggle build).
     async fn migrate_enable_all_senses_v3(&self) -> Result<()> {
         const MIGRATION_TARGET: &str = "migrate-enable-all-senses-v3";
 
@@ -2300,22 +2309,41 @@ impl AgentRuntimeManager {
             return Ok(());
         }
 
+        let user_disabled_screen = state.ledger.iter().any(|e| {
+            matches!(
+                e.action.as_str(),
+                "runtime_disable_screen" | "disable_screen" | "screen_off"
+            )
+        });
+        let user_disabled_camera = state.ledger.iter().any(|e| {
+            matches!(
+                e.action.as_str(),
+                "runtime_disable_camera" | "disable_camera" | "camera_off"
+            )
+        });
+
         let mut changed = false;
         let mut detail = serde_json::Map::new();
 
         if state.sensory_capture_runtime.enabled
-            && (!state.sensory_capture_runtime.screen_enabled
-                || !state.sensory_capture_runtime.camera_enabled)
+            && ((!state.sensory_capture_runtime.screen_enabled && !user_disabled_screen)
+                || (!state.sensory_capture_runtime.camera_enabled && !user_disabled_camera))
         {
             detail.insert(
                 "sensory_before".to_string(),
                 serde_json::json!({
                     "screen_enabled": state.sensory_capture_runtime.screen_enabled,
                     "camera_enabled": state.sensory_capture_runtime.camera_enabled,
+                    "user_disabled_screen": user_disabled_screen,
+                    "user_disabled_camera": user_disabled_camera,
                 }),
             );
-            state.sensory_capture_runtime.screen_enabled = true;
-            state.sensory_capture_runtime.camera_enabled = true;
+            if !user_disabled_screen {
+                state.sensory_capture_runtime.screen_enabled = true;
+            }
+            if !user_disabled_camera {
+                state.sensory_capture_runtime.camera_enabled = true;
+            }
             state.sensory_capture_runtime.running = true;
             state.sensory_capture_runtime.updated_at = Some(Utc::now());
             changed = true;

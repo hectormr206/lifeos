@@ -1094,8 +1094,9 @@ async fn main() -> anyhow::Result<()> {
     {
         let sensory_mem = state.memory_plane_manager.clone();
         let sensory_rx = state.event_bus.subscribe();
+        let sensory_pf = Some(shared_privacy.clone());
         tokio::spawn(async move {
-            sensory_memory::run_sensory_memory_listener(sensory_rx, sensory_mem).await;
+            sensory_memory::run_sensory_memory_listener(sensory_rx, sensory_mem, sensory_pf).await;
         });
         info!("Sensory memory listener started");
     }

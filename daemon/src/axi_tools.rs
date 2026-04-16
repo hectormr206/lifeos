@@ -2445,13 +2445,26 @@ REGLAS FIRMES:
             TaskComplexity::Medium
         };
 
+        // When the user message carries a screenshot (or any attached
+        // image), clamp sensitivity to Critical so the router is pinned
+        // to the LOCAL tier. Without this, a "take a screenshot" tool
+        // call could silently ship the frame to any cloud provider
+        // (Anthropic / OpenAI / Gemini) just because BYOK keys are
+        // configured. `SensitivityLevel::Critical` maps to a providers
+        // list of `[ProviderTier::Local]` in llm_router.
+        let sensitivity = if image_b64.is_some() {
+            Some(crate::privacy_filter::SensitivityLevel::Critical)
+        } else {
+            None
+        };
+
         let mut screenshot_path: Option<String> = None;
 
         for round in 0..MAX_TOOL_ROUNDS {
             let request = RouterRequest {
                 messages: messages.clone(),
                 complexity: Some(complexity),
-                sensitivity: None,
+                sensitivity,
                 preferred_provider: None,
                 max_tokens: Some(2048),
                 task_type: None,

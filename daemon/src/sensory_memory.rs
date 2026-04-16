@@ -13,6 +13,7 @@ use tokio::sync::{broadcast, RwLock};
 
 use crate::events::DaemonEvent;
 use crate::memory_plane::MemoryPlaneManager;
+use crate::privacy_filter::{PrivacyFilter, SensitivityLevel};
 
 /// Minimum time between persisting screen captures (avoid spam).
 const VISUAL_COOLDOWN_SECS: i64 = 300; // 5 minutes
@@ -21,9 +22,17 @@ const MIN_TRANSCRIPT_LEN: usize = 20;
 
 /// Run the sensory memory listener. Subscribes to the event bus and
 /// persists significant sensory events to MemoryPlane.
+///
+/// `privacy_filter`, when set, classifies + sanitizes window titles and
+/// transcripts before they land in MemoryPlane. Without it, a window
+/// title like "[Private] KeePassXC — Database.kdbx" or "Gmail — Inbox (5)"
+/// was written verbatim and searchable — a real privacy leak even with
+/// the screen-capture master toggle off (window change tracking is
+/// intentionally kept on for presence/focus telemetry).
 pub async fn run_sensory_memory_listener(
     mut event_rx: broadcast::Receiver<DaemonEvent>,
     memory: Arc<RwLock<MemoryPlaneManager>>,
+    privacy_filter: Option<Arc<PrivacyFilter>>,
 ) {
     info!("[sensory_memory] Listener started");
 
@@ -119,19 +128,43 @@ pub async fn run_sensory_memory_listener(
             DaemonEvent::WindowChanged { app, title } => {
                 // Only persist when the app actually changes (not just window title)
                 if app != last_app && !app.is_empty() {
-                    let mem = memory.read().await;
-                    let content = format!("What: User switched to {}. Window: {}", app, title);
-                    let tags = vec!["sensory".to_string(), "context".to_string(), app.clone()];
-                    mem.add_entry(
-                        "context",
-                        "system",
-                        &tags,
-                        Some("window_change"),
-                        15,
-                        &content,
-                    )
-                    .await
-                    .ok();
+                    // Privacy filter the window title before persistence.
+                    // Critical → drop both title AND app (the app name
+                    // itself — e.g. "KeePassXC" — can be sensitive).
+                    // High → sanitize the title.
+                    let (sanitized_title, skip) = if let Some(ref pf) = privacy_filter {
+                        match pf.classify(&title) {
+                            SensitivityLevel::Critical => {
+                                info!(
+                                    "[sensory_memory] window title classified Critical — skipping"
+                                );
+                                (String::new(), true)
+                            }
+                            SensitivityLevel::High => (pf.sanitize(&title).sanitized_text, false),
+                            _ => (title.clone(), false),
+                        }
+                    } else {
+                        (title.clone(), false)
+                    };
+
+                    if !skip {
+                        let mem = memory.read().await;
+                        let content = format!(
+                            "What: User switched to {}. Window: {}",
+                            app, sanitized_title
+                        );
+                        let tags = vec!["sensory".to_string(), "context".to_string(), app.clone()];
+                        mem.add_entry(
+                            "context",
+                            "system",
+                            &tags,
+                            Some("window_change"),
+                            15,
+                            &content,
+                        )
+                        .await
+                        .ok();
+                    }
                     last_app = app;
                 }
             }
