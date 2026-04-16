@@ -3088,8 +3088,39 @@ async fn stop_stt_service() -> Result<Json<serde_json::Value>, (StatusCode, Json
 }
 
 async fn transcribe_audio_file(
+    State(state): State<ApiState>,
     Json(payload): Json<SttTranscribePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // Hearing audit C-4 — previously this endpoint accepted ANY file
+    // path that existed on disk and shipped it to whisper. An authed
+    // caller could transcribe /home/**/*.wav, other users' recordings,
+    // or anything whisper's libsndfile can read. Now: whitelist the
+    // path to daemon-owned sensory dirs and gate on FollowAlong
+    // consent + the unified Sense::Microphone policy.
+    ensure_followalong_consent(&state).await?;
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    if let Err(reason) = sensory_mgr
+        .ensure_sense_allowed(
+            crate::sensory_pipeline::Sense::Microphone,
+            "api.stt_transcribe",
+        )
+        .await
+    {
+        let status = if reason.contains("suspend") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::FORBIDDEN
+        };
+        return Err((
+            status,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: reason.to_string(),
+                code: status.as_u16(),
+            }),
+        ));
+    }
+
     let file = payload.file.trim();
     if file.is_empty() {
         return Err((
@@ -3101,19 +3132,10 @@ async fn transcribe_audio_file(
             }),
         ));
     }
+    let validated = validate_sensory_source_path(file)?;
+    let file_str = validated.to_string_lossy().to_string();
 
-    if !std::path::Path::new(file).exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: "Not Found".to_string(),
-                message: format!("Audio file not found: {}", file),
-                code: 404,
-            }),
-        ));
-    }
-
-    let (text, binary) = transcribe_with_whisper(file, payload.model.as_deref()).await?;
+    let (text, binary) = transcribe_with_whisper(&file_str, payload.model.as_deref()).await?;
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -3360,12 +3382,47 @@ async fn run_voice_session(
     State(state): State<ApiState>,
     Json(payload): Json<SensoryVoiceSessionPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // Hearing audit C-5: `audio_file` was forwarded to whisper without
+    // whitelist or gate. Full mic-gate + path whitelist before we hand
+    // control to the pipeline.
+    ensure_followalong_consent(&state).await?;
     let ai_manager = *state.ai_manager.read().await;
     let overlay_mgr = state.overlay_manager.read().await.clone();
     let screen_capture = state.screen_capture.read().await.clone();
     let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
     let memory_plane = state.memory_plane_manager.read().await.clone();
     let telemetry = state.telemetry_manager.read().await.clone();
+    if let Err(reason) = sensory_mgr
+        .ensure_sense_allowed(
+            crate::sensory_pipeline::Sense::Microphone,
+            "api.voice_session",
+        )
+        .await
+    {
+        let status = if reason.contains("suspend") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::FORBIDDEN
+        };
+        return Err((
+            status,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: reason.to_string(),
+                code: status.as_u16(),
+            }),
+        ));
+    }
+
+    // Whitelist caller-supplied audio_file paths to daemon-owned dirs.
+    let validated_audio_file = match payload.audio_file.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => Some(
+            validate_sensory_source_path(raw)?
+                .to_string_lossy()
+                .to_string(),
+        ),
+        _ => None,
+    };
 
     let result = sensory_mgr
         .run_voice_loop(
@@ -3375,7 +3432,7 @@ async fn run_voice_session(
             &memory_plane,
             &telemetry,
             VoiceLoopRequest {
-                audio_file: payload.audio_file,
+                audio_file: validated_audio_file,
                 prompt: payload.prompt,
                 include_screen: payload.include_screen.unwrap_or(false),
                 screen_source: payload.screen_source,
@@ -9253,8 +9310,35 @@ const WAKE_WORD_MODEL_PATH: &str = "/var/lib/lifeos/models/rustpotter/axi.rpw";
 
 /// Record a 2-second WAV sample of the user saying the wake word.
 async fn record_wake_word_sample(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // Hearing audit C-9: this endpoint previously discarded state and
+    // spawned pw-record with zero checks. Now gates on consent +
+    // unified Sense::Microphone (kill switch + audio_enabled + suspend).
+    ensure_followalong_consent(&state).await?;
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    if let Err(reason) = sensory_mgr
+        .ensure_sense_allowed(
+            crate::sensory_pipeline::Sense::Microphone,
+            "api.wake_word_record",
+        )
+        .await
+    {
+        let status = if reason.contains("suspend") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::FORBIDDEN
+        };
+        return Err((
+            status,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: reason.to_string(),
+                code: status.as_u16(),
+            }),
+        ));
+    }
+
     let samples_dir = std::path::Path::new(WAKE_WORD_SAMPLES_DIR);
     tokio::fs::create_dir_all(samples_dir).await.map_err(|e| {
         (
@@ -9569,10 +9653,17 @@ async fn ensure_screen_capture_allowed(
 
 /// Allowed base directories for caller-supplied sensory source paths.
 /// Restricting to daemon-owned output dirs blocks path-traversal reads of
-/// arbitrary files through /api/v1/sensory/vision/describe and
-/// /api/v1/vision/ocr.
-const SENSORY_SOURCE_ALLOWED_PREFIXES: &[&str] =
-    &["/var/lib/lifeos/screenshots/", "/var/lib/lifeos/camera/"];
+/// arbitrary files through /api/v1/sensory/vision/describe,
+/// /api/v1/vision/ocr, /api/v1/audio/stt/transcribe, and
+/// /api/v1/sensory/voice/session (audio_file).
+const SENSORY_SOURCE_ALLOWED_PREFIXES: &[&str] = &[
+    "/var/lib/lifeos/screenshots/",
+    "/var/lib/lifeos/camera/",
+    "/var/lib/lifeos/audio/",
+    "/var/lib/lifeos/meetings/",
+    "/var/lib/lifeos/simplex-downloads/",
+    "/var/lib/lifeos/tts/",
+];
 
 fn validate_sensory_source_path(
     source: &str,
