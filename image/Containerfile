@@ -239,15 +239,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Pre-warm the default voice (if_sara) to materialise .pt weights files
 # and verify kokoro can synthesise without network access.
+# NOTE: Python code lives in a separate file to avoid Dockerfile parser
+# confusion — a `from X import Y` line inside an inline RUN heredoc gets
+# misparsed as a `FROM` stage directive by buildkit.
+COPY image/scripts/prewarm-kokoro.py /build/prewarm-kokoro.py
 RUN HF_HUB_OFFLINE=0 \
-    /opt/lifeos/kokoro-env/bin/python3 -c "
-from kokoro import KPipeline
-import numpy as np
-pipeline = KPipeline(lang_code='e', device='cpu')
-chunks = list(pipeline('Hola sistema, voz lista.', voice='if_sara'))
-assert chunks, 'No audio chunks produced — voice pre-warm failed'
-print('Kokoro pre-warm OK: if_sara voice loaded')
-"
+    /opt/lifeos/kokoro-env/bin/python3 /build/prewarm-kokoro.py
 
 # Verify if_sara voice artifact exists after pre-warm
 RUN find /opt/lifeos/kokoro-env -name 'if_sara*' | grep -q '.' || \

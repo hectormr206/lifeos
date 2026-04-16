@@ -3181,9 +3181,7 @@ async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
     {
         // N1: usar unwrap_or_else para recuperarse de mutex envenenado en lugar
         // de panic, preservando la disponibilidad del sensory loop.
-        let last = LAST_KOKORO_PROBE
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let last = LAST_KOKORO_PROBE.lock().unwrap_or_else(|p| p.into_inner());
         let now = std::time::Instant::now();
         if !should_probe(*last, KOKORO_PROBE_INTERVAL, now) {
             return (None, vec![]);
@@ -3210,9 +3208,7 @@ async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
                 );
                 // C2: estampar SÓLO en éxito para que el throttle de 5 min
                 // aplique sólo a partir del primer probe exitoso.
-                let mut last = LAST_KOKORO_PROBE
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner());
+                let mut last = LAST_KOKORO_PROBE.lock().unwrap_or_else(|p| p.into_inner());
                 *last = Some(std::time::Instant::now());
                 return (Some(base_url), voices);
             }
@@ -8126,9 +8122,7 @@ Drafting the description:
         // Verifies that LAST_KOKORO_PROBE can be locked without panicking.
         // The production code uses unwrap_or_else(|p| p.into_inner()) — if it
         // were still .expect(...), a poisoned lock would panic the sensory loop.
-        let guard = LAST_KOKORO_PROBE
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let guard = LAST_KOKORO_PROBE.lock().unwrap_or_else(|p| p.into_inner());
         assert!(
             guard.is_none() || guard.is_some(),
             "LAST_KOKORO_PROBE debe ser accesible"
