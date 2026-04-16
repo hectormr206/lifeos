@@ -1826,6 +1826,11 @@ REGLAS FIRMES:
         pub meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
         /// Calendar manager for event scheduling and reminders.
         pub calendar: Option<Arc<crate::calendar::CalendarManager>>,
+        /// Sensory pipeline manager — consulted by the `screenshot` tool
+        /// (and any future screen-touching tool) to honor the user's
+        /// screen_enabled / kill switch / suspend / session-lock /
+        /// sensitive-window policy instead of silently shelling grim.
+        pub sensory_pipeline: Option<Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>>,
         /// Rate limiter for tool calls per chat_id.
         pub rate_limiter: RateLimiter,
     }
@@ -1981,7 +1986,7 @@ REGLAS FIRMES:
         }
 
         let result = match call.name.as_str() {
-            "screenshot" => execute_screenshot().await,
+            "screenshot" => execute_screenshot(ctx).await,
             "run_command" => execute_run_command(&call.args).await,
             "search_web" => execute_search_web(&call.args, ctx).await,
             "read_file" => execute_read_file(&call.args).await,
@@ -2662,7 +2667,17 @@ REGLAS FIRMES:
     // Individual tool implementations
     // -----------------------------------------------------------------------
 
-    async fn execute_screenshot() -> Result<String> {
+    async fn execute_screenshot(ctx: &ToolContext) -> Result<String> {
+        // Gate: check the shared screen-capture policy before shelling
+        // grim. Round-2 audit C-NEW-2 — this tool previously bypassed
+        // every user policy and wrote to /tmp 0o644.
+        if let Some(ref sensory) = ctx.sensory_pipeline {
+            let guard = sensory.read().await;
+            if let Err(reason) = guard.ensure_screen_capture_allowed().await {
+                anyhow::bail!("screenshot tool refused: {}", reason);
+            }
+        }
+
         let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
         tokio::fs::create_dir_all(&tmp_dir).await?;
         let path = tmp_dir.join(format!("screen-{}.png", chrono::Utc::now().timestamp()));
@@ -2683,6 +2698,18 @@ REGLAS FIRMES:
         };
 
         if captured && path.exists() {
+            // 0o600 — owner-only. Prior behavior wrote /tmp 0o644, so
+            // any local user could read the screenshot until the next
+            // tmpreaper sweep. Round-2 audit C-NEW-2.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(md) = tokio::fs::metadata(&path).await {
+                    let mut perms = md.permissions();
+                    perms.set_mode(0o600);
+                    let _ = tokio::fs::set_permissions(&path, perms).await;
+                }
+            }
             Ok(path.to_string_lossy().to_string())
         } else {
             anyhow::bail!("No pude capturar la pantalla (grim/gnome-screenshot no disponible)")

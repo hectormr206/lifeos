@@ -734,6 +734,9 @@ mod inner {
         meeting_archive: Option<Arc<crate::meeting_archive::MeetingArchive>>,
         meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
         calendar: Option<Arc<crate::calendar::CalendarManager>>,
+        sensory_pipeline_for_tools: Option<
+            Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>,
+        >,
         history: Arc<ConversationHistory>,
         cron_store: Arc<CronStore>,
         event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
@@ -757,6 +760,7 @@ mod inner {
             meeting_archive,
             meeting_assistant,
             calendar,
+            sensory_pipeline: sensory_pipeline_for_tools.clone(),
             rate_limiter: RateLimiter::new(),
         };
 
@@ -1248,6 +1252,32 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                 || lower == "/screen"
                                                 || wants_screenshot(&lower)
                                             {
+                                                // Shared screen-capture gate — refuses when
+                                                // screen_enabled=false / kill switch / suspend /
+                                                // session locked / sensitive window. Round-2
+                                                // audit C-NEW-4: this command previously shipped
+                                                // a live screenshot over the network with zero
+                                                // policy check.
+                                                let gate = if let Some(ref sens) =
+                                                    tool_ctx.sensory_pipeline
+                                                {
+                                                    sens.read()
+                                                        .await
+                                                        .ensure_screen_capture_allowed()
+                                                        .await
+                                                        .map_err(|r| r.to_string())
+                                                } else {
+                                                    Ok(())
+                                                };
+                                                if let Err(reason) = gate {
+                                                    let _ = send_message(
+                                                        &mut sink,
+                                                        &display_name,
+                                                        &format!("Captura rechazada: {}", reason),
+                                                    )
+                                                    .await;
+                                                    continue;
+                                                }
                                                 match capture_screenshot().await {
                                                     Some(path) => {
                                                         let _ = send_file(

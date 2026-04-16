@@ -701,6 +701,42 @@ impl SensoryPipelineManager {
         })
     }
 
+    /// Single source of truth for "is a screen capture allowed right now?".
+    /// EVERY caller that shells out to grim/maim/spectacle/gnome-screenshot
+    /// MUST consult this before capturing — API handlers, agentic tools,
+    /// supervisor steps, MCP actions, SimpleX commands, meeting mode,
+    /// overlay, desktop_operator. The round-2 audit found each of those
+    /// paths had its own (or no) gate, which is exactly how new entry
+    /// points end up bypassing user policy.
+    ///
+    /// Returns `Err(reason)` with a human-readable reason when any of the
+    /// gates trips: kill switch, master screen toggle, suspend, session
+    /// locked, or active window is sensitive.
+    pub async fn ensure_screen_capture_allowed(&self) -> std::result::Result<(), &'static str> {
+        let state = self.state.read().await;
+        if state.kill_switch_active {
+            return Err("sensory kill switch is active");
+        }
+        if !state.vision.enabled {
+            return Err("screen capture is disabled by user preference");
+        }
+        let current_window = state.vision.current_window.clone();
+        drop(state);
+
+        if self.is_suspending() {
+            return Err("screen capture is paused across suspend/hibernate");
+        }
+        if is_session_locked().await {
+            return Err("screen capture skipped: session locked");
+        }
+        if let Some(title) = current_window {
+            if is_sensitive_window_title(&title) {
+                return Err("screen capture skipped: sensitive active window");
+            }
+        }
+        Ok(())
+    }
+
     /// Called by the login1 PrepareForSleep listener when the system is
     /// about to suspend/hibernate or has just resumed. Gates subsequent
     /// presence captures via the `suspending` flag.
@@ -3224,6 +3260,20 @@ impl SensoryPipelineManager {
         write_atomic(&path, &raw)
             .await
             .context("Failed to persist sensory pipeline state")?;
+        // Harden to 0o600. The persisted state contains last_ocr_text,
+        // last_summary, current_window, voice transcripts, capture paths —
+        // exactly the data the API response scrubs. Without this chmod
+        // the file was world-readable (0o644), so every local uid could
+        // read live activity via the disk. Audit round-2 C-NEW-6.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(md) = tokio::fs::metadata(&path).await {
+                let mut perms = md.permissions();
+                perms.set_mode(0o600);
+                let _ = tokio::fs::set_permissions(&path, perms).await;
+            }
+        }
         Ok(())
     }
 }

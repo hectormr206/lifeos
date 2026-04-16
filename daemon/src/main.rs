@@ -2045,6 +2045,7 @@ async fn main() -> anyhow::Result<()> {
             let ma = Some(meeting_archive.clone());
             let mast = Some(shared_meeting_assistant.clone());
             let cal = Some(state.calendar.clone());
+            let sens = Some(state.sensory_pipeline_manager.clone());
             let hist = shared_history.clone();
             let cron = shared_cron_store.clone();
             let ev = state.event_bus.clone();
@@ -2058,6 +2059,7 @@ async fn main() -> anyhow::Result<()> {
                     ma,
                     mast,
                     cal,
+                    sens,
                     hist,
                     cron,
                     Some(ev),

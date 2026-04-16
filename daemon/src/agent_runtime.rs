@@ -2309,17 +2309,26 @@ impl AgentRuntimeManager {
             return Ok(());
         }
 
+        // Look for any prior explicit sensory toggle that recorded
+        // `screen_enabled: false` / `camera_enabled: false` in its
+        // payload. Those entries are written by `set_sensory_capture_runtime`
+        // with action `sensory_capture_start` (granular toggle) or
+        // `sensory_capture_stop` (all-off). If the user has EVER chosen
+        // to disable the sense explicitly, the migration must not
+        // override it — round-2 audit flagged the previous version as
+        // a no-op because the action names it looked for were never
+        // written. This scans payload details instead.
         let user_disabled_screen = state.ledger.iter().any(|e| {
             matches!(
                 e.action.as_str(),
-                "runtime_disable_screen" | "disable_screen" | "screen_off"
-            )
+                "sensory_capture_start" | "sensory_capture_stop"
+            ) && e.detail.get("screen_enabled").and_then(|v| v.as_bool()) == Some(false)
         });
         let user_disabled_camera = state.ledger.iter().any(|e| {
             matches!(
                 e.action.as_str(),
-                "runtime_disable_camera" | "disable_camera" | "camera_off"
-            )
+                "sensory_capture_start" | "sensory_capture_stop"
+            ) && e.detail.get("camera_enabled").and_then(|v| v.as_bool()) == Some(false)
         });
 
         let mut changed = false;

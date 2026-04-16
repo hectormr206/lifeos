@@ -3340,8 +3340,17 @@ async fn get_sensory_status(
             "last_relevant_text",
             "last_summary",
             "current_window",
+            "current_app",           // app identity reveals activity category
+            "last_window_change_at", // cadence leak
         ] {
             vision.remove(key);
+        }
+    }
+    // Voice transcripts and responses also leak directly — the prior
+    // scrub only covered vision. Round-2 audit flagged this as C-NEW-7.
+    if let Some(voice) = value.get_mut("voice").and_then(|v| v.as_object_mut()) {
+        for key in ["last_transcript", "last_response", "last_audio_path"] {
+            voice.remove(key);
         }
     }
     Ok(Json(value))
@@ -5264,11 +5273,20 @@ async fn overlay_chat(
     State(state): State<ApiState>,
     Json(request): Json<OverlayChatRequest>,
 ) -> Result<Json<OverlayChatResponse>, (StatusCode, Json<ApiError>)> {
+    // `include_screen=true` triggers a real screen capture inside
+    // overlay.send_message via include_screen_context. Without this gate
+    // the endpoint bypassed every screen policy lever (round-2 C-NEW-1).
+    // Callers that didn't request screen context stay ungated.
+    let request_include_screen = request.include_screen;
+    if request_include_screen {
+        ensure_screen_capture_allowed(&state).await?;
+    }
+
     let overlay_mgr = state.overlay_manager.read().await.clone();
     let start = std::time::Instant::now();
 
     let response = match overlay_mgr
-        .send_message(request.message, request.include_screen)
+        .send_message(request.message, request_include_screen)
         .await
     {
         Ok(response) => response,
@@ -7072,11 +7090,25 @@ async fn get_followalong_context(
     State(state): State<ApiState>,
 ) -> Result<Json<ContextStateResponse>, (StatusCode, Json<ApiError>)> {
     let manager = state.follow_along_manager.read().await.clone();
+    let config = manager.get_config().await;
+    let consented = config.consent_status == crate::follow_along::ConsentStatus::Granted;
     let context = manager.get_context().await;
 
+    // Mirror the gate that `get_event_stats` now applies: without
+    // FollowAlong consent, drop the identity fields. Audit round-2
+    // C-NEW-8 — the previous version returned live titles regardless
+    // of consent, undoing every other gate.
     Ok(Json(ContextStateResponse {
-        current_application: context.current_application,
-        current_window: context.current_window,
+        current_application: if consented {
+            context.current_application
+        } else {
+            None
+        },
+        current_window: if consented {
+            context.current_window
+        } else {
+            None
+        },
         active_pattern: context.active_pattern,
         session_duration_minutes: context.session_duration.num_minutes(),
         last_event: context.last_event.map(|t| t.to_rfc3339()),
@@ -9503,50 +9535,29 @@ async fn ensure_followalong_consent(state: &ApiState) -> Result<(), (StatusCode,
     }
 }
 
-/// Gate a request that will capture / describe / OCR the screen. Verifies
-/// every policy lever the user has: FollowAlong consent, master sensory
-/// kill switch, per-sense `screen_enabled`, and the suspend/hibernate
-/// pause from sleep_watch.
-///
-/// Call this at EVERY entry point that touches the screen — not just the
-/// obvious ones. The screen-sense audit found that `/overlay/screenshot`,
-/// `/vision/ocr`, `/vision/describe`, `/sensory/snapshot`, and the
-/// meeting-capture path each had a different subset of gates. Routing
-/// everything through this helper keeps them lock-step.
+/// Gate a screen-capturing API request. Wraps the shared
+/// `SensoryPipelineManager::ensure_screen_capture_allowed` with an
+/// HTTP error shape; non-API callers (axi_tools, supervisor,
+/// simplex_bridge, desktop_operator, MCP, overlay) MUST call the
+/// manager directly so every capture path shares one policy check.
 async fn ensure_screen_capture_allowed(
     state: &ApiState,
 ) -> Result<(), (StatusCode, Json<ApiError>)> {
     ensure_followalong_consent(state).await?;
 
     let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
-    let status = sensory_mgr.status().await;
-    if status.kill_switch_active {
+    if let Err(reason) = sensory_mgr.ensure_screen_capture_allowed().await {
+        let status = if reason.contains("suspend") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::FORBIDDEN
+        };
         return Err((
-            StatusCode::FORBIDDEN,
+            status,
             Json(ApiError {
                 error: "Forbidden".to_string(),
-                message: "Sensory kill switch is active".to_string(),
-                code: 403,
-            }),
-        ));
-    }
-    if !status.vision.enabled {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(ApiError {
-                error: "Forbidden".to_string(),
-                message: "Screen capture is disabled by user preference".to_string(),
-                code: 403,
-            }),
-        ));
-    }
-    if sensory_mgr.is_suspending() {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiError {
-                error: "Service Unavailable".to_string(),
-                message: "Screen capture is paused across suspend/hibernate".to_string(),
-                code: 503,
+                message: reason.to_string(),
+                code: status.as_u16(),
             }),
         ));
     }
@@ -11863,6 +11874,7 @@ async fn post_llm_chat(
             meeting_archive: Some(state.meeting_archive.clone()),
             meeting_assistant: state.meeting_assistant.clone(),
             calendar: Some(state.calendar.clone()),
+            sensory_pipeline: Some(state.sensory_pipeline_manager.clone()),
             rate_limiter: RateLimiter::new(),
         };
 
