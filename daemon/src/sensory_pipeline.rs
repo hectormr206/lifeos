@@ -2149,11 +2149,7 @@ impl SensoryPipelineManager {
                                         audio_path = Some(path.clone());
                                     }
                                     let playback = self
-                                        .spawn_playback(
-                                            overlay.clone(),
-                                            session_id.clone(),
-                                            &path,
-                                        )
+                                        .spawn_playback(overlay.clone(), session_id.clone(), &path)
                                         .await?;
                                     if playback_backend.is_none() {
                                         playback_backend = playback.0;
@@ -3484,8 +3480,7 @@ impl SensoryPipelineManager {
             // the actual handle. tokio's start_kill consults the
             // child's exit state, so we can never SIGKILL a reused
             // PID after the player exited naturally.
-            let (barge_kill_tx, mut barge_kill_rx) =
-                tokio::sync::oneshot::channel::<()>();
+            let (barge_kill_tx, mut barge_kill_rx) = tokio::sync::oneshot::channel::<()>();
             let mut monitor_kill_tx = Some(barge_kill_tx);
 
             // Barge-in monitor: capture short audio snippets while playing and
