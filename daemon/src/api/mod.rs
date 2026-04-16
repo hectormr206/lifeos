@@ -8054,6 +8054,9 @@ struct SensoryRuntimePayload {
     screen_enabled: Option<bool>,
     camera_enabled: Option<bool>,
     tts_enabled: Option<bool>,
+    /// Per-sense toggle for the meeting recorder. See
+    /// `SensoryCaptureRuntimeState::meeting_enabled`.
+    meeting_enabled: Option<bool>,
     capture_interval_seconds: Option<u64>,
     actor: Option<String>,
 }
@@ -8841,6 +8844,7 @@ async fn set_sensory_runtime(
     let screen_enabled = payload.screen_enabled.unwrap_or(current.screen_enabled);
     let camera_enabled = payload.camera_enabled.unwrap_or(current.camera_enabled);
     let tts_enabled = payload.tts_enabled.unwrap_or(current.tts_enabled);
+    let meeting_enabled = payload.meeting_enabled.unwrap_or(current.meeting_enabled);
     let capture_interval_seconds = payload
         .capture_interval_seconds
         .or(Some(current.capture_interval_seconds))
@@ -8868,6 +8872,7 @@ async fn set_sensory_runtime(
             screen_enabled,
             camera_enabled,
             tts_enabled,
+            meeting_enabled,
             capture_interval_seconds,
             payload.actor.as_deref(),
         )
@@ -8894,6 +8899,7 @@ async fn set_sensory_runtime(
                 screen_enabled: status.screen_enabled,
                 camera_enabled: status.camera_enabled,
                 tts_enabled: status.tts_enabled,
+                meeting_enabled: status.meeting_enabled,
                 kill_switch_active: status.kill_switch_active,
                 capture_interval_seconds: status.capture_interval_seconds,
                 always_on_active: always_on.enabled,
@@ -9280,6 +9286,7 @@ async fn trigger_sensory_kill_switch(
                     screen_enabled: runtime.screen_enabled,
                     camera_enabled: runtime.camera_enabled,
                     tts_enabled: runtime.tts_enabled,
+                    meeting_enabled: runtime.meeting_enabled,
                     kill_switch_active: runtime.kill_switch_active,
                     capture_interval_seconds: runtime.capture_interval_seconds,
                     always_on_active: always_on.enabled,

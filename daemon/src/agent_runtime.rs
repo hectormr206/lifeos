@@ -243,6 +243,13 @@ pub struct SensoryCaptureRuntimeState {
     pub camera_enabled: bool,
     #[serde(default = "default_tts_enabled")]
     pub tts_enabled: bool,
+    /// Master toggle for automatic meeting capture. When false the
+    /// daemon still does meeting *detection* (for presence / focus
+    /// hints) but does NOT record mic, system audio, or screenshots.
+    /// Default: true (preserves existing behaviour). Surfaced as
+    /// `Sense::Meeting` in the unified gate.
+    #[serde(default = "default_meeting_enabled")]
+    pub meeting_enabled: bool,
     pub running: bool,
     pub kill_switch_active: bool,
     #[serde(default)]
@@ -255,11 +262,17 @@ pub struct SensoryCaptureRuntimeState {
     pub restore_camera_enabled_after_kill_switch: Option<bool>,
     #[serde(default)]
     pub restore_tts_enabled_after_kill_switch: Option<bool>,
+    #[serde(default)]
+    pub restore_meeting_enabled_after_kill_switch: Option<bool>,
     pub capture_interval_seconds: u64,
     pub last_snapshot_at: Option<DateTime<Utc>>,
     pub last_screen_path: Option<String>,
     pub last_transcript_chars: usize,
     pub updated_at: Option<DateTime<Utc>>,
+}
+
+fn default_meeting_enabled() -> bool {
+    true
 }
 
 impl Default for SensoryCaptureRuntimeState {
@@ -270,6 +283,7 @@ impl Default for SensoryCaptureRuntimeState {
             screen_enabled: false,
             camera_enabled: false,
             tts_enabled: true,
+            meeting_enabled: true,
             running: false,
             kill_switch_active: false,
             restore_enabled_after_kill_switch: None,
@@ -277,6 +291,7 @@ impl Default for SensoryCaptureRuntimeState {
             restore_screen_enabled_after_kill_switch: None,
             restore_camera_enabled_after_kill_switch: None,
             restore_tts_enabled_after_kill_switch: None,
+            restore_meeting_enabled_after_kill_switch: None,
             capture_interval_seconds: 10,
             last_snapshot_at: None,
             last_screen_path: None,
@@ -1265,6 +1280,7 @@ impl AgentRuntimeManager {
         screen_enabled: bool,
         camera_enabled: bool,
         tts_enabled: bool,
+        meeting_enabled: bool,
         capture_interval_seconds: Option<u64>,
         actor: Option<&str>,
     ) -> Result<SensoryCaptureRuntimeState> {
@@ -1275,6 +1291,7 @@ impl AgentRuntimeManager {
         state.sensory_capture_runtime.screen_enabled = enabled && screen_enabled;
         state.sensory_capture_runtime.camera_enabled = enabled && camera_enabled;
         state.sensory_capture_runtime.tts_enabled = tts_enabled;
+        state.sensory_capture_runtime.meeting_enabled = meeting_enabled;
         state.sensory_capture_runtime.running =
             enabled && (audio_enabled || screen_enabled || camera_enabled);
         state.sensory_capture_runtime.kill_switch_active = false;
@@ -1293,6 +1310,9 @@ impl AgentRuntimeManager {
         state
             .sensory_capture_runtime
             .restore_tts_enabled_after_kill_switch = None;
+        state
+            .sensory_capture_runtime
+            .restore_meeting_enabled_after_kill_switch = None;
         state.always_on_runtime.restore_enabled_after_kill_switch = None;
         state.sensory_capture_runtime.capture_interval_seconds =
             capture_interval_seconds.unwrap_or(10).clamp(5, 30);
@@ -1301,6 +1321,7 @@ impl AgentRuntimeManager {
         let effective_screen_enabled = state.sensory_capture_runtime.screen_enabled;
         let effective_camera_enabled = state.sensory_capture_runtime.camera_enabled;
         let effective_tts_enabled = state.sensory_capture_runtime.tts_enabled;
+        let effective_meeting_enabled = state.sensory_capture_runtime.meeting_enabled;
         let effective_interval = state.sensory_capture_runtime.capture_interval_seconds;
 
         append_ledger(
@@ -1319,6 +1340,7 @@ impl AgentRuntimeManager {
                 "screen_enabled": effective_screen_enabled,
                 "camera_enabled": effective_camera_enabled,
                 "tts_enabled": effective_tts_enabled,
+                "meeting_enabled": effective_meeting_enabled,
                 "capture_interval_seconds": effective_interval,
             }),
         );
@@ -1354,6 +1376,10 @@ impl AgentRuntimeManager {
             .sensory_capture_runtime
             .restore_tts_enabled_after_kill_switch =
             Some(state.sensory_capture_runtime.tts_enabled);
+        state
+            .sensory_capture_runtime
+            .restore_meeting_enabled_after_kill_switch =
+            Some(state.sensory_capture_runtime.meeting_enabled);
         state.always_on_runtime.restore_enabled_after_kill_switch =
             Some(state.always_on_runtime.enabled);
         state.sensory_capture_runtime.enabled = false;
@@ -1361,6 +1387,7 @@ impl AgentRuntimeManager {
         state.sensory_capture_runtime.screen_enabled = false;
         state.sensory_capture_runtime.camera_enabled = false;
         state.sensory_capture_runtime.tts_enabled = false;
+        state.sensory_capture_runtime.meeting_enabled = false;
         state.sensory_capture_runtime.running = false;
         state.sensory_capture_runtime.kill_switch_active = true;
         state.sensory_capture_runtime.updated_at = Some(Utc::now());
@@ -2420,6 +2447,11 @@ fn restore_sensory_after_kill_switch(state: &mut AgentRuntimeState) {
         .restore_tts_enabled_after_kill_switch
         .take()
         .unwrap_or(state.sensory_capture_runtime.tts_enabled);
+    let restore_meeting_enabled = state
+        .sensory_capture_runtime
+        .restore_meeting_enabled_after_kill_switch
+        .take()
+        .unwrap_or(state.sensory_capture_runtime.meeting_enabled);
     let restore_always_on_enabled = state
         .always_on_runtime
         .restore_enabled_after_kill_switch
@@ -2431,6 +2463,7 @@ fn restore_sensory_after_kill_switch(state: &mut AgentRuntimeState) {
     state.sensory_capture_runtime.screen_enabled = restore_enabled && restore_screen_enabled;
     state.sensory_capture_runtime.camera_enabled = restore_enabled && restore_camera_enabled;
     state.sensory_capture_runtime.tts_enabled = restore_tts_enabled;
+    state.sensory_capture_runtime.meeting_enabled = restore_meeting_enabled;
     state.sensory_capture_runtime.running = state.sensory_capture_runtime.enabled
         && (state.sensory_capture_runtime.audio_enabled
             || state.sensory_capture_runtime.screen_enabled
@@ -3350,6 +3383,7 @@ mod tests {
                 true,
                 false,
                 true,
+                true,
                 Some(10),
                 Some("user://local/admin"),
             )
@@ -3387,6 +3421,7 @@ mod tests {
             false,
             true,
             false,
+            true,
             Some(12),
             Some("user://local/admin"),
         )

@@ -342,6 +342,13 @@ pub struct VoiceSessionRuntime {
     /// (also requires always-on listening to be enabled).
     #[serde(default)]
     pub audio_enabled: bool,
+    /// Per-sense toggle for automatic meeting capture. Evaluated by
+    /// `Sense::Meeting`. When false, Axi still detects meetings (for
+    /// focus / presence hints) but does NOT record audio or take
+    /// screenshots. AND'd with audio_enabled and kill_switch in the
+    /// gate so it cannot accidentally re-enable capture.
+    #[serde(default)]
+    pub meeting_capture_enabled: bool,
     pub always_on_active: bool,
     #[serde(default = "default_tts_enabled")]
     pub tts_enabled: bool,
@@ -370,6 +377,7 @@ impl Default for VoiceSessionRuntime {
         Self {
             active: false,
             audio_enabled: false,
+            meeting_capture_enabled: true,
             always_on_active: false,
             tts_enabled: true,
             session_id: None,
@@ -659,6 +667,9 @@ pub struct SensoryRuntimeSync<'a> {
     pub screen_enabled: bool,
     pub camera_enabled: bool,
     pub tts_enabled: bool,
+    /// Per-sense toggle for automatic meeting capture. Evaluated by
+    /// `Sense::Meeting`. See `VoiceSessionRuntime::meeting_capture_enabled`.
+    pub meeting_enabled: bool,
     pub kill_switch_active: bool,
     pub capture_interval_seconds: u64,
     pub always_on_active: bool,
@@ -700,6 +711,11 @@ pub struct AlwaysOnCycle<'a> {
 ///   PLUS `voice.always_on_active` (the wake-word detector must be
 ///   enabled by the user). Use for rustpotter and the continuous
 ///   hotword-probe loop only.
+/// - `Meeting` — stricter superset of Microphone: adds the per-sense
+///   `voice.meeting_capture_enabled` toggle so the user can let Axi
+///   hear the mic (wake word, voice commands) WITHOUT auto-recording
+///   every meeting they have. Gates the meeting recorder, screenshots,
+///   and real-time captions.
 /// - `Tts` — kill switch + `voice.tts_enabled`.
 /// - `WindowTracking` — kill switch + FollowAlong consent. Gates the
 ///   event-bus `WindowChanged` listener in `sensory_memory`.
@@ -713,6 +729,7 @@ pub enum Sense {
     Camera,
     Microphone,
     AlwaysOnListening,
+    Meeting,
     Tts,
     WindowTracking,
     CloudRoute,
@@ -725,6 +742,7 @@ impl Sense {
             Sense::Camera => "camera",
             Sense::Microphone => "microphone",
             Sense::AlwaysOnListening => "always_on_listening",
+            Sense::Meeting => "meeting",
             Sense::Tts => "tts",
             Sense::WindowTracking => "window_tracking",
             Sense::CloudRoute => "cloud_route",
@@ -899,6 +917,24 @@ impl SensoryPipelineManager {
                 }
                 Ok(())
             }
+            Sense::Meeting => {
+                // Lets Axi hear you (wake word, voice commands) WITHOUT
+                // auto-recording every call. When `meeting_capture_enabled`
+                // is false, meeting detection still runs (presence /
+                // focus hints) but the recorder, captions, and meeting
+                // screenshots are gated closed.
+                if !state.voice.audio_enabled {
+                    return Err("meeting capture requires audio_enabled");
+                }
+                if !state.voice.meeting_capture_enabled {
+                    return Err("meeting capture is disabled by user preference");
+                }
+                drop(state);
+                if self.is_suspending() {
+                    return Err("meeting capture is paused across suspend/hibernate");
+                }
+                Ok(())
+            }
             Sense::Tts => {
                 if !state.voice.tts_enabled {
                     return Err("TTS is disabled by user preference");
@@ -1056,6 +1092,8 @@ impl SensoryPipelineManager {
         state.presence.camera_consented = runtime.camera_enabled && !runtime.kill_switch_active;
         state.presence.camera_active = runtime.camera_enabled && !runtime.kill_switch_active;
         state.voice.audio_enabled = runtime.audio_enabled && !runtime.kill_switch_active;
+        state.voice.meeting_capture_enabled =
+            runtime.meeting_enabled && runtime.audio_enabled && !runtime.kill_switch_active;
         state.voice.always_on_active =
             runtime.always_on_active && runtime.audio_enabled && !runtime.kill_switch_active;
         state.voice.tts_enabled = runtime.tts_enabled && !runtime.kill_switch_active;
@@ -8493,6 +8531,7 @@ mod tests {
             st.kill_switch_active = true;
             st.vision.enabled = true;
             st.voice.always_on_active = true;
+            st.voice.meeting_capture_enabled = true;
             st.voice.tts_enabled = true;
             st.presence.camera_consented = true;
         }
@@ -8500,6 +8539,8 @@ mod tests {
             Sense::Screen,
             Sense::Camera,
             Sense::Microphone,
+            Sense::AlwaysOnListening,
+            Sense::Meeting,
             Sense::Tts,
             Sense::WindowTracking,
             Sense::CloudRoute,
@@ -8511,6 +8552,51 @@ mod tests {
                 sense
             );
         }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn meeting_gate_respects_per_sense_toggle() {
+        // Axi should be able to hear the user (wake word, voice commands)
+        // WITHOUT auto-recording every meeting. Turning
+        // `meeting_capture_enabled` off must deny Sense::Meeting while
+        // Sense::Microphone still passes — the defining property of the
+        // new toggle.
+        let dir =
+            std::env::temp_dir().join(format!("lifeos-meeting-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        {
+            let mut st = mgr.state.write().await;
+            st.kill_switch_active = false;
+            st.voice.audio_enabled = true;
+            st.voice.meeting_capture_enabled = false;
+        }
+        let mic = mgr
+            .ensure_sense_allowed(Sense::Microphone, "test.mic")
+            .await;
+        let meeting = mgr
+            .ensure_sense_allowed(Sense::Meeting, "test.meeting")
+            .await;
+        assert!(
+            mic.is_ok(),
+            "Microphone should pass with audio_enabled=true"
+        );
+        assert!(
+            meeting.is_err(),
+            "Meeting should be refused with meeting_capture_enabled=false"
+        );
+
+        // Flip back: both pass.
+        {
+            let mut st = mgr.state.write().await;
+            st.voice.meeting_capture_enabled = true;
+        }
+        assert!(mgr
+            .ensure_sense_allowed(Sense::Meeting, "test.meeting_on")
+            .await
+            .is_ok());
+
         std::fs::remove_dir_all(dir).ok();
     }
 

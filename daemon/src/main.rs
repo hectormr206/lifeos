@@ -2645,6 +2645,7 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     screen_enabled: runtime.screen_enabled,
                     camera_enabled: runtime.camera_enabled,
                     tts_enabled: runtime.tts_enabled,
+                    meeting_enabled: runtime.meeting_enabled,
                     kill_switch_active: runtime.kill_switch_active,
                     capture_interval_seconds: runtime.capture_interval_seconds,
                     always_on_active: always_on.enabled,

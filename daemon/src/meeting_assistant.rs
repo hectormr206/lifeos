@@ -245,7 +245,7 @@ impl MeetingAssistant {
                 let guard = sensory.read().await;
                 if guard
                     .ensure_sense_allowed(
-                        crate::sensory_pipeline::Sense::Microphone,
+                        crate::sensory_pipeline::Sense::Meeting,
                         "meeting_assistant.detect_tick",
                     )
                     .await
@@ -595,7 +595,7 @@ impl MeetingAssistant {
             let guard = sensory.read().await;
             if let Err(reason) = guard
                 .ensure_sense_allowed(
-                    crate::sensory_pipeline::Sense::Microphone,
+                    crate::sensory_pipeline::Sense::Meeting,
                     "meeting_assistant.start_recording",
                 )
                 .await
@@ -1576,7 +1576,7 @@ Usá EXACTAMENTE este formato para cada tarea:
             let guard = sensory.read().await;
             if guard
                 .ensure_sense_allowed(
-                    crate::sensory_pipeline::Sense::Microphone,
+                    crate::sensory_pipeline::Sense::Meeting,
                     "meeting_assistant.start_captions",
                 )
                 .await
@@ -1641,7 +1641,7 @@ Usá EXACTAMENTE este formato para cada tarea:
                     let guard = sensory.read().await;
                     if guard
                         .ensure_sense_allowed(
-                            crate::sensory_pipeline::Sense::Microphone,
+                            crate::sensory_pipeline::Sense::Meeting,
                             "meeting.caption_chunk",
                         )
                         .await
