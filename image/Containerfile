@@ -243,10 +243,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # confusion — a `from X import Y` line inside an inline RUN heredoc gets
 # misparsed as a `FROM` stage directive by buildkit.
 COPY image/scripts/prewarm-kokoro.py /build/prewarm-kokoro.py
+ENV HF_HOME=/opt/lifeos/kokoro-env/hf-cache
 RUN HF_HUB_OFFLINE=0 \
     /opt/lifeos/kokoro-env/bin/python3 /build/prewarm-kokoro.py
 
-# Verify if_sara voice artifact exists after pre-warm
+# Verify if_sara voice artifact exists after pre-warm (weights land in HF_HOME)
 RUN find /opt/lifeos/kokoro-env -name 'if_sara*' | grep -q '.' || \
     (echo 'ERROR: if_sara voice artifact not found after pre-warm' && exit 1)
 
