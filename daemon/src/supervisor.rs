@@ -283,6 +283,12 @@ pub struct Supervisor {
     shadow_mode: bool,
     /// Optional event bus for broadcasting health reports to the dashboard.
     event_bus: std::sync::Mutex<Option<broadcast::Sender<crate::events::DaemonEvent>>>,
+    /// Sensory pipeline — consulted before any `StepAction::ScreenCapture`
+    /// or `StepAction::ScreenAnalyze` shells out to grim so the supervisor
+    /// loop honors kill-switch, master screen toggle, suspend, lock, and
+    /// sensitive-window policy. Round-2 audit C-NEW-5.
+    sensory_pipeline:
+        std::sync::Mutex<Option<Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>>>,
 }
 
 impl Supervisor {
@@ -348,12 +354,26 @@ impl Supervisor {
             auto_approve_medium,
             shadow_mode,
             event_bus: std::sync::Mutex::new(None),
+            sensory_pipeline: std::sync::Mutex::new(None),
         }
     }
 
     /// Attach an event bus for broadcasting health reports to the dashboard.
     pub fn set_event_bus(&self, bus: broadcast::Sender<crate::events::DaemonEvent>) {
         *self.event_bus.lock().unwrap_or_else(|e| e.into_inner()) = Some(bus);
+    }
+
+    /// Attach the sensory pipeline manager so `StepAction::ScreenCapture`
+    /// and `StepAction::ScreenAnalyze` can honor the unified sense gate.
+    /// Without this, the supervisor captures even with screen_enabled=false.
+    pub fn set_sensory_pipeline(
+        &self,
+        manager: Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>,
+    ) {
+        *self
+            .sensory_pipeline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(manager);
     }
 
     /// Attach a scheduled task manager.
@@ -1427,6 +1447,32 @@ impl Supervisor {
 
     /// Capture a screenshot and return its path.
     async fn execute_screen_capture(&self) -> Result<String> {
+        // Unified sense gate. Round-2 audit C-NEW-5: the supervisor
+        // previously captured at will from `StepAction::ScreenCapture`,
+        // ignoring every user policy lever.
+        let sensory = self
+            .sensory_pipeline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let sensory = sensory.ok_or_else(|| {
+            anyhow::anyhow!(
+                "supervisor screen capture refused: sensory pipeline not wired (fail-closed)"
+            )
+        })?;
+        {
+            let guard = sensory.read().await;
+            if let Err(reason) = guard
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::Screen,
+                    "supervisor.screen_capture",
+                )
+                .await
+            {
+                anyhow::bail!("supervisor screen capture refused: {}", reason);
+            }
+        }
+
         let screenshot_dir = self.work_dir.join("target/screenshots");
         tokio::fs::create_dir_all(&screenshot_dir).await.ok();
         let filename = format!(
@@ -1541,6 +1587,28 @@ impl Supervisor {
 
     /// Capture a screenshot and return its path.
     async fn capture_screenshot(&self) -> Result<String> {
+        // Same gate as execute_screen_capture — covers the analyze path.
+        let sensory = self
+            .sensory_pipeline
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let sensory = sensory.ok_or_else(|| {
+            anyhow::anyhow!("supervisor capture refused: sensory pipeline not wired (fail-closed)")
+        })?;
+        {
+            let guard = sensory.read().await;
+            if let Err(reason) = guard
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::Screen,
+                    "supervisor.capture_screenshot",
+                )
+                .await
+            {
+                anyhow::bail!("supervisor capture refused: {}", reason);
+            }
+        }
+
         let screenshot_dir = std::env::temp_dir().join("lifeos-screenshots");
         tokio::fs::create_dir_all(&screenshot_dir).await.ok();
         let filename = format!("sv-{}.png", chrono::Local::now().format("%H%M%S"));
@@ -2255,6 +2323,7 @@ Always end with a "respond" step summarizing what was done."#,
                     &crate::desktop_operator::DesktopAction::FlatpakInstall {
                         app_id: app_id.clone(),
                     },
+                    None,
                 )
                 .await;
                 if result.success {
@@ -2266,6 +2335,7 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::OpenApp { name } => {
                 let result = crate::desktop_operator::DesktopOperator::execute(
                     &crate::desktop_operator::DesktopAction::OpenApp { name: name.clone() },
+                    None,
                 )
                 .await;
                 Ok(result.output)
@@ -2273,6 +2343,7 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::OpenFile { path } => {
                 let result = crate::desktop_operator::DesktopOperator::execute(
                     &crate::desktop_operator::DesktopAction::OpenFile { path: path.clone() },
+                    None,
                 )
                 .await;
                 Ok(result.output)
@@ -2280,6 +2351,7 @@ Always end with a "respond" step summarizing what was done."#,
             StepAction::TypeText { text } => {
                 let result = crate::desktop_operator::DesktopOperator::execute(
                     &crate::desktop_operator::DesktopAction::TypeText { text: text.clone() },
+                    None,
                 )
                 .await;
                 Ok(result.output)
@@ -2289,6 +2361,7 @@ Always end with a "respond" step summarizing what was done."#,
                     &crate::desktop_operator::DesktopAction::SendKeys {
                         combo: combo.clone(),
                     },
+                    None,
                 )
                 .await;
                 Ok(result.output)

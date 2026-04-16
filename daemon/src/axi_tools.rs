@@ -2194,7 +2194,7 @@ REGLAS FIRMES:
             | "cosmic_terminal" | "cosmic_files" | "cosmic_editor" | "cosmic_dark_mode"
             | "calc_read_cells" | "writer_export_pdf" | "a11y_tree" | "a11y_find"
             | "a11y_activate" | "a11y_get_text" | "a11y_set_text" | "a11y_apps" => {
-                execute_os_control(&call.name, &call.args).await
+                execute_os_control(&call.name, &call.args, ctx.sensory_pipeline.clone()).await
             }
             // --- Fase BA: Unified Memory tools ---
             "health_status" => execute_health_status().await,
@@ -10180,9 +10180,15 @@ max_context = 128000
 
     /// Execute OS control plane tools by delegating to the MCP server's `call_tool`.
     /// Maps short Telegram tool names to their `lifeos_*` MCP counterparts.
-    async fn execute_os_control(tool_name: &str, args: &serde_json::Value) -> Result<String> {
+    /// `sensory` is threaded through so MCP-side screenshot actions can
+    /// honor the unified sense gate.
+    async fn execute_os_control(
+        tool_name: &str,
+        args: &serde_json::Value,
+        sensory: Option<Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>>,
+    ) -> Result<String> {
         let mcp_name = format!("lifeos_{}", tool_name);
-        match crate::mcp_server::call_tool(&mcp_name, args).await {
+        match crate::mcp_server::call_tool(&mcp_name, args, sensory).await {
             Ok(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
             Err(e) => Ok(format!("Error: {}", e)),
         }

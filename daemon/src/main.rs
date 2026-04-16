@@ -854,6 +854,14 @@ async fn main() -> anyhow::Result<()> {
         spm.set_follow_along(state.follow_along_manager.clone());
     }
 
+    // Plumb the sensory pipeline into the supervisor so its
+    // StepAction::ScreenCapture / ScreenAnalyze paths hit the unified
+    // gate — without this the autonomous agent bypasses every user
+    // policy lever (round-2 audit C-NEW-5).
+    state
+        .supervisor
+        .set_sensory_pipeline(state.sensory_pipeline_manager.clone());
+
     // Attach scheduled tasks manager to supervisor.
     state
         .supervisor
