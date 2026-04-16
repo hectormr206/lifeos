@@ -2014,6 +2014,17 @@ impl SensoryPipelineManager {
         if state.kill_switch_active {
             anyhow::bail!("sensory kill switch is active");
         }
+        // Respect the user's master screen toggle. The dashboard surfaces
+        // `vision.enabled` as "captura de pantalla" — a request that
+        // bypasses it makes the toggle meaningless.
+        if !state.vision.enabled {
+            anyhow::bail!("screen capture is disabled by user preference");
+        }
+        // Hard stop across suspend/hibernate — same gate the sensory loop
+        // and camera path already use.
+        if self.is_suspending() {
+            anyhow::bail!("screen capture is paused across suspend/hibernate");
+        }
 
         let question = request.question.unwrap_or_else(|| {
             "Que ves en mi pantalla? Describe lo relevante y accionable.".to_string()

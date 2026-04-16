@@ -9,7 +9,7 @@
 //! Transcription: Whisper STT post-meeting, then LLM summarization.
 
 use anyhow::{Context, Result};
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -133,6 +133,11 @@ pub struct MeetingAssistant {
     caption_stop_tx: Option<tokio::sync::watch::Sender<bool>>,
     /// Consecutive ticks where no meeting was detected (grace period counter).
     no_meeting_ticks: u8,
+    /// Agent runtime manager — consulted before every screenshot so the
+    /// `screen_enabled` toggle and sensory kill switch apply to meeting
+    /// mode too. Without this, meeting capture was "god mode" and kept
+    /// recording over a user-disabled screen sense.
+    agent_runtime: Option<Arc<RwLock<crate::agent_runtime::AgentRuntimeManager>>>,
 }
 
 impl MeetingAssistant {
@@ -164,7 +169,17 @@ impl MeetingAssistant {
             caption_buffer: Arc::new(RwLock::new(Vec::new())),
             caption_stop_tx: None,
             no_meeting_ticks: 0,
+            agent_runtime: None,
         }
+    }
+
+    /// Wire the agent runtime manager so meeting capture can honor
+    /// `screen_enabled` and `kill_switch_active`.
+    pub fn set_agent_runtime(
+        &mut self,
+        runtime: Arc<RwLock<crate::agent_runtime::AgentRuntimeManager>>,
+    ) {
+        self.agent_runtime = Some(runtime);
     }
 
     /// Set the speaker identification manager for resolving speaker labels to names (BB.1).
@@ -1048,7 +1063,28 @@ Usá EXACTAMENTE este formato para cada tarea:
 
     /// Capture a screenshot of the current screen using `grim` and save it to
     /// the meetings directory alongside the audio recording.
+    ///
+    /// Enforces the same gates as any other screen capture entry point:
+    /// screen_enabled, kill switch, and the per-meeting toggle (when we
+    /// land it). Also hardens the output file to 0o600 so meeting
+    /// screenshots aren't world-readable — prior behavior was 0o644.
     async fn capture_meeting_screenshot(&mut self) -> Result<()> {
+        // Gate on the master screen-capture toggle + kill switch via the
+        // runtime manager. Bypassing these made meeting mode a "god-mode"
+        // screen recorder that kept capturing even with the user's
+        // dashboard toggle off.
+        if let Some(ref runtime) = self.agent_runtime {
+            let sensory = runtime.read().await.sensory_capture_runtime().await;
+            if sensory.kill_switch_active {
+                debug!("[meeting] screenshot skipped: sensory kill switch active");
+                return Ok(());
+            }
+            if !sensory.screen_enabled {
+                debug!("[meeting] screenshot skipped: screen_enabled=false");
+                return Ok(());
+            }
+        }
+
         let meetings_dir = self.data_dir.join("meetings");
         tokio::fs::create_dir_all(&meetings_dir).await?;
 
@@ -1061,19 +1097,55 @@ Usá EXACTAMENTE este formato para cada tarea:
         let output_path = meetings_dir.join(&filename);
         let output_str = output_path.to_string_lossy().to_string();
 
-        let output = Command::new("grim")
-            .arg(&output_str)
-            .output()
-            .await
-            .context("Failed to run grim for meeting screenshot")?;
+        // Timeout + kill_on_drop guard against a hung compositor / portal
+        // prompt blocking the meeting loop indefinitely. The awareness
+        // capture path has a similar bound; meeting mode was missing it.
+        let mut cmd = Command::new("grim");
+        cmd.arg(&output_str).kill_on_drop(true);
+        let output =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await {
+                Ok(res) => res.context("Failed to run grim for meeting screenshot")?,
+                Err(_) => {
+                    tokio::fs::remove_file(&output_path).await.ok();
+                    anyhow::bail!("grim timed out capturing meeting screenshot");
+                }
+            };
 
         if !output.status.success() {
+            tokio::fs::remove_file(&output_path).await.ok();
             anyhow::bail!("grim failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+
+        // 0o600 — owner-only. Stops a world-readable ~/var/lib/lifeos/meetings/
+        // snapshot leaking whatever desk contents were visible during a call.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(md) = tokio::fs::metadata(&output_path).await {
+                let mut perms = md.permissions();
+                perms.set_mode(0o600);
+                let _ = tokio::fs::set_permissions(&output_path, perms).await;
+            }
         }
 
         self.state.screenshot_paths.push(output_str.clone());
         self.last_screenshot = Some(std::time::Instant::now());
         info!("[meeting] Screenshot #{} captured: {}", n, filename);
+
+        // Per-capture retention sweep. Housekeeping runs every 6h; at
+        // ~1 screenshot / 45 s during an active call that would let the
+        // directory balloon past the 120-file cap between ticks. Observed
+        // live pre-fix: 176 PNGs + WAVs = 778 MB.
+        if let Ok(removed) =
+            crate::storage_housekeeping::cleanup_dir_by_count(&meetings_dir, 120).await
+        {
+            if removed > 0 {
+                debug!(
+                    "[meeting] per-capture retention removed {} files (cap 120)",
+                    removed
+                );
+            }
+        }
 
         Ok(())
     }

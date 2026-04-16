@@ -3183,10 +3183,12 @@ async fn post_vision_ocr(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let capture_screen = payload.capture_screen.unwrap_or(payload.source.is_none());
 
-    // Consent is required for every OCR path, not just live screen capture.
-    // Reading a previously-captured frame or screenshot still qualifies as
-    // sensory data access and must be gated.
-    ensure_followalong_consent(&state).await?;
+    // Full screen-sense gate: consent + kill switch + screen_enabled +
+    // suspend. Applies to both live-capture and pre-captured sources.
+    // Previously only `ensure_followalong_consent` ran here, so a user
+    // who had toggled `screen_enabled=false` (or whose kill switch was
+    // tripped) could still OCR screenshots through this endpoint.
+    ensure_screen_capture_allowed(&state).await?;
 
     let source_path = if capture_screen {
         let capture = ScreenCapture::new(PathBuf::from("/var/lib/lifeos/screenshots"));
@@ -3315,7 +3317,34 @@ async fn get_sensory_status(
                 }),
             )
         })?;
-    Ok(Json(serde_json::json!(status)))
+
+    // Redact the fields that leak user activity: window title, capture
+    // path, raw + extracted OCR text, and the LLM screen summary. These
+    // stay in the in-memory pipeline state (and the on-disk state file)
+    // but must NOT be returned to API clients. Previously every
+    // bootstrap-authed consumer got live window titles on each poll.
+    let mut value = serde_json::to_value(&status).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )
+    })?;
+    if let Some(vision) = value.get_mut("vision").and_then(|v| v.as_object_mut()) {
+        for key in [
+            "last_capture_path",
+            "last_ocr_text",
+            "last_relevant_text",
+            "last_summary",
+            "current_window",
+        ] {
+            vision.remove(key);
+        }
+    }
+    Ok(Json(value))
 }
 
 async fn run_voice_session(
@@ -3471,10 +3500,11 @@ async fn describe_screen_with_sensory(
         ));
     }
 
-    // Consent-gate every vision-describe call. Feeding a pre-captured file
-    // to the multimodal model and persisting its description is just as
-    // sensitive as live screen capture.
-    ensure_followalong_consent(&state).await?;
+    // Full screen-sense gate (consent + kill switch + screen_enabled +
+    // suspend). Previously only `ensure_followalong_consent` — that let
+    // describe_screen bypass the master screen toggle the user sees in
+    // the dashboard.
+    ensure_screen_capture_allowed(&state).await?;
 
     // Whitelist caller-supplied source paths to daemon-owned sensory dirs
     // so the endpoint cannot be used to read and describe arbitrary files.
@@ -5276,6 +5306,11 @@ async fn overlay_chat(
 async fn overlay_screenshot(
     State(state): State<ApiState>,
 ) -> Result<Json<OverlayScreenshotResponse>, (StatusCode, Json<ApiError>)> {
+    // `overlay.include_screen_context()` calls ScreenCapture::capture
+    // directly with no gating of its own. Without this check the overlay
+    // endpoint was a backdoor around consent + kill switch + the master
+    // screen toggle.
+    ensure_screen_capture_allowed(&state).await?;
     let overlay_mgr = state.overlay_manager.read().await.clone();
     let screenshot_path = match overlay_mgr.include_screen_context().await {
         Ok(path) => path,
@@ -8815,7 +8850,12 @@ async fn capture_sensory_snapshot(
         ));
     }
 
-    let include_screen = payload.include_screen.unwrap_or(sensory.screen_enabled);
+    // `include_screen=true` in the payload must NOT override the user's
+    // master `screen_enabled` toggle. Ditto kill switch. Previously a
+    // caller could force a capture by passing `include_screen: true`
+    // even after the user had explicitly disabled screen capture.
+    let payload_include = payload.include_screen.unwrap_or(sensory.screen_enabled);
+    let include_screen = payload_include && sensory.screen_enabled && !sensory.kill_switch_active;
     let mut screen_path = None;
     if include_screen {
         let capture = ScreenCapture::new(PathBuf::from("/var/lib/lifeos/screenshots"));
@@ -9461,6 +9501,56 @@ async fn ensure_followalong_consent(state: &ApiState) -> Result<(), (StatusCode,
             }),
         ))
     }
+}
+
+/// Gate a request that will capture / describe / OCR the screen. Verifies
+/// every policy lever the user has: FollowAlong consent, master sensory
+/// kill switch, per-sense `screen_enabled`, and the suspend/hibernate
+/// pause from sleep_watch.
+///
+/// Call this at EVERY entry point that touches the screen — not just the
+/// obvious ones. The screen-sense audit found that `/overlay/screenshot`,
+/// `/vision/ocr`, `/vision/describe`, `/sensory/snapshot`, and the
+/// meeting-capture path each had a different subset of gates. Routing
+/// everything through this helper keeps them lock-step.
+async fn ensure_screen_capture_allowed(
+    state: &ApiState,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    ensure_followalong_consent(state).await?;
+
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let status = sensory_mgr.status().await;
+    if status.kill_switch_active {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "Sensory kill switch is active".to_string(),
+                code: 403,
+            }),
+        ));
+    }
+    if !status.vision.enabled {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "Screen capture is disabled by user preference".to_string(),
+                code: 403,
+            }),
+        ));
+    }
+    if sensory_mgr.is_suspending() {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiError {
+                error: "Service Unavailable".to_string(),
+                message: "Screen capture is paused across suspend/hibernate".to_string(),
+                code: 503,
+            }),
+        ));
+    }
+    Ok(())
 }
 
 /// Allowed base directories for caller-supplied sensory source paths.
