@@ -513,6 +513,23 @@
             </div>
           </div>
         </section>
+        <!-- ── TTS Voice Selector ── -->
+        <section class="settings-section" data-subsection="general">
+          <h2>Selector de Voz (TTS)</h2>
+          <div id="tts-unavailable-banner" class="setting-hint" style="display:none; color:var(--error, #e74c3c); margin-bottom:8px;">TTS temporalmente no disponible.</div>
+          <div class="settings-grid">
+            <div class="setting-item" style="grid-column: 1 / -1;">
+              <label for="voice-select">Voz de Axi</label>
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+                <select id="voice-select" style="flex:1; min-width:180px;"><option value="">Cargando voces...</option></select>
+                <input type="text" id="voice-preview-text" value="Hola, soy Axi. Esta es una prueba de voz." style="flex:2; min-width:200px;">
+                <button id="voice-preview-play" class="btn-small" title="Probar voz">&#9654;</button>
+                <button id="voice-save" class="btn-small" style="background:#27ae60;">Guardar</button>
+                <span id="tts-voice-status" style="font-size:0.85em; color:var(--text-muted);"></span>
+              </div>
+            </div>
+          </div>
+        </section>
         <section class="settings-section" data-subsection="general">
           <h2>Configuracion General</h2>
           <div class="settings-grid">

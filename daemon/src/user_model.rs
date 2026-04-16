@@ -23,6 +23,9 @@ pub struct UserModel {
     pub updated_at: Option<DateTime<Utc>>,
     /// When the user first started using LifeOS (set on first boot)
     pub first_seen: Option<DateTime<Utc>>,
+    /// Preferred TTS voice for Kokoro (e.g. "if_sara", "af_heart"). None = use server default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tts_voice: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -162,6 +165,13 @@ impl UserModel {
             }
             "emoji_usage" => self.communication.emoji_usage = value.to_string(),
             "vocabulary_level" => self.communication.vocabulary_level = value.to_string(),
+            "tts_voice" => {
+                if value.trim().is_empty() {
+                    self.tts_voice = None;
+                } else {
+                    self.tts_voice = Some(value.to_string());
+                }
+            }
             _ => {}
         }
         self.updated_at = Some(Utc::now());
@@ -736,5 +746,36 @@ mod tests {
         };
         let prompt = model.prompt_instructions();
         assert!(!prompt.contains("Modo aprendizaje activo"));
+    }
+
+    // ── D3: tts_voice field tests ─────────────────────────────────────────────
+    #[test]
+    fn test_user_model_tts_voice_defaults_to_none() {
+        let model = UserModel::default();
+        assert_eq!(model.tts_voice, None);
+    }
+
+    #[test]
+    fn test_user_model_tts_voice_deserialize_missing_key() {
+        let json = r#"{"communication":{"formality_level":2,"verbosity":"normal","preferred_format":"mixed","emoji_usage":"light","vocabulary_level":"technical"},"schedule_patterns":[],"active_projects":[],"declared_goals":[],"current_context":"","language":"","updated_at":null,"first_seen":null}"#;
+        let model: UserModel = serde_json::from_str(json).expect("deserialize without tts_voice");
+        assert_eq!(model.tts_voice, None);
+    }
+
+    #[test]
+    fn test_apply_preference_tts_voice_sets_value() {
+        let mut model = UserModel::default();
+        model.apply_preference("tts_voice", "af_heart");
+        assert_eq!(model.tts_voice, Some("af_heart".to_string()));
+    }
+
+    #[test]
+    fn test_apply_preference_tts_voice_empty_clears_value() {
+        let mut model = UserModel {
+            tts_voice: Some("if_sara".to_string()),
+            ..Default::default()
+        };
+        model.apply_preference("tts_voice", "");
+        assert_eq!(model.tts_voice, None);
     }
 }

@@ -996,6 +996,73 @@ mod inner {
                                                         &reply,
                                                     )
                                                     .await;
+                                                    // ── Voice-note reply hook (E2) ──
+                                                    // For voice-originated inputs, synthesize reply as OGG
+                                                    // and send as voice note (max 600 chars, max 1 MB).
+                                                    if reply.len() <= 600 {
+                                                        let tts_dir = std::path::PathBuf::from(
+                                                            "/var/lib/lifeos/tts-output",
+                                                        );
+                                                        let _ = tokio::fs::create_dir_all(&tts_dir)
+                                                            .await;
+                                                        let server_url =
+                                                            std::env::var("LIFEOS_TTS_SERVER_URL")
+                                                                .unwrap_or_else(|_| {
+                                                                    "http://127.0.0.1:8083"
+                                                                        .to_string()
+                                                                });
+                                                        let env_default = std::env::var(
+                                                            "LIFEOS_TTS_DEFAULT_VOICE",
+                                                        )
+                                                        .unwrap_or_else(|_| "if_sara".to_string());
+                                                        let voice = if let Some(ref um_arc) =
+                                                            tool_ctx.user_model
+                                                        {
+                                                            let um = um_arc.read().await;
+                                                            crate::sensory_pipeline::resolve_tts_voice(
+                                                                &um,
+                                                                &env_default,
+                                                                None,
+                                                                &[],
+                                                            )
+                                                        } else {
+                                                            env_default.clone()
+                                                        };
+                                                        match crate::sensory_pipeline::synthesize_with_kokoro_http(
+                                                            &std::path::PathBuf::from("/var/lib/lifeos"),
+                                                            &server_url,
+                                                            &reply,
+                                                            &voice,
+                                                            "ogg",
+                                                        ).await {
+                                                            Ok(ref audio_path) => {
+                                                                // Sanity check: path must be in /var/lib/lifeos/tts-output/
+                                                                let canonical = std::path::Path::new(audio_path);
+                                                                if !canonical.starts_with("/var/lib/lifeos/tts-output/") {
+                                                                    warn!("[simplex_bridge] TTS output path outside expected dir: {}", audio_path);
+                                                                } else {
+                                                                    // File size guard: skip if > 1 MB
+                                                                    let size_ok = tokio::fs::metadata(audio_path).await
+                                                                        .map(|m| m.len() <= 1_048_576)
+                                                                        .unwrap_or(false);
+                                                                    if size_ok {
+                                                                        let _ = send_file(&mut sink, &display_name, audio_path).await;
+                                                                    } else {
+                                                                        warn!("[simplex_bridge] TTS OGG too large (>1 MB), skipping voice note");
+                                                                    }
+                                                                    // Schedule cleanup after 60s
+                                                                    let cleanup_path = audio_path.clone();
+                                                                    tokio::spawn(async move {
+                                                                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                                                                        tokio::fs::remove_file(&cleanup_path).await.ok();
+                                                                    });
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                warn!("[simplex_bridge] TTS synthesis for voice reply failed: {}", e);
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                                 None => {
                                                     let _ = send_message(

@@ -3739,6 +3739,100 @@ async function refreshVidaPlena() {
   }
 }
 
+// --- TTS Voice Selector ---
+async function loadTtsVoiceSelector() {
+  const selectEl = document.getElementById('voice-select');
+  const playBtn = document.getElementById('voice-preview-play');
+  const saveBtn = document.getElementById('voice-save');
+  const statusEl = document.getElementById('tts-voice-status');
+  const banner = document.getElementById('tts-unavailable-banner');
+  if (!selectEl) return;
+
+  // Load current preference
+  let currentVoice = null;
+  try {
+    const prefs = await api('GET', '/user/preferences');
+    currentVoice = prefs && prefs.tts_voice ? prefs.tts_voice : null;
+  } catch { /* ignore */ }
+
+  // Load available voices
+  try {
+    const data = await api('GET', '/tts/voices');
+    if (!data || !data.voices || data.voices.length === 0) {
+      selectEl.innerHTML = '<option value="">Sin voces disponibles</option>';
+      if (playBtn) playBtn.disabled = true;
+      return;
+    }
+    // Group by language
+    const byLang = {};
+    for (const v of data.voices) {
+      const lang = v.language || 'Otras';
+      if (!byLang[lang]) byLang[lang] = [];
+      byLang[lang].push(v);
+    }
+    selectEl.innerHTML = '';
+    for (const [lang, voices] of Object.entries(byLang)) {
+      const group = document.createElement('optgroup');
+      group.label = lang;
+      for (const v of voices) {
+        const opt = document.createElement('option');
+        opt.value = v.name;
+        opt.textContent = v.name + (v.is_default ? ' (predeterminada)' : '');
+        if (v.name === currentVoice || (v.is_default && !currentVoice)) opt.selected = true;
+        group.appendChild(opt);
+      }
+      selectEl.appendChild(group);
+    }
+    if (playBtn) playBtn.disabled = false;
+    if (banner) banner.style.display = 'none';
+  } catch (_e) {
+    // TTS unavailable — disable controls and show banner
+    selectEl.innerHTML = '<option value="">TTS no disponible</option>';
+    if (playBtn) playBtn.disabled = true;
+    if (banner) banner.style.display = '';
+    return;
+  }
+
+  // Preview button
+  if (playBtn) {
+    playBtn.addEventListener('click', async () => {
+      const previewInput = document.getElementById('voice-preview-text');
+      const text = previewInput ? previewInput.value : 'Hola, soy Axi.';
+      const voice = selectEl.value;
+      playBtn.disabled = true;
+      if (statusEl) statusEl.textContent = 'Sintetizando...';
+      try {
+        await api('POST', '/sensory/tts/speak', { text, voice_model: voice, playback: true });
+        if (statusEl) statusEl.textContent = '';
+      } catch {
+        if (statusEl) statusEl.textContent = 'Error al reproducir.';
+      } finally {
+        playBtn.disabled = false;
+      }
+    });
+  }
+
+  // Save button
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      const voice = selectEl.value;
+      saveBtn.disabled = true;
+      if (statusEl) statusEl.textContent = 'Guardando...';
+      try {
+        await api('PATCH', '/user/preferences', { key: 'tts_voice', value: voice });
+        if (statusEl) {
+          statusEl.textContent = 'Guardado.';
+          setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
+        }
+      } catch {
+        if (statusEl) statusEl.textContent = 'Error al guardar.';
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+  }
+}
+
 // --- Boot ---
 (async () => {
   initTabs();
@@ -3765,5 +3859,6 @@ async function refreshVidaPlena() {
   refreshVidaPlena();
   loadMeetings();
   loadCalendar();
+  loadTtsVoiceSelector();
   runWelcomeSequence().catch(err => console.warn('welcome sequence failed:', err));
 })();
