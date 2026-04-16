@@ -345,7 +345,8 @@ impl MeetingAssistant {
                             });
 
                         // 2b. Identify speakers in diarized transcript (BB.1)
-                        let diarized = self.identify_speakers_in_transcript(&diarized, &path).await;
+                        let (diarized, participants) =
+                            self.identify_speakers_in_transcript(&diarized, &path).await;
 
                         // 3. Summarize with LLM (if router available)
                         let summary = if let Some(ref router) = self.llm_router {
@@ -420,7 +421,7 @@ impl MeetingAssistant {
                                     .clone()
                                     .unwrap_or_else(|| "unknown".into()),
                                 meeting_type: "remote".to_string(),
-                                participants: Vec::new(),
+                                participants: participants.clone(),
                                 transcript: transcript.clone(),
                                 diarized_transcript: diarized.clone(),
                                 summary: summary.clone().unwrap_or_default(),
@@ -459,7 +460,7 @@ impl MeetingAssistant {
                                 ended_at: &ended,
                                 duration_secs: duration,
                                 app_name: &meeting_title,
-                                participants: &[],
+                                participants: &participants,
                                 summary: summary.as_deref(),
                                 diarized_transcript: &diarized,
                                 action_items: &action_items_vec,
@@ -817,12 +818,16 @@ impl MeetingAssistant {
     ///
     /// Parses unique speaker labels like "[Speaker 1]", extracts a 5-second audio sample
     /// for each speaker, runs speaker identification, and replaces generic labels with
-    /// recognized names. Returns the original transcript if speaker_id is None or
-    /// identification fails.
-    async fn identify_speakers_in_transcript(&self, diarized: &str, audio_path: &str) -> String {
+    /// recognized names. Returns the updated transcript AND the set of real participant
+    /// names identified (empty set if no profile matched or speaker_id is unavailable).
+    async fn identify_speakers_in_transcript(
+        &self,
+        diarized: &str,
+        audio_path: &str,
+    ) -> (String, Vec<String>) {
         let speaker_id = match &self.speaker_id {
             Some(sid) => sid,
-            None => return diarized.to_string(),
+            None => return (diarized.to_string(), Vec::new()),
         };
 
         // Collect unique speaker labels and their first occurrence line index
@@ -837,7 +842,7 @@ impl MeetingAssistant {
         }
 
         if speaker_lines.is_empty() {
-            return diarized.to_string();
+            return (diarized.to_string(), Vec::new());
         }
 
         let total_lines = diarized.lines().count().max(1);
@@ -913,7 +918,7 @@ impl MeetingAssistant {
         }
 
         if name_map.is_empty() {
-            return diarized.to_string();
+            return (diarized.to_string(), Vec::new());
         }
 
         // Replace all speaker labels in the transcript
@@ -924,11 +929,26 @@ impl MeetingAssistant {
             result = result.replace(&old, &new);
         }
 
+        // Collect the subset of names that are actually identified humans
+        // (i.e. a registered profile matched). Anonymous profiles whose
+        // embeddings matched but have no user-supplied name come through
+        // as `format!("Unknown {label}")` — exclude those from the
+        // `participants` list so the column means "named humans we
+        // recognised" rather than "every label in the diarization".
+        let mut named: Vec<String> = name_map
+            .values()
+            .filter(|n| !n.starts_with("Unknown "))
+            .cloned()
+            .collect();
+        named.sort();
+        named.dedup();
+
         info!(
-            "[meeting] Speaker identification complete: {} speakers resolved",
-            name_map.len()
+            "[meeting] Speaker identification complete: {} speakers resolved ({} named)",
+            name_map.len(),
+            named.len()
         );
-        result
+        (result, named)
     }
 
     /// Generate a meeting summary from a transcript using the LLM router.
@@ -1173,7 +1193,7 @@ Usá EXACTAMENTE este formato para cada tarea:
                         });
 
                     // Identify speakers in diarized transcript (BB.1)
-                    let diarized = self
+                    let (diarized, participants) = self
                         .identify_speakers_in_transcript(&diarized, recording_path)
                         .await;
 
@@ -1250,7 +1270,7 @@ Usá EXACTAMENTE este formato para cada tarea:
                                 .clone()
                                 .unwrap_or_else(|| "manual".into()),
                             meeting_type: "manual".to_string(),
-                            participants: Vec::new(),
+                            participants: participants.clone(),
                             transcript: transcript.clone(),
                             diarized_transcript: diarized.clone(),
                             summary: summary.clone().unwrap_or_default(),
@@ -1286,7 +1306,7 @@ Usá EXACTAMENTE este formato para cada tarea:
                             ended_at: &ended,
                             duration_secs: duration,
                             app_name: &meeting_title,
-                            participants: &[],
+                            participants: &participants,
                             summary: summary.as_deref(),
                             diarized_transcript: &diarized,
                             action_items: &action_items_vec,
@@ -2463,9 +2483,18 @@ fn extract_parenthesized_deadline(s: &str) -> (String, Option<String>) {
 }
 
 async fn resolve_whisper_model() -> Result<String> {
+    // Prefer larger models first. Meeting transcription is a one-shot
+    // batch job — quality matters far more than per-second latency.
+    // `small` (~466MB) is substantially more accurate than `base`
+    // (~142MB) on Spanish / accented speech at the cost of ~3× CPU
+    // time, which is still well under the meeting duration itself.
+    // Caption model (live) stays on `tiny` via `resolve_caption_model`.
     let candidates = [
-        "/var/lib/lifeos/models/whisper/ggml-base.bin",
+        "/var/lib/lifeos/models/whisper/ggml-medium.bin",
+        "/usr/share/lifeos/models/whisper/ggml-medium.bin",
         "/var/lib/lifeos/models/whisper/ggml-small.bin",
+        "/usr/share/lifeos/models/whisper/ggml-small.bin",
+        "/var/lib/lifeos/models/whisper/ggml-base.bin",
         "/usr/share/lifeos/models/whisper/ggml-base.bin",
     ];
     for path in &candidates {

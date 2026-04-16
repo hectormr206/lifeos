@@ -1308,6 +1308,12 @@ pub fn create_router(state: ApiState) -> Router {
         )
         .route("/sensory/benchmark", post(run_sensory_benchmark))
         .route("/sensory/kill-switch", post(trigger_sensory_kill_switch))
+        // Speaker profile management — let the user name anonymous
+        // profiles the daemon auto-created during meetings so future
+        // diarizations surface real participant names.
+        .route("/speakers", get(list_speaker_profiles))
+        .route("/speakers/:id/name", post(set_speaker_profile_name))
+        .route("/speakers/:id", delete(delete_speaker_profile))
         // Wake word training
         .route("/sensory/wake-word/record", post(record_wake_word_sample))
         .route("/sensory/wake-word/train", post(train_wake_word_model))
@@ -3552,6 +3558,104 @@ async fn refresh_presence_status(
         "status": "ok",
         "presence": presence,
     })))
+}
+
+// ── Speaker profile management ──────────────────────────────────────────
+//
+// The daemon auto-creates anonymous profiles (`speaker_<uuid>`) the first
+// time it hears a new voice during a meeting. These endpoints let the user
+// list those profiles and attach real names — so the next meeting's
+// diarized transcript and `participants` column surface "Hector" / "Juan"
+// instead of "Unknown Speaker 1".
+
+#[derive(Deserialize)]
+struct SpeakerNamePayload {
+    name: String,
+}
+
+async fn list_speaker_profiles(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let sid = sensory_mgr.speaker_id();
+    let guard = sid.read().await;
+    let profiles: Vec<serde_json::Value> = guard
+        .profiles()
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id,
+                "name": p.name,
+                "embedding_count": p.embeddings.len(),
+                "interaction_count": p.interaction_count,
+                "created_at": p.created_at,
+                "last_seen_at": p.last_seen_at,
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "count": profiles.len(),
+        "profiles": profiles,
+    })))
+}
+
+async fn set_speaker_profile_name(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    Json(payload): Json<SpeakerNamePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let name = payload.name.trim().to_string();
+    if name.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "name is empty".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let sid = sensory_mgr.speaker_id();
+    let mut guard = sid.write().await;
+    if guard.set_name(&id, &name) {
+        Ok(Json(serde_json::json!({
+            "status": "ok",
+            "id": id,
+            "name": name,
+        })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("No speaker profile with id {}", id),
+                code: 404,
+            }),
+        ))
+    }
+}
+
+async fn delete_speaker_profile(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let sid = sensory_mgr.speaker_id();
+    let mut guard = sid.write().await;
+    if guard.delete_profile(&id) {
+        Ok(Json(serde_json::json!({ "status": "ok", "id": id })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("No speaker profile with id {}", id),
+                code: 404,
+            }),
+        ))
+    }
 }
 
 async fn run_sensory_benchmark(

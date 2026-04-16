@@ -163,11 +163,27 @@ impl SpeakerIdManager {
     }
 
     /// Set a speaker's name (after Axi asks or user tells).
-    pub fn set_name(&mut self, profile_id: &str, name: &str) {
+    /// Returns true if the profile existed and was updated.
+    pub fn set_name(&mut self, profile_id: &str, name: &str) -> bool {
         if let Some(profile) = self.profiles.get_mut(profile_id) {
             info!("Speaker {profile_id} identified as '{name}'");
             profile.name = Some(name.to_string());
             self.save_profiles();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove a speaker profile (user mis-identified it or wants to reset).
+    /// Returns true if a profile was removed.
+    pub fn delete_profile(&mut self, profile_id: &str) -> bool {
+        if self.profiles.remove(profile_id).is_some() {
+            info!("Speaker profile {profile_id} deleted");
+            self.save_profiles();
+            true
+        } else {
+            false
         }
     }
 
