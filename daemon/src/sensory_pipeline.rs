@@ -266,7 +266,7 @@ pub struct KokoroVoice {
 pub struct SensoryCapabilities {
     pub stt_binary: Option<String>,
     pub audio_capture_binary: Option<String>,
-    /// URL of the Kokoro TTS HTTP server (e.g. "http://127.0.0.1:8083"). None = unavailable.
+    /// URL of the Kokoro TTS HTTP server (e.g. "http://127.0.0.1:8084"). None = unavailable.
     pub tts_server_url: Option<String>,
     /// Voices available from the Kokoro TTS server. Empty if server is unavailable.
     pub kokoro_voices: Vec<KokoroVoice>,
@@ -3190,7 +3190,7 @@ async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
     }
 
     let base_url = std::env::var("LIFEOS_TTS_SERVER_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8083".to_string());
+        .unwrap_or_else(|_| "http://127.0.0.1:8084".to_string());
 
     let client = kokoro_probe_client();
 

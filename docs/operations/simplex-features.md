@@ -113,7 +113,7 @@ message).
 3. Whisper transcribes the WAV locally.
 4. The transcript is dispatched through the agentic loop.
 5. `send_message` delivers the text reply (this always happens first).
-6. Kokoro (`lifeos-tts-server.service` on `127.0.0.1:8083`) synthesizes the
+6. Kokoro (`lifeos-tts-server.service` on `127.0.0.1:8084`) synthesizes the
    reply as OGG/Vorbis via `POST /tts` with `format=ogg`.
 7. `send_file` attaches the OGG as a voice bubble in SimpleX.
 8. The OGG file is deleted 60 seconds after `send_file` returns.

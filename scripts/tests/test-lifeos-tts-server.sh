@@ -4,14 +4,14 @@
 #
 # Requires:
 #   - kokoro and aiohttp installed in /opt/lifeos/kokoro-env (or on PATH)
-#   - LIFEOS_TTS_SERVER_URL or defaults to http://127.0.0.1:8083
+#   - LIFEOS_TTS_SERVER_URL or defaults to http://127.0.0.1:8084
 #
 # The script starts the server (if not already running), runs assertions,
 # then stops the server it started.
 #
 # Usage:
 #   bash scripts/tests/test-lifeos-tts-server.sh
-#   LIFEOS_TTS_SERVER_URL=http://127.0.0.1:8083 bash scripts/tests/test-lifeos-tts-server.sh
+#   LIFEOS_TTS_SERVER_URL=http://127.0.0.1:8084 bash scripts/tests/test-lifeos-tts-server.sh
 #
 # Exit 0 = all tests passed; non-zero = failures.
 
@@ -19,7 +19,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVER_SCRIPT="${REPO_ROOT}/image/files/usr/local/bin/lifeos-tts-server.py"
-SERVER_URL="${LIFEOS_TTS_SERVER_URL:-http://127.0.0.1:8083}"
+SERVER_URL="${LIFEOS_TTS_SERVER_URL:-http://127.0.0.1:8084}"
 VENV_PYTHON="${LIFEOS_TTS_VENV_PYTHON:-/opt/lifeos/kokoro-env/bin/python3}"
 WAIT_TIMEOUT=60   # seconds to wait for /health to become 200
 SERVER_PID=""
@@ -42,7 +42,7 @@ start_server() {
         python="python3"
     fi
 
-    LIFEOS_TTS_ENGINE_PORT=8083 \
+    LIFEOS_TTS_ENGINE_PORT=8084 \
     LIFEOS_TTS_DEFAULT_VOICE=if_sara \
     LIFEOS_TTS_DEVICE=cpu \
     HF_HUB_OFFLINE=1 \

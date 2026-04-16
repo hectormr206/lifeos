@@ -1005,7 +1005,7 @@ mod inner {
                                                         let server_url =
                                                             std::env::var("LIFEOS_TTS_SERVER_URL")
                                                                 .unwrap_or_else(|_| {
-                                                                    "http://127.0.0.1:8083"
+                                                                    "http://127.0.0.1:8084"
                                                                         .to_string()
                                                                 });
                                                         let env_default = std::env::var(
