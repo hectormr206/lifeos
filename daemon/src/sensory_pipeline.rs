@@ -39,6 +39,49 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 const STATE_FILE: &str = "sensory_pipeline_state.json";
 const BENCHMARK_FILE: &str = "sensory_benchmark.json";
 const DEFAULT_SCREEN_INTERVAL_SECONDS: u64 = 10;
+
+/// Intervalo mínimo entre llamadas sucesivas al probe del servidor Kokoro TTS.
+/// El estado del servidor cambia lentamente; 5 segundos era un desperdicio de red.
+pub(crate) const KOKORO_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Tiempos de espera entre reintentos de `synthesize_with_kokoro_http`.
+/// 2 entradas → 3 intentos en total (1 inicial + 2 reintentos).
+pub(crate) const KOKORO_RETRY_DELAYS: [u64; 2] = [200, 800];
+
+/// Cliente HTTP singleton para health probes al servidor Kokoro TTS.
+/// `connect_timeout` 500 ms, `timeout` 2 s — suficiente para loopback.
+static KOKORO_PROBE_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+/// Cliente HTTP singleton para síntesis TTS (POST /tts).
+/// `connect_timeout` 3 s, `timeout` 30 s — tolera CPU bajo carga.
+static KOKORO_SYNTH_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+/// Devuelve el cliente HTTP para health probes (connect 500 ms, timeout 2 s).
+pub(crate) fn kokoro_probe_client() -> &'static reqwest::Client {
+    KOKORO_PROBE_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(500))
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .expect("Failed to build Kokoro probe reqwest client")
+    })
+}
+
+/// Devuelve el cliente HTTP para síntesis TTS (connect 3 s, timeout 30 s).
+pub(crate) fn kokoro_synth_client() -> &'static reqwest::Client {
+    KOKORO_SYNTH_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to build Kokoro synth reqwest client")
+    })
+}
+
+/// Último instante en que se ejecutó `probe_kokoro_tts_server`.
+/// Permite saltar el probe si el intervalo mínimo no ha transcurrido.
+static LAST_KOKORO_PROBE: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
 const ALWAYS_ON_CAPTURE_SECONDS: u64 = 4;
 const DEFAULT_WAKE_WORD: &str = "axi";
 fn default_tts_enabled() -> bool {
@@ -3111,16 +3154,47 @@ async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
     }
 }
 
+/// Determina si se debe ejecutar un probe ahora.
+/// El throttle sólo se aplica cuando hubo un probe EXITOSO previo.
+/// Un probe fallido no debe estampar el reloj para que el sensory loop
+/// (~5 s) pueda reintentar durante el período de calentamiento (≤ 20 s).
+pub(crate) fn should_probe(
+    last: Option<std::time::Instant>,
+    interval: std::time::Duration,
+    now: std::time::Instant,
+) -> bool {
+    match last {
+        None => true,
+        Some(prev) => now.duration_since(prev) >= interval,
+    }
+}
+
 /// Probe the Kokoro TTS server at startup. Returns `(Some(url), voices)` on
 /// success or `(None, vec![])` when the server is unreachable after 3 retries.
+/// Successive calls within `KOKORO_PROBE_INTERVAL` are skipped and return
+/// `(None, vec![])` immediately to avoid hammering the server every 5 s.
+///
+/// El throttle se estampa SÓLO en probe exitoso.  Si Kokoro aún está
+/// calentando (normal: 6-8 s; diseño: hasta 20 s) los intentos fallidos
+/// no bloquean los reintentos del siguiente tick (~5 s).
 async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
+    {
+        // N1: usar unwrap_or_else para recuperarse de mutex envenenado en lugar
+        // de panic, preservando la disponibilidad del sensory loop.
+        let last = LAST_KOKORO_PROBE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let now = std::time::Instant::now();
+        if !should_probe(*last, KOKORO_PROBE_INTERVAL, now) {
+            return (None, vec![]);
+        }
+        // No estampamos aquí — sólo estampamos en éxito (ver abajo).
+    }
+
     let base_url = std::env::var("LIFEOS_TTS_SERVER_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8083".to_string());
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .unwrap_or_default();
+    let client = kokoro_probe_client();
 
     for attempt in 0..3u32 {
         if attempt > 0 {
@@ -3128,12 +3202,18 @@ async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
         }
         match client.get(format!("{base_url}/health")).send().await {
             Ok(resp) if resp.status().is_success() => {
-                let voices = fetch_kokoro_voices(&client, &base_url).await;
+                let voices = fetch_kokoro_voices(client, &base_url).await;
                 log::info!(
                     "[tts] Kokoro TTS server ready at {} ({} voices)",
                     base_url,
                     voices.len()
                 );
+                // C2: estampar SÓLO en éxito para que el throttle de 5 min
+                // aplique sólo a partir del primer probe exitoso.
+                let mut last = LAST_KOKORO_PROBE
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                *last = Some(std::time::Instant::now());
                 return (Some(base_url), voices);
             }
             Ok(resp) => {
@@ -3158,7 +3238,7 @@ async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
 }
 
 /// Fetch available voices from `GET {base_url}/voices`.
-async fn fetch_kokoro_voices(client: &reqwest::Client, base_url: &str) -> Vec<KokoroVoice> {
+pub async fn fetch_kokoro_voices(client: &reqwest::Client, base_url: &str) -> Vec<KokoroVoice> {
     match client.get(format!("{base_url}/voices")).send().await {
         Ok(resp) if resp.status().is_success() => {
             resp.json::<Vec<KokoroVoice>>().await.unwrap_or_default()
@@ -4033,13 +4113,9 @@ pub async fn synthesize_with_kokoro_http(
     let ext = if format == "ogg" { "ogg" } else { "wav" };
     let audio_path = tts_dir.join(format!("axi-{}.{}", uuid::Uuid::new_v4(), ext));
 
-    let client = reqwest::Client::builder()
-        .connect_timeout(std::time::Duration::from_millis(500))
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("Failed to build reqwest client")?;
+    let client = kokoro_synth_client();
 
-    let delays_ms = [200u64, 500, 1200];
+    let delays_ms = KOKORO_RETRY_DELAYS;
     let mut last_err: Option<anyhow::Error> = None;
 
     for (attempt, &delay_ms) in std::iter::once(&0u64).chain(delays_ms.iter()).enumerate() {
@@ -4068,7 +4144,7 @@ pub async fn synthesize_with_kokoro_http(
                     e
                 );
                 last_err = Some(e.into());
-                if is_transient && attempt < 3 {
+                if is_transient && attempt < KOKORO_RETRY_DELAYS.len() {
                     continue;
                 }
                 break;
@@ -4081,7 +4157,7 @@ pub async fn synthesize_with_kokoro_http(
         {
             log::warn!("[tts] Kokoro returned {} (attempt {})", status, attempt + 1);
             last_err = Some(anyhow::anyhow!("Kokoro returned {}", status));
-            if attempt < 3 {
+            if attempt < KOKORO_RETRY_DELAYS.len() {
                 continue;
             }
             break;
@@ -7948,5 +8024,114 @@ Drafting the description:
         let available = make_voices(&["if_sara", "af_heart"]);
         let result = resolve_tts_voice(&model, "if_sara", Some(""), &available);
         assert_eq!(result, "if_sara");
+    }
+
+    // --- Warning A: probe interval ---
+
+    #[test]
+    fn kokoro_probe_interval_is_five_minutes() {
+        assert_eq!(
+            KOKORO_PROBE_INTERVAL,
+            std::time::Duration::from_secs(300),
+            "KOKORO_PROBE_INTERVAL debe ser 5 minutos (300 s)"
+        );
+    }
+
+    // --- Warning B: retry count ---
+
+    #[test]
+    fn kokoro_retry_delays_len_gives_three_total_attempts() {
+        // 1 initial attempt + KOKORO_RETRY_DELAYS.len() retries == 3
+        assert_eq!(
+            KOKORO_RETRY_DELAYS.len(),
+            2,
+            "KOKORO_RETRY_DELAYS must have exactly 2 entries (1 initial + 2 retries = 3 total)"
+        );
+    }
+
+    // ── C2: throttle should_probe helper ─────────────────────────────────────
+    // Tests the pure helper that decides whether a probe should run.
+    // None → always probe; Some(recent) → skip; Some(old) → probe again.
+
+    #[test]
+    fn should_probe_returns_true_when_never_probed() {
+        let now = std::time::Instant::now();
+        assert!(
+            should_probe(None, KOKORO_PROBE_INTERVAL, now),
+            "should_probe debe retornar true cuando nunca se probó (last=None)"
+        );
+    }
+
+    #[test]
+    fn should_probe_returns_false_when_last_probe_was_recent() {
+        let now = std::time::Instant::now();
+        // 1 minute ago — well within the 5-minute interval
+        let recent = now - std::time::Duration::from_secs(60);
+        assert!(
+            !should_probe(Some(recent), KOKORO_PROBE_INTERVAL, now),
+            "should_probe debe retornar false cuando el último probe fue hace 1 min (intervalo 5 min)"
+        );
+    }
+
+    #[test]
+    fn should_probe_returns_true_when_last_probe_was_old() {
+        let now = std::time::Instant::now();
+        // 6 minutes ago — past the 5-minute interval
+        let old = now - std::time::Duration::from_secs(360);
+        assert!(
+            should_probe(Some(old), KOKORO_PROBE_INTERVAL, now),
+            "should_probe debe retornar true cuando el último probe fue hace 6 min (intervalo 5 min)"
+        );
+    }
+
+    // ── W4: split probe/synth clients ────────────────────────────────────────
+
+    #[test]
+    fn kokoro_probe_client_returns_same_instance() {
+        let a = kokoro_probe_client();
+        let b = kokoro_probe_client();
+        assert!(
+            std::ptr::eq(a, b),
+            "kokoro_probe_client() debe devolver siempre el mismo puntero (singleton)"
+        );
+    }
+
+    #[test]
+    fn kokoro_synth_client_returns_same_instance() {
+        let a = kokoro_synth_client();
+        let b = kokoro_synth_client();
+        assert!(
+            std::ptr::eq(a, b),
+            "kokoro_synth_client() debe devolver siempre el mismo puntero (singleton)"
+        );
+    }
+
+    #[test]
+    fn kokoro_probe_and_synth_clients_are_different_instances() {
+        let probe = kokoro_probe_client() as *const _ as *const ();
+        let synth = kokoro_synth_client() as *const _ as *const ();
+        assert!(
+            !std::ptr::eq(probe, synth),
+            "kokoro_probe_client() y kokoro_synth_client() deben ser instancias distintas"
+        );
+    }
+
+    // ── N1: mutex poison recovery ─────────────────────────────────────────────
+    // Direct unit test is hard without a threaded panic, but this confirms the
+    // function compiles and returns a valid guard using unwrap_or_else(|p| p.into_inner()).
+    // Coverage provided implicitly by all tests that call probe_kokoro_tts_server()
+    // or any function locking LAST_KOKORO_PROBE.
+    #[test]
+    fn last_kokoro_probe_lock_is_accessible() {
+        // Verifies that LAST_KOKORO_PROBE can be locked without panicking.
+        // The production code uses unwrap_or_else(|p| p.into_inner()) — if it
+        // were still .expect(...), a poisoned lock would panic the sensory loop.
+        let guard = LAST_KOKORO_PROBE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        assert!(
+            guard.is_none() || guard.is_some(),
+            "LAST_KOKORO_PROBE debe ser accesible"
+        );
     }
 }

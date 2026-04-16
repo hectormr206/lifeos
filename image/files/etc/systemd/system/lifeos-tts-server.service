@@ -26,7 +26,6 @@ SyslogIdentifier=lifeos-tts-server
 # Dynamic user for isolation (no persistent UID needed)
 DynamicUser=yes
 RuntimeDirectory=lifeos-tts
-StateDirectory=lifeos/tts-output
 
 # Memory and CPU limits
 MemoryMax=1G
@@ -37,6 +36,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 PrivateTmp=true
+PrivateDevices=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -50,9 +50,6 @@ CapabilityBoundingSet=
 IPAddressAllow=127.0.0.0/8 ::1/128
 IPAddressDeny=any
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-
-# Read-write paths needed
-ReadWritePaths=/var/lib/lifeos/tts-output
 
 [Install]
 WantedBy=multi-user.target

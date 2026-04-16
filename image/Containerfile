@@ -664,10 +664,10 @@ RUN set -eux && \
 
 # --- Directorios LifeOS ---
 # bootc installer + lorax expect /var/mnt to exist because /mnt -> /var/mnt.
-RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /var/lib/lifeos/tts-output /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
+RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos /etc/lifeos /var/mnt /var/roothome && \
     chmod 0700 /var/roothome && \
-    chmod 0775 /var/lib/lifeos /var/lib/lifeos/models /var/lib/lifeos/tts-output /var/log/lifeos && \
-    chgrp wheel /var/lib/lifeos /var/lib/lifeos/models /var/lib/lifeos/tts-output /var/log/lifeos
+    chmod 0775 /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos && \
+    chgrp wheel /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos
 
 COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
 COPY --from=wespeaker-builder /out/models/wespeaker /usr/share/lifeos/models/wespeaker

@@ -11884,11 +11884,59 @@ async fn get_user_profile(
     ))
 }
 
+/// Valida que `voice` sea una voz disponible en Kokoro.
+///
+/// Reglas:
+/// - String vacío → siempre aceptado (limpia el override, vuelve al default).
+/// - Lista vacía (Kokoro inalcanzable) → aceptado con degradación graceful.
+/// - Voz no vacía y lista no vacía → rechazado con 400 si no está en la lista.
+fn validate_tts_voice(
+    voice: &str,
+    available: &[crate::sensory_pipeline::KokoroVoice],
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    // Empty string clears the override — always valid.
+    if voice.is_empty() {
+        return Ok(());
+    }
+    // If Kokoro is unreachable the available list will be empty; accept the
+    // voice to avoid locking the user out due to transient downtime.
+    if available.is_empty() {
+        log::warn!(
+            "[api] tts_voice '{}' accepted without validation — Kokoro voice list is empty (server unreachable?)",
+            voice
+        );
+        return Ok(());
+    }
+    // Non-empty list: reject voices that are not in it.
+    if available.iter().any(|v| v.name == voice) {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "invalid_voice".to_string(),
+                message: format!(
+                    "Voice '{}' not available. Use GET /api/v1/tts/voices to list valid voices.",
+                    voice
+                ),
+                code: 400,
+            }),
+        ))
+    }
+}
+
 /// PATCH /api/v1/user/preferences — Apply a preference key/value pair.
 async fn patch_user_preferences(
     State(state): State<ApiState>,
     Json(payload): Json<PreferencePatchPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // Guard: validate tts_voice against the cached Kokoro voice list.
+    if payload.key == "tts_voice" {
+        let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+        let pipeline_state = sensory_mgr.status().await;
+        validate_tts_voice(&payload.value, &pipeline_state.capabilities.kokoro_voices)?;
+    }
+
     let mut model = state.user_model.write().await;
     model.apply_preference(&payload.key, &payload.value);
 
@@ -12340,5 +12388,65 @@ mod tests {
             // Reference the handler to ensure it's not dead code
             let _ = get_tts_voices as fn(_) -> _;
         };
+    }
+
+    // ── G1: validate_tts_voice — voz válida dentro de la lista disponible ──────
+    #[test]
+    fn test_validate_tts_voice_valid_voice_returns_ok() {
+        let available = vec![
+            crate::sensory_pipeline::KokoroVoice {
+                name: "af_heart".to_string(),
+                language: "en-us".to_string(),
+                gender: "female".to_string(),
+                is_default: true,
+            },
+            crate::sensory_pipeline::KokoroVoice {
+                name: "if_sara".to_string(),
+                language: "en-us".to_string(),
+                gender: "female".to_string(),
+                is_default: false,
+            },
+        ];
+        assert!(validate_tts_voice("af_heart", &available).is_ok());
+        assert!(validate_tts_voice("if_sara", &available).is_ok());
+    }
+
+    // ── G2: validate_tts_voice — voz inválida con lista no vacía retorna 400 ───
+    #[test]
+    fn test_validate_tts_voice_invalid_voice_returns_400() {
+        let available = vec![crate::sensory_pipeline::KokoroVoice {
+            name: "af_heart".to_string(),
+            language: "en-us".to_string(),
+            gender: "female".to_string(),
+            is_default: true,
+        }];
+        let err = validate_tts_voice("nonexistent_voice", &available);
+        assert!(err.is_err());
+        let (status, Json(body)) = err.unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body.error, "invalid_voice");
+        assert!(body.message.contains("nonexistent_voice"));
+    }
+
+    // ── G3: validate_tts_voice — string vacío se acepta (limpia el override) ───
+    #[test]
+    fn test_validate_tts_voice_empty_string_returns_ok() {
+        let available = vec![crate::sensory_pipeline::KokoroVoice {
+            name: "af_heart".to_string(),
+            language: "en-us".to_string(),
+            gender: "female".to_string(),
+            is_default: true,
+        }];
+        // Empty string clears the override — always accepted
+        assert!(validate_tts_voice("", &available).is_ok());
+    }
+
+    // ── G4: validate_tts_voice — lista vacía (Kokoro inalcanzable) acepta todo ─
+    #[test]
+    fn test_validate_tts_voice_empty_available_list_accepts_any_voice() {
+        // Graceful degradation: if Kokoro is unreachable the voice list is
+        // empty; we must NOT block the user from setting a preference.
+        assert!(validate_tts_voice("af_heart", &[]).is_ok());
+        assert!(validate_tts_voice("any_unknown_voice", &[]).is_ok());
     }
 }

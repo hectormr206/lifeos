@@ -706,7 +706,7 @@ function populateAudioDiag(sensory, stt) {
   setVal('d-audio-capture', cap.audio_capture_binary || 'No encontrado', cap.audio_capture_binary ? '' : 'val-error');
   setVal('d-audio-transcript', voice.last_transcript || '(sin datos)');
   setVal('d-audio-latency', voice.last_latency_ms ? voice.last_latency_ms + 'ms' : '—');
-  setVal('d-audio-tts', cap.tts_binary ? (cap.tts_binary + (cap.tts_model ? ' + modelo' : '')) : 'No encontrado', cap.tts_binary ? '' : 'val-warn');
+  setVal('d-audio-tts', cap.tts_server_url ? cap.tts_server_url : 'No configurado', cap.tts_server_url ? '' : 'val-warn');
   setVal('d-audio-last', timeAgo(voice.last_listen_at));
 
   // Error
@@ -746,14 +746,16 @@ function populateTtsDiag(sensory) {
   const voice = sensory?.voice || {};
   const runtime = dashboardState.runtime || {};
 
-  const ttsReady = !!cap.tts_binary;
+  const ttsReady = !!cap.tts_server_url;
   const enabled = runtime.tts_enabled !== false;
   if (enabled && ttsReady) setDot('dot-tts', 'ok');
   else if (ttsReady) setDot('dot-tts', 'warn');
   else setDot('dot-tts', 'error');
 
-  setVal('d-tts-binary', cap.tts_binary || 'No encontrado', cap.tts_binary ? '' : 'val-error');
-  setVal('d-tts-model', cap.tts_model || 'Sin modelo explicito', cap.tts_model ? 'val-ok' : 'val-warn');
+  setVal('d-tts-binary', cap.tts_server_url || 'No configurado', cap.tts_server_url ? '' : 'val-error');
+  const voices = cap.kokoro_voices;
+  const voicesStr = Array.isArray(voices) && voices.length ? voices.map(v => v.name).join(', ') : 'Sin voces';
+  setVal('d-tts-model', voicesStr, Array.isArray(voices) && voices.length ? 'val-ok' : 'val-warn');
   setVal('d-tts-engine', voice.last_tts_engine || '—');
   setVal('d-tts-backend', voice.last_playback_backend || '—');
   setVal('d-tts-enabled', enabled ? 'Activo' : 'Inactivo', enabled ? 'val-ok' : 'val-warn');
@@ -3751,7 +3753,7 @@ async function loadTtsVoiceSelector() {
   // Load current preference
   let currentVoice = null;
   try {
-    const prefs = await api('GET', '/user/preferences');
+    const prefs = await api('GET', '/user/profile');
     currentVoice = prefs && prefs.tts_voice ? prefs.tts_voice : null;
   } catch { /* ignore */ }
 
