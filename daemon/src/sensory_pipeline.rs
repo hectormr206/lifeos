@@ -939,6 +939,14 @@ impl SensoryPipelineManager {
                 if !state.voice.tts_enabled {
                     return Err("TTS is disabled by user preference");
                 }
+                drop(state);
+                // Habla audit C-4: every other sense gates on
+                // `is_suspending()`; TTS was left out and would happily
+                // fire synthesis mid-suspend, leaving a half-rendered
+                // OGG on disk and an audible playback on resume.
+                if self.is_suspending() {
+                    return Err("TTS is paused across suspend/hibernate");
+                }
                 Ok(())
             }
             Sense::WindowTracking => {
@@ -1342,11 +1350,19 @@ impl SensoryPipelineManager {
         overlay: &OverlayManager,
         request: TtsRequest,
     ) -> Result<TtsResult> {
-        let state = self.state.read().await.clone();
-        if state.kill_switch_active {
-            anyhow::bail!("sensory kill switch is active");
-        }
-        if request.playback && !state.voice.tts_enabled {
+        // Habla audit C-1 / W-1 / W-2: route through the unified gate
+        // so every TTS decision hits the audit ring AND the policy
+        // (kill_switch + tts_enabled + suspend) stays lock-step with
+        // every other sense. Previously the inline check read raw
+        // runtime flags and never recorded denials in gate_audit.
+        //
+        // Non-playback requests (synthesize-only, e.g. meeting voice
+        // notes that send an OGG via SimpleX) still need the gate:
+        // the output file is the privacy artifact, not the playback.
+        if let Err(reason) = self
+            .ensure_sense_allowed(Sense::Tts, "pipeline.speak_text")
+            .await
+        {
             overlay
                 .set_axi_state(AxiState::Idle, Some("tts-disabled"))
                 .await?;
@@ -1356,9 +1372,10 @@ impl SensoryPipelineManager {
                 tts_engine: None,
                 playback_backend: None,
                 playback_started: false,
-                degraded_modes: vec!["tts_disabled".to_string()],
+                degraded_modes: vec![format!("tts_disabled: {}", reason)],
             });
         }
+        let state = self.state.read().await.clone();
 
         overlay
             .set_axi_state(AxiState::Speaking, Some("tts"))
@@ -3249,8 +3266,14 @@ impl SensoryPipelineManager {
             return Ok((None, false));
         };
 
+        // Habla audit C-5: `kill_on_drop(true)` so if the parent task
+        // is dropped (daemon shutdown, panic, cancellation) the
+        // playback child dies with it. Prior behaviour left orphan
+        // pw-play / paplay / aplay processes running after the daemon
+        // exited. Matches the STT kill_on_drop pattern from hearing C-11.
         let mut child = Command::new(&player)
             .arg(audio_path)
+            .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("Failed to start playback backend {}", player))?;
 
@@ -3374,8 +3397,10 @@ impl SensoryPipelineManager {
             // Play the current sentence with barge-in detection.
             // We monitor the microphone for voice activity while playing;
             // if the user starts speaking, we kill the playback immediately.
+            // `kill_on_drop(true)` per Habla C-5 — orphan hygiene.
             let mut child = Command::new(&player)
                 .arg(&current_audio)
+                .kill_on_drop(true)
                 .spawn()
                 .context("Failed to start playback")?;
 
@@ -4586,6 +4611,13 @@ async fn synthesize_tts(
 /// Call Kokoro TTS server HTTP API with retry logic.
 /// Retries 3 times on connection-refused / 503 / 504 / timeout.
 /// Returns path to the saved audio file.
+/// Maximum characters accepted for a single TTS synthesis. Sized for
+/// a ~10-minute utterance at conservative speaking rates. Kokoro's
+/// handler reads the whole body into memory and runs it on a
+/// `Semaphore(2)` executor, so longer inputs are effectively a local
+/// DoS. Habla audit W-5.
+pub const TTS_TEXT_MAX_CHARS: usize = 10_000;
+
 pub async fn synthesize_with_kokoro_http(
     data_dir: &Path,
     base_url: &str,
@@ -4593,6 +4625,16 @@ pub async fn synthesize_with_kokoro_http(
     voice: &str,
     format: &str,
 ) -> Result<String> {
+    // Habla audit W-5: reject absurdly long inputs before hitting
+    // Kokoro. A 10 MB text payload would pin CPU for minutes.
+    if text.chars().count() > TTS_TEXT_MAX_CHARS {
+        anyhow::bail!(
+            "TTS text exceeds {}-char limit ({} chars)",
+            TTS_TEXT_MAX_CHARS,
+            text.chars().count()
+        );
+    }
+
     let tts_dir = data_dir.join("tts");
     tokio::fs::create_dir_all(&tts_dir)
         .await
@@ -4663,6 +4705,18 @@ pub async fn synthesize_with_kokoro_http(
         tokio::fs::write(&audio_path, &bytes)
             .await
             .context("Failed to write TTS audio file")?;
+        // Habla audit W-8: chmod 0o600 so other local users can't read
+        // Axi's rendered speech. Matches the pattern used by
+        // speaker_profiles, screen captures, and session store.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(md) = tokio::fs::metadata(&audio_path).await {
+                let mut perms = md.permissions();
+                perms.set_mode(0o600);
+                let _ = tokio::fs::set_permissions(&audio_path, perms).await;
+            }
+        }
 
         cleanup_dir_by_count(&tts_dir, TTS_RETENTION_COUNT, "tts")
             .await

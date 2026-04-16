@@ -1048,7 +1048,30 @@ mod inner {
                                                     // ── Voice-note reply hook (E2) ──
                                                     // For voice-originated inputs, synthesize reply as OGG
                                                     // and send as voice note (max 600 chars, max 1 MB).
-                                                    if reply.len() <= 600 {
+                                                    //
+                                                    // Habla audit C-2: gate on Sense::Tts BEFORE
+                                                    // synthesising. Without this, the voice-note
+                                                    // reply path kept synthesising + sending
+                                                    // audio over SimpleX even with tts_enabled=false
+                                                    // or kill switch engaged. Gate checks
+                                                    // kill_switch + tts_enabled + suspend.
+                                                    let tts_gate_ok = if let Some(ref sens) =
+                                                        tool_ctx.sensory_pipeline
+                                                    {
+                                                        sens.read()
+                                                            .await
+                                                            .ensure_sense_allowed(
+                                                                crate::sensory_pipeline::Sense::Tts,
+                                                                "simplex_bridge.voice_note_reply",
+                                                            )
+                                                            .await
+                                                            .is_ok()
+                                                    } else {
+                                                        // Fail-closed when manager isn't wired —
+                                                        // consistent with the mic gate.
+                                                        false
+                                                    };
+                                                    if reply.len() <= 600 && tts_gate_ok {
                                                         let server_url =
                                                             std::env::var("LIFEOS_TTS_SERVER_URL")
                                                                 .unwrap_or_else(|_| {

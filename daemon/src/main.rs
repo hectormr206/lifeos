@@ -2559,6 +2559,10 @@ async fn harden_sensory_file_perms() {
             "/var/lib/lifeos/models/rustpotter/samples",
             "/var/lib/lifeos/audio",
             "/var/lib/lifeos/meetings",
+            // Habla audit W-8: TTS output (Axi's rendered speech)
+            // was 0o644 world-readable. Reconcile at boot so an
+            // upgrade retroactively tightens existing files.
+            "/var/lib/lifeos/tts",
         ];
 
         let mut hardened = 0usize;
