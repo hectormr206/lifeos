@@ -777,19 +777,34 @@ impl MeetingAssistant {
         let whisper = resolve_whisper_binary().await?;
         let model = resolve_whisper_model().await?;
 
-        let output = Command::new(&whisper)
-            .args([
-                "-m",
-                &model,
-                "-f",
-                audio_path,
-                "--language",
-                &self.language,
-                "--output-txt",
-            ])
-            .output()
-            .await
-            .context("Failed to run whisper for meeting transcription")?;
+        // Hearing audit C-11: timeout + kill_on_drop so a hung whisper
+        // can't sit at 350% CPU forever. Meetings can be hours long so
+        // allow 15× real-time (ggml-base/small on CPU is roughly
+        // 0.1-0.3× real-time) with a 2-hour absolute ceiling.
+        let duration_secs = estimate_wav_duration_secs(audio_path).unwrap_or(0);
+        let timeout_secs = duration_secs.saturating_mul(15).clamp(60, 7200);
+        let mut cmd = Command::new(&whisper);
+        cmd.args([
+            "-m",
+            &model,
+            "-f",
+            audio_path,
+            "--language",
+            &self.language,
+            "--output-txt",
+        ])
+        .kill_on_drop(true);
+        let output =
+            match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output())
+                .await
+            {
+                Ok(res) => res.context("Failed to run whisper for meeting transcription")?,
+                Err(_) => anyhow::bail!(
+                    "meeting transcription timed out after {}s (audio ~{}s)",
+                    timeout_secs,
+                    duration_secs
+                ),
+            };
 
         if !output.status.success() {
             anyhow::bail!(
@@ -2457,6 +2472,29 @@ async fn detect_camera_in_use() -> bool {
         }
     }
     false
+}
+
+/// Best-effort WAV duration estimate from the RIFF header. Returns
+/// `None` on parse failure so the caller can fall back to a floor
+/// timeout. Used to bound whisper subprocess runtime proportional
+/// to audio length (hearing audit C-11).
+fn estimate_wav_duration_secs(path: &str) -> Option<u64> {
+    use std::fs::File;
+    use std::io::Read;
+    let mut f = File::open(path).ok()?;
+    let mut header = [0u8; 44];
+    if f.read_exact(&mut header).is_err() {
+        return None;
+    }
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+        return None;
+    }
+    let byte_rate = u32::from_le_bytes(header[28..32].try_into().ok()?);
+    let file_len = std::fs::metadata(path).ok()?.len();
+    if byte_rate == 0 || file_len <= 44 {
+        return None;
+    }
+    Some(((file_len - 44) / byte_rate as u64).max(1))
 }
 
 async fn resolve_whisper_binary() -> Result<String> {

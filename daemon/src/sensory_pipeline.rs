@@ -3884,6 +3884,7 @@ async fn transcribe_audio(
     let resolved_model = resolve_stt_model(model).await;
 
     let mut cmd = Command::new(&binary);
+    cmd.kill_on_drop(true);
     let lang = resolve_stt_language();
     let estimated_duration_ms = estimate_pcm_wav_duration_ms(file);
     let stt_args = build_interactive_stt_args(
@@ -3898,10 +3899,30 @@ async fn transcribe_audio(
         "[stt] profile={profile:?} duration_ms={estimated_duration_ms:?} fast_path={fast_path}"
     );
     cmd.args(&stt_args);
-    let output = cmd
-        .output()
-        .await
-        .with_context(|| format!("Failed to execute {}", binary))?;
+    // Hearing audit C-11: bound the subprocess lifetime so a hung
+    // whisper-cli cannot cook CPU indefinitely (observed live:
+    // PID 4192949 at 354% CPU for 270s with no cancellation). Allow
+    // ~10× real-time as worst case (ggml-base on CPU does 0.3-0.5×),
+    // with a 30s floor for short utterances and a 10min ceiling for
+    // full meetings. `kill_on_drop(true)` above ensures the child
+    // dies on timeout (or any abort of the parent task).
+    let duration_secs = estimated_duration_ms.unwrap_or(0) / 1000;
+    let timeout_secs = duration_secs.saturating_mul(10).clamp(30, 600);
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        cmd.output(),
+    )
+    .await
+    {
+        Ok(res) => res.with_context(|| format!("Failed to execute {}", binary))?,
+        Err(_) => {
+            anyhow::bail!(
+                "stt transcription timed out after {}s (audio ~{}s)",
+                timeout_secs,
+                duration_secs
+            );
+        }
+    };
     if !output.status.success() {
         anyhow::bail!(
             "stt transcription failed: {}",
