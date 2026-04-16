@@ -2455,6 +2455,38 @@ Respond ONLY with a JSON object (no markdown):
             );
         }
 
+        // Hearing audit round-2 C-NEW-2: the autonomous agent could
+        // produce a `StepAction::ShellCommand { command: "pw-record …" }`
+        // or `"ffmpeg -f pulse …"` and this function would run it
+        // without consulting the unified sense gate. Any sensor binary
+        // the command mentions MUST pass its Sense gate first.
+        for sense in classify_shell_command_senses(command) {
+            let sensory = self
+                .sensory_pipeline
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            let Some(manager) = sensory else {
+                anyhow::bail!(
+                    "supervisor shell refused: sensory pipeline not wired but command \
+                     invokes a sensor binary ({:?})",
+                    sense
+                );
+            };
+            let guard = manager.read().await;
+            if let Err(reason) = guard
+                .ensure_sense_allowed(sense, "supervisor.execute_shell")
+                .await
+            {
+                anyhow::bail!(
+                    "supervisor shell refused: {} requires {} which is gated: {}",
+                    command,
+                    sense.as_str(),
+                    reason
+                );
+            }
+        }
+
         info!("Executing shell: {}", command);
 
         let output = tokio::process::Command::new("sh")
@@ -2812,6 +2844,72 @@ fn sanitize_fallback_text(text: &str) -> String {
     result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Inspect a shell command string for references to sensor binaries and
+/// return every `Sense` the command would exercise. The supervisor's
+/// `execute_shell` runs each returned variant through the unified sense
+/// gate before letting the command touch `sh -c`.
+///
+/// Heuristic, not a parser: detects both bare binary names and common
+/// flag combinations (`ffmpeg -f pulse`, `ffmpeg -f v4l2`). False
+/// negatives just pass through the allowlist path (same as before this
+/// fix); false positives fail-closed via the gate. Both are acceptable
+/// — the baseline was "no check at all".
+pub fn classify_shell_command_senses(command: &str) -> Vec<crate::sensory_pipeline::Sense> {
+    use crate::sensory_pipeline::Sense;
+    let lower = command.to_lowercase();
+    let mut senses = Vec::new();
+
+    // Microphone / STT binaries. `ffmpeg` is ambiguous — only flag it
+    // for Microphone when the command wires an audio input source.
+    let mic_tokens = [
+        "pw-record ",
+        "parec ",
+        "parecord ",
+        "arecord ",
+        "whisper-cli",
+        "whisper-cpp",
+        "whisper-stream",
+    ];
+    let ffmpeg_audio = lower.contains("ffmpeg")
+        && (lower.contains("-f pulse")
+            || lower.contains("-f alsa")
+            || lower.contains("-f jack")
+            || lower.contains(" default")
+            || lower.contains(" hw:"));
+    if mic_tokens.iter().any(|t| lower.contains(t)) || ffmpeg_audio {
+        senses.push(Sense::Microphone);
+    }
+
+    // Screen-capture binaries.
+    let screen_tokens = [
+        "grim ",
+        "grim\n",
+        "maim ",
+        "spectacle ",
+        "gnome-screenshot",
+        "flameshot ",
+        "scrot ",
+        "wf-recorder",
+    ];
+    let ffmpeg_screen = lower.contains("ffmpeg")
+        && (lower.contains("-f x11grab")
+            || lower.contains("-f kmsgrab")
+            || lower.contains("-f pipewire"));
+    if screen_tokens.iter().any(|t| lower.contains(t)) || ffmpeg_screen {
+        senses.push(Sense::Screen);
+    }
+
+    // Camera binaries.
+    let cam_tokens = ["fswebcam ", "libcamera-still", "libcamera-jpeg"];
+    let ffmpeg_camera =
+        lower.contains("ffmpeg") && (lower.contains("-f v4l2") || lower.contains("/dev/video"));
+    if cam_tokens.iter().any(|t| lower.contains(t)) || ffmpeg_camera {
+        senses.push(Sense::Camera);
+    }
+
+    senses
+}
+
 /// Strip HTML tags to get plain text (simple approach).
 fn strip_html(html: &str) -> String {
     let mut result = String::with_capacity(html.len() / 2);
@@ -2874,6 +2972,97 @@ fn extract_json(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sensory_pipeline::Sense;
+
+    // ── supervisor shell sensor-binary classifier ───────────────────────
+
+    #[test]
+    fn classifier_detects_pulse_mic_capture() {
+        assert!(classify_shell_command_senses("pw-record /tmp/x.wav").contains(&Sense::Microphone));
+        assert!(
+            classify_shell_command_senses("parecord --channels=1 out.wav")
+                .contains(&Sense::Microphone)
+        );
+        assert!(
+            classify_shell_command_senses("arecord -d 60 /tmp/a.wav").contains(&Sense::Microphone)
+        );
+        assert!(
+            classify_shell_command_senses("whisper-cli -m model -f clip.wav")
+                .contains(&Sense::Microphone)
+        );
+    }
+
+    #[test]
+    fn classifier_detects_ffmpeg_audio_patterns() {
+        for cmd in [
+            "ffmpeg -f pulse -i default out.wav",
+            "ffmpeg -f alsa -i hw:0 out.wav",
+            "ffmpeg -f jack out.wav",
+        ] {
+            assert!(
+                classify_shell_command_senses(cmd).contains(&Sense::Microphone),
+                "expected Microphone for: {}",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn classifier_detects_screen_capture_binaries() {
+        for cmd in [
+            "grim /tmp/s.png",
+            "maim /tmp/s.png",
+            "gnome-screenshot -f /tmp/s.png",
+            "flameshot gui",
+            "ffmpeg -f x11grab -i :0.0 out.mp4",
+        ] {
+            assert!(
+                classify_shell_command_senses(cmd).contains(&Sense::Screen),
+                "expected Screen for: {}",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn classifier_detects_camera_patterns() {
+        for cmd in [
+            "fswebcam cam.jpg",
+            "libcamera-still -o cam.jpg",
+            "ffmpeg -f v4l2 -i /dev/video0 cam.jpg",
+        ] {
+            assert!(
+                classify_shell_command_senses(cmd).contains(&Sense::Camera),
+                "expected Camera for: {}",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn classifier_ignores_unrelated_commands() {
+        for cmd in [
+            "git status",
+            "ls -la",
+            "ffmpeg -i input.mp4 -c:v libx264 out.mp4",
+            "echo hola",
+            "cat /tmp/notes.txt",
+        ] {
+            assert!(
+                classify_shell_command_senses(cmd).is_empty(),
+                "expected no senses for: {}",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn classifier_catches_mic_and_ffmpeg_in_one_command() {
+        // A chained command shouldn't slip a mic-capture past us.
+        let cmd = "ffmpeg -f pulse -i default - | whisper-cli -m m.bin -";
+        let senses = classify_shell_command_senses(cmd);
+        assert!(senses.contains(&Sense::Microphone));
+    }
 
     #[test]
     fn parse_plan_json() {
