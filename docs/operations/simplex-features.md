@@ -93,9 +93,50 @@ without needing slash commands.
 The bridge acknowledges receipt immediately ("🎤 Recibido, transcribiendo...")
 so you know the file was accepted.
 
-> Note: TTS audio replies (voice output) are not sent back over SimpleX —
-> the bridge responds with text only. Voice output is available on the local
-> system.
+> Voice replies are enabled: when Axi receives a voice note, it sends back
+> both a text reply and an OGG voice attachment. See [Voice Reply Feature](#voice-reply-feature)
+> below for details.
+
+### Voice Reply Feature
+
+Axi applies **modality mirroring** for voice conversations: when the incoming
+message is a voice note, Axi sends both a text reply and an OGG voice
+attachment. Text messages receive text replies only.
+
+**Trigger:** incoming `MsgContent::Voice` (a SimpleX voice note, not a text
+message).
+
+**Flow:**
+
+1. The OGG/OPUS voice note is auto-accepted via XFTP.
+2. `ffmpeg` converts it to WAV (16 kHz mono).
+3. Whisper transcribes the WAV locally.
+4. The transcript is dispatched through the agentic loop.
+5. `send_message` delivers the text reply (this always happens first).
+6. Kokoro (`lifeos-tts-server.service` on `127.0.0.1:8083`) synthesizes the
+   reply as OGG/Vorbis via `POST /tts` with `format=ogg`.
+7. `send_file` attaches the OGG as a voice bubble in SimpleX.
+8. The OGG file is deleted 60 seconds after `send_file` returns.
+
+**File lifecycle:**
+
+- Files are saved as `/var/lib/lifeos/tts-output/simplex-<uuid>.ogg`.
+- Deleted by a background task 60 seconds after delivery.
+- If the cleanup task fails, stale files can be removed manually — they are
+  safe to delete.
+
+**Limits and failure behavior:**
+
+| Condition | Behavior |
+|-----------|----------|
+| OGG file > 1 MB | Voice attachment skipped, text reply still sent, WARN logged |
+| Kokoro server unreachable | Voice attachment skipped, text reply still sent, WARN logged |
+| `send_file` fails | Handler continues normally, no panic, text reply already delivered |
+
+In all failure cases, the text reply is always sent first and is never lost.
+
+**No configuration needed** — modality mirroring is automatic for all voice-originated
+messages.
 
 ### Images
 

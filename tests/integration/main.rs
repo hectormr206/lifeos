@@ -402,3 +402,51 @@ fn test_phase2_model_catalog_exists_and_has_signature() {
 // v0.4.1: llm_debate + matrix_bridge unit tests are inline in their modules.
 // v0.4.2: simplex_bridge unit tests are inline in the module.
 // (unit test that doesn't require the compiled binary).
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v0.7.0: Piper TTS removal guard (migrate-tts-to-kokoro, Batch C)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// C5: Verify scripts/assert-no-piper.sh exists and is executable.
+/// Mirrors test_assert_no_dev_artifacts_script_exists_and_is_executable.
+#[test]
+fn test_assert_no_piper_script_exists_and_is_executable() {
+    let script = project_root().join("scripts/assert-no-piper.sh");
+    assert!(
+        script.exists(),
+        "scripts/assert-no-piper.sh must exist at repo root (task C2)"
+    );
+    let metadata = std::fs::metadata(&script).expect("could not stat assert-no-piper.sh");
+    use std::os::unix::fs::PermissionsExt;
+    let mode = metadata.permissions().mode();
+    assert!(
+        mode & 0o111 != 0,
+        "scripts/assert-no-piper.sh must be executable (chmod +x)"
+    );
+}
+
+/// C6: Compile-time regression guard — asserts that synthesize_with_piper has
+/// been removed from daemon/src/sensory_pipeline.rs after Agent 3 (Batch D)
+/// completes the Rust daemon refactor.
+///
+/// NOTE: This test WILL FAIL until Agent 3 removes synthesize_with_piper
+/// (task D5). Mark as known-failing until D5 is complete.
+/// After D5: this test must pass and must never be removed.
+#[test]
+fn test_sensory_pipeline_has_no_piper_synthesizer() {
+    let source_path = project_root().join("daemon/src/sensory_pipeline.rs");
+    assert!(
+        source_path.exists(),
+        "daemon/src/sensory_pipeline.rs must exist"
+    );
+
+    let content = std::fs::read_to_string(&source_path)
+        .expect("could not read daemon/src/sensory_pipeline.rs");
+
+    assert!(
+        !content.contains("synthesize_with_piper"),
+        "daemon/src/sensory_pipeline.rs must NOT contain 'synthesize_with_piper' \
+        after migrate-tts-to-kokoro (task D5). Remove the Piper synthesizer \
+        function and all call sites before merging v0.7.0."
+    );
+}

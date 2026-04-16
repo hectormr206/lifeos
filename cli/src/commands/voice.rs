@@ -27,7 +27,7 @@ pub enum VoiceCommands {
         #[arg(long)]
         model: Option<String>,
     },
-    /// Speak text with local TTS (Piper)
+    /// Speak text with local TTS (Kokoro)
     Speak {
         text: String,
         #[arg(long)]

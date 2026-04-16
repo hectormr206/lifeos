@@ -180,25 +180,6 @@ RUN set -eux && \
     rm -rf /tmp/whisper.cpp
 
 # ============================================================================
-# Stage 4: Bundle Piper TTS assets (brand voice)
-# ============================================================================
-FROM fedora:${FEDORA_MAJOR} AS piper-voice-builder
-
-RUN dnf install -y curl && \
-    dnf clean all
-
-RUN set -eux && \
-    mkdir -p /out/models/piper && \
-    curl -fSL --retry 3 --connect-timeout 60 \
-      -o /out/models/piper/es_MX-claude-high.onnx \
-      https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx?download=true && \
-    curl -fSL --retry 3 --connect-timeout 60 \
-      -o /out/models/piper/es_MX-claude-high.onnx.json \
-      https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/claude/high/es_MX-claude-high.onnx.json?download=true && \
-    test -s /out/models/piper/es_MX-claude-high.onnx && \
-    test -s /out/models/piper/es_MX-claude-high.onnx.json
-
-# ============================================================================
 # Stage 4b: Download WeSpeaker ONNX model for speaker identification
 # ============================================================================
 FROM fedora:${FEDORA_MAJOR} AS wespeaker-builder
@@ -214,24 +195,75 @@ RUN set -eux && \
     echo ">>> WeSpeaker ONNX model downloaded ($(du -sh /out/models/wespeaker/voxceleb_resnet34_LM.onnx | cut -f1))"
 
 # ============================================================================
-# Stage 5: Bundle Piper TTS runtime binary (Rhasspy Piper CLI)
+# Stage 5: Build Kokoro TTS Python environment (CPU-only)
 # ============================================================================
-FROM fedora:${FEDORA_MAJOR} AS piper-runtime-builder
+# Uses python:3.12-slim as base (Debian) for a smaller pip-install surface.
+# The resulting /opt/lifeos/kokoro-env venv is copied into the final image.
+# Torch wheel is sourced from vendored build-assets/wheels/ so this stage
+# never requires network access to download.pytorch.org at build time.
+# Approximate size: ~850 MB (torch ~750 MB + kokoro + deps ~100 MB).
+FROM python:3.12-slim AS kokoro-builder
 
-ARG PIPER_RUNTIME_VERSION=2023.11.14-2
+# Install system deps needed for pip build steps + ffmpeg (for OGG encoding)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN dnf install -y curl tar gzip && \
-    dnf clean all
+# Create venv
+RUN python3 -m venv /opt/lifeos/kokoro-env
 
-RUN set -eux && \
-    mkdir -p /out/opt/lifeos/piper-tts && \
-    curl -fSL --retry 3 --connect-timeout 60 \
-      -o /tmp/piper_linux_x86_64.tar.gz \
-      "https://github.com/rhasspy/piper/releases/download/${PIPER_RUNTIME_VERSION}/piper_linux_x86_64.tar.gz" && \
-    tar -xzf /tmp/piper_linux_x86_64.tar.gz -C /tmp && \
-    cp -a /tmp/piper/. /out/opt/lifeos/piper-tts/ && \
-    test -x /out/opt/lifeos/piper-tts/piper && \
-    /out/opt/lifeos/piper-tts/piper --help 2>&1 | grep -q -- '--model'
+# Copy vendored wheel directory (torch ~180 MB, pre-downloaded for offline builds)
+# If the wheel is absent, pip falls back to https://download.pytorch.org/whl/cpu
+# during the build — CI should always have the vendored wheel.
+COPY build-assets/wheels/ /build-assets/wheels/
+
+# Install Python dependencies with pip cache mount for layer efficiency
+# torch: CPU-only variant from vendored wheel or PyTorch whl index
+# kokoro: kokoro-82m (TTS model + inference engine)
+# aiohttp: async HTTP server
+# soundfile: optional fast OGG encoding (libsndfile Vorbis if available)
+# numpy: audio array processing
+RUN --mount=type=cache,target=/root/.cache/pip \
+    /opt/lifeos/kokoro-env/bin/pip install --upgrade pip && \
+    /opt/lifeos/kokoro-env/bin/pip install \
+        --find-links /build-assets/wheels/ \
+        "torch==2.4.1+cpu" \
+        --index-url https://download.pytorch.org/whl/cpu && \
+    /opt/lifeos/kokoro-env/bin/pip install \
+        --find-links /build-assets/wheels/ \
+        kokoro \
+        aiohttp \
+        soundfile \
+        numpy
+
+# Pre-warm the default voice (if_sara) to materialise .pt weights files
+# and verify kokoro can synthesise without network access.
+# NOTE: Python code lives in a separate file to avoid Dockerfile parser
+# confusion — a `from X import Y` line inside an inline RUN heredoc gets
+# misparsed as a `FROM` stage directive by buildkit.
+COPY image/scripts/prewarm-kokoro.py /build/prewarm-kokoro.py
+ENV HF_HOME=/opt/lifeos/kokoro-env/hf-cache
+RUN HF_HUB_OFFLINE=0 \
+    /opt/lifeos/kokoro-env/bin/python3 /build/prewarm-kokoro.py
+
+# Verify if_sara voice artifact exists after pre-warm (weights land in HF_HOME)
+RUN find /opt/lifeos/kokoro-env -name 'if_sara*' | grep -q '.' || \
+    (echo 'ERROR: if_sara voice artifact not found after pre-warm' && exit 1)
+
+# Copy the manifest builder script and generate voices-manifest.json
+COPY image/scripts/build-kokoro-manifest.py /build/build-kokoro-manifest.py
+RUN LIFEOS_TTS_DEFAULT_VOICE=if_sara \
+    /opt/lifeos/kokoro-env/bin/python3 /build/build-kokoro-manifest.py \
+        --venv-dir /opt/lifeos/kokoro-env \
+        --output /opt/lifeos/kokoro-env/voices-manifest.json && \
+    test -s /opt/lifeos/kokoro-env/voices-manifest.json && \
+    echo "voices-manifest.json generated ($(wc -l < /opt/lifeos/kokoro-env/voices-manifest.json) lines)"
+
+# Strip build artifacts to reduce image size
+RUN find /opt/lifeos/kokoro-env -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true && \
+    find /opt/lifeos/kokoro-env -name '*.pyc' -delete 2>/dev/null || true && \
+    find /opt/lifeos/kokoro-env -path '*/tests/*.py' -not -name '__init__.py' -delete 2>/dev/null || true
 
 # ============================================================================
 # Stage 6a-simplex: Extract SimpleX CLI binary from Ubuntu .deb
@@ -556,6 +588,7 @@ RUN dnf -y install \
     aide firewalld audit \
     powertop zram-generator \
     pciutils usbutils biosdevname prefixdevname curl ca-certificates openssl-libs cryptsetup \
+    ffmpeg \
     python3-mako \
     anaconda-core anaconda-dracut \
     lorax-templates-generic \
@@ -635,11 +668,14 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /va
     chgrp wheel /var/lib/lifeos /var/lib/lifeos/models /var/log/lifeos
 
 COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
-COPY --from=piper-voice-builder /out/models/piper /usr/share/lifeos/models/piper
 COPY --from=wespeaker-builder /out/models/wespeaker /usr/share/lifeos/models/wespeaker
-COPY --from=piper-runtime-builder /out/opt/lifeos/piper-tts /opt/lifeos/piper-tts
 
-RUN ln -sf /opt/lifeos/piper-tts/piper /usr/local/bin/lifeos-piper
+# --- Kokoro TTS runtime (venv + voices + manifest) ---
+COPY --from=kokoro-builder /opt/lifeos/kokoro-env /opt/lifeos/kokoro-env
+COPY image/files/usr/local/bin/lifeos-tts-server.py /usr/local/bin/lifeos-tts-server.py
+COPY image/files/etc/systemd/system/lifeos-tts-server.service /usr/lib/systemd/system/lifeos-tts-server.service
+COPY image/files/etc/lifeos/tts-server.env /etc/lifeos/tts-server.env
+RUN chmod +x /usr/local/bin/lifeos-tts-server.py
 
 # --- AI Model (pre-bundled) ---
 # Qwen3.5-4B: multimodal vision-language model with hybrid DeltaNet architecture.
@@ -988,9 +1024,6 @@ RUN printf '%s\n' \
     '' \
     '[Service]' \
     'Type=simple' \
-    'Environment=LIFEOS_TTS_BIN=/usr/local/bin/lifeos-piper' \
-    'Environment=LIFEOS_TTS_MODEL=/usr/share/lifeos/models/piper/es_MX-claude-high.onnx' \
-    'Environment=LIFEOS_TTS_FALLBACK_BIN=/usr/bin/espeak-ng' \
     'Environment=LIFEOS_DASHBOARD_DIR=/usr/share/lifeos/dashboard' \
     'Environment=LIFEOS_RUNTIME_DIR=%t/lifeos' \
     'Environment=LIFEOS_WESPEAKER_MODEL=/usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx' \
@@ -1046,6 +1079,7 @@ RUN mkdir -p /usr/lib/systemd/system/multi-user.target.wants \
     ln -sf /usr/lib/systemd/system/llama-server.service   /usr/lib/systemd/system/multi-user.target.wants/llama-server.service && \
     ln -sf /usr/lib/systemd/system/llama-embeddings.service /usr/lib/systemd/system/multi-user.target.wants/llama-embeddings.service && \
     ln -sf /usr/lib/systemd/system/whisper-stt.service    /usr/lib/systemd/system/multi-user.target.wants/whisper-stt.service && \
+    ln -sf /usr/lib/systemd/system/lifeos-tts-server.service /usr/lib/systemd/system/multi-user.target.wants/lifeos-tts-server.service && \
     ln -sf /usr/lib/systemd/system/fstrim.timer /usr/lib/systemd/system/timers.target.wants/fstrim.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-btrfs-snapshot.timer /usr/lib/systemd/system/timers.target.wants/lifeos-btrfs-snapshot.timer && \
     ln -sf /usr/lib/systemd/system/lifeos-maintenance-cleanup.timer /usr/lib/systemd/system/timers.target.wants/lifeos-maintenance-cleanup.timer && \
@@ -1251,8 +1285,11 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -x /usr/bin/wl-copy              || fail "/usr/bin/wl-copy"; \
     test -x /usr/bin/tesseract            || fail "/usr/bin/tesseract"; \
     test -x /usr/bin/espeak-ng            || fail "/usr/bin/espeak-ng"; \
-    test -x /usr/local/bin/lifeos-piper   || fail "/usr/local/bin/lifeos-piper"; \
-    /usr/local/bin/lifeos-piper --help 2>&1 | grep -q -- '--model' || fail "piper --model"; \
+    test -x /usr/local/bin/lifeos-tts-server.py || fail "/usr/local/bin/lifeos-tts-server.py"; \
+    test -f /usr/lib/systemd/system/lifeos-tts-server.service || fail "lifeos-tts-server.service"; \
+    test -f /etc/lifeos/tts-server.env    || fail "/etc/lifeos/tts-server.env"; \
+    test -d /opt/lifeos/kokoro-env        || fail "/opt/lifeos/kokoro-env"; \
+    test -f /opt/lifeos/kokoro-env/voices-manifest.json || fail "kokoro voices-manifest.json"; \
     test -x /usr/bin/spice-vdagent        || fail "/usr/bin/spice-vdagent"; \
     test -x /usr/bin/virsh                || fail "/usr/bin/virsh"; \
     test -x /usr/bin/pkg-config           || fail "/usr/bin/pkg-config"; \
@@ -1292,8 +1329,6 @@ RUN set -e; fail() { echo "VERIFY FAILED: $1"; exit 1; }; \
     test -f /usr/lib/bootc/kargs.d/60-lifeos-split-lock-detect.toml || fail "60-lifeos-split-lock-detect.toml"; \
     test -f /usr/share/lifeos/models/whisper/ggml-base.bin || fail "whisper/ggml-base.bin"; \
     test -f /usr/share/lifeos/models/whisper/ggml-tiny.bin || fail "whisper/ggml-tiny.bin"; \
-    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx || fail "piper/es_MX-claude-high.onnx"; \
-    test -f /usr/share/lifeos/models/piper/es_MX-claude-high.onnx.json || fail "piper/es_MX-claude-high.onnx.json"; \
     test -f /usr/share/lifeos/models/wespeaker/voxceleb_resnet34_LM.onnx || fail "wespeaker/voxceleb_resnet34_LM.onnx"; \
     test -f /usr/share/lifeos/models/rustpotter/axi.rpw || fail "rustpotter/axi.rpw"; \
     test -d /usr/share/backgrounds/lifeos || fail "/usr/share/backgrounds/lifeos"; \

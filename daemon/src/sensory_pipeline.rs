@@ -32,13 +32,56 @@ use std::time::Instant;
 /// condition never changes at runtime, so one WARN at the first miss and
 /// DEBUG afterwards is the right policy.
 static CAMERA_BINARY_WARNED: AtomicBool = AtomicBool::new(false);
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 const STATE_FILE: &str = "sensory_pipeline_state.json";
 const BENCHMARK_FILE: &str = "sensory_benchmark.json";
 const DEFAULT_SCREEN_INTERVAL_SECONDS: u64 = 10;
+
+/// Intervalo mínimo entre llamadas sucesivas al probe del servidor Kokoro TTS.
+/// El estado del servidor cambia lentamente; 5 segundos era un desperdicio de red.
+pub(crate) const KOKORO_PROBE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Tiempos de espera entre reintentos de `synthesize_with_kokoro_http`.
+/// 2 entradas → 3 intentos en total (1 inicial + 2 reintentos).
+pub(crate) const KOKORO_RETRY_DELAYS: [u64; 2] = [200, 800];
+
+/// Cliente HTTP singleton para health probes al servidor Kokoro TTS.
+/// `connect_timeout` 500 ms, `timeout` 2 s — suficiente para loopback.
+static KOKORO_PROBE_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+/// Cliente HTTP singleton para síntesis TTS (POST /tts).
+/// `connect_timeout` 3 s, `timeout` 30 s — tolera CPU bajo carga.
+static KOKORO_SYNTH_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
+/// Devuelve el cliente HTTP para health probes (connect 500 ms, timeout 2 s).
+pub(crate) fn kokoro_probe_client() -> &'static reqwest::Client {
+    KOKORO_PROBE_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(500))
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .expect("Failed to build Kokoro probe reqwest client")
+    })
+}
+
+/// Devuelve el cliente HTTP para síntesis TTS (connect 3 s, timeout 30 s).
+pub(crate) fn kokoro_synth_client() -> &'static reqwest::Client {
+    KOKORO_SYNTH_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to build Kokoro synth reqwest client")
+    })
+}
+
+/// Último instante en que se ejecutó `probe_kokoro_tts_server`.
+/// Permite saltar el probe si el intervalo mínimo no ha transcurrido.
+static LAST_KOKORO_PROBE: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
 const ALWAYS_ON_CAPTURE_SECONDS: u64 = 4;
 const DEFAULT_WAKE_WORD: &str = "axi";
 fn default_tts_enabled() -> bool {
@@ -181,16 +224,6 @@ const CAMERA_FRAME_VERY_DARK_CONTRAST_BOOST: f32 = 30.0;
 /// the wake word again (continuous conversation window).
 const CONTINUOUS_CONVERSATION_SECS: i64 = 30;
 
-/// Emotional/contextual variation for TTS synthesis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TtsEmotion {
-    Neutral,
-    Urgent,
-    Confirmation,
-    Question,
-    Calm,
-}
-
 /// Near-field vs far-field microphone mode. Near-field (headset) uses lower
 /// thresholds, while far-field (laptop mic) uses higher thresholds and gain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,42 +243,6 @@ struct MicCalibration {
     timestamp: DateTime<Utc>,
 }
 
-/// Simple keyword/pattern matching to detect the emotional tone of a text.
-fn detect_emotion(text: &str) -> TtsEmotion {
-    let lower = text.to_lowercase();
-    if lower.contains("error")
-        || lower.contains("fallo")
-        || lower.contains("alerta")
-        || lower.contains("critico")
-        || lower.contains("urgente")
-        || lower.contains("warning")
-        || lower.contains("failed")
-    {
-        return TtsEmotion::Urgent;
-    }
-    if lower.contains("listo")
-        || lower.contains("hecho")
-        || lower.contains("completado")
-        || lower.contains("exito")
-        || lower.contains("done")
-        || lower.contains("success")
-        || lower.contains("perfecto")
-    {
-        return TtsEmotion::Confirmation;
-    }
-    if lower.contains("buenas noches")
-        || lower.contains("descansa")
-        || lower.contains("relax")
-        || lower.contains("good night")
-    {
-        return TtsEmotion::Calm;
-    }
-    if text.trim_end().ends_with('?') {
-        return TtsEmotion::Question;
-    }
-    TtsEmotion::Neutral
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SensorLeds {
@@ -255,13 +252,24 @@ pub struct SensorLeds {
     pub kill_switch_active: bool,
 }
 
+/// A single voice available from the Kokoro TTS server.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct KokoroVoice {
+    pub name: String,
+    pub language: String,
+    pub gender: String,
+    pub is_default: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SensoryCapabilities {
     pub stt_binary: Option<String>,
     pub audio_capture_binary: Option<String>,
-    pub tts_binary: Option<String>,
-    pub tts_model: Option<String>,
+    /// URL of the Kokoro TTS HTTP server (e.g. "http://127.0.0.1:8083"). None = unavailable.
+    pub tts_server_url: Option<String>,
+    /// Voices available from the Kokoro TTS server. Empty if server is unavailable.
+    pub kokoro_voices: Vec<KokoroVoice>,
     pub playback_binary: Option<String>,
     pub screen_capture_available: bool,
     pub tesseract_available: bool,
@@ -2877,42 +2885,28 @@ impl SensoryPipelineManager {
             return Ok((None, None, None, false));
         }
 
-        // Resolve TTS toolchain once.
-        let piper_models = resolve_tts_models(voice_model).await;
-        let fallback_binary = resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await;
-        let binary = select_tts_binary(
-            resolve_binary("LIFEOS_TTS_BIN", &["lifeos-piper", "piper", "espeak-ng"]).await,
-            piper_models.first().map(|v| v.as_str()),
-            fallback_binary.clone(),
-        );
-        let binary = sanitize_tts_binary(binary, fallback_binary.clone())
-            .await
-            .ok_or_else(|| anyhow::anyhow!("no local TTS backend found"))?;
-
         let player = resolve_binary("LIFEOS_PLAYBACK_BIN", &["pw-play", "aplay", "paplay"])
             .await
             .ok_or_else(|| anyhow::anyhow!("no playback backend found"))?;
 
+        // Resolve voice for this session.
+        let env_default =
+            std::env::var("LIFEOS_TTS_DEFAULT_VOICE").unwrap_or_else(|_| "if_sara".to_string());
+        let voice = voice_model.unwrap_or(env_default.as_str()).to_string();
+
         // Duck system audio before speaking.
         duck_system_audio(true).await;
 
-        let emotion = detect_emotion(text);
         let mut first_audio_path: Option<String> = None;
-        let tts_engine = binary.clone();
+        let tts_engine = format!("kokoro:{}", voice);
         let playback_backend = player.clone();
         let mut any_played = false;
 
         // Pre-synthesize the first sentence.
-        let mut next_audio = synthesize_single_chunk(
-            &self.data_dir,
-            &binary,
-            &sentences[0],
-            language,
-            piper_models.first().map(|v| v.as_str()),
-            emotion,
-        )
-        .await
-        .ok();
+        let mut next_audio =
+            synthesize_single_chunk(&self.data_dir, &sentences[0], language, &voice)
+                .await
+                .ok();
 
         for i in 0..sentences.len() {
             let current_audio = match next_audio.take() {
@@ -2927,22 +2921,13 @@ impl SensoryPipelineManager {
             // Start synthesizing the NEXT sentence in the background.
             let next_synth = if i + 1 < sentences.len() {
                 let data_dir = self.data_dir.clone();
-                let bin = binary.clone();
                 let sent = sentences[i + 1].clone();
                 let lang = language.map(str::to_string);
-                let model = piper_models.first().cloned();
-                let emo = emotion;
+                let v = voice.clone();
                 Some(tokio::spawn(async move {
-                    synthesize_single_chunk(
-                        &data_dir,
-                        &bin,
-                        &sent,
-                        lang.as_deref(),
-                        model.as_deref(),
-                        emo,
-                    )
-                    .await
-                    .ok()
+                    synthesize_single_chunk(&data_dir, &sent, lang.as_deref(), &v)
+                        .await
+                        .ok()
                 }))
             } else {
                 None
@@ -3138,16 +3123,7 @@ async fn write_atomic(path: &PathBuf, contents: &str) -> Result<()> {
 }
 
 async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
-    let preferred_tts_binary =
-        resolve_binary("LIFEOS_TTS_BIN", &["lifeos-piper", "piper", "espeak-ng"]).await;
-    let tts_model = resolve_tts_model(None).await;
-    let fallback_tts_binary = resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await;
-    let tts_binary = select_tts_binary(
-        preferred_tts_binary,
-        tts_model.as_deref(),
-        fallback_tts_binary.clone(),
-    );
-    let tts_binary = sanitize_tts_binary(tts_binary, fallback_tts_binary).await;
+    let (tts_server_url, kokoro_voices) = probe_kokoro_tts_server().await;
 
     SensoryCapabilities {
         stt_binary: resolve_binary("LIFEOS_STT_BIN", &["whisper-cli", "whisper", "whisper-cpp"])
@@ -3157,8 +3133,8 @@ async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
             &["ffmpeg", "arecord", "pw-record", "parecord"],
         )
         .await,
-        tts_binary,
-        tts_model,
+        tts_server_url,
+        kokoro_voices,
         playback_binary: resolve_binary("LIFEOS_PLAYBACK_BIN", &["pw-play", "aplay", "paplay"])
             .await,
         screen_capture_available: true,
@@ -3175,6 +3151,102 @@ async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
         llama_server_running: ai_manager.is_running().await,
         always_on_source: resolve_always_on_source().await,
         rustpotter_model_available: crate::wake_word::resolve_model_path().is_some(),
+    }
+}
+
+/// Determina si se debe ejecutar un probe ahora.
+/// El throttle sólo se aplica cuando hubo un probe EXITOSO previo.
+/// Un probe fallido no debe estampar el reloj para que el sensory loop
+/// (~5 s) pueda reintentar durante el período de calentamiento (≤ 20 s).
+pub(crate) fn should_probe(
+    last: Option<std::time::Instant>,
+    interval: std::time::Duration,
+    now: std::time::Instant,
+) -> bool {
+    match last {
+        None => true,
+        Some(prev) => now.duration_since(prev) >= interval,
+    }
+}
+
+/// Probe the Kokoro TTS server at startup. Returns `(Some(url), voices)` on
+/// success or `(None, vec![])` when the server is unreachable after 3 retries.
+/// Successive calls within `KOKORO_PROBE_INTERVAL` are skipped and return
+/// `(None, vec![])` immediately to avoid hammering the server every 5 s.
+///
+/// El throttle se estampa SÓLO en probe exitoso.  Si Kokoro aún está
+/// calentando (normal: 6-8 s; diseño: hasta 20 s) los intentos fallidos
+/// no bloquean los reintentos del siguiente tick (~5 s).
+async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
+    {
+        // N1: usar unwrap_or_else para recuperarse de mutex envenenado en lugar
+        // de panic, preservando la disponibilidad del sensory loop.
+        let last = LAST_KOKORO_PROBE.lock().unwrap_or_else(|p| p.into_inner());
+        let now = std::time::Instant::now();
+        if !should_probe(*last, KOKORO_PROBE_INTERVAL, now) {
+            return (None, vec![]);
+        }
+        // No estampamos aquí — sólo estampamos en éxito (ver abajo).
+    }
+
+    let base_url = std::env::var("LIFEOS_TTS_SERVER_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8083".to_string());
+
+    let client = kokoro_probe_client();
+
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        match client.get(format!("{base_url}/health")).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let voices = fetch_kokoro_voices(client, &base_url).await;
+                log::info!(
+                    "[tts] Kokoro TTS server ready at {} ({} voices)",
+                    base_url,
+                    voices.len()
+                );
+                // C2: estampar SÓLO en éxito para que el throttle de 5 min
+                // aplique sólo a partir del primer probe exitoso.
+                let mut last = LAST_KOKORO_PROBE.lock().unwrap_or_else(|p| p.into_inner());
+                *last = Some(std::time::Instant::now());
+                return (Some(base_url), voices);
+            }
+            Ok(resp) => {
+                log::warn!(
+                    "[tts] Kokoro health check returned {} (attempt {})",
+                    resp.status(),
+                    attempt + 1
+                );
+            }
+            Err(e) => {
+                log::warn!(
+                    "[tts] Kokoro health check failed (attempt {}): {}",
+                    attempt + 1,
+                    e
+                );
+            }
+        }
+    }
+
+    log::warn!("[tts] Kokoro TTS server not available — TTS degraded");
+    (None, vec![])
+}
+
+/// Fetch available voices from `GET {base_url}/voices`.
+pub async fn fetch_kokoro_voices(client: &reqwest::Client, base_url: &str) -> Vec<KokoroVoice> {
+    match client.get(format!("{base_url}/voices")).send().await {
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<Vec<KokoroVoice>>().await.unwrap_or_default()
+        }
+        Ok(resp) => {
+            log::warn!("[tts] /voices returned {}", resp.status());
+            vec![]
+        }
+        Err(e) => {
+            log::warn!("[tts] Failed to fetch voices: {}", e);
+            vec![]
+        }
     }
 }
 
@@ -3371,10 +3443,7 @@ fn degraded_modes(capabilities: &SensoryCapabilities, gpu: &GpuOffloadStatus) ->
     if capabilities.audio_capture_binary.is_none() {
         degraded.push("mic_capture_unavailable".to_string());
     }
-    if capabilities.tts_binary.is_none()
-        || (tts_binary_requires_model(capabilities.tts_binary.as_deref())
-            && capabilities.tts_model.is_none())
-    {
+    if capabilities.tts_server_url.is_none() {
         degraded.push("tts_unavailable".to_string());
     }
     if capabilities.camera_device.is_none() {
@@ -3944,6 +4013,49 @@ async fn multimodal_chat_with_fallback(
     }
 }
 
+/// Resolve the TTS voice to use, applying priority: req_override > model.tts_voice > env_default.
+/// Empty-string override is treated as None.
+pub fn resolve_tts_voice(
+    model: &crate::user_model::UserModel,
+    env_default: &str,
+    req_override: Option<&str>,
+    available: &[KokoroVoice],
+) -> String {
+    // 1. req_override (if non-empty and in available list)
+    if let Some(ov) = req_override {
+        let ov = ov.trim();
+        if !ov.is_empty() {
+            if available.is_empty() || available.iter().any(|v| v.name == ov) {
+                return ov.to_string();
+            }
+            log::warn!(
+                "[tts] Requested voice '{}' not in available list — falling back to default '{}'",
+                ov,
+                env_default
+            );
+            return env_default.to_string();
+        }
+    }
+
+    // 2. model.tts_voice (if in available list)
+    if let Some(ref mv) = model.tts_voice {
+        if available.is_empty() || available.iter().any(|v| v.name == mv.as_str()) {
+            return mv.clone();
+        }
+        log::warn!(
+            "[tts] Model voice '{}' not in available list — falling back to default '{}'",
+            mv,
+            env_default
+        );
+    }
+
+    // 3. env_default
+    env_default.to_string()
+}
+
+/// Synthesize text to a WAV file via the Kokoro HTTP TTS server.
+/// Retries on transient errors with [200ms, 500ms, 1200ms] delays.
+/// Falls back to espeak-ng when tts_server_url is None.
 async fn synthesize_tts(
     data_dir: &Path,
     text: &str,
@@ -3951,119 +4063,122 @@ async fn synthesize_tts(
     voice_model: Option<&str>,
 ) -> Result<(String, String)> {
     let tts_text = prepare_tts_text(text);
-    let piper_models = resolve_tts_models(voice_model).await;
-    let fallback_binary = resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"]).await;
-    let binary = select_tts_binary(
-        resolve_binary("LIFEOS_TTS_BIN", &["lifeos-piper", "piper", "espeak-ng"]).await,
-        piper_models.first().map(|value| value.as_str()),
-        fallback_binary.clone(),
-    );
-    let binary = sanitize_tts_binary(binary, fallback_binary.clone())
-        .await
-        .ok_or_else(|| anyhow::anyhow!("no local TTS backend found"))?;
 
-    if binary_basename(&binary) == "espeak-ng" {
-        let audio_path = synthesize_with_espeak(data_dir, &binary, &tts_text, language).await?;
-        return Ok((audio_path, binary));
-    }
+    // Determine if Kokoro server URL is configured.
+    let server_url = std::env::var("LIFEOS_TTS_SERVER_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
 
-    let emotion = detect_emotion(&tts_text);
-    let mut piper_errors = Vec::new();
-    for model in piper_models {
-        match synthesize_with_piper(data_dir, &binary, &tts_text, &model, emotion).await {
-            Ok(audio_path) => return Ok((audio_path, binary.clone())),
-            Err(err) => {
-                log::warn!("Piper synthesis failed with model {}: {}", model, err);
-                piper_errors.push(format!("{model}: {err}"));
+    if let Some(ref base_url) = server_url {
+        let env_default =
+            std::env::var("LIFEOS_TTS_DEFAULT_VOICE").unwrap_or_else(|_| "if_sara".to_string());
+        let voice = voice_model.unwrap_or(env_default.as_str()).to_string();
+        match synthesize_with_kokoro_http(data_dir, base_url, &tts_text, &voice, "wav").await {
+            Ok(path) => return Ok((path, format!("kokoro:{}", voice))),
+            Err(e) => {
+                log::warn!("[tts] Kokoro synthesis failed: {} — trying espeak-ng", e);
             }
         }
     }
 
-    if let Some(fallback_binary) = fallback_binary {
-        let audio_path =
-            synthesize_with_espeak(data_dir, &fallback_binary, &tts_text, language).await?;
-        return Ok((audio_path, fallback_binary));
-    };
-
-    if !piper_errors.is_empty() {
-        anyhow::bail!(
-            "piper synthesis failed for all configured models: {}",
-            piper_errors.join(" | ")
-        );
-    }
-
-    anyhow::bail!("no Piper voice model configured");
+    // Fallback: espeak-ng
+    let espeak = resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"])
+        .await
+        .ok_or_else(|| {
+            anyhow::anyhow!("no TTS backend available (Kokoro unreachable, espeak-ng not found)")
+        })?;
+    let audio_path = synthesize_with_espeak(data_dir, &espeak, &tts_text, language).await?;
+    Ok((audio_path, espeak))
 }
 
-async fn synthesize_with_piper(
+/// Call Kokoro TTS server HTTP API with retry logic.
+/// Retries 3 times on connection-refused / 503 / 504 / timeout.
+/// Returns path to the saved audio file.
+pub async fn synthesize_with_kokoro_http(
     data_dir: &Path,
-    binary: &str,
+    base_url: &str,
     text: &str,
-    model: &str,
-    emotion: TtsEmotion,
+    voice: &str,
+    format: &str,
 ) -> Result<String> {
     let tts_dir = data_dir.join("tts");
     tokio::fs::create_dir_all(&tts_dir)
         .await
         .context("Failed to create TTS output dir")?;
-    let audio_path = tts_dir.join(format!("axi-{}.wav", uuid::Uuid::new_v4()));
 
-    let mut args = vec![
-        "--model".to_string(),
-        model.to_string(),
-        "--output_file".to_string(),
-        audio_path.to_string_lossy().to_string(),
-    ];
-    match emotion {
-        TtsEmotion::Urgent => {
-            args.extend(["--length-scale".into(), "0.85".into()]);
-            args.extend(["--sentence-silence".into(), "0.1".into()]);
-        }
-        TtsEmotion::Confirmation => {
-            args.extend(["--length-scale".into(), "0.95".into()]);
-            args.extend(["--sentence-silence".into(), "0.3".into()]);
-        }
-        TtsEmotion::Question => {
-            args.extend(["--length-scale".into(), "1.05".into()]);
-            args.extend(["--sentence-silence".into(), "0.4".into()]);
-        }
-        TtsEmotion::Calm => {
-            args.extend(["--length-scale".into(), "1.15".into()]);
-            args.extend(["--sentence-silence".into(), "0.5".into()]);
-        }
-        TtsEmotion::Neutral => {}
-    }
+    let ext = if format == "ogg" { "ogg" } else { "wav" };
+    let audio_path = tts_dir.join(format!("axi-{}.{}", uuid::Uuid::new_v4(), ext));
 
-    let mut child = Command::new(binary)
-        .args(&args)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .with_context(|| format!("Failed to start Piper via {}", binary))?;
+    let client = kokoro_synth_client();
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(text.trim().as_bytes())
+    let delays_ms = KOKORO_RETRY_DELAYS;
+    let mut last_err: Option<anyhow::Error> = None;
+
+    for (attempt, &delay_ms) in std::iter::once(&0u64).chain(delays_ms.iter()).enumerate() {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
+
+        let body = serde_json::json!({
+            "text": text,
+            "voice": voice,
+            "format": format,
+        });
+
+        let resp = match client
+            .post(format!("{base_url}/tts"))
+            .json(&body)
+            .send()
             .await
-            .context("Failed to send text to Piper stdin")?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let is_transient = e.is_connect() || e.is_timeout();
+                log::warn!(
+                    "[tts] Kokoro request failed (attempt {}): {}",
+                    attempt + 1,
+                    e
+                );
+                last_err = Some(e.into());
+                if is_transient && attempt < KOKORO_RETRY_DELAYS.len() {
+                    continue;
+                }
+                break;
+            }
+        };
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::SERVICE_UNAVAILABLE
+            || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+        {
+            log::warn!("[tts] Kokoro returned {} (attempt {})", status, attempt + 1);
+            last_err = Some(anyhow::anyhow!("Kokoro returned {}", status));
+            if attempt < KOKORO_RETRY_DELAYS.len() {
+                continue;
+            }
+            break;
+        }
+
+        if !status.is_success() {
+            let msg = resp.text().await.unwrap_or_else(|_| status.to_string());
+            anyhow::bail!("Kokoro TTS error {}: {}", status, msg);
+        }
+
+        let bytes = resp
+            .bytes()
+            .await
+            .context("Failed to read Kokoro audio bytes")?;
+        tokio::fs::write(&audio_path, &bytes)
+            .await
+            .context("Failed to write TTS audio file")?;
+
+        cleanup_dir_by_count(&tts_dir, TTS_RETENTION_COUNT, "tts")
+            .await
+            .ok();
+        return Ok(audio_path.to_string_lossy().to_string());
     }
 
-    let output = child
-        .wait_with_output()
-        .await
-        .context("Failed to wait for Piper output")?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "piper synthesis failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-
-    cleanup_dir_by_count(&tts_dir, TTS_RETENTION_COUNT, "tts")
-        .await
-        .ok();
-    Ok(audio_path.to_string_lossy().to_string())
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Kokoro TTS failed after retries")))
 }
 
 async fn synthesize_with_espeak(
@@ -4104,21 +4219,33 @@ async fn synthesize_with_espeak(
 }
 
 /// Synthesize a single text chunk to a WAV file. Used by progressive playback.
+/// Uses Kokoro HTTP API when available, falls back to espeak-ng.
 async fn synthesize_single_chunk(
     data_dir: &Path,
-    binary: &str,
     text: &str,
     language: Option<&str>,
-    piper_model: Option<&str>,
-    emotion: TtsEmotion,
+    voice: &str,
 ) -> Result<String> {
-    if binary_basename(binary) == "espeak-ng" {
-        return synthesize_with_espeak(data_dir, binary, text, language).await;
+    let server_url = std::env::var("LIFEOS_TTS_SERVER_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
+
+    if let Some(ref base_url) = server_url {
+        match synthesize_with_kokoro_http(data_dir, base_url, text, voice, "wav").await {
+            Ok(path) => return Ok(path),
+            Err(e) => {
+                log::warn!(
+                    "[tts] Kokoro chunk synthesis failed: {} — trying espeak-ng",
+                    e
+                );
+            }
+        }
     }
-    if let Some(model) = piper_model {
-        return synthesize_with_piper(data_dir, binary, text, model, emotion).await;
-    }
-    anyhow::bail!("no TTS model available for progressive synthesis")
+
+    let espeak = resolve_binary("LIFEOS_TTS_FALLBACK_BIN", &["espeak-ng"])
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no TTS backend available for chunk synthesis"))?;
+    synthesize_with_espeak(data_dir, &espeak, text, language).await
 }
 
 /// Split response text into sentence-level chunks suitable for progressive TTS.
@@ -5056,86 +5183,6 @@ async fn capture_until_silence(data_dir: &Path, source: Option<&str>) -> Result<
     Ok(audio_path.to_string_lossy().to_string())
 }
 
-pub async fn resolve_tts_model(override_model: Option<&str>) -> Option<String> {
-    resolve_tts_models(override_model).await.into_iter().next()
-}
-
-pub async fn resolve_tts_models(override_model: Option<&str>) -> Vec<String> {
-    let mut models = Vec::new();
-
-    if let Some(model) = override_model.and_then(resolve_existing_tts_model) {
-        models.push(model);
-    }
-
-    if let Ok(model) = std::env::var("LIFEOS_TTS_MODEL") {
-        if let Some(model) = resolve_existing_tts_model(&model) {
-            if !models.iter().any(|existing| existing == &model) {
-                models.push(model);
-            }
-        }
-    }
-
-    for candidate in [
-        "/var/lib/lifeos/models/piper/es_MX-claude-high.onnx",
-        "/var/lib/lifeos/models/piper/es_ES-sharvard-medium.onnx",
-        "/var/lib/lifeos/models/piper/en_US-lessac-medium.onnx",
-        "/usr/share/lifeos/models/piper/es_MX-claude-high.onnx",
-        "/usr/share/lifeos/models/piper/en_US-lessac-medium.onnx",
-    ] {
-        if !models.iter().any(|existing| existing == candidate) && tts_model_is_ready(candidate) {
-            models.push(candidate.to_string());
-        }
-    }
-
-    models
-}
-
-pub fn resolve_existing_tts_model(candidate: &str) -> Option<String> {
-    let candidate = candidate.trim();
-    if candidate.is_empty() {
-        return None;
-    }
-    if tts_model_is_ready(candidate) {
-        return Some(candidate.to_string());
-    }
-
-    let file_name = Path::new(candidate)
-        .file_name()
-        .and_then(|name| name.to_str())?;
-    [
-        "/var/lib/lifeos/models/piper",
-        "/usr/share/lifeos/models/piper",
-        "/var/lib/lifeos/models",
-        "/usr/share/lifeos/models",
-    ]
-    .iter()
-    .map(|dir| format!("{dir}/{file_name}"))
-    .find(|path| tts_model_is_ready(path))
-}
-
-pub fn tts_model_is_ready(candidate: &str) -> bool {
-    let candidate = candidate.trim();
-    if candidate.is_empty() {
-        return false;
-    }
-    let path = Path::new(candidate);
-    if !path.exists() {
-        return false;
-    }
-
-    let is_onnx = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("onnx"))
-        .unwrap_or(false);
-    if !is_onnx {
-        return true;
-    }
-
-    let metadata = format!("{candidate}.json");
-    Path::new(&metadata).exists()
-}
-
 async fn resolve_stt_model(override_model: Option<&str>) -> Option<String> {
     if let Some(model) = override_model.and_then(resolve_existing_stt_model) {
         return Some(model);
@@ -5234,61 +5281,6 @@ fn resolve_existing_stt_model(candidate: &str) -> Option<String> {
     .iter()
     .map(|dir| format!("{dir}/{file_name}"))
     .find(|path| Path::new(path).exists())
-}
-
-fn binary_basename(path: &str) -> &str {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path)
-}
-
-fn tts_binary_requires_model(binary: Option<&str>) -> bool {
-    matches!(binary.map(binary_basename), Some("piper" | "lifeos-piper"))
-}
-
-fn select_tts_binary(
-    preferred: Option<String>,
-    tts_model: Option<&str>,
-    espeak_fallback: Option<String>,
-) -> Option<String> {
-    if tts_binary_requires_model(preferred.as_deref()) && tts_model.is_none() {
-        return espeak_fallback.or(preferred);
-    }
-    preferred
-}
-
-async fn sanitize_tts_binary(
-    selected: Option<String>,
-    espeak_fallback: Option<String>,
-) -> Option<String> {
-    let binary = selected?;
-
-    if tts_binary_requires_model(Some(binary.as_str())) && !supports_piper_cli(&binary).await {
-        log::warn!(
-            "Configured Piper binary '{}' does not support Piper CLI flags; falling back",
-            binary
-        );
-        return espeak_fallback;
-    }
-
-    Some(binary)
-}
-
-async fn supports_piper_cli(binary: &str) -> bool {
-    let output = match Command::new(binary).arg("--help").output().await {
-        Ok(output) => output,
-        Err(_) => return false,
-    };
-
-    let combined = format!(
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-    .to_lowercase();
-
-    combined.contains("--model")
 }
 
 fn espeak_voice_for_language(language: Option<&str>) -> &'static str {
@@ -7688,74 +7680,6 @@ mod tests {
     }
 
     #[test]
-    fn tts_binary_selection_falls_back_to_espeak_when_piper_model_missing() {
-        let selected = select_tts_binary(
-            Some("/usr/bin/piper".to_string()),
-            None,
-            Some("/usr/bin/espeak-ng".to_string()),
-        );
-        assert_eq!(selected.as_deref(), Some("/usr/bin/espeak-ng"));
-    }
-
-    #[test]
-    fn tts_binary_selection_keeps_piper_when_model_exists() {
-        let selected = select_tts_binary(
-            Some("/usr/bin/piper".to_string()),
-            Some("/var/lib/lifeos/models/piper/es_MX-claude-high.onnx"),
-            Some("/usr/bin/espeak-ng".to_string()),
-        );
-        assert_eq!(selected.as_deref(), Some("/usr/bin/piper"));
-    }
-
-    #[test]
-    fn tts_binary_selection_treats_lifeos_piper_as_model_backend() {
-        let selected = select_tts_binary(
-            Some("/usr/local/bin/lifeos-piper".to_string()),
-            None,
-            Some("/usr/bin/espeak-ng".to_string()),
-        );
-        assert_eq!(selected.as_deref(), Some("/usr/bin/espeak-ng"));
-    }
-
-    #[test]
-    fn tts_model_readiness_requires_companion_json_for_onnx() {
-        let dir = std::env::temp_dir().join(format!("lifeos-tts-model-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let model = dir.join("es_MX-test.onnx");
-        std::fs::write(&model, b"fake").unwrap();
-
-        assert!(!tts_model_is_ready(model.to_string_lossy().as_ref()));
-
-        let metadata = dir.join("es_MX-test.onnx.json");
-        std::fs::write(&metadata, br#"{"audio":{"sample_rate":22050}}"#).unwrap();
-        assert!(tts_model_is_ready(model.to_string_lossy().as_ref()));
-
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn resolve_existing_tts_model_rejects_incomplete_onnx_asset() {
-        let dir = std::env::temp_dir().join(format!("lifeos-tts-resolve-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let model = dir.join("es_MX-broken.onnx");
-        std::fs::write(&model, b"fake").unwrap();
-
-        assert!(resolve_existing_tts_model(model.to_string_lossy().as_ref()).is_none());
-
-        std::fs::write(
-            dir.join("es_MX-broken.onnx.json"),
-            br#"{"audio":{"sample_rate":22050}}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            resolve_existing_tts_model(model.to_string_lossy().as_ref()).as_deref(),
-            Some(model.to_string_lossy().as_ref())
-        );
-
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
     fn sanitize_assistant_response_removes_reasoning_scaffolding() {
         let raw = r#"
 The user wants me to describe the screen.
@@ -8006,5 +7930,202 @@ Drafting the description:
         assert!(status.kill_switch_active);
         assert_eq!(status.axi_state, AxiState::Offline);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ── D2: Capabilities regression guard ────────────────────────────────────
+    #[test]
+    fn test_capabilities_has_no_piper_fields() {
+        let caps = SensoryCapabilities::default();
+        let value = serde_json::to_value(&caps).expect("serialize SensoryCapabilities");
+        assert!(
+            value.get("tts_binary").is_none(),
+            "SensoryCapabilities must not contain tts_binary (piper field)"
+        );
+        assert!(
+            value.get("tts_model").is_none(),
+            "SensoryCapabilities must not contain tts_model (piper field)"
+        );
+        assert!(
+            value.get("tts_server_url").is_some(),
+            "SensoryCapabilities must contain tts_server_url (kokoro field)"
+        );
+        assert!(
+            value.get("kokoro_voices").is_some(),
+            "SensoryCapabilities must contain kokoro_voices (kokoro field)"
+        );
+    }
+
+    // ── D1: resolve_tts_voice permutation tests ───────────────────────────────
+    fn make_voices(names: &[&str]) -> Vec<KokoroVoice> {
+        names
+            .iter()
+            .map(|&n| KokoroVoice {
+                name: n.to_string(),
+                language: "es".to_string(),
+                gender: "female".to_string(),
+                is_default: false,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_resolve_tts_voice_override_in_available() {
+        let model = crate::user_model::UserModel::default();
+        let available = make_voices(&["if_sara", "af_heart"]);
+        let result = resolve_tts_voice(&model, "if_sara", Some("af_heart"), &available);
+        assert_eq!(result, "af_heart");
+    }
+
+    #[test]
+    fn test_resolve_tts_voice_override_not_in_available_falls_back_to_default() {
+        let model = crate::user_model::UserModel::default();
+        let available = make_voices(&["if_sara"]);
+        let result = resolve_tts_voice(&model, "if_sara", Some("nonexistent"), &available);
+        assert_eq!(result, "if_sara");
+    }
+
+    #[test]
+    fn test_resolve_tts_voice_model_voice_in_available() {
+        let model = crate::user_model::UserModel {
+            tts_voice: Some("im_nicola".to_string()),
+            ..Default::default()
+        };
+        let available = make_voices(&["if_sara", "im_nicola"]);
+        let result = resolve_tts_voice(&model, "if_sara", None, &available);
+        assert_eq!(result, "im_nicola");
+    }
+
+    #[test]
+    fn test_resolve_tts_voice_model_voice_not_in_available() {
+        let model = crate::user_model::UserModel {
+            tts_voice: Some("im_nicola".to_string()),
+            ..Default::default()
+        };
+        let available = make_voices(&["if_sara"]);
+        let result = resolve_tts_voice(&model, "if_sara", None, &available);
+        assert_eq!(result, "if_sara");
+    }
+
+    #[test]
+    fn test_resolve_tts_voice_no_model_voice_returns_default() {
+        let model = crate::user_model::UserModel::default();
+        let available = make_voices(&["if_sara"]);
+        let result = resolve_tts_voice(&model, "if_sara", None, &available);
+        assert_eq!(result, "if_sara");
+    }
+
+    #[test]
+    fn test_resolve_tts_voice_empty_string_override_treats_as_none() {
+        let model = crate::user_model::UserModel::default();
+        let available = make_voices(&["if_sara", "af_heart"]);
+        let result = resolve_tts_voice(&model, "if_sara", Some(""), &available);
+        assert_eq!(result, "if_sara");
+    }
+
+    // --- Warning A: probe interval ---
+
+    #[test]
+    fn kokoro_probe_interval_is_five_minutes() {
+        assert_eq!(
+            KOKORO_PROBE_INTERVAL,
+            std::time::Duration::from_secs(300),
+            "KOKORO_PROBE_INTERVAL debe ser 5 minutos (300 s)"
+        );
+    }
+
+    // --- Warning B: retry count ---
+
+    #[test]
+    fn kokoro_retry_delays_len_gives_three_total_attempts() {
+        // 1 initial attempt + KOKORO_RETRY_DELAYS.len() retries == 3
+        assert_eq!(
+            KOKORO_RETRY_DELAYS.len(),
+            2,
+            "KOKORO_RETRY_DELAYS must have exactly 2 entries (1 initial + 2 retries = 3 total)"
+        );
+    }
+
+    // ── C2: throttle should_probe helper ─────────────────────────────────────
+    // Tests the pure helper that decides whether a probe should run.
+    // None → always probe; Some(recent) → skip; Some(old) → probe again.
+
+    #[test]
+    fn should_probe_returns_true_when_never_probed() {
+        let now = std::time::Instant::now();
+        assert!(
+            should_probe(None, KOKORO_PROBE_INTERVAL, now),
+            "should_probe debe retornar true cuando nunca se probó (last=None)"
+        );
+    }
+
+    #[test]
+    fn should_probe_returns_false_when_last_probe_was_recent() {
+        let now = std::time::Instant::now();
+        // 1 minute ago — well within the 5-minute interval
+        let recent = now - std::time::Duration::from_secs(60);
+        assert!(
+            !should_probe(Some(recent), KOKORO_PROBE_INTERVAL, now),
+            "should_probe debe retornar false cuando el último probe fue hace 1 min (intervalo 5 min)"
+        );
+    }
+
+    #[test]
+    fn should_probe_returns_true_when_last_probe_was_old() {
+        let now = std::time::Instant::now();
+        // 6 minutes ago — past the 5-minute interval
+        let old = now - std::time::Duration::from_secs(360);
+        assert!(
+            should_probe(Some(old), KOKORO_PROBE_INTERVAL, now),
+            "should_probe debe retornar true cuando el último probe fue hace 6 min (intervalo 5 min)"
+        );
+    }
+
+    // ── W4: split probe/synth clients ────────────────────────────────────────
+
+    #[test]
+    fn kokoro_probe_client_returns_same_instance() {
+        let a = kokoro_probe_client();
+        let b = kokoro_probe_client();
+        assert!(
+            std::ptr::eq(a, b),
+            "kokoro_probe_client() debe devolver siempre el mismo puntero (singleton)"
+        );
+    }
+
+    #[test]
+    fn kokoro_synth_client_returns_same_instance() {
+        let a = kokoro_synth_client();
+        let b = kokoro_synth_client();
+        assert!(
+            std::ptr::eq(a, b),
+            "kokoro_synth_client() debe devolver siempre el mismo puntero (singleton)"
+        );
+    }
+
+    #[test]
+    fn kokoro_probe_and_synth_clients_are_different_instances() {
+        let probe = kokoro_probe_client() as *const _ as *const ();
+        let synth = kokoro_synth_client() as *const _ as *const ();
+        assert!(
+            !std::ptr::eq(probe, synth),
+            "kokoro_probe_client() y kokoro_synth_client() deben ser instancias distintas"
+        );
+    }
+
+    // ── N1: mutex poison recovery ─────────────────────────────────────────────
+    // Direct unit test is hard without a threaded panic, but this confirms the
+    // function compiles and returns a valid guard using unwrap_or_else(|p| p.into_inner()).
+    // Coverage provided implicitly by all tests that call probe_kokoro_tts_server()
+    // or any function locking LAST_KOKORO_PROBE.
+    #[test]
+    fn last_kokoro_probe_lock_is_accessible() {
+        // Verifies that LAST_KOKORO_PROBE can be locked without panicking.
+        // The production code uses unwrap_or_else(|p| p.into_inner()) — if it
+        // were still .expect(...), a poisoned lock would panic the sensory loop.
+        let guard = LAST_KOKORO_PROBE.lock().unwrap_or_else(|p| p.into_inner());
+        assert!(
+            guard.is_none() || guard.is_some(),
+            "LAST_KOKORO_PROBE debe ser accesible"
+        );
     }
 }

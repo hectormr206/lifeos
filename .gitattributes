@@ -1,2 +1,5 @@
 .gitattributes text eol=lf
 *.sh text eol=lf
+
+# Vendored Python wheels — large binary files, tracked with git LFS
+build-assets/wheels/*.whl filter=lfs diff=lfs merge=lfs -text

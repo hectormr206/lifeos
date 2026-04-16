@@ -33,6 +33,30 @@ jobs:
         run: bash scripts/assert-no-dev-artifacts.sh image/files
 
   # ============================================================================
+  # Job 0b: Piper artifact guard — asserts no Piper TTS artifacts remain after
+  # migration to Kokoro TTS (migrate-tts-to-kokoro, v0.7.0).
+  # Runs parallel to no-dev-artifacts. See scripts/assert-no-piper.sh.
+  # ============================================================================
+  no-piper-artifacts:
+    name: No Piper artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Install fd (file finder)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y fd-find
+          sudo ln -sf /usr/bin/fdfind /usr/local/bin/fd
+
+      - name: Assert no Piper artifacts in image/files
+        run: bash scripts/assert-no-piper.sh image/files
+
+      - name: Assert no Piper artifacts in Containerfile
+        run: bash scripts/assert-no-piper.sh image/Containerfile
+
+  # ============================================================================
   # Job 1: Build and Test CLI
   # ============================================================================
   build-cli:

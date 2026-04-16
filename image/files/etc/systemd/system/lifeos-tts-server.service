@@ -1,0 +1,55 @@
+[Unit]
+Description=LifeOS Kokoro TTS Server (HTTP, 127.0.0.1:8083)
+Documentation=https://github.com/hexgrad/kokoro
+After=network.target
+Before=lifeosd.service
+
+[Service]
+Type=simple
+
+# Runtime environment
+EnvironmentFile=/etc/lifeos/tts-server.env
+
+# Server binary
+ExecStart=/opt/lifeos/kokoro-env/bin/python3 /usr/local/bin/lifeos-tts-server.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=60
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeos-tts-server
+
+# Dynamic user for isolation (no persistent UID needed)
+DynamicUser=yes
+RuntimeDirectory=lifeos-tts
+
+# Memory and CPU limits
+MemoryMax=1G
+CPUQuota=200%
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+LockPersonality=true
+CapabilityBoundingSet=
+
+# Network isolation — loopback only
+IPAddressAllow=127.0.0.0/8 ::1/128
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

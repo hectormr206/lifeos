@@ -48,6 +48,8 @@ mod inner {
     const SIMPLEX_CHAT_ID: i64 = 0x534D_504C_5800_0001; // "SMPLX001"
     /// Path where the invite link is persisted for the dashboard.
     const INVITE_LINK_PATH: &str = "/var/lib/lifeos/simplex-invite-link";
+    /// Canonical TTS output directory prefix — must match `synthesize_with_kokoro_http` output path.
+    pub(crate) const TTS_OUTPUT_PREFIX: &str = "/var/lib/lifeos/tts/";
     /// Directory for downloaded files from SimpleX contacts.
     const DOWNLOADS_DIR: &str = "/var/lib/lifeos/simplex-downloads";
 
@@ -996,6 +998,78 @@ mod inner {
                                                         &reply,
                                                     )
                                                     .await;
+                                                    // ── Voice-note reply hook (E2) ──
+                                                    // For voice-originated inputs, synthesize reply as OGG
+                                                    // and send as voice note (max 600 chars, max 1 MB).
+                                                    if reply.len() <= 600 {
+                                                        let server_url =
+                                                            std::env::var("LIFEOS_TTS_SERVER_URL")
+                                                                .unwrap_or_else(|_| {
+                                                                    "http://127.0.0.1:8083"
+                                                                        .to_string()
+                                                                });
+                                                        let env_default = std::env::var(
+                                                            "LIFEOS_TTS_DEFAULT_VOICE",
+                                                        )
+                                                        .unwrap_or_else(|_| "if_sara".to_string());
+                                                        // Usa el singleton kokoro_probe_client (connect 500ms, timeout 2s)
+                                                        // para no bloquear el path de respuesta de Simplex.
+                                                        // En caso de fallo degrada a &[] sin validación de voz.
+                                                        let available_voices: Vec<crate::sensory_pipeline::KokoroVoice> =
+                                                            crate::sensory_pipeline::fetch_kokoro_voices(
+                                                                crate::sensory_pipeline::kokoro_probe_client(),
+                                                                &server_url,
+                                                            )
+                                                            .await;
+                                                        let voice = if let Some(ref um_arc) =
+                                                            tool_ctx.user_model
+                                                        {
+                                                            let um = um_arc.read().await;
+                                                            crate::sensory_pipeline::resolve_tts_voice(
+                                                                &um,
+                                                                &env_default,
+                                                                None,
+                                                                &available_voices,
+                                                            )
+                                                        } else {
+                                                            env_default.clone()
+                                                        };
+                                                        match crate::sensory_pipeline::synthesize_with_kokoro_http(
+                                                            &std::path::PathBuf::from("/var/lib/lifeos"),
+                                                            &server_url,
+                                                            &reply,
+                                                            &voice,
+                                                            "ogg",
+                                                        ).await {
+                                                            Ok(ref audio_path) => {
+                                                                // Sanity check: path must be within the canonical
+                                                                // TTS output directory created by synthesize_with_kokoro_http.
+                                                                let canonical = std::path::Path::new(audio_path);
+                                                                if !canonical.starts_with(TTS_OUTPUT_PREFIX) {
+                                                                    warn!("[simplex_bridge] TTS output path outside expected dir: {}", audio_path);
+                                                                } else {
+                                                                    // File size guard: skip if > 1 MB
+                                                                    let size_ok = tokio::fs::metadata(audio_path).await
+                                                                        .map(|m| m.len() <= 1_048_576)
+                                                                        .unwrap_or(false);
+                                                                    if size_ok {
+                                                                        let _ = send_file(&mut sink, &display_name, audio_path).await;
+                                                                    } else {
+                                                                        warn!("[simplex_bridge] TTS OGG too large (>1 MB), skipping voice note");
+                                                                    }
+                                                                    // Schedule cleanup after 60s
+                                                                    let cleanup_path = audio_path.clone();
+                                                                    tokio::spawn(async move {
+                                                                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                                                                        tokio::fs::remove_file(&cleanup_path).await.ok();
+                                                                    });
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                warn!("[simplex_bridge] TTS synthesis for voice reply failed: {}", e);
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                                 None => {
                                                     let _ = send_message(
@@ -1484,3 +1558,45 @@ mod stubs {
 
 #[cfg(not(feature = "messaging"))]
 pub(crate) use stubs::*;
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+#[cfg(feature = "messaging")]
+mod tests {
+    use super::inner::TTS_OUTPUT_PREFIX;
+
+    /// Test 1: TTS_OUTPUT_PREFIX matches the canonical output directory of
+    /// `synthesize_with_kokoro_http`, which writes to `{data_dir}/tts/axi-<uuid>.<ext>`.
+    /// The guard in the voice-note handler must use this prefix exactly.
+    #[test]
+    fn test_tts_output_prefix_matches_kokoro_output_path() {
+        // synthesize_with_kokoro_http writes to data_dir.join("tts").join("axi-<uuid>.<ext>")
+        // With data_dir = /var/lib/lifeos this becomes /var/lib/lifeos/tts/axi-*.ogg
+        let data_dir = std::path::Path::new("/var/lib/lifeos");
+        let example_path = data_dir.join("tts").join("axi-test.ogg");
+
+        assert!(
+            example_path.starts_with(TTS_OUTPUT_PREFIX),
+            "Expected kokoro output path {:?} to start_with TTS_OUTPUT_PREFIX {:?}",
+            example_path,
+            TTS_OUTPUT_PREFIX
+        );
+
+        // The old/wrong prefix must NOT match
+        let wrong_prefix = "/var/lib/lifeos/tts-output/";
+        assert!(
+            !example_path.starts_with(wrong_prefix),
+            "Old broken prefix {:?} must NOT match kokoro output path {:?}",
+            wrong_prefix,
+            example_path
+        );
+    }
+
+    /// Test 2: fetch_kokoro_voices is pub — verifiable at compile time.
+    /// If the function is private, this test will not compile with E0603.
+    #[test]
+    fn test_fetch_kokoro_voices_is_pub() {
+        // Compile-only proof: reference the function by path — E0603 if private.
+        let _ = crate::sensory_pipeline::fetch_kokoro_voices as fn(_, _) -> _;
+    }
+}
