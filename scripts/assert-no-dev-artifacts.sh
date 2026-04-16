@@ -122,35 +122,46 @@ check_filesystem() {
 }
 
 # ── OCI image mode ────────────────────────────────────────────────────────────
+# Uses `buildah from` + `buildah mount` to inspect the image rootfs without
+# executing the entrypoint. This is bootc-safe — bootc images have a special
+# entrypoint that `podman create` rejects. buildah's "working container" model
+# never runs processes, so it always succeeds.
 check_oci_image() {
     local image_ref="$1"
-    local container_name="_lifeos_devcheck_$$"
-    local tmp_file
-    tmp_file=$(mktemp /tmp/lifeos-devcheck.XXXXXX)
+    local ctr=""
+    local mountpoint=""
     local offenders=()
     local rc=0
 
-    # Cleanup on exit
     cleanup() {
-        rm -f "${tmp_file}"
-        podman rm -f "${container_name}" >/dev/null 2>&1 || true
+        if [ -n "${mountpoint}" ] && [ -n "${ctr}" ]; then
+            buildah umount "${ctr}" >/dev/null 2>&1 || true
+        fi
+        if [ -n "${ctr}" ]; then
+            buildah rm "${ctr}" >/dev/null 2>&1 || true
+        fi
     }
     trap cleanup RETURN
 
-    # Create a container from the image and export its filesystem as a tar listing
-    if ! podman create --name "${container_name}" "${image_ref}" true >/dev/null 2>&1; then
-        echo "ERROR: could not create container from image: ${image_ref}" >&2
+    # `buildah from --pull=never` creates a working container from a local or
+    # referenced image without running its entrypoint. Capture stderr so real
+    # errors are visible (unlike the previous podman-create path).
+    if ! ctr=$(buildah from --pull=never "${image_ref}" 2>&1); then
+        echo "ERROR: could not create working container from image: ${image_ref}" >&2
+        echo "${ctr}" >&2
+        ctr=""
         return 2
     fi
 
-    if ! podman export "${container_name}" | tar -tf - >"${tmp_file}" 2>/dev/null; then
-        echo "ERROR: could not export container filesystem from: ${image_ref}" >&2
+    if ! mountpoint=$(buildah mount "${ctr}" 2>&1); then
+        echo "ERROR: could not mount working container filesystem: ${image_ref}" >&2
+        echo "${mountpoint}" >&2
+        mountpoint=""
         return 2
     fi
 
     for rel_path in "${FORBIDDEN_PATHS[@]}"; do
-        # tar listings use relative paths (no leading slash)
-        if grep -qF "${rel_path}" "${tmp_file}" 2>/dev/null; then
+        if [ -e "${mountpoint}/${rel_path}" ]; then
             offenders+=("/${rel_path}")
         fi
     done
