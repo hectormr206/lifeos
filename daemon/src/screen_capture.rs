@@ -936,7 +936,7 @@ impl ScreenCapture {
                 .await
                 .with_context(|| format!("Failed to remove stale screenshot {}", path.display()))?;
             removed += 1;
-            log::info!("Removed stale screenshot: {}", path.display());
+            log::debug!("Removed stale screenshot (path redacted)");
         }
 
         Ok(removed)
