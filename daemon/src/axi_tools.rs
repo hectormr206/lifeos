@@ -2450,6 +2450,27 @@ REGLAS FIRMES:
             TaskComplexity::Medium
         };
 
+        // Belt-and-braces cloud-route gate. The sensitivity clamp below
+        // already pins the router to LOCAL tier when an image is
+        // attached, but we ALSO route the request through the unified
+        // `Sense::CloudRoute` gate so every image-carrying LLM call
+        // hits the audit ring, and future policy (e.g. "no image
+        // routing during meetings") has a single place to land.
+        if image_b64.is_some() {
+            if let Some(ref sensory) = ctx.sensory_pipeline {
+                let guard = sensory.read().await;
+                if let Err(reason) = guard
+                    .ensure_sense_allowed(
+                        crate::sensory_pipeline::Sense::CloudRoute,
+                        "axi_tools.agentic_chat.image",
+                    )
+                    .await
+                {
+                    return (format!("Ruteo de imagen rechazado: {}", reason), None);
+                }
+            }
+        }
+
         // When the user message carries a screenshot (or any attached
         // image), clamp sensitivity to Critical so the router is pinned
         // to the LOCAL tier. Without this, a "take a screenshot" tool
@@ -2668,12 +2689,21 @@ REGLAS FIRMES:
     // -----------------------------------------------------------------------
 
     async fn execute_screenshot(ctx: &ToolContext) -> Result<String> {
-        // Gate: check the shared screen-capture policy before shelling
-        // grim. Round-2 audit C-NEW-2 — this tool previously bypassed
-        // every user policy and wrote to /tmp 0o644.
+        // Unified Sense::Screen gate — kill switch + vision.enabled +
+        // suspend + session lock + sensitive-window title.  Round-2
+        // audit C-NEW-2 — this tool previously bypassed every user
+        // policy and wrote to /tmp 0o644.  Routing through the typed
+        // API also records an audit entry with caller
+        // `axi_tools.execute_screenshot`.
         if let Some(ref sensory) = ctx.sensory_pipeline {
             let guard = sensory.read().await;
-            if let Err(reason) = guard.ensure_screen_capture_allowed().await {
+            if let Err(reason) = guard
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::Screen,
+                    "axi_tools.execute_screenshot",
+                )
+                .await
+            {
                 anyhow::bail!("screenshot tool refused: {}", reason);
             }
         }

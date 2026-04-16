@@ -2240,30 +2240,15 @@ impl SensoryPipelineManager {
         request: VisionDescribeRequest,
     ) -> Result<VisionDescribeResult> {
         let state = self.refresh_capabilities(ai_manager).await?;
-        if state.kill_switch_active {
-            anyhow::bail!("sensory kill switch is active");
-        }
-        // Respect the user's master screen toggle. The dashboard surfaces
-        // `vision.enabled` as "captura de pantalla" — a request that
-        // bypasses it makes the toggle meaningless.
-        if !state.vision.enabled {
-            anyhow::bail!("screen capture is disabled by user preference");
-        }
-        // Hard stop across suspend/hibernate — same gate the sensory loop
-        // and camera path already use.
-        if self.is_suspending() {
-            anyhow::bail!("screen capture is paused across suspend/hibernate");
-        }
-        // Refuse if session is locked or the active window is a credential /
-        // private / lock prompt. The awareness cycle already skips these;
-        // describe_screen used to bypass the list entirely.
-        if is_session_locked().await {
-            anyhow::bail!("screen capture skipped: session locked");
-        }
-        if let Some(ref title) = state.vision.current_window {
-            if is_sensitive_window_title(title) {
-                anyhow::bail!("screen capture skipped: sensitive window");
-            }
+        // Unified sense gate — kill switch + vision.enabled + suspend +
+        // session lock + sensitive-window title. Replaces the inline
+        // ladder this function used to carry so every screen-consuming
+        // path enforces the same policy via one implementation.
+        if let Err(reason) = self
+            .ensure_sense_allowed(Sense::Screen, "pipeline.describe_screen")
+            .await
+        {
+            anyhow::bail!("{}", reason);
         }
 
         let question = request.question.unwrap_or_else(|| {
@@ -2656,21 +2641,14 @@ impl SensoryPipelineManager {
         follow_along: &FollowAlongManager,
         memory_plane: &MemoryPlaneManager,
     ) -> Result<PresenceRuntime> {
-        // Hard stop on kill switch. Without this, a direct
-        // `POST /sensory/presence` can still drive camera captures, AI
-        // scene analysis, and memory writes even when the master sensory
-        // kill switch is engaged.
+        // Unified sense gate — kill switch + camera_consented + suspend.
+        // Any variant trip short-circuits with the last-known presence
+        // snapshot so callers don't need to branch on the reason.
+        if self
+            .ensure_sense_allowed(Sense::Camera, "pipeline.update_presence")
+            .await
+            .is_err()
         {
-            let guard = self.state.read().await;
-            if guard.kill_switch_active {
-                return Ok(guard.presence.clone());
-            }
-        }
-
-        // Hard stop across suspend/hibernate. Kernel USB re-probes on
-        // resume would hand us a stale /dev/video0 handle, so capturing
-        // through a sleep cycle yields EACCES and a locked device.
-        if self.is_suspending() {
             return Ok(self.state.read().await.presence.clone());
         }
 

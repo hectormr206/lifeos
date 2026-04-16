@@ -9535,9 +9535,9 @@ async fn ensure_followalong_consent(state: &ApiState) -> Result<(), (StatusCode,
     }
 }
 
-/// Gate a screen-capturing API request. Wraps the shared
-/// `SensoryPipelineManager::ensure_screen_capture_allowed` with an
-/// HTTP error shape; non-API callers (axi_tools, supervisor,
+/// Gate a screen-capturing API request. Wraps the unified
+/// `SensoryPipelineManager::ensure_sense_allowed(Sense::Screen, caller)`
+/// with an HTTP error shape. Non-API callers (axi_tools, supervisor,
 /// simplex_bridge, desktop_operator, MCP, overlay) MUST call the
 /// manager directly so every capture path shares one policy check.
 async fn ensure_screen_capture_allowed(
@@ -9546,7 +9546,10 @@ async fn ensure_screen_capture_allowed(
     ensure_followalong_consent(state).await?;
 
     let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
-    if let Err(reason) = sensory_mgr.ensure_screen_capture_allowed().await {
+    if let Err(reason) = sensory_mgr
+        .ensure_sense_allowed(crate::sensory_pipeline::Sense::Screen, "api.screen_helper")
+        .await
+    {
         let status = if reason.contains("suspend") {
             StatusCode::SERVICE_UNAVAILABLE
         } else {
