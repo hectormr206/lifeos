@@ -131,6 +131,11 @@ check_oci_image() {
     local offenders=()
     local rc=0
 
+    # Strip the `containers-storage:` transport prefix if present — podman
+    # run does its own storage lookup and chokes on the explicit prefix when
+    # the name is unqualified (it gets re-resolved as docker.io/library/<name>).
+    local podman_ref="${image_ref#containers-storage:}"
+
     # Build a bash probe that prints `found:<path>` for each forbidden path
     # that exists inside the image. Unknown-size arrays are safe here because
     # FORBIDDEN_PATHS is a fixed readonly list defined above.
@@ -141,7 +146,7 @@ check_oci_image() {
     probe+="true"
 
     local probe_out
-    if ! probe_out=$(podman run --rm --entrypoint /bin/bash "${image_ref}" -lc "${probe}" 2>&1); then
+    if ! probe_out=$(podman run --rm --entrypoint /bin/bash "${podman_ref}" -lc "${probe}" 2>&1); then
         echo "ERROR: could not run probe inside image: ${image_ref}" >&2
         echo "${probe_out}" >&2
         return 2
