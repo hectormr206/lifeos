@@ -1065,6 +1065,17 @@ REGLAS FIRMES:
         /// Recent messages kept verbatim (sliding window tail).
         messages: Vec<ChatMessage>,
         last_active: chrono::DateTime<chrono::Utc>,
+        /// Sticky "this conversation originated from voice" flag.
+        /// Hearing round-2 W-NEW-5: a SimpleX voice note got the
+        /// Critical sensitivity clamp on its own turn, but the
+        /// transcript landed in history as plain text — a follow-up
+        /// text-only turn called `agentic_chat` without the clamp and
+        /// the LLM router could pick a cloud provider because the
+        /// privacy_filter classifies benign transcripts as Low.
+        /// This flag carries the clamp across every subsequent turn
+        /// on the same chat until TTL expires the entry.
+        #[serde(default)]
+        voice_origin: bool,
     }
 
     /// Thread-safe conversation history with disk persistence and auto-compaction.
@@ -1147,6 +1158,33 @@ REGLAS FIRMES:
             entry.compacted_summary.clone()
         }
 
+        /// True if any message on this chat originated from voice (e.g.
+        /// a SimpleX voice note). Sticky across turns until TTL expires.
+        /// Callers should clamp their LLM request's sensitivity to
+        /// `Critical` when this returns true, so a benign-looking text
+        /// follow-up doesn't accidentally route a voice transcript to
+        /// a cloud provider.
+        pub async fn voice_origin(&self, chat_id: i64) -> bool {
+            let chats = self.chats.read().await;
+            chats.get(&chat_id).map(|e| e.voice_origin).unwrap_or(false)
+        }
+
+        /// Mark a chat as voice-originated. Idempotent. Called by the
+        /// SimpleX bridge (and any future voice-input bridge) when a
+        /// voice transcript is dispatched through `agentic_chat`.
+        pub async fn mark_voice_origin(&self, chat_id: i64) {
+            let mut chats = self.chats.write().await;
+            let entry = chats.entry(chat_id).or_insert_with(|| ConversationEntry {
+                first_message: None,
+                compacted_summary: None,
+                messages: Vec::new(),
+                last_active: chrono::Utc::now(),
+                voice_origin: false,
+            });
+            entry.voice_origin = true;
+            entry.last_active = chrono::Utc::now();
+        }
+
         /// Append messages and trigger compaction if needed.
         pub async fn append(&self, chat_id: i64, new_messages: &[ChatMessage]) {
             let mut chats = self.chats.write().await;
@@ -1155,6 +1193,7 @@ REGLAS FIRMES:
                 compacted_summary: None,
                 messages: Vec::new(),
                 last_active: chrono::Utc::now(),
+                voice_origin: false,
             });
 
             // Capture first user message if not yet set
@@ -2511,11 +2550,25 @@ REGLAS FIRMES:
         // transcript, OCR output) can force this clamp via the
         // `force_sensitivity` argument even when there's no image —
         // used by simplex_bridge for voice notes (hearing audit C-6).
-        let sensitivity = force_sensitivity.or(if image_b64.is_some() {
-            Some(crate::privacy_filter::SensitivityLevel::Critical)
-        } else {
-            None
-        });
+        //
+        // Sticky voice-origin clamp (hearing round-2 W-NEW-5): if any
+        // prior turn on this chat arrived via voice, carry the Critical
+        // clamp forward automatically. Without this, a benign-looking
+        // text follow-up on a voice-originated conversation drops the
+        // sensitivity and the voice transcript (still in history) can
+        // leak to a cloud provider.
+        let sticky_voice = ctx.history.voice_origin(chat_id).await;
+        let sensitivity = force_sensitivity
+            .or(if sticky_voice {
+                Some(crate::privacy_filter::SensitivityLevel::Critical)
+            } else {
+                None
+            })
+            .or(if image_b64.is_some() {
+                Some(crate::privacy_filter::SensitivityLevel::Critical)
+            } else {
+                None
+            });
 
         let mut screenshot_path: Option<String> = None;
 

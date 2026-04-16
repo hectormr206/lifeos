@@ -2680,11 +2680,23 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
         // untouched if the user toggled audio_enabled off, leaving the
         // mic hot for hours (observed live pw-record PID 16194 at 5h49m).
         if let Some(ref detector) = state.wake_word_detector {
-            let should_be_active = runtime.audio_enabled
-                && !runtime.kill_switch_active
-                && always_on.enabled
-                && always_on.hotword_enabled
-                && !meeting.active;
+            // Route through the unified gate so the orchestrator picks
+            // up every condition the Sense::AlwaysOnListening variant
+            // enforces — kill_switch + audio_enabled + always_on_active
+            // + suspend. Round-2 hearing W-NEW-3: previously the local
+            // AND-chain didn't consult `is_suspending`, so the detector
+            // could resume mid-suspend.
+            let gate_ok = sensory_manager
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::AlwaysOnListening,
+                    "main.wake_word_supervisor",
+                )
+                .await
+                .is_ok();
+            // Meeting check stays separate — it's a UX preference
+            // (silence wake word during active calls), not a policy
+            // gate. Same as before.
+            let should_be_active = gate_ok && always_on.hotword_enabled && !meeting.active;
 
             if should_be_active {
                 detector.resume();

@@ -1016,6 +1016,15 @@ mod inner {
                                                     // that must never leave the device
                                                     // even when BYOK cloud providers are
                                                     // configured.
+                                                    //
+                                                    // W-NEW-5: mark the chat as voice-originated
+                                                    // so EVERY follow-up turn on this chat
+                                                    // inherits the clamp, even when the next
+                                                    // message is plain text ("sí dale" / "ok").
+                                                    tool_ctx
+                                                        .history
+                                                        .mark_voice_origin(SIMPLEX_CHAT_ID)
+                                                        .await;
                                                     let (reply, _) =
                                                         axi_tools::agentic_chat_with_sensitivity(
                                                             &tool_ctx,

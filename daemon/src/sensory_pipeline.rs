@@ -1120,7 +1120,22 @@ impl SensoryPipelineManager {
             && load_calibrated_threshold().await.is_none()
         {
             let source = snapshot.capabilities.always_on_source.clone();
+            // Hearing round-2 W-NEW-4: the calibration task spawns a
+            // 2-second mic recording. Previously fired whenever the
+            // caller condition held, but if the user tripped the kill
+            // switch OR initiated suspend between the snapshot above
+            // and the spawned task actually running, the mic capture
+            // went through anyway. Re-check the gate INSIDE the
+            // spawned task so the capture aborts on any late toggle.
+            let gate_mgr = self.clone();
             tokio::spawn(async move {
+                if gate_mgr
+                    .ensure_sense_allowed(Sense::AlwaysOnListening, "pipeline.auto_calibrate_mic")
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
                 let threshold = calibrate_mic_threshold(source.as_deref()).await;
                 log::info!("[voice-init] auto-calibrated mic threshold: {threshold}");
             });
