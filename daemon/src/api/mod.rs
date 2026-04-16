@@ -1663,6 +1663,43 @@ async fn dashboard_bootstrap(
             }),
         ));
     }
+
+    // Defense-in-depth against DNS rebinding: a browser visiting an attacker
+    // page that rebinds its hostname to 127.0.0.1 still sends the attacker's
+    // original hostname in the Host header. Require Host (and Origin, if
+    // present) to address the loopback interface.
+    let headers = request.headers();
+    let host_ok = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(is_loopback_host)
+        .unwrap_or(false);
+    if !host_ok {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "Bootstrap endpoint requires a loopback Host header".to_string(),
+                code: 403,
+            }),
+        ));
+    }
+    if let Some(origin) = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|h| h.to_str().ok())
+    {
+        if !is_loopback_origin(origin) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiError {
+                    error: "Forbidden".to_string(),
+                    message: "Bootstrap endpoint rejects non-loopback Origin".to_string(),
+                    code: 403,
+                }),
+            ));
+        }
+    }
+
     let peer = request
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
@@ -1675,6 +1712,38 @@ async fn dashboard_bootstrap(
         token: state.config.api_key.clone(),
         auth_required: state.config.api_key.is_some(),
     }))
+}
+
+/// True if `host` (value from a `Host` header, may include `:port`) points
+/// at the loopback interface. Accepts `localhost`, `127.0.0.1`, `::1` and
+/// the bracketed IPv6 form `[::1]`.
+fn is_loopback_host(host: &str) -> bool {
+    let trimmed = host.trim();
+    // Strip the bracketed-IPv6 wrapper and port suffix.
+    let without_brackets = trimmed
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once(']').map(|(h, _)| h))
+        .unwrap_or(trimmed);
+    let host_only = if without_brackets.contains("::") {
+        // IPv6 literal may still carry a `]:port` that we stripped above,
+        // but the bare form `::1` has no port delimiter.
+        without_brackets
+    } else {
+        without_brackets
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(without_brackets)
+    };
+    matches!(host_only, "localhost" | "127.0.0.1" | "::1")
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let trimmed = origin.trim().trim_end_matches('/');
+    let without_scheme = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+        .unwrap_or(trimmed);
+    is_loopback_host(without_scheme)
 }
 
 async fn get_security_alerts(
@@ -3046,8 +3115,12 @@ async fn post_vision_ocr(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let capture_screen = payload.capture_screen.unwrap_or(payload.source.is_none());
 
+    // Consent is required for every OCR path, not just live screen capture.
+    // Reading a previously-captured frame or screenshot still qualifies as
+    // sensory data access and must be gated.
+    ensure_followalong_consent(&state).await?;
+
     let source_path = if capture_screen {
-        ensure_followalong_consent(&state).await?;
         let capture = ScreenCapture::new(PathBuf::from("/var/lib/lifeos/screenshots"));
         let screenshot = capture.capture().await.map_err(|e| {
             (
@@ -3061,7 +3134,7 @@ async fn post_vision_ocr(
         })?;
         screenshot.path.to_string_lossy().to_string()
     } else {
-        payload
+        let raw = payload
             .source
             .as_deref()
             .map(|v| v.trim().to_string())
@@ -3075,19 +3148,11 @@ async fn post_vision_ocr(
                         code: 400,
                     }),
                 )
-            })?
+            })?;
+        validate_sensory_source_path(&raw)?
+            .to_string_lossy()
+            .to_string()
     };
-
-    if !std::path::Path::new(&source_path).exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: "Not Found".to_string(),
-                message: format!("Image source not found: {}", source_path),
-                code: 404,
-            }),
-        ));
-    }
 
     let language = payload
         .language
@@ -3133,11 +3198,22 @@ async fn post_vision_ocr(
         })?;
 
     if !output.status.success() {
+        // Do NOT echo tesseract/leptonica stderr to the caller — on
+        // non-image inputs libleptonica stuffs the first line of the file
+        // into the error message as the "filename", which would leak the
+        // contents of whatever path the caller supplied (even though the
+        // caller-supplied path is validated above, defense-in-depth).
+        let exit_code = output.status.code().unwrap_or(-1);
+        log::warn!(
+            "OCR exited with status {}: {}",
+            exit_code,
+            output_stderr(&output)
+        );
         return Err((
             StatusCode::BAD_GATEWAY,
             Json(ApiError {
                 error: "Bad Gateway".to_string(),
-                message: format!("OCR failed: {}", output_stderr(&output)),
+                message: format!("OCR failed (exit {})", exit_code),
                 code: 502,
             }),
         ));
@@ -3327,6 +3403,22 @@ async fn describe_screen_with_sensory(
         ));
     }
 
+    // Consent-gate every vision-describe call. Feeding a pre-captured file
+    // to the multimodal model and persisting its description is just as
+    // sensitive as live screen capture.
+    ensure_followalong_consent(&state).await?;
+
+    // Whitelist caller-supplied source paths to daemon-owned sensory dirs
+    // so the endpoint cannot be used to read and describe arbitrary files.
+    let validated_source = match payload.source.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => Some(
+            validate_sensory_source_path(raw)?
+                .to_string_lossy()
+                .to_string(),
+        ),
+        _ => None,
+    };
+
     let ai_manager = *state.ai_manager.read().await;
     let overlay_mgr = state.overlay_manager.read().await.clone();
     let screen_capture = state.screen_capture.read().await.clone();
@@ -3340,7 +3432,7 @@ async fn describe_screen_with_sensory(
             &screen_capture,
             &memory_plane,
             VisionDescribeRequest {
-                source: payload.source,
+                source: validated_source,
                 capture_screen: payload.capture_screen.unwrap_or(true),
                 speak: payload.speak.unwrap_or(true),
                 question: payload.question,
@@ -9205,6 +9297,54 @@ async fn ensure_followalong_consent(state: &ApiState) -> Result<(), (StatusCode,
     }
 }
 
+/// Allowed base directories for caller-supplied sensory source paths.
+/// Restricting to daemon-owned output dirs blocks path-traversal reads of
+/// arbitrary files through /api/v1/sensory/vision/describe and
+/// /api/v1/vision/ocr.
+const SENSORY_SOURCE_ALLOWED_PREFIXES: &[&str] =
+    &["/var/lib/lifeos/screenshots/", "/var/lib/lifeos/camera/"];
+
+fn validate_sensory_source_path(
+    source: &str,
+) -> Result<std::path::PathBuf, (StatusCode, Json<ApiError>)> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "source path is empty".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+    let canonical = std::path::Path::new(trimmed).canonicalize().map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: "source path does not resolve".to_string(),
+                code: 404,
+            }),
+        )
+    })?;
+    let canon_str = canonical.to_string_lossy();
+    let allowed = SENSORY_SOURCE_ALLOWED_PREFIXES
+        .iter()
+        .any(|p| canon_str.starts_with(p));
+    if !allowed {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "source path is outside the allowed sensory directories".to_string(),
+                code: 403,
+            }),
+        ));
+    }
+    Ok(canonical)
+}
+
 async fn get_workspace_awareness() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)>
 {
     let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_else(|_| "COSMIC".to_string());
@@ -12455,5 +12595,102 @@ mod tests {
         // empty; we must NOT block the user from setting a preference.
         assert!(validate_tts_voice("af_heart", &[]).is_ok());
         assert!(validate_tts_voice("any_unknown_voice", &[]).is_ok());
+    }
+
+    // ── camera-audit Fase A: path-traversal guards + loopback header gates ──
+
+    #[test]
+    fn loopback_host_accepts_localhost_and_127() {
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("localhost:8081"));
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.0.0.1:8081"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("[::1]"));
+        assert!(is_loopback_host("[::1]:8081"));
+    }
+
+    #[test]
+    fn loopback_host_rejects_remote_and_empty() {
+        assert!(!is_loopback_host("evil.com"));
+        assert!(!is_loopback_host("evil.com:8081"));
+        assert!(!is_loopback_host("10.0.0.5"));
+        assert!(!is_loopback_host("127.0.0.1.evil.com"));
+        assert!(!is_loopback_host(""));
+        // IPv4-mapped IPv6 loopback is intentionally rejected: keeps the
+        // matcher simple and the real browser path never uses this form.
+        assert!(!is_loopback_host("::ffff:127.0.0.1"));
+    }
+
+    #[test]
+    fn loopback_origin_accepts_http_and_https_loopback() {
+        assert!(is_loopback_origin("http://localhost"));
+        assert!(is_loopback_origin("http://localhost:8081"));
+        assert!(is_loopback_origin("https://127.0.0.1"));
+        assert!(is_loopback_origin("http://[::1]:8081/"));
+    }
+
+    #[test]
+    fn loopback_origin_rejects_non_loopback() {
+        assert!(!is_loopback_origin("http://evil.com"));
+        assert!(!is_loopback_origin("https://evil.com:8081"));
+        assert!(!is_loopback_origin("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn sensory_source_path_rejects_empty_and_unauthorized_paths() {
+        // Empty / whitespace → 400.
+        let err = validate_sensory_source_path("").unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        let err = validate_sensory_source_path("   ").unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+
+        // Outside the allowed dirs → 403 (for paths that do exist) or 404
+        // (for paths that don't resolve). Both branches are security-safe;
+        // the important property is that the call does NOT return Ok.
+        let status = validate_sensory_source_path("/etc/passwd")
+            .map(|_| StatusCode::OK)
+            .unwrap_or_else(|e| e.0);
+        assert_ne!(status, StatusCode::OK);
+        assert!(matches!(
+            status,
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+        ));
+
+        let status = validate_sensory_source_path("/home/lifeos/.bash_history")
+            .map(|_| StatusCode::OK)
+            .unwrap_or_else(|e| e.0);
+        assert_ne!(status, StatusCode::OK);
+    }
+
+    #[test]
+    fn sensory_source_path_blocks_traversal_into_allowed_prefix() {
+        // A caller that supplies `/var/lib/lifeos/camera/../../../etc/passwd`
+        // canonicalizes to `/etc/passwd`, which is NOT under an allowed
+        // prefix, so the check must reject even if the raw string does
+        // start with an allowed prefix.
+        let status = validate_sensory_source_path("/var/lib/lifeos/camera/../../../etc/passwd")
+            .map(|_| StatusCode::OK)
+            .unwrap_or_else(|e| e.0);
+        assert_ne!(status, StatusCode::OK);
+    }
+
+    #[test]
+    fn sensory_source_path_accepts_valid_camera_frame() {
+        // Create a real temp file under /var/lib/lifeos/camera/ simulating a
+        // daemon-captured frame, and verify the validator returns Ok.
+        let dir = std::path::Path::new("/var/lib/lifeos/camera");
+        if !dir.exists() {
+            eprintln!("skipping — /var/lib/lifeos/camera not present");
+            return;
+        }
+        let sample = dir.join("test-sensory-source-validator.jpg");
+        if std::fs::write(&sample, b"fake jpg bytes").is_err() {
+            eprintln!("skipping — cannot write test file (permission)");
+            return;
+        }
+        let result = validate_sensory_source_path(sample.to_str().unwrap());
+        let _ = std::fs::remove_file(&sample);
+        assert!(result.is_ok(), "expected Ok for camera-owned path");
     }
 }

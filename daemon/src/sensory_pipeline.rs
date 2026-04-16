@@ -761,7 +761,12 @@ impl SensoryPipelineManager {
         };
         state.vision.enabled = runtime.screen_enabled && !runtime.kill_switch_active;
         state.vision.capture_interval_seconds = runtime.capture_interval_seconds.clamp(5, 30);
-        state.presence.camera_consented = runtime.camera_enabled;
+        // Treat consent as gated by the kill switch: callers use
+        // `camera_consented` to decide whether a capture is allowed at all
+        // (see `update_presence` and API endpoints), so leaving it at the
+        // raw `camera_enabled` value would let an active kill switch be
+        // bypassed by a direct `POST /sensory/presence` request.
+        state.presence.camera_consented = runtime.camera_enabled && !runtime.kill_switch_active;
         state.presence.camera_active = runtime.camera_enabled && !runtime.kill_switch_active;
         state.voice.always_on_active =
             runtime.always_on_active && runtime.audio_enabled && !runtime.kill_switch_active;
@@ -2377,6 +2382,17 @@ impl SensoryPipelineManager {
         follow_along: &FollowAlongManager,
         memory_plane: &MemoryPlaneManager,
     ) -> Result<PresenceRuntime> {
+        // Hard stop on kill switch. Without this, a direct
+        // `POST /sensory/presence` can still drive camera captures, AI
+        // scene analysis, and memory writes even when the master sensory
+        // kill switch is engaged.
+        {
+            let guard = self.state.read().await;
+            if guard.kill_switch_active {
+                return Ok(guard.presence.clone());
+            }
+        }
+
         let mut snapshot = self.state.read().await.clone();
         let was_present = snapshot.presence.present;
         let camera_available = snapshot.capabilities.camera_device.is_some();
@@ -2477,15 +2493,47 @@ impl SensoryPipelineManager {
         snapshot.presence.source = source.to_string();
         snapshot.presence.face_near_screen = face_near_screen;
         snapshot.presence.fatigue_alert = fatigue_alert;
+        // Apply the same privacy filter the OCR / awareness paths use
+        // (see vision awareness persistence above and screen-context
+        // sanitization below). Without this, raw VL-model output about a
+        // webcam frame — which can easily include sensitive context like
+        // on-screen email subjects, documents visible on the desk, or
+        // people's names — was stored verbatim in MemoryPlane and echoed
+        // back by the presence API.
+        let (filtered_scene, skip_scene_persist) = match scene_description.as_deref() {
+            Some(desc) if !desc.is_empty() => {
+                if let Some(ref pf) = self.privacy_filter {
+                    match pf.classify(desc) {
+                        SensitivityLevel::Critical => {
+                            log::warn!(
+                                "Camera scene classified as Critical — dropping from state + memory"
+                            );
+                            (None, true)
+                        }
+                        SensitivityLevel::High => {
+                            log::info!(
+                                "Camera scene classified as High — sanitizing before persistence"
+                            );
+                            (Some(pf.sanitize(desc).sanitized_text), false)
+                        }
+                        _ => (Some(desc.to_string()), false),
+                    }
+                } else {
+                    (Some(desc.to_string()), false)
+                }
+            }
+            _ => (None, true),
+        };
+
         snapshot.presence.posture_alert = posture_alert;
         snapshot.presence.last_checked_at = Some(now);
-        snapshot.presence.scene_description = scene_description.clone();
+        snapshot.presence.scene_description = filtered_scene.clone();
         snapshot.presence.user_state = user_state.clone();
         snapshot.presence.people_count = people_count;
         snapshot.presence.last_frame_path = frame_path;
 
         // Store camera context in memory for later recall.
-        if let Some(ref desc) = scene_description {
+        if let (Some(ref desc), false) = (filtered_scene.as_ref(), skip_scene_persist) {
             let importance = if people_count.unwrap_or(0) >= 2 {
                 70 // meeting
             } else if user_state.as_deref() == Some("away") {
