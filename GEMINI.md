@@ -34,6 +34,15 @@ All docs are organized in `docs/`. Read `docs/README.md` for the full index.
 | Developer workstation bootstrap | `docs/operations/developer-bootstrap.md` |
 | Update check/stage/apply flow | `docs/operations/update-flow.md` |
 
+## Key Services (runtime)
+
+| Service | Address | Notes |
+|---------|---------|-------|
+| `lifeosd` REST API | `127.0.0.1:8081` | Auth: `x-bootstrap-token` header |
+| `llama-server` | `127.0.0.1:8082` | Local LLM inference (llama.cpp) |
+| `lifeos-tts-server` | `127.0.0.1:8083` | TTS: Kokoro-82M (Apache 2.0), 50+ voices. See [`docs/operations/tts.md`](docs/operations/tts.md) |
+| `simplex-chat` | `ws://127.0.0.1:5226` | SimpleX bridge WebSocket |
+
 ## Key Files
 
 | File | Purpose |

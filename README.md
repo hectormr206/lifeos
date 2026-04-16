@@ -26,6 +26,7 @@ LifeOS is built in Mexico and developed in the open for users, contributors, and
 - **Desktop control tooling** (`integrated in repo`) - the repo includes tools for windows, apps, clipboard, browser, LibreOffice, COSMIC desktop, and accessibility trees
 - **Provider routing** (`integrated in repo`) - multiple LLM providers are wired with privacy-aware routing policies
 - **Interaction surfaces** - SimpleX is the privacy-first remote channel (`simplex_bridge.rs` + `simplex-chat.service`, E2E encrypted, no phone number required); the local dashboard (`http://127.0.0.1:8081/dashboard`) is the in-host web UI (`integrated in repo`); local voice and broader desktop surfaces exist but some remain experimental or are still being re-validated
+- **Voice: Kokoro-82M** (`integrated in repo`) - 50+ voices, Apache 2.0, CPU-only inference via `lifeos-tts-server.service` on `:8083`; dashboard voice selector lets users pick and preview any voice; SimpleX voice replies send OGG attachments when you send Axi a voice note
 - **Reliability layers** (`integrated in repo`) - watchdog, sentinel, circuit breaker, safe mode, and config rollback exist, but not every repair flow is equally mature
 - **Security baseline** (`integrated in repo`) - the image ships firewalld, auditd, DNS-over-TLS, SSH hardening, and related guardrails; broader hardening claims should be read as a baseline, not as a finished benchmark story. A read-only `GET /api/security/alerts` endpoint (localhost-only, no auth) exposes the in-memory ring buffer of recent security monitor events for the dashboard
 - **GPU Game Guard** (`validated on host`) - GPU offload policy exists and recent false positives were fixed, but it stays under ongoing validation after daemon/runtime changes
@@ -79,6 +80,7 @@ All documentation is organized in [`docs/`](docs/README.md):
 - **OS Base:** Fedora bootc (immutable, OCI-based)
 - **Desktop:** COSMIC (System76) on Wayland
 - **AI Runtime:** llama.cpp / llama-server
+- **TTS:** Kokoro-82M (Apache 2.0) via `lifeos-tts-server.service` on `127.0.0.1:8083`
 - **Database:** SQLite with WAL + sqlite-vec for embeddings
 - **API:** Axum REST + WebSocket on localhost:8081
 - **Protocols:** MCP (Model Context Protocol), AT-SPI2, D-Bus, CDP

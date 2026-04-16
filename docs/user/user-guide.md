@@ -64,6 +64,63 @@ life memory search "logs build" --mode hybrid
 life memory graph --limit 50
 ```
 
+## Cambiar la voz de Axi
+
+Axi usa **Kokoro-82M** como motor de texto a voz con 50+ voces de alta calidad.
+Podés elegir la voz que más te guste desde el dashboard — se aplica globalmente tanto
+para las respuestas directas por bocina como para los mensajes de voz en SimpleX.
+
+**Pasos:**
+
+1. Abrí el dashboard en tu navegador: `http://127.0.0.1:8081/dashboard`
+2. Navegá a la sección **Voz** dentro de los ajustes.
+3. Seleccioná la voz del dropdown — las voces aparecen agrupadas por idioma.
+4. (Opcional) Editá el texto de preview en el campo de texto.
+5. Hacé click en **▶ Escuchar** para escuchar la voz con ese texto por tus bocinas.
+6. Hacé click en **Guardar** para guardarla como tu voz por defecto.
+
+La voz guardada se aplica a todas las interacciones de Axi:
+- Respuestas directas por voz (desktop).
+- Mensajes de voz OGG en respuestas de SimpleX.
+
+Si el servidor TTS no está disponible, el botón de preview aparece deshabilitado
+con un aviso. El botón de guardar sigue activo — podés guardar una voz sin necesidad
+de previsualizar.
+
+---
+
+## Respuestas por voz en SimpleX
+
+Axi aplica **espejado de modalidad** en SimpleX: el formato de entrada determina el
+formato de la respuesta.
+
+| Mensaje entrante | Respuesta de Axi |
+|-----------------|-----------------|
+| Texto escrito | Solo texto |
+| Nota de voz | Texto **+** archivo de voz OGG |
+
+**¿Cómo funciona?**
+
+1. Enviás una nota de voz a Axi en SimpleX.
+2. Whisper transcribe el audio localmente.
+3. El LLM genera la respuesta.
+4. Axi envía primero la respuesta como texto.
+5. Kokoro sintetiza la respuesta como audio OGG.
+6. Axi adjunta el OGG como burbuja de voz en la conversación.
+7. El archivo OGG se elimina automáticamente 60 segundos después del envío.
+
+**No requiere ninguna configuración** — el espejado es automático.
+
+**Límites y comportamiento ante fallas:**
+
+- El archivo OGG no puede superar **1 MB**. Si es más grande, se envía solo el texto.
+- Si el servidor Kokoro no está disponible, se envía la respuesta de texto igualmente —
+  nunca se pierde la respuesta por un fallo de voz.
+- Los archivos temporales de voz se guardan en `/var/lib/lifeos/tts-output/` y se
+  eliminan solos. No requieren mantenimiento manual.
+
+---
+
 ## Voice and Sensory Runtime (Consent-Gated)
 
 1. Grant consent for monitoring:

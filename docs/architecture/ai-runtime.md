@@ -1404,8 +1404,8 @@ Implementacion concreta:
 **Bloque 1 — Voz bidireccional (P0, sin esto no hay fase):**
 
 - [x] **STT always-on real:** Whisper.cpp como servicio persistente con VAD (Voice Activity Detection) real usando `silero-vad` o `webrtcvad`, hotword "Hey Axi" funcional como trigger de escucha activa, no solo endpoint API bajo demanda. _Implementado en repo con loop residente en `sensory_pipeline.rs`, captura local de mic, VAD heuristico PCM, hotword configurable y degradacion graceful cuando no hay backend de audio._
-- [x] **TTS local funcional:** Integrar engine TTS real para que Axi **hable**. Candidatos evaluados: `Piper` (ONNX, rapido, MIT, 30+ idiomas incluyendo espanol), `Kokoro` (calidad alta, Apache 2.0), `Coqui XTTS` (clonacion de voz, MPL 2.0). _Implementado con Piper local, salida WAV y reproduccion por `pw-play`/`aplay`/`paplay`, expuesto por API y CLI._
-- [x] **Flujo conversacional completo (pipeline voice loop):** Microfono → VAD → STT (Whisper) → LLM (llama-server) → TTS (Piper) → Speaker (PipeWire), todo orquestado por `lifeosd` con indicadores visuales en el overlay. _Implementado en `lifeosd` como `voice_session` cancelable con overlay sincronizado._
+- [x] **TTS local funcional:** Integrar engine TTS real para que Axi **hable**. Motor seleccionado: **Kokoro-82M** (Apache 2.0, 50+ voces, CPU-only). Empaquetado como servicio HTTP en `lifeos-tts-server.service` (`127.0.0.1:8083`). Integracion en `sensory_pipeline.rs::synthesize_with_kokoro_http()`. Resolucion de voz: payload > `UserModel.tts_voice` > env default (`if_sara`). _Implementado con Kokoro-82M via PyPI `kokoro`, salida WAV/OGG y reproduccion por `pw-play`/`aplay`/`paplay`, expuesto por API, CLI y selector en dashboard._
+- [x] **Flujo conversacional completo (pipeline voice loop):** Microfono → VAD → STT (Whisper) → LLM (llama-server) → TTS (Kokoro HTTP `POST /tts`) → Speaker (PipeWire), todo orquestado por `lifeosd` con indicadores visuales en el overlay. _Implementado en `lifeosd` como `voice_session` cancelable con overlay sincronizado._
 - [x] **Latencia UX verificada:** El primer token de audio (TTS) debe comenzar a reproducirse en **< 2 segundos** despues de que el usuario termina de hablar. _Cobertura en repo via `life ai bench-sensory` + `sensory_benchmark.json` con latencia voice-loop reproducible._
 - [x] **Interrupciones naturales:** El usuario puede interrumpir a Axi mientras habla (barge-in). VAD detecta nueva utterance → cancela TTS actual → procesa nueva entrada. _Implementado con cancelacion de playback en caliente y contador de barge-in._
 
@@ -1513,7 +1513,7 @@ Implementacion concreta:
 
 **Reglas de producto obligatorias:**
 
-1. Los runtimes de voz y sus assets pequenos (`whisper`, `piper`, VAD, hotword) pueden venir preinstalados.
+1. Los runtimes de voz y sus assets pequenos (`whisper`, `kokoro`, VAD, hotword) pueden venir preinstalados.
 2. Los LLM pesados viven en `/var/lib/lifeos/models` como contenido gestionado por el usuario, no como payload obligatorio de la ISO normal.
 3. La seleccion por defecto debe persistirse en una unica fuente de verdad: `/etc/lifeos/llama-server.env`.
 4. Cada modelo multimodal debe gestionar sus assets companeros (`mmproj`) de forma explicita; no se admite un `mmproj` generico compartido entre familias/tamanos incompatibles.
@@ -1595,7 +1595,7 @@ Audio entrante
 
 - [x] **Varianza de embedding por speaker:** Centroide rolling con hasta 50 embeddings recientes absorbe variaciones naturales (voz ronca, cansada, baja, gritando). _Implementado en `SpeakerProfile::add_embedding()` con `MAX_EMBEDDINGS_PER_SPEAKER = 50`._
 - [ ] **Feedback loop con memoria:** Las decisiones de matching se guardan en el memory_plane para que Axi mejore su confianza con el tiempo.
-- [ ] **Clonacion de voz por speaker (Piper XTTS):** TTS personalizado por hablante — Axi responde con tono adaptado al contexto emocional detectado.
+- [ ] **Clonacion de voz por speaker (Kokoro XTTS):** TTS personalizado por hablante — Axi responde con tono adaptado al contexto emocional detectado.
 
 **Bloque 4 — Permisos y autonomia de Axi (P0):**
 

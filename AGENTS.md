@@ -40,6 +40,15 @@ LifeOS uses a pragmatic issue/PR policy:
 
 Prefer the lightest process that still preserves enough context for future maintainers and agents.
 
+## Key Services (runtime)
+
+| Service | Address | Notes |
+|---------|---------|-------|
+| `lifeosd` REST API | `127.0.0.1:8081` | Auth: `x-bootstrap-token` header |
+| `llama-server` | `127.0.0.1:8082` | Local LLM inference (llama.cpp) |
+| `lifeos-tts-server` | `127.0.0.1:8083` | TTS: Kokoro-82M (Apache 2.0), 50+ voices. See [`docs/operations/tts.md`](docs/operations/tts.md) |
+| `simplex-chat` | `ws://127.0.0.1:5226` | SimpleX bridge WebSocket |
+
 ## How to Navigate This Repo
 
 **Do NOT read all docs.** Use targeted searches:
