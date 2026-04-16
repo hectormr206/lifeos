@@ -2594,25 +2594,37 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                 });
         }
 
-        if runtime.audio_enabled && !runtime.kill_switch_active && always_on.enabled {
-            // Sync hotword_enabled state with the wake word detector.
-            // Pause wake word during meetings to prevent false triggers.
-            if let Some(ref detector) = state.wake_word_detector {
-                if meeting.active {
-                    detector.pause();
-                } else if always_on.hotword_enabled {
-                    detector.resume();
-                } else {
-                    detector.pause();
-                }
-                // Update audio source if it changed (BT connect/disconnect).
+        // Hearing audit C-2/C-3: the wake-word detector MUST be paused
+        // whenever any of kill_switch, audio_enabled=false, or
+        // always_on.enabled=false is true — not just when we're also
+        // in the "maybe-resume" branch. Previously the detector went
+        // untouched if the user toggled audio_enabled off, leaving the
+        // mic hot for hours (observed live pw-record PID 16194 at 5h49m).
+        if let Some(ref detector) = state.wake_word_detector {
+            let should_be_active = runtime.audio_enabled
+                && !runtime.kill_switch_active
+                && always_on.enabled
+                && always_on.hotword_enabled
+                && !meeting.active;
+
+            if should_be_active {
+                detector.resume();
+            } else {
+                detector.pause();
+            }
+
+            // Update audio source if it changed (BT connect/disconnect).
+            // Only meaningful while active; harmless while paused.
+            if should_be_active {
                 let new_source = {
                     let st = sensory_manager.status().await;
                     st.capabilities.always_on_source.clone()
                 };
                 detector.set_source(new_source);
             }
+        }
 
+        if runtime.audio_enabled && !runtime.kill_switch_active && always_on.enabled {
             // Skip voice detection entirely during a meeting.
             if !meeting.active {
                 // Dispatch: rustpotter (streaming) or legacy whisper-based detection.

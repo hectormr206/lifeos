@@ -129,9 +129,13 @@ mod inner {
             self.signal_active_child(libc::SIGTERM, "source change");
         }
 
-        /// Pause detection (mic stays open but detections are suppressed).
+        /// Pause detection AND close the mic. SIGTERMs any running
+        /// pw-record so the mic is actually released — the listener
+        /// loop will notice `active=false` and idle without respawning.
+        /// Hearing audit C-2/C-3.
         pub fn pause(&self) {
             self.active.store(false, Ordering::Relaxed);
+            self.signal_active_child(libc::SIGTERM, "pause");
         }
 
         /// Resume detection.
@@ -170,6 +174,24 @@ mod inner {
                     info!("Wake word detector shutting down");
                     return;
                 }
+
+                // Hearing audit C-2/C-3: do NOT hold `pw-record` open
+                // while the detector is paused (kill switch engaged or
+                // audio disabled). Previously `pause()` only flipped a
+                // flag so detections got discarded, but the mic
+                // subprocess stayed running — observed live as a 5h49m
+                // hot pw-record that the kill switch could not stop.
+                //
+                // Now: when `active=false` and no reload/shutdown is
+                // pending, idle in a cheap 500ms poll loop without
+                // spawning pw-record. The mic is actually closed.
+                // Resume flips `active=true` and we spawn a fresh
+                // session on the next iteration.
+                if !self.active.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    continue;
+                }
+
                 // Clear reload flag before starting a new session
                 if self.reload.swap(false, Ordering::Relaxed) {
                     info!("Reloading wake word model...");
@@ -179,6 +201,11 @@ mod inner {
                 }
                 if self.shutdown.load(Ordering::Relaxed) {
                     return;
+                }
+                if !self.active.load(Ordering::Relaxed) {
+                    // Don't churn respawn when we've just been paused
+                    // mid-session. Skip the 2s delay and idle directly.
+                    continue;
                 }
                 info!("Respawning pw-record in 2 s …");
                 if self.wait_for_restart_delay() {
