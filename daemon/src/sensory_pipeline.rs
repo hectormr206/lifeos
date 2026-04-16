@@ -3384,7 +3384,25 @@ impl SensoryPipelineManager {
             return Ok((None, None, None, false));
         }
 
-        let sentences = split_tts_chunks(text);
+        // Habla round-2 S-NEW-2: the per-chunk limit
+        // (`TTS_TEXT_MAX_CHARS` inside `synthesize_with_kokoro_http`)
+        // only guards one synthesis call. A pathological LLM reply
+        // built from many short sentences would split into dozens of
+        // under-cap chunks and still pin the Kokoro `Semaphore(2)`
+        // executor for minutes. Enforce the same budget at the
+        // aggregate level by truncating the text before splitting.
+        let aggregate_text = if text.chars().count() > TTS_TEXT_MAX_CHARS {
+            log::warn!(
+                "[tts] progressive text {} chars > aggregate cap {} — truncating",
+                text.chars().count(),
+                TTS_TEXT_MAX_CHARS
+            );
+            text.chars().take(TTS_TEXT_MAX_CHARS).collect::<String>()
+        } else {
+            text.to_string()
+        };
+
+        let sentences = split_tts_chunks(&aggregate_text);
         if sentences.is_empty() {
             return Ok((None, None, None, false));
         }
@@ -3459,10 +3477,20 @@ impl SensoryPipelineManager {
             }
             any_played = true;
 
+            // Habla round-2 W-NEW-1: use a oneshot channel to request
+            // kill from the monitor, instead of handing the monitor a
+            // bare PID. The outer task owns the tokio `Child`; when
+            // the monitor signals, the outer calls `start_kill()` on
+            // the actual handle. tokio's start_kill consults the
+            // child's exit state, so we can never SIGKILL a reused
+            // PID after the player exited naturally.
+            let (barge_kill_tx, mut barge_kill_rx) =
+                tokio::sync::oneshot::channel::<()>();
+            let mut monitor_kill_tx = Some(barge_kill_tx);
+
             // Barge-in monitor: capture short audio snippets while playing and
             // check for voice activity. If the user speaks, kill the playback.
             let barge_in_data_dir = self.data_dir.clone();
-            let barge_in_pid = child_pid;
             let barge_in_detected = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let barge_in_flag = barge_in_detected.clone();
             let barge_in_source = {
@@ -3523,9 +3551,14 @@ impl SensoryPipelineManager {
                         }
                         log::info!("Barge-in detected during TTS playback");
                         barge_in_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                        // Kill the playback process.
-                        if let Some(pid) = barge_in_pid {
-                            kill_pid(pid).await.ok();
+                        // Habla W-NEW-1: ask the outer task to kill the
+                        // specific Child handle it owns. If the outer
+                        // already reaped naturally, it won't be
+                        // awaiting this receiver and send() is a
+                        // harmless Err — no stray SIGKILL on a reused
+                        // PID.
+                        if let Some(tx) = monitor_kill_tx.take() {
+                            let _ = tx.send(());
                         }
                         break;
                     }
@@ -3534,7 +3567,21 @@ impl SensoryPipelineManager {
                 }
             });
 
-            let _ = child.wait().await;
+            // Habla W-NEW-1: wait on the Child handle directly. If
+            // the monitor signals barge-in first, call start_kill on
+            // the live handle then wait for the reaped status. If
+            // the player exits naturally, the receiver is dropped
+            // when this select! arm wins and the monitor's later
+            // send() is a harmless Err.
+            tokio::select! {
+                _ = child.wait() => {}
+                maybe = &mut barge_kill_rx => {
+                    if maybe.is_ok() {
+                        let _ = child.start_kill();
+                    }
+                    let _ = child.wait().await;
+                }
+            }
             monitor_handle.abort();
 
             let was_barged_in = barge_in_detected.load(std::sync::atomic::Ordering::Relaxed);
