@@ -2122,30 +2122,46 @@ impl SensoryPipelineManager {
                     }
                     Err(e) => {
                         log::warn!("Progressive TTS failed, trying single-shot: {}", e);
-                        // Fallback to single-shot TTS if progressive fails.
-                        match synthesize_tts(
-                            &self.data_dir,
-                            &playback_text,
-                            request.language.as_deref(),
-                            request.voice_model.as_deref(),
-                        )
-                        .await
+                        // Habla round-2 C-NEW-1: the single-shot fallback
+                        // also bypasses the unified gate — re-check before
+                        // emitting audio so suspend / kill-switch still
+                        // apply even when progressive synth blew up.
+                        match self
+                            .ensure_sense_allowed(Sense::Tts, "pipeline.voice_loop.fallback")
+                            .await
                         {
-                            Ok((path, engine)) => {
-                                duck_system_audio(true).await;
-                                tts_engine = Some(engine);
-                                if audio_path.is_none() {
-                                    audio_path = Some(path.clone());
-                                }
-                                let playback = self
-                                    .spawn_playback(overlay.clone(), session_id.clone(), &path)
-                                    .await?;
-                                if playback_backend.is_none() {
-                                    playback_backend = playback.0;
-                                }
-                                playback_started |= playback.1;
+                            Err(reason) => {
+                                log::debug!("[tts] fallback refused: {}", reason);
+                                degraded.push("tts_disabled".to_string());
                             }
-                            Err(_) => degraded.push("tts_unavailable".to_string()),
+                            Ok(()) => match synthesize_tts(
+                                &self.data_dir,
+                                &playback_text,
+                                request.language.as_deref(),
+                                request.voice_model.as_deref(),
+                            )
+                            .await
+                            {
+                                Ok((path, engine)) => {
+                                    duck_system_audio(true).await;
+                                    tts_engine = Some(engine);
+                                    if audio_path.is_none() {
+                                        audio_path = Some(path.clone());
+                                    }
+                                    let playback = self
+                                        .spawn_playback(
+                                            overlay.clone(),
+                                            session_id.clone(),
+                                            &path,
+                                        )
+                                        .await?;
+                                    if playback_backend.is_none() {
+                                        playback_backend = playback.0;
+                                    }
+                                    playback_started |= playback.1;
+                                }
+                                Err(_) => degraded.push("tts_unavailable".to_string()),
+                            },
                         }
                     }
                 }
@@ -2429,7 +2445,20 @@ impl SensoryPipelineManager {
         let response_text = sanitize_assistant_response(&response.response);
 
         let mut degraded = degraded_modes(&state.capabilities, &state.gpu);
-        let speech_allowed = request.speak && state.voice.tts_enabled;
+        let mut speech_allowed = request.speak && state.voice.tts_enabled;
+        // Habla round-2 C-NEW-2: describe_screen was calling synthesize_tts
+        // directly, bypassing the unified Sense::Tts gate. Check the full
+        // policy (kill-switch, suspend, tts_enabled) before emitting audio.
+        if speech_allowed {
+            if let Err(reason) = self
+                .ensure_sense_allowed(Sense::Tts, "pipeline.describe_screen")
+                .await
+            {
+                log::debug!("[tts] describe_screen refused: {}", reason);
+                speech_allowed = false;
+                degraded.push("tts_disabled".to_string());
+            }
+        }
         let mut audio_path = None;
         if speech_allowed {
             match synthesize_tts(
@@ -3341,6 +3370,20 @@ impl SensoryPipelineManager {
         language: Option<&str>,
         voice_model: Option<&str>,
     ) -> Result<(Option<String>, Option<String>, Option<String>, bool)> {
+        // Habla round-2 C-NEW-1 / W-NEW-2: defense-in-depth Tts gate at
+        // the progressive synth entry point. voice_loop and
+        // describe_screen both reach TTS through this function without
+        // consulting the unified gate — checking here means even a
+        // future caller that forgets the gate can't emit audio past
+        // suspend / kill-switch / tts_enabled=false.
+        if let Err(reason) = self
+            .ensure_sense_allowed(Sense::Tts, "pipeline.synthesize_and_play_progressive")
+            .await
+        {
+            log::debug!("[tts] progressive synthesis refused: {}", reason);
+            return Ok((None, None, None, false));
+        }
+
         let sentences = split_tts_chunks(text);
         if sentences.is_empty() {
             return Ok((None, None, None, false));
@@ -4618,7 +4661,7 @@ async fn synthesize_tts(
 /// DoS. Habla audit W-5.
 pub const TTS_TEXT_MAX_CHARS: usize = 10_000;
 
-pub async fn synthesize_with_kokoro_http(
+pub(crate) async fn synthesize_with_kokoro_http(
     data_dir: &Path,
     base_url: &str,
     text: &str,
