@@ -2214,7 +2214,6 @@ async fn start_api_server(state: Arc<DaemonState>, shared: SharedBridgeState) {
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,
             api_key: state.bootstrap_token.clone(),
-            enable_cors: true,
             max_request_size: 10 * 1024 * 1024,
         },
         game_guard: state.game_guard.clone(),

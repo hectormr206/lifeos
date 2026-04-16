@@ -201,7 +201,6 @@ pub struct ApiState {
 pub struct ApiConfig {
     pub bind_address: SocketAddr,
     pub api_key: Option<String>,
-    pub enable_cors: bool,
     pub max_request_size: usize,
 }
 
@@ -210,7 +209,6 @@ impl Default for ApiConfig {
         Self {
             bind_address: "127.0.0.1:8081".parse().unwrap(),
             api_key: None,
-            enable_cors: true,
             max_request_size: 10 * 1024 * 1024, // 10MB
         }
     }

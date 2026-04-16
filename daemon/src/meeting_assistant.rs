@@ -2295,15 +2295,26 @@ fn collect_window_titles(node: &serde_json::Value, titles: &mut Vec<String>) {
     }
 }
 
-/// Check if /dev/video0 is in use by any process.
+/// Check if any of the usual `/dev/video*` nodes is held by another
+/// process. On multi-camera hosts (laptop webcam + external USB capture,
+/// or two USB cams) a meeting app may hold `/dev/video1` while the
+/// built-in is on `/dev/video0`; only probing video0 missed those cases.
 async fn detect_camera_in_use() -> bool {
-    let output = Command::new("fuser").arg("/dev/video0").output().await.ok();
-
-    match output {
-        // fuser writes PIDs to STDERR (not stdout), so check both
-        Some(o) => o.status.success() && (!o.stdout.is_empty() || !o.stderr.is_empty()),
-        None => false,
+    for device in ["/dev/video0", "/dev/video1", "/dev/video2"] {
+        if !std::path::Path::new(device).exists() {
+            continue;
+        }
+        let output = Command::new("fuser").arg(device).output().await.ok();
+        let busy = match output {
+            // fuser writes PIDs to STDERR (not stdout), so check both
+            Some(o) => o.status.success() && (!o.stdout.is_empty() || !o.stderr.is_empty()),
+            None => false,
+        };
+        if busy {
+            return true;
+        }
     }
+    false
 }
 
 async fn resolve_whisper_binary() -> Result<String> {

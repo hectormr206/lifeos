@@ -2465,18 +2465,31 @@ impl SensoryPipelineManager {
             (p, f, s, None)
         };
 
-        // AI-powered scene analysis when camera captured a frame and multimodal is available.
-        let (scene_description, user_state, people_count) = if let Some(ref frame) = frame_path {
-            match analyze_camera_scene(ai_manager, frame).await {
+        // AI-powered scene analysis when camera captured a frame AND the
+        // capabilities snapshot says multimodal is available. Gating on
+        // the capability flag prevents a cascade of VL requests during the
+        // 6-8s llama-server startup window — each would time out, spam
+        // journald, and delay the presence cycle.
+        let (scene_description, user_state, people_count) = match (
+            frame_path.as_deref(),
+            snapshot.capabilities.multimodal_chat_available,
+        ) {
+            (Some(frame), true) => match analyze_camera_scene(ai_manager, frame).await {
                 Ok(analysis) => (
                     Some(analysis.scene_description),
                     Some(analysis.user_state),
                     Some(analysis.people_count),
                 ),
-                Err(_) => (None, None, None),
-            }
-        } else {
-            (None, None, None)
+                Err(err) => {
+                    // Swallowing these silently made VL regressions invisible in
+                    // journald. Log at debug (failures are not operator-actionable
+                    // by themselves — they happen during model warm-up, on
+                    // transient parse mismatches, etc.) and keep moving.
+                    log::debug!("[camera] scene analysis failed: {}", err);
+                    (None, None, None)
+                }
+            },
+            _ => (None, None, None),
         };
 
         let stats = follow_along.get_event_stats().await;
@@ -7484,8 +7497,11 @@ async fn refresh_meeting_state(camera_device: Option<&str>) -> MeetingState {
 }
 
 async fn reap_stale_presence_capture_processes(device: &str) -> Result<bool> {
+    // Include the user id column so the reaper cannot be tricked into
+    // SIGTERMing another user's process on a shared/multi-user host by
+    // anyone who can name their process "/camera/presence-…".
     let output = Command::new("ps")
-        .args(["-eo", "pid=,etimes=,cmd="])
+        .args(["-eo", "pid=,uid=,etimes=,cmd="])
         .output()
         .await
         .context("Failed to inspect process table for stale camera capture")?;
@@ -7493,15 +7509,23 @@ async fn reap_stale_presence_capture_processes(device: &str) -> Result<bool> {
         return Ok(false);
     }
 
+    // SAFETY: libc::getuid is a pure read of the calling process's real UID.
+    let own_uid: u32 = unsafe { libc::getuid() };
+
     let mut killed = false;
     let device_lower = device.to_lowercase();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let mut parts = line.split_whitespace();
         let pid = parts.next().and_then(|value| value.parse::<u32>().ok());
+        let uid = parts.next().and_then(|value| value.parse::<u32>().ok());
         let elapsed = parts.next().and_then(|value| value.parse::<u64>().ok());
         let cmd = parts.collect::<Vec<_>>().join(" ");
         let Some(pid) = pid else { continue };
+        let Some(uid) = uid else { continue };
         let Some(elapsed) = elapsed else { continue };
+        if uid != own_uid {
+            continue;
+        }
         if elapsed < CAMERA_STALE_CAPTURE_SECS {
             continue;
         }
