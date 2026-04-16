@@ -233,6 +233,32 @@ impl MeetingAssistant {
             return Ok(false);
         }
 
+        // Round-2 audit C-NEW-3: re-check the mic gate on every
+        // detection tick. Without this, a meeting that started while
+        // the gate was open kept the mic hot for the whole meeting
+        // even after the user toggled audio_enabled=false or tripped
+        // the kill switch mid-call. When recording and the gate flips
+        // closed, stop cleanly — the transcript / archive handling
+        // inside stop_recording still runs on whatever we captured.
+        if self.state.recording {
+            if let Some(ref sensory) = self.sensory_pipeline {
+                let guard = sensory.read().await;
+                if guard
+                    .ensure_sense_allowed(
+                        crate::sensory_pipeline::Sense::Microphone,
+                        "meeting_assistant.detect_tick",
+                    )
+                    .await
+                    .is_err()
+                {
+                    info!("[meeting] mic gate closed mid-session — stopping recording");
+                    drop(guard);
+                    self.stop_recording();
+                    return Ok(false);
+                }
+            }
+        }
+
         // Strategy 1: Check PipeWire/PulseAudio for conferencing app audio streams
         // Strategy 1: Check PipeWire/PulseAudio for conferencing app audio streams
         let audio_meeting = detect_meeting_audio().await;
@@ -1572,6 +1598,9 @@ Usá EXACTAMENTE este formato para cada tarea:
         let buffer = Arc::clone(&self.caption_buffer);
         let data_dir = self.data_dir.clone();
         let language = self.language.clone();
+        // Cloned handle so the spawned task can re-check the mic gate
+        // per-chunk. Round-2 audit C-NEW-3.
+        let sensory_for_captions = self.sensory_pipeline.clone();
 
         tokio::spawn(async move {
             let captions_dir = data_dir.join("meetings").join("captions_tmp");
@@ -1601,6 +1630,26 @@ Usá EXACTAMENTE este formato para cada tarea:
                 // Check stop signal
                 if *rx.borrow() {
                     break;
+                }
+
+                // Round-2 audit C-NEW-3: per-chunk mic gate recheck.
+                // Without this, a user toggling audio_enabled=false or
+                // tripping the kill switch mid-meeting didn't stop the
+                // captions loop — the 3s chunk capture kept going for
+                // the entire meeting duration.
+                if let Some(ref sensory) = sensory_for_captions {
+                    let guard = sensory.read().await;
+                    if guard
+                        .ensure_sense_allowed(
+                            crate::sensory_pipeline::Sense::Microphone,
+                            "meeting.caption_chunk",
+                        )
+                        .await
+                        .is_err()
+                    {
+                        info!("[meeting] Captions: mic gate closed mid-session — exiting");
+                        break;
+                    }
                 }
 
                 let chunk_path = captions_dir.join(format!("chunk_{}.wav", chunk_idx));
@@ -1640,20 +1689,39 @@ Usá EXACTAMENTE este formato para cada tarea:
                     }
                 }
 
-                // Transcribe the chunk
+                // Transcribe the chunk. Round-2 audit C-NEW-4 — each
+                // chunk is ~3s of audio so whisper should finish in a
+                // couple of seconds; anything past 30s is a hang. The
+                // outer caption loop runs one chunk at a time so a
+                // stuck whisper blocks the whole feature. `kill_on_drop`
+                // ensures the orphan dies when the caption task is
+                // cancelled (stop_captions / daemon shutdown).
                 let lang = if language == "auto" { "en" } else { &language };
-                let output = Command::new(&whisper)
-                    .args([
-                        "-m",
-                        &model,
-                        "-f",
-                        &chunk_str,
-                        "--language",
-                        lang,
-                        "--no-timestamps",
-                    ])
-                    .output()
-                    .await;
+                let mut cmd = Command::new(&whisper);
+                cmd.args([
+                    "-m",
+                    &model,
+                    "-f",
+                    &chunk_str,
+                    "--language",
+                    lang,
+                    "--no-timestamps",
+                ])
+                .kill_on_drop(true);
+                let output =
+                    match tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(_) => {
+                            warn!(
+                                "[meeting] Captions: whisper timed out on chunk {}",
+                                &chunk_str
+                            );
+                            let _ = tokio::fs::remove_file(&chunk_path).await;
+                            continue;
+                        }
+                    };
 
                 // Read whisper's txt output before cleanup
                 let txt_path = format!("{}.txt", &chunk_str);

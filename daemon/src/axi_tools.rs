@@ -9970,8 +9970,13 @@ max_context = 128000
             "flatpak",
             "podman",
             "docker",
-            "ffmpeg",
-            "whisper-cli",
+            // `ffmpeg` and `whisper-cli` removed from the tool allowlist.
+            // Hearing audit round-2 C-NEW-1: both binaries let an authed
+            // agent bypass the unified Sense::Microphone gate by
+            // shelling mic capture or arbitrary-file STT directly.
+            // Legitimate flows route through the gated API endpoints
+            // (/audio/stt/transcribe, /sensory/voice/session) or the
+            // pipeline's capture helpers.
             "sqlite3",
             "stat",
             "head",

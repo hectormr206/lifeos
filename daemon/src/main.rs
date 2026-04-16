@@ -845,6 +845,16 @@ async fn main() -> anyhow::Result<()> {
         warn!("Failed to initialize ConfigStore: {}", e);
     }
 
+    // Hearing audit round-2 C-NEW-5: reconcile sensitive-file perms
+    // at boot. The pre-fix daemon saved biometric files (rustpotter
+    // model, speaker profile embeddings) and raw voice captures at
+    // default umask (observed 0o644 world-readable) — newer save
+    // paths harden to 0o600 but existing files never get touched.
+    // Walk the known dirs and chmod on every boot so an upgrade
+    // retroactively closes the gap without waiting for the user to
+    // retrain or re-record.
+    harden_sensory_file_perms().await;
+
     // Inject FollowAlong into the sensory pipeline so `Sense::WindowTracking`
     // in the unified gate can consult consent. Must happen after the state
     // struct is built because sensory_pipeline_manager is created BEFORE
@@ -2525,6 +2535,74 @@ async fn run_metrics_collection(state: Arc<DaemonState>) {
 }
 
 /// Run periodic sensory housekeeping: awareness refresh, presence updates and GPU sync.
+/// Chmod 0o600 on every sensitive sensory artifact on disk. Called
+/// once at daemon boot so an upgrade retroactively closes round-2
+/// C-NEW-5 — pre-fix saves left biometric + raw-voice files at the
+/// umask default (observed 0o644 on the live host).
+///
+/// Idempotent and non-fatal: any chmod failure is logged at debug
+/// and the daemon continues. Targets:
+/// - `/var/lib/lifeos/models/rustpotter/axi.rpw`      (wake-word model, MFCC)
+/// - `/var/lib/lifeos/models/rustpotter/samples/*.wav` (enrollment samples)
+/// - `/var/lib/lifeos/speaker_profiles/speaker_profiles.json` (embeddings)
+/// - `/var/lib/lifeos/audio/*.wav`                    (always-on snippets)
+/// - `/var/lib/lifeos/meetings/*.wav`                 (meeting recordings)
+async fn harden_sensory_file_perms() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let targets: &[&str] = &[
+            "/var/lib/lifeos/models/rustpotter/axi.rpw",
+            "/var/lib/lifeos/speaker_profiles/speaker_profiles.json",
+        ];
+        let dirs: &[&str] = &[
+            "/var/lib/lifeos/models/rustpotter/samples",
+            "/var/lib/lifeos/audio",
+            "/var/lib/lifeos/meetings",
+        ];
+
+        let mut hardened = 0usize;
+        for path in targets {
+            if let Ok(md) = std::fs::metadata(path) {
+                let mut perms = md.permissions();
+                if perms.mode() & 0o777 != 0o600 {
+                    perms.set_mode(0o600);
+                    match std::fs::set_permissions(path, perms) {
+                        Ok(_) => hardened += 1,
+                        Err(e) => debug!("[harden] {}: {}", path, e),
+                    }
+                }
+            }
+        }
+        for dir in dirs {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let Ok(md) = entry.metadata() else { continue };
+                let mut perms = md.permissions();
+                if perms.mode() & 0o777 != 0o600 {
+                    perms.set_mode(0o600);
+                    match std::fs::set_permissions(&path, perms) {
+                        Ok(_) => hardened += 1,
+                        Err(e) => debug!("[harden] {}: {}", path.display(), e),
+                    }
+                }
+            }
+        }
+        if hardened > 0 {
+            info!(
+                "[harden] chmod 0o600 applied to {} sensitive sensory file(s)",
+                hardened
+            );
+        }
+    }
+}
+
 async fn run_sensory_runtime(state: Arc<DaemonState>) {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     let wake_notify = state.wake_word_notify.clone();

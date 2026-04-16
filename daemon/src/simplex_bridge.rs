@@ -546,11 +546,27 @@ mod inner {
             path // try original file if conversion failed
         };
 
-        let output = Command::new(whisper)
-            .args(["-m", model, "-f", input_path, "-l", "es", "--no-timestamps"])
-            .output()
-            .await
-            .ok()?;
+        // Round-2 audit C-NEW-4 — SimpleX voice notes are capped at
+        // ~60s by the sender client and run through a small whisper
+        // model, so ~120s timeout is plenty. `kill_on_drop(true)` so
+        // a crashed / cancelled bridge doesn't leave orphans.
+        let mut cmd = Command::new(whisper);
+        cmd.args(["-m", model, "-f", input_path, "-l", "es", "--no-timestamps"])
+            .kill_on_drop(true);
+        let output =
+            match tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output()).await {
+                Ok(Ok(o)) => o,
+                Ok(Err(e)) => {
+                    warn!("[simplex_bridge] whisper spawn failed: {}", e);
+                    let _ = tokio::fs::remove_file(&wav_path).await;
+                    return None;
+                }
+                Err(_) => {
+                    warn!("[simplex_bridge] whisper transcription timed out");
+                    let _ = tokio::fs::remove_file(&wav_path).await;
+                    return None;
+                }
+            };
 
         // Clean up temp WAV
         let _ = tokio::fs::remove_file(&wav_path).await;
