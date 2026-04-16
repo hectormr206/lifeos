@@ -6891,8 +6891,16 @@ struct CameraPresenceMetrics {
 #[derive(Debug, Clone)]
 struct CameraFrameStats {
     skin_ratio: f64,
+    /// Mean brightness over the center crop. Used as an overall luminance
+    /// signal but NOT as the enhancement trigger — that now uses
+    /// `face_brightness` so a bright back-lit scene with a dim face
+    /// still gets enhanced.
     avg_brightness: f64,
     avg_edge: f64,
+    /// Mean brightness of the skin-tone pixels in the center crop (if
+    /// any were detected). None when no skin was found — callers fall
+    /// back to `avg_brightness`.
+    face_brightness: Option<f64>,
 }
 
 fn analyze_camera_frame(path: &Path) -> Result<CameraPresenceMetrics> {
@@ -6927,6 +6935,7 @@ fn compute_camera_frame_stats(image: &DynamicImage) -> Result<CameraFrameStats> 
     let mut skin_like_pixels = 0u64;
     let mut brightness_sum = 0f64;
     let mut edge_sum = 0f64;
+    let mut skin_brightness_sum = 0f64;
 
     for y in center_top..center_bottom {
         for x in center_left..center_right {
@@ -6935,9 +6944,11 @@ fn compute_camera_frame_stats(image: &DynamicImage) -> Result<CameraFrameStats> 
             let r = channels[0] as f64;
             let g = channels[1] as f64;
             let b = channels[2] as f64;
-            brightness_sum += (r + g + b) / 3.0;
+            let pixel_brightness = (r + g + b) / 3.0;
+            brightness_sum += pixel_brightness;
             if is_skin_like(channels[0], channels[1], channels[2]) {
                 skin_like_pixels += 1;
+                skin_brightness_sum += pixel_brightness;
             }
             if x > center_left {
                 let prev = image.get_pixel(x - 1, y).to_rgb();
@@ -6955,10 +6966,17 @@ fn compute_camera_frame_stats(image: &DynamicImage) -> Result<CameraFrameStats> 
         anyhow::bail!("camera frame is empty");
     }
 
+    let face_brightness = if skin_like_pixels > 0 {
+        Some(skin_brightness_sum / skin_like_pixels as f64)
+    } else {
+        None
+    };
+
     Ok(CameraFrameStats {
         skin_ratio: skin_like_pixels as f64 / total_pixels as f64,
         avg_brightness: brightness_sum / total_pixels as f64,
         avg_edge: edge_sum / total_pixels as f64,
+        face_brightness,
     })
 }
 
@@ -6966,14 +6984,20 @@ fn maybe_enhance_camera_frame(
     image: DynamicImage,
     stats: &CameraFrameStats,
 ) -> (DynamicImage, CameraFrameStats, bool) {
-    if stats.avg_brightness >= CAMERA_FRAME_DARK_THRESHOLD {
+    // Use face brightness (skin-pixel mean) when available rather than the
+    // whole-center mean — handles back-lit scenes where a bright window
+    // behind the user lifts the mean above the threshold while the face
+    // itself is under-exposed. Falls back to avg_brightness when no skin
+    // was detected (face not yet in frame, camera off-angle, etc.).
+    let reference_brightness = stats.face_brightness.unwrap_or(stats.avg_brightness);
+    if reference_brightness >= CAMERA_FRAME_DARK_THRESHOLD {
         return (image, stats.clone(), false);
     }
 
-    let brighten = (CAMERA_FRAME_TARGET_BRIGHTNESS - stats.avg_brightness)
+    let brighten = (CAMERA_FRAME_TARGET_BRIGHTNESS - reference_brightness)
         .round()
         .clamp(12.0, CAMERA_FRAME_MAX_BRIGHTEN as f64) as i32;
-    let contrast = if stats.avg_brightness < 45.0 {
+    let contrast = if reference_brightness < 45.0 {
         CAMERA_FRAME_VERY_DARK_CONTRAST_BOOST
     } else {
         CAMERA_FRAME_CONTRAST_BOOST
@@ -7107,6 +7131,19 @@ async fn analyze_camera_scene(
     parse_camera_scene_response(&response.response)
 }
 
+/// Parse a caller-supplied PEOPLE: value safely.
+/// - "3"  → 3
+/// - "500" → 255 (clamped, u8 max)
+/// - "-1" / garbage → 0
+///
+/// Implemented via i32 + clamp so u8 overflow doesn't silently fall
+/// through to 0 and misclassify a crowded room as empty.
+fn parse_people_count(raw: &str) -> u8 {
+    raw.parse::<i32>()
+        .map(|n| n.clamp(0, u8::MAX as i32) as u8)
+        .unwrap_or(0)
+}
+
 fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
     // Strip <think>…</think> blocks that some models emit before the answer.
     let cleaned = strip_think_blocks(text);
@@ -7123,7 +7160,11 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
         } else if let Some(rest) = line.strip_prefix("STATE:") {
             state = rest.trim().to_lowercase();
         } else if let Some(rest) = line.strip_prefix("PEOPLE:") {
-            people = rest.trim().parse().unwrap_or(0);
+            // Parse via i32 + clamp so a model answer like "PEOPLE: 500"
+            // (overflow in u8) does not silently fall through to 0 and
+            // misclassify a crowded room as empty. Negatives are clamped
+            // to 0 for robustness against malformed output.
+            people = parse_people_count(rest.trim());
         }
     }
 
@@ -7157,7 +7198,7 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
         if let Some(idx) = full_text.find("PEOPLE:") {
             let after = full_text[idx + 7..].trim();
             let num_str = after.split_whitespace().next().unwrap_or("0");
-            people = num_str.parse().unwrap_or(0);
+            people = parse_people_count(num_str);
         }
     }
 
@@ -7182,8 +7223,12 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
         }
     }
 
-    // Truncate overly long scene descriptions.
-    scene = truncate_scene(&scene, 120);
+    // Truncate overly long scene descriptions. The prompt asks for 10
+    // words max; 64 chars is a comfortable ceiling for that while still
+    // keeping room for diacritics / Spanish text. Down from 120: models
+    // routinely overshoot the word budget and the tighter cap reduces
+    // how much arbitrary VL context lands in MemoryPlane per cycle.
+    scene = truncate_scene(&scene, 64);
 
     Ok(CameraSceneAnalysis {
         scene_description: scene,
@@ -7884,6 +7929,65 @@ mod tests {
         // narrower Cb/Cr box.
         assert!(!is_skin_like(255, 0, 0), "pure red shirt");
         assert!(!is_skin_like(200, 20, 20), "deep red");
+    }
+
+    #[test]
+    fn people_count_parser_clamps_overflow_and_negatives() {
+        assert_eq!(parse_people_count("3"), 3);
+        assert_eq!(parse_people_count("0"), 0);
+        // u8 overflow — previous `unwrap_or(0)` silently reported an empty
+        // room; now we clamp.
+        assert_eq!(parse_people_count("500"), u8::MAX);
+        assert_eq!(parse_people_count("1000"), u8::MAX);
+        // Negatives clamp to 0, same for garbage.
+        assert_eq!(parse_people_count("-1"), 0);
+        assert_eq!(parse_people_count("abc"), 0);
+        assert_eq!(parse_people_count(""), 0);
+    }
+
+    #[test]
+    fn truncate_scene_honors_new_64_char_cap() {
+        // Below cap → passthrough.
+        assert_eq!(truncate_scene("short scene", 64).chars().count(), 11);
+        // Above cap → truncated + ellipsis, and the prompt's
+        // "10 words max" contract is comfortably respected.
+        let long =
+            "this is a scene description that runs much longer than sixty four characters for sure";
+        let out = truncate_scene(long, 64);
+        assert!(out.chars().count() <= 64);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn adaptive_brightness_uses_face_brightness_when_available() {
+        // Back-lit synthetic frame: bright background + dim skin region
+        // in the center. Mean brightness is above the dark threshold, so
+        // the OLD enhancement path would not trigger; face-region mean
+        // IS below threshold, so the NEW path correctly decides to
+        // enhance.
+        let dir =
+            std::env::temp_dir().join(format!("lifeos-camera-backlit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("backlit.jpg");
+
+        let mut image: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(120, 120, Rgb([230, 230, 230])); // bright bg
+                                                                     // Paint a darker skin-tone face in the center — inside the new
+                                                                     // YCbCr skin locus but below CAMERA_FRAME_DARK_THRESHOLD.
+        for y in 30..90 {
+            for x in 35..85 {
+                image.put_pixel(x, y, Rgb([55, 38, 30]));
+            }
+        }
+        image.save(&path).unwrap();
+
+        let metrics = analyze_camera_frame(&path).unwrap();
+        assert!(
+            metrics.enhanced,
+            "expected face-region brightness to trigger enhancement"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
