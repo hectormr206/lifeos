@@ -6685,12 +6685,58 @@ fn llama_env_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/etc/lifeos/llama-server.env"))
 }
 
+/// Send SIGTERM to `pid` and escalate to SIGKILL if the process does not
+/// exit within ~2 seconds. Uses `libc::kill` directly instead of forking
+/// `/usr/bin/kill`, so the reaper costs one syscall per signal rather than
+/// two forks per TERM.
+///
+/// The escalation matters: ffmpeg / libcamera can get wedged in uninterrupt-
+/// ible sleep on a hung V4L2 device. A TERM-only reaper leaves the camera
+/// device permanently locked on that class of failure.
 async fn kill_pid(pid: u32) -> Result<()> {
-    Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .status()
-        .await
-        .context("Failed to invoke kill")?;
+    // SAFETY: libc::kill is sound on any valid i32 pid. Rejecting pid=0
+    // (broadcast to process group) and negative values is done up-front.
+    let pid_i32: libc::pid_t = pid.try_into().context("pid out of range")?;
+    if pid_i32 <= 0 {
+        anyhow::bail!("refusing to signal pid {} (invalid)", pid);
+    }
+
+    // 1) Polite shutdown — give the child a chance to flush/close handles.
+    let term_rc = unsafe { libc::kill(pid_i32, libc::SIGTERM) };
+    if term_rc != 0 {
+        let err = std::io::Error::last_os_error();
+        // ESRCH = process already gone; treat as success.
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            anyhow::bail!("SIGTERM {} failed: {}", pid, err);
+        }
+        return Ok(());
+    }
+
+    // 2) Poll for exit. `kill(pid, 0)` is the standard liveness probe —
+    //    returns 0 if the process is still alive, ESRCH if it's gone.
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let alive_rc = unsafe { libc::kill(pid_i32, 0) };
+        if alive_rc != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(());
+            }
+        }
+    }
+
+    // 3) Still alive after ~2s — escalate.
+    log::warn!(
+        "kill_pid: pid {} did not exit after SIGTERM; escalating to SIGKILL",
+        pid
+    );
+    let kill_rc = unsafe { libc::kill(pid_i32, libc::SIGKILL) };
+    if kill_rc != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            anyhow::bail!("SIGKILL {} failed: {}", pid, err);
+        }
+    }
     Ok(())
 }
 
@@ -6748,7 +6794,14 @@ async fn capture_camera_presence(
                     "2",
                     frame_path.to_string_lossy().as_ref(),
                 ]);
-                run_camera_capture_command(fallback, binary).await?;
+                if let Err(fallback_error) = run_camera_capture_command(fallback, binary).await {
+                    // Fallback ALSO failed — ffmpeg may have left a zero-byte
+                    // or truncated JPG on disk that would survive until the
+                    // 6h housekeeping sweep and count against the retention
+                    // cap. Sweep it before returning the error.
+                    tokio::fs::remove_file(&frame_path).await.ok();
+                    return Err(fallback_error);
+                }
             }
         }
         "libcamera-still" | "libcamera-jpeg" => {
@@ -6766,10 +6819,23 @@ async fn capture_camera_presence(
     }
 
     if program != "ffmpeg" {
-        run_camera_capture_command(cmd, binary).await?;
+        if let Err(err) = run_camera_capture_command(cmd, binary).await {
+            // Same hygiene for the non-ffmpeg backends.
+            tokio::fs::remove_file(&frame_path).await.ok();
+            return Err(err);
+        }
     }
 
-    let mut metrics = analyze_camera_frame(&frame_path)?;
+    let mut metrics = match analyze_camera_frame(&frame_path) {
+        Ok(m) => m,
+        Err(err) => {
+            // A frame exists on disk but it didn't parse. Do not leak
+            // unreadable JPGs into the retention bucket — they'd count
+            // against the 120-file cap and distract troubleshooting.
+            tokio::fs::remove_file(&frame_path).await.ok();
+            return Err(err);
+        }
+    };
     metrics.frame_path = Some(frame_path.to_string_lossy().to_string());
     log::debug!(
         "[camera] captured presence frame via {} brightness={:.1} enhanced={} present={} face_near_screen={}",

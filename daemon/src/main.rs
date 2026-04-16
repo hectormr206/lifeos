@@ -467,6 +467,11 @@ pub struct DaemonState {
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub wake_word_detector: Option<Arc<wake_word::WakeWordDetector>>,
     pub wake_word_notify: Arc<tokio::sync::Notify>,
+    /// Broadcasts a shutdown request to long-running background tasks so
+    /// they can drain gracefully before the process exits. Sensory runtime
+    /// in particular uses this to finish the current camera/screen capture
+    /// cycle instead of being `.abort()`ed mid-analysis.
+    pub shutdown_notify: Arc<tokio::sync::Notify>,
     pub event_bus: tokio::sync::broadcast::Sender<events::DaemonEvent>,
     pub security_alert_buffer: security_ai::AlertBuffer,
     pub session_store: Arc<session_store::SessionStore>,
@@ -593,6 +598,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize wake word detector (rustpotter) if available.
     let wake_word_notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
     let wake_word_detector = {
         if !wake_word::WakeWordDetector::available() {
             info!("Wake word feature not compiled — using Whisper-based detection");
@@ -808,6 +814,7 @@ async fn main() -> anyhow::Result<()> {
         last_update_check: RwLock::new(None),
         wake_word_detector,
         wake_word_notify: wake_word_notify.clone(),
+        shutdown_notify: shutdown_notify.clone(),
         event_bus: event_tx,
         security_alert_buffer: security_ai::new_alert_buffer(),
         session_store: shared_session_store,
@@ -2119,11 +2126,25 @@ async fn main() -> anyhow::Result<()> {
         detector.stop();
     }
 
+    // Ask long-running background loops to drain their current iteration
+    // before we hit them with .abort(). This lets the sensory runtime
+    // finish an in-flight camera capture + analyze + retention sweep
+    // instead of leaving a partial JPG on disk.
+    state.shutdown_notify.notify_waiters();
+
     // Cancel all tasks
     health_handle.abort();
     update_handle.abort();
     metrics_handle.abort();
-    sensory_handle.abort();
+    let mut sensory_handle = sensory_handle;
+    match tokio::time::timeout(Duration::from_secs(3), &mut sensory_handle).await {
+        Ok(Ok(())) => info!("Sensory runtime drained cleanly"),
+        Ok(Err(e)) => warn!("Sensory runtime task ended with join error: {}", e),
+        Err(_) => {
+            warn!("Sensory runtime did not drain within 3s; aborting");
+            sensory_handle.abort();
+        }
+    }
     state.supervisor.stop();
     supervisor_handle.abort();
     thermal_handle.abort();
@@ -2469,12 +2490,20 @@ async fn run_metrics_collection(state: Arc<DaemonState>) {
 async fn run_sensory_runtime(state: Arc<DaemonState>) {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     let wake_notify = state.wake_word_notify.clone();
+    let shutdown_notify = state.shutdown_notify.clone();
 
     loop {
         // Wake immediately on rustpotter detection OR on interval tick.
+        // Exit BETWEEN iterations on shutdown so the current cycle (which
+        // may be mid-camera-capture / mid-analyze) finishes cleanly rather
+        // than being aborted with a partial JPG on disk.
         tokio::select! {
             _ = interval.tick() => {},
             _ = wake_notify.notified() => {},
+            _ = shutdown_notify.notified() => {
+                info!("[sensory] shutdown requested; draining loop");
+                return;
+            },
         }
 
         let ai_manager = *state.ai_manager.read().await;
