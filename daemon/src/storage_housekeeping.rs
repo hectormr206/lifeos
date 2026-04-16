@@ -29,7 +29,11 @@ const _TELEMETRY_RETENTION_DAYS: u64 = 30;
 
 /// Maximum age for ephemeral captures (camera, audio, tts) in days.
 /// These are processed immediately; raw files only needed short-term.
-const EPHEMERAL_RETENTION_DAYS: u64 = 7;
+/// Cut from 7 → 2 (matches SCREENSHOT_RETENTION_DAYS): holding a week of
+/// plaintext webcam frames / mic recordings / TTS audio on disk is
+/// disproportionate to the "ephemeral" label. Scene descriptions that
+/// matter live encrypted in MemoryPlane.
+const EPHEMERAL_RETENTION_DAYS: u64 = 2;
 
 /// Maximum age for session transcript files on disk (days).
 const SESSION_RETENTION_DAYS: u64 = 30;

@@ -1704,6 +1704,45 @@ async fn dashboard_bootstrap(
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0);
+
+    // Defense-in-depth: reject TCP peers that are not on the loopback
+    // interface even if the bind check and header checks passed. This
+    // closes the theoretical "bound to 0.0.0.0 by misconfiguration"
+    // window as a belt-and-braces guard.
+    if let Some(peer_addr) = peer {
+        if !peer_addr.ip().is_loopback() {
+            log::warn!(
+                "Dashboard bootstrap rejected: non-loopback peer {}",
+                peer_addr
+            );
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiError {
+                    error: "Forbidden".to_string(),
+                    message: "Bootstrap endpoint rejects non-loopback peers".to_string(),
+                    code: 403,
+                }),
+            ));
+        }
+    }
+
+    // Coarse rate-limit. A local attacker with a poisoned Host header is
+    // blocked upstream; this just bounds how many tokens a misbehaving
+    // loopback process can pull per minute. Burst allowance is generous
+    // because the legitimate dashboard fetches the token once per page
+    // load.
+    if !bootstrap_rate_limit_check() {
+        log::warn!("Dashboard bootstrap rate-limit hit");
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiError {
+                error: "Too Many Requests".to_string(),
+                message: "Bootstrap endpoint rate-limited".to_string(),
+                code: 429,
+            }),
+        ));
+    }
+
     log::info!(
         "Dashboard bootstrap token served to {:?} — local-only endpoint",
         peer
@@ -1712,6 +1751,31 @@ async fn dashboard_bootstrap(
         token: state.config.api_key.clone(),
         auth_required: state.config.api_key.is_some(),
     }))
+}
+
+/// Sliding-window rate limiter for `/dashboard/bootstrap`.
+/// 30 requests / 60s is well above any legitimate dashboard load
+/// pattern (typically one fetch per page reload) but sharply limits
+/// the damage a misbehaving loopback process can do.
+fn bootstrap_rate_limit_check() -> bool {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    static WINDOW: Mutex<Vec<Instant>> = Mutex::new(Vec::new());
+    const MAX_REQUESTS: usize = 30;
+    const WINDOW_DURATION: Duration = Duration::from_secs(60);
+
+    let now = Instant::now();
+    let mut guard = match WINDOW.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.retain(|ts| now.duration_since(*ts) < WINDOW_DURATION);
+    if guard.len() >= MAX_REQUESTS {
+        return false;
+    }
+    guard.push(now);
+    true
 }
 
 /// True if `host` (value from a `Host` header, may include `:port`) points

@@ -440,8 +440,6 @@ pub struct PresenceRuntime {
     pub user_state: Option<String>,
     /// Number of people detected in frame (0 = nobody, 1 = user alone, 2+ = meeting).
     pub people_count: Option<u8>,
-    /// Last frame path for multimodal analysis.
-    pub last_frame_path: Option<String>,
 }
 
 impl Default for PresenceRuntime {
@@ -461,7 +459,6 @@ impl Default for PresenceRuntime {
             scene_description: None,
             user_state: None,
             people_count: None,
-            last_frame_path: None,
         }
     }
 }
@@ -2536,7 +2533,6 @@ impl SensoryPipelineManager {
         snapshot.presence.scene_description = filtered_scene.clone();
         snapshot.presence.user_state = user_state.clone();
         snapshot.presence.people_count = people_count;
-        snapshot.presence.last_frame_path = frame_path;
 
         // Store camera context in memory for later recall.
         if let (Some(ref desc), false) = (filtered_scene.as_ref(), skip_scene_persist) {
