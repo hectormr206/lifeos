@@ -335,6 +335,13 @@ impl Default for GpuOffloadStatus {
 #[serde(default)]
 pub struct VoiceSessionRuntime {
     pub active: bool,
+    /// Master "mic capture is permitted at all" toggle — AND of
+    /// `runtime.audio_enabled && !kill_switch_active`. Covers explicit
+    /// voice sessions, meeting recording, barge-in, wake-word sample
+    /// enrollment. Separate from `always_on_active` which is stricter
+    /// (also requires always-on listening to be enabled).
+    #[serde(default)]
+    pub audio_enabled: bool,
     pub always_on_active: bool,
     #[serde(default = "default_tts_enabled")]
     pub tts_enabled: bool,
@@ -362,6 +369,7 @@ impl Default for VoiceSessionRuntime {
     fn default() -> Self {
         Self {
             active: false,
+            audio_enabled: false,
             always_on_active: false,
             tts_enabled: true,
             session_id: None,
@@ -684,8 +692,14 @@ pub struct AlwaysOnCycle<'a> {
 /// - `Camera` — kill switch + `presence.camera_consented` + suspend.
 ///   The camera_consented field is already AND'd with kill switch by
 ///   `sync_runtime` (Fase A fix).
-/// - `Microphone` — kill switch + `voice.always_on_active`. Covers mic
-///   capture, wake-word, passive listening.
+/// - `Microphone` — kill switch + `voice.audio_enabled` + suspend.
+///   Covers EVERY mic capture: explicit voice sessions, meeting
+///   recorder, barge-in during TTS playback, wake-word sample
+///   enrollment, STT file transcription.
+/// - `AlwaysOnListening` — stricter superset of Microphone: same gates
+///   PLUS `voice.always_on_active` (the wake-word detector must be
+///   enabled by the user). Use for rustpotter and the continuous
+///   hotword-probe loop only.
 /// - `Tts` — kill switch + `voice.tts_enabled`.
 /// - `WindowTracking` — kill switch + FollowAlong consent. Gates the
 ///   event-bus `WindowChanged` listener in `sensory_memory`.
@@ -698,6 +712,7 @@ pub enum Sense {
     Screen,
     Camera,
     Microphone,
+    AlwaysOnListening,
     Tts,
     WindowTracking,
     CloudRoute,
@@ -709,6 +724,7 @@ impl Sense {
             Sense::Screen => "screen",
             Sense::Camera => "camera",
             Sense::Microphone => "microphone",
+            Sense::AlwaysOnListening => "always_on_listening",
             Sense::Tts => "tts",
             Sense::WindowTracking => "window_tracking",
             Sense::CloudRoute => "cloud_route",
@@ -856,12 +872,30 @@ impl SensoryPipelineManager {
                 Ok(())
             }
             Sense::Microphone => {
-                if !state.voice.always_on_active {
+                if !state.voice.audio_enabled {
                     return Err("microphone capture is disabled by user preference");
                 }
                 drop(state);
                 if self.is_suspending() {
                     return Err("microphone capture is paused across suspend/hibernate");
+                }
+                Ok(())
+            }
+            Sense::AlwaysOnListening => {
+                // Stricter than Microphone: user must have BOTH the
+                // master audio toggle on AND opted in to always-on
+                // listening. Used by rustpotter and the continuous
+                // hotword-probe loop — never by user-initiated mic
+                // sessions, which should ask for Sense::Microphone.
+                if !state.voice.audio_enabled {
+                    return Err("always-on listening requires audio_enabled");
+                }
+                if !state.voice.always_on_active {
+                    return Err("always-on listening is disabled by user preference");
+                }
+                drop(state);
+                if self.is_suspending() {
+                    return Err("always-on listening is paused across suspend/hibernate");
                 }
                 Ok(())
             }
@@ -1021,6 +1055,7 @@ impl SensoryPipelineManager {
         // bypassed by a direct `POST /sensory/presence` request.
         state.presence.camera_consented = runtime.camera_enabled && !runtime.kill_switch_active;
         state.presence.camera_active = runtime.camera_enabled && !runtime.kill_switch_active;
+        state.voice.audio_enabled = runtime.audio_enabled && !runtime.kill_switch_active;
         state.voice.always_on_active =
             runtime.always_on_active && runtime.audio_enabled && !runtime.kill_switch_active;
         state.voice.tts_enabled = runtime.tts_enabled && !runtime.kill_switch_active;
@@ -1381,6 +1416,17 @@ impl SensoryPipelineManager {
             let st = self.state.read().await;
             st.capabilities.always_on_source.clone()
         };
+        // Unified mic gate — `Sense::AlwaysOnListening` (stricter than
+        // plain Microphone: requires user-opted wake-word listening to
+        // be enabled). Without this, the hotword probe loop kept
+        // capturing even with audio_enabled=false.
+        if self
+            .ensure_sense_allowed(Sense::AlwaysOnListening, "pipeline.hotword_cycle.capture")
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
         let audio_path = match capture_audio_snippet(
             &self.data_dir,
             ALWAYS_ON_CAPTURE_SECONDS,
@@ -1649,6 +1695,17 @@ impl SensoryPipelineManager {
             let st = self.state.read().await;
             st.capabilities.always_on_source.clone()
         };
+        // Post-wakeword user-initiated capture. Uses the `Microphone`
+        // sense (not AlwaysOnListening) because by this point the user
+        // has explicitly triggered capture via the hotword — it's an
+        // active voice session, not passive background listening.
+        if self
+            .ensure_sense_allowed(Sense::Microphone, "pipeline.capture_until_silence")
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
         let audio_path =
             match capture_until_silence(&self.data_dir, always_on_source.as_deref()).await {
                 Ok(path) => path,
@@ -3292,17 +3349,36 @@ impl SensoryPipelineManager {
                 st.capabilities.always_on_source.clone()
             };
             let barge_in_playback_audio = current_audio.clone();
+            // Clone self's shared state so the spawned monitor task can
+            // consult the mic gate inside its loop. A user toggling
+            // audio_enabled=false mid-playback now stops barge-in capture
+            // on the next loop iteration (previously it kept going).
+            let barge_in_mgr = self.clone();
             let monitor_handle = tokio::spawn(async move {
                 // Wait a short moment before starting to monitor, so the
                 // playback audio doesn't feed back into the microphone.
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                while let Ok(path) = capture_audio_snippet_ms(
-                    &barge_in_data_dir,
-                    BARGE_IN_CAPTURE_MILLIS,
-                    barge_in_source.as_deref(),
-                )
-                .await
-                {
+                loop {
+                    // Per-iteration gate check so a mid-playback toggle
+                    // of audio_enabled / kill switch actually stops the
+                    // monitor rather than waiting for the outer task.
+                    if barge_in_mgr
+                        .ensure_sense_allowed(Sense::Microphone, "pipeline.barge_in_monitor")
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    let path = match capture_audio_snippet_ms(
+                        &barge_in_data_dir,
+                        BARGE_IN_CAPTURE_MILLIS,
+                        barge_in_source.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    };
                     if audio_has_voice_activity_with_profile(
                         Path::new(&path),
                         VoiceActivityProfile::BargeIn,

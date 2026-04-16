@@ -138,6 +138,12 @@ pub struct MeetingAssistant {
     /// mode too. Without this, meeting capture was "god mode" and kept
     /// recording over a user-disabled screen sense.
     agent_runtime: Option<Arc<RwLock<crate::agent_runtime::AgentRuntimeManager>>>,
+    /// Sensory pipeline — consulted before every pw-record spawn so
+    /// meeting capture honors the unified Sense::Microphone gate
+    /// (kill switch + audio_enabled + suspend). Without this, meeting
+    /// mode was a "god-mode" mic recorder that kept running over user-
+    /// disabled audio. Hearing audit C-8.
+    sensory_pipeline: Option<Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>>,
 }
 
 impl MeetingAssistant {
@@ -170,6 +176,7 @@ impl MeetingAssistant {
             caption_stop_tx: None,
             no_meeting_ticks: 0,
             agent_runtime: None,
+            sensory_pipeline: None,
         }
     }
 
@@ -180,6 +187,16 @@ impl MeetingAssistant {
         runtime: Arc<RwLock<crate::agent_runtime::AgentRuntimeManager>>,
     ) {
         self.agent_runtime = Some(runtime);
+    }
+
+    /// Wire the sensory pipeline so mic capture (meeting recording +
+    /// real-time captions) can consult the unified Sense::Microphone
+    /// gate. Without this wire-up the pw-record spawners fall-closed.
+    pub fn set_sensory_pipeline(
+        &mut self,
+        manager: Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>,
+    ) {
+        self.sensory_pipeline = Some(manager);
     }
 
     /// Set the speaker identification manager for resolving speaker labels to names (BB.1).
@@ -544,6 +561,23 @@ impl MeetingAssistant {
     }
 
     async fn start_recording(&mut self) -> Result<()> {
+        // Unified Sense::Microphone gate BEFORE spawning any pw-record.
+        // Before this, meeting mode kept auto-recording even with
+        // audio_enabled=false or kill switch engaged — exactly the
+        // C-8 bypass the hearing audit found.
+        if let Some(ref sensory) = self.sensory_pipeline {
+            let guard = sensory.read().await;
+            if let Err(reason) = guard
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::Microphone,
+                    "meeting_assistant.start_recording",
+                )
+                .await
+            {
+                anyhow::bail!("meeting recording refused: {}", reason);
+            }
+        }
+
         let meetings_dir = self.data_dir.join("meetings");
         tokio::fs::create_dir_all(&meetings_dir).await?;
 
@@ -1494,6 +1528,24 @@ Usá EXACTAMENTE este formato para cada tarea:
     pub async fn start_captions(&mut self) {
         if !self.captions_enabled {
             return;
+        }
+
+        // Real-time captions continuously capture 3s mic chunks — same
+        // Sense::Microphone policy as the full meeting recorder. Without
+        // this gate, captions kept listening even with audio_enabled=false.
+        if let Some(ref sensory) = self.sensory_pipeline {
+            let guard = sensory.read().await;
+            if guard
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::Microphone,
+                    "meeting_assistant.start_captions",
+                )
+                .await
+                .is_err()
+            {
+                info!("[meeting] captions refused by Sense::Microphone gate");
+                return;
+            }
         }
 
         // Stop any existing caption task first

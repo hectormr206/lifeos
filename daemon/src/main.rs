@@ -1363,6 +1363,9 @@ async fn main() -> anyhow::Result<()> {
         // Wire the agent runtime so meeting mode honors screen_enabled +
         // kill switch like every other sensory capture path does.
         assistant.set_agent_runtime(state.agent_runtime_manager.clone());
+        // Wire the sensory pipeline so meeting mic recording hits the
+        // unified Sense::Microphone gate.
+        assistant.set_sensory_pipeline(state.sensory_pipeline_manager.clone());
         std::sync::Arc::new(tokio::sync::RwLock::new(assistant))
     };
     let meeting_loop_assistant = shared_meeting_assistant.clone();
