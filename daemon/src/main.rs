@@ -845,6 +845,15 @@ async fn main() -> anyhow::Result<()> {
         warn!("Failed to initialize ConfigStore: {}", e);
     }
 
+    // Inject FollowAlong into the sensory pipeline so `Sense::WindowTracking`
+    // in the unified gate can consult consent. Must happen after the state
+    // struct is built because sensory_pipeline_manager is created BEFORE
+    // follow_along_manager inside the struct literal.
+    {
+        let mut spm = state.sensory_pipeline_manager.write().await;
+        spm.set_follow_along(state.follow_along_manager.clone());
+    }
+
     // Attach scheduled tasks manager to supervisor.
     state
         .supervisor

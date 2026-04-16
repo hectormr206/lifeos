@@ -670,19 +670,102 @@ pub struct AlwaysOnCycle<'a> {
     pub wake_word_detector: Option<&'a crate::wake_word::WakeWordDetector>,
 }
 
-#[derive(Clone)]
+/// One of Axi's senses — the input/output channels a caller may want to
+/// exercise. Each variant has its own policy (kill switch alone, or
+/// master toggle, or consent, etc.) but every capture/persist/route
+/// request goes through the unified `ensure_sense_allowed` gate so a
+/// new entry point CANNOT nest itself around an older enforcement.
+///
+/// Policy per variant:
+/// - `Screen` — kill switch + `vision.enabled` + suspend + session
+///   lock + sensitive-window title. Applied to every grim/maim/
+///   spectacle/gnome-screenshot shell-out, OCR call, and multimodal
+///   describe request.
+/// - `Camera` — kill switch + `presence.camera_consented` + suspend.
+///   The camera_consented field is already AND'd with kill switch by
+///   `sync_runtime` (Fase A fix).
+/// - `Microphone` — kill switch + `voice.always_on_active`. Covers mic
+///   capture, wake-word, passive listening.
+/// - `Tts` — kill switch + `voice.tts_enabled`.
+/// - `WindowTracking` — kill switch + FollowAlong consent. Gates the
+///   event-bus `WindowChanged` listener in `sensory_memory`.
+/// - `CloudRoute` — kill switch only. Redundant safety rail for anything
+///   that would send a sensory artifact (image, audio, OCR) to a
+///   non-local LLM provider; upstream paths should ALSO clamp
+///   `SensitivityLevel::Critical`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sense {
+    Screen,
+    Camera,
+    Microphone,
+    Tts,
+    WindowTracking,
+    CloudRoute,
+}
+
+impl Sense {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Sense::Screen => "screen",
+            Sense::Camera => "camera",
+            Sense::Microphone => "microphone",
+            Sense::Tts => "tts",
+            Sense::WindowTracking => "window_tracking",
+            Sense::CloudRoute => "cloud_route",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GateAuditEntry {
+    pub sense: Sense,
+    pub caller: &'static str,
+    pub allowed: bool,
+    pub reason: Option<&'static str>,
+    pub at: DateTime<Utc>,
+}
+
+/// How many gate decisions to keep in memory for dashboard/audit-trail
+/// surfacing. Small ring buffer — we care about recency, not history
+/// (MemoryPlane is where long-term audit lives).
+const GATE_AUDIT_RING_CAPACITY: usize = 200;
+
 pub struct SensoryPipelineManager {
     data_dir: PathBuf,
     state: Arc<RwLock<SensoryPipelineState>>,
     playback: Arc<Mutex<Option<ActivePlayback>>>,
     speaker_id: Arc<RwLock<crate::speaker_id::SpeakerIdManager>>,
     privacy_filter: Option<Arc<PrivacyFilter>>,
+    /// Consent source for `Sense::WindowTracking`. Injected from main
+    /// so the gate can consult FollowAlong without every caller having
+    /// to plumb the manager manually. `None` means the gate treats
+    /// window tracking as unconditionally disallowed (fail-closed).
+    follow_along: Option<Arc<RwLock<crate::follow_along::FollowAlongManager>>>,
+    /// Ring buffer of recent gate decisions — feeds `GET /sensory/gate-audit`
+    /// so the dashboard can surface "which senses were asked for, by
+    /// whom, and were any refused?" without touching MemoryPlane.
+    gate_audit: Arc<RwLock<std::collections::VecDeque<GateAuditEntry>>>,
     /// Set while the host is in (or about to enter) suspend/hibernate.
     /// Gates all camera captures so the sensory loop doesn't try to hold
     /// `/dev/video0` across a sleep cycle — kernel USB re-probes on resume
     /// leave the old v4l2 handle stale (journal: "Cannot open video device
     /// /dev/video0: Permission denied"). Cleared on PrepareForSleep(false).
     suspending: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Clone for SensoryPipelineManager {
+    fn clone(&self) -> Self {
+        Self {
+            data_dir: self.data_dir.clone(),
+            state: self.state.clone(),
+            playback: self.playback.clone(),
+            speaker_id: self.speaker_id.clone(),
+            privacy_filter: self.privacy_filter.clone(),
+            follow_along: self.follow_along.clone(),
+            gate_audit: self.gate_audit.clone(),
+            suspending: self.suspending.clone(),
+        }
+    }
 }
 
 impl SensoryPipelineManager {
@@ -697,44 +780,154 @@ impl SensoryPipelineManager {
                 speaker_dir,
             ))),
             privacy_filter: None,
+            follow_along: None,
+            gate_audit: Arc::new(RwLock::new(std::collections::VecDeque::with_capacity(
+                GATE_AUDIT_RING_CAPACITY,
+            ))),
             suspending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
-    /// Single source of truth for "is a screen capture allowed right now?".
-    /// EVERY caller that shells out to grim/maim/spectacle/gnome-screenshot
-    /// MUST consult this before capturing — API handlers, agentic tools,
-    /// supervisor steps, MCP actions, SimpleX commands, meeting mode,
-    /// overlay, desktop_operator. The round-2 audit found each of those
-    /// paths had its own (or no) gate, which is exactly how new entry
-    /// points end up bypassing user policy.
+    /// Inject the FollowAlong manager so `Sense::WindowTracking` can
+    /// consult consent. Call this once at daemon init — the gate will
+    /// fail-closed for WindowTracking if the manager isn't wired.
+    pub fn set_follow_along(
+        &mut self,
+        manager: Arc<RwLock<crate::follow_along::FollowAlongManager>>,
+    ) {
+        self.follow_along = Some(manager);
+    }
+
+    /// Unified sense gate — the ONE place every caller goes through before
+    /// exercising any of Axi's senses. Returns `Err(reason)` when a gate
+    /// trips. `caller` is a short static tag (e.g. `"api.overlay_chat"`)
+    /// that lands in the audit ring for debugging / dashboard surfacing.
     ///
-    /// Returns `Err(reason)` with a human-readable reason when any of the
-    /// gates trips: kill switch, master screen toggle, suspend, session
-    /// locked, or active window is sensitive.
-    pub async fn ensure_screen_capture_allowed(&self) -> std::result::Result<(), &'static str> {
+    /// This is the architectural fix for the recurring "asymmetric
+    /// hardening" class of bug surfaced by the TTS / camera / screen
+    /// audits: new entry points kept bypassing user policy because each
+    /// one had its own ad-hoc subset of checks. Now every sense access
+    /// is routed through here — add a new entry point, get every gate
+    /// for free.
+    pub async fn ensure_sense_allowed(
+        &self,
+        sense: Sense,
+        caller: &'static str,
+    ) -> std::result::Result<(), &'static str> {
+        let outcome = self.check_sense(sense).await;
+        self.record_audit(sense, caller, outcome).await;
+        outcome
+    }
+
+    async fn check_sense(&self, sense: Sense) -> std::result::Result<(), &'static str> {
         let state = self.state.read().await;
         if state.kill_switch_active {
             return Err("sensory kill switch is active");
         }
-        if !state.vision.enabled {
-            return Err("screen capture is disabled by user preference");
-        }
-        let current_window = state.vision.current_window.clone();
-        drop(state);
 
-        if self.is_suspending() {
-            return Err("screen capture is paused across suspend/hibernate");
-        }
-        if is_session_locked().await {
-            return Err("screen capture skipped: session locked");
-        }
-        if let Some(title) = current_window {
-            if is_sensitive_window_title(&title) {
-                return Err("screen capture skipped: sensitive active window");
+        match sense {
+            Sense::Screen => {
+                if !state.vision.enabled {
+                    return Err("screen capture is disabled by user preference");
+                }
+                let current_window = state.vision.current_window.clone();
+                drop(state);
+                if self.is_suspending() {
+                    return Err("screen capture is paused across suspend/hibernate");
+                }
+                if is_session_locked().await {
+                    return Err("screen capture skipped: session locked");
+                }
+                if let Some(title) = current_window {
+                    if is_sensitive_window_title(&title) {
+                        return Err("screen capture skipped: sensitive active window");
+                    }
+                }
+                Ok(())
+            }
+            Sense::Camera => {
+                if !state.presence.camera_consented {
+                    return Err("camera capture is disabled by user preference");
+                }
+                drop(state);
+                if self.is_suspending() {
+                    return Err("camera capture is paused across suspend/hibernate");
+                }
+                Ok(())
+            }
+            Sense::Microphone => {
+                if !state.voice.always_on_active {
+                    return Err("microphone capture is disabled by user preference");
+                }
+                drop(state);
+                if self.is_suspending() {
+                    return Err("microphone capture is paused across suspend/hibernate");
+                }
+                Ok(())
+            }
+            Sense::Tts => {
+                if !state.voice.tts_enabled {
+                    return Err("TTS is disabled by user preference");
+                }
+                Ok(())
+            }
+            Sense::WindowTracking => {
+                drop(state);
+                let Some(ref follow_along) = self.follow_along else {
+                    return Err("window tracking: follow-along manager not wired (fail-closed)");
+                };
+                let guard = follow_along.read().await;
+                let config = guard.get_config().await;
+                if config.consent_status != crate::follow_along::ConsentStatus::Granted {
+                    return Err("window tracking requires FollowAlong consent");
+                }
+                Ok(())
+            }
+            Sense::CloudRoute => {
+                // Kill switch already checked above — CloudRoute itself
+                // has no per-user toggle today; callers are responsible
+                // for clamping sensitivity so the router stays local
+                // when the payload contains sensory artifacts.
+                Ok(())
             }
         }
-        Ok(())
+    }
+
+    async fn record_audit(
+        &self,
+        sense: Sense,
+        caller: &'static str,
+        outcome: std::result::Result<(), &'static str>,
+    ) {
+        let entry = GateAuditEntry {
+            sense,
+            caller,
+            allowed: outcome.is_ok(),
+            reason: outcome.err(),
+            at: Utc::now(),
+        };
+        let mut ring = self.gate_audit.write().await;
+        if ring.len() >= GATE_AUDIT_RING_CAPACITY {
+            ring.pop_front();
+        }
+        ring.push_back(entry);
+    }
+
+    /// Dump the gate audit ring in newest-first order. Feeds the
+    /// dashboard's "what senses was Axi asked to use, and what got
+    /// refused?" panel.
+    pub async fn gate_audit(&self) -> Vec<GateAuditEntry> {
+        let ring = self.gate_audit.read().await;
+        ring.iter().rev().cloned().collect()
+    }
+
+    /// Thin wrapper around the unified `ensure_sense_allowed(Sense::Screen)`
+    /// gate. Kept for callers that haven't been migrated to pass an
+    /// explicit caller tag yet; new call sites should prefer
+    /// `ensure_sense_allowed` so the audit log knows who asked.
+    pub async fn ensure_screen_capture_allowed(&self) -> std::result::Result<(), &'static str> {
+        self.ensure_sense_allowed(Sense::Screen, "legacy.screen_helper")
+            .await
     }
 
     /// Called by the login1 PrepareForSleep listener when the system is
