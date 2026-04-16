@@ -3298,10 +3298,17 @@ async fn get_tts_voices(
         ));
     }
 
+    let env_default =
+        std::env::var("LIFEOS_TTS_DEFAULT_VOICE").unwrap_or_else(|_| "if_sara".to_string());
+    let um = state.user_model.read().await;
+    let current_voice =
+        crate::sensory_pipeline::resolve_tts_voice(&um, &env_default, None, &caps.kokoro_voices);
+
     Ok(Json(serde_json::json!({
         "status": "ok",
         "voices": caps.kokoro_voices,
         "server_url": caps.tts_server_url,
+        "current_voice": current_voice,
     })))
 }
 
