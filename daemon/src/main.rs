@@ -90,6 +90,7 @@ mod simplex_bridge;
 mod single_instance;
 mod skill_generator;
 mod skill_registry;
+mod sleep_watch;
 mod speaker_id;
 mod sqlite_protection;
 mod storage_housekeeping;
@@ -1118,6 +1119,17 @@ async fn main() -> anyhow::Result<()> {
     let update_handle = tokio::spawn(run_update_checks(state.clone()));
     let metrics_handle = tokio::spawn(run_metrics_collection(state.clone()));
     let sensory_handle = tokio::spawn(run_sensory_runtime(state.clone()));
+
+    // Gate camera captures across suspend/hibernate. A failed bus connection
+    // (no login1 available) is logged and ignored — the capture loop still
+    // works, it just loses the suspend safety net.
+    let sleep_sensory = state.sensory_pipeline_manager.clone();
+    let sleep_ai = state.ai_manager.clone();
+    let sleep_watch_handle = tokio::spawn(async move {
+        if let Err(err) = sleep_watch::watch_prepare_for_sleep(sleep_sensory, sleep_ai).await {
+            warn!("[sleep-watch] watcher exited: {}", err);
+        }
+    });
 
     // Proactive notifications loop — checks every 5 minutes
     let proactive_state = state.clone();
@@ -2148,6 +2160,7 @@ async fn main() -> anyhow::Result<()> {
     state.supervisor.stop();
     supervisor_handle.abort();
     thermal_handle.abort();
+    sleep_watch_handle.abort();
     if let Some(h) = game_guard_handle {
         h.abort();
     }

@@ -677,6 +677,12 @@ pub struct SensoryPipelineManager {
     playback: Arc<Mutex<Option<ActivePlayback>>>,
     speaker_id: Arc<RwLock<crate::speaker_id::SpeakerIdManager>>,
     privacy_filter: Option<Arc<PrivacyFilter>>,
+    /// Set while the host is in (or about to enter) suspend/hibernate.
+    /// Gates all camera captures so the sensory loop doesn't try to hold
+    /// `/dev/video0` across a sleep cycle — kernel USB re-probes on resume
+    /// leave the old v4l2 handle stale (journal: "Cannot open video device
+    /// /dev/video0: Permission denied"). Cleared on PrepareForSleep(false).
+    suspending: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SensoryPipelineManager {
@@ -691,7 +697,22 @@ impl SensoryPipelineManager {
                 speaker_dir,
             ))),
             privacy_filter: None,
+            suspending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
+    }
+
+    /// Called by the login1 PrepareForSleep listener when the system is
+    /// about to suspend/hibernate or has just resumed. Gates subsequent
+    /// presence captures via the `suspending` flag.
+    pub fn set_suspending(&self, suspending: bool) {
+        self.suspending
+            .store(suspending, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Cheap check used by capture entry points and `update_presence` to
+    /// skip work while the host is suspending/hibernating.
+    pub fn is_suspending(&self) -> bool {
+        self.suspending.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Attach a shared privacy filter for OCR text classification.
@@ -2394,6 +2415,13 @@ impl SensoryPipelineManager {
             if guard.kill_switch_active {
                 return Ok(guard.presence.clone());
             }
+        }
+
+        // Hard stop across suspend/hibernate. Kernel USB re-probes on
+        // resume would hand us a stale /dev/video0 handle, so capturing
+        // through a sleep cycle yields EACCES and a locked device.
+        if self.is_suspending() {
+            return Ok(self.state.read().await.presence.clone());
         }
 
         let mut snapshot = self.state.read().await.clone();
