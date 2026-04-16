@@ -38,6 +38,22 @@ repos:
         stages: [pre-commit]
 
   # ============================================================================
+  # Piper artifact guard — assert no Piper TTS references in Containerfile or
+  # image/files/ tree. Catches regressions that would re-introduce Piper after
+  # migration to Kokoro TTS (migrate-tts-to-kokoro, v0.7.0).
+  # Runs only when Containerfile or image/files/{service,env,conf} files change.
+  # ============================================================================
+  - repo: local
+    hooks:
+      - id: assert-no-piper-artifacts
+        name: Assert no Piper artifacts in Containerfile and image files
+        language: script
+        entry: bash scripts/assert-no-piper.sh image/Containerfile image/files
+        pass_filenames: false
+        stages: [pre-commit]
+        files: ^image/(Containerfile|files/.*\.(service|env|conf))$
+
+  # ============================================================================
   # Rust Formatting and Linting
   # ============================================================================
   - repo: local
