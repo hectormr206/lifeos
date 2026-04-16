@@ -168,7 +168,12 @@ pub struct HousekeepingReport {
 // ─────────────────────────────────────────────────────────
 
 /// Keep only the newest `max_files` files in a directory. Remove older ones.
-async fn cleanup_dir_by_count(dir: &Path, max_files: usize) -> Result<usize> {
+///
+/// Exposed as `pub(crate)` so hot paths (e.g. camera presence capture) can
+/// enforce the cap per cycle rather than waiting for the 6-hour
+/// housekeeping tick — otherwise the directory drifts far above the limit
+/// between sweeps (observed live: 229 files in /var/lib/lifeos/camera/).
+pub(crate) async fn cleanup_dir_by_count(dir: &Path, max_files: usize) -> Result<usize> {
     let mut entries = Vec::new();
     let mut read_dir = fs::read_dir(dir).await?;
 

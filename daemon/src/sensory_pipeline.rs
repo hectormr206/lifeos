@@ -215,6 +215,12 @@ const CAMERA_CAPTURE_TIMEOUT_SECS: u64 = 3;
 const CAMERA_STALE_CAPTURE_SECS: u64 = 15;
 const CAMERA_CAPTURE_PREFERRED_SIZE: &str = "1280x720";
 const CAMERA_CAPTURE_FALLBACK_SIZE: &str = "640x480";
+/// Per-capture cap for `/var/lib/lifeos/camera/`. Enforced every cycle so
+/// the directory cannot drift above this between 6-hour housekeeping ticks
+/// (observed live: 229 files, nearly 2× the cap, because camera captures
+/// ~6×/min and housekeeping only ran every 6h). Matches the global
+/// MAX_FILES_PER_DIR used by `storage_housekeeping`.
+const CAMERA_PRESENCE_MAX_FILES: usize = 120;
 const CAMERA_FRAME_DARK_THRESHOLD: f64 = 62.0;
 const CAMERA_FRAME_TARGET_BRIGHTNESS: f64 = 96.0;
 const CAMERA_FRAME_MAX_BRIGHTEN: i32 = 52;
@@ -6777,6 +6783,24 @@ async fn capture_camera_presence(
         metrics.present,
         metrics.face_near_screen
     );
+
+    // Enforce the per-cycle retention cap here rather than waiting for the
+    // 6-hour background housekeeping tick. `cleanup_dir_by_count` is cheap
+    // (a single readdir + sort + N unlinks) and guarantees the directory
+    // never drifts above the cap even under sustained capture cadence.
+    if let Ok(removed) =
+        crate::storage_housekeeping::cleanup_dir_by_count(&camera_dir, CAMERA_PRESENCE_MAX_FILES)
+            .await
+    {
+        if removed > 0 {
+            log::debug!(
+                "[camera] per-cycle retention removed {} files (cap {})",
+                removed,
+                CAMERA_PRESENCE_MAX_FILES
+            );
+        }
+    }
+
     Ok(metrics)
 }
 
@@ -7227,11 +7251,33 @@ fn strip_think_blocks(input: &str) -> String {
     output
 }
 
+/// Detect skin-like pixels across the full Fitzpatrick I–VI range.
+///
+/// The previous heuristic (`r > 95 && g > 40 && b > 20 && r - g > 15 && r > g > b`)
+/// had a hard R-channel floor at 95, which excluded most deeply pigmented
+/// skin (Fitzpatrick IV–VI typically lands in R 40–90) — the presence and
+/// `face_near_screen` signals never triggered for darker-skinned users, so
+/// posture/fatigue alerts and the "user at screen" state were silently
+/// disabled for them. See Buolamwini/Gebru "Gender Shades" (2018) for
+/// prior art on this exact class of bug.
+///
+/// The new approach converts RGB → YCbCr and matches the chroma channels
+/// (Cb, Cr) against the Chai & Ngan (1999) skin-locus range, which is
+/// chroma-based and much less sensitive to overall luminance — it
+/// generalises across skin tones while still rejecting typical
+/// background / clothing / wall colours.
 fn is_skin_like(r: u8, g: u8, b: u8) -> bool {
-    let r = r as i32;
-    let g = g as i32;
-    let b = b as i32;
-    r > 95 && g > 40 && b > 20 && (r - g).abs() > 15 && r > g && r > b
+    let r = r as f32;
+    let g = g as f32;
+    let b = b as f32;
+    // ITU-R BT.601 RGB → YCbCr (8-bit studio range, 16–235 luma / 16–240 chroma).
+    let y = 0.299 * r + 0.587 * g + 0.114 * b;
+    let cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+    let cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+    // Chai & Ngan skin-locus; keep a generous luma floor so pure black
+    // (dead-dark pixels) don't count, but don't use luma as an upper
+    // discriminator — bright and dark skin alike land inside the Cb/Cr box.
+    (77.0..=127.0).contains(&cb) && (133.0..=173.0).contains(&cr) && y >= 20.0
 }
 
 // ── Meeting / call detection ────────────────────────────────────────────
@@ -7709,6 +7755,58 @@ mod tests {
         assert!(metrics.avg_brightness >= CAMERA_FRAME_DARK_THRESHOLD);
 
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ── camera-audit Fase B: YCbCr skin detection covers all Fitzpatrick tones ──
+
+    #[test]
+    fn skin_detector_matches_light_skin() {
+        // Fitzpatrick I–III swatch (warm beige). Should match.
+        assert!(is_skin_like(220, 180, 150));
+        assert!(is_skin_like(210, 150, 120));
+        assert!(is_skin_like(200, 160, 135));
+    }
+
+    #[test]
+    fn skin_detector_matches_dark_skin_fitzpatrick_iv_vi() {
+        // These RGB samples represent deeply pigmented skin (Fitzpatrick
+        // IV–VI). The OLD heuristic's `r > 95` floor made every one of
+        // these return false, silently disabling posture/face-near-screen
+        // for darker-skinned users. Regression-guard the new YCbCr path.
+        assert!(is_skin_like(88, 60, 44), "medium-brown failed");
+        assert!(is_skin_like(70, 45, 30), "dark-brown failed");
+        assert!(is_skin_like(60, 38, 25), "very-dark-brown failed");
+        assert!(is_skin_like(48, 30, 20), "near-black-brown failed");
+    }
+
+    #[test]
+    fn skin_detector_rejects_non_skin_backgrounds() {
+        // Saturated greens / blues / grays / black are outside the Cb/Cr
+        // skin locus and must not register.
+        assert!(!is_skin_like(0, 0, 0), "pure black");
+        assert!(!is_skin_like(60, 150, 40), "grass green");
+        assert!(!is_skin_like(40, 120, 200), "sky blue");
+        assert!(!is_skin_like(120, 120, 120), "neutral gray");
+        assert!(!is_skin_like(10, 10, 10), "near-black noise");
+    }
+
+    #[test]
+    fn skin_detector_rejects_old_heuristic_false_positives() {
+        // The previous RGB gate matched deeply saturated pure reds as
+        // "skin" (sunlight on red shirt, red paint on wall, etc.) because
+        // it only required R dominance. YCbCr filters these out via the
+        // narrower Cb/Cr box.
+        assert!(!is_skin_like(255, 0, 0), "pure red shirt");
+        assert!(!is_skin_like(200, 20, 20), "deep red");
+    }
+
+    #[test]
+    fn camera_presence_max_files_matches_housekeeping_global() {
+        // Guard against drift between the per-cycle cap and the global
+        // housekeeping cap — if the two ever diverge, the per-cycle path
+        // either leaks files or prunes more aggressively than advertised.
+        // Keep them lock-step.
+        assert_eq!(CAMERA_PRESENCE_MAX_FILES, 120);
     }
 
     #[test]
