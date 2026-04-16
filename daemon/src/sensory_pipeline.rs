@@ -8369,6 +8369,118 @@ mod tests {
         assert_eq!(CAMERA_PRESENCE_MAX_FILES, 120);
     }
 
+    // ── Unified sensory gate — one policy, every sense ──────────────────
+
+    #[tokio::test]
+    async fn sense_enum_str_tags_are_stable() {
+        // Gate audit log exports these verbatim — renaming a variant
+        // string is a breaking change for any dashboard/CLI consumer
+        // that filters on it.
+        assert_eq!(Sense::Screen.as_str(), "screen");
+        assert_eq!(Sense::Camera.as_str(), "camera");
+        assert_eq!(Sense::Microphone.as_str(), "microphone");
+        assert_eq!(Sense::Tts.as_str(), "tts");
+        assert_eq!(Sense::WindowTracking.as_str(), "window_tracking");
+        assert_eq!(Sense::CloudRoute.as_str(), "cloud_route");
+    }
+
+    #[tokio::test]
+    async fn kill_switch_blocks_every_sense() {
+        // Regression guard: the kill switch is the outermost gate and
+        // MUST short-circuit every variant before per-sense policy runs.
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        {
+            let mut st = mgr.state.write().await;
+            st.kill_switch_active = true;
+            st.vision.enabled = true;
+            st.voice.always_on_active = true;
+            st.voice.tts_enabled = true;
+            st.presence.camera_consented = true;
+        }
+        for sense in [
+            Sense::Screen,
+            Sense::Camera,
+            Sense::Microphone,
+            Sense::Tts,
+            Sense::WindowTracking,
+            Sense::CloudRoute,
+        ] {
+            let result = mgr.ensure_sense_allowed(sense, "test.kill_switch").await;
+            assert!(
+                result.is_err(),
+                "kill switch must block {:?} but returned Ok",
+                sense
+            );
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sense_screen_blocked_when_disabled() {
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        // kill switch off but vision.enabled still false (default).
+        assert!(mgr
+            .ensure_sense_allowed(Sense::Screen, "test.screen_off")
+            .await
+            .is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sense_window_tracking_fails_closed_without_follow_along() {
+        // If the FollowAlong manager isn't wired, window tracking must
+        // refuse — we fail-closed rather than fail-open because this
+        // gate controls whether window titles land in MemoryPlane.
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        let result = mgr
+            .ensure_sense_allowed(Sense::WindowTracking, "test.no_follow_along")
+            .await;
+        assert!(result.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn gate_audit_ring_records_every_decision() {
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        {
+            let mut st = mgr.state.write().await;
+            st.kill_switch_active = true; // all calls will fail
+        }
+        let _ = mgr.ensure_sense_allowed(Sense::Camera, "test.a").await;
+        let _ = mgr.ensure_sense_allowed(Sense::Tts, "test.b").await;
+        let log = mgr.gate_audit().await;
+        assert_eq!(log.len(), 2);
+        // Newest-first ordering — last call appears first.
+        assert_eq!(log[0].caller, "test.b");
+        assert_eq!(log[0].sense, Sense::Tts);
+        assert!(!log[0].allowed);
+        assert_eq!(log[1].caller, "test.a");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn gate_audit_ring_caps_at_buffer_size() {
+        // Verifies the ring trims oldest entries; prevents unbounded
+        // memory growth if a misbehaving caller loops on the gate.
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        for _ in 0..(GATE_AUDIT_RING_CAPACITY + 25) {
+            let _ = mgr.ensure_sense_allowed(Sense::Tts, "test.cap").await;
+        }
+        let log = mgr.gate_audit().await;
+        assert_eq!(log.len(), GATE_AUDIT_RING_CAPACITY);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn stale_presence_capture_detection_matches_only_real_presence_commands() {
         assert!(is_stale_presence_capture_process(
