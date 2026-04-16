@@ -2025,6 +2025,17 @@ impl SensoryPipelineManager {
         if self.is_suspending() {
             anyhow::bail!("screen capture is paused across suspend/hibernate");
         }
+        // Refuse if session is locked or the active window is a credential /
+        // private / lock prompt. The awareness cycle already skips these;
+        // describe_screen used to bypass the list entirely.
+        if is_session_locked().await {
+            anyhow::bail!("screen capture skipped: session locked");
+        }
+        if let Some(ref title) = state.vision.current_window {
+            if is_sensitive_window_title(title) {
+                anyhow::bail!("screen capture skipped: sensitive window");
+            }
+        }
 
         let question = request.question.unwrap_or_else(|| {
             "Que ves en mi pantalla? Describe lo relevante y accionable.".to_string()
@@ -2157,22 +2168,21 @@ impl SensoryPipelineManager {
             return Ok(None);
         }
 
-        // Skip capture if active window looks sensitive (login, password dialogs).
+        // Skip capture if the session is locked. `loginctl` exposes
+        // `LockedHint` per session — when the user locks the screen we
+        // MUST stop capturing to avoid leaking login prompts, password
+        // managers, and whatever was on screen before lock.
+        if is_session_locked().await {
+            log::debug!("sensory: skipping capture — session locked");
+            return Ok(None);
+        }
+
+        // Skip capture if active window looks sensitive (login, password dialogs,
+        // private / incognito browsing). Shared helper so every entry
+        // point — awareness, describe_screen, meeting capture, overlay —
+        // enforces the same list instead of each diverging.
         if let Some(ref title) = state.vision.current_window {
-            let lower = title.to_lowercase();
-            let sensitive = [
-                "password",
-                "login",
-                "sign in",
-                "pin",
-                "cvv",
-                "secret",
-                "private",
-                "contraseña",
-                "iniciar sesión",
-                "unlock",
-            ];
-            if sensitive.iter().any(|kw| lower.contains(kw)) {
+            if is_sensitive_window_title(title) {
                 log::info!("sensory: skipping capture — sensitive window: {}", title);
                 return Ok(None);
             }
@@ -2843,9 +2853,18 @@ impl SensoryPipelineManager {
         };
 
         let ocr_lang = detect_ocr_languages();
-        let mut ocr_text = extract_ocr(&screen_path, Some(&ocr_lang))
-            .await
-            .unwrap_or_default();
+        // Previously `.unwrap_or_default()` — so every tesseract crash /
+        // missing binary / unreadable screenshot silently degraded to an
+        // empty string, and downstream importance/summary decisions ran on
+        // a baseline with no operator signal. Surface at warn level so
+        // repeated failures show up in the journal.
+        let mut ocr_text = match extract_ocr(&screen_path, Some(&ocr_lang)).await {
+            Ok(text) => text,
+            Err(err) => {
+                log::warn!("[screen] OCR failed: {}", err);
+                String::new()
+            }
+        };
         let relevant_text = relevant_ocr_lines(&ocr_text, query);
         let multimodal_used = if let Some(model) = ai_manager.active_model().await {
             model.to_lowercase().contains("qwen")
@@ -7621,6 +7640,94 @@ async fn reap_stale_presence_capture_processes(device: &str) -> Result<bool> {
     }
 
     Ok(killed)
+}
+
+/// True when the user session is locked, per systemd-logind. Returns
+/// false on any error (bus unavailable, unknown session, etc.) so a
+/// broken bus doesn't silently disable capture — the suspend gate and
+/// sensitive-window gate still protect us in that case.
+///
+/// Uses the direct CLI to avoid adding an extra sync point on the
+/// system bus; `loginctl show-session --property LockedHint` is a
+/// single fast call.
+pub async fn is_session_locked() -> bool {
+    let session_id = std::env::var("XDG_SESSION_ID").unwrap_or_default();
+    if session_id.is_empty() {
+        return false;
+    }
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::process::Command::new("loginctl")
+            .args(["show-session", &session_id, "--property=LockedHint"])
+            .output(),
+    )
+    .await
+    {
+        Ok(Ok(o)) => o,
+        _ => return false,
+    };
+    if !output.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.trim() == "LockedHint=yes")
+}
+
+/// True when the active window title matches a sensitive pattern (login,
+/// password manager, private / incognito browsing, unlock prompts).
+/// Shared by every screen-capture entry point so the policy stays uniform
+/// — previously only the awareness cycle applied it, leaving
+/// describe_screen / meeting / overlay uncovered.
+///
+/// The list covers English, Spanish, Portuguese, French, German, and
+/// Italian variants of "private browsing" / "incognito" — the prior list
+/// missed Chrome's "Incognito" entirely and every Spanish variant except
+/// "contraseña" / "iniciar sesión".
+pub fn is_sensitive_window_title(title: &str) -> bool {
+    let lower = title.to_lowercase();
+    const SENSITIVE_KEYWORDS: &[&str] = &[
+        // credentials / unlock
+        "password",
+        "contraseña",
+        "senha",
+        "mot de passe",
+        "passwort",
+        "password manager",
+        "keepass",
+        "bitwarden",
+        "1password",
+        "login",
+        "log in",
+        "sign in",
+        "iniciar sesión",
+        "iniciar sesion",
+        "pin",
+        "cvv",
+        "2fa",
+        "secret",
+        "unlock",
+        "desbloquear",
+        // private / incognito browsing
+        "private browsing",
+        "private window",
+        "navegación privada",
+        "navegacion privada",
+        "modo privado",
+        "modo incognito",
+        "modo incógnito",
+        "incognito",
+        "incógnito",
+        "inprivate",
+        "privater modus",
+        "navigation privée",
+        "navigazione anonima",
+        // lock screens
+        "lock screen",
+        "locked",
+        "screen locked",
+    ];
+    SENSITIVE_KEYWORDS.iter().any(|kw| lower.contains(kw))
 }
 
 fn is_stale_presence_capture_process(cmd: &str, device_lower: &str) -> bool {

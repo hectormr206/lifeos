@@ -241,15 +241,19 @@ impl ScreenCapture {
 
         let mut args = vec![temp_path.to_string_lossy().to_string()];
 
-        // Add monitor selection if needed
+        // Add monitor selection if needed. grim syntax is `grim [-o OUTPUT] FILE`
+        // — the previous code inserted the monitor name as a bare
+        // positional argument which grim rejects (exits non-zero), so
+        // single-monitor mode silently fell back to "all monitors" via
+        // the default `all_monitors=true` path. Multi-monitor setups
+        // were leaking secondary-display content.
         if !self.config.all_monitors {
-            // Get list of monitors and select first one
             if let Ok(output) = Command::new("grim").args(["-l"]).output() {
                 let monitors = String::from_utf8_lossy(&output.stdout);
                 if let Some(first_monitor) = monitors.lines().next() {
-                    // Extract monitor name (format: "HDMI-A-1, 1920x1080, 0,0")
                     if let Some(monitor_name) = first_monitor.split(',').next() {
-                        args.insert(1, monitor_name.to_string());
+                        args.insert(0, "-o".to_string());
+                        args.insert(1, monitor_name.trim().to_string());
                     }
                 }
             }
