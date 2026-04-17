@@ -1057,7 +1057,12 @@ impl SensoryPipelineManager {
         ai_manager: &AiManager,
     ) -> Result<SensoryPipelineState> {
         let mut state = self.state.write().await;
-        state.capabilities = detect_capabilities(ai_manager).await;
+        // Pass current caps as `prior` so detect_capabilities can carry forward
+        // TTS fields when the Kokoro probe is throttled (runs every ~5 min, but
+        // this loop ticks every ~5 s). Without this, the dashboard flaps to
+        // "TTS no disponible" between successful probes.
+        let prior_caps = state.capabilities.clone();
+        state.capabilities = detect_capabilities(&prior_caps, ai_manager).await;
         state.gpu = detect_gpu_status(state.gpu.tokens_per_second).await;
         let llama_server_running = state.capabilities.llama_server_running;
         if let Err(error) = maybe_apply_gpu_rebalance(&mut state.gpu, llama_server_running).await {
@@ -3703,8 +3708,16 @@ async fn write_atomic(path: &PathBuf, contents: &str) -> Result<()> {
     Ok(())
 }
 
-async fn detect_capabilities(ai_manager: &AiManager) -> SensoryCapabilities {
-    let (tts_server_url, kokoro_voices) = probe_kokoro_tts_server().await;
+async fn detect_capabilities(
+    prior: &SensoryCapabilities,
+    ai_manager: &AiManager,
+) -> SensoryCapabilities {
+    // On a throttled probe we must carry forward the previously-known TTS caps
+    // instead of clearing them — otherwise every non-probe tick (~5 s) would
+    // null `tts_server_url` and the dashboard would flap to "TTS no disponible"
+    // between successful probes (~5 min apart).
+    let (tts_server_url, kokoro_voices) =
+        apply_probe_outcome(prior, probe_kokoro_tts_server().await);
 
     SensoryCapabilities {
         stt_binary: resolve_binary("LIFEOS_STT_BIN", &["whisper-cli", "whisper", "whisper-cpp"])
@@ -3750,22 +3763,61 @@ pub(crate) fn should_probe(
     }
 }
 
-/// Probe the Kokoro TTS server at startup. Returns `(Some(url), voices)` on
-/// success or `(None, vec![])` when the server is unreachable after 3 retries.
-/// Successive calls within `KOKORO_PROBE_INTERVAL` are skipped and return
-/// `(None, vec![])` immediately to avoid hammering the server every 5 s.
+/// Outcome of a Kokoro TTS probe. Callers MUST distinguish throttled from
+/// unavailable — returning `None` for both would clear `tts_server_url` on
+/// every non-probe tick (~5 s) while the successful-probe throttle is still
+/// active (~5 min), causing the dashboard to flap.
+#[derive(Debug)]
+enum ProbeOutcome {
+    /// Probe was skipped because the throttle window is still active. The
+    /// caller should carry forward the previously-known capabilities.
+    Throttled,
+    /// Probe succeeded — these are the authoritative values.
+    Ok {
+        url: String,
+        voices: Vec<KokoroVoice>,
+    },
+    /// Probe ran but Kokoro is unreachable. Clear the capabilities.
+    Unavailable,
+}
+
+/// Pure helper that maps a `ProbeOutcome` to the `(tts_server_url, kokoro_voices)`
+/// pair `detect_capabilities` should publish. Extracted so the carry-forward
+/// semantics on `Throttled` can be unit-tested without spinning up an
+/// `AiManager` or a real HTTP probe.
+///
+/// * `Ok { url, voices }` → use the fresh values (probe is authoritative).
+/// * `Throttled` → carry forward `prior` caps so the dashboard doesn't flap
+///   between successful probes (~5 min apart) on every sensory tick (~5 s).
+/// * `Unavailable` → clear the caps; Kokoro is genuinely down.
+fn apply_probe_outcome(
+    prior: &SensoryCapabilities,
+    outcome: ProbeOutcome,
+) -> (Option<String>, Vec<KokoroVoice>) {
+    match outcome {
+        ProbeOutcome::Ok { url, voices } => (Some(url), voices),
+        ProbeOutcome::Throttled => (prior.tts_server_url.clone(), prior.kokoro_voices.clone()),
+        ProbeOutcome::Unavailable => (None, vec![]),
+    }
+}
+
+/// Probe the Kokoro TTS server at startup. Returns `ProbeOutcome::Ok { .. }` on
+/// success or `ProbeOutcome::Unavailable` when the server is unreachable after
+/// 3 retries. Successive calls within `KOKORO_PROBE_INTERVAL` return
+/// `ProbeOutcome::Throttled` immediately to avoid hammering the server every
+/// 5 s — callers must preserve prior caps in that case.
 ///
 /// El throttle se estampa SÓLO en probe exitoso.  Si Kokoro aún está
 /// calentando (normal: 6-8 s; diseño: hasta 20 s) los intentos fallidos
 /// no bloquean los reintentos del siguiente tick (~5 s).
-async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
+async fn probe_kokoro_tts_server() -> ProbeOutcome {
     {
         // N1: usar unwrap_or_else para recuperarse de mutex envenenado en lugar
         // de panic, preservando la disponibilidad del sensory loop.
         let last = LAST_KOKORO_PROBE.lock().unwrap_or_else(|p| p.into_inner());
         let now = std::time::Instant::now();
         if !should_probe(*last, KOKORO_PROBE_INTERVAL, now) {
-            return (None, vec![]);
+            return ProbeOutcome::Throttled;
         }
         // No estampamos aquí — sólo estampamos en éxito (ver abajo).
     }
@@ -3791,7 +3843,10 @@ async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
                 // aplique sólo a partir del primer probe exitoso.
                 let mut last = LAST_KOKORO_PROBE.lock().unwrap_or_else(|p| p.into_inner());
                 *last = Some(std::time::Instant::now());
-                return (Some(base_url), voices);
+                return ProbeOutcome::Ok {
+                    url: base_url,
+                    voices,
+                };
             }
             Ok(resp) => {
                 log::warn!(
@@ -3811,7 +3866,7 @@ async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
     }
 
     log::warn!("[tts] Kokoro TTS server not available — TTS degraded");
-    (None, vec![])
+    ProbeOutcome::Unavailable
 }
 
 /// Fetch available voices from `GET {base_url}/voices`.
@@ -9282,5 +9337,106 @@ Drafting the description:
             guard.is_none() || guard.is_some(),
             "LAST_KOKORO_PROBE debe ser accesible"
         );
+    }
+
+    // ── ProbeOutcome carry-forward semantics ─────────────────────────────────
+    // These tests lock in the fix for the dashboard false-negative banner:
+    // when the Kokoro probe is throttled (~5 min window), we MUST carry the
+    // previously-known TTS caps forward instead of nulling them on every
+    // ~5 s sensory tick. `apply_probe_outcome` is the pure helper extracted
+    // from `detect_capabilities` for exactly this coverage.
+
+    fn sample_voices() -> Vec<KokoroVoice> {
+        vec![
+            KokoroVoice {
+                name: "af_sky".to_string(),
+                language: "en".to_string(),
+                gender: "female".to_string(),
+                is_default: true,
+            },
+            KokoroVoice {
+                name: "am_adam".to_string(),
+                language: "en".to_string(),
+                gender: "male".to_string(),
+                is_default: false,
+            },
+        ]
+    }
+
+    fn prior_with_tts() -> SensoryCapabilities {
+        SensoryCapabilities {
+            tts_server_url: Some("http://127.0.0.1:8084".to_string()),
+            kokoro_voices: sample_voices(),
+            ..SensoryCapabilities::default()
+        }
+    }
+
+    #[test]
+    fn probe_outcome_throttled_carries_prior_tts_caps_forward() {
+        let prior = prior_with_tts();
+        let (url, voices) = apply_probe_outcome(&prior, ProbeOutcome::Throttled);
+        assert_eq!(
+            url.as_deref(),
+            Some("http://127.0.0.1:8084"),
+            "Throttled debe preservar la URL previa — si nulifica, el dashboard parpadea"
+        );
+        let expected = sample_voices();
+        assert_eq!(voices.len(), expected.len());
+        for (got, want) in voices.iter().zip(expected.iter()) {
+            assert_eq!(got.name, want.name);
+            assert_eq!(got.language, want.language);
+            assert_eq!(got.gender, want.gender);
+            assert_eq!(got.is_default, want.is_default);
+        }
+    }
+
+    #[test]
+    fn probe_outcome_unavailable_clears_tts_caps() {
+        let prior = prior_with_tts();
+        let (url, voices) = apply_probe_outcome(&prior, ProbeOutcome::Unavailable);
+        assert!(
+            url.is_none(),
+            "Unavailable debe limpiar la URL — Kokoro está caído de verdad"
+        );
+        assert!(voices.is_empty(), "Unavailable debe limpiar las voces");
+    }
+
+    #[test]
+    fn probe_outcome_ok_uses_fresh_values_over_prior() {
+        let prior = prior_with_tts();
+        let fresh_voices = vec![KokoroVoice {
+            name: "bf_alice".to_string(),
+            language: "en-GB".to_string(),
+            gender: "female".to_string(),
+            is_default: true,
+        }];
+        let (url, voices) = apply_probe_outcome(
+            &prior,
+            ProbeOutcome::Ok {
+                url: "http://10.0.0.5:8084".to_string(),
+                voices: fresh_voices.clone(),
+            },
+        );
+        assert_eq!(
+            url.as_deref(),
+            Some("http://10.0.0.5:8084"),
+            "Ok es autoritativo — debe reemplazar la URL previa"
+        );
+        assert_eq!(voices.len(), 1, "Ok debe reemplazar el vector completo");
+        assert_eq!(
+            voices[0].name, fresh_voices[0].name,
+            "Ok es autoritativo — debe reemplazar las voces previas"
+        );
+        assert_eq!(voices[0].language, "en-GB");
+    }
+
+    #[test]
+    fn probe_outcome_throttled_with_empty_prior_stays_empty() {
+        // Edge case: si nunca hubo un probe exitoso, Throttled mantiene el
+        // estado vacío — no inventa caps.
+        let prior = SensoryCapabilities::default();
+        let (url, voices) = apply_probe_outcome(&prior, ProbeOutcome::Throttled);
+        assert!(url.is_none());
+        assert!(voices.is_empty());
     }
 }

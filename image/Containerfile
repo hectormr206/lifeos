@@ -524,6 +524,21 @@ RUN chmod +x /usr/local/bin/lifeos-flatpak-update.sh
 COPY image/files/etc/systemd/system/lifeos-flatpak-update.service /usr/lib/systemd/system/lifeos-flatpak-update.service
 COPY image/files/etc/systemd/system/lifeos-flatpak-update.timer /usr/lib/systemd/system/lifeos-flatpak-update.timer
 
+# --- Bun runtime (for Claude Code Channels plugins, incl. Telegram) ---
+# Installed system-wide so every user has it available without per-user setup.
+# Pinned to v1.2.5 for reproducible image builds — bump deliberately when testing.
+RUN set -eux && \
+    BUN_VERSION="1.2.5" && \
+    BUN_ZIP="/tmp/bun.zip" && \
+    curl -fSL --retry 3 -o "${BUN_ZIP}" \
+        "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" && \
+    dnf -y install --skip-unavailable unzip && \
+    unzip -q "${BUN_ZIP}" -d /tmp/bun-extract && \
+    install -m 0755 /tmp/bun-extract/bun-linux-x64/bun /usr/local/bin/bun && \
+    ln -sf /usr/local/bin/bun /usr/local/bin/bunx && \
+    rm -rf "${BUN_ZIP}" /tmp/bun-extract && \
+    /usr/local/bin/bun --version
+
 # --- Firefox Hardened (Privacy-first browser) ---
 RUN dnf -y install \
     firefox \
