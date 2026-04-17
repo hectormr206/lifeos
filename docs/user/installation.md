@@ -246,6 +246,14 @@ cargo audit --version
 pkg-config --modversion gtk4
 ```
 
+#### Bun runtime (pre-installed)
+
+LifeOS ships **Bun** (JS/TS runtime + package manager, v1.x) directly on the host image at `/usr/local/bin/bun`, con un symlink `bunx` junto a él. Está pre-instalado porque los plugins de **Claude Code Channels** — incluido el plugin de Telegram — lo requieren para ejecutar sus servidores locales. No tocás Bun como usuario final; está ahí para que las integraciones de Axi funcionen sin pasos extra.
+
+```bash
+bun --version
+```
+
 Use `toolbox` for extra development stacks that should stay isolated from the host, such as Node.js:
 
 ```bash

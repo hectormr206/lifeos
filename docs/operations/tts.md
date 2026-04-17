@@ -1,6 +1,6 @@
 # TTS Service — Kokoro
 
-> Updated: 2026-04-15
+> Updated: 2026-04-17
 
 ## Overview
 
@@ -257,6 +257,28 @@ LifeOS applies automatic modality mirroring for SimpleX conversations:
 | Voice note | Text reply **+** OGG voice attachment |
 
 This behavior is automatic and requires no configuration.
+
+---
+
+## Capability Probe y Voice Prewarm
+
+Dos detalles operativos relevantes para entender por qué el dashboard y la lista
+de voces se mantienen estables:
+
+- **Prewarm de voces en build-time.** El script `image/scripts/prewarm-kokoro.py`
+  usa `snapshot_download` del repo `hexgrad/Kokoro-82M` y baja **todas** las
+  voces (`voices/*.pt`, 50+) dentro del venv de Kokoro. Antes solo se precargaba
+  `if_sara.pt`, por lo que `GET /voices` devolvía una lista vacía en imágenes
+  recién instaladas y el selector del dashboard aparecía sin opciones. Ahora la
+  imagen ya trae todas las voces listas en `/opt/lifeos/kokoro-env/lib/python3.12/site-packages/kokoro/voices/`.
+
+- **Carry-forward en el capability probe.** `daemon/src/sensory_pipeline.rs`
+  sondea Kokoro cada ~5 min, pero el loop de refresh de capacidades tickea cada
+  ~5 s. Cuando el probe está en cooldown (throttled), `detect_capabilities`
+  ahora devuelve `ProbeOutcome::Throttled` y **arrastra las capacidades TTS
+  previas** en lugar de marcar al servicio como no disponible. Resultado: el
+  dashboard ya no parpadea a "TTS no disponible" mientras Kokoro está sano; sólo
+  se marca caído cuando el probe real lo confirma (`ProbeOutcome::Unavailable`).
 
 ---
 

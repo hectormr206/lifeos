@@ -98,7 +98,7 @@ def check_placeholders(files: List[str]) -> List[Finding]:
     return findings
 
 
-def check_tests_for_source_changes(files: List[str]) -> List[Finding]:
+def check_tests_for_source_changes(files: List[str], base_sha: str = "") -> List[Finding]:
     touched_source = [
         f
         for f in files
@@ -119,6 +119,20 @@ def check_tests_for_source_changes(files: List[str]) -> List[Finding]:
     if touched_tests:
         return []
 
+    # Rust idiomatically ships tests inline via #[cfg(test)] mod tests { ... }; detect added markers.
+    if base_sha:
+        inline_markers = ("#[cfg(test)]", "#[test]", "#[tokio::test]")
+        for src in touched_source:
+            try:
+                diff = run(["git", "diff", base_sha, "HEAD", "--", src])
+            except subprocess.CalledProcessError:
+                continue
+            for line in diff.splitlines():
+                if line.startswith("+++") or not line.startswith("+"):
+                    continue
+                if any(marker in line for marker in inline_markers):
+                    return []
+
     return [
         Finding(
             rule_id="tests_required_for_source_change",
@@ -135,7 +149,7 @@ def main() -> int:
     files = changed_files(base_sha)
     findings: List[Finding] = []
     findings.extend(check_placeholders(files))
-    findings.extend(check_tests_for_source_changes(files))
+    findings.extend(check_tests_for_source_changes(files, base_sha))
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     payload = {
