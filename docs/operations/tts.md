@@ -9,7 +9,7 @@ model released under the Apache 2.0 license with 50+ high-quality voices across
 multiple languages.
 
 The engine runs as a **system service** (`lifeos-tts-server.service`) that exposes
-a local HTTP API on `127.0.0.1:8083`. The service starts automatically at boot
+a local HTTP API on `127.0.0.1:8084`. The service starts automatically at boot
 and is ready before `lifeosd.service` launches.
 
 | Property | Value |
@@ -17,7 +17,7 @@ and is ready before `lifeosd.service` launches.
 | Model | Kokoro-82M |
 | License | Apache 2.0 |
 | Backend | Python 3.12 venv at `/opt/lifeos/kokoro-env/` |
-| Listen address | `127.0.0.1:8083` (loopback only) |
+| Listen address | `127.0.0.1:8084` (loopback only) |
 | Default voice | `if_sara` (feminine, English) |
 | Inference | CPU-only (no CUDA dependency) |
 | Config | `/etc/lifeos/tts-server.env` |
@@ -29,7 +29,7 @@ and is ready before `lifeosd.service` launches.
 ```
                                   ┌──────────────────────┐
                                   │  lifeos-tts-server   │
-  lifeosd ──POST /tts────────────►│  (Kokoro-82M, :8083) │──► pw-play / aplay
+  lifeosd ──POST /tts────────────►│  (Kokoro-82M, :8084) │──► pw-play / aplay
           ◄── audio/wav ──────────│  127.0.0.1 only      │    (host speakers)
                                   └──────────────────────┘
                                             ▲
@@ -80,7 +80,7 @@ systemctl restart lifeos-tts-server
 ### Health check
 
 ```bash
-curl -s http://127.0.0.1:8083/health | python3 -m json.tool
+curl -s http://127.0.0.1:8084/health | python3 -m json.tool
 ```
 
 Expected response when ready:
@@ -193,7 +193,7 @@ Synthesize speech from text.
 **Example — WAV synthesis:**
 
 ```bash
-curl -s -X POST http://127.0.0.1:8083/tts \
+curl -s -X POST http://127.0.0.1:8084/tts \
   -H "Content-Type: application/json" \
   -d '{"text":"Hola Axi","voice":"if_sara"}' \
   -o /tmp/test.wav
@@ -203,7 +203,7 @@ aplay /tmp/test.wav
 **Example — OGG for SimpleX:**
 
 ```bash
-curl -s -X POST http://127.0.0.1:8083/tts \
+curl -s -X POST http://127.0.0.1:8084/tts \
   -H "Content-Type: application/json" \
   -d '{"text":"Hola","voice":"if_sara","format":"ogg"}' \
   -o /tmp/test.ogg
@@ -294,7 +294,7 @@ free -h
 1. Confirm the voice name is correct:
 
 ```bash
-curl -s http://127.0.0.1:8083/voices | python3 -m json.tool | grep '"name"'
+curl -s http://127.0.0.1:8084/voices | python3 -m json.tool | grep '"name"'
 ```
 
 2. If the voices manifest is empty or missing, check the build:

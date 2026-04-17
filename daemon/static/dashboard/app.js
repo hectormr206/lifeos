@@ -339,10 +339,19 @@ function updateSensoryToggles(runtime) {
   $('#toggle-tts').checked = runtime.tts_enabled;
   $('#toggle-screen').checked = runtime.screen_enabled;
   $('#toggle-camera').checked = runtime.camera_enabled;
+  const toggleMeeting = $('#toggle-meeting-capture');
+  if (toggleMeeting) {
+    toggleMeeting.checked = runtime.meeting_enabled !== false;
+  }
   $('#audio-status').textContent = runtime.audio_enabled ? 'Activo' : 'Inactivo';
   $('#tts-status').textContent = runtime.tts_enabled ? 'Activo' : 'Inactivo';
   $('#screen-status').textContent = runtime.screen_enabled ? 'Activo' : 'Inactivo';
   $('#camera-status').textContent = runtime.camera_enabled ? 'Activo' : 'Inactivo';
+  const meetingCaptureStatus = $('#meeting-capture-status');
+  if (meetingCaptureStatus) {
+    meetingCaptureStatus.textContent =
+      runtime.meeting_enabled !== false ? 'Activo' : 'Inactivo';
+  }
   updateKillSwitchUi(runtime.kill_switch_active);
   renderHero();
 }
@@ -999,10 +1008,17 @@ async function toggleSensory(field, value, elId) {
       tts_enabled: current.tts_enabled,
       screen_enabled: current.screen_enabled,
       camera_enabled: current.camera_enabled,
+      meeting_enabled: current.meeting_enabled !== false,
     };
     body[field] = value;
-    // If enabling any sensor, ensure the master enabled flag is on
-    if (value && field !== 'capture_interval_seconds' && field !== 'tts_enabled') body.enabled = true;
+    // If enabling any sensor that needs the master on, ensure `enabled=true`.
+    // `meeting_enabled` and `tts_enabled` are per-sense layers that don't
+    // by themselves require the master toggle.
+    const enableMasterOnTurnOn =
+      field !== 'capture_interval_seconds'
+      && field !== 'tts_enabled'
+      && field !== 'meeting_enabled';
+    if (value && enableMasterOnTurnOn) body.enabled = true;
     await api('POST', '/runtime/sensory', body);
     
     // Refresh panel immediately if expanded to show state
@@ -1021,6 +1037,18 @@ $('#toggle-audio').addEventListener('change', (e) => toggleSensory('audio_enable
 $('#toggle-tts').addEventListener('change', (e) => toggleSensory('tts_enabled', e.target.checked, 'toggle-tts'));
 $('#toggle-screen').addEventListener('change', (e) => toggleSensory('screen_enabled', e.target.checked, 'toggle-screen'));
 $('#toggle-camera').addEventListener('change', (e) => toggleSensory('camera_enabled', e.target.checked, 'toggle-camera'));
+{
+  const meetingEl = $('#toggle-meeting-capture');
+  if (meetingEl) {
+    meetingEl.addEventListener('change', (e) =>
+      toggleSensory(
+        'meeting_enabled',
+        e.target.checked,
+        'toggle-meeting-capture',
+      ),
+    );
+  }
+}
 
 $('#toggle-always-on').addEventListener('change', async (e) => {
   try { await api('POST', '/runtime/always-on', { enabled: e.target.checked }); }

@@ -9,7 +9,7 @@
 //! Transcription: Whisper STT post-meeting, then LLM summarization.
 
 use anyhow::{Context, Result};
-use log::{info, warn};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -133,6 +133,17 @@ pub struct MeetingAssistant {
     caption_stop_tx: Option<tokio::sync::watch::Sender<bool>>,
     /// Consecutive ticks where no meeting was detected (grace period counter).
     no_meeting_ticks: u8,
+    /// Agent runtime manager — consulted before every screenshot so the
+    /// `screen_enabled` toggle and sensory kill switch apply to meeting
+    /// mode too. Without this, meeting capture was "god mode" and kept
+    /// recording over a user-disabled screen sense.
+    agent_runtime: Option<Arc<RwLock<crate::agent_runtime::AgentRuntimeManager>>>,
+    /// Sensory pipeline — consulted before every pw-record spawn so
+    /// meeting capture honors the unified Sense::Microphone gate
+    /// (kill switch + audio_enabled + suspend). Without this, meeting
+    /// mode was a "god-mode" mic recorder that kept running over user-
+    /// disabled audio. Hearing audit C-8.
+    sensory_pipeline: Option<Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>>,
 }
 
 impl MeetingAssistant {
@@ -164,7 +175,28 @@ impl MeetingAssistant {
             caption_buffer: Arc::new(RwLock::new(Vec::new())),
             caption_stop_tx: None,
             no_meeting_ticks: 0,
+            agent_runtime: None,
+            sensory_pipeline: None,
         }
+    }
+
+    /// Wire the agent runtime manager so meeting capture can honor
+    /// `screen_enabled` and `kill_switch_active`.
+    pub fn set_agent_runtime(
+        &mut self,
+        runtime: Arc<RwLock<crate::agent_runtime::AgentRuntimeManager>>,
+    ) {
+        self.agent_runtime = Some(runtime);
+    }
+
+    /// Wire the sensory pipeline so mic capture (meeting recording +
+    /// real-time captions) can consult the unified Sense::Microphone
+    /// gate. Without this wire-up the pw-record spawners fall-closed.
+    pub fn set_sensory_pipeline(
+        &mut self,
+        manager: Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>,
+    ) {
+        self.sensory_pipeline = Some(manager);
     }
 
     /// Set the speaker identification manager for resolving speaker labels to names (BB.1).
@@ -199,6 +231,32 @@ impl MeetingAssistant {
     pub async fn detect_meeting(&mut self) -> Result<bool> {
         if !self.enabled {
             return Ok(false);
+        }
+
+        // Round-2 audit C-NEW-3: re-check the mic gate on every
+        // detection tick. Without this, a meeting that started while
+        // the gate was open kept the mic hot for the whole meeting
+        // even after the user toggled audio_enabled=false or tripped
+        // the kill switch mid-call. When recording and the gate flips
+        // closed, stop cleanly — the transcript / archive handling
+        // inside stop_recording still runs on whatever we captured.
+        if self.state.recording {
+            if let Some(ref sensory) = self.sensory_pipeline {
+                let guard = sensory.read().await;
+                if guard
+                    .ensure_sense_allowed(
+                        crate::sensory_pipeline::Sense::Meeting,
+                        "meeting_assistant.detect_tick",
+                    )
+                    .await
+                    .is_err()
+                {
+                    info!("[meeting] mic gate closed mid-session — stopping recording");
+                    drop(guard);
+                    self.stop_recording();
+                    return Ok(false);
+                }
+            }
         }
 
         // Strategy 1: Check PipeWire/PulseAudio for conferencing app audio streams
@@ -345,7 +403,8 @@ impl MeetingAssistant {
                             });
 
                         // 2b. Identify speakers in diarized transcript (BB.1)
-                        let diarized = self.identify_speakers_in_transcript(&diarized, &path).await;
+                        let (diarized, participants) =
+                            self.identify_speakers_in_transcript(&diarized, &path).await;
 
                         // 3. Summarize with LLM (if router available)
                         let summary = if let Some(ref router) = self.llm_router {
@@ -420,7 +479,7 @@ impl MeetingAssistant {
                                     .clone()
                                     .unwrap_or_else(|| "unknown".into()),
                                 meeting_type: "remote".to_string(),
-                                participants: Vec::new(),
+                                participants: participants.clone(),
                                 transcript: transcript.clone(),
                                 diarized_transcript: diarized.clone(),
                                 summary: summary.clone().unwrap_or_default(),
@@ -459,7 +518,7 @@ impl MeetingAssistant {
                                 ended_at: &ended,
                                 duration_secs: duration,
                                 app_name: &meeting_title,
-                                participants: &[],
+                                participants: &participants,
                                 summary: summary.as_deref(),
                                 diarized_transcript: &diarized,
                                 action_items: &action_items_vec,
@@ -528,6 +587,23 @@ impl MeetingAssistant {
     }
 
     async fn start_recording(&mut self) -> Result<()> {
+        // Unified Sense::Microphone gate BEFORE spawning any pw-record.
+        // Before this, meeting mode kept auto-recording even with
+        // audio_enabled=false or kill switch engaged — exactly the
+        // C-8 bypass the hearing audit found.
+        if let Some(ref sensory) = self.sensory_pipeline {
+            let guard = sensory.read().await;
+            if let Err(reason) = guard
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::Meeting,
+                    "meeting_assistant.start_recording",
+                )
+                .await
+            {
+                anyhow::bail!("meeting recording refused: {}", reason);
+            }
+        }
+
         let meetings_dir = self.data_dir.join("meetings");
         tokio::fs::create_dir_all(&meetings_dir).await?;
 
@@ -572,7 +648,6 @@ impl MeetingAssistant {
                     .app_name
                     .clone()
                     .unwrap_or_else(|| "Unknown".into()),
-                recording_path: output_path.to_string_lossy().to_string(),
             });
         }
 
@@ -681,7 +756,6 @@ impl MeetingAssistant {
         // Emit recording stopped event via the event bus
         if let Some(ref tx) = self.event_bus {
             let _ = tx.send(crate::events::DaemonEvent::MeetingRecordingStopped {
-                recording_path: self.state.recording_path.clone(),
                 duration_secs: self.state.duration_secs,
             });
         }
@@ -729,19 +803,34 @@ impl MeetingAssistant {
         let whisper = resolve_whisper_binary().await?;
         let model = resolve_whisper_model().await?;
 
-        let output = Command::new(&whisper)
-            .args([
-                "-m",
-                &model,
-                "-f",
-                audio_path,
-                "--language",
-                &self.language,
-                "--output-txt",
-            ])
-            .output()
-            .await
-            .context("Failed to run whisper for meeting transcription")?;
+        // Hearing audit C-11: timeout + kill_on_drop so a hung whisper
+        // can't sit at 350% CPU forever. Meetings can be hours long so
+        // allow 15× real-time (ggml-base/small on CPU is roughly
+        // 0.1-0.3× real-time) with a 2-hour absolute ceiling.
+        let duration_secs = estimate_wav_duration_secs(audio_path).unwrap_or(0);
+        let timeout_secs = duration_secs.saturating_mul(15).clamp(60, 7200);
+        let mut cmd = Command::new(&whisper);
+        cmd.args([
+            "-m",
+            &model,
+            "-f",
+            audio_path,
+            "--language",
+            &self.language,
+            "--output-txt",
+        ])
+        .kill_on_drop(true);
+        let output =
+            match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), cmd.output())
+                .await
+            {
+                Ok(res) => res.context("Failed to run whisper for meeting transcription")?,
+                Err(_) => anyhow::bail!(
+                    "meeting transcription timed out after {}s (audio ~{}s)",
+                    timeout_secs,
+                    duration_secs
+                ),
+            };
 
         if !output.status.success() {
             anyhow::bail!(
@@ -817,12 +906,16 @@ impl MeetingAssistant {
     ///
     /// Parses unique speaker labels like "[Speaker 1]", extracts a 5-second audio sample
     /// for each speaker, runs speaker identification, and replaces generic labels with
-    /// recognized names. Returns the original transcript if speaker_id is None or
-    /// identification fails.
-    async fn identify_speakers_in_transcript(&self, diarized: &str, audio_path: &str) -> String {
+    /// recognized names. Returns the updated transcript AND the set of real participant
+    /// names identified (empty set if no profile matched or speaker_id is unavailable).
+    async fn identify_speakers_in_transcript(
+        &self,
+        diarized: &str,
+        audio_path: &str,
+    ) -> (String, Vec<String>) {
         let speaker_id = match &self.speaker_id {
             Some(sid) => sid,
-            None => return diarized.to_string(),
+            None => return (diarized.to_string(), Vec::new()),
         };
 
         // Collect unique speaker labels and their first occurrence line index
@@ -837,7 +930,7 @@ impl MeetingAssistant {
         }
 
         if speaker_lines.is_empty() {
-            return diarized.to_string();
+            return (diarized.to_string(), Vec::new());
         }
 
         let total_lines = diarized.lines().count().max(1);
@@ -913,7 +1006,7 @@ impl MeetingAssistant {
         }
 
         if name_map.is_empty() {
-            return diarized.to_string();
+            return (diarized.to_string(), Vec::new());
         }
 
         // Replace all speaker labels in the transcript
@@ -924,11 +1017,26 @@ impl MeetingAssistant {
             result = result.replace(&old, &new);
         }
 
+        // Collect the subset of names that are actually identified humans
+        // (i.e. a registered profile matched). Anonymous profiles whose
+        // embeddings matched but have no user-supplied name come through
+        // as `format!("Unknown {label}")` — exclude those from the
+        // `participants` list so the column means "named humans we
+        // recognised" rather than "every label in the diarization".
+        let mut named: Vec<String> = name_map
+            .values()
+            .filter(|n| !n.starts_with("Unknown "))
+            .cloned()
+            .collect();
+        named.sort();
+        named.dedup();
+
         info!(
-            "[meeting] Speaker identification complete: {} speakers resolved",
-            name_map.len()
+            "[meeting] Speaker identification complete: {} speakers resolved ({} named)",
+            name_map.len(),
+            named.len()
         );
-        result
+        (result, named)
     }
 
     /// Generate a meeting summary from a transcript using the LLM router.
@@ -1028,7 +1136,28 @@ Usá EXACTAMENTE este formato para cada tarea:
 
     /// Capture a screenshot of the current screen using `grim` and save it to
     /// the meetings directory alongside the audio recording.
+    ///
+    /// Enforces the same gates as any other screen capture entry point:
+    /// screen_enabled, kill switch, and the per-meeting toggle (when we
+    /// land it). Also hardens the output file to 0o600 so meeting
+    /// screenshots aren't world-readable — prior behavior was 0o644.
     async fn capture_meeting_screenshot(&mut self) -> Result<()> {
+        // Gate on the master screen-capture toggle + kill switch via the
+        // runtime manager. Bypassing these made meeting mode a "god-mode"
+        // screen recorder that kept capturing even with the user's
+        // dashboard toggle off.
+        if let Some(ref runtime) = self.agent_runtime {
+            let sensory = runtime.read().await.sensory_capture_runtime().await;
+            if sensory.kill_switch_active {
+                debug!("[meeting] screenshot skipped: sensory kill switch active");
+                return Ok(());
+            }
+            if !sensory.screen_enabled {
+                debug!("[meeting] screenshot skipped: screen_enabled=false");
+                return Ok(());
+            }
+        }
+
         let meetings_dir = self.data_dir.join("meetings");
         tokio::fs::create_dir_all(&meetings_dir).await?;
 
@@ -1041,19 +1170,55 @@ Usá EXACTAMENTE este formato para cada tarea:
         let output_path = meetings_dir.join(&filename);
         let output_str = output_path.to_string_lossy().to_string();
 
-        let output = Command::new("grim")
-            .arg(&output_str)
-            .output()
-            .await
-            .context("Failed to run grim for meeting screenshot")?;
+        // Timeout + kill_on_drop guard against a hung compositor / portal
+        // prompt blocking the meeting loop indefinitely. The awareness
+        // capture path has a similar bound; meeting mode was missing it.
+        let mut cmd = Command::new("grim");
+        cmd.arg(&output_str).kill_on_drop(true);
+        let output =
+            match tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await {
+                Ok(res) => res.context("Failed to run grim for meeting screenshot")?,
+                Err(_) => {
+                    tokio::fs::remove_file(&output_path).await.ok();
+                    anyhow::bail!("grim timed out capturing meeting screenshot");
+                }
+            };
 
         if !output.status.success() {
+            tokio::fs::remove_file(&output_path).await.ok();
             anyhow::bail!("grim failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+
+        // 0o600 — owner-only. Stops a world-readable ~/var/lib/lifeos/meetings/
+        // snapshot leaking whatever desk contents were visible during a call.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(md) = tokio::fs::metadata(&output_path).await {
+                let mut perms = md.permissions();
+                perms.set_mode(0o600);
+                let _ = tokio::fs::set_permissions(&output_path, perms).await;
+            }
         }
 
         self.state.screenshot_paths.push(output_str.clone());
         self.last_screenshot = Some(std::time::Instant::now());
         info!("[meeting] Screenshot #{} captured: {}", n, filename);
+
+        // Per-capture retention sweep. Housekeeping runs every 6h; at
+        // ~1 screenshot / 45 s during an active call that would let the
+        // directory balloon past the 120-file cap between ticks. Observed
+        // live pre-fix: 176 PNGs + WAVs = 778 MB.
+        if let Ok(removed) =
+            crate::storage_housekeeping::cleanup_dir_by_count(&meetings_dir, 120).await
+        {
+            if removed > 0 {
+                debug!(
+                    "[meeting] per-capture retention removed {} files (cap 120)",
+                    removed
+                );
+            }
+        }
 
         Ok(())
     }
@@ -1173,7 +1338,7 @@ Usá EXACTAMENTE este formato para cada tarea:
                         });
 
                     // Identify speakers in diarized transcript (BB.1)
-                    let diarized = self
+                    let (diarized, participants) = self
                         .identify_speakers_in_transcript(&diarized, recording_path)
                         .await;
 
@@ -1250,7 +1415,7 @@ Usá EXACTAMENTE este formato para cada tarea:
                                 .clone()
                                 .unwrap_or_else(|| "manual".into()),
                             meeting_type: "manual".to_string(),
-                            participants: Vec::new(),
+                            participants: participants.clone(),
                             transcript: transcript.clone(),
                             diarized_transcript: diarized.clone(),
                             summary: summary.clone().unwrap_or_default(),
@@ -1286,7 +1451,7 @@ Usá EXACTAMENTE este formato para cada tarea:
                             ended_at: &ended,
                             duration_secs: duration,
                             app_name: &meeting_title,
-                            participants: &[],
+                            participants: &participants,
                             summary: summary.as_deref(),
                             diarized_transcript: &diarized,
                             action_items: &action_items_vec,
@@ -1404,6 +1569,24 @@ Usá EXACTAMENTE este formato para cada tarea:
             return;
         }
 
+        // Real-time captions continuously capture 3s mic chunks — same
+        // Sense::Microphone policy as the full meeting recorder. Without
+        // this gate, captions kept listening even with audio_enabled=false.
+        if let Some(ref sensory) = self.sensory_pipeline {
+            let guard = sensory.read().await;
+            if guard
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::Meeting,
+                    "meeting_assistant.start_captions",
+                )
+                .await
+                .is_err()
+            {
+                info!("[meeting] captions refused by Sense::Microphone gate");
+                return;
+            }
+        }
+
         // Stop any existing caption task first
         self.stop_captions().await;
 
@@ -1415,6 +1598,9 @@ Usá EXACTAMENTE este formato para cada tarea:
         let buffer = Arc::clone(&self.caption_buffer);
         let data_dir = self.data_dir.clone();
         let language = self.language.clone();
+        // Cloned handle so the spawned task can re-check the mic gate
+        // per-chunk. Round-2 audit C-NEW-3.
+        let sensory_for_captions = self.sensory_pipeline.clone();
 
         tokio::spawn(async move {
             let captions_dir = data_dir.join("meetings").join("captions_tmp");
@@ -1444,6 +1630,26 @@ Usá EXACTAMENTE este formato para cada tarea:
                 // Check stop signal
                 if *rx.borrow() {
                     break;
+                }
+
+                // Round-2 audit C-NEW-3: per-chunk mic gate recheck.
+                // Without this, a user toggling audio_enabled=false or
+                // tripping the kill switch mid-meeting didn't stop the
+                // captions loop — the 3s chunk capture kept going for
+                // the entire meeting duration.
+                if let Some(ref sensory) = sensory_for_captions {
+                    let guard = sensory.read().await;
+                    if guard
+                        .ensure_sense_allowed(
+                            crate::sensory_pipeline::Sense::Meeting,
+                            "meeting.caption_chunk",
+                        )
+                        .await
+                        .is_err()
+                    {
+                        info!("[meeting] Captions: mic gate closed mid-session — exiting");
+                        break;
+                    }
                 }
 
                 let chunk_path = captions_dir.join(format!("chunk_{}.wav", chunk_idx));
@@ -1483,20 +1689,39 @@ Usá EXACTAMENTE este formato para cada tarea:
                     }
                 }
 
-                // Transcribe the chunk
+                // Transcribe the chunk. Round-2 audit C-NEW-4 — each
+                // chunk is ~3s of audio so whisper should finish in a
+                // couple of seconds; anything past 30s is a hang. The
+                // outer caption loop runs one chunk at a time so a
+                // stuck whisper blocks the whole feature. `kill_on_drop`
+                // ensures the orphan dies when the caption task is
+                // cancelled (stop_captions / daemon shutdown).
                 let lang = if language == "auto" { "en" } else { &language };
-                let output = Command::new(&whisper)
-                    .args([
-                        "-m",
-                        &model,
-                        "-f",
-                        &chunk_str,
-                        "--language",
-                        lang,
-                        "--no-timestamps",
-                    ])
-                    .output()
-                    .await;
+                let mut cmd = Command::new(&whisper);
+                cmd.args([
+                    "-m",
+                    &model,
+                    "-f",
+                    &chunk_str,
+                    "--language",
+                    lang,
+                    "--no-timestamps",
+                ])
+                .kill_on_drop(true);
+                let output =
+                    match tokio::time::timeout(std::time::Duration::from_secs(30), cmd.output())
+                        .await
+                    {
+                        Ok(res) => res,
+                        Err(_) => {
+                            warn!(
+                                "[meeting] Captions: whisper timed out on chunk {}",
+                                &chunk_str
+                            );
+                            let _ = tokio::fs::remove_file(&chunk_path).await;
+                            continue;
+                        }
+                    };
 
                 // Read whisper's txt output before cleanup
                 let txt_path = format!("{}.txt", &chunk_str);
@@ -2295,15 +2520,49 @@ fn collect_window_titles(node: &serde_json::Value, titles: &mut Vec<String>) {
     }
 }
 
-/// Check if /dev/video0 is in use by any process.
+/// Check if any of the usual `/dev/video*` nodes is held by another
+/// process. On multi-camera hosts (laptop webcam + external USB capture,
+/// or two USB cams) a meeting app may hold `/dev/video1` while the
+/// built-in is on `/dev/video0`; only probing video0 missed those cases.
 async fn detect_camera_in_use() -> bool {
-    let output = Command::new("fuser").arg("/dev/video0").output().await.ok();
-
-    match output {
-        // fuser writes PIDs to STDERR (not stdout), so check both
-        Some(o) => o.status.success() && (!o.stdout.is_empty() || !o.stderr.is_empty()),
-        None => false,
+    for device in ["/dev/video0", "/dev/video1", "/dev/video2"] {
+        if !std::path::Path::new(device).exists() {
+            continue;
+        }
+        let output = Command::new("fuser").arg(device).output().await.ok();
+        let busy = match output {
+            // fuser writes PIDs to STDERR (not stdout), so check both
+            Some(o) => o.status.success() && (!o.stdout.is_empty() || !o.stderr.is_empty()),
+            None => false,
+        };
+        if busy {
+            return true;
+        }
     }
+    false
+}
+
+/// Best-effort WAV duration estimate from the RIFF header. Returns
+/// `None` on parse failure so the caller can fall back to a floor
+/// timeout. Used to bound whisper subprocess runtime proportional
+/// to audio length (hearing audit C-11).
+fn estimate_wav_duration_secs(path: &str) -> Option<u64> {
+    use std::fs::File;
+    use std::io::Read;
+    let mut f = File::open(path).ok()?;
+    let mut header = [0u8; 44];
+    if f.read_exact(&mut header).is_err() {
+        return None;
+    }
+    if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
+        return None;
+    }
+    let byte_rate = u32::from_le_bytes(header[28..32].try_into().ok()?);
+    let file_len = std::fs::metadata(path).ok()?.len();
+    if byte_rate == 0 || file_len <= 44 {
+        return None;
+    }
+    Some(((file_len - 44) / byte_rate as u64).max(1))
 }
 
 async fn resolve_whisper_binary() -> Result<String> {
@@ -2452,9 +2711,18 @@ fn extract_parenthesized_deadline(s: &str) -> (String, Option<String>) {
 }
 
 async fn resolve_whisper_model() -> Result<String> {
+    // Prefer larger models first. Meeting transcription is a one-shot
+    // batch job — quality matters far more than per-second latency.
+    // `small` (~466MB) is substantially more accurate than `base`
+    // (~142MB) on Spanish / accented speech at the cost of ~3× CPU
+    // time, which is still well under the meeting duration itself.
+    // Caption model (live) stays on `tiny` via `resolve_caption_model`.
     let candidates = [
-        "/var/lib/lifeos/models/whisper/ggml-base.bin",
+        "/var/lib/lifeos/models/whisper/ggml-medium.bin",
+        "/usr/share/lifeos/models/whisper/ggml-medium.bin",
         "/var/lib/lifeos/models/whisper/ggml-small.bin",
+        "/usr/share/lifeos/models/whisper/ggml-small.bin",
+        "/var/lib/lifeos/models/whisper/ggml-base.bin",
         "/usr/share/lifeos/models/whisper/ggml-base.bin",
     ];
     for path in &candidates {

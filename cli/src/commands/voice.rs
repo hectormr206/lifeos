@@ -74,6 +74,23 @@ pub enum VoiceCommands {
         #[arg(long)]
         refresh: bool,
     },
+    /// List all known speaker profiles (including anonymous ones auto-created from meetings)
+    Speakers,
+    /// Attach a real name to an anonymous speaker profile so future
+    /// diarizations surface it in the transcript and participants list.
+    /// Use `life voice speakers` to see the profile IDs.
+    NameSpeaker {
+        /// Speaker profile id (e.g. `speaker_234bc0c2f5f34b...`)
+        id: String,
+        /// Human-readable name to associate with this profile
+        name: String,
+    },
+    /// Delete a speaker profile — use when a profile was mis-merged or you
+    /// want Axi to re-learn the voice from scratch.
+    DeleteSpeaker {
+        /// Speaker profile id
+        id: String,
+    },
 }
 
 pub async fn execute(cmd: VoiceCommands) -> anyhow::Result<()> {
@@ -137,6 +154,9 @@ pub async fn execute(cmd: VoiceCommands) -> anyhow::Result<()> {
         }
         VoiceCommands::Interrupt => cmd_interrupt().await,
         VoiceCommands::Presence { refresh } => cmd_presence(refresh).await,
+        VoiceCommands::Speakers => cmd_speakers_list().await,
+        VoiceCommands::NameSpeaker { id, name } => cmd_speakers_name(&id, &name).await,
+        VoiceCommands::DeleteSpeaker { id } => cmd_speakers_delete(&id).await,
     }
 }
 
@@ -747,5 +767,90 @@ async fn cmd_presence(refresh: bool) -> anyhow::Result<()> {
         "  away_seconds: {}",
         presence["away_seconds"].as_u64().unwrap_or_default()
     );
+    Ok(())
+}
+
+async fn cmd_speakers_list() -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .get(format!("{}/api/v1/speakers", daemon_client::daemon_url()))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to list speakers: {}", body);
+    }
+    let body: serde_json::Value = resp.json().await?;
+    let count = body["count"].as_u64().unwrap_or(0);
+    println!("{} ({} perfiles)", "Speaker profiles".bold().blue(), count);
+    let empty = vec![];
+    let profiles = body["profiles"].as_array().unwrap_or(&empty);
+    if profiles.is_empty() {
+        println!("  (no profiles yet — Axi creates these automatically as it hears new voices)");
+        return Ok(());
+    }
+    for p in profiles {
+        let id = p["id"].as_str().unwrap_or("?");
+        let name_cell = match p["name"].as_str() {
+            Some(n) if !n.is_empty() => n.green().bold().to_string(),
+            _ => "(sin nombre)".yellow().to_string(),
+        };
+        let emb = p["embedding_count"].as_u64().unwrap_or(0);
+        let interactions = p["interaction_count"].as_u64().unwrap_or(0);
+        let last = p["last_seen_at"].as_str().unwrap_or("");
+        println!(
+            "  {} {}\n    id: {}\n    embeddings: {}   interactions: {}   last_seen: {}",
+            "•".cyan(),
+            name_cell,
+            id.dimmed(),
+            emb,
+            interactions,
+            last.dimmed()
+        );
+    }
+    println!();
+    println!(
+        "{}",
+        "Use `life voice name-speaker <id> <nombre>` to name a profile.".dimmed()
+    );
+    Ok(())
+}
+
+async fn cmd_speakers_name(id: &str, name: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .post(format!(
+            "{}/api/v1/speakers/{}/name",
+            daemon_client::daemon_url(),
+            id
+        ))
+        .json(&serde_json::json!({ "name": name }))
+        .send()
+        .await?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!("Failed to name speaker ({}): {}", status, body);
+    }
+    println!("{} {} → {}", "✓".green(), id.dimmed(), name.green().bold());
+    Ok(())
+}
+
+async fn cmd_speakers_delete(id: &str) -> anyhow::Result<()> {
+    let client = daemon_client::authenticated_client();
+    let resp = client
+        .delete(format!(
+            "{}/api/v1/speakers/{}",
+            daemon_client::daemon_url(),
+            id
+        ))
+        .send()
+        .await?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!("Failed to delete speaker ({}): {}", status, body);
+    }
+    println!("{} deleted: {}", "✓".green(), id.dimmed());
     Ok(())
 }

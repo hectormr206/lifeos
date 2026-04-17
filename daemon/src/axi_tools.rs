@@ -1065,6 +1065,17 @@ REGLAS FIRMES:
         /// Recent messages kept verbatim (sliding window tail).
         messages: Vec<ChatMessage>,
         last_active: chrono::DateTime<chrono::Utc>,
+        /// Sticky "this conversation originated from voice" flag.
+        /// Hearing round-2 W-NEW-5: a SimpleX voice note got the
+        /// Critical sensitivity clamp on its own turn, but the
+        /// transcript landed in history as plain text — a follow-up
+        /// text-only turn called `agentic_chat` without the clamp and
+        /// the LLM router could pick a cloud provider because the
+        /// privacy_filter classifies benign transcripts as Low.
+        /// This flag carries the clamp across every subsequent turn
+        /// on the same chat until TTL expires the entry.
+        #[serde(default)]
+        voice_origin: bool,
     }
 
     /// Thread-safe conversation history with disk persistence and auto-compaction.
@@ -1147,6 +1158,33 @@ REGLAS FIRMES:
             entry.compacted_summary.clone()
         }
 
+        /// True if any message on this chat originated from voice (e.g.
+        /// a SimpleX voice note). Sticky across turns until TTL expires.
+        /// Callers should clamp their LLM request's sensitivity to
+        /// `Critical` when this returns true, so a benign-looking text
+        /// follow-up doesn't accidentally route a voice transcript to
+        /// a cloud provider.
+        pub async fn voice_origin(&self, chat_id: i64) -> bool {
+            let chats = self.chats.read().await;
+            chats.get(&chat_id).map(|e| e.voice_origin).unwrap_or(false)
+        }
+
+        /// Mark a chat as voice-originated. Idempotent. Called by the
+        /// SimpleX bridge (and any future voice-input bridge) when a
+        /// voice transcript is dispatched through `agentic_chat`.
+        pub async fn mark_voice_origin(&self, chat_id: i64) {
+            let mut chats = self.chats.write().await;
+            let entry = chats.entry(chat_id).or_insert_with(|| ConversationEntry {
+                first_message: None,
+                compacted_summary: None,
+                messages: Vec::new(),
+                last_active: chrono::Utc::now(),
+                voice_origin: false,
+            });
+            entry.voice_origin = true;
+            entry.last_active = chrono::Utc::now();
+        }
+
         /// Append messages and trigger compaction if needed.
         pub async fn append(&self, chat_id: i64, new_messages: &[ChatMessage]) {
             let mut chats = self.chats.write().await;
@@ -1155,6 +1193,7 @@ REGLAS FIRMES:
                 compacted_summary: None,
                 messages: Vec::new(),
                 last_active: chrono::Utc::now(),
+                voice_origin: false,
             });
 
             // Capture first user message if not yet set
@@ -1826,6 +1865,11 @@ REGLAS FIRMES:
         pub meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
         /// Calendar manager for event scheduling and reminders.
         pub calendar: Option<Arc<crate::calendar::CalendarManager>>,
+        /// Sensory pipeline manager — consulted by the `screenshot` tool
+        /// (and any future screen-touching tool) to honor the user's
+        /// screen_enabled / kill switch / suspend / session-lock /
+        /// sensitive-window policy instead of silently shelling grim.
+        pub sensory_pipeline: Option<Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>>,
         /// Rate limiter for tool calls per chat_id.
         pub rate_limiter: RateLimiter,
     }
@@ -1981,7 +2025,7 @@ REGLAS FIRMES:
         }
 
         let result = match call.name.as_str() {
-            "screenshot" => execute_screenshot().await,
+            "screenshot" => execute_screenshot(ctx).await,
             "run_command" => execute_run_command(&call.args).await,
             "search_web" => execute_search_web(&call.args, ctx).await,
             "read_file" => execute_read_file(&call.args).await,
@@ -2189,7 +2233,7 @@ REGLAS FIRMES:
             | "cosmic_terminal" | "cosmic_files" | "cosmic_editor" | "cosmic_dark_mode"
             | "calc_read_cells" | "writer_export_pdf" | "a11y_tree" | "a11y_find"
             | "a11y_activate" | "a11y_get_text" | "a11y_set_text" | "a11y_apps" => {
-                execute_os_control(&call.name, &call.args).await
+                execute_os_control(&call.name, &call.args, ctx.sensory_pipeline.clone()).await
             }
             // --- Fase BA: Unified Memory tools ---
             "health_status" => execute_health_status().await,
@@ -2232,11 +2276,39 @@ REGLAS FIRMES:
     /// The agentic chat loop: sends message to LLM, parses tool calls,
     /// executes them, feeds results back, repeats until no more tool calls.
     /// Returns (final_response_text, optional_screenshot_path).
+    /// Forces the LLM router to pick a LOCAL-tier provider only,
+    /// regardless of message content. Used for voice transcripts and
+    /// any other channel where the message itself is a sensitive
+    /// sensor artifact (hearing audit C-6: a SimpleX voice note
+    /// previously went to any configured cloud BYOK provider).
     pub async fn agentic_chat(
         ctx: &ToolContext,
         chat_id: i64,
         user_text: &str,
         image_b64: Option<&str>,
+    ) -> (String, Option<String>) {
+        agentic_chat_inner(ctx, chat_id, user_text, image_b64, None).await
+    }
+
+    /// `force_sensitivity` variant — callers that know the message is
+    /// a sensory artifact (voice transcript, OCR output, etc.) can
+    /// clamp the router to local tier even when there's no image.
+    pub async fn agentic_chat_with_sensitivity(
+        ctx: &ToolContext,
+        chat_id: i64,
+        user_text: &str,
+        image_b64: Option<&str>,
+        force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
+    ) -> (String, Option<String>) {
+        agentic_chat_inner(ctx, chat_id, user_text, image_b64, force_sensitivity).await
+    }
+
+    async fn agentic_chat_inner(
+        ctx: &ToolContext,
+        chat_id: i64,
+        user_text: &str,
+        image_b64: Option<&str>,
+        force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
     ) -> (String, Option<String>) {
         // AQ.3 — Detect implicit preference feedback and update user model
         if let Some(ref um_arc) = ctx.user_model {
@@ -2445,13 +2517,66 @@ REGLAS FIRMES:
             TaskComplexity::Medium
         };
 
+        // Belt-and-braces cloud-route gate. The sensitivity clamp below
+        // already pins the router to LOCAL tier when an image is
+        // attached, but we ALSO route the request through the unified
+        // `Sense::CloudRoute` gate so every image-carrying LLM call
+        // hits the audit ring, and future policy (e.g. "no image
+        // routing during meetings") has a single place to land.
+        if image_b64.is_some() {
+            if let Some(ref sensory) = ctx.sensory_pipeline {
+                let guard = sensory.read().await;
+                if let Err(reason) = guard
+                    .ensure_sense_allowed(
+                        crate::sensory_pipeline::Sense::CloudRoute,
+                        "axi_tools.agentic_chat.image",
+                    )
+                    .await
+                {
+                    return (format!("Ruteo de imagen rechazado: {}", reason), None);
+                }
+            }
+        }
+
+        // When the user message carries a screenshot (or any attached
+        // image), clamp sensitivity to Critical so the router is pinned
+        // to the LOCAL tier. Without this, a "take a screenshot" tool
+        // call could silently ship the frame to any cloud provider
+        // (Anthropic / OpenAI / Gemini) just because BYOK keys are
+        // configured. `SensitivityLevel::Critical` maps to a providers
+        // list of `[ProviderTier::Local]` in llm_router.
+        //
+        // Callers that know the message is a sensor artifact (voice
+        // transcript, OCR output) can force this clamp via the
+        // `force_sensitivity` argument even when there's no image —
+        // used by simplex_bridge for voice notes (hearing audit C-6).
+        //
+        // Sticky voice-origin clamp (hearing round-2 W-NEW-5): if any
+        // prior turn on this chat arrived via voice, carry the Critical
+        // clamp forward automatically. Without this, a benign-looking
+        // text follow-up on a voice-originated conversation drops the
+        // sensitivity and the voice transcript (still in history) can
+        // leak to a cloud provider.
+        let sticky_voice = ctx.history.voice_origin(chat_id).await;
+        let sensitivity = force_sensitivity
+            .or(if sticky_voice {
+                Some(crate::privacy_filter::SensitivityLevel::Critical)
+            } else {
+                None
+            })
+            .or(if image_b64.is_some() {
+                Some(crate::privacy_filter::SensitivityLevel::Critical)
+            } else {
+                None
+            });
+
         let mut screenshot_path: Option<String> = None;
 
         for round in 0..MAX_TOOL_ROUNDS {
             let request = RouterRequest {
                 messages: messages.clone(),
                 complexity: Some(complexity),
-                sensitivity: None,
+                sensitivity,
                 preferred_provider: None,
                 max_tokens: Some(2048),
                 task_type: None,
@@ -2649,7 +2774,26 @@ REGLAS FIRMES:
     // Individual tool implementations
     // -----------------------------------------------------------------------
 
-    async fn execute_screenshot() -> Result<String> {
+    async fn execute_screenshot(ctx: &ToolContext) -> Result<String> {
+        // Unified Sense::Screen gate — kill switch + vision.enabled +
+        // suspend + session lock + sensitive-window title.  Round-2
+        // audit C-NEW-2 — this tool previously bypassed every user
+        // policy and wrote to /tmp 0o644.  Routing through the typed
+        // API also records an audit entry with caller
+        // `axi_tools.execute_screenshot`.
+        if let Some(ref sensory) = ctx.sensory_pipeline {
+            let guard = sensory.read().await;
+            if let Err(reason) = guard
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::Screen,
+                    "axi_tools.execute_screenshot",
+                )
+                .await
+            {
+                anyhow::bail!("screenshot tool refused: {}", reason);
+            }
+        }
+
         let tmp_dir = std::env::temp_dir().join("lifeos-telegram");
         tokio::fs::create_dir_all(&tmp_dir).await?;
         let path = tmp_dir.join(format!("screen-{}.png", chrono::Utc::now().timestamp()));
@@ -2670,6 +2814,18 @@ REGLAS FIRMES:
         };
 
         if captured && path.exists() {
+            // 0o600 — owner-only. Prior behavior wrote /tmp 0o644, so
+            // any local user could read the screenshot until the next
+            // tmpreaper sweep. Round-2 audit C-NEW-2.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(md) = tokio::fs::metadata(&path).await {
+                    let mut perms = md.permissions();
+                    perms.set_mode(0o600);
+                    let _ = tokio::fs::set_permissions(&path, perms).await;
+                }
+            }
             Ok(path.to_string_lossy().to_string())
         } else {
             anyhow::bail!("No pude capturar la pantalla (grim/gnome-screenshot no disponible)")
@@ -9867,8 +10023,13 @@ max_context = 128000
             "flatpak",
             "podman",
             "docker",
-            "ffmpeg",
-            "whisper-cli",
+            // `ffmpeg` and `whisper-cli` removed from the tool allowlist.
+            // Hearing audit round-2 C-NEW-1: both binaries let an authed
+            // agent bypass the unified Sense::Microphone gate by
+            // shelling mic capture or arbitrary-file STT directly.
+            // Legitimate flows route through the gated API endpoints
+            // (/audio/stt/transcribe, /sensory/voice/session) or the
+            // pipeline's capture helpers.
             "sqlite3",
             "stat",
             "head",
@@ -10110,9 +10271,15 @@ max_context = 128000
 
     /// Execute OS control plane tools by delegating to the MCP server's `call_tool`.
     /// Maps short Telegram tool names to their `lifeos_*` MCP counterparts.
-    async fn execute_os_control(tool_name: &str, args: &serde_json::Value) -> Result<String> {
+    /// `sensory` is threaded through so MCP-side screenshot actions can
+    /// honor the unified sense gate.
+    async fn execute_os_control(
+        tool_name: &str,
+        args: &serde_json::Value,
+        sensory: Option<Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>>,
+    ) -> Result<String> {
         let mcp_name = format!("lifeos_{}", tool_name);
-        match crate::mcp_server::call_tool(&mcp_name, args).await {
+        match crate::mcp_server::call_tool(&mcp_name, args, sensory).await {
             Ok(val) => Ok(serde_json::to_string_pretty(&val).unwrap_or_else(|_| val.to_string())),
             Err(e) => Ok(format!("Error: {}", e)),
         }

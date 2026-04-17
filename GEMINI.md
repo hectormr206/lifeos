@@ -40,7 +40,8 @@ All docs are organized in `docs/`. Read `docs/README.md` for the full index.
 |---------|---------|-------|
 | `lifeosd` REST API | `127.0.0.1:8081` | Auth: `x-bootstrap-token` header |
 | `llama-server` | `127.0.0.1:8082` | Local LLM inference (llama.cpp) |
-| `lifeos-tts-server` | `127.0.0.1:8083` | TTS: Kokoro-82M (Apache 2.0), 50+ voices. See [`docs/operations/tts.md`](docs/operations/tts.md) |
+| `lifeos-tts-server` | `127.0.0.1:8084` | TTS: Kokoro-82M (Apache 2.0), 50+ voices. See [`docs/operations/tts.md`](docs/operations/tts.md) |
+| `llama-embeddings` | `127.0.0.1:8083` | Semantic embeddings (nomic-embed-text-v1.5 via llama.cpp) |
 | `simplex-chat` | `ws://127.0.0.1:5226` | SimpleX bridge WebSocket |
 
 ## Key Files

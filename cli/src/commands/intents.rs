@@ -1090,6 +1090,10 @@ async fn cmd_sensory_status() -> anyhow::Result<()> {
                 body["camera_enabled"].as_bool().unwrap_or(false)
             );
             println!(
+                "  meeting_capture: {}",
+                body["meeting_enabled"].as_bool().unwrap_or(true)
+            );
+            println!(
                 "  kill_switch_active: {}",
                 body["kill_switch_active"].as_bool().unwrap_or(false)
             );

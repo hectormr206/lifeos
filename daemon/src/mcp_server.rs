@@ -20,9 +20,18 @@
 
 /// Process an MCP tool call and return the result.
 /// This is a dispatcher — actual execution delegates to the appropriate module.
+///
+/// `sensory` is threaded through because `lifeos_desktop_action` with
+/// name=="screenshot" and `lifeos_browser_screenshot` now require the
+/// unified sense gate (round-2 audit C-NEW-3). Pass `None` only when
+/// the caller has no sensory manager to share — all screenshot actions
+/// will fail-closed in that case.
 pub async fn call_tool(
     name: &str,
     arguments: &serde_json::Value,
+    sensory: Option<
+        std::sync::Arc<tokio::sync::RwLock<crate::sensory_pipeline::SensoryPipelineManager>>,
+    >,
 ) -> Result<serde_json::Value, String> {
     match name {
         "lifeos_status" => {
@@ -199,7 +208,8 @@ pub async fn call_tool(
                 _ => return Err(format!("Unknown desktop action: {}", action_name)),
             };
 
-            let result = crate::desktop_operator::DesktopOperator::execute(&action).await;
+            let result =
+                crate::desktop_operator::DesktopOperator::execute(&action, sensory.clone()).await;
             Ok(serde_json::json!({
                 "success": result.success,
                 "output": result.output,
@@ -659,7 +669,8 @@ pub async fn call_tool(
             ));
             // Take a screenshot of whatever is currently on screen via the desktop operator
             let action = crate::desktop_operator::DesktopAction::Screenshot;
-            let result = crate::desktop_operator::DesktopOperator::execute(&action).await;
+            let result =
+                crate::desktop_operator::DesktopOperator::execute(&action, sensory.clone()).await;
             if result.success {
                 Ok(serde_json::json!({
                     "screenshot": result.output,

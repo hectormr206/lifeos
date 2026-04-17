@@ -670,12 +670,36 @@ RUN mkdir -p /usr/share/lifeos/models /var/lib/lifeos /var/lib/lifeos/models /va
 COPY --from=whisper-builder /out/models/whisper /usr/share/lifeos/models/whisper
 COPY --from=wespeaker-builder /out/models/wespeaker /usr/share/lifeos/models/wespeaker
 
-# --- Kokoro TTS runtime (venv + voices + manifest) ---
+# --- Kokoro TTS runtime (Python 3.12 interpreter + venv + voices + manifest) ---
+#
+# The venv in /opt/lifeos/kokoro-env was created in the `kokoro-builder` stage
+# (python:3.12-slim, Debian). Its `bin/python3` symlink points at
+# `/usr/local/bin/python3` — which only exists in the Debian builder. The
+# Fedora runtime ships Python 3.14 at `/usr/bin/python3`; that mismatch leaves
+# the venv with a dangling interpreter and systemd fails with 203/EXEC.
+#
+# Fix: copy the exact Python 3.12 runtime bundle the venv was built against
+# (interpreter + stdlib + shared libpython) from the builder stage into the
+# final image at its original paths, plus the `python3` symlink. The Python
+# binary only dynamically links to glibc-level libs (libc, libm, libssl,
+# libffi, libz) that are present in Fedora with compatible ABI.
+COPY --from=kokoro-builder /usr/local/bin/python3.12 /usr/local/bin/python3.12
+COPY --from=kokoro-builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
+COPY --from=kokoro-builder /usr/local/lib/libpython3.12.so.1.0 /usr/local/lib/libpython3.12.so.1.0
+RUN ln -sf python3.12 /usr/local/bin/python3 && \
+    echo '/usr/local/lib' > /etc/ld.so.conf.d/lifeos-python3.12.conf && \
+    ldconfig
+
 COPY --from=kokoro-builder /opt/lifeos/kokoro-env /opt/lifeos/kokoro-env
 COPY image/files/usr/local/bin/lifeos-tts-server.py /usr/local/bin/lifeos-tts-server.py
 COPY image/files/etc/systemd/system/lifeos-tts-server.service /usr/lib/systemd/system/lifeos-tts-server.service
 COPY image/files/etc/lifeos/tts-server.env /etc/lifeos/tts-server.env
 RUN chmod +x /usr/local/bin/lifeos-tts-server.py
+
+# Smoke test: the venv's python must resolve and import ssl/hashlib before
+# we ship. Catches cross-distro linker regressions at build time instead of
+# 203/EXEC crash-loops in production.
+RUN /opt/lifeos/kokoro-env/bin/python3 -c "import ssl, hashlib, socket; print('lifeos-tts venv ok:', ssl.OPENSSL_VERSION)"
 
 # --- AI Model (pre-bundled) ---
 # Qwen3.5-4B: multimodal vision-language model with hybrid DeltaNet architecture.

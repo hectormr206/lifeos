@@ -163,11 +163,27 @@ impl SpeakerIdManager {
     }
 
     /// Set a speaker's name (after Axi asks or user tells).
-    pub fn set_name(&mut self, profile_id: &str, name: &str) {
+    /// Returns true if the profile existed and was updated.
+    pub fn set_name(&mut self, profile_id: &str, name: &str) -> bool {
         if let Some(profile) = self.profiles.get_mut(profile_id) {
             info!("Speaker {profile_id} identified as '{name}'");
             profile.name = Some(name.to_string());
             self.save_profiles();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove a speaker profile (user mis-identified it or wants to reset).
+    /// Returns true if a profile was removed.
+    pub fn delete_profile(&mut self, profile_id: &str) -> bool {
+        if self.profiles.remove(profile_id).is_some() {
+            info!("Speaker profile {profile_id} deleted");
+            self.save_profiles();
+            true
+        } else {
+            false
         }
     }
 
@@ -218,6 +234,19 @@ impl SpeakerIdManager {
             Ok(data) => {
                 if let Err(e) = std::fs::write(&path, data) {
                     warn!("Failed to save speaker profiles: {e}");
+                }
+                // Hearing audit C-13: 256-float voice embeddings are
+                // biometric PII. Chmod 0o600 after every save so the
+                // file stays owner-only even on a fresh write that
+                // inherits the umask default.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(md) = std::fs::metadata(&path) {
+                        let mut perms = md.permissions();
+                        perms.set_mode(0o600);
+                        let _ = std::fs::set_permissions(&path, perms);
+                    }
                 }
             }
             Err(e) => warn!("Failed to serialize speaker profiles: {e}"),

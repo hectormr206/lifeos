@@ -77,10 +77,14 @@ pub enum DaemonEvent {
     },
     MeetingRecordingStarted {
         app_name: String,
-        recording_path: String,
+        // `recording_path` removed from the event payload — it leaked
+        // the absolute on-disk location of the mic recording to every
+        // event-bus subscriber (ws_gateway clients, sensory_memory,
+        // future plugins). Consumers that need the path should query
+        // meeting state directly via MeetingAssistant. Hearing audit C-12.
     },
     MeetingRecordingStopped {
-        recording_path: Option<String>,
+        // `recording_path` removed for the same reason as Started.
         duration_secs: u64,
     },
     // -- Events consumed by the dashboard (Fix AL / AP) ----------------------

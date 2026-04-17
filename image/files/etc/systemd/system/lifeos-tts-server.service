@@ -1,5 +1,5 @@
 [Unit]
-Description=LifeOS Kokoro TTS Server (HTTP, 127.0.0.1:8083)
+Description=LifeOS Kokoro TTS Server (HTTP, 127.0.0.1:8084)
 Documentation=https://github.com/hexgrad/kokoro
 After=network.target
 Before=lifeosd.service

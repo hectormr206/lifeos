@@ -12,7 +12,9 @@
 use anyhow::{Context, Result};
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tokio::process::Command;
+use tokio::sync::RwLock;
 
 /// Actions the desktop operator can perform.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,8 +74,17 @@ pub struct DesktopActionResult {
 pub struct DesktopOperator;
 
 impl DesktopOperator {
-    pub async fn execute(action: &DesktopAction) -> DesktopActionResult {
-        match Self::execute_inner(action).await {
+    /// Execute a DesktopAction with optional sensory-pipeline gating.
+    /// The `sensory` argument is consulted for `Screenshot` so that
+    /// MCP / supervisor callers cannot bypass kill-switch, master
+    /// screen toggle, suspend, session lock, or sensitive-window
+    /// policy. Pass `None` only when the caller has already gated
+    /// the request upstream (currently no such caller exists).
+    pub async fn execute(
+        action: &DesktopAction,
+        sensory: Option<Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>>,
+    ) -> DesktopActionResult {
+        match Self::execute_inner(action, sensory).await {
             Ok(output) => DesktopActionResult {
                 success: true,
                 output,
@@ -85,7 +96,10 @@ impl DesktopOperator {
         }
     }
 
-    async fn execute_inner(action: &DesktopAction) -> Result<String> {
+    async fn execute_inner(
+        action: &DesktopAction,
+        sensory: Option<Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>>,
+    ) -> Result<String> {
         match action {
             DesktopAction::FlatpakInstall { app_id } => {
                 info!("[desktop] Installing flatpak: {}", app_id);
@@ -230,23 +244,66 @@ impl DesktopOperator {
             }
 
             DesktopAction::Screenshot => {
-                // Try grim (Wayland), fallback to gnome-screenshot
+                // Unified sense gate BEFORE shelling grim. Round-2 audit
+                // C-NEW-3: MCP `desktop_action.screenshot` + the
+                // browser-screenshot wrapper previously bypassed every
+                // user policy and wrote /tmp 0o644. Fail-closed when the
+                // sensory manager isn't plumbed — a caller that omits
+                // the argument cannot capture.
+                let sensory = sensory.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "desktop Screenshot refused: sensory pipeline not wired (fail-closed)"
+                    )
+                })?;
+                {
+                    let guard = sensory.read().await;
+                    if let Err(reason) = guard
+                        .ensure_sense_allowed(
+                            crate::sensory_pipeline::Sense::Screen,
+                            "desktop_operator.Screenshot",
+                        )
+                        .await
+                    {
+                        anyhow::bail!("desktop Screenshot refused: {}", reason);
+                    }
+                }
+
+                // Try grim (Wayland), fallback to gnome-screenshot.
+                // Output goes to /tmp with 0o600 — prior behavior was
+                // 0o644 world-readable. We keep /tmp rather than moving
+                // to /var/lib/lifeos/screenshots/ because this path is
+                // used by MCP callers that consume the file immediately
+                // and may run in contexts without write access to the
+                // managed dir. The retention story for this path is
+                // tmpreaper, not storage_housekeeping.
                 let path = format!(
                     "/tmp/lifeos-screenshot-{}.png",
                     chrono::Utc::now().format("%Y%m%d-%H%M%S")
                 );
                 let result = Command::new("grim").arg(&path).output().await;
-                match result {
-                    Ok(o) if o.status.success() => Ok(path),
+                let captured = match result {
+                    Ok(o) if o.status.success() => true,
                     _ => {
                         Command::new("gnome-screenshot")
                             .args(["-f", &path])
                             .output()
                             .await
                             .context("Screenshot failed (grim and gnome-screenshot)")?;
-                        Ok(path)
+                        true
+                    }
+                };
+                if captured {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(md) = tokio::fs::metadata(&path).await {
+                            let mut perms = md.permissions();
+                            perms.set_mode(0o600);
+                            let _ = tokio::fs::set_permissions(&path, perms).await;
+                        }
                     }
                 }
+                Ok(path)
             }
 
             DesktopAction::FlatpakOverride { app_id, permission } => {

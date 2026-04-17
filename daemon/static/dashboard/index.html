@@ -284,6 +284,22 @@
                 <p class="diag-test-result" id="test-result-camera"></p>
               </div>
             </div>
+            <div class="control-card" data-sensor="meeting">
+              <div class="control-header clickable">
+                <span class="control-icon">&#128250;</span>
+                <span class="control-name">Grabar reuniones</span>
+                <span class="expand-chevron">&#9660;</span>
+              </div>
+              <p id="meeting-capture-status" class="control-status">—</p>
+              <label class="toggle" onclick="event.stopPropagation()"><input type="checkbox" id="toggle-meeting-capture"><span class="slider"></span></label>
+              <div class="diagnostic-panel" id="diag-meeting">
+                <p class="diag-details" style="font-size:13px;line-height:1.4">
+                  Cuando esta activo, Axi graba audio y transcribe automaticamente cada reunion que
+                  detecta. Si lo desactivas, Axi sigue detectando las reuniones (para ajustar presencia
+                  y focus) pero no graba nada. Requiere que el microfono este habilitado.
+                </p>
+              </div>
+            </div>
           </div>
           <button id="kill-switch" class="kill-switch-btn">KILL SWITCH</button>
         </section>

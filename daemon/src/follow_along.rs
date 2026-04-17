@@ -538,9 +538,17 @@ impl FollowAlongManager {
     }
 
     /// Get event statistics
+    ///
+    /// When FollowAlong consent has not been granted, the
+    /// `current_application` and `current_window` fields are omitted —
+    /// previously they leaked through this helper regardless of consent
+    /// state, undoing the `record_event` consent gate.
     pub async fn get_event_stats(&self) -> EventStatistics {
         let buffer = self.events_buffer.read().await;
         let context = self.context_state.read().await;
+        let config = self.config.read().await;
+        let consented = config.consent_status == ConsentStatus::Granted;
+        drop(config);
 
         let mut event_counts: HashMap<String, usize> = HashMap::new();
         for event in buffer.iter() {
@@ -551,8 +559,16 @@ impl FollowAlongManager {
         EventStatistics {
             total_events: buffer.len(),
             event_counts,
-            current_application: context.current_application.clone(),
-            current_window: context.current_window.clone(),
+            current_application: if consented {
+                context.current_application.clone()
+            } else {
+                None
+            },
+            current_window: if consented {
+                context.current_window.clone()
+            } else {
+                None
+            },
             session_duration: context.session_duration,
             session_start: self.session_start,
         }

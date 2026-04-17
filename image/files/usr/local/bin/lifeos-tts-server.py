@@ -2,7 +2,7 @@
 """
 lifeos-tts-server.py — LifeOS Kokoro TTS HTTP Server
 
-Binds to 127.0.0.1:$LIFEOS_TTS_ENGINE_PORT (default 8083).
+Binds to 127.0.0.1:$LIFEOS_TTS_ENGINE_PORT (default 8084).
 
 Routes:
     GET  /health  → {"status":"ok","model":"Kokoro-82M","voices_loaded":N}
@@ -13,7 +13,7 @@ Routes:
 
 Environment:
     LIFEOS_TTS_DEFAULT_VOICE  Default voice name (default: if_sara)
-    LIFEOS_TTS_ENGINE_PORT    Bind port (default: 8083)
+    LIFEOS_TTS_ENGINE_PORT    Bind port (default: 8084)
     LIFEOS_TTS_DEVICE         Torch device (default: cpu)
     HF_HUB_OFFLINE            Set to 1 to prevent HuggingFace downloads (set by env file)
     TRANSFORMERS_OFFLINE      Set to 1 to prevent transformers hub access
@@ -82,7 +82,7 @@ _LOG = logging.getLogger("lifeos.tts")
 # ---------------------------------------------------------------------------
 
 DEFAULT_VOICE: str = os.environ.get("LIFEOS_TTS_DEFAULT_VOICE", "if_sara")
-PORT: int = int(os.environ.get("LIFEOS_TTS_ENGINE_PORT", "8083"))
+PORT: int = int(os.environ.get("LIFEOS_TTS_ENGINE_PORT", "8084"))
 DEVICE: str = os.environ.get("LIFEOS_TTS_DEVICE", "cpu")
 SAMPLE_RATE: int = 24000
 MEMORY_LIMIT_BYTES: int = 900 * 1024 * 1024  # 900 MB RSS watchdog

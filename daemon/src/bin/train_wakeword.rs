@@ -90,6 +90,20 @@ fn main() {
         std::process::exit(1);
     });
 
+    // Hearing audit round-2 C-NEW-5: the image-build bakes the rpw
+    // file at umask default (observed 0o644 on user hosts). The model
+    // encodes MFCC statistics of the enrollment voice — biometric PII.
+    // Chmod 0o600 so only the lifeos user can read.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(md) = std::fs::metadata(&output) {
+            let mut perms = md.permissions();
+            perms.set_mode(0o600);
+            let _ = std::fs::set_permissions(&output, perms);
+        }
+    }
+
     eprintln!("Wake word model saved to: {output}");
     eprintln!("Model name: {name}");
 }

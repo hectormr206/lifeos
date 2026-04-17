@@ -29,7 +29,11 @@ const _TELEMETRY_RETENTION_DAYS: u64 = 30;
 
 /// Maximum age for ephemeral captures (camera, audio, tts) in days.
 /// These are processed immediately; raw files only needed short-term.
-const EPHEMERAL_RETENTION_DAYS: u64 = 7;
+/// Cut from 7 → 2 (matches SCREENSHOT_RETENTION_DAYS): holding a week of
+/// plaintext webcam frames / mic recordings / TTS audio on disk is
+/// disproportionate to the "ephemeral" label. Scene descriptions that
+/// matter live encrypted in MemoryPlane.
+const EPHEMERAL_RETENTION_DAYS: u64 = 2;
 
 /// Maximum age for session transcript files on disk (days).
 const SESSION_RETENTION_DAYS: u64 = 30;
@@ -168,7 +172,12 @@ pub struct HousekeepingReport {
 // ─────────────────────────────────────────────────────────
 
 /// Keep only the newest `max_files` files in a directory. Remove older ones.
-async fn cleanup_dir_by_count(dir: &Path, max_files: usize) -> Result<usize> {
+///
+/// Exposed as `pub(crate)` so hot paths (e.g. camera presence capture) can
+/// enforce the cap per cycle rather than waiting for the 6-hour
+/// housekeeping tick — otherwise the directory drifts far above the limit
+/// between sweeps (observed live: 229 files in /var/lib/lifeos/camera/).
+pub(crate) async fn cleanup_dir_by_count(dir: &Path, max_files: usize) -> Result<usize> {
     let mut entries = Vec::new();
     let mut read_dir = fs::read_dir(dir).await?;
 

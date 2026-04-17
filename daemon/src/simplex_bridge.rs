@@ -546,11 +546,27 @@ mod inner {
             path // try original file if conversion failed
         };
 
-        let output = Command::new(whisper)
-            .args(["-m", model, "-f", input_path, "-l", "es", "--no-timestamps"])
-            .output()
-            .await
-            .ok()?;
+        // Round-2 audit C-NEW-4 — SimpleX voice notes are capped at
+        // ~60s by the sender client and run through a small whisper
+        // model, so ~120s timeout is plenty. `kill_on_drop(true)` so
+        // a crashed / cancelled bridge doesn't leave orphans.
+        let mut cmd = Command::new(whisper);
+        cmd.args(["-m", model, "-f", input_path, "-l", "es", "--no-timestamps"])
+            .kill_on_drop(true);
+        let output =
+            match tokio::time::timeout(std::time::Duration::from_secs(120), cmd.output()).await {
+                Ok(Ok(o)) => o,
+                Ok(Err(e)) => {
+                    warn!("[simplex_bridge] whisper spawn failed: {}", e);
+                    let _ = tokio::fs::remove_file(&wav_path).await;
+                    return None;
+                }
+                Err(_) => {
+                    warn!("[simplex_bridge] whisper transcription timed out");
+                    let _ = tokio::fs::remove_file(&wav_path).await;
+                    return None;
+                }
+            };
 
         // Clean up temp WAV
         let _ = tokio::fs::remove_file(&wav_path).await;
@@ -734,6 +750,9 @@ mod inner {
         meeting_archive: Option<Arc<crate::meeting_archive::MeetingArchive>>,
         meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
         calendar: Option<Arc<crate::calendar::CalendarManager>>,
+        sensory_pipeline_for_tools: Option<
+            Arc<RwLock<crate::sensory_pipeline::SensoryPipelineManager>>,
+        >,
         history: Arc<ConversationHistory>,
         cron_store: Arc<CronStore>,
         event_bus: Option<tokio::sync::broadcast::Sender<crate::events::DaemonEvent>>,
@@ -757,6 +776,7 @@ mod inner {
             meeting_archive,
             meeting_assistant,
             calendar,
+            sensory_pipeline: sensory_pipeline_for_tools.clone(),
             rate_limiter: RateLimiter::new(),
         };
 
@@ -980,18 +1000,45 @@ mod inner {
                                         PendingAction::TranscribeVoice { display_name } => {
                                             match transcribe_audio(&path).await {
                                                 Some(transcript) => {
+                                                    // C-7 fix: no transcript content in
+                                                    // journald — length-only log. Previously
+                                                    // the first 80 chars landed in the
+                                                    // system journal alongside the
+                                                    // contact's display name.
                                                     info!(
-                                                        "[simplex_bridge] Voice transcribed from {}: {}",
+                                                        "[simplex_bridge] Voice transcribed from {} ({} chars)",
                                                         display_name,
-                                                        &transcript.chars().take(80).collect::<String>()
+                                                        transcript.chars().count()
                                                     );
-                                                    let (reply, _) = axi_tools::agentic_chat(
-                                                        &tool_ctx,
-                                                        SIMPLEX_CHAT_ID,
-                                                        &format!("[Mensaje de voz] {}", transcript),
-                                                        None,
-                                                    )
-                                                    .await;
+                                                    // C-6 fix: force sensitivity to Critical
+                                                    // so the LLM router pins to LOCAL tier
+                                                    // only. Voice notes are sensory artifacts
+                                                    // that must never leave the device
+                                                    // even when BYOK cloud providers are
+                                                    // configured.
+                                                    //
+                                                    // W-NEW-5: mark the chat as voice-originated
+                                                    // so EVERY follow-up turn on this chat
+                                                    // inherits the clamp, even when the next
+                                                    // message is plain text ("sí dale" / "ok").
+                                                    tool_ctx
+                                                        .history
+                                                        .mark_voice_origin(SIMPLEX_CHAT_ID)
+                                                        .await;
+                                                    let (reply, _) =
+                                                        axi_tools::agentic_chat_with_sensitivity(
+                                                            &tool_ctx,
+                                                            SIMPLEX_CHAT_ID,
+                                                            &format!(
+                                                                "[Mensaje de voz] {}",
+                                                                transcript
+                                                            ),
+                                                            None,
+                                                            Some(
+                                                                crate::privacy_filter::SensitivityLevel::Critical,
+                                                            ),
+                                                        )
+                                                        .await;
                                                     let _ = send_message(
                                                         &mut sink,
                                                         &display_name,
@@ -1001,11 +1048,34 @@ mod inner {
                                                     // ── Voice-note reply hook (E2) ──
                                                     // For voice-originated inputs, synthesize reply as OGG
                                                     // and send as voice note (max 600 chars, max 1 MB).
-                                                    if reply.len() <= 600 {
+                                                    //
+                                                    // Habla audit C-2: gate on Sense::Tts BEFORE
+                                                    // synthesising. Without this, the voice-note
+                                                    // reply path kept synthesising + sending
+                                                    // audio over SimpleX even with tts_enabled=false
+                                                    // or kill switch engaged. Gate checks
+                                                    // kill_switch + tts_enabled + suspend.
+                                                    let tts_gate_ok = if let Some(ref sens) =
+                                                        tool_ctx.sensory_pipeline
+                                                    {
+                                                        sens.read()
+                                                            .await
+                                                            .ensure_sense_allowed(
+                                                                crate::sensory_pipeline::Sense::Tts,
+                                                                "simplex_bridge.voice_note_reply",
+                                                            )
+                                                            .await
+                                                            .is_ok()
+                                                    } else {
+                                                        // Fail-closed when manager isn't wired —
+                                                        // consistent with the mic gate.
+                                                        false
+                                                    };
+                                                    if reply.len() <= 600 && tts_gate_ok {
                                                         let server_url =
                                                             std::env::var("LIFEOS_TTS_SERVER_URL")
                                                                 .unwrap_or_else(|_| {
-                                                                    "http://127.0.0.1:8083"
+                                                                    "http://127.0.0.1:8084"
                                                                         .to_string()
                                                                 });
                                                         let env_default = std::env::var(
@@ -1248,6 +1318,32 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                 || lower == "/screen"
                                                 || wants_screenshot(&lower)
                                             {
+                                                // Shared screen-capture gate — refuses when
+                                                // screen_enabled=false / kill switch / suspend /
+                                                // session locked / sensitive window. Round-2
+                                                // audit C-NEW-4: this command previously shipped
+                                                // a live screenshot over the network with zero
+                                                // policy check.
+                                                let gate = if let Some(ref sens) =
+                                                    tool_ctx.sensory_pipeline
+                                                {
+                                                    sens.read()
+                                                        .await
+                                                        .ensure_screen_capture_allowed()
+                                                        .await
+                                                        .map_err(|r| r.to_string())
+                                                } else {
+                                                    Ok(())
+                                                };
+                                                if let Err(reason) = gate {
+                                                    let _ = send_message(
+                                                        &mut sink,
+                                                        &display_name,
+                                                        &format!("Captura rechazada: {}", reason),
+                                                    )
+                                                    .await;
+                                                    continue;
+                                                }
                                                 match capture_screenshot().await {
                                                     Some(path) => {
                                                         let _ = send_file(

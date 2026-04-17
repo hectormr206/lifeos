@@ -201,7 +201,6 @@ pub struct ApiState {
 pub struct ApiConfig {
     pub bind_address: SocketAddr,
     pub api_key: Option<String>,
-    pub enable_cors: bool,
     pub max_request_size: usize,
 }
 
@@ -210,7 +209,6 @@ impl Default for ApiConfig {
         Self {
             bind_address: "127.0.0.1:8081".parse().unwrap(),
             api_key: None,
-            enable_cors: true,
             max_request_size: 10 * 1024 * 1024, // 10MB
         }
     }
@@ -1310,6 +1308,12 @@ pub fn create_router(state: ApiState) -> Router {
         )
         .route("/sensory/benchmark", post(run_sensory_benchmark))
         .route("/sensory/kill-switch", post(trigger_sensory_kill_switch))
+        // Speaker profile management — let the user name anonymous
+        // profiles the daemon auto-created during meetings so future
+        // diarizations surface real participant names.
+        .route("/speakers", get(list_speaker_profiles))
+        .route("/speakers/:id/name", post(set_speaker_profile_name))
+        .route("/speakers/:id", delete(delete_speaker_profile))
         // Wake word training
         .route("/sensory/wake-word/record", post(record_wake_word_sample))
         .route("/sensory/wake-word/train", post(train_wake_word_model))
@@ -1663,10 +1667,86 @@ async fn dashboard_bootstrap(
             }),
         ));
     }
+
+    // Defense-in-depth against DNS rebinding: a browser visiting an attacker
+    // page that rebinds its hostname to 127.0.0.1 still sends the attacker's
+    // original hostname in the Host header. Require Host (and Origin, if
+    // present) to address the loopback interface.
+    let headers = request.headers();
+    let host_ok = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(is_loopback_host)
+        .unwrap_or(false);
+    if !host_ok {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "Bootstrap endpoint requires a loopback Host header".to_string(),
+                code: 403,
+            }),
+        ));
+    }
+    if let Some(origin) = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|h| h.to_str().ok())
+    {
+        if !is_loopback_origin(origin) {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiError {
+                    error: "Forbidden".to_string(),
+                    message: "Bootstrap endpoint rejects non-loopback Origin".to_string(),
+                    code: 403,
+                }),
+            ));
+        }
+    }
+
     let peer = request
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|ci| ci.0);
+
+    // Defense-in-depth: reject TCP peers that are not on the loopback
+    // interface even if the bind check and header checks passed. This
+    // closes the theoretical "bound to 0.0.0.0 by misconfiguration"
+    // window as a belt-and-braces guard.
+    if let Some(peer_addr) = peer {
+        if !peer_addr.ip().is_loopback() {
+            log::warn!(
+                "Dashboard bootstrap rejected: non-loopback peer {}",
+                peer_addr
+            );
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ApiError {
+                    error: "Forbidden".to_string(),
+                    message: "Bootstrap endpoint rejects non-loopback peers".to_string(),
+                    code: 403,
+                }),
+            ));
+        }
+    }
+
+    // Coarse rate-limit. A local attacker with a poisoned Host header is
+    // blocked upstream; this just bounds how many tokens a misbehaving
+    // loopback process can pull per minute. Burst allowance is generous
+    // because the legitimate dashboard fetches the token once per page
+    // load.
+    if !bootstrap_rate_limit_check() {
+        log::warn!("Dashboard bootstrap rate-limit hit");
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiError {
+                error: "Too Many Requests".to_string(),
+                message: "Bootstrap endpoint rate-limited".to_string(),
+                code: 429,
+            }),
+        ));
+    }
+
     log::info!(
         "Dashboard bootstrap token served to {:?} — local-only endpoint",
         peer
@@ -1675,6 +1755,63 @@ async fn dashboard_bootstrap(
         token: state.config.api_key.clone(),
         auth_required: state.config.api_key.is_some(),
     }))
+}
+
+/// Sliding-window rate limiter for `/dashboard/bootstrap`.
+/// 30 requests / 60s is well above any legitimate dashboard load
+/// pattern (typically one fetch per page reload) but sharply limits
+/// the damage a misbehaving loopback process can do.
+fn bootstrap_rate_limit_check() -> bool {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    static WINDOW: Mutex<Vec<Instant>> = Mutex::new(Vec::new());
+    const MAX_REQUESTS: usize = 30;
+    const WINDOW_DURATION: Duration = Duration::from_secs(60);
+
+    let now = Instant::now();
+    let mut guard = match WINDOW.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.retain(|ts| now.duration_since(*ts) < WINDOW_DURATION);
+    if guard.len() >= MAX_REQUESTS {
+        return false;
+    }
+    guard.push(now);
+    true
+}
+
+/// True if `host` (value from a `Host` header, may include `:port`) points
+/// at the loopback interface. Accepts `localhost`, `127.0.0.1`, `::1` and
+/// the bracketed IPv6 form `[::1]`.
+fn is_loopback_host(host: &str) -> bool {
+    let trimmed = host.trim();
+    // Strip the bracketed-IPv6 wrapper and port suffix.
+    let without_brackets = trimmed
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once(']').map(|(h, _)| h))
+        .unwrap_or(trimmed);
+    let host_only = if without_brackets.contains("::") {
+        // IPv6 literal may still carry a `]:port` that we stripped above,
+        // but the bare form `::1` has no port delimiter.
+        without_brackets
+    } else {
+        without_brackets
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(without_brackets)
+    };
+    matches!(host_only, "localhost" | "127.0.0.1" | "::1")
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let trimmed = origin.trim().trim_end_matches('/');
+    let without_scheme = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+        .unwrap_or(trimmed);
+    is_loopback_host(without_scheme)
 }
 
 async fn get_security_alerts(
@@ -2951,8 +3088,39 @@ async fn stop_stt_service() -> Result<Json<serde_json::Value>, (StatusCode, Json
 }
 
 async fn transcribe_audio_file(
+    State(state): State<ApiState>,
     Json(payload): Json<SttTranscribePayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // Hearing audit C-4 — previously this endpoint accepted ANY file
+    // path that existed on disk and shipped it to whisper. An authed
+    // caller could transcribe /home/**/*.wav, other users' recordings,
+    // or anything whisper's libsndfile can read. Now: whitelist the
+    // path to daemon-owned sensory dirs and gate on FollowAlong
+    // consent + the unified Sense::Microphone policy.
+    ensure_followalong_consent(&state).await?;
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    if let Err(reason) = sensory_mgr
+        .ensure_sense_allowed(
+            crate::sensory_pipeline::Sense::Microphone,
+            "api.stt_transcribe",
+        )
+        .await
+    {
+        let status = if reason.contains("suspend") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::FORBIDDEN
+        };
+        return Err((
+            status,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: reason.to_string(),
+                code: status.as_u16(),
+            }),
+        ));
+    }
+
     let file = payload.file.trim();
     if file.is_empty() {
         return Err((
@@ -2964,19 +3132,10 @@ async fn transcribe_audio_file(
             }),
         ));
     }
+    let validated = validate_sensory_source_path(file)?;
+    let file_str = validated.to_string_lossy().to_string();
 
-    if !std::path::Path::new(file).exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: "Not Found".to_string(),
-                message: format!("Audio file not found: {}", file),
-                code: 404,
-            }),
-        ));
-    }
-
-    let (text, binary) = transcribe_with_whisper(file, payload.model.as_deref()).await?;
+    let (text, binary) = transcribe_with_whisper(&file_str, payload.model.as_deref()).await?;
 
     Ok(Json(serde_json::json!({
         "status": "ok",
@@ -3046,8 +3205,14 @@ async fn post_vision_ocr(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
     let capture_screen = payload.capture_screen.unwrap_or(payload.source.is_none());
 
+    // Full screen-sense gate: consent + kill switch + screen_enabled +
+    // suspend. Applies to both live-capture and pre-captured sources.
+    // Previously only `ensure_followalong_consent` ran here, so a user
+    // who had toggled `screen_enabled=false` (or whose kill switch was
+    // tripped) could still OCR screenshots through this endpoint.
+    ensure_screen_capture_allowed(&state).await?;
+
     let source_path = if capture_screen {
-        ensure_followalong_consent(&state).await?;
         let capture = ScreenCapture::new(PathBuf::from("/var/lib/lifeos/screenshots"));
         let screenshot = capture.capture().await.map_err(|e| {
             (
@@ -3061,7 +3226,7 @@ async fn post_vision_ocr(
         })?;
         screenshot.path.to_string_lossy().to_string()
     } else {
-        payload
+        let raw = payload
             .source
             .as_deref()
             .map(|v| v.trim().to_string())
@@ -3075,19 +3240,11 @@ async fn post_vision_ocr(
                         code: 400,
                     }),
                 )
-            })?
+            })?;
+        validate_sensory_source_path(&raw)?
+            .to_string_lossy()
+            .to_string()
     };
-
-    if !std::path::Path::new(&source_path).exists() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ApiError {
-                error: "Not Found".to_string(),
-                message: format!("Image source not found: {}", source_path),
-                code: 404,
-            }),
-        ));
-    }
 
     let language = payload
         .language
@@ -3133,11 +3290,22 @@ async fn post_vision_ocr(
         })?;
 
     if !output.status.success() {
+        // Do NOT echo tesseract/leptonica stderr to the caller — on
+        // non-image inputs libleptonica stuffs the first line of the file
+        // into the error message as the "filename", which would leak the
+        // contents of whatever path the caller supplied (even though the
+        // caller-supplied path is validated above, defense-in-depth).
+        let exit_code = output.status.code().unwrap_or(-1);
+        log::warn!(
+            "OCR exited with status {}: {}",
+            exit_code,
+            output_stderr(&output)
+        );
         return Err((
             StatusCode::BAD_GATEWAY,
             Json(ApiError {
                 error: "Bad Gateway".to_string(),
-                message: format!("OCR failed: {}", output_stderr(&output)),
+                message: format!("OCR failed (exit {})", exit_code),
                 code: 502,
             }),
         ));
@@ -3171,19 +3339,90 @@ async fn get_sensory_status(
                 }),
             )
         })?;
-    Ok(Json(serde_json::json!(status)))
+
+    // Redact the fields that leak user activity: window title, capture
+    // path, raw + extracted OCR text, and the LLM screen summary. These
+    // stay in the in-memory pipeline state (and the on-disk state file)
+    // but must NOT be returned to API clients. Previously every
+    // bootstrap-authed consumer got live window titles on each poll.
+    let mut value = serde_json::to_value(&status).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiError {
+                error: "Internal Server Error".to_string(),
+                message: e.to_string(),
+                code: 500,
+            }),
+        )
+    })?;
+    if let Some(vision) = value.get_mut("vision").and_then(|v| v.as_object_mut()) {
+        for key in [
+            "last_capture_path",
+            "last_ocr_text",
+            "last_relevant_text",
+            "last_summary",
+            "current_window",
+            "current_app",           // app identity reveals activity category
+            "last_window_change_at", // cadence leak
+        ] {
+            vision.remove(key);
+        }
+    }
+    // Voice transcripts and responses also leak directly — the prior
+    // scrub only covered vision. Round-2 audit flagged this as C-NEW-7.
+    if let Some(voice) = value.get_mut("voice").and_then(|v| v.as_object_mut()) {
+        for key in ["last_transcript", "last_response", "last_audio_path"] {
+            voice.remove(key);
+        }
+    }
+    Ok(Json(value))
 }
 
 async fn run_voice_session(
     State(state): State<ApiState>,
     Json(payload): Json<SensoryVoiceSessionPayload>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // Hearing audit C-5: `audio_file` was forwarded to whisper without
+    // whitelist or gate. Full mic-gate + path whitelist before we hand
+    // control to the pipeline.
+    ensure_followalong_consent(&state).await?;
     let ai_manager = *state.ai_manager.read().await;
     let overlay_mgr = state.overlay_manager.read().await.clone();
     let screen_capture = state.screen_capture.read().await.clone();
     let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
     let memory_plane = state.memory_plane_manager.read().await.clone();
     let telemetry = state.telemetry_manager.read().await.clone();
+    if let Err(reason) = sensory_mgr
+        .ensure_sense_allowed(
+            crate::sensory_pipeline::Sense::Microphone,
+            "api.voice_session",
+        )
+        .await
+    {
+        let status = if reason.contains("suspend") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::FORBIDDEN
+        };
+        return Err((
+            status,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: reason.to_string(),
+                code: status.as_u16(),
+            }),
+        ));
+    }
+
+    // Whitelist caller-supplied audio_file paths to daemon-owned dirs.
+    let validated_audio_file = match payload.audio_file.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => Some(
+            validate_sensory_source_path(raw)?
+                .to_string_lossy()
+                .to_string(),
+        ),
+        _ => None,
+    };
 
     let result = sensory_mgr
         .run_voice_loop(
@@ -3193,7 +3432,7 @@ async fn run_voice_session(
             &memory_plane,
             &telemetry,
             VoiceLoopRequest {
-                audio_file: payload.audio_file,
+                audio_file: validated_audio_file,
                 prompt: payload.prompt,
                 include_screen: payload.include_screen.unwrap_or(false),
                 screen_source: payload.screen_source,
@@ -3327,6 +3566,23 @@ async fn describe_screen_with_sensory(
         ));
     }
 
+    // Full screen-sense gate (consent + kill switch + screen_enabled +
+    // suspend). Previously only `ensure_followalong_consent` — that let
+    // describe_screen bypass the master screen toggle the user sees in
+    // the dashboard.
+    ensure_screen_capture_allowed(&state).await?;
+
+    // Whitelist caller-supplied source paths to daemon-owned sensory dirs
+    // so the endpoint cannot be used to read and describe arbitrary files.
+    let validated_source = match payload.source.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => Some(
+            validate_sensory_source_path(raw)?
+                .to_string_lossy()
+                .to_string(),
+        ),
+        _ => None,
+    };
+
     let ai_manager = *state.ai_manager.read().await;
     let overlay_mgr = state.overlay_manager.read().await.clone();
     let screen_capture = state.screen_capture.read().await.clone();
@@ -3340,7 +3596,7 @@ async fn describe_screen_with_sensory(
             &screen_capture,
             &memory_plane,
             VisionDescribeRequest {
-                source: payload.source,
+                source: validated_source,
                 capture_screen: payload.capture_screen.unwrap_or(true),
                 speak: payload.speak.unwrap_or(true),
                 question: payload.question,
@@ -3398,6 +3654,104 @@ async fn refresh_presence_status(
         "status": "ok",
         "presence": presence,
     })))
+}
+
+// ── Speaker profile management ──────────────────────────────────────────
+//
+// The daemon auto-creates anonymous profiles (`speaker_<uuid>`) the first
+// time it hears a new voice during a meeting. These endpoints let the user
+// list those profiles and attach real names — so the next meeting's
+// diarized transcript and `participants` column surface "Hector" / "Juan"
+// instead of "Unknown Speaker 1".
+
+#[derive(Deserialize)]
+struct SpeakerNamePayload {
+    name: String,
+}
+
+async fn list_speaker_profiles(
+    State(state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let sid = sensory_mgr.speaker_id();
+    let guard = sid.read().await;
+    let profiles: Vec<serde_json::Value> = guard
+        .profiles()
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id,
+                "name": p.name,
+                "embedding_count": p.embeddings.len(),
+                "interaction_count": p.interaction_count,
+                "created_at": p.created_at,
+                "last_seen_at": p.last_seen_at,
+            })
+        })
+        .collect();
+    Ok(Json(serde_json::json!({
+        "status": "ok",
+        "count": profiles.len(),
+        "profiles": profiles,
+    })))
+}
+
+async fn set_speaker_profile_name(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+    Json(payload): Json<SpeakerNamePayload>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let name = payload.name.trim().to_string();
+    if name.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "name is empty".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let sid = sensory_mgr.speaker_id();
+    let mut guard = sid.write().await;
+    if guard.set_name(&id, &name) {
+        Ok(Json(serde_json::json!({
+            "status": "ok",
+            "id": id,
+            "name": name,
+        })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("No speaker profile with id {}", id),
+                code: 404,
+            }),
+        ))
+    }
+}
+
+async fn delete_speaker_profile(
+    State(state): State<ApiState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    let sid = sensory_mgr.speaker_id();
+    let mut guard = sid.write().await;
+    if guard.delete_profile(&id) {
+        Ok(Json(serde_json::json!({ "status": "ok", "id": id })))
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: format!("No speaker profile with id {}", id),
+                code: 404,
+            }),
+        ))
+    }
 }
 
 async fn run_sensory_benchmark(
@@ -4976,11 +5330,20 @@ async fn overlay_chat(
     State(state): State<ApiState>,
     Json(request): Json<OverlayChatRequest>,
 ) -> Result<Json<OverlayChatResponse>, (StatusCode, Json<ApiError>)> {
+    // `include_screen=true` triggers a real screen capture inside
+    // overlay.send_message via include_screen_context. Without this gate
+    // the endpoint bypassed every screen policy lever (round-2 C-NEW-1).
+    // Callers that didn't request screen context stay ungated.
+    let request_include_screen = request.include_screen;
+    if request_include_screen {
+        ensure_screen_capture_allowed(&state).await?;
+    }
+
     let overlay_mgr = state.overlay_manager.read().await.clone();
     let start = std::time::Instant::now();
 
     let response = match overlay_mgr
-        .send_message(request.message, request.include_screen)
+        .send_message(request.message, request_include_screen)
         .await
     {
         Ok(response) => response,
@@ -5018,6 +5381,11 @@ async fn overlay_chat(
 async fn overlay_screenshot(
     State(state): State<ApiState>,
 ) -> Result<Json<OverlayScreenshotResponse>, (StatusCode, Json<ApiError>)> {
+    // `overlay.include_screen_context()` calls ScreenCapture::capture
+    // directly with no gating of its own. Without this check the overlay
+    // endpoint was a backdoor around consent + kill switch + the master
+    // screen toggle.
+    ensure_screen_capture_allowed(&state).await?;
     let overlay_mgr = state.overlay_manager.read().await.clone();
     let screenshot_path = match overlay_mgr.include_screen_context().await {
         Ok(path) => path,
@@ -6779,11 +7147,25 @@ async fn get_followalong_context(
     State(state): State<ApiState>,
 ) -> Result<Json<ContextStateResponse>, (StatusCode, Json<ApiError>)> {
     let manager = state.follow_along_manager.read().await.clone();
+    let config = manager.get_config().await;
+    let consented = config.consent_status == crate::follow_along::ConsentStatus::Granted;
     let context = manager.get_context().await;
 
+    // Mirror the gate that `get_event_stats` now applies: without
+    // FollowAlong consent, drop the identity fields. Audit round-2
+    // C-NEW-8 — the previous version returned live titles regardless
+    // of consent, undoing every other gate.
     Ok(Json(ContextStateResponse {
-        current_application: context.current_application,
-        current_window: context.current_window,
+        current_application: if consented {
+            context.current_application
+        } else {
+            None
+        },
+        current_window: if consented {
+            context.current_window
+        } else {
+            None
+        },
         active_pattern: context.active_pattern,
         session_duration_minutes: context.session_duration.num_minutes(),
         last_event: context.last_event.map(|t| t.to_rfc3339()),
@@ -7672,6 +8054,9 @@ struct SensoryRuntimePayload {
     screen_enabled: Option<bool>,
     camera_enabled: Option<bool>,
     tts_enabled: Option<bool>,
+    /// Per-sense toggle for the meeting recorder. See
+    /// `SensoryCaptureRuntimeState::meeting_enabled`.
+    meeting_enabled: Option<bool>,
     capture_interval_seconds: Option<u64>,
     actor: Option<String>,
 }
@@ -8459,6 +8844,7 @@ async fn set_sensory_runtime(
     let screen_enabled = payload.screen_enabled.unwrap_or(current.screen_enabled);
     let camera_enabled = payload.camera_enabled.unwrap_or(current.camera_enabled);
     let tts_enabled = payload.tts_enabled.unwrap_or(current.tts_enabled);
+    let meeting_enabled = payload.meeting_enabled.unwrap_or(current.meeting_enabled);
     let capture_interval_seconds = payload
         .capture_interval_seconds
         .or(Some(current.capture_interval_seconds))
@@ -8486,6 +8872,7 @@ async fn set_sensory_runtime(
             screen_enabled,
             camera_enabled,
             tts_enabled,
+            meeting_enabled,
             capture_interval_seconds,
             payload.actor.as_deref(),
         )
@@ -8512,6 +8899,7 @@ async fn set_sensory_runtime(
                 screen_enabled: status.screen_enabled,
                 camera_enabled: status.camera_enabled,
                 tts_enabled: status.tts_enabled,
+                meeting_enabled: status.meeting_enabled,
                 kill_switch_active: status.kill_switch_active,
                 capture_interval_seconds: status.capture_interval_seconds,
                 always_on_active: always_on.enabled,
@@ -8557,7 +8945,12 @@ async fn capture_sensory_snapshot(
         ));
     }
 
-    let include_screen = payload.include_screen.unwrap_or(sensory.screen_enabled);
+    // `include_screen=true` in the payload must NOT override the user's
+    // master `screen_enabled` toggle. Ditto kill switch. Previously a
+    // caller could force a capture by passing `include_screen: true`
+    // even after the user had explicitly disabled screen capture.
+    let payload_include = payload.include_screen.unwrap_or(sensory.screen_enabled);
+    let include_screen = payload_include && sensory.screen_enabled && !sensory.kill_switch_active;
     let mut screen_path = None;
     if include_screen {
         let capture = ScreenCapture::new(PathBuf::from("/var/lib/lifeos/screenshots"));
@@ -8893,6 +9286,7 @@ async fn trigger_sensory_kill_switch(
                     screen_enabled: runtime.screen_enabled,
                     camera_enabled: runtime.camera_enabled,
                     tts_enabled: runtime.tts_enabled,
+                    meeting_enabled: runtime.meeting_enabled,
                     kill_switch_active: runtime.kill_switch_active,
                     capture_interval_seconds: runtime.capture_interval_seconds,
                     always_on_active: always_on.enabled,
@@ -8923,8 +9317,35 @@ const WAKE_WORD_MODEL_PATH: &str = "/var/lib/lifeos/models/rustpotter/axi.rpw";
 
 /// Record a 2-second WAV sample of the user saying the wake word.
 async fn record_wake_word_sample(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)> {
+    // Hearing audit C-9: this endpoint previously discarded state and
+    // spawned pw-record with zero checks. Now gates on consent +
+    // unified Sense::Microphone (kill switch + audio_enabled + suspend).
+    ensure_followalong_consent(&state).await?;
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    if let Err(reason) = sensory_mgr
+        .ensure_sense_allowed(
+            crate::sensory_pipeline::Sense::Microphone,
+            "api.wake_word_record",
+        )
+        .await
+    {
+        let status = if reason.contains("suspend") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::FORBIDDEN
+        };
+        return Err((
+            status,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: reason.to_string(),
+                code: status.as_u16(),
+            }),
+        ));
+    }
+
     let samples_dir = std::path::Path::new(WAKE_WORD_SAMPLES_DIR);
     tokio::fs::create_dir_all(samples_dir).await.map_err(|e| {
         (
@@ -9116,6 +9537,20 @@ async fn train_wake_word_model(
             .save_to_file(&model_path)
             .map_err(|e| format!("Failed to save model: {e}"))?;
 
+        // Hearing audit C-13: rustpotter model encodes MFCC statistics
+        // of the user's enrolled voice — biometric data. Prior behavior
+        // left the file world-readable (observed 0o644 root:root).
+        // Chmod 0o600 so only the daemon's uid can read.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(md) = std::fs::metadata(&model_path) {
+                let mut perms = md.permissions();
+                perms.set_mode(0o600);
+                let _ = std::fs::set_permissions(&model_path, perms);
+            }
+        }
+
         Ok::<_, String>(model_path)
     })
     .await
@@ -9203,6 +9638,93 @@ async fn ensure_followalong_consent(state: &ApiState) -> Result<(), (StatusCode,
             }),
         ))
     }
+}
+
+/// Gate a screen-capturing API request. Wraps the unified
+/// `SensoryPipelineManager::ensure_sense_allowed(Sense::Screen, caller)`
+/// with an HTTP error shape. Non-API callers (axi_tools, supervisor,
+/// simplex_bridge, desktop_operator, MCP, overlay) MUST call the
+/// manager directly so every capture path shares one policy check.
+async fn ensure_screen_capture_allowed(
+    state: &ApiState,
+) -> Result<(), (StatusCode, Json<ApiError>)> {
+    ensure_followalong_consent(state).await?;
+
+    let sensory_mgr = state.sensory_pipeline_manager.read().await.clone();
+    if let Err(reason) = sensory_mgr
+        .ensure_sense_allowed(crate::sensory_pipeline::Sense::Screen, "api.screen_helper")
+        .await
+    {
+        let status = if reason.contains("suspend") {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::FORBIDDEN
+        };
+        return Err((
+            status,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: reason.to_string(),
+                code: status.as_u16(),
+            }),
+        ));
+    }
+    Ok(())
+}
+
+/// Allowed base directories for caller-supplied sensory source paths.
+/// Restricting to daemon-owned output dirs blocks path-traversal reads of
+/// arbitrary files through /api/v1/sensory/vision/describe,
+/// /api/v1/vision/ocr, /api/v1/audio/stt/transcribe, and
+/// /api/v1/sensory/voice/session (audio_file).
+const SENSORY_SOURCE_ALLOWED_PREFIXES: &[&str] = &[
+    "/var/lib/lifeos/screenshots/",
+    "/var/lib/lifeos/camera/",
+    "/var/lib/lifeos/audio/",
+    "/var/lib/lifeos/meetings/",
+    "/var/lib/lifeos/simplex-downloads/",
+    "/var/lib/lifeos/tts/",
+];
+
+fn validate_sensory_source_path(
+    source: &str,
+) -> Result<std::path::PathBuf, (StatusCode, Json<ApiError>)> {
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "Bad Request".to_string(),
+                message: "source path is empty".to_string(),
+                code: 400,
+            }),
+        ));
+    }
+    let canonical = std::path::Path::new(trimmed).canonicalize().map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ApiError {
+                error: "Not Found".to_string(),
+                message: "source path does not resolve".to_string(),
+                code: 404,
+            }),
+        )
+    })?;
+    let canon_str = canonical.to_string_lossy();
+    let allowed = SENSORY_SOURCE_ALLOWED_PREFIXES
+        .iter()
+        .any(|p| canon_str.starts_with(p));
+    if !allowed {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(ApiError {
+                error: "Forbidden".to_string(),
+                message: "source path is outside the allowed sensory directories".to_string(),
+                code: 403,
+            }),
+        ));
+    }
+    Ok(canonical)
 }
 
 async fn get_workspace_awareness() -> Result<Json<serde_json::Value>, (StatusCode, Json<ApiError>)>
@@ -11467,6 +11989,7 @@ async fn post_llm_chat(
             meeting_archive: Some(state.meeting_archive.clone()),
             meeting_assistant: state.meeting_assistant.clone(),
             calendar: Some(state.calendar.clone()),
+            sensory_pipeline: Some(state.sensory_pipeline_manager.clone()),
             rate_limiter: RateLimiter::new(),
         };
 
@@ -12455,5 +12978,102 @@ mod tests {
         // empty; we must NOT block the user from setting a preference.
         assert!(validate_tts_voice("af_heart", &[]).is_ok());
         assert!(validate_tts_voice("any_unknown_voice", &[]).is_ok());
+    }
+
+    // ── camera-audit Fase A: path-traversal guards + loopback header gates ──
+
+    #[test]
+    fn loopback_host_accepts_localhost_and_127() {
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("localhost:8081"));
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.0.0.1:8081"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("[::1]"));
+        assert!(is_loopback_host("[::1]:8081"));
+    }
+
+    #[test]
+    fn loopback_host_rejects_remote_and_empty() {
+        assert!(!is_loopback_host("evil.com"));
+        assert!(!is_loopback_host("evil.com:8081"));
+        assert!(!is_loopback_host("10.0.0.5"));
+        assert!(!is_loopback_host("127.0.0.1.evil.com"));
+        assert!(!is_loopback_host(""));
+        // IPv4-mapped IPv6 loopback is intentionally rejected: keeps the
+        // matcher simple and the real browser path never uses this form.
+        assert!(!is_loopback_host("::ffff:127.0.0.1"));
+    }
+
+    #[test]
+    fn loopback_origin_accepts_http_and_https_loopback() {
+        assert!(is_loopback_origin("http://localhost"));
+        assert!(is_loopback_origin("http://localhost:8081"));
+        assert!(is_loopback_origin("https://127.0.0.1"));
+        assert!(is_loopback_origin("http://[::1]:8081/"));
+    }
+
+    #[test]
+    fn loopback_origin_rejects_non_loopback() {
+        assert!(!is_loopback_origin("http://evil.com"));
+        assert!(!is_loopback_origin("https://evil.com:8081"));
+        assert!(!is_loopback_origin("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn sensory_source_path_rejects_empty_and_unauthorized_paths() {
+        // Empty / whitespace → 400.
+        let err = validate_sensory_source_path("").unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        let err = validate_sensory_source_path("   ").unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+
+        // Outside the allowed dirs → 403 (for paths that do exist) or 404
+        // (for paths that don't resolve). Both branches are security-safe;
+        // the important property is that the call does NOT return Ok.
+        let status = validate_sensory_source_path("/etc/passwd")
+            .map(|_| StatusCode::OK)
+            .unwrap_or_else(|e| e.0);
+        assert_ne!(status, StatusCode::OK);
+        assert!(matches!(
+            status,
+            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+        ));
+
+        let status = validate_sensory_source_path("/home/lifeos/.bash_history")
+            .map(|_| StatusCode::OK)
+            .unwrap_or_else(|e| e.0);
+        assert_ne!(status, StatusCode::OK);
+    }
+
+    #[test]
+    fn sensory_source_path_blocks_traversal_into_allowed_prefix() {
+        // A caller that supplies `/var/lib/lifeos/camera/../../../etc/passwd`
+        // canonicalizes to `/etc/passwd`, which is NOT under an allowed
+        // prefix, so the check must reject even if the raw string does
+        // start with an allowed prefix.
+        let status = validate_sensory_source_path("/var/lib/lifeos/camera/../../../etc/passwd")
+            .map(|_| StatusCode::OK)
+            .unwrap_or_else(|e| e.0);
+        assert_ne!(status, StatusCode::OK);
+    }
+
+    #[test]
+    fn sensory_source_path_accepts_valid_camera_frame() {
+        // Create a real temp file under /var/lib/lifeos/camera/ simulating a
+        // daemon-captured frame, and verify the validator returns Ok.
+        let dir = std::path::Path::new("/var/lib/lifeos/camera");
+        if !dir.exists() {
+            eprintln!("skipping — /var/lib/lifeos/camera not present");
+            return;
+        }
+        let sample = dir.join("test-sensory-source-validator.jpg");
+        if std::fs::write(&sample, b"fake jpg bytes").is_err() {
+            eprintln!("skipping — cannot write test file (permission)");
+            return;
+        }
+        let result = validate_sensory_source_path(sample.to_str().unwrap());
+        let _ = std::fs::remove_file(&sample);
+        assert!(result.is_ok(), "expected Ok for camera-owned path");
     }
 }

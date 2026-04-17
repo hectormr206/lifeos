@@ -37,7 +37,8 @@ sudo bash scripts/build-iso.sh
 
 - **Daemon API:** Axum REST on `127.0.0.1:8081` + WebSocket at `/ws`. Auth: `x-bootstrap-token` header
 - **AI runtime:** llama-server on `:8082`, Qwen3.5-4B default, 13+ LLM providers via `llm_router.rs`
-- **TTS:** `lifeos-tts-server.service` (Kokoro-82M, Apache 2.0) on `127.0.0.1:8083`. HTTP API: `GET /health`, `GET /voices`, `POST /tts`. Integration: `sensory_pipeline.rs::synthesize_with_kokoro_http()`. Docs: [`docs/operations/tts.md`](docs/operations/tts.md)
+- **TTS:** `lifeos-tts-server.service` (Kokoro-82M, Apache 2.0) on `127.0.0.1:8084`. HTTP API: `GET /health`, `GET /voices`, `POST /tts`. Integration: `sensory_pipeline.rs::synthesize_with_kokoro_http()`. Docs: [`docs/operations/tts.md`](docs/operations/tts.md)
+- **Embeddings:** `llama-embeddings.service` (nomic-embed-text-v1.5) on `127.0.0.1:8083`. Shared with `ai.rs::get_embedding()`.
 - **Features:** `default = ["dbus", "http-api"]`, optional `ui-overlay` (GTK4), `messaging` (SimpleX bridge), `tray`
 
 ## Critical Constraints

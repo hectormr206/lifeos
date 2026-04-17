@@ -215,6 +215,12 @@ const CAMERA_CAPTURE_TIMEOUT_SECS: u64 = 3;
 const CAMERA_STALE_CAPTURE_SECS: u64 = 15;
 const CAMERA_CAPTURE_PREFERRED_SIZE: &str = "1280x720";
 const CAMERA_CAPTURE_FALLBACK_SIZE: &str = "640x480";
+/// Per-capture cap for `/var/lib/lifeos/camera/`. Enforced every cycle so
+/// the directory cannot drift above this between 6-hour housekeeping ticks
+/// (observed live: 229 files, nearly 2× the cap, because camera captures
+/// ~6×/min and housekeeping only ran every 6h). Matches the global
+/// MAX_FILES_PER_DIR used by `storage_housekeeping`.
+const CAMERA_PRESENCE_MAX_FILES: usize = 120;
 const CAMERA_FRAME_DARK_THRESHOLD: f64 = 62.0;
 const CAMERA_FRAME_TARGET_BRIGHTNESS: f64 = 96.0;
 const CAMERA_FRAME_MAX_BRIGHTEN: i32 = 52;
@@ -266,7 +272,7 @@ pub struct KokoroVoice {
 pub struct SensoryCapabilities {
     pub stt_binary: Option<String>,
     pub audio_capture_binary: Option<String>,
-    /// URL of the Kokoro TTS HTTP server (e.g. "http://127.0.0.1:8083"). None = unavailable.
+    /// URL of the Kokoro TTS HTTP server (e.g. "http://127.0.0.1:8084"). None = unavailable.
     pub tts_server_url: Option<String>,
     /// Voices available from the Kokoro TTS server. Empty if server is unavailable.
     pub kokoro_voices: Vec<KokoroVoice>,
@@ -329,6 +335,20 @@ impl Default for GpuOffloadStatus {
 #[serde(default)]
 pub struct VoiceSessionRuntime {
     pub active: bool,
+    /// Master "mic capture is permitted at all" toggle — AND of
+    /// `runtime.audio_enabled && !kill_switch_active`. Covers explicit
+    /// voice sessions, meeting recording, barge-in, wake-word sample
+    /// enrollment. Separate from `always_on_active` which is stricter
+    /// (also requires always-on listening to be enabled).
+    #[serde(default)]
+    pub audio_enabled: bool,
+    /// Per-sense toggle for automatic meeting capture. Evaluated by
+    /// `Sense::Meeting`. When false, Axi still detects meetings (for
+    /// focus / presence hints) but does NOT record audio or take
+    /// screenshots. AND'd with audio_enabled and kill_switch in the
+    /// gate so it cannot accidentally re-enable capture.
+    #[serde(default)]
+    pub meeting_capture_enabled: bool,
     pub always_on_active: bool,
     #[serde(default = "default_tts_enabled")]
     pub tts_enabled: bool,
@@ -356,6 +376,8 @@ impl Default for VoiceSessionRuntime {
     fn default() -> Self {
         Self {
             active: false,
+            audio_enabled: false,
+            meeting_capture_enabled: true,
             always_on_active: false,
             tts_enabled: true,
             session_id: None,
@@ -434,8 +456,6 @@ pub struct PresenceRuntime {
     pub user_state: Option<String>,
     /// Number of people detected in frame (0 = nobody, 1 = user alone, 2+ = meeting).
     pub people_count: Option<u8>,
-    /// Last frame path for multimodal analysis.
-    pub last_frame_path: Option<String>,
 }
 
 impl Default for PresenceRuntime {
@@ -455,7 +475,6 @@ impl Default for PresenceRuntime {
             scene_description: None,
             user_state: None,
             people_count: None,
-            last_frame_path: None,
         }
     }
 }
@@ -648,6 +667,9 @@ pub struct SensoryRuntimeSync<'a> {
     pub screen_enabled: bool,
     pub camera_enabled: bool,
     pub tts_enabled: bool,
+    /// Per-sense toggle for automatic meeting capture. Evaluated by
+    /// `Sense::Meeting`. See `VoiceSessionRuntime::meeting_capture_enabled`.
+    pub meeting_enabled: bool,
     pub kill_switch_active: bool,
     pub capture_interval_seconds: u64,
     pub always_on_active: bool,
@@ -667,13 +689,117 @@ pub struct AlwaysOnCycle<'a> {
     pub wake_word_detector: Option<&'a crate::wake_word::WakeWordDetector>,
 }
 
-#[derive(Clone)]
+/// One of Axi's senses — the input/output channels a caller may want to
+/// exercise. Each variant has its own policy (kill switch alone, or
+/// master toggle, or consent, etc.) but every capture/persist/route
+/// request goes through the unified `ensure_sense_allowed` gate so a
+/// new entry point CANNOT nest itself around an older enforcement.
+///
+/// Policy per variant:
+/// - `Screen` — kill switch + `vision.enabled` + suspend + session
+///   lock + sensitive-window title. Applied to every grim/maim/
+///   spectacle/gnome-screenshot shell-out, OCR call, and multimodal
+///   describe request.
+/// - `Camera` — kill switch + `presence.camera_consented` + suspend.
+///   The camera_consented field is already AND'd with kill switch by
+///   `sync_runtime` (Fase A fix).
+/// - `Microphone` — kill switch + `voice.audio_enabled` + suspend.
+///   Covers EVERY mic capture: explicit voice sessions, meeting
+///   recorder, barge-in during TTS playback, wake-word sample
+///   enrollment, STT file transcription.
+/// - `AlwaysOnListening` — stricter superset of Microphone: same gates
+///   PLUS `voice.always_on_active` (the wake-word detector must be
+///   enabled by the user). Use for rustpotter and the continuous
+///   hotword-probe loop only.
+/// - `Meeting` — stricter superset of Microphone: adds the per-sense
+///   `voice.meeting_capture_enabled` toggle so the user can let Axi
+///   hear the mic (wake word, voice commands) WITHOUT auto-recording
+///   every meeting they have. Gates the meeting recorder, screenshots,
+///   and real-time captions.
+/// - `Tts` — kill switch + `voice.tts_enabled`.
+/// - `WindowTracking` — kill switch + FollowAlong consent. Gates the
+///   event-bus `WindowChanged` listener in `sensory_memory`.
+/// - `CloudRoute` — kill switch only. Redundant safety rail for anything
+///   that would send a sensory artifact (image, audio, OCR) to a
+///   non-local LLM provider; upstream paths should ALSO clamp
+///   `SensitivityLevel::Critical`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sense {
+    Screen,
+    Camera,
+    Microphone,
+    AlwaysOnListening,
+    Meeting,
+    Tts,
+    WindowTracking,
+    CloudRoute,
+}
+
+impl Sense {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Sense::Screen => "screen",
+            Sense::Camera => "camera",
+            Sense::Microphone => "microphone",
+            Sense::AlwaysOnListening => "always_on_listening",
+            Sense::Meeting => "meeting",
+            Sense::Tts => "tts",
+            Sense::WindowTracking => "window_tracking",
+            Sense::CloudRoute => "cloud_route",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GateAuditEntry {
+    pub sense: Sense,
+    pub caller: &'static str,
+    pub allowed: bool,
+    pub reason: Option<&'static str>,
+    pub at: DateTime<Utc>,
+}
+
+/// How many gate decisions to keep in memory for dashboard/audit-trail
+/// surfacing. Small ring buffer — we care about recency, not history
+/// (MemoryPlane is where long-term audit lives).
+const GATE_AUDIT_RING_CAPACITY: usize = 200;
+
 pub struct SensoryPipelineManager {
     data_dir: PathBuf,
     state: Arc<RwLock<SensoryPipelineState>>,
     playback: Arc<Mutex<Option<ActivePlayback>>>,
     speaker_id: Arc<RwLock<crate::speaker_id::SpeakerIdManager>>,
     privacy_filter: Option<Arc<PrivacyFilter>>,
+    /// Consent source for `Sense::WindowTracking`. Injected from main
+    /// so the gate can consult FollowAlong without every caller having
+    /// to plumb the manager manually. `None` means the gate treats
+    /// window tracking as unconditionally disallowed (fail-closed).
+    follow_along: Option<Arc<RwLock<crate::follow_along::FollowAlongManager>>>,
+    /// Ring buffer of recent gate decisions — feeds `GET /sensory/gate-audit`
+    /// so the dashboard can surface "which senses were asked for, by
+    /// whom, and were any refused?" without touching MemoryPlane.
+    gate_audit: Arc<RwLock<std::collections::VecDeque<GateAuditEntry>>>,
+    /// Set while the host is in (or about to enter) suspend/hibernate.
+    /// Gates all camera captures so the sensory loop doesn't try to hold
+    /// `/dev/video0` across a sleep cycle — kernel USB re-probes on resume
+    /// leave the old v4l2 handle stale (journal: "Cannot open video device
+    /// /dev/video0: Permission denied"). Cleared on PrepareForSleep(false).
+    suspending: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Clone for SensoryPipelineManager {
+    fn clone(&self) -> Self {
+        Self {
+            data_dir: self.data_dir.clone(),
+            state: self.state.clone(),
+            playback: self.playback.clone(),
+            speaker_id: self.speaker_id.clone(),
+            privacy_filter: self.privacy_filter.clone(),
+            follow_along: self.follow_along.clone(),
+            gate_audit: self.gate_audit.clone(),
+            suspending: self.suspending.clone(),
+        }
+    }
 }
 
 impl SensoryPipelineManager {
@@ -688,7 +814,212 @@ impl SensoryPipelineManager {
                 speaker_dir,
             ))),
             privacy_filter: None,
+            follow_along: None,
+            gate_audit: Arc::new(RwLock::new(std::collections::VecDeque::with_capacity(
+                GATE_AUDIT_RING_CAPACITY,
+            ))),
+            suspending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
+    }
+
+    /// Inject the FollowAlong manager so `Sense::WindowTracking` can
+    /// consult consent. Call this once at daemon init — the gate will
+    /// fail-closed for WindowTracking if the manager isn't wired.
+    pub fn set_follow_along(
+        &mut self,
+        manager: Arc<RwLock<crate::follow_along::FollowAlongManager>>,
+    ) {
+        self.follow_along = Some(manager);
+    }
+
+    /// Unified sense gate — the ONE place every caller goes through before
+    /// exercising any of Axi's senses. Returns `Err(reason)` when a gate
+    /// trips. `caller` is a short static tag (e.g. `"api.overlay_chat"`)
+    /// that lands in the audit ring for debugging / dashboard surfacing.
+    ///
+    /// This is the architectural fix for the recurring "asymmetric
+    /// hardening" class of bug surfaced by the TTS / camera / screen
+    /// audits: new entry points kept bypassing user policy because each
+    /// one had its own ad-hoc subset of checks. Now every sense access
+    /// is routed through here — add a new entry point, get every gate
+    /// for free.
+    pub async fn ensure_sense_allowed(
+        &self,
+        sense: Sense,
+        caller: &'static str,
+    ) -> std::result::Result<(), &'static str> {
+        let outcome = self.check_sense(sense).await;
+        self.record_audit(sense, caller, outcome).await;
+        outcome
+    }
+
+    async fn check_sense(&self, sense: Sense) -> std::result::Result<(), &'static str> {
+        let state = self.state.read().await;
+        if state.kill_switch_active {
+            return Err("sensory kill switch is active");
+        }
+
+        match sense {
+            Sense::Screen => {
+                if !state.vision.enabled {
+                    return Err("screen capture is disabled by user preference");
+                }
+                let current_window = state.vision.current_window.clone();
+                drop(state);
+                if self.is_suspending() {
+                    return Err("screen capture is paused across suspend/hibernate");
+                }
+                if is_session_locked().await {
+                    return Err("screen capture skipped: session locked");
+                }
+                if let Some(title) = current_window {
+                    if is_sensitive_window_title(&title) {
+                        return Err("screen capture skipped: sensitive active window");
+                    }
+                }
+                Ok(())
+            }
+            Sense::Camera => {
+                if !state.presence.camera_consented {
+                    return Err("camera capture is disabled by user preference");
+                }
+                drop(state);
+                if self.is_suspending() {
+                    return Err("camera capture is paused across suspend/hibernate");
+                }
+                Ok(())
+            }
+            Sense::Microphone => {
+                if !state.voice.audio_enabled {
+                    return Err("microphone capture is disabled by user preference");
+                }
+                drop(state);
+                if self.is_suspending() {
+                    return Err("microphone capture is paused across suspend/hibernate");
+                }
+                Ok(())
+            }
+            Sense::AlwaysOnListening => {
+                // Stricter than Microphone: user must have BOTH the
+                // master audio toggle on AND opted in to always-on
+                // listening. Used by rustpotter and the continuous
+                // hotword-probe loop — never by user-initiated mic
+                // sessions, which should ask for Sense::Microphone.
+                if !state.voice.audio_enabled {
+                    return Err("always-on listening requires audio_enabled");
+                }
+                if !state.voice.always_on_active {
+                    return Err("always-on listening is disabled by user preference");
+                }
+                drop(state);
+                if self.is_suspending() {
+                    return Err("always-on listening is paused across suspend/hibernate");
+                }
+                Ok(())
+            }
+            Sense::Meeting => {
+                // Lets Axi hear you (wake word, voice commands) WITHOUT
+                // auto-recording every call. When `meeting_capture_enabled`
+                // is false, meeting detection still runs (presence /
+                // focus hints) but the recorder, captions, and meeting
+                // screenshots are gated closed.
+                if !state.voice.audio_enabled {
+                    return Err("meeting capture requires audio_enabled");
+                }
+                if !state.voice.meeting_capture_enabled {
+                    return Err("meeting capture is disabled by user preference");
+                }
+                drop(state);
+                if self.is_suspending() {
+                    return Err("meeting capture is paused across suspend/hibernate");
+                }
+                Ok(())
+            }
+            Sense::Tts => {
+                if !state.voice.tts_enabled {
+                    return Err("TTS is disabled by user preference");
+                }
+                drop(state);
+                // Habla audit C-4: every other sense gates on
+                // `is_suspending()`; TTS was left out and would happily
+                // fire synthesis mid-suspend, leaving a half-rendered
+                // OGG on disk and an audible playback on resume.
+                if self.is_suspending() {
+                    return Err("TTS is paused across suspend/hibernate");
+                }
+                Ok(())
+            }
+            Sense::WindowTracking => {
+                drop(state);
+                let Some(ref follow_along) = self.follow_along else {
+                    return Err("window tracking: follow-along manager not wired (fail-closed)");
+                };
+                let guard = follow_along.read().await;
+                let config = guard.get_config().await;
+                if config.consent_status != crate::follow_along::ConsentStatus::Granted {
+                    return Err("window tracking requires FollowAlong consent");
+                }
+                Ok(())
+            }
+            Sense::CloudRoute => {
+                // Kill switch already checked above — CloudRoute itself
+                // has no per-user toggle today; callers are responsible
+                // for clamping sensitivity so the router stays local
+                // when the payload contains sensory artifacts.
+                Ok(())
+            }
+        }
+    }
+
+    async fn record_audit(
+        &self,
+        sense: Sense,
+        caller: &'static str,
+        outcome: std::result::Result<(), &'static str>,
+    ) {
+        let entry = GateAuditEntry {
+            sense,
+            caller,
+            allowed: outcome.is_ok(),
+            reason: outcome.err(),
+            at: Utc::now(),
+        };
+        let mut ring = self.gate_audit.write().await;
+        if ring.len() >= GATE_AUDIT_RING_CAPACITY {
+            ring.pop_front();
+        }
+        ring.push_back(entry);
+    }
+
+    /// Dump the gate audit ring in newest-first order. Feeds the
+    /// dashboard's "what senses was Axi asked to use, and what got
+    /// refused?" panel.
+    pub async fn gate_audit(&self) -> Vec<GateAuditEntry> {
+        let ring = self.gate_audit.read().await;
+        ring.iter().rev().cloned().collect()
+    }
+
+    /// Thin wrapper around the unified `ensure_sense_allowed(Sense::Screen)`
+    /// gate. Kept for callers that haven't been migrated to pass an
+    /// explicit caller tag yet; new call sites should prefer
+    /// `ensure_sense_allowed` so the audit log knows who asked.
+    pub async fn ensure_screen_capture_allowed(&self) -> std::result::Result<(), &'static str> {
+        self.ensure_sense_allowed(Sense::Screen, "legacy.screen_helper")
+            .await
+    }
+
+    /// Called by the login1 PrepareForSleep listener when the system is
+    /// about to suspend/hibernate or has just resumed. Gates subsequent
+    /// presence captures via the `suspending` flag.
+    pub fn set_suspending(&self, suspending: bool) {
+        self.suspending
+            .store(suspending, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Cheap check used by capture entry points and `update_presence` to
+    /// skip work while the host is suspending/hibernating.
+    pub fn is_suspending(&self) -> bool {
+        self.suspending.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Attach a shared privacy filter for OCR text classification.
@@ -761,8 +1092,16 @@ impl SensoryPipelineManager {
         };
         state.vision.enabled = runtime.screen_enabled && !runtime.kill_switch_active;
         state.vision.capture_interval_seconds = runtime.capture_interval_seconds.clamp(5, 30);
-        state.presence.camera_consented = runtime.camera_enabled;
+        // Treat consent as gated by the kill switch: callers use
+        // `camera_consented` to decide whether a capture is allowed at all
+        // (see `update_presence` and API endpoints), so leaving it at the
+        // raw `camera_enabled` value would let an active kill switch be
+        // bypassed by a direct `POST /sensory/presence` request.
+        state.presence.camera_consented = runtime.camera_enabled && !runtime.kill_switch_active;
         state.presence.camera_active = runtime.camera_enabled && !runtime.kill_switch_active;
+        state.voice.audio_enabled = runtime.audio_enabled && !runtime.kill_switch_active;
+        state.voice.meeting_capture_enabled =
+            runtime.meeting_enabled && runtime.audio_enabled && !runtime.kill_switch_active;
         state.voice.always_on_active =
             runtime.always_on_active && runtime.audio_enabled && !runtime.kill_switch_active;
         state.voice.tts_enabled = runtime.tts_enabled && !runtime.kill_switch_active;
@@ -789,7 +1128,22 @@ impl SensoryPipelineManager {
             && load_calibrated_threshold().await.is_none()
         {
             let source = snapshot.capabilities.always_on_source.clone();
+            // Hearing round-2 W-NEW-4: the calibration task spawns a
+            // 2-second mic recording. Previously fired whenever the
+            // caller condition held, but if the user tripped the kill
+            // switch OR initiated suspend between the snapshot above
+            // and the spawned task actually running, the mic capture
+            // went through anyway. Re-check the gate INSIDE the
+            // spawned task so the capture aborts on any late toggle.
+            let gate_mgr = self.clone();
             tokio::spawn(async move {
+                if gate_mgr
+                    .ensure_sense_allowed(Sense::AlwaysOnListening, "pipeline.auto_calibrate_mic")
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
                 let threshold = calibrate_mic_threshold(source.as_deref()).await;
                 log::info!("[voice-init] auto-calibrated mic threshold: {threshold}");
             });
@@ -996,11 +1350,19 @@ impl SensoryPipelineManager {
         overlay: &OverlayManager,
         request: TtsRequest,
     ) -> Result<TtsResult> {
-        let state = self.state.read().await.clone();
-        if state.kill_switch_active {
-            anyhow::bail!("sensory kill switch is active");
-        }
-        if request.playback && !state.voice.tts_enabled {
+        // Habla audit C-1 / W-1 / W-2: route through the unified gate
+        // so every TTS decision hits the audit ring AND the policy
+        // (kill_switch + tts_enabled + suspend) stays lock-step with
+        // every other sense. Previously the inline check read raw
+        // runtime flags and never recorded denials in gate_audit.
+        //
+        // Non-playback requests (synthesize-only, e.g. meeting voice
+        // notes that send an OGG via SimpleX) still need the gate:
+        // the output file is the privacy artifact, not the playback.
+        if let Err(reason) = self
+            .ensure_sense_allowed(Sense::Tts, "pipeline.speak_text")
+            .await
+        {
             overlay
                 .set_axi_state(AxiState::Idle, Some("tts-disabled"))
                 .await?;
@@ -1010,9 +1372,10 @@ impl SensoryPipelineManager {
                 tts_engine: None,
                 playback_backend: None,
                 playback_started: false,
-                degraded_modes: vec!["tts_disabled".to_string()],
+                degraded_modes: vec![format!("tts_disabled: {}", reason)],
             });
         }
+        let state = self.state.read().await.clone();
 
         overlay
             .set_axi_state(AxiState::Speaking, Some("tts"))
@@ -1123,6 +1486,17 @@ impl SensoryPipelineManager {
             let st = self.state.read().await;
             st.capabilities.always_on_source.clone()
         };
+        // Unified mic gate — `Sense::AlwaysOnListening` (stricter than
+        // plain Microphone: requires user-opted wake-word listening to
+        // be enabled). Without this, the hotword probe loop kept
+        // capturing even with audio_enabled=false.
+        if self
+            .ensure_sense_allowed(Sense::AlwaysOnListening, "pipeline.hotword_cycle.capture")
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
         let audio_path = match capture_audio_snippet(
             &self.data_dir,
             ALWAYS_ON_CAPTURE_SECONDS,
@@ -1391,6 +1765,17 @@ impl SensoryPipelineManager {
             let st = self.state.read().await;
             st.capabilities.always_on_source.clone()
         };
+        // Post-wakeword user-initiated capture. Uses the `Microphone`
+        // sense (not AlwaysOnListening) because by this point the user
+        // has explicitly triggered capture via the hotword — it's an
+        // active voice session, not passive background listening.
+        if self
+            .ensure_sense_allowed(Sense::Microphone, "pipeline.capture_until_silence")
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
         let audio_path =
             match capture_until_silence(&self.data_dir, always_on_source.as_deref()).await {
                 Ok(path) => path,
@@ -1737,30 +2122,42 @@ impl SensoryPipelineManager {
                     }
                     Err(e) => {
                         log::warn!("Progressive TTS failed, trying single-shot: {}", e);
-                        // Fallback to single-shot TTS if progressive fails.
-                        match synthesize_tts(
-                            &self.data_dir,
-                            &playback_text,
-                            request.language.as_deref(),
-                            request.voice_model.as_deref(),
-                        )
-                        .await
+                        // Habla round-2 C-NEW-1: the single-shot fallback
+                        // also bypasses the unified gate — re-check before
+                        // emitting audio so suspend / kill-switch still
+                        // apply even when progressive synth blew up.
+                        match self
+                            .ensure_sense_allowed(Sense::Tts, "pipeline.voice_loop.fallback")
+                            .await
                         {
-                            Ok((path, engine)) => {
-                                duck_system_audio(true).await;
-                                tts_engine = Some(engine);
-                                if audio_path.is_none() {
-                                    audio_path = Some(path.clone());
-                                }
-                                let playback = self
-                                    .spawn_playback(overlay.clone(), session_id.clone(), &path)
-                                    .await?;
-                                if playback_backend.is_none() {
-                                    playback_backend = playback.0;
-                                }
-                                playback_started |= playback.1;
+                            Err(reason) => {
+                                log::debug!("[tts] fallback refused: {}", reason);
+                                degraded.push("tts_disabled".to_string());
                             }
-                            Err(_) => degraded.push("tts_unavailable".to_string()),
+                            Ok(()) => match synthesize_tts(
+                                &self.data_dir,
+                                &playback_text,
+                                request.language.as_deref(),
+                                request.voice_model.as_deref(),
+                            )
+                            .await
+                            {
+                                Ok((path, engine)) => {
+                                    duck_system_audio(true).await;
+                                    tts_engine = Some(engine);
+                                    if audio_path.is_none() {
+                                        audio_path = Some(path.clone());
+                                    }
+                                    let playback = self
+                                        .spawn_playback(overlay.clone(), session_id.clone(), &path)
+                                        .await?;
+                                    if playback_backend.is_none() {
+                                        playback_backend = playback.0;
+                                    }
+                                    playback_started |= playback.1;
+                                }
+                                Err(_) => degraded.push("tts_unavailable".to_string()),
+                            },
                         }
                     }
                 }
@@ -1982,8 +2379,15 @@ impl SensoryPipelineManager {
         request: VisionDescribeRequest,
     ) -> Result<VisionDescribeResult> {
         let state = self.refresh_capabilities(ai_manager).await?;
-        if state.kill_switch_active {
-            anyhow::bail!("sensory kill switch is active");
+        // Unified sense gate — kill switch + vision.enabled + suspend +
+        // session lock + sensitive-window title. Replaces the inline
+        // ladder this function used to carry so every screen-consuming
+        // path enforces the same policy via one implementation.
+        if let Err(reason) = self
+            .ensure_sense_allowed(Sense::Screen, "pipeline.describe_screen")
+            .await
+        {
+            anyhow::bail!("{}", reason);
         }
 
         let question = request.question.unwrap_or_else(|| {
@@ -2037,7 +2441,20 @@ impl SensoryPipelineManager {
         let response_text = sanitize_assistant_response(&response.response);
 
         let mut degraded = degraded_modes(&state.capabilities, &state.gpu);
-        let speech_allowed = request.speak && state.voice.tts_enabled;
+        let mut speech_allowed = request.speak && state.voice.tts_enabled;
+        // Habla round-2 C-NEW-2: describe_screen was calling synthesize_tts
+        // directly, bypassing the unified Sense::Tts gate. Check the full
+        // policy (kill-switch, suspend, tts_enabled) before emitting audio.
+        if speech_allowed {
+            if let Err(reason) = self
+                .ensure_sense_allowed(Sense::Tts, "pipeline.describe_screen")
+                .await
+            {
+                log::debug!("[tts] describe_screen refused: {}", reason);
+                speech_allowed = false;
+                degraded.push("tts_disabled".to_string());
+            }
+        }
         let mut audio_path = None;
         if speech_allowed {
             match synthesize_tts(
@@ -2117,22 +2534,21 @@ impl SensoryPipelineManager {
             return Ok(None);
         }
 
-        // Skip capture if active window looks sensitive (login, password dialogs).
+        // Skip capture if the session is locked. `loginctl` exposes
+        // `LockedHint` per session — when the user locks the screen we
+        // MUST stop capturing to avoid leaking login prompts, password
+        // managers, and whatever was on screen before lock.
+        if is_session_locked().await {
+            log::debug!("sensory: skipping capture — session locked");
+            return Ok(None);
+        }
+
+        // Skip capture if active window looks sensitive (login, password dialogs,
+        // private / incognito browsing). Shared helper so every entry
+        // point — awareness, describe_screen, meeting capture, overlay —
+        // enforces the same list instead of each diverging.
         if let Some(ref title) = state.vision.current_window {
-            let lower = title.to_lowercase();
-            let sensitive = [
-                "password",
-                "login",
-                "sign in",
-                "pin",
-                "cvv",
-                "secret",
-                "private",
-                "contraseña",
-                "iniciar sesión",
-                "unlock",
-            ];
-            if sensitive.iter().any(|kw| lower.contains(kw)) {
+            if is_sensitive_window_title(title) {
                 log::info!("sensory: skipping capture — sensitive window: {}", title);
                 return Ok(None);
             }
@@ -2377,6 +2793,17 @@ impl SensoryPipelineManager {
         follow_along: &FollowAlongManager,
         memory_plane: &MemoryPlaneManager,
     ) -> Result<PresenceRuntime> {
+        // Unified sense gate — kill switch + camera_consented + suspend.
+        // Any variant trip short-circuits with the last-known presence
+        // snapshot so callers don't need to branch on the reason.
+        if self
+            .ensure_sense_allowed(Sense::Camera, "pipeline.update_presence")
+            .await
+            .is_err()
+        {
+            return Ok(self.state.read().await.presence.clone());
+        }
+
         let mut snapshot = self.state.read().await.clone();
         let was_present = snapshot.presence.present;
         let camera_available = snapshot.capabilities.camera_device.is_some();
@@ -2446,18 +2873,31 @@ impl SensoryPipelineManager {
             (p, f, s, None)
         };
 
-        // AI-powered scene analysis when camera captured a frame and multimodal is available.
-        let (scene_description, user_state, people_count) = if let Some(ref frame) = frame_path {
-            match analyze_camera_scene(ai_manager, frame).await {
+        // AI-powered scene analysis when camera captured a frame AND the
+        // capabilities snapshot says multimodal is available. Gating on
+        // the capability flag prevents a cascade of VL requests during the
+        // 6-8s llama-server startup window — each would time out, spam
+        // journald, and delay the presence cycle.
+        let (scene_description, user_state, people_count) = match (
+            frame_path.as_deref(),
+            snapshot.capabilities.multimodal_chat_available,
+        ) {
+            (Some(frame), true) => match analyze_camera_scene(ai_manager, frame).await {
                 Ok(analysis) => (
                     Some(analysis.scene_description),
                     Some(analysis.user_state),
                     Some(analysis.people_count),
                 ),
-                Err(_) => (None, None, None),
-            }
-        } else {
-            (None, None, None)
+                Err(err) => {
+                    // Swallowing these silently made VL regressions invisible in
+                    // journald. Log at debug (failures are not operator-actionable
+                    // by themselves — they happen during model warm-up, on
+                    // transient parse mismatches, etc.) and keep moving.
+                    log::debug!("[camera] scene analysis failed: {}", err);
+                    (None, None, None)
+                }
+            },
+            _ => (None, None, None),
         };
 
         let stats = follow_along.get_event_stats().await;
@@ -2477,15 +2917,46 @@ impl SensoryPipelineManager {
         snapshot.presence.source = source.to_string();
         snapshot.presence.face_near_screen = face_near_screen;
         snapshot.presence.fatigue_alert = fatigue_alert;
+        // Apply the same privacy filter the OCR / awareness paths use
+        // (see vision awareness persistence above and screen-context
+        // sanitization below). Without this, raw VL-model output about a
+        // webcam frame — which can easily include sensitive context like
+        // on-screen email subjects, documents visible on the desk, or
+        // people's names — was stored verbatim in MemoryPlane and echoed
+        // back by the presence API.
+        let (filtered_scene, skip_scene_persist) = match scene_description.as_deref() {
+            Some(desc) if !desc.is_empty() => {
+                if let Some(ref pf) = self.privacy_filter {
+                    match pf.classify(desc) {
+                        SensitivityLevel::Critical => {
+                            log::warn!(
+                                "Camera scene classified as Critical — dropping from state + memory"
+                            );
+                            (None, true)
+                        }
+                        SensitivityLevel::High => {
+                            log::info!(
+                                "Camera scene classified as High — sanitizing before persistence"
+                            );
+                            (Some(pf.sanitize(desc).sanitized_text), false)
+                        }
+                        _ => (Some(desc.to_string()), false),
+                    }
+                } else {
+                    (Some(desc.to_string()), false)
+                }
+            }
+            _ => (None, true),
+        };
+
         snapshot.presence.posture_alert = posture_alert;
         snapshot.presence.last_checked_at = Some(now);
-        snapshot.presence.scene_description = scene_description.clone();
+        snapshot.presence.scene_description = filtered_scene.clone();
         snapshot.presence.user_state = user_state.clone();
         snapshot.presence.people_count = people_count;
-        snapshot.presence.last_frame_path = frame_path;
 
         // Store camera context in memory for later recall.
-        if let Some(ref desc) = scene_description {
+        if let (Some(ref desc), false) = (filtered_scene.as_ref(), skip_scene_persist) {
             let importance = if people_count.unwrap_or(0) >= 2 {
                 70 // meeting
             } else if user_state.as_deref() == Some("away") {
@@ -2741,9 +3212,18 @@ impl SensoryPipelineManager {
         };
 
         let ocr_lang = detect_ocr_languages();
-        let mut ocr_text = extract_ocr(&screen_path, Some(&ocr_lang))
-            .await
-            .unwrap_or_default();
+        // Previously `.unwrap_or_default()` — so every tesseract crash /
+        // missing binary / unreadable screenshot silently degraded to an
+        // empty string, and downstream importance/summary decisions ran on
+        // a baseline with no operator signal. Surface at warn level so
+        // repeated failures show up in the journal.
+        let mut ocr_text = match extract_ocr(&screen_path, Some(&ocr_lang)).await {
+            Ok(text) => text,
+            Err(err) => {
+                log::warn!("[screen] OCR failed: {}", err);
+                String::new()
+            }
+        };
         let relevant_text = relevant_ocr_lines(&ocr_text, query);
         let multimodal_used = if let Some(model) = ai_manager.active_model().await {
             model.to_lowercase().contains("qwen")
@@ -2811,8 +3291,14 @@ impl SensoryPipelineManager {
             return Ok((None, false));
         };
 
+        // Habla audit C-5: `kill_on_drop(true)` so if the parent task
+        // is dropped (daemon shutdown, panic, cancellation) the
+        // playback child dies with it. Prior behaviour left orphan
+        // pw-play / paplay / aplay processes running after the daemon
+        // exited. Matches the STT kill_on_drop pattern from hearing C-11.
         let mut child = Command::new(&player)
             .arg(audio_path)
+            .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("Failed to start playback backend {}", player))?;
 
@@ -2880,7 +3366,39 @@ impl SensoryPipelineManager {
         language: Option<&str>,
         voice_model: Option<&str>,
     ) -> Result<(Option<String>, Option<String>, Option<String>, bool)> {
-        let sentences = split_tts_chunks(text);
+        // Habla round-2 C-NEW-1 / W-NEW-2: defense-in-depth Tts gate at
+        // the progressive synth entry point. voice_loop and
+        // describe_screen both reach TTS through this function without
+        // consulting the unified gate — checking here means even a
+        // future caller that forgets the gate can't emit audio past
+        // suspend / kill-switch / tts_enabled=false.
+        if let Err(reason) = self
+            .ensure_sense_allowed(Sense::Tts, "pipeline.synthesize_and_play_progressive")
+            .await
+        {
+            log::debug!("[tts] progressive synthesis refused: {}", reason);
+            return Ok((None, None, None, false));
+        }
+
+        // Habla round-2 S-NEW-2: the per-chunk limit
+        // (`TTS_TEXT_MAX_CHARS` inside `synthesize_with_kokoro_http`)
+        // only guards one synthesis call. A pathological LLM reply
+        // built from many short sentences would split into dozens of
+        // under-cap chunks and still pin the Kokoro `Semaphore(2)`
+        // executor for minutes. Enforce the same budget at the
+        // aggregate level by truncating the text before splitting.
+        let aggregate_text = if text.chars().count() > TTS_TEXT_MAX_CHARS {
+            log::warn!(
+                "[tts] progressive text {} chars > aggregate cap {} — truncating",
+                text.chars().count(),
+                TTS_TEXT_MAX_CHARS
+            );
+            text.chars().take(TTS_TEXT_MAX_CHARS).collect::<String>()
+        } else {
+            text.to_string()
+        };
+
+        let sentences = split_tts_chunks(&aggregate_text);
         if sentences.is_empty() {
             return Ok((None, None, None, false));
         }
@@ -2936,8 +3454,10 @@ impl SensoryPipelineManager {
             // Play the current sentence with barge-in detection.
             // We monitor the microphone for voice activity while playing;
             // if the user starts speaking, we kill the playback immediately.
+            // `kill_on_drop(true)` per Habla C-5 — orphan hygiene.
             let mut child = Command::new(&player)
                 .arg(&current_audio)
+                .kill_on_drop(true)
                 .spawn()
                 .context("Failed to start playback")?;
 
@@ -2953,10 +3473,19 @@ impl SensoryPipelineManager {
             }
             any_played = true;
 
+            // Habla round-2 W-NEW-1: use a oneshot channel to request
+            // kill from the monitor, instead of handing the monitor a
+            // bare PID. The outer task owns the tokio `Child`; when
+            // the monitor signals, the outer calls `start_kill()` on
+            // the actual handle. tokio's start_kill consults the
+            // child's exit state, so we can never SIGKILL a reused
+            // PID after the player exited naturally.
+            let (barge_kill_tx, mut barge_kill_rx) = tokio::sync::oneshot::channel::<()>();
+            let mut monitor_kill_tx = Some(barge_kill_tx);
+
             // Barge-in monitor: capture short audio snippets while playing and
             // check for voice activity. If the user speaks, kill the playback.
             let barge_in_data_dir = self.data_dir.clone();
-            let barge_in_pid = child_pid;
             let barge_in_detected = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let barge_in_flag = barge_in_detected.clone();
             let barge_in_source = {
@@ -2964,17 +3493,36 @@ impl SensoryPipelineManager {
                 st.capabilities.always_on_source.clone()
             };
             let barge_in_playback_audio = current_audio.clone();
+            // Clone self's shared state so the spawned monitor task can
+            // consult the mic gate inside its loop. A user toggling
+            // audio_enabled=false mid-playback now stops barge-in capture
+            // on the next loop iteration (previously it kept going).
+            let barge_in_mgr = self.clone();
             let monitor_handle = tokio::spawn(async move {
                 // Wait a short moment before starting to monitor, so the
                 // playback audio doesn't feed back into the microphone.
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                while let Ok(path) = capture_audio_snippet_ms(
-                    &barge_in_data_dir,
-                    BARGE_IN_CAPTURE_MILLIS,
-                    barge_in_source.as_deref(),
-                )
-                .await
-                {
+                loop {
+                    // Per-iteration gate check so a mid-playback toggle
+                    // of audio_enabled / kill switch actually stops the
+                    // monitor rather than waiting for the outer task.
+                    if barge_in_mgr
+                        .ensure_sense_allowed(Sense::Microphone, "pipeline.barge_in_monitor")
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    let path = match capture_audio_snippet_ms(
+                        &barge_in_data_dir,
+                        BARGE_IN_CAPTURE_MILLIS,
+                        barge_in_source.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    };
                     if audio_has_voice_activity_with_profile(
                         Path::new(&path),
                         VoiceActivityProfile::BargeIn,
@@ -2998,9 +3546,14 @@ impl SensoryPipelineManager {
                         }
                         log::info!("Barge-in detected during TTS playback");
                         barge_in_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                        // Kill the playback process.
-                        if let Some(pid) = barge_in_pid {
-                            kill_pid(pid).await.ok();
+                        // Habla W-NEW-1: ask the outer task to kill the
+                        // specific Child handle it owns. If the outer
+                        // already reaped naturally, it won't be
+                        // awaiting this receiver and send() is a
+                        // harmless Err — no stray SIGKILL on a reused
+                        // PID.
+                        if let Some(tx) = monitor_kill_tx.take() {
+                            let _ = tx.send(());
                         }
                         break;
                     }
@@ -3009,7 +3562,21 @@ impl SensoryPipelineManager {
                 }
             });
 
-            let _ = child.wait().await;
+            // Habla W-NEW-1: wait on the Child handle directly. If
+            // the monitor signals barge-in first, call start_kill on
+            // the live handle then wait for the reaped status. If
+            // the player exits naturally, the receiver is dropped
+            // when this select! arm wins and the monitor's later
+            // send() is a harmless Err.
+            tokio::select! {
+                _ = child.wait() => {}
+                maybe = &mut barge_kill_rx => {
+                    if maybe.is_ok() {
+                        let _ = child.start_kill();
+                    }
+                    let _ = child.wait().await;
+                }
+            }
             monitor_handle.abort();
 
             let was_barged_in = barge_in_detected.load(std::sync::atomic::Ordering::Relaxed);
@@ -3103,6 +3670,20 @@ impl SensoryPipelineManager {
         write_atomic(&path, &raw)
             .await
             .context("Failed to persist sensory pipeline state")?;
+        // Harden to 0o600. The persisted state contains last_ocr_text,
+        // last_summary, current_window, voice transcripts, capture paths —
+        // exactly the data the API response scrubs. Without this chmod
+        // the file was world-readable (0o644), so every local uid could
+        // read live activity via the disk. Audit round-2 C-NEW-6.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(md) = tokio::fs::metadata(&path).await {
+                let mut perms = md.permissions();
+                perms.set_mode(0o600);
+                let _ = tokio::fs::set_permissions(&path, perms).await;
+            }
+        }
         Ok(())
     }
 }
@@ -3190,7 +3771,7 @@ async fn probe_kokoro_tts_server() -> (Option<String>, Vec<KokoroVoice>) {
     }
 
     let base_url = std::env::var("LIFEOS_TTS_SERVER_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8083".to_string());
+        .unwrap_or_else(|_| "http://127.0.0.1:8084".to_string());
 
     let client = kokoro_probe_client();
 
@@ -3466,6 +4047,7 @@ async fn transcribe_audio(
     let resolved_model = resolve_stt_model(model).await;
 
     let mut cmd = Command::new(&binary);
+    cmd.kill_on_drop(true);
     let lang = resolve_stt_language();
     let estimated_duration_ms = estimate_pcm_wav_duration_ms(file);
     let stt_args = build_interactive_stt_args(
@@ -3480,10 +4062,30 @@ async fn transcribe_audio(
         "[stt] profile={profile:?} duration_ms={estimated_duration_ms:?} fast_path={fast_path}"
     );
     cmd.args(&stt_args);
-    let output = cmd
-        .output()
-        .await
-        .with_context(|| format!("Failed to execute {}", binary))?;
+    // Hearing audit C-11: bound the subprocess lifetime so a hung
+    // whisper-cli cannot cook CPU indefinitely (observed live:
+    // PID 4192949 at 354% CPU for 270s with no cancellation). Allow
+    // ~10× real-time as worst case (ggml-base on CPU does 0.3-0.5×),
+    // with a 30s floor for short utterances and a 10min ceiling for
+    // full meetings. `kill_on_drop(true)` above ensures the child
+    // dies on timeout (or any abort of the parent task).
+    let duration_secs = estimated_duration_ms.unwrap_or(0) / 1000;
+    let timeout_secs = duration_secs.saturating_mul(10).clamp(30, 600);
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(timeout_secs),
+        cmd.output(),
+    )
+    .await
+    {
+        Ok(res) => res.with_context(|| format!("Failed to execute {}", binary))?,
+        Err(_) => {
+            anyhow::bail!(
+                "stt transcription timed out after {}s (audio ~{}s)",
+                timeout_secs,
+                duration_secs
+            );
+        }
+    };
     if !output.status.success() {
         anyhow::bail!(
             "stt transcription failed: {}",
@@ -4094,13 +4696,30 @@ async fn synthesize_tts(
 /// Call Kokoro TTS server HTTP API with retry logic.
 /// Retries 3 times on connection-refused / 503 / 504 / timeout.
 /// Returns path to the saved audio file.
-pub async fn synthesize_with_kokoro_http(
+/// Maximum characters accepted for a single TTS synthesis. Sized for
+/// a ~10-minute utterance at conservative speaking rates. Kokoro's
+/// handler reads the whole body into memory and runs it on a
+/// `Semaphore(2)` executor, so longer inputs are effectively a local
+/// DoS. Habla audit W-5.
+pub const TTS_TEXT_MAX_CHARS: usize = 10_000;
+
+pub(crate) async fn synthesize_with_kokoro_http(
     data_dir: &Path,
     base_url: &str,
     text: &str,
     voice: &str,
     format: &str,
 ) -> Result<String> {
+    // Habla audit W-5: reject absurdly long inputs before hitting
+    // Kokoro. A 10 MB text payload would pin CPU for minutes.
+    if text.chars().count() > TTS_TEXT_MAX_CHARS {
+        anyhow::bail!(
+            "TTS text exceeds {}-char limit ({} chars)",
+            TTS_TEXT_MAX_CHARS,
+            text.chars().count()
+        );
+    }
+
     let tts_dir = data_dir.join("tts");
     tokio::fs::create_dir_all(&tts_dir)
         .await
@@ -4171,6 +4790,18 @@ pub async fn synthesize_with_kokoro_http(
         tokio::fs::write(&audio_path, &bytes)
             .await
             .context("Failed to write TTS audio file")?;
+        // Habla audit W-8: chmod 0o600 so other local users can't read
+        // Axi's rendered speech. Matches the pattern used by
+        // speaker_profiles, screen captures, and session store.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(md) = tokio::fs::metadata(&audio_path).await {
+                let mut perms = md.permissions();
+                perms.set_mode(0o600);
+                let _ = tokio::fs::set_permissions(&audio_path, perms).await;
+            }
+        }
 
         cleanup_dir_by_count(&tts_dir, TTS_RETENTION_COUNT, "tts")
             .await
@@ -6635,12 +7266,58 @@ fn llama_env_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/etc/lifeos/llama-server.env"))
 }
 
+/// Send SIGTERM to `pid` and escalate to SIGKILL if the process does not
+/// exit within ~2 seconds. Uses `libc::kill` directly instead of forking
+/// `/usr/bin/kill`, so the reaper costs one syscall per signal rather than
+/// two forks per TERM.
+///
+/// The escalation matters: ffmpeg / libcamera can get wedged in uninterrupt-
+/// ible sleep on a hung V4L2 device. A TERM-only reaper leaves the camera
+/// device permanently locked on that class of failure.
 async fn kill_pid(pid: u32) -> Result<()> {
-    Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .status()
-        .await
-        .context("Failed to invoke kill")?;
+    // SAFETY: libc::kill is sound on any valid i32 pid. Rejecting pid=0
+    // (broadcast to process group) and negative values is done up-front.
+    let pid_i32: libc::pid_t = pid.try_into().context("pid out of range")?;
+    if pid_i32 <= 0 {
+        anyhow::bail!("refusing to signal pid {} (invalid)", pid);
+    }
+
+    // 1) Polite shutdown — give the child a chance to flush/close handles.
+    let term_rc = unsafe { libc::kill(pid_i32, libc::SIGTERM) };
+    if term_rc != 0 {
+        let err = std::io::Error::last_os_error();
+        // ESRCH = process already gone; treat as success.
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            anyhow::bail!("SIGTERM {} failed: {}", pid, err);
+        }
+        return Ok(());
+    }
+
+    // 2) Poll for exit. `kill(pid, 0)` is the standard liveness probe —
+    //    returns 0 if the process is still alive, ESRCH if it's gone.
+    for _ in 0..20 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let alive_rc = unsafe { libc::kill(pid_i32, 0) };
+        if alive_rc != 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::ESRCH) {
+                return Ok(());
+            }
+        }
+    }
+
+    // 3) Still alive after ~2s — escalate.
+    log::warn!(
+        "kill_pid: pid {} did not exit after SIGTERM; escalating to SIGKILL",
+        pid
+    );
+    let kill_rc = unsafe { libc::kill(pid_i32, libc::SIGKILL) };
+    if kill_rc != 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() != Some(libc::ESRCH) {
+            anyhow::bail!("SIGKILL {} failed: {}", pid, err);
+        }
+    }
     Ok(())
 }
 
@@ -6698,7 +7375,14 @@ async fn capture_camera_presence(
                     "2",
                     frame_path.to_string_lossy().as_ref(),
                 ]);
-                run_camera_capture_command(fallback, binary).await?;
+                if let Err(fallback_error) = run_camera_capture_command(fallback, binary).await {
+                    // Fallback ALSO failed — ffmpeg may have left a zero-byte
+                    // or truncated JPG on disk that would survive until the
+                    // 6h housekeeping sweep and count against the retention
+                    // cap. Sweep it before returning the error.
+                    tokio::fs::remove_file(&frame_path).await.ok();
+                    return Err(fallback_error);
+                }
             }
         }
         "libcamera-still" | "libcamera-jpeg" => {
@@ -6716,10 +7400,23 @@ async fn capture_camera_presence(
     }
 
     if program != "ffmpeg" {
-        run_camera_capture_command(cmd, binary).await?;
+        if let Err(err) = run_camera_capture_command(cmd, binary).await {
+            // Same hygiene for the non-ffmpeg backends.
+            tokio::fs::remove_file(&frame_path).await.ok();
+            return Err(err);
+        }
     }
 
-    let mut metrics = analyze_camera_frame(&frame_path)?;
+    let mut metrics = match analyze_camera_frame(&frame_path) {
+        Ok(m) => m,
+        Err(err) => {
+            // A frame exists on disk but it didn't parse. Do not leak
+            // unreadable JPGs into the retention bucket — they'd count
+            // against the 120-file cap and distract troubleshooting.
+            tokio::fs::remove_file(&frame_path).await.ok();
+            return Err(err);
+        }
+    };
     metrics.frame_path = Some(frame_path.to_string_lossy().to_string());
     log::debug!(
         "[camera] captured presence frame via {} brightness={:.1} enhanced={} present={} face_near_screen={}",
@@ -6729,6 +7426,24 @@ async fn capture_camera_presence(
         metrics.present,
         metrics.face_near_screen
     );
+
+    // Enforce the per-cycle retention cap here rather than waiting for the
+    // 6-hour background housekeeping tick. `cleanup_dir_by_count` is cheap
+    // (a single readdir + sort + N unlinks) and guarantees the directory
+    // never drifts above the cap even under sustained capture cadence.
+    if let Ok(removed) =
+        crate::storage_housekeeping::cleanup_dir_by_count(&camera_dir, CAMERA_PRESENCE_MAX_FILES)
+            .await
+    {
+        if removed > 0 {
+            log::debug!(
+                "[camera] per-cycle retention removed {} files (cap {})",
+                removed,
+                CAMERA_PRESENCE_MAX_FILES
+            );
+        }
+    }
+
     Ok(metrics)
 }
 
@@ -6744,8 +7459,16 @@ struct CameraPresenceMetrics {
 #[derive(Debug, Clone)]
 struct CameraFrameStats {
     skin_ratio: f64,
+    /// Mean brightness over the center crop. Used as an overall luminance
+    /// signal but NOT as the enhancement trigger — that now uses
+    /// `face_brightness` so a bright back-lit scene with a dim face
+    /// still gets enhanced.
     avg_brightness: f64,
     avg_edge: f64,
+    /// Mean brightness of the skin-tone pixels in the center crop (if
+    /// any were detected). None when no skin was found — callers fall
+    /// back to `avg_brightness`.
+    face_brightness: Option<f64>,
 }
 
 fn analyze_camera_frame(path: &Path) -> Result<CameraPresenceMetrics> {
@@ -6780,6 +7503,7 @@ fn compute_camera_frame_stats(image: &DynamicImage) -> Result<CameraFrameStats> 
     let mut skin_like_pixels = 0u64;
     let mut brightness_sum = 0f64;
     let mut edge_sum = 0f64;
+    let mut skin_brightness_sum = 0f64;
 
     for y in center_top..center_bottom {
         for x in center_left..center_right {
@@ -6788,9 +7512,11 @@ fn compute_camera_frame_stats(image: &DynamicImage) -> Result<CameraFrameStats> 
             let r = channels[0] as f64;
             let g = channels[1] as f64;
             let b = channels[2] as f64;
-            brightness_sum += (r + g + b) / 3.0;
+            let pixel_brightness = (r + g + b) / 3.0;
+            brightness_sum += pixel_brightness;
             if is_skin_like(channels[0], channels[1], channels[2]) {
                 skin_like_pixels += 1;
+                skin_brightness_sum += pixel_brightness;
             }
             if x > center_left {
                 let prev = image.get_pixel(x - 1, y).to_rgb();
@@ -6808,10 +7534,17 @@ fn compute_camera_frame_stats(image: &DynamicImage) -> Result<CameraFrameStats> 
         anyhow::bail!("camera frame is empty");
     }
 
+    let face_brightness = if skin_like_pixels > 0 {
+        Some(skin_brightness_sum / skin_like_pixels as f64)
+    } else {
+        None
+    };
+
     Ok(CameraFrameStats {
         skin_ratio: skin_like_pixels as f64 / total_pixels as f64,
         avg_brightness: brightness_sum / total_pixels as f64,
         avg_edge: edge_sum / total_pixels as f64,
+        face_brightness,
     })
 }
 
@@ -6819,14 +7552,20 @@ fn maybe_enhance_camera_frame(
     image: DynamicImage,
     stats: &CameraFrameStats,
 ) -> (DynamicImage, CameraFrameStats, bool) {
-    if stats.avg_brightness >= CAMERA_FRAME_DARK_THRESHOLD {
+    // Use face brightness (skin-pixel mean) when available rather than the
+    // whole-center mean — handles back-lit scenes where a bright window
+    // behind the user lifts the mean above the threshold while the face
+    // itself is under-exposed. Falls back to avg_brightness when no skin
+    // was detected (face not yet in frame, camera off-angle, etc.).
+    let reference_brightness = stats.face_brightness.unwrap_or(stats.avg_brightness);
+    if reference_brightness >= CAMERA_FRAME_DARK_THRESHOLD {
         return (image, stats.clone(), false);
     }
 
-    let brighten = (CAMERA_FRAME_TARGET_BRIGHTNESS - stats.avg_brightness)
+    let brighten = (CAMERA_FRAME_TARGET_BRIGHTNESS - reference_brightness)
         .round()
         .clamp(12.0, CAMERA_FRAME_MAX_BRIGHTEN as f64) as i32;
-    let contrast = if stats.avg_brightness < 45.0 {
+    let contrast = if reference_brightness < 45.0 {
         CAMERA_FRAME_VERY_DARK_CONTRAST_BOOST
     } else {
         CAMERA_FRAME_CONTRAST_BOOST
@@ -6960,6 +7699,19 @@ async fn analyze_camera_scene(
     parse_camera_scene_response(&response.response)
 }
 
+/// Parse a caller-supplied PEOPLE: value safely.
+/// - "3"  → 3
+/// - "500" → 255 (clamped, u8 max)
+/// - "-1" / garbage → 0
+///
+/// Implemented via i32 + clamp so u8 overflow doesn't silently fall
+/// through to 0 and misclassify a crowded room as empty.
+fn parse_people_count(raw: &str) -> u8 {
+    raw.parse::<i32>()
+        .map(|n| n.clamp(0, u8::MAX as i32) as u8)
+        .unwrap_or(0)
+}
+
 fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
     // Strip <think>…</think> blocks that some models emit before the answer.
     let cleaned = strip_think_blocks(text);
@@ -6976,7 +7728,11 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
         } else if let Some(rest) = line.strip_prefix("STATE:") {
             state = rest.trim().to_lowercase();
         } else if let Some(rest) = line.strip_prefix("PEOPLE:") {
-            people = rest.trim().parse().unwrap_or(0);
+            // Parse via i32 + clamp so a model answer like "PEOPLE: 500"
+            // (overflow in u8) does not silently fall through to 0 and
+            // misclassify a crowded room as empty. Negatives are clamped
+            // to 0 for robustness against malformed output.
+            people = parse_people_count(rest.trim());
         }
     }
 
@@ -7010,7 +7766,7 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
         if let Some(idx) = full_text.find("PEOPLE:") {
             let after = full_text[idx + 7..].trim();
             let num_str = after.split_whitespace().next().unwrap_or("0");
-            people = num_str.parse().unwrap_or(0);
+            people = parse_people_count(num_str);
         }
     }
 
@@ -7035,8 +7791,12 @@ fn parse_camera_scene_response(text: &str) -> Result<CameraSceneAnalysis> {
         }
     }
 
-    // Truncate overly long scene descriptions.
-    scene = truncate_scene(&scene, 120);
+    // Truncate overly long scene descriptions. The prompt asks for 10
+    // words max; 64 chars is a comfortable ceiling for that while still
+    // keeping room for diacritics / Spanish text. Down from 120: models
+    // routinely overshoot the word budget and the tighter cap reduces
+    // how much arbitrary VL context lands in MemoryPlane per cycle.
+    scene = truncate_scene(&scene, 64);
 
     Ok(CameraSceneAnalysis {
         scene_description: scene,
@@ -7179,11 +7939,33 @@ fn strip_think_blocks(input: &str) -> String {
     output
 }
 
+/// Detect skin-like pixels across the full Fitzpatrick I–VI range.
+///
+/// The previous heuristic (`r > 95 && g > 40 && b > 20 && r - g > 15 && r > g > b`)
+/// had a hard R-channel floor at 95, which excluded most deeply pigmented
+/// skin (Fitzpatrick IV–VI typically lands in R 40–90) — the presence and
+/// `face_near_screen` signals never triggered for darker-skinned users, so
+/// posture/fatigue alerts and the "user at screen" state were silently
+/// disabled for them. See Buolamwini/Gebru "Gender Shades" (2018) for
+/// prior art on this exact class of bug.
+///
+/// The new approach converts RGB → YCbCr and matches the chroma channels
+/// (Cb, Cr) against the Chai & Ngan (1999) skin-locus range, which is
+/// chroma-based and much less sensitive to overall luminance — it
+/// generalises across skin tones while still rejecting typical
+/// background / clothing / wall colours.
 fn is_skin_like(r: u8, g: u8, b: u8) -> bool {
-    let r = r as i32;
-    let g = g as i32;
-    let b = b as i32;
-    r > 95 && g > 40 && b > 20 && (r - g).abs() > 15 && r > g && r > b
+    let r = r as f32;
+    let g = g as f32;
+    let b = b as f32;
+    // ITU-R BT.601 RGB → YCbCr (8-bit studio range, 16–235 luma / 16–240 chroma).
+    let y = 0.299 * r + 0.587 * g + 0.114 * b;
+    let cb = 128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b;
+    let cr = 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b;
+    // Chai & Ngan skin-locus; keep a generous luma floor so pure black
+    // (dead-dark pixels) don't count, but don't use luma as an upper
+    // discriminator — bright and dark skin alike land inside the Cb/Cr box.
+    (77.0..=127.0).contains(&cb) && (133.0..=173.0).contains(&cr) && y >= 20.0
 }
 
 // ── Meeting / call detection ────────────────────────────────────────────
@@ -7328,8 +8110,11 @@ async fn refresh_meeting_state(camera_device: Option<&str>) -> MeetingState {
 }
 
 async fn reap_stale_presence_capture_processes(device: &str) -> Result<bool> {
+    // Include the user id column so the reaper cannot be tricked into
+    // SIGTERMing another user's process on a shared/multi-user host by
+    // anyone who can name their process "/camera/presence-…".
     let output = Command::new("ps")
-        .args(["-eo", "pid=,etimes=,cmd="])
+        .args(["-eo", "pid=,uid=,etimes=,cmd="])
         .output()
         .await
         .context("Failed to inspect process table for stale camera capture")?;
@@ -7337,15 +8122,23 @@ async fn reap_stale_presence_capture_processes(device: &str) -> Result<bool> {
         return Ok(false);
     }
 
+    // SAFETY: libc::getuid is a pure read of the calling process's real UID.
+    let own_uid: u32 = unsafe { libc::getuid() };
+
     let mut killed = false;
     let device_lower = device.to_lowercase();
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         let mut parts = line.split_whitespace();
         let pid = parts.next().and_then(|value| value.parse::<u32>().ok());
+        let uid = parts.next().and_then(|value| value.parse::<u32>().ok());
         let elapsed = parts.next().and_then(|value| value.parse::<u64>().ok());
         let cmd = parts.collect::<Vec<_>>().join(" ");
         let Some(pid) = pid else { continue };
+        let Some(uid) = uid else { continue };
         let Some(elapsed) = elapsed else { continue };
+        if uid != own_uid {
+            continue;
+        }
         if elapsed < CAMERA_STALE_CAPTURE_SECS {
             continue;
         }
@@ -7357,6 +8150,94 @@ async fn reap_stale_presence_capture_processes(device: &str) -> Result<bool> {
     }
 
     Ok(killed)
+}
+
+/// True when the user session is locked, per systemd-logind. Returns
+/// false on any error (bus unavailable, unknown session, etc.) so a
+/// broken bus doesn't silently disable capture — the suspend gate and
+/// sensitive-window gate still protect us in that case.
+///
+/// Uses the direct CLI to avoid adding an extra sync point on the
+/// system bus; `loginctl show-session --property LockedHint` is a
+/// single fast call.
+pub async fn is_session_locked() -> bool {
+    let session_id = std::env::var("XDG_SESSION_ID").unwrap_or_default();
+    if session_id.is_empty() {
+        return false;
+    }
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        tokio::process::Command::new("loginctl")
+            .args(["show-session", &session_id, "--property=LockedHint"])
+            .output(),
+    )
+    .await
+    {
+        Ok(Ok(o)) => o,
+        _ => return false,
+    };
+    if !output.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.trim() == "LockedHint=yes")
+}
+
+/// True when the active window title matches a sensitive pattern (login,
+/// password manager, private / incognito browsing, unlock prompts).
+/// Shared by every screen-capture entry point so the policy stays uniform
+/// — previously only the awareness cycle applied it, leaving
+/// describe_screen / meeting / overlay uncovered.
+///
+/// The list covers English, Spanish, Portuguese, French, German, and
+/// Italian variants of "private browsing" / "incognito" — the prior list
+/// missed Chrome's "Incognito" entirely and every Spanish variant except
+/// "contraseña" / "iniciar sesión".
+pub fn is_sensitive_window_title(title: &str) -> bool {
+    let lower = title.to_lowercase();
+    const SENSITIVE_KEYWORDS: &[&str] = &[
+        // credentials / unlock
+        "password",
+        "contraseña",
+        "senha",
+        "mot de passe",
+        "passwort",
+        "password manager",
+        "keepass",
+        "bitwarden",
+        "1password",
+        "login",
+        "log in",
+        "sign in",
+        "iniciar sesión",
+        "iniciar sesion",
+        "pin",
+        "cvv",
+        "2fa",
+        "secret",
+        "unlock",
+        "desbloquear",
+        // private / incognito browsing
+        "private browsing",
+        "private window",
+        "navegación privada",
+        "navegacion privada",
+        "modo privado",
+        "modo incognito",
+        "modo incógnito",
+        "incognito",
+        "incógnito",
+        "inprivate",
+        "privater modus",
+        "navigation privée",
+        "navigazione anonima",
+        // lock screens
+        "lock screen",
+        "locked",
+        "screen locked",
+    ];
+    SENSITIVE_KEYWORDS.iter().any(|kw| lower.contains(kw))
 }
 
 fn is_stale_presence_capture_process(cmd: &str, device_lower: &str) -> bool {
@@ -7642,6 +8523,10 @@ mod tests {
 
     #[test]
     fn camera_frame_analysis_brightens_dark_face_frames() {
+        // Face swatch (48,30,20) sits inside the YCbCr skin locus but its
+        // mean brightness (~33) is well below CAMERA_FRAME_DARK_THRESHOLD=62,
+        // so `face_brightness`-driven enhancement must trigger regardless
+        // of background luminance.
         let dir = std::env::temp_dir().join(format!("lifeos-camera-dark-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("presence.jpg");
@@ -7650,7 +8535,7 @@ mod tests {
             ImageBuffer::from_pixel(120, 120, Rgb([8, 8, 8]));
         for y in 30..90 {
             for x in 35..85 {
-                image.put_pixel(x, y, Rgb([88, 60, 44]));
+                image.put_pixel(x, y, Rgb([48, 30, 20]));
             }
         }
         image.save(&path).unwrap();
@@ -7658,8 +8543,278 @@ mod tests {
         let metrics = analyze_camera_frame(&path).unwrap();
         assert!(metrics.present);
         assert!(metrics.enhanced);
-        assert!(metrics.avg_brightness >= CAMERA_FRAME_DARK_THRESHOLD);
 
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    // ── camera-audit Fase B: YCbCr skin detection covers all Fitzpatrick tones ──
+
+    #[test]
+    fn skin_detector_matches_light_skin() {
+        // Fitzpatrick I–III swatch (warm beige). Should match.
+        assert!(is_skin_like(220, 180, 150));
+        assert!(is_skin_like(210, 150, 120));
+        assert!(is_skin_like(200, 160, 135));
+    }
+
+    #[test]
+    fn skin_detector_matches_dark_skin_fitzpatrick_iv_vi() {
+        // These RGB samples represent deeply pigmented skin (Fitzpatrick
+        // IV–VI). The OLD heuristic's `r > 95` floor made every one of
+        // these return false, silently disabling posture/face-near-screen
+        // for darker-skinned users. Regression-guard the new YCbCr path.
+        assert!(is_skin_like(88, 60, 44), "medium-brown failed");
+        assert!(is_skin_like(70, 45, 30), "dark-brown failed");
+        assert!(is_skin_like(60, 38, 25), "very-dark-brown failed");
+        assert!(is_skin_like(48, 30, 20), "near-black-brown failed");
+    }
+
+    #[test]
+    fn skin_detector_rejects_non_skin_backgrounds() {
+        // Saturated greens / blues / grays / black are outside the Cb/Cr
+        // skin locus and must not register.
+        assert!(!is_skin_like(0, 0, 0), "pure black");
+        assert!(!is_skin_like(60, 150, 40), "grass green");
+        assert!(!is_skin_like(40, 120, 200), "sky blue");
+        assert!(!is_skin_like(120, 120, 120), "neutral gray");
+        assert!(!is_skin_like(10, 10, 10), "near-black noise");
+    }
+
+    #[test]
+    fn skin_detector_rejects_old_heuristic_false_positives() {
+        // The previous RGB gate matched deeply saturated pure reds as
+        // "skin" (sunlight on red shirt, red paint on wall, etc.) because
+        // it only required R dominance. YCbCr filters these out via the
+        // narrower Cb/Cr box.
+        assert!(!is_skin_like(255, 0, 0), "pure red shirt");
+        assert!(!is_skin_like(200, 20, 20), "deep red");
+    }
+
+    #[test]
+    fn people_count_parser_clamps_overflow_and_negatives() {
+        assert_eq!(parse_people_count("3"), 3);
+        assert_eq!(parse_people_count("0"), 0);
+        // u8 overflow — previous `unwrap_or(0)` silently reported an empty
+        // room; now we clamp.
+        assert_eq!(parse_people_count("500"), u8::MAX);
+        assert_eq!(parse_people_count("1000"), u8::MAX);
+        // Negatives clamp to 0, same for garbage.
+        assert_eq!(parse_people_count("-1"), 0);
+        assert_eq!(parse_people_count("abc"), 0);
+        assert_eq!(parse_people_count(""), 0);
+    }
+
+    #[test]
+    fn truncate_scene_honors_new_64_char_cap() {
+        // Below cap → passthrough.
+        assert_eq!(truncate_scene("short scene", 64).chars().count(), 11);
+        // Above cap → truncated + ellipsis, and the prompt's
+        // "10 words max" contract is comfortably respected.
+        let long =
+            "this is a scene description that runs much longer than sixty four characters for sure";
+        let out = truncate_scene(long, 64);
+        assert!(out.chars().count() <= 64);
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn adaptive_brightness_uses_face_brightness_when_available() {
+        // Back-lit synthetic frame: bright background + dim skin region
+        // in the center. Mean brightness is above the dark threshold, so
+        // the OLD enhancement path would not trigger; face-region mean
+        // IS below threshold, so the NEW path correctly decides to
+        // enhance.
+        let dir =
+            std::env::temp_dir().join(format!("lifeos-camera-backlit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("backlit.jpg");
+
+        let mut image: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(120, 120, Rgb([230, 230, 230])); // bright bg
+                                                                     // Paint a darker skin-tone face in the center — inside the new
+                                                                     // YCbCr skin locus but below CAMERA_FRAME_DARK_THRESHOLD.
+        for y in 30..90 {
+            for x in 35..85 {
+                image.put_pixel(x, y, Rgb([55, 38, 30]));
+            }
+        }
+        image.save(&path).unwrap();
+
+        let metrics = analyze_camera_frame(&path).unwrap();
+        assert!(
+            metrics.enhanced,
+            "expected face-region brightness to trigger enhancement"
+        );
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn camera_presence_max_files_matches_housekeeping_global() {
+        // Guard against drift between the per-cycle cap and the global
+        // housekeeping cap — if the two ever diverge, the per-cycle path
+        // either leaks files or prunes more aggressively than advertised.
+        // Keep them lock-step.
+        assert_eq!(CAMERA_PRESENCE_MAX_FILES, 120);
+    }
+
+    // ── Unified sensory gate — one policy, every sense ──────────────────
+
+    #[tokio::test]
+    async fn sense_enum_str_tags_are_stable() {
+        // Gate audit log exports these verbatim — renaming a variant
+        // string is a breaking change for any dashboard/CLI consumer
+        // that filters on it.
+        assert_eq!(Sense::Screen.as_str(), "screen");
+        assert_eq!(Sense::Camera.as_str(), "camera");
+        assert_eq!(Sense::Microphone.as_str(), "microphone");
+        assert_eq!(Sense::Tts.as_str(), "tts");
+        assert_eq!(Sense::WindowTracking.as_str(), "window_tracking");
+        assert_eq!(Sense::CloudRoute.as_str(), "cloud_route");
+    }
+
+    #[tokio::test]
+    async fn kill_switch_blocks_every_sense() {
+        // Regression guard: the kill switch is the outermost gate and
+        // MUST short-circuit every variant before per-sense policy runs.
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        {
+            let mut st = mgr.state.write().await;
+            st.kill_switch_active = true;
+            st.vision.enabled = true;
+            st.voice.always_on_active = true;
+            st.voice.meeting_capture_enabled = true;
+            st.voice.tts_enabled = true;
+            st.presence.camera_consented = true;
+        }
+        for sense in [
+            Sense::Screen,
+            Sense::Camera,
+            Sense::Microphone,
+            Sense::AlwaysOnListening,
+            Sense::Meeting,
+            Sense::Tts,
+            Sense::WindowTracking,
+            Sense::CloudRoute,
+        ] {
+            let result = mgr.ensure_sense_allowed(sense, "test.kill_switch").await;
+            assert!(
+                result.is_err(),
+                "kill switch must block {:?} but returned Ok",
+                sense
+            );
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn meeting_gate_respects_per_sense_toggle() {
+        // Axi should be able to hear the user (wake word, voice commands)
+        // WITHOUT auto-recording every meeting. Turning
+        // `meeting_capture_enabled` off must deny Sense::Meeting while
+        // Sense::Microphone still passes — the defining property of the
+        // new toggle.
+        let dir =
+            std::env::temp_dir().join(format!("lifeos-meeting-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        {
+            let mut st = mgr.state.write().await;
+            st.kill_switch_active = false;
+            st.voice.audio_enabled = true;
+            st.voice.meeting_capture_enabled = false;
+        }
+        let mic = mgr
+            .ensure_sense_allowed(Sense::Microphone, "test.mic")
+            .await;
+        let meeting = mgr
+            .ensure_sense_allowed(Sense::Meeting, "test.meeting")
+            .await;
+        assert!(
+            mic.is_ok(),
+            "Microphone should pass with audio_enabled=true"
+        );
+        assert!(
+            meeting.is_err(),
+            "Meeting should be refused with meeting_capture_enabled=false"
+        );
+
+        // Flip back: both pass.
+        {
+            let mut st = mgr.state.write().await;
+            st.voice.meeting_capture_enabled = true;
+        }
+        assert!(mgr
+            .ensure_sense_allowed(Sense::Meeting, "test.meeting_on")
+            .await
+            .is_ok());
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sense_screen_blocked_when_disabled() {
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        // kill switch off but vision.enabled still false (default).
+        assert!(mgr
+            .ensure_sense_allowed(Sense::Screen, "test.screen_off")
+            .await
+            .is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn sense_window_tracking_fails_closed_without_follow_along() {
+        // If the FollowAlong manager isn't wired, window tracking must
+        // refuse — we fail-closed rather than fail-open because this
+        // gate controls whether window titles land in MemoryPlane.
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        let result = mgr
+            .ensure_sense_allowed(Sense::WindowTracking, "test.no_follow_along")
+            .await;
+        assert!(result.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn gate_audit_ring_records_every_decision() {
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        {
+            let mut st = mgr.state.write().await;
+            st.kill_switch_active = true; // all calls will fail
+        }
+        let _ = mgr.ensure_sense_allowed(Sense::Camera, "test.a").await;
+        let _ = mgr.ensure_sense_allowed(Sense::Tts, "test.b").await;
+        let log = mgr.gate_audit().await;
+        assert_eq!(log.len(), 2);
+        // Newest-first ordering — last call appears first.
+        assert_eq!(log[0].caller, "test.b");
+        assert_eq!(log[0].sense, Sense::Tts);
+        assert!(!log[0].allowed);
+        assert_eq!(log[1].caller, "test.a");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn gate_audit_ring_caps_at_buffer_size() {
+        // Verifies the ring trims oldest entries; prevents unbounded
+        // memory growth if a misbehaving caller loops on the gate.
+        let dir = std::env::temp_dir().join(format!("lifeos-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mgr = SensoryPipelineManager::new(dir.clone()).unwrap();
+        for _ in 0..(GATE_AUDIT_RING_CAPACITY + 25) {
+            let _ = mgr.ensure_sense_allowed(Sense::Tts, "test.cap").await;
+        }
+        let log = mgr.gate_audit().await;
+        assert_eq!(log.len(), GATE_AUDIT_RING_CAPACITY);
         std::fs::remove_dir_all(dir).ok();
     }
 

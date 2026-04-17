@@ -90,6 +90,7 @@ mod simplex_bridge;
 mod single_instance;
 mod skill_generator;
 mod skill_registry;
+mod sleep_watch;
 mod speaker_id;
 mod sqlite_protection;
 mod storage_housekeeping;
@@ -467,6 +468,11 @@ pub struct DaemonState {
     pub last_update_check: RwLock<Option<chrono::DateTime<chrono::Local>>>,
     pub wake_word_detector: Option<Arc<wake_word::WakeWordDetector>>,
     pub wake_word_notify: Arc<tokio::sync::Notify>,
+    /// Broadcasts a shutdown request to long-running background tasks so
+    /// they can drain gracefully before the process exits. Sensory runtime
+    /// in particular uses this to finish the current camera/screen capture
+    /// cycle instead of being `.abort()`ed mid-analysis.
+    pub shutdown_notify: Arc<tokio::sync::Notify>,
     pub event_bus: tokio::sync::broadcast::Sender<events::DaemonEvent>,
     pub security_alert_buffer: security_ai::AlertBuffer,
     pub session_store: Arc<session_store::SessionStore>,
@@ -593,6 +599,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Initialize wake word detector (rustpotter) if available.
     let wake_word_notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
     let wake_word_detector = {
         if !wake_word::WakeWordDetector::available() {
             info!("Wake word feature not compiled — using Whisper-based detection");
@@ -808,6 +815,7 @@ async fn main() -> anyhow::Result<()> {
         last_update_check: RwLock::new(None),
         wake_word_detector,
         wake_word_notify: wake_word_notify.clone(),
+        shutdown_notify: shutdown_notify.clone(),
         event_bus: event_tx,
         security_alert_buffer: security_ai::new_alert_buffer(),
         session_store: shared_session_store,
@@ -836,6 +844,33 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = state.config_store.init().await {
         warn!("Failed to initialize ConfigStore: {}", e);
     }
+
+    // Hearing audit round-2 C-NEW-5: reconcile sensitive-file perms
+    // at boot. The pre-fix daemon saved biometric files (rustpotter
+    // model, speaker profile embeddings) and raw voice captures at
+    // default umask (observed 0o644 world-readable) — newer save
+    // paths harden to 0o600 but existing files never get touched.
+    // Walk the known dirs and chmod on every boot so an upgrade
+    // retroactively closes the gap without waiting for the user to
+    // retrain or re-record.
+    harden_sensory_file_perms().await;
+
+    // Inject FollowAlong into the sensory pipeline so `Sense::WindowTracking`
+    // in the unified gate can consult consent. Must happen after the state
+    // struct is built because sensory_pipeline_manager is created BEFORE
+    // follow_along_manager inside the struct literal.
+    {
+        let mut spm = state.sensory_pipeline_manager.write().await;
+        spm.set_follow_along(state.follow_along_manager.clone());
+    }
+
+    // Plumb the sensory pipeline into the supervisor so its
+    // StepAction::ScreenCapture / ScreenAnalyze paths hit the unified
+    // gate — without this the autonomous agent bypasses every user
+    // policy lever (round-2 audit C-NEW-5).
+    state
+        .supervisor
+        .set_sensory_pipeline(state.sensory_pipeline_manager.clone());
 
     // Attach scheduled tasks manager to supervisor.
     state
@@ -1086,8 +1121,9 @@ async fn main() -> anyhow::Result<()> {
     {
         let sensory_mem = state.memory_plane_manager.clone();
         let sensory_rx = state.event_bus.subscribe();
+        let sensory_pf = Some(shared_privacy.clone());
         tokio::spawn(async move {
-            sensory_memory::run_sensory_memory_listener(sensory_rx, sensory_mem).await;
+            sensory_memory::run_sensory_memory_listener(sensory_rx, sensory_mem, sensory_pf).await;
         });
         info!("Sensory memory listener started");
     }
@@ -1111,6 +1147,17 @@ async fn main() -> anyhow::Result<()> {
     let update_handle = tokio::spawn(run_update_checks(state.clone()));
     let metrics_handle = tokio::spawn(run_metrics_collection(state.clone()));
     let sensory_handle = tokio::spawn(run_sensory_runtime(state.clone()));
+
+    // Gate camera captures across suspend/hibernate. A failed bus connection
+    // (no login1 available) is logged and ignored — the capture loop still
+    // works, it just loses the suspend safety net.
+    let sleep_sensory = state.sensory_pipeline_manager.clone();
+    let sleep_ai = state.ai_manager.clone();
+    let sleep_watch_handle = tokio::spawn(async move {
+        if let Err(err) = sleep_watch::watch_prepare_for_sleep(sleep_sensory, sleep_ai).await {
+            warn!("[sleep-watch] watcher exited: {}", err);
+        }
+    });
 
     // Proactive notifications loop — checks every 5 minutes
     let proactive_state = state.clone();
@@ -1323,6 +1370,12 @@ async fn main() -> anyhow::Result<()> {
         // meetings and live voice interactions resolve against the same profiles.
         let shared_speaker_id = state.sensory_pipeline_manager.read().await.speaker_id();
         assistant.set_speaker_id(shared_speaker_id);
+        // Wire the agent runtime so meeting mode honors screen_enabled +
+        // kill switch like every other sensory capture path does.
+        assistant.set_agent_runtime(state.agent_runtime_manager.clone());
+        // Wire the sensory pipeline so meeting mic recording hits the
+        // unified Sense::Microphone gate.
+        assistant.set_sensory_pipeline(state.sensory_pipeline_manager.clone());
         std::sync::Arc::new(tokio::sync::RwLock::new(assistant))
     };
     let meeting_loop_assistant = shared_meeting_assistant.clone();
@@ -2022,6 +2075,7 @@ async fn main() -> anyhow::Result<()> {
             let ma = Some(meeting_archive.clone());
             let mast = Some(shared_meeting_assistant.clone());
             let cal = Some(state.calendar.clone());
+            let sens = Some(state.sensory_pipeline_manager.clone());
             let hist = shared_history.clone();
             let cron = shared_cron_store.clone();
             let ev = state.event_bus.clone();
@@ -2035,6 +2089,7 @@ async fn main() -> anyhow::Result<()> {
                     ma,
                     mast,
                     cal,
+                    sens,
                     hist,
                     cron,
                     Some(ev),
@@ -2119,14 +2174,29 @@ async fn main() -> anyhow::Result<()> {
         detector.stop();
     }
 
+    // Ask long-running background loops to drain their current iteration
+    // before we hit them with .abort(). This lets the sensory runtime
+    // finish an in-flight camera capture + analyze + retention sweep
+    // instead of leaving a partial JPG on disk.
+    state.shutdown_notify.notify_waiters();
+
     // Cancel all tasks
     health_handle.abort();
     update_handle.abort();
     metrics_handle.abort();
-    sensory_handle.abort();
+    let mut sensory_handle = sensory_handle;
+    match tokio::time::timeout(Duration::from_secs(3), &mut sensory_handle).await {
+        Ok(Ok(())) => info!("Sensory runtime drained cleanly"),
+        Ok(Err(e)) => warn!("Sensory runtime task ended with join error: {}", e),
+        Err(_) => {
+            warn!("Sensory runtime did not drain within 3s; aborting");
+            sensory_handle.abort();
+        }
+    }
     state.supervisor.stop();
     supervisor_handle.abort();
     thermal_handle.abort();
+    sleep_watch_handle.abort();
     if let Some(h) = game_guard_handle {
         h.abort();
     }
@@ -2193,7 +2263,6 @@ async fn start_api_server(state: Arc<DaemonState>, shared: SharedBridgeState) {
         config: api::ApiConfig {
             bind_address: state.config.api_bind_address,
             api_key: state.bootstrap_token.clone(),
-            enable_cors: true,
             max_request_size: 10 * 1024 * 1024,
         },
         game_guard: state.game_guard.clone(),
@@ -2466,15 +2535,95 @@ async fn run_metrics_collection(state: Arc<DaemonState>) {
 }
 
 /// Run periodic sensory housekeeping: awareness refresh, presence updates and GPU sync.
+/// Chmod 0o600 on every sensitive sensory artifact on disk. Called
+/// once at daemon boot so an upgrade retroactively closes round-2
+/// C-NEW-5 — pre-fix saves left biometric + raw-voice files at the
+/// umask default (observed 0o644 on the live host).
+///
+/// Idempotent and non-fatal: any chmod failure is logged at debug
+/// and the daemon continues. Targets:
+/// - `/var/lib/lifeos/models/rustpotter/axi.rpw`      (wake-word model, MFCC)
+/// - `/var/lib/lifeos/models/rustpotter/samples/*.wav` (enrollment samples)
+/// - `/var/lib/lifeos/speaker_profiles/speaker_profiles.json` (embeddings)
+/// - `/var/lib/lifeos/audio/*.wav`                    (always-on snippets)
+/// - `/var/lib/lifeos/meetings/*.wav`                 (meeting recordings)
+async fn harden_sensory_file_perms() {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let targets: &[&str] = &[
+            "/var/lib/lifeos/models/rustpotter/axi.rpw",
+            "/var/lib/lifeos/speaker_profiles/speaker_profiles.json",
+        ];
+        let dirs: &[&str] = &[
+            "/var/lib/lifeos/models/rustpotter/samples",
+            "/var/lib/lifeos/audio",
+            "/var/lib/lifeos/meetings",
+            // Habla audit W-8: TTS output (Axi's rendered speech)
+            // was 0o644 world-readable. Reconcile at boot so an
+            // upgrade retroactively tightens existing files.
+            "/var/lib/lifeos/tts",
+        ];
+
+        let mut hardened = 0usize;
+        for path in targets {
+            if let Ok(md) = std::fs::metadata(path) {
+                let mut perms = md.permissions();
+                if perms.mode() & 0o777 != 0o600 {
+                    perms.set_mode(0o600);
+                    match std::fs::set_permissions(path, perms) {
+                        Ok(_) => hardened += 1,
+                        Err(e) => debug!("[harden] {}: {}", path, e),
+                    }
+                }
+            }
+        }
+        for dir in dirs {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let Ok(md) = entry.metadata() else { continue };
+                let mut perms = md.permissions();
+                if perms.mode() & 0o777 != 0o600 {
+                    perms.set_mode(0o600);
+                    match std::fs::set_permissions(&path, perms) {
+                        Ok(_) => hardened += 1,
+                        Err(e) => debug!("[harden] {}: {}", path.display(), e),
+                    }
+                }
+            }
+        }
+        if hardened > 0 {
+            info!(
+                "[harden] chmod 0o600 applied to {} sensitive sensory file(s)",
+                hardened
+            );
+        }
+    }
+}
+
 async fn run_sensory_runtime(state: Arc<DaemonState>) {
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     let wake_notify = state.wake_word_notify.clone();
+    let shutdown_notify = state.shutdown_notify.clone();
 
     loop {
         // Wake immediately on rustpotter detection OR on interval tick.
+        // Exit BETWEEN iterations on shutdown so the current cycle (which
+        // may be mid-camera-capture / mid-analyze) finishes cleanly rather
+        // than being aborted with a partial JPG on disk.
         tokio::select! {
             _ = interval.tick() => {},
             _ = wake_notify.notified() => {},
+            _ = shutdown_notify.notified() => {
+                info!("[sensory] shutdown requested; draining loop");
+                return;
+            },
         }
 
         let ai_manager = *state.ai_manager.read().await;
@@ -2500,6 +2649,7 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                     screen_enabled: runtime.screen_enabled,
                     camera_enabled: runtime.camera_enabled,
                     tts_enabled: runtime.tts_enabled,
+                    meeting_enabled: runtime.meeting_enabled,
                     kill_switch_active: runtime.kill_switch_active,
                     capture_interval_seconds: runtime.capture_interval_seconds,
                     always_on_active: always_on.enabled,
@@ -2527,25 +2677,49 @@ async fn run_sensory_runtime(state: Arc<DaemonState>) {
                 });
         }
 
-        if runtime.audio_enabled && !runtime.kill_switch_active && always_on.enabled {
-            // Sync hotword_enabled state with the wake word detector.
-            // Pause wake word during meetings to prevent false triggers.
-            if let Some(ref detector) = state.wake_word_detector {
-                if meeting.active {
-                    detector.pause();
-                } else if always_on.hotword_enabled {
-                    detector.resume();
-                } else {
-                    detector.pause();
-                }
-                // Update audio source if it changed (BT connect/disconnect).
+        // Hearing audit C-2/C-3: the wake-word detector MUST be paused
+        // whenever any of kill_switch, audio_enabled=false, or
+        // always_on.enabled=false is true — not just when we're also
+        // in the "maybe-resume" branch. Previously the detector went
+        // untouched if the user toggled audio_enabled off, leaving the
+        // mic hot for hours (observed live pw-record PID 16194 at 5h49m).
+        if let Some(ref detector) = state.wake_word_detector {
+            // Route through the unified gate so the orchestrator picks
+            // up every condition the Sense::AlwaysOnListening variant
+            // enforces — kill_switch + audio_enabled + always_on_active
+            // + suspend. Round-2 hearing W-NEW-3: previously the local
+            // AND-chain didn't consult `is_suspending`, so the detector
+            // could resume mid-suspend.
+            let gate_ok = sensory_manager
+                .ensure_sense_allowed(
+                    crate::sensory_pipeline::Sense::AlwaysOnListening,
+                    "main.wake_word_supervisor",
+                )
+                .await
+                .is_ok();
+            // Meeting check stays separate — it's a UX preference
+            // (silence wake word during active calls), not a policy
+            // gate. Same as before.
+            let should_be_active = gate_ok && always_on.hotword_enabled && !meeting.active;
+
+            if should_be_active {
+                detector.resume();
+            } else {
+                detector.pause();
+            }
+
+            // Update audio source if it changed (BT connect/disconnect).
+            // Only meaningful while active; harmless while paused.
+            if should_be_active {
                 let new_source = {
                     let st = sensory_manager.status().await;
                     st.capabilities.always_on_source.clone()
                 };
                 detector.set_source(new_source);
             }
+        }
 
+        if runtime.audio_enabled && !runtime.kill_switch_active && always_on.enabled {
             // Skip voice detection entirely during a meeting.
             if !meeting.active {
                 // Dispatch: rustpotter (streaming) or legacy whisper-based detection.
