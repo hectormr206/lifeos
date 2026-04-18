@@ -2525,21 +2525,56 @@ fn collect_window_titles(node: &serde_json::Value, titles: &mut Vec<String>) {
 /// or two USB cams) a meeting app may hold `/dev/video1` while the
 /// built-in is on `/dev/video0`; only probing video0 missed those cases.
 async fn detect_camera_in_use() -> bool {
+    // Presence-check and other Axi senses hold /dev/videoN briefly every
+    // capture interval. A naive `fuser` check fires on ourselves and pins
+    // the wake-word detector in a meeting-loop (see wake-word/meeting
+    // false-positive audit). Exclude lifeosd's own PID and its direct
+    // children so only external holders count.
+    let own_pid = std::process::id();
     for device in ["/dev/video0", "/dev/video1", "/dev/video2"] {
         if !std::path::Path::new(device).exists() {
             continue;
         }
-        let output = Command::new("fuser").arg(device).output().await.ok();
-        let busy = match output {
-            // fuser writes PIDs to STDERR (not stdout), so check both
-            Some(o) => o.status.success() && (!o.stdout.is_empty() || !o.stderr.is_empty()),
-            None => false,
+        let Some(output) = Command::new("fuser").arg(device).output().await.ok() else {
+            continue;
         };
-        if busy {
+        if !output.status.success() {
+            continue;
+        }
+        // `fuser` prints whitespace-separated PIDs to stdout; with no flags
+        // it also echoes the path to stderr even when nothing holds it, so
+        // we rely on stdout tokens alone and ignore stderr.
+        let pids: Vec<u32> = String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .filter_map(|tok| {
+                tok.trim_end_matches(|c: char| !c.is_ascii_digit())
+                    .parse()
+                    .ok()
+            })
+            .collect();
+        for pid in pids {
+            if pid == own_pid {
+                continue;
+            }
+            if proc_parent_pid(pid) == Some(own_pid) {
+                continue;
+            }
             return true;
         }
     }
     false
+}
+
+/// Read `PPid` for a running PID. Returns `None` if /proc is unreadable
+/// (e.g. the process already exited between `fuser` and this call).
+fn proc_parent_pid(pid: u32) -> Option<u32> {
+    let status = std::fs::read_to_string(format!("/proc/{}/status", pid)).ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("PPid:") {
+            return rest.trim().parse().ok();
+        }
+    }
+    None
 }
 
 /// Best-effort WAV duration estimate from the RIFF header. Returns

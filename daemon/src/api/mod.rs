@@ -9376,10 +9376,24 @@ async fn record_wake_word_sample(
 
     match output {
         Ok(mut child) => {
-            // Let it record for 2.5 seconds, then kill
+            // Record for 2.5s, then ask pw-record to exit gracefully. SIGKILL
+            // (Child::kill) left the WAV header with unpatched chunk sizes —
+            // the file opened but rustpotter's MFCC produced 0 frames and
+            // panicked in dtw.rs with "index out of bounds: len is 0".
+            // SIGTERM lets pw-record flush the header before exit.
             tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            if let Some(pid) = child.id() {
+                unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            }
+            // Bound the graceful shutdown — if pw-record ignores SIGTERM,
+            // fall back to SIGKILL after 1s so we don't block the handler.
+            match tokio::time::timeout(std::time::Duration::from_secs(1), child.wait()).await {
+                Ok(_) => {}
+                Err(_) => {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                }
+            }
 
             if wav_path.exists() {
                 Ok(Json(serde_json::json!({
@@ -12978,6 +12992,24 @@ mod tests {
         // empty; we must NOT block the user from setting a preference.
         assert!(validate_tts_voice("af_heart", &[]).is_ok());
         assert!(validate_tts_voice("any_unknown_voice", &[]).is_ok());
+    }
+
+    // ── Wake-word training: samples dir must live under the lifeos-writable
+    // tree, not under a root-owned baked-model path. Regression guard for the
+    // "Permission denied" failure that broke Grabar muestra on first boot.
+    #[test]
+    fn wake_word_samples_dir_under_writable_lifeos_tree() {
+        assert!(
+            WAKE_WORD_SAMPLES_DIR.starts_with("/var/lib/lifeos/"),
+            "samples dir must live under /var/lib/lifeos/ so the lifeos user can \
+             write without needing a root-owned ancestor: got {WAKE_WORD_SAMPLES_DIR}"
+        );
+        // Must not be the baked-model path itself; that dir ships root-owned
+        // and the daemon cannot create files in it.
+        assert_ne!(
+            WAKE_WORD_SAMPLES_DIR, "/var/lib/lifeos/models/rustpotter",
+            "samples dir must be a subdirectory, not the root-owned parent"
+        );
     }
 
     // ── camera-audit Fase A: path-traversal guards + loopback header gates ──

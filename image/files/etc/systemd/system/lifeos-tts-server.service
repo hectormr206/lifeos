@@ -14,9 +14,14 @@ EnvironmentFile=/etc/lifeos/tts-server.env
 ExecStart=/opt/lifeos/kokoro-env/bin/python3 /usr/local/bin/lifeos-tts-server.py
 
 # Restart policy
-Restart=on-failure
+# `always` because the memory watchdog inside the script exits cleanly (status 0)
+# after SIGTERM'ing itself; `on-failure` would leave the server dead. StartLimit
+# prevents infinite restart loops if the process genuinely cannot stay within the limit.
+Restart=always
 RestartSec=5
 TimeoutStartSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=300
 
 # Logging
 StandardOutput=journal
@@ -28,7 +33,9 @@ DynamicUser=yes
 RuntimeDirectory=lifeos-tts
 
 # Memory and CPU limits
-MemoryMax=1G
+# 1536M leaves ~140MB cushion above the in-process watchdog (1400MB) so the kernel
+# OOM killer never fires before the script's graceful SIGTERM path.
+MemoryMax=1536M
 CPUQuota=200%
 
 # Security hardening

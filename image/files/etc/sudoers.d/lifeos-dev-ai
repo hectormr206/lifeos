@@ -1,0 +1,20 @@
+# LifeOS dev — extra NOPASSWD rules for the AI helper (Claude Code).
+#
+# These complement /etc/sudoers.d/lifeos-dev so the agent can apply
+# laptop-scope fixes end-to-end (create user-owned state dirs, apply
+# tmpfiles rules, adjust ownership under /var/lib/lifeos) without
+# requiring the user to paste a password every time.
+#
+# Every rule pins to a concrete binary path and argument pattern.
+# No blanket shells, no unrestricted chown.
+#
+# Source: lifeos-dev-deploy.sh allowlists /etc/sudoers.d/lifeos-* so this
+# file ships via the same sanctioned path as the other dev rules.
+
+lifeos ALL=(root) NOPASSWD: /usr/bin/install -d -o lifeos -g lifeos -m 755 /var/lib/lifeos/*
+lifeos ALL=(root) NOPASSWD: /usr/bin/install -d -o lifeos -g lifeos -m 750 /var/lib/lifeos/*
+lifeos ALL=(root) NOPASSWD: /usr/bin/install -d -o lifeos -g lifeos -m 700 /var/lib/lifeos/*
+lifeos ALL=(root) NOPASSWD: /usr/bin/systemd-tmpfiles --create /etc/tmpfiles.d/lifeos-*.conf
+lifeos ALL=(root) NOPASSWD: /usr/bin/systemd-tmpfiles --create
+lifeos ALL=(root) NOPASSWD: /usr/bin/chown lifeos\:lifeos /var/lib/lifeos/*
+lifeos ALL=(root) NOPASSWD: /usr/bin/chown -R lifeos\:lifeos /var/lib/lifeos/*

@@ -19,7 +19,7 @@ Environment:
     TRANSFORMERS_OFFLINE      Set to 1 to prevent transformers hub access
 
 Concurrency: asyncio.Semaphore(2) — max 2 simultaneous synthesis requests.
-Memory watchdog: SIGTERM self if process RSS exceeds 900 MB.
+Memory watchdog: SIGTERM self if process RSS exceeds 1400 MB.
 Graceful shutdown: drains in-flight requests on SIGTERM before exit.
 OGG encoding: ffmpeg subprocess (primary path, always available in image).
               soundfile/libsndfile used as fast path if available.
@@ -81,11 +81,16 @@ _LOG = logging.getLogger("lifeos.tts")
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_VOICE: str = os.environ.get("LIFEOS_TTS_DEFAULT_VOICE", "if_sara")
+# Phonemizer needs an explicit path to libespeak-ng on Fedora — it does not probe
+# standard lib dirs. Without this, every voice sounds robotic because the pipeline
+# silently falls back to grapheme-level tokens. Set before any `phonemizer` import.
+os.environ.setdefault("PHONEMIZER_ESPEAK_LIBRARY", "/usr/lib64/libespeak-ng.so.1")
+
+DEFAULT_VOICE: str = os.environ.get("LIFEOS_TTS_DEFAULT_VOICE", "ef_dora")
 PORT: int = int(os.environ.get("LIFEOS_TTS_ENGINE_PORT", "8084"))
 DEVICE: str = os.environ.get("LIFEOS_TTS_DEVICE", "cpu")
 SAMPLE_RATE: int = 24000
-MEMORY_LIMIT_BYTES: int = 900 * 1024 * 1024  # 900 MB RSS watchdog
+MEMORY_LIMIT_BYTES: int = 1400 * 1024 * 1024  # 1400 MB RSS watchdog (Kokoro-82M baseline ~900MB + headroom for concurrent synthesis)
 VENV_DIR: Path = Path("/opt/lifeos/kokoro-env")
 MANIFEST_PATH: Path = VENV_DIR / "voices-manifest.json"
 
@@ -217,7 +222,7 @@ def _resolve_voice(requested: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 
 async def _memory_watchdog() -> None:
-    """Periodically check RSS; SIGTERM self if over 900 MB."""
+    """Periodically check RSS; SIGTERM self if over the configured limit."""
     while not _shutdown_event.is_set():
         try:
             rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024  # KB → bytes
