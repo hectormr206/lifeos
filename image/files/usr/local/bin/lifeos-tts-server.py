@@ -81,7 +81,12 @@ _LOG = logging.getLogger("lifeos.tts")
 # Configuration
 # ---------------------------------------------------------------------------
 
-DEFAULT_VOICE: str = os.environ.get("LIFEOS_TTS_DEFAULT_VOICE", "if_sara")
+# Phonemizer needs an explicit path to libespeak-ng on Fedora — it does not probe
+# standard lib dirs. Without this, every voice sounds robotic because the pipeline
+# silently falls back to grapheme-level tokens. Set before any `phonemizer` import.
+os.environ.setdefault("PHONEMIZER_ESPEAK_LIBRARY", "/usr/lib64/libespeak-ng.so.1")
+
+DEFAULT_VOICE: str = os.environ.get("LIFEOS_TTS_DEFAULT_VOICE", "ef_dora")
 PORT: int = int(os.environ.get("LIFEOS_TTS_ENGINE_PORT", "8084"))
 DEVICE: str = os.environ.get("LIFEOS_TTS_DEVICE", "cpu")
 SAMPLE_RATE: int = 24000
