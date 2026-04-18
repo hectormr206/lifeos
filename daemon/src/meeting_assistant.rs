@@ -2546,7 +2546,11 @@ async fn detect_camera_in_use() -> bool {
         // we rely on stdout tokens alone and ignore stderr.
         let pids: Vec<u32> = String::from_utf8_lossy(&output.stdout)
             .split_whitespace()
-            .filter_map(|tok| tok.trim_end_matches(|c: char| !c.is_ascii_digit()).parse().ok())
+            .filter_map(|tok| {
+                tok.trim_end_matches(|c: char| !c.is_ascii_digit())
+                    .parse()
+                    .ok()
+            })
             .collect();
         for pid in pids {
             if pid == own_pid {

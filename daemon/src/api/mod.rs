@@ -9376,10 +9376,24 @@ async fn record_wake_word_sample(
 
     match output {
         Ok(mut child) => {
-            // Let it record for 2.5 seconds, then kill
+            // Record for 2.5s, then ask pw-record to exit gracefully. SIGKILL
+            // (Child::kill) left the WAV header with unpatched chunk sizes —
+            // the file opened but rustpotter's MFCC produced 0 frames and
+            // panicked in dtw.rs with "index out of bounds: len is 0".
+            // SIGTERM lets pw-record flush the header before exit.
             tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
-            let _ = child.kill().await;
-            let _ = child.wait().await;
+            if let Some(pid) = child.id() {
+                unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            }
+            // Bound the graceful shutdown — if pw-record ignores SIGTERM,
+            // fall back to SIGKILL after 1s so we don't block the handler.
+            match tokio::time::timeout(std::time::Duration::from_secs(1), child.wait()).await {
+                Ok(_) => {}
+                Err(_) => {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                }
+            }
 
             if wav_path.exists() {
                 Ok(Json(serde_json::json!({
