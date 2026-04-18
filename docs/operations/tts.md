@@ -1,6 +1,6 @@
 # TTS Service — Kokoro
 
-> Updated: 2026-04-17
+> Updated: 2026-04-18
 
 ## Overview
 
@@ -18,9 +18,37 @@ and is ready before `lifeosd.service` launches.
 | License | Apache 2.0 |
 | Backend | Python 3.12 venv at `/opt/lifeos/kokoro-env/` |
 | Listen address | `127.0.0.1:8084` (loopback only) |
-| Default voice | `if_sara` (feminine, English) |
+| Default voice | `ef_dora` (feminine, Spanish) |
 | Inference | CPU-only (no CUDA dependency) |
+| Memory limit | `MemoryMax=1536M` (in-process watchdog trips at 1400 MB) |
+| Restart policy | `Restart=always` with `StartLimitBurst=3` / `StartLimitIntervalSec=300` |
 | Config | `/etc/lifeos/tts-server.env` |
+
+### Voice prefix convention
+
+Kokoro voice names encode language and gender in the two-letter prefix:
+`a`=US-English, `b`=UK-English, `e`=Español, `f`=Français, `h`=Hindi,
+`i`=Italiano, `j`=Japonés, `p`=Português, `z`=中文; second letter `f`=female,
+`m`=male. So `ef_dora` = Español-Female-Dora, `if_sara` = Italian-Female-Sara.
+Picking a voice whose prefix does not match the spoken language degrades
+naturalness noticeably.
+
+### Required environment
+
+`lifeos-tts-server.service` needs `PHONEMIZER_ESPEAK_LIBRARY=/usr/lib64/libespeak-ng.so.1`
+to point the `phonemizer` Python library at the Fedora-shipped `libespeak-ng`.
+Without it, phonemizer fails silently and Kokoro falls back to grapheme-level
+tokens — every voice sounds robotic regardless of selection. The variable is
+set both in `/etc/lifeos/tts-server.env` and as a hard-coded `os.environ.setdefault`
+inside `lifeos-tts-server.py` for defense in depth.
+
+`lifeosd` itself reads `LIFEOS_TTS_SERVER_URL` (defaulted to `http://127.0.0.1:8084`
+in the `00-tts.conf` drop-in for the user-scope service) and falls back to
+`espeak-ng` when that variable is empty — which makes every voice sound the same
+because espeak has no voice embeddings. If the dashboard's voice selector does
+nothing audible, check `tts.tts_engine` in the `POST /api/v1/sensory/tts/speak`
+response: `kokoro:<voice>` means success, `/usr/bin/espeak-ng` means the
+variable is unset.
 
 ---
 
