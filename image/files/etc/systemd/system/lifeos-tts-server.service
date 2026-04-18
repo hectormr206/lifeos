@@ -28,7 +28,9 @@ DynamicUser=yes
 RuntimeDirectory=lifeos-tts
 
 # Memory and CPU limits
-MemoryMax=1G
+# 1536M leaves ~140MB cushion above the in-process watchdog (1400MB) so the kernel
+# OOM killer never fires before the script's graceful SIGTERM path.
+MemoryMax=1536M
 CPUQuota=200%
 
 # Security hardening
