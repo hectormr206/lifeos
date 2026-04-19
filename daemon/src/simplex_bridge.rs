@@ -27,7 +27,7 @@
 #[cfg(feature = "messaging")]
 mod inner {
     use futures_util::{SinkExt, StreamExt};
-    use log::{error, info, warn};
+    use log::{debug, error, info, warn};
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
     use std::path::Path;
@@ -1235,7 +1235,7 @@ mod inner {
                             // explicitly opt in via config or env accept
                             // the tradeoff.
                             if !simplex_fanout_reminders_enabled().await {
-                                log::warn!(
+                                warn!(
                                     "[simplex_bridge] Reminder '{}' no se entrega: \
                                      messaging.simplex.fanout_reminders_to_last_contact=false \
                                      (default). Activalo explícito si querés fan-out.",
@@ -1248,7 +1248,7 @@ mod inner {
                             if let Some(name) = contact {
                                 let _ = outbound.send((name, msg));
                             } else {
-                                log::warn!(
+                                warn!(
                                     "[simplex_bridge] Reminder fired but no contact known to deliver to: {}",
                                     title
                                 );
@@ -1324,7 +1324,7 @@ mod inner {
                         let event: SimplexEvent = match serde_json::from_str(&text) {
                             Ok(e) => e,
                             Err(e) => {
-                                log::debug!(
+                                debug!(
                                     "[simplex_bridge] Unparseable event: {} — {}",
                                     e,
                                     crate::str_utils::truncate_bytes_safe(&text, 200)
@@ -1788,7 +1788,7 @@ mod inner {
                                     let display_name = match extract_display_name(item) {
                                         Some(n) => n,
                                         None => {
-                                            log::warn!("[simplex_bridge] Message with no contact info, skipping");
+                                            warn!("[simplex_bridge] Message with no contact info, skipping");
                                             continue;
                                         }
                                     };
@@ -2273,7 +2273,7 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
 
                                         // ── Unknown content type ──
                                         MsgContent::Unknown => {
-                                            log::debug!(
+                                            debug!(
                                                 "[simplex_bridge] Unknown content type from {}",
                                                 display_name
                                             );

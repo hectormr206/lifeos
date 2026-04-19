@@ -8523,7 +8523,7 @@ REGLAS FIRMES:
         {
             Ok(c) => c,
             Err(e) => {
-                log::warn!("brave_search: HTTP client build failed: {}", e);
+                warn!("brave_search: HTTP client build failed: {}", e);
                 return Ok(GENERIC_ERR.to_string());
             }
         };
@@ -8542,7 +8542,7 @@ REGLAS FIRMES:
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("brave_search: network error: {}", e);
+                warn!("brave_search: network error: {}", e);
                 return Ok(GENERIC_ERR.to_string());
             }
         };
@@ -8551,7 +8551,7 @@ REGLAS FIRMES:
             let status = resp.status();
             // Read body for logs only (truncated) — NEVER returned to the LLM.
             let body = resp.text().await.unwrap_or_default();
-            log::warn!(
+            warn!(
                 "brave_search: non-2xx response status={} body={}",
                 status,
                 crate::str_utils::truncate_bytes_safe(&body, 200)
@@ -8562,7 +8562,7 @@ REGLAS FIRMES:
         let body: serde_json::Value = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
-                log::warn!("brave_search: JSON parse failed: {}", e);
+                warn!("brave_search: JSON parse failed: {}", e);
                 return Ok(GENERIC_ERR.to_string());
             }
         };
