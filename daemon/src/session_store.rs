@@ -172,11 +172,11 @@ fn hash_fallback(raw: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
     let digest = hasher.finalize();
-    let hex: String = digest
-        .iter()
-        .take(8)
-        .map(|b| format!("{:02x}", b))
-        .collect();
+    use std::fmt::Write;
+    let hex = digest.iter().take(8).fold(String::with_capacity(16), |mut acc, b| {
+        let _ = write!(acc, "{:02x}", b);
+        acc
+    });
     format!("sanitized_{}", hex)
 }
 

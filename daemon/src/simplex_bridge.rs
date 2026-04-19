@@ -402,6 +402,7 @@ mod inner {
     /// (or just unusual) filename like `-i.mp4` could be mis-parsed. We:
     /// 1. Reject relative paths.
     /// 2. Reject paths whose filename begins with `-`.
+    ///
     /// Returns the validated `PathBuf` on success.
     fn sanitize_ffmpeg_path(p: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
         if !p.is_absolute() {

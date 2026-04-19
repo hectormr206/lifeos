@@ -1520,8 +1520,8 @@ pub fn should_escalate(local_response: &RouterResponse) -> bool {
     // and strip trailing punctuation we see in hedges.
     let normalized: String = text
         .to_lowercase()
-        .trim_start_matches(|c: char| matches!(c, '¡' | '¿' | '"' | '\'' | '(' | '[' | '«'))
-        .trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ';' | ':' | '»' | ')' | ']' | '"' | '\''))
+        .trim_start_matches(['¡', '¿', '"', '\'', '(', '[', '«'])
+        .trim_end_matches(['.', ',', '!', '?', ';', ':', '»', ')', ']', '"', '\''])
         .trim()
         .to_string();
 
@@ -1632,7 +1632,7 @@ fn starts_with_terminal_hedge(normalized: &str, hedge: &str) -> bool {
     let is_terminator = matches!(first_tail_char, Some('.') | Some('!') | Some('?'));
     if is_terminator {
         let after_term = tail_trimmed
-            .trim_start_matches(|c: char| matches!(c, '.' | '!' | '?'))
+            .trim_start_matches(['.', '!', '?'])
             .trim();
         let tail_words = after_term.split_whitespace().count();
         if tail_words <= 5 {

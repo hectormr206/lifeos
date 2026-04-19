@@ -2294,19 +2294,6 @@ REGLAS FIRMES:
         agentic_chat_inner(ctx, chat_id, user_text, image_b64, None, None).await
     }
 
-    /// `force_sensitivity` variant — callers that know the message is
-    /// a sensory artifact (voice transcript, OCR output, etc.) can
-    /// clamp the router to local tier even when there's no image.
-    pub async fn agentic_chat_with_sensitivity(
-        ctx: &ToolContext,
-        chat_id: i64,
-        user_text: &str,
-        image_b64: Option<&str>,
-        force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
-    ) -> (String, Option<String>) {
-        agentic_chat_inner(ctx, chat_id, user_text, image_b64, force_sensitivity, None).await
-    }
-
     /// Full variant: explicit `SessionKey` override for bridges whose
     /// durable session identity does NOT derive from `chat_id` (e.g.,
     /// SimpleX, where one in-memory chat_id fans out to many per-contact
@@ -8437,7 +8424,8 @@ REGLAS FIRMES:
         use tokio::time::{Duration, Instant};
 
         // (cached_at, value). value=None means we observed a miss.
-        static CACHE: OnceLock<RwLock<Option<(Instant, Option<String>)>>> = OnceLock::new();
+        type BraveCache = RwLock<Option<(Instant, Option<String>)>>;
+        static CACHE: OnceLock<BraveCache> = OnceLock::new();
         let cache = CACHE.get_or_init(|| RwLock::new(None));
 
         const CACHE_TTL: Duration = Duration::from_secs(30);
