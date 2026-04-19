@@ -448,6 +448,14 @@ RUN set -eux && \
                 KERNELS_WITH_MISSING_SIGN_TOOL=$((KERNELS_WITH_MISSING_SIGN_TOOL + 1)); \
                 continue; \
             fi; \
+            for modxz in "${modules_dir}"/extra/nvidia/*.ko.xz; do \
+                [ -e "${modxz}" ] || continue; \
+                xz -d -f "${modxz}"; \
+            done; \
+            for modzst in "${modules_dir}"/extra/nvidia/*.ko.zst; do \
+                [ -e "${modzst}" ] || continue; \
+                zstd -d --rm -f "${modzst}" -o "${modzst%.zst}"; \
+            done; \
             for mod in "${modules_dir}"/extra/nvidia/*.ko; do \
                 [ -e "${mod}" ] || continue; \
                 "${SIGN_TOOL}" sha256 "${KMOD_SIGN_KEY}" "${KMOD_SIGN_CERT}" "${mod}"; \
