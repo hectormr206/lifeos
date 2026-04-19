@@ -384,6 +384,102 @@ impl LlmRouter {
         }
     }
 
+    /// Route a chat request with **local-first escalation**.
+    ///
+    /// Flow:
+    /// 1. If sensitivity is `Critical` → local-only (no escalation).
+    /// 2. Otherwise → try Local tier first. If `should_escalate()` flags the
+    ///    response as weak/unknown/unsuitable, re-run once forcing `Free` tier.
+    /// 3. Capped at ONE escalation step (local → free) to avoid cost cascades.
+    ///
+    /// Toggle via env `LIFEOS_LLM_ESCALATION_ENABLED=false` to disable (default: true).
+    pub async fn chat_with_escalation(&self, request: &RouterRequest) -> Result<RouterResponse> {
+        let enabled = std::env::var("LIFEOS_LLM_ESCALATION_ENABLED")
+            .map(|v| !matches!(v.as_str(), "0" | "false" | "no"))
+            .unwrap_or(true);
+        if !enabled {
+            return self.chat(request).await;
+        }
+
+        let sensitivity = request.sensitivity.unwrap_or(SensitivityLevel::Low);
+
+        // Voice / privacy-critical → never escalate. Local tier only.
+        if matches!(sensitivity, SensitivityLevel::Critical) {
+            info!("[llm_router] escalation skipped (sensitivity=Critical) — me quedo local");
+            return self.chat(request).await;
+        }
+
+        // Round 1: force local tier — but ONLY if the caller didn't already
+        // pin a provider. Respect explicit caller intent; escalation still
+        // triggers on weakness below.
+        let mut local_req = request.clone();
+        if local_req.preferred_provider.is_none() {
+            let local_name = self
+                .providers
+                .iter()
+                .find(|p| p.tier == ProviderTier::Local)
+                .map(|p| p.name.clone());
+            if let Some(ref name) = local_name {
+                local_req.preferred_provider = Some(name.clone());
+            }
+        }
+
+        let local_resp = match self.chat(&local_req).await {
+            Ok(r) => r,
+            Err(e) => {
+                // Local unavailable — escalate directly to Free tier.
+                info!(
+                    "[llm_router] escalación: local cayó ({}) — voy directo al tier Free, dale",
+                    e
+                );
+                return self.chat_forced_free(request).await;
+            }
+        };
+
+        // Only consider escalation if we actually hit a Local-tier provider.
+        let hit_local = self
+            .providers
+            .iter()
+            .any(|p| p.name == local_resp.provider && p.tier == ProviderTier::Local);
+
+        if !hit_local {
+            return Ok(local_resp);
+        }
+
+        if should_escalate(&local_resp) {
+            info!(
+                "[llm_router] escalando a Free: local respondió flojito (len={}, provider={}). \
+                 Locura cósmica, pedimos refuerzo.",
+                local_resp.text.len(),
+                local_resp.provider
+            );
+            match self.chat_forced_free(request).await {
+                Ok(r) => Ok(r),
+                Err(e) => {
+                    warn!(
+                        "[llm_router] Free también falló ({}). Me quedo con la respuesta local, aunque sea débil.",
+                        e
+                    );
+                    Ok(local_resp)
+                }
+            }
+        } else {
+            Ok(local_resp)
+        }
+    }
+
+    /// Retry the request, but bias toward the Free tier by excluding Local preference.
+    async fn chat_forced_free(&self, request: &RouterRequest) -> Result<RouterResponse> {
+        let mut req = request.clone();
+        // Pick first available Free-tier provider as the preferred target.
+        if let Some(free) = self.providers.iter().find(|p| p.tier == ProviderTier::Free) {
+            req.preferred_provider = Some(free.name.clone());
+        } else {
+            req.preferred_provider = None;
+        }
+        self.chat(&req).await
+    }
+
     /// Route a chat request to the best available provider.
     pub async fn chat(&self, request: &RouterRequest) -> Result<RouterResponse> {
         let complexity = request.complexity.unwrap_or(TaskComplexity::Medium);
@@ -1391,6 +1487,156 @@ impl LlmRouter {
     }
 }
 
+/// Decide whether a local response should trigger escalation to the next tier.
+///
+/// Heuristic (deliberately simple, no ML) — tuned to AVOID false positives
+/// on legitimate short answers that happen to contain hedge substrings:
+/// - Empty / whitespace-only response.
+/// - Trivially short responses (< 3 codepoints of the NORMALIZED string).
+/// - Response is ENTIRELY a known hedge phrase (equality after normalization)
+///   OR opens with a hedge phrase AND is short/terminally-hedged (see
+///   `starts_with_terminal_hedge`): a long substantive answer that happens
+///   to begin with "No sé con certeza, pero..." does NOT escalate.
+/// - Degenerate outputs (`...`, `>>>`).
+///
+/// Rationale: substring matching for "no sé" flags valid responses like
+/// "no sé si te conviene X, pero..." which is actually a useful answer.
+/// We only escalate when the model is truly punting.
+pub fn should_escalate(local_response: &RouterResponse) -> bool {
+    let text = local_response.text.trim();
+
+    if text.is_empty() {
+        return true;
+    }
+
+    // Normalize FIRST so the tiny-length check runs on the same representation
+    // used by hedge matching. "«ok»" → "ok" (2 chars → escalate); "¡Sí!" → "sí"
+    // (2 chars → escalate — acceptable, pure ack); "Sí." → "sí" (2 chars).
+    // Normalization: lowercase, strip LEADING Spanish/quote openers (¡¿"'([«)
+    // and strip trailing punctuation we see in hedges.
+    let normalized: String = text
+        .to_lowercase()
+        .trim_start_matches(['¡', '¿', '"', '\'', '(', '[', '«'])
+        .trim_end_matches(['.', ',', '!', '?', ';', ':', '»', ')', ']', '"', '\''])
+        .trim()
+        .to_string();
+
+    // Trivially short by Unicode codepoint count on the NORMALIZED string.
+    // Threshold `< 3` keeps legitimate acks like "sí" (2)... wait: 2 < 3 so
+    // pure bare "sí"/"no"/"ok" DO escalate; but "Sí." / "No." / "Ok." / "Va."
+    // all become 2-char normalized strings too. Per spec those should NOT
+    // escalate — so we bump the raw text floor slightly: only escalate if
+    // the normalized string is strictly less than 2 codepoints ("a", "??").
+    // Covers the cases from the spec:
+    //   "Sí." → "sí" (2) → no escalate
+    //   "No." → "no" (2) → no escalate
+    //   "Ok." → "ok" (2) → no escalate
+    //   "Va." → "va" (2) → no escalate
+    //   "a"   → "a"  (1) → escalate
+    //   "??"  → ""   (0) → escalate (trailing punct stripped to empty)
+    if normalized.chars().count() < 2 {
+        return true;
+    }
+
+    // Explicit hedge / refusal patterns (ES + EN) — the FULL response must
+    // either BE one of these (after normalization) or open with one in a
+    // terminal way (see `starts_with_terminal_hedge`).
+    const HEDGE_PATTERNS: &[&str] = &[
+        "no sé",
+        "no lo sé",
+        "no lo se",
+        "no tengo esa información",
+        "no tengo esa informacion",
+        "no tengo información",
+        "no tengo informacion",
+        "no puedo responder",
+        "no estoy seguro",
+        "desconozco",
+        "i don't know",
+        "i do not know",
+        "i'm not sure",
+        "i am not sure",
+        "i cannot answer",
+        "i can't answer",
+        "as an ai, i cannot",
+        "i don't have that information",
+        "i do not have that information",
+    ];
+
+    for pat in HEDGE_PATTERNS {
+        // Exact-match hedge → escalate.
+        if normalized == *pat {
+            return true;
+        }
+        // Starts-with hedge only escalates when the hedge is TERMINAL —
+        // i.e. the hedge is essentially the whole answer or is followed by
+        // a short tail. A long substantive answer that opens with
+        // "No sé con certeza, pero te cuento que..." does NOT escalate.
+        if starts_with_terminal_hedge(&normalized, pat) {
+            return true;
+        }
+    }
+
+    // Degenerate echoes.
+    if text == "..." || text == ">>>" {
+        return true;
+    }
+
+    false
+}
+
+/// Returns true when `normalized` opens with `hedge` AND the hedge is
+/// terminal — meaning either:
+///   * the whole response is the hedge (optionally followed by stripped
+///     punctuation), OR
+///   * the response continues past the hedge with a VERY short tail
+///     (<= 5 words) AND the hedge is followed by a sentence terminator
+///     (`.`, `!`, `?`) or a comma/semicolon that cuts the clause short.
+///
+/// The overall word-count cap of 6 acts as a safety net: any response
+/// with <= 6 words that opens with a hedge is escalated ("No sé, la verdad.").
+///
+/// Captures:
+///   "No sé."                         → terminal (pure hedge)
+///   "No sé. Pero tal vez X."         → terminal (short tail after `.`)
+///   "No sé, la verdad."              → terminal (<= 6 words overall)
+/// Does NOT capture:
+///   "No sé con certeza, pero te cuento que el flujo A va a B y luego C."
+///     → long substantive answer; NOT terminal.
+fn starts_with_terminal_hedge(normalized: &str, hedge: &str) -> bool {
+    if !normalized.starts_with(hedge) {
+        return false;
+    }
+
+    // Pure hedge (normalization already stripped trailing punctuation).
+    if normalized == hedge {
+        return true;
+    }
+
+    // Short overall response that opens with a hedge → escalate.
+    let word_count = normalized.split_whitespace().count();
+    if word_count <= 6 {
+        return true;
+    }
+
+    // Look at what follows the hedge. If the hedge is immediately followed
+    // by a sentence terminator AND the remaining tail is <= 5 words, treat
+    // it as terminal ("No sé. Pero tal vez X.").
+    let tail = &normalized[hedge.len()..];
+    let tail_trimmed = tail.trim_start();
+    let first_tail_char = tail_trimmed.chars().next();
+    let is_terminator = matches!(first_tail_char, Some('.') | Some('!') | Some('?'));
+    if is_terminator {
+        let after_term = tail_trimmed.trim_start_matches(['.', '!', '?']).trim();
+        let tail_words = after_term.split_whitespace().count();
+        if tail_words <= 5 {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Strip `<think>...</think>` blocks from LLM responses (Qwen3, DeepSeek, etc.).
 /// These models include chain-of-thought reasoning that shouldn't be shown to users.
 pub fn strip_think_tags(text: &str) -> String {
@@ -1689,6 +1935,88 @@ mod tests {
             privacy: "low".into(),
         };
         assert_eq!(task_type_bonus(&provider, TaskType::LongContext), 50);
+    }
+
+    fn resp(text: &str) -> RouterResponse {
+        RouterResponse {
+            text: text.into(),
+            provider: "local".into(),
+            model: "local".into(),
+            tokens_used: None,
+            latency_ms: 0,
+            cached: false,
+        }
+    }
+
+    #[test]
+    fn test_should_escalate_empty() {
+        assert!(should_escalate(&resp("")));
+        assert!(should_escalate(&resp("   \n  ")));
+    }
+
+    #[test]
+    fn test_should_escalate_too_short() {
+        // Truly degenerate short inputs still escalate.
+        assert!(should_escalate(&resp("a")));
+        assert!(should_escalate(&resp("??")));
+        assert!(should_escalate(&resp("")));
+    }
+
+    #[test]
+    fn test_should_not_escalate_short_acks() {
+        // Short Spanish/English acks are legitimate replies — don't escalate.
+        assert!(!should_escalate(&resp("Sí.")));
+        assert!(!should_escalate(&resp("No.")));
+        assert!(!should_escalate(&resp("Ok.")));
+        assert!(!should_escalate(&resp("Va.")));
+        assert!(!should_escalate(&resp("sí claro")));
+    }
+
+    #[test]
+    fn test_should_escalate_hedge_terminal() {
+        // Pure hedge, possibly decorated with punctuation/quotes.
+        assert!(should_escalate(&resp("¡No sé!")));
+        assert!(should_escalate(&resp("No sé.")));
+        // Hedge + very short tail (<= 6 words overall).
+        assert!(should_escalate(&resp("No sé, la verdad.")));
+    }
+
+    #[test]
+    fn test_should_not_escalate_hedge_with_substance() {
+        // Long substantive answer that happens to OPEN with a hedge — the
+        // hedge is embedded, not terminal, so the answer stands on its own.
+        assert!(!should_escalate(&resp(
+            "No sé con certeza, pero te cuento que el flujo A va a B y luego C."
+        )));
+        assert!(!should_escalate(&resp(
+            "Desconozco el detalle técnico exacto, pero el flujo general es A → B → C y funciona así."
+        )));
+    }
+
+    #[test]
+    fn test_should_escalate_normalized_quotes() {
+        // Normalization strips leading «¡¿"'([ — so decorated short replies
+        // are treated identically to their bare form.
+        // "«ok»" normalizes to "ok" (2 chars) — below hedge list, above the
+        // tiny-length floor (< 2), so it survives as a legitimate ack.
+        assert!(!should_escalate(&resp("«ok»")));
+        // But a single decorated letter still trips the length floor.
+        assert!(should_escalate(&resp("«a»")));
+    }
+
+    #[test]
+    fn test_should_escalate_dont_know_patterns() {
+        // Short terminal hedges still escalate (<= 6 words overall).
+        assert!(should_escalate(&resp("Desconozco ese dato, perdón.")));
+        assert!(should_escalate(&resp("I don't know.")));
+        assert!(should_escalate(&resp("No tengo información.")));
+    }
+
+    #[test]
+    fn test_should_not_escalate_normal_answer() {
+        assert!(!should_escalate(&resp(
+            "La capital de Argentina es Buenos Aires, una ciudad cosmopolita y hermosa."
+        )));
     }
 
     #[test]

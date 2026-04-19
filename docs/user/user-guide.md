@@ -215,6 +215,33 @@ OCR from live screen capture:
 life ai ocr --capture-screen
 ```
 
+## Web Search (Brave)
+
+Axi puede consultar la web cuando se lo pedís. Usa la tool `web_search`
+contra la API de Brave Search (free tier, ~2.000 queries por mes).
+
+Configurá la clave de una de estas dos formas:
+
+- Variable de entorno:
+
+  ```bash
+  export BRAVE_SEARCH_API_KEY=<tu_token>
+  ```
+
+- O en `/var/lib/lifeos/config-checkpoints/working/config.toml`:
+
+  ```toml
+  [web_search]
+  brave_api_key = "tu_token"
+  ```
+
+Obtené una API key gratis en
+<https://api.search.brave.com/app/subscriptions/subscribe>.
+
+La tool está disponible en todos los canales (CLI, dashboard, Telegram,
+SimpleX). Si no hay clave configurada, Axi te lo dice y te recuerda
+cómo setearla.
+
 ## Safety and Self-Defense
 
 ```bash

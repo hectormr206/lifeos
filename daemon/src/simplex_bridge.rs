@@ -14,7 +14,11 @@
 //!   full-resolution file auto-accepted via XFTP
 //! - **Receive voice notes**: auto-accepted, transcribed with Whisper, then
 //!   dispatched as text through agentic chat
-//! - **Receive video**: thumbnail extracted and processed as image
+//! - **Receive video**: full file accepted via XFTP; ffmpeg extracts N
+//!   keyframes (default 4, time-based fallback), ffprobe reports duration,
+//!   and — when enabled — Whisper transcribes the audio track. Frames +
+//!   transcript dispatched through the multimodal LLM. Limits: 120s / 50 MB.
+//!   Config: `LIFEOS_VIDEO_TRANSCRIBE_AUDIO` (default true).
 //! - **Send files**: camera photos, screenshots, TTS audio via `/f @name path`
 //!
 //! Activation: The bridge starts only when the SimpleX CLI WebSocket is
@@ -23,7 +27,7 @@
 #[cfg(feature = "messaging")]
 mod inner {
     use futures_util::{SinkExt, StreamExt};
-    use log::{error, info, warn};
+    use log::{debug, error, info, warn};
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
     use std::path::Path;
@@ -38,13 +42,17 @@ mod inner {
     };
     use crate::llm_router::LlmRouter;
     use crate::memory_plane::MemoryPlaneManager;
+    use crate::session_store::SessionKey;
     use crate::task_queue::TaskQueue;
 
     /// WebSocket endpoint for the SimpleX CLI headless API.
     const SIMPLEX_WS_URL: &str = "ws://127.0.0.1:5226";
     /// Reconnect delay after connection failure.
     const RECONNECT_DELAY_SECS: u64 = 15;
-    /// Fixed "chat_id" for the SimpleX channel (conversation history key).
+    /// Synthetic `chat_id` used ONLY for the in-memory
+    /// `ConversationHistory` index (which is keyed by `i64`) and for the
+    /// event-bus reminder filter. Durable per-contact session replay lives
+    /// on `SessionKey::simplex(contact_id)`, NOT on this magic id.
     const SIMPLEX_CHAT_ID: i64 = 0x534D_504C_5800_0001; // "SMPLX001"
     /// Path where the invite link is persisted for the dashboard.
     const INVITE_LINK_PATH: &str = "/var/lib/lifeos/simplex-invite-link";
@@ -263,6 +271,15 @@ mod inner {
             display_name: String,
             caption: String,
         },
+        /// Process a video: extract keyframes, optionally transcribe audio,
+        /// then dispatch to the multimodal LLM.
+        ProcessVideo {
+            display_name: String,
+            caption: String,
+            /// Duration reported by SimpleX (seconds). Used as a fast-path
+            /// size check; `ffprobe` is authoritative once the file lands.
+            duration: Option<u64>,
+        },
     }
 
     /// Disk-backed store of in-flight file actions so voice/image jobs survive
@@ -377,6 +394,60 @@ mod inner {
     /// Ensure the downloads directory exists.
     fn ensure_downloads_dir() {
         let _ = std::fs::create_dir_all(DOWNLOADS_DIR);
+    }
+
+    /// Defense-in-depth: sanitize a path before handing it to ffmpeg/ffprobe.
+    ///
+    /// ffmpeg treats any argument starting with `-` as a flag. A malicious
+    /// (or just unusual) filename like `-i.mp4` could be mis-parsed. We:
+    /// 1. Reject relative paths.
+    /// 2. Reject paths whose filename begins with `-`.
+    ///
+    /// Returns the validated `PathBuf` on success.
+    fn sanitize_ffmpeg_path(p: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+        if !p.is_absolute() {
+            anyhow::bail!("ffmpeg path must be absolute: {}", p.display());
+        }
+        if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with('-') {
+                anyhow::bail!("ffmpeg path filename begins with '-': {}", p.display());
+            }
+        }
+        Ok(p.to_path_buf())
+    }
+
+    /// Startup defense-in-depth: remove stale `video-*` scratch dirs older
+    /// than 24h under the downloads root. `TempDir` Drop handles the normal
+    /// case; this sweep covers crash-before-drop scenarios.
+    async fn sweep_stale_video_scratch() {
+        let root = std::path::Path::new(DOWNLOADS_DIR);
+        let mut rd = match tokio::fs::read_dir(root).await {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        let cutoff =
+            std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(24 * 3600));
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if !name.starts_with("video-") {
+                continue;
+            }
+            let is_old = match (entry.metadata().await, cutoff) {
+                (Ok(md), Some(c)) => md.modified().map(|m| m < c).unwrap_or(false),
+                _ => false,
+            };
+            if is_old {
+                let _ = tokio::fs::remove_dir_all(&path).await;
+                info!(
+                    "[simplex_bridge] Sweep: borré scratch dir viejo {}",
+                    path.display()
+                );
+            }
+        }
     }
 
     /// Set the Axi profile (display name, description, avatar) on SimpleX.
@@ -497,6 +568,62 @@ mod inner {
         let _ = std::fs::write(&path, display_name);
     }
 
+    /// Whether to fan out reminder events (which are not yet per-contact
+    /// addressable on SimpleX) to `last_known_contact()`. OFF by default —
+    /// flipping it on has privacy implications: reminders originally tied
+    /// to one context may reach whichever contact happened to be the most
+    /// recent. Controlled by:
+    /// - env `LIFEOS_SIMPLEX_FANOUT_REMINDERS` (1/true/yes/on), OR
+    /// - `config.toml`: `[messaging.simplex] fanout_reminders_to_last_contact = true`
+    async fn simplex_fanout_reminders_enabled() -> bool {
+        use std::sync::OnceLock;
+        use tokio::sync::RwLock;
+        use tokio::time::{Duration, Instant};
+
+        // (cached_at, resolved_bool). Hits and misses share the same TTL
+        // since the value itself is always defined (default false).
+        static CACHE: OnceLock<RwLock<Option<(Instant, bool)>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| RwLock::new(None));
+
+        // Config changes propagate within CACHE_TTL. Privacy-relevant flags
+        // use 30 s so turning them off takes effect quickly — flipping the
+        // fanout toggle from true to false now propagates within 30 s
+        // instead of up to 60 s.
+        const CACHE_TTL: Duration = Duration::from_secs(30);
+
+        {
+            let guard = cache.read().await;
+            if let Some((stamped, val)) = guard.as_ref() {
+                if stamped.elapsed() < CACHE_TTL {
+                    return *val;
+                }
+            }
+        }
+
+        let resolved: bool = if let Ok(v) = std::env::var("LIFEOS_SIMPLEX_FANOUT_REMINDERS") {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        } else {
+            let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
+            match tokio::fs::read_to_string(path).await {
+                Ok(raw) => match toml::from_str::<toml::Value>(&raw) {
+                    Ok(parsed) => parsed
+                        .get("messaging")
+                        .and_then(|v| v.get("simplex"))
+                        .and_then(|v| v.get("fanout_reminders_to_last_contact"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    Err(_) => false,
+                },
+                Err(_) => false,
+            }
+        };
+
+        let mut w = cache.write().await;
+        *w = Some((Instant::now(), resolved));
+        resolved
+    }
+
     /// Return the most recently seen contact display_name, if any.
     fn last_known_contact() -> Option<String> {
         let path = last_contact_path();
@@ -533,12 +660,30 @@ mod inner {
 
         // Convert to WAV first (voice notes may be OGG/OPUS)
         let wav_path = format!("{}.wav", path);
-        let ffmpeg = Command::new("ffmpeg")
-            .args([
-                "-y", "-i", path, "-ar", "16000", "-ac", "1", "-f", "wav", &wav_path,
-            ])
-            .output()
-            .await;
+        let safe_voice_input = sanitize_ffmpeg_path(std::path::Path::new(path));
+        let ffmpeg = match safe_voice_input {
+            Ok(safe) => {
+                Command::new("ffmpeg")
+                    .args([
+                        "-y",
+                        "-i",
+                        safe.to_string_lossy().as_ref(),
+                        "-ar",
+                        "16000",
+                        "-ac",
+                        "1",
+                        "-f",
+                        "wav",
+                        &wav_path,
+                    ])
+                    .output()
+                    .await
+            }
+            Err(e) => {
+                warn!("[simplex_bridge] voice ffmpeg rejected path: {}", e);
+                return None;
+            }
+        };
 
         let input_path = if ffmpeg.map(|o| o.status.success()).unwrap_or(false) {
             &wav_path
@@ -592,6 +737,250 @@ mod inner {
         } else {
             Some(text)
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Video processing — full-frame support for SimpleX video messages
+    // -----------------------------------------------------------------------
+
+    /// Max accepted video duration (seconds). Longer clips are rejected with a
+    /// friendly Rioplatense reply.
+    const VIDEO_MAX_DURATION_SECS: u64 = 120;
+    /// Max accepted video file size (bytes). 50 MB.
+    const VIDEO_MAX_BYTES: u64 = 50 * 1024 * 1024;
+    /// Default number of keyframes to extract from a video.
+    const VIDEO_KEYFRAMES: u32 = 4;
+    /// ffmpeg / ffprobe hard timeout per invocation.
+    const VIDEO_FFMPEG_TIMEOUT_SECS: u64 = 60;
+
+    /// Whether to extract the audio track of a video and transcribe it with
+    /// Whisper. Controlled by `LIFEOS_VIDEO_TRANSCRIBE_AUDIO` (default true).
+    fn video_transcribe_audio_enabled() -> bool {
+        match std::env::var("LIFEOS_VIDEO_TRANSCRIBE_AUDIO") {
+            Ok(v) => {
+                let v = v.trim().to_ascii_lowercase();
+                !(v == "0" || v == "false" || v == "no" || v == "off")
+            }
+            Err(_) => true,
+        }
+    }
+
+    /// Run `ffprobe` to obtain the duration of a media file in seconds.
+    async fn probe_video_duration(path: &str) -> Option<f64> {
+        let safe_path = match sanitize_ffmpeg_path(std::path::Path::new(path)) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("[simplex_bridge] ffprobe rejected path: {}", e);
+                return None;
+            }
+        };
+        let mut cmd = Command::new("ffprobe");
+        cmd.args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "csv=p=0",
+            safe_path.to_string_lossy().as_ref(),
+        ])
+        .kill_on_drop(true);
+        let output = match tokio::time::timeout(
+            Duration::from_secs(VIDEO_FFMPEG_TIMEOUT_SECS),
+            cmd.output(),
+        )
+        .await
+        {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => {
+                warn!("[simplex_bridge] ffprobe spawn failed: {}", e);
+                return None;
+            }
+            Err(_) => {
+                warn!("[simplex_bridge] ffprobe timed out");
+                return None;
+            }
+        };
+        if !output.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        s.parse::<f64>().ok()
+    }
+
+    /// Extract up to `n` frames from a video.
+    ///
+    /// Strategy: first try keyframe selection (I-frames); if that returns fewer
+    /// frames than requested, fall back to evenly spaced time-based extraction.
+    /// Returns a list of paths to extracted JPEG frames in temporal order.
+    async fn extract_video_keyframes(
+        video_path: &str,
+        out_dir: &std::path::Path,
+        n: u32,
+        duration_secs: Option<f64>,
+    ) -> Vec<std::path::PathBuf> {
+        let _ = tokio::fs::create_dir_all(out_dir).await;
+
+        let safe_input = match sanitize_ffmpeg_path(std::path::Path::new(video_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(
+                    "[simplex_bridge] extract_video_keyframes rejected path: {}",
+                    e
+                );
+                return Vec::new();
+            }
+        };
+        let safe_input_str = safe_input.to_string_lossy().into_owned();
+
+        // Attempt 1 — keyframe selection. ffmpeg's `thumbnail` filter picks the
+        // most representative frame per scene; `eq(pict_type,I)` restricts to
+        // I-frames. `-vsync vfr` avoids duplicate padding.
+        let kf_pattern = out_dir.join("kf_%02d.jpg");
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args([
+            "-y",
+            "-i",
+            safe_input_str.as_str(),
+            "-vf",
+            "select='eq(pict_type,I)',thumbnail,scale=-1:480",
+            "-frames:v",
+            &n.to_string(),
+            "-vsync",
+            "vfr",
+            kf_pattern.to_string_lossy().as_ref(),
+        ])
+        .kill_on_drop(true);
+        let _ = tokio::time::timeout(Duration::from_secs(VIDEO_FFMPEG_TIMEOUT_SECS), cmd.output())
+            .await;
+
+        let mut frames = collect_frames(out_dir, "kf_").await;
+        if frames.len() as u32 >= n {
+            frames.truncate(n as usize);
+            return frames;
+        }
+
+        // Attempt 2 — time-based fallback. Pick N evenly spaced timestamps
+        // (25%, 50%, 75%, ...) and extract one frame per timestamp.
+        if let Some(total) = duration_secs.filter(|d| *d > 0.0) {
+            // Clear previous partial frames to avoid mixing modes.
+            for f in &frames {
+                let _ = tokio::fs::remove_file(f).await;
+            }
+            frames.clear();
+            for i in 0..n {
+                // Spread across middle of clip: (i+1)/(n+1) * total.
+                let t = (i as f64 + 1.0) / (n as f64 + 1.0) * total;
+                let out_path = out_dir.join(format!("tb_{:02}.jpg", i));
+                let mut c = Command::new("ffmpeg");
+                c.args([
+                    "-y",
+                    "-ss",
+                    &format!("{:.3}", t),
+                    "-i",
+                    safe_input_str.as_str(),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=-1:480",
+                    out_path.to_string_lossy().as_ref(),
+                ])
+                .kill_on_drop(true);
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(VIDEO_FFMPEG_TIMEOUT_SECS),
+                    c.output(),
+                )
+                .await;
+                if out_path.exists() {
+                    frames.push(out_path);
+                }
+            }
+        }
+
+        frames
+    }
+
+    /// List extracted frame files with the given prefix, sorted by name.
+    async fn collect_frames(out_dir: &std::path::Path, prefix: &str) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        if let Ok(mut rd) = tokio::fs::read_dir(out_dir).await {
+            while let Ok(Some(entry)) = rd.next_entry().await {
+                let p = entry.path();
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with(prefix) && name.ends_with(".jpg") {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// Extract the audio track of a video to a WAV file suitable for
+    /// `transcribe_audio`. Returns the WAV path on success.
+    async fn extract_video_audio(video_path: &str, out_dir: &std::path::Path) -> Option<String> {
+        let safe_input = match sanitize_ffmpeg_path(std::path::Path::new(video_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("[simplex_bridge] extract_video_audio rejected path: {}", e);
+                return None;
+            }
+        };
+        let wav = out_dir.join("audio.wav");
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args([
+            "-y",
+            "-i",
+            safe_input.to_string_lossy().as_ref(),
+            "-vn",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "wav",
+            wav.to_string_lossy().as_ref(),
+        ])
+        .kill_on_drop(true);
+        let out =
+            tokio::time::timeout(Duration::from_secs(VIDEO_FFMPEG_TIMEOUT_SECS), cmd.output())
+                .await;
+        match out {
+            Ok(Ok(o)) if o.status.success() && wav.exists() => {
+                Some(wav.to_string_lossy().into_owned())
+            }
+            _ => None,
+        }
+    }
+
+    /// Build a human-readable prompt describing a video for the LLM.
+    fn build_video_prompt(
+        caption: &str,
+        duration_secs: Option<f64>,
+        frame_count: usize,
+        transcript: Option<&str>,
+    ) -> String {
+        let dur = duration_secs
+            .map(|d| format!("{:.1}s", d))
+            .unwrap_or_else(|| "duración desconocida".to_string());
+        let mut out = if caption.is_empty() {
+            format!(
+                "El usuario envió un video de {} con {} frames clave adjuntos. \
+                 Describí lo que se ve y respondé.",
+                dur, frame_count
+            )
+        } else {
+            format!(
+                "{}\n\n[Contexto: video de {} con {} frames clave]",
+                caption, dur, frame_count
+            )
+        };
+        if let Some(t) = transcript.filter(|t| !t.trim().is_empty()) {
+            out.push_str("\n\n[Transcripción del audio] ");
+            out.push_str(t);
+        }
+        out
     }
 
     /// Capture a camera photo and return the path.
@@ -763,6 +1152,27 @@ mod inner {
         );
 
         ensure_downloads_dir();
+        sweep_stale_video_scratch().await;
+
+        // One-shot legacy session archive: a previous build stored ALL
+        // SimpleX turns under the synthetic telegram_dm(SIMPLEX_CHAT_ID)
+        // directory — mixing messages from every contact into a single
+        // transcript. We CANNOT safely rebind that to one contact, so we
+        // archive it under `.legacy_archive/` and start fresh per-contact.
+        if let Some(ref store) = session_store {
+            match store.archive_simplex_legacy_session(SIMPLEX_CHAT_ID).await {
+                Ok(true) => info!(
+                    "[simplex_bridge] Archivé la sesión legacy de SimpleX \
+                     (historia mixta pre-upgrade, no se puede atribuir a un \
+                     solo contacto). Arrancamos de cero por contacto, dale."
+                ),
+                Ok(false) => {}
+                Err(e) => warn!(
+                    "[simplex_bridge] Falló el archivado de la sesión legacy: {}",
+                    e
+                ),
+            }
+        }
 
         let tool_ctx = ToolContext {
             router,
@@ -813,15 +1223,28 @@ mod inner {
                         // Accept only our SimpleX magic chat_id (and also
                         // accept any unknown-high-magic id just in case).
                         if chat_id == SIMPLEX_CHAT_ID {
+                            // Privacy gate: the SimpleX CLI does not expose
+                            // per-chat_id contact mapping, so "fan out to
+                            // last_known_contact" would silently leak a
+                            // reminder to whichever contact happened to be
+                            // most recent. OFF by default; users who
+                            // explicitly opt in via config or env accept
+                            // the tradeoff.
+                            if !simplex_fanout_reminders_enabled().await {
+                                warn!(
+                                    "[simplex_bridge] Reminder '{}' no se entrega: \
+                                     messaging.simplex.fanout_reminders_to_last_contact=false \
+                                     (default). Activalo explícito si querés fan-out.",
+                                    title
+                                );
+                                continue;
+                            }
                             let msg = format!("🔔 Recordatorio ({}): {}", start_time, title);
-                            // Target all contacts — simplex does not expose
-                            // a deterministic display_name per chat_id yet,
-                            // so we use the stored default contact.
                             let contact = last_known_contact();
                             if let Some(name) = contact {
                                 let _ = outbound.send((name, msg));
                             } else {
-                                log::warn!(
+                                warn!(
                                     "[simplex_bridge] Reminder fired but no contact known to deliver to: {}",
                                     title
                                 );
@@ -897,7 +1320,7 @@ mod inner {
                         let event: SimplexEvent = match serde_json::from_str(&text) {
                             Ok(e) => e,
                             Err(e) => {
-                                log::debug!(
+                                debug!(
                                     "[simplex_bridge] Unparseable event: {} — {}",
                                     e,
                                     crate::str_utils::truncate_bytes_safe(&text, 200)
@@ -1026,7 +1449,7 @@ mod inner {
                                                         .mark_voice_origin(SIMPLEX_CHAT_ID)
                                                         .await;
                                                     let (reply, _) =
-                                                        axi_tools::agentic_chat_with_sensitivity(
+                                                        axi_tools::agentic_chat_with_session(
                                                             &tool_ctx,
                                                             SIMPLEX_CHAT_ID,
                                                             &format!(
@@ -1037,6 +1460,7 @@ mod inner {
                                                             Some(
                                                                 crate::privacy_filter::SensitivityLevel::Critical,
                                                             ),
+                                                            Some(SessionKey::simplex(&display_name)),
                                                         )
                                                         .await;
                                                     let _ = send_message(
@@ -1162,17 +1586,158 @@ mod inner {
                                                 } else {
                                                     caption
                                                 };
-                                                let (reply, _) = axi_tools::agentic_chat(
-                                                    &tool_ctx,
-                                                    SIMPLEX_CHAT_ID,
-                                                    &prompt,
-                                                    Some(&b64),
-                                                )
-                                                .await;
+                                                let (reply, _) =
+                                                    axi_tools::agentic_chat_with_session(
+                                                        &tool_ctx,
+                                                        SIMPLEX_CHAT_ID,
+                                                        &prompt,
+                                                        Some(&b64),
+                                                        None,
+                                                        Some(SessionKey::simplex(&display_name)),
+                                                    )
+                                                    .await;
                                                 let _ =
                                                     send_message(&mut sink, &display_name, &reply)
                                                         .await;
                                             }
+                                        }
+                                        PendingAction::ProcessVideo {
+                                            display_name,
+                                            caption,
+                                            duration,
+                                        } => {
+                                            // Authoritative size check on the landed file — the
+                                            // message hint can lie; the file on disk can't.
+                                            let size = tokio::fs::metadata(&path)
+                                                .await
+                                                .map(|m| m.len())
+                                                .unwrap_or(0);
+                                            if size > VIDEO_MAX_BYTES {
+                                                let _ = send_message(
+                                                    &mut sink,
+                                                    &display_name,
+                                                    "Ese video supera los 50 MB que puedo procesar, loco. \
+                                                     Mandame un clip más cortito (hasta 120s / 50 MB) y lo vemos.",
+                                                )
+                                                .await;
+                                                let _ = tokio::fs::remove_file(&path).await;
+                                                continue;
+                                            }
+
+                                            // Authoritative duration via ffprobe.
+                                            let ffprobe_dur = probe_video_duration(&path).await;
+                                            let effective_dur =
+                                                ffprobe_dur.or_else(|| duration.map(|d| d as f64));
+                                            if let Some(d) = effective_dur {
+                                                if d > VIDEO_MAX_DURATION_SECS as f64 {
+                                                    let _ = send_message(
+                                                        &mut sink,
+                                                        &display_name,
+                                                        &format!(
+                                                            "El video dura {:.0}s y solo puedo \
+                                                             analizar hasta {}s. Dale, recortalo \
+                                                             y lo vemos.",
+                                                            d, VIDEO_MAX_DURATION_SECS
+                                                        ),
+                                                    )
+                                                    .await;
+                                                    let _ = tokio::fs::remove_file(&path).await;
+                                                    continue;
+                                                }
+                                            }
+
+                                            // Scratch dir for frames + extracted audio. `TempDir`
+                                            // cleans up on ALL paths (success, error, panic) via Drop.
+                                            let work_tmp = match tempfile::Builder::new()
+                                                .prefix("video-")
+                                                .tempdir_in(DOWNLOADS_DIR)
+                                            {
+                                                Ok(t) => t,
+                                                Err(e) => {
+                                                    warn!(
+                                                        "[simplex_bridge] No pude crear scratch dir: {}",
+                                                        e
+                                                    );
+                                                    let _ = tokio::fs::remove_file(&path).await;
+                                                    continue;
+                                                }
+                                            };
+                                            let work_dir = work_tmp.path().to_path_buf();
+
+                                            let frames = extract_video_keyframes(
+                                                &path,
+                                                &work_dir,
+                                                VIDEO_KEYFRAMES,
+                                                effective_dur,
+                                            )
+                                            .await;
+
+                                            if frames.is_empty() {
+                                                warn!(
+                                                    "[simplex_bridge] Could not extract any frames from {}",
+                                                    path
+                                                );
+                                                let _ = send_message(
+                                                    &mut sink,
+                                                    &display_name,
+                                                    "Recibí el video pero no pude sacar frames para analizarlo. \
+                                                     Fijate si podés reenviarlo.",
+                                                )
+                                                .await;
+                                                // work_tmp drops here, cleans up.
+                                                let _ = tokio::fs::remove_file(&path).await;
+                                                continue;
+                                            }
+
+                                            // Optional — extract and transcribe the audio track.
+                                            let transcript = if video_transcribe_audio_enabled() {
+                                                match extract_video_audio(&path, &work_dir).await {
+                                                    Some(wav) => {
+                                                        let t = transcribe_audio(&wav).await;
+                                                        let _ = tokio::fs::remove_file(&wav).await;
+                                                        t
+                                                    }
+                                                    None => None,
+                                                }
+                                            } else {
+                                                None
+                                            };
+
+                                            // Primary frame (frame 0) is passed to the multimodal
+                                            // LLM as the image part. Remaining frames are
+                                            // announced in the prompt so the model knows they
+                                            // exist; when a multi-image pathway lands, this is
+                                            // the hook to extend.
+                                            let primary_b64 = file_to_base64(
+                                                frames[0].to_string_lossy().as_ref(),
+                                            )
+                                            .await;
+
+                                            let prompt = build_video_prompt(
+                                                &caption,
+                                                effective_dur,
+                                                frames.len(),
+                                                transcript.as_deref(),
+                                            );
+
+                                            let (reply, _) = axi_tools::agentic_chat_with_session(
+                                                &tool_ctx,
+                                                SIMPLEX_CHAT_ID,
+                                                &prompt,
+                                                primary_b64.as_deref(),
+                                                None,
+                                                Some(SessionKey::simplex(&display_name)),
+                                            )
+                                            .await;
+                                            let _ = send_message(&mut sink, &display_name, &reply)
+                                                .await;
+
+                                            // Cleanup — `work_tmp` drops here and recursively
+                                            // removes the scratch dir. We still explicitly unlink
+                                            // the downloaded video since it lives in DOWNLOADS_DIR,
+                                            // not inside the scratch tempdir.
+                                            drop(work_tmp);
+                                            let _ = tokio::fs::remove_file(&path).await;
                                         }
                                     }
                                 }
@@ -1216,7 +1781,7 @@ mod inner {
                                     let display_name = match extract_display_name(item) {
                                         Some(n) => n,
                                         None => {
-                                            log::warn!("[simplex_bridge] Message with no contact info, skipping");
+                                            warn!("[simplex_bridge] Message with no contact info, skipping");
                                             continue;
                                         }
                                     };
@@ -1365,13 +1930,16 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                 continue;
                                             }
 
-                                            let (reply, _audio) = axi_tools::agentic_chat(
-                                                &tool_ctx,
-                                                SIMPLEX_CHAT_ID,
-                                                msg_text,
-                                                None,
-                                            )
-                                            .await;
+                                            let (reply, _audio) =
+                                                axi_tools::agentic_chat_with_session(
+                                                    &tool_ctx,
+                                                    SIMPLEX_CHAT_ID,
+                                                    msg_text,
+                                                    None,
+                                                    None,
+                                                    Some(SessionKey::simplex(&display_name)),
+                                                )
+                                                .await;
 
                                             match send_message(&mut sink, &display_name, &reply)
                                                 .await
@@ -1412,13 +1980,18 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                         } else {
                                                             caption.clone()
                                                         };
-                                                        let (reply, _) = axi_tools::agentic_chat(
-                                                            &tool_ctx,
-                                                            SIMPLEX_CHAT_ID,
-                                                            &prompt,
-                                                            Some(&b64),
-                                                        )
-                                                        .await;
+                                                        let (reply, _) =
+                                                            axi_tools::agentic_chat_with_session(
+                                                                &tool_ctx,
+                                                                SIMPLEX_CHAT_ID,
+                                                                &prompt,
+                                                                Some(&b64),
+                                                                None,
+                                                                Some(SessionKey::simplex(
+                                                                    &display_name,
+                                                                )),
+                                                            )
+                                                            .await;
                                                         let _ = send_message(
                                                             &mut sink,
                                                             &display_name,
@@ -1510,6 +2083,19 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                         }
 
                                         // ── Video message ──
+                                        //
+                                        // Full-frame flow:
+                                        // 1. Reject up-front if the reported duration already
+                                        //    exceeds 120s or the file_size (if advertised)
+                                        //    exceeds 50 MB — no point downloading.
+                                        // 2. Queue a ProcessVideo pending action and
+                                        //    auto-accept the XFTP transfer. The real work
+                                        //    (keyframe extraction, optional audio transcription,
+                                        //    LLM dispatch) happens on rcvFileComplete.
+                                        // 3. If an inline thumbnail is present, fire a quick
+                                        //    "I'm thinking" reply using it as frame 0 — purely
+                                        //    a progressive UX hint. The authoritative analysis
+                                        //    still runs on the downloaded file.
                                         MsgContent::Video {
                                             text,
                                             image,
@@ -1521,45 +2107,142 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                 duration.unwrap_or(0)
                                             );
 
-                                            // Process the thumbnail if available
                                             let caption = text.as_deref().unwrap_or("").to_string();
+
+                                            // Early duration limit check.
+                                            if let Some(d) = duration {
+                                                if *d > VIDEO_MAX_DURATION_SECS {
+                                                    let _ = send_message(
+                                                        &mut sink,
+                                                        &display_name,
+                                                        &format!(
+                                                            "El video dura {}s y solo puedo \
+                                                             analizar hasta {}s. Dale, mandame \
+                                                             un clip más corto.",
+                                                            *d, VIDEO_MAX_DURATION_SECS
+                                                        ),
+                                                    )
+                                                    .await;
+                                                    continue;
+                                                }
+                                            }
+
+                                            // Early size check from the advertised transfer.
+                                            let advertised_size = inner
+                                                .file
+                                                .as_ref()
+                                                .and_then(|f| f.file_size)
+                                                .unwrap_or(0);
+                                            if advertised_size > VIDEO_MAX_BYTES {
+                                                let _ = send_message(
+                                                    &mut sink,
+                                                    &display_name,
+                                                    "Ese video supera los 50 MB que puedo procesar, loco. \
+                                                     Mandame un clip más cortito (hasta 120s / 50 MB) y lo vemos.",
+                                                )
+                                                .await;
+                                                continue;
+                                            }
+
+                                            // Progressive UX: if a thumbnail came inline, send
+                                            // a quick "on it" message with the thumb analyzed
+                                            // as frame 0 while the full file downloads.
                                             if let Some(data_uri) = image {
-                                                if let Some(path) =
+                                                if let Some(thumb_path) =
                                                     save_data_uri_to_file(data_uri).await
                                                 {
-                                                    if let Some(b64) = file_to_base64(&path).await {
-                                                        let prompt = if caption.is_empty() {
-                                                            format!(
-                                                                "El usuario envió un video de {}s. Esta es una captura del video. Descríbela.",
-                                                                duration.unwrap_or(0)
+                                                    if let Some(b64) =
+                                                        file_to_base64(&thumb_path).await
+                                                    {
+                                                        let prompt = format!(
+                                                            "El usuario envió un video de {}s. \
+                                                             Esta es una captura previa mientras \
+                                                             descargo el archivo completo. \
+                                                             Decí algo cortito (una línea) sobre \
+                                                             lo que ves en la captura; ya voy a \
+                                                             responder más detalladamente cuando \
+                                                             procese los frames.",
+                                                            duration.unwrap_or(0)
+                                                        );
+                                                        let (reply, _) =
+                                                            axi_tools::agentic_chat_with_session(
+                                                                &tool_ctx,
+                                                                SIMPLEX_CHAT_ID,
+                                                                &prompt,
+                                                                Some(&b64),
+                                                                None,
+                                                                Some(SessionKey::simplex(
+                                                                    &display_name,
+                                                                )),
                                                             )
-                                                        } else {
-                                                            caption
-                                                        };
-                                                        let (reply, _) = axi_tools::agentic_chat(
-                                                            &tool_ctx,
-                                                            SIMPLEX_CHAT_ID,
-                                                            &prompt,
-                                                            Some(&b64),
-                                                        )
-                                                        .await;
+                                                            .await;
                                                         let _ = send_message(
                                                             &mut sink,
                                                             &display_name,
                                                             &reply,
                                                         )
                                                         .await;
-                                                        continue;
                                                     }
+                                                    // Cleanup the inline thumbnail — we'll
+                                                    // re-extract real frames from the full file.
+                                                    let _ =
+                                                        tokio::fs::remove_file(&thumb_path).await;
                                                 }
                                             }
 
-                                            let _ = send_message(
-                                                &mut sink,
-                                                &display_name,
-                                                "Recibí tu video. Por ahora solo puedo analizar imágenes, pero estoy trabajando en soporte de video completo.",
-                                            )
-                                            .await;
+                                            // Queue full-file processing. XFTP download is
+                                            // kicked off by accept_file; the rcvFileComplete
+                                            // branch picks up the ProcessVideo action.
+                                            if let Some(file_id) =
+                                                inner.file.as_ref().and_then(|f| f.file_id)
+                                            {
+                                                {
+                                                    let mut guard = pending_files.lock().await;
+                                                    guard.insert(
+                                                        file_id,
+                                                        PendingAction::ProcessVideo {
+                                                            display_name: display_name.clone(),
+                                                            caption: caption.clone(),
+                                                            duration: *duration,
+                                                        },
+                                                    );
+                                                    persist_pending_files(&guard).await;
+                                                }
+                                                match accept_file(&mut sink, file_id).await {
+                                                    Ok(()) => {
+                                                        let _ = send_message(
+                                                            &mut sink,
+                                                            &display_name,
+                                                            "🎬 Recibiendo el video, dame un cachito \
+                                                             que lo proceso...",
+                                                        )
+                                                        .await;
+                                                    }
+                                                    Err(e) => {
+                                                        error!(
+                                                            "[simplex_bridge] Failed to accept video file: {}",
+                                                            e
+                                                        );
+                                                        let _ = send_message(
+                                                            &mut sink,
+                                                            &display_name,
+                                                            "No pude aceptar el archivo del video. \
+                                                             ¿Me lo reenviás?",
+                                                        )
+                                                        .await;
+                                                    }
+                                                }
+                                            } else {
+                                                // No XFTP transfer attached — we only have the
+                                                // thumbnail response already sent (if any).
+                                                let _ = send_message(
+                                                    &mut sink,
+                                                    &display_name,
+                                                    "Recibí el video pero no vino el archivo completo. \
+                                                     Probá reenviarlo.",
+                                                )
+                                                .await;
+                                            }
                                         }
 
                                         // ── File message ──
@@ -1587,7 +2270,7 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
 
                                         // ── Unknown content type ──
                                         MsgContent::Unknown => {
-                                            log::debug!(
+                                            debug!(
                                                 "[simplex_bridge] Unknown content type from {}",
                                                 display_name
                                             );

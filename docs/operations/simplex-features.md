@@ -149,8 +149,29 @@ messages.
 
 ### Video
 
-The thumbnail frame is extracted and analyzed by the multimodal LLM. Full
-video playback/analysis is not yet supported.
+Full-frame video analysis:
+
+- **Inline thumbnail (fast path)**: if the message carries an inline thumbnail,
+  Axi sends a quick one-line preview reply using it as frame 0 while the full
+  file is still downloading.
+- **Full file (XFTP)**: auto-accepted in the background. Once landed, `ffmpeg`
+  extracts up to 4 keyframes (`select='eq(pict_type,I)',thumbnail,scale=-1:480`);
+  if keyframe selection returns fewer frames than requested, a time-based
+  fallback picks evenly spaced timestamps across the clip.
+- **Duration**: reported by `ffprobe` and included in the LLM prompt.
+- **Audio track (optional)**: when `LIFEOS_VIDEO_TRANSCRIBE_AUDIO` is unset or
+  truthy (default), the audio is extracted to WAV and transcribed with the
+  same Whisper helper used for voice notes. The transcript is appended to the
+  prompt. Set to `0` / `false` / `no` / `off` to disable.
+- **Multimodal dispatch**: frame 0 is passed as the image part to
+  `agentic_chat`; remaining frames are announced in the prompt (multi-image
+  dispatch is the next extension point).
+- **Limits**: max 120s duration, max 50 MB. Exceeding either triggers a
+  Rioplatense reply explaining the limit.
+- **Timeouts**: every `ffmpeg`/`ffprobe` invocation is bounded to 60s with
+  `kill_on_drop(true)` so orphaned processes never leak.
+- **Cleanup**: extracted frames, WAV audio and the downloaded video are
+  removed once the reply is sent.
 
 ### Files
 
@@ -174,6 +195,72 @@ tools are available via natural language — cron job creation, service
 management, system monitoring, memory plane queries, calendar, and so on.
 There is no feature difference at the tool layer between SimpleX and the
 dashboard.
+
+### Web search (Brave)
+
+Como SimpleX comparte el `ToolContext`, cualquier pedido que dispare la
+tool `web_search` también funciona acá. La tool usa la API de Brave
+Search (free tier, ~2.000 queries por mes).
+
+Configurá la clave con la variable `BRAVE_SEARCH_API_KEY` o en
+`/var/lib/lifeos/config-checkpoints/working/config.toml`:
+
+```toml
+[web_search]
+brave_api_key = "tu_token"
+```
+
+Obtené una clave gratis en
+<https://api.search.brave.com/app/subscriptions/subscribe>. Si no hay
+clave, Axi responde con un mensaje rioplatense explicando cómo setearla
+en lugar de fallar silenciosamente.
+
+### Reminders fan-out
+
+> **Default: OFF.** Reminder events do not reach SimpleX contacts unless you opt in.
+
+Cuando se dispara un recordatorio (`lifeos reminder ...`), el daemon no tiene
+forma de saber a qué contacto de SimpleX pertenecía el contexto original — la
+CLI de SimpleX no expone un mapeo `chat_id → contacto`. Históricamente el
+bridge hacía *fan-out* al último contacto conocido (`last_known_contact()`),
+pero eso puede filtrar un recordatorio a quien justo te escribió último, que
+no necesariamente es la persona con la que estabas hablando cuando lo creaste.
+
+Por privacidad, ahora el fan-out está **desactivado por defecto**. Si lo
+querés activar explícitamente (asumiendo el tradeoff), tenés dos opciones:
+
+**Opción 1 — Variable de entorno** (útil para probar):
+
+```bash
+export LIFEOS_SIMPLEX_FANOUT_REMINDERS=1
+```
+
+Valores aceptados: `1`, `true`, `yes`, `on` (case-insensitive). Cualquier
+otro valor, o la ausencia de la variable, deja el fan-out apagado.
+
+**Opción 2 — Config persistente** (recomendada):
+
+En `/var/lib/lifeos/config-checkpoints/working/config.toml`:
+
+```toml
+[messaging.simplex]
+fanout_reminders_to_last_contact = true
+```
+
+El daemon relee el archivo cada ~60 segundos (cache TTL corta para que los
+cambios desde el dashboard surjan rápido), así que no hace falta reiniciar
+`lifeosd` después de togglear el flag.
+
+**¿Por qué cambió el default?** Originalmente el fan-out estaba implícito
+("ON"), lo que podía resultar en que un recordatorio sobre X le llegara al
+contacto Y solo porque Y fue el último que te escribió. Esto no es un leak
+de datos, pero sí es ruido y contexto cruzado indeseado. Moverlo a opt-in
+respeta el principio de mínima sorpresa.
+
+Cuando el flag está apagado y se dispara un recordatorio que solo tiene
+canal SimpleX, el daemon lo registra con `warn!` (`messaging.simplex.fanout_reminders_to_last_contact=false (default). Activalo explícito si querés fan-out.`)
+y no envía nada. No se pierde el recordatorio — queda en el storage local
+de reminders, solo no se reenvía por SimpleX.
 
 ### Incoming calls
 

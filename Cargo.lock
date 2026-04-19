@@ -2591,7 +2591,7 @@ dependencies = [
 
 [[package]]
 name = "life"
-version = "0.7.17"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "lifeos-integration-tests"
-version = "0.7.17"
+version = "0.8.0"
 dependencies = [
  "life",
  "serde_json",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "lifeosd"
-version = "0.7.17"
+version = "0.8.0"
 dependencies = [
  "aes-gcm-siv",
  "anyhow",
@@ -2668,6 +2668,7 @@ dependencies = [
  "shell-words",
  "sqlite-vec",
  "sysinfo",
+ "tempfile",
  "tokio",
  "tokio-tungstenite 0.29.0",
  "toml 0.8.23",

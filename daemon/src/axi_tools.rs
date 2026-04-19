@@ -793,6 +793,9 @@ REGLAS FIRMES:
 17. **browser_navigate** — Navega a una URL con el navegador y captura screenshot para analisis visual.
     args: {"url": "https://example.com", "analyze": "describe lo que ves en la pagina"}
 
+17b. **web_search** — Busca en internet via Brave Search API (BYOK). Devuelve una lista compacta `titulo | url | snippet`. Requiere BRAVE_SEARCH_API_KEY configurada. Usala para preguntas factuales / noticias / referencias rapidas cuando no necesitas abrir el navegador.
+    args: {"query": "precio dolar hoy", "num_results": 5}
+
 18. **cron_add** — Programa una tarea recurrente con expresion cron.
     args: {"name": "briefing matutino", "cron": "0 7 * * *", "action": "Revisa emails y calendario, dame un resumen"}
 
@@ -2201,6 +2204,7 @@ REGLAS FIRMES:
             "notify" => execute_notify(&call.args).await,
             "task_status" => execute_task_status(ctx).await,
             "browser_navigate" => execute_browser_navigate(&call.args, ctx).await,
+            "web_search" => execute_web_search(&call.args).await,
             "cron_add" => execute_cron_add(&call.args, ctx).await,
             "cron_list" => execute_cron_list(ctx).await,
             "cron_remove" => execute_cron_remove(&call.args, ctx).await,
@@ -2287,20 +2291,31 @@ REGLAS FIRMES:
         user_text: &str,
         image_b64: Option<&str>,
     ) -> (String, Option<String>) {
-        agentic_chat_inner(ctx, chat_id, user_text, image_b64, None).await
+        agentic_chat_inner(ctx, chat_id, user_text, image_b64, None, None).await
     }
 
-    /// `force_sensitivity` variant — callers that know the message is
-    /// a sensory artifact (voice transcript, OCR output, etc.) can
-    /// clamp the router to local tier even when there's no image.
-    pub async fn agentic_chat_with_sensitivity(
+    /// Full variant: explicit `SessionKey` override for bridges whose
+    /// durable session identity does NOT derive from `chat_id` (e.g.,
+    /// SimpleX, where one in-memory chat_id fans out to many per-contact
+    /// sessions). When `None`, the default `SessionKey::telegram_dm(chat_id)`
+    /// is used (backwards compat for Telegram and any legacy caller).
+    pub async fn agentic_chat_with_session(
         ctx: &ToolContext,
         chat_id: i64,
         user_text: &str,
         image_b64: Option<&str>,
         force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
+        session_key: Option<SessionKey>,
     ) -> (String, Option<String>) {
-        agentic_chat_inner(ctx, chat_id, user_text, image_b64, force_sensitivity).await
+        agentic_chat_inner(
+            ctx,
+            chat_id,
+            user_text,
+            image_b64,
+            force_sensitivity,
+            session_key,
+        )
+        .await
     }
 
     async fn agentic_chat_inner(
@@ -2309,6 +2324,7 @@ REGLAS FIRMES:
         user_text: &str,
         image_b64: Option<&str>,
         force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
+        session_key_override: Option<SessionKey>,
     ) -> (String, Option<String>) {
         // AQ.3 — Detect implicit preference feedback and update user model
         if let Some(ref um_arc) = ctx.user_model {
@@ -2383,8 +2399,12 @@ REGLAS FIRMES:
         let history = ctx.history.get(chat_id).await;
         let is_new_session = history.is_empty();
 
-        // Collect session store turns (for restoring context after restart)
-        let session_key = SessionKey::telegram_dm(chat_id);
+        // Collect session store turns (for restoring context after restart).
+        // If the caller supplied an explicit SessionKey (e.g., SimpleX bridge
+        // routing per-contact), honour it; otherwise default to telegram_dm
+        // keyed by chat_id (backwards compat for Telegram and callers that
+        // never threaded a bridge-specific key).
+        let session_key = session_key_override.unwrap_or_else(|| SessionKey::telegram_dm(chat_id));
         let mut restored_turns: Vec<ChatMessage> = Vec::new();
         if let Some(ref store) = ctx.session_store {
             if let Ok(_meta) = store.get_or_create(&session_key).await {
@@ -2429,56 +2449,180 @@ REGLAS FIRMES:
                 || l.contains("who am i")
                 || l.contains("tell me about me")
         };
-        if is_new_session || needs_memory_recall(user_text) {
-            if let Some(memory) = &ctx.memory {
-                let mem = memory.read().await;
-                // For identity questions, broaden the recall to pull in
-                // everything we've ever learned about the user — not just
-                // what matches their current sentence.
-                let identity_queries: &[&str] = &[
-                    "usuario",
-                    "preferencias",
-                    "Hector",
-                    "proyectos",
-                    "discovery",
-                    "preference",
-                    "trabajo",
-                    "perfil",
-                ];
-                let recall_queries: Vec<&str> = if is_identity_question {
-                    let mut v = vec![user_text, "session_summary"];
-                    v.extend_from_slice(identity_queries);
-                    v
-                } else {
-                    vec![user_text, "session_summary"]
-                };
-                let mut context_block = String::new();
-                for query in &recall_queries {
-                    if let Ok(results) = mem.search_entries(query, 3, None).await {
-                        for r in &results {
-                            let snippet = if r.entry.content.len() > 300 {
-                                format!(
-                                    "{}...",
-                                    crate::str_utils::truncate_bytes_safe(&r.entry.content, 300)
-                                )
-                            } else {
-                                r.entry.content.clone()
-                            };
-                            context_block.push_str(&format!(
-                                "- [{}] ({}): {}\n",
-                                r.entry.kind,
-                                r.entry.created_at.format("%Y-%m-%d %H:%M"),
-                                snippet
-                            ));
-                        }
+        // Memoria siempre-on: consultamos la memoria persistente en TODOS los
+        // turnos (SimpleX, Telegram, CLI). La búsqueda base usa el mensaje del
+        // usuario como query (top-3). Si la consulta dispara los heurísticos
+        // de "broader recall" (palabras tipo "recuerdas", pregunta de identidad
+        // o sesión nueva), extendemos con queries adicionales (session_summary
+        // y, para preguntas de identidad, queries de perfil).
+        //
+        // Filtramos resultados débiles por score (ver MEMORY_RECALL_MIN_SCORE)
+        // para no contaminar el prompt con ruido. Deduplicamos por entry_id
+        // entre los distintos queries, y envolvemos la búsqueda en un timeout
+        // para no bloquear la latencia del turno si la memoria se traba.
+        const MEMORY_RECALL_MIN_SCORE: f64 = 0.5;
+        const MEMORY_RECALL_BUDGET_MS: u64 = 800;
+
+        if let Some(memory) = &ctx.memory {
+            // Identity questions pull everything we've ever learned about the
+            // user — not just what matches their current sentence.
+            let identity_queries: &[&str] = &[
+                "usuario",
+                "preferencias",
+                "Hector",
+                "proyectos",
+                "discovery",
+                "preference",
+                "trabajo",
+                "perfil",
+            ];
+            let broader_recall =
+                is_new_session || needs_memory_recall(user_text) || is_identity_question;
+
+            // Base: siempre el mensaje del usuario, top-3.
+            // Broader: extendemos con session_summary y, si es identidad,
+            // con las identity_queries. Cada query trae top-5 cuando estamos
+            // en modo broader, top-3 en base.
+            let base_limit: usize = 3;
+            let broader_limit: usize = 5;
+
+            // (query, limit) tuples. El primero es la base siempre-on.
+            let mut recall_queries: Vec<(String, usize)> =
+                vec![(user_text.to_string(), base_limit)];
+            if broader_recall {
+                recall_queries.push(("session_summary".to_string(), broader_limit));
+                if is_identity_question {
+                    for q in identity_queries {
+                        recall_queries.push(((*q).to_string(), broader_limit));
                     }
                 }
-                if !context_block.is_empty() {
-                    system_prompt.push_str(&format!(
-                        "\n\n[Contexto recuperado de tu memoria persistente]:\n{}",
-                        context_block
+            }
+
+            // Snapshot the Arc. Each concurrent query acquires its own
+            // short-lived read guard, calls search_entries, and drops the
+            // guard immediately — writers never see a guard held across
+            // `.await` boundaries between queries, so they aren't starved.
+            let mem_handle: Arc<RwLock<MemoryPlaneManager>> = Arc::clone(memory);
+
+            // Short-circuit + parallel fan-out. If the FIRST query (which
+            // is always the user's message) errors or times out within the
+            // total budget, we treat the embedding service as down and
+            // skip the remaining queries — no point burning the turn
+            // budget on calls that won't succeed.
+            let total_budget = std::time::Duration::from_millis(MEMORY_RECALL_BUDGET_MS);
+
+            // Probe with the base query first (bounded by total budget).
+            // Acquire a read guard, run the one search, drop the guard.
+            let base_query = recall_queries[0].clone();
+            let probe_result = {
+                let mem_handle_probe = Arc::clone(&mem_handle);
+                let bq0 = base_query.0.clone();
+                let bq1 = base_query.1;
+                tokio::time::timeout(total_budget, async move {
+                    let g = mem_handle_probe.read().await;
+                    let res = g.search_entries(&bq0, bq1, None).await;
+                    drop(g);
+                    res
+                })
+                .await
+            };
+
+            let base_results = match probe_result {
+                Ok(Ok(r)) => Some(r),
+                Ok(Err(e)) => {
+                    warn!(
+                        "[memory] recall base falló ('{}'): {} — corto circuito, no pido más",
+                        base_query.0, e
+                    );
+                    None
+                }
+                Err(_) => {
+                    warn!(
+                        "[memory] recall base superó {}ms — embedding service tardo, corto circuito",
+                        MEMORY_RECALL_BUDGET_MS
+                    );
+                    None
+                }
+            };
+
+            // Base probe succeeded → fire the rest concurrently. Each
+            // future acquires and releases its OWN read guard, so queries
+            // proceed independently without holding a single guard across
+            // the full join_all.
+            let extra_results: Vec<Vec<crate::memory_plane::MemorySearchResult>> =
+                if base_results.is_some() && recall_queries.len() > 1 {
+                    let rest: Vec<(String, usize)> = recall_queries[1..].to_vec();
+                    let mem_handle_inner = Arc::clone(&mem_handle);
+                    let fan_out = async move {
+                        let futs = rest.into_iter().map(|(q, lim)| {
+                            let handle = Arc::clone(&mem_handle_inner);
+                            async move {
+                                let g = handle.read().await;
+                                let res = g.search_entries(&q, lim, None).await;
+                                drop(g);
+                                (q, res)
+                            }
+                        });
+                        futures_util::future::join_all(futs).await
+                    };
+                    match tokio::time::timeout(total_budget, fan_out).await {
+                        Ok(rows) => rows
+                            .into_iter()
+                            .filter_map(|(q, res)| match res {
+                                Ok(r) => Some(r),
+                                Err(e) => {
+                                    warn!("[memory] recall falló para query '{}': {}", q, e);
+                                    None
+                                }
+                            })
+                            .collect(),
+                        Err(_) => {
+                            warn!(
+                                "[memory] fan-out de recall superó {}ms, uso solo resultados base",
+                                MEMORY_RECALL_BUDGET_MS
+                            );
+                            Vec::new()
+                        }
+                    }
+                } else {
+                    Vec::new()
+                };
+
+            let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut context_block = String::new();
+
+            let all_batches = base_results.into_iter().chain(extra_results.into_iter());
+
+            for results in all_batches {
+                for r in &results {
+                    if r.score < MEMORY_RECALL_MIN_SCORE {
+                        continue;
+                    }
+                    if !seen_ids.insert(r.entry.entry_id.clone()) {
+                        continue;
+                    }
+                    let snippet = if r.entry.content.len() > 300 {
+                        format!(
+                            "{}...",
+                            crate::str_utils::truncate_bytes_safe(&r.entry.content, 300)
+                        )
+                    } else {
+                        r.entry.content.clone()
+                    };
+                    context_block.push_str(&format!(
+                        "- [{}] ({}): {}\n",
+                        r.entry.kind,
+                        r.entry.created_at.format("%Y-%m-%d %H:%M"),
+                        snippet
                     ));
                 }
+            }
+
+            if !context_block.is_empty() {
+                system_prompt.push_str(&format!(
+                    "\n\n[Contexto recuperado de tu memoria persistente]:\n{}",
+                    context_block
+                ));
             }
         }
 
@@ -2583,7 +2727,7 @@ REGLAS FIRMES:
             };
 
             let router = ctx.router.read().await;
-            let response = match router.chat(&request).await {
+            let response = match router.chat_with_escalation(&request).await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!("[axi_tools] LLM call failed round {}: {}", round, e);
@@ -2621,6 +2765,7 @@ REGLAS FIRMES:
                 if let Some(ref store) = ctx.session_store {
                     let store = store.clone();
                     let sk = session_key.clone();
+                    let channel_label = sk.channel.clone();
                     let user_content = user_text.to_string();
                     let assistant_content = final_text.clone();
                     let router = ctx.router.clone();
@@ -2633,7 +2778,7 @@ REGLAS FIRMES:
                                 TranscriptTurn {
                                     role: "user".into(),
                                     content: user_content,
-                                    channel: "telegram".into(),
+                                    channel: channel_label.clone(),
                                     timestamp: now,
                                     tool_name: None,
                                     tool_result: None,
@@ -2650,7 +2795,7 @@ REGLAS FIRMES:
                                 TranscriptTurn {
                                     role: "assistant".into(),
                                     content: assistant_content,
-                                    channel: "telegram".into(),
+                                    channel: channel_label.clone(),
                                     timestamp: now,
                                     tool_name: None,
                                     tool_result: None,
@@ -8249,6 +8394,167 @@ REGLAS FIRMES:
                 ))
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // NEW: Brave Search web_search tool
+    // -----------------------------------------------------------------------
+
+    /// Read the Brave Search API key from:
+    /// 1. Env var `BRAVE_SEARCH_API_KEY`
+    /// 2. `web_search.brave_api_key` in the daemon config
+    ///    (/var/lib/lifeos/config-checkpoints/working/config.toml)
+    ///
+    /// Config changes propagate within CACHE_TTL. Privacy-relevant flags use
+    /// 30 s so turning them off takes effect quickly. Uniform TTL for hits
+    /// AND misses avoids re-reading the file every few seconds when the key
+    /// is absent, while keeping key rotation responsive.
+    async fn brave_search_api_key() -> Option<String> {
+        use std::sync::OnceLock;
+        use tokio::sync::RwLock;
+        use tokio::time::{Duration, Instant};
+
+        // (cached_at, value). value=None means we observed a miss.
+        type BraveCache = RwLock<Option<(Instant, Option<String>)>>;
+        static CACHE: OnceLock<BraveCache> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| RwLock::new(None));
+
+        const CACHE_TTL: Duration = Duration::from_secs(30);
+
+        // Fast path: valid cache entry.
+        {
+            let guard = cache.read().await;
+            if let Some((stamped, val)) = guard.as_ref() {
+                if stamped.elapsed() < CACHE_TTL {
+                    return val.clone();
+                }
+            }
+        }
+
+        // Slow path: re-read env + config.
+        let fresh: Option<String> = {
+            let mut found: Option<String> = None;
+            if let Ok(k) = std::env::var("BRAVE_SEARCH_API_KEY") {
+                if !k.trim().is_empty() {
+                    found = Some(k);
+                }
+            }
+            if found.is_none() {
+                let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
+                if let Ok(raw) = tokio::fs::read_to_string(path).await {
+                    if let Ok(parsed) = toml::from_str::<toml::Value>(&raw) {
+                        found = parsed
+                            .get("web_search")
+                            .and_then(|v| v.get("brave_api_key"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .filter(|s| !s.trim().is_empty());
+                    }
+                }
+            }
+            found
+        };
+
+        let mut w = cache.write().await;
+        *w = Some((Instant::now(), fresh.clone()));
+        fresh
+    }
+
+    /// Brave Search API — free tier web search.
+    /// API reference: <https://api.search.brave.com/app/documentation/web-search/get-started>
+    ///
+    /// Single attempt, 10s timeout, no retry. Returns a compact
+    /// `titulo | url | snippet` list to the LLM (snippet truncated
+    /// to ~200 chars each).
+    async fn execute_web_search(args: &serde_json::Value) -> Result<String> {
+        let query = args["query"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'query'"))?;
+        if query.trim().is_empty() {
+            anyhow::bail!("'query' no puede estar vacio");
+        }
+        let num_results = args["num_results"].as_u64().unwrap_or(5).clamp(1, 20) as usize;
+
+        let key = match brave_search_api_key().await {
+            Some(k) => k,
+            None => {
+                return Ok(
+                    "No hay API key de Brave Search configurada, che. Ponete las pilas: \
+                     exportate BRAVE_SEARCH_API_KEY=<tu_token> o agregala en \
+                     /var/lib/lifeos/config-checkpoints/working/config.toml bajo \
+                     [web_search] brave_api_key = \"...\" y volveme a pedir la busqueda."
+                        .to_string(),
+                );
+            }
+        };
+
+        // Rioplatense generic error — we never echo raw reqwest errors or
+        // API bodies to the LLM, they may include URLs, HTML, or (in the
+        // worst case) echoed headers. Raw detail goes to tracing only.
+        const GENERIC_ERR: &str =
+            "No pude consultar Brave Search ahora. Revisá tu clave o probá más tarde.";
+
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("brave_search: HTTP client build failed: {}", e);
+                return Ok(GENERIC_ERR.to_string());
+            }
+        };
+
+        let resp = client
+            .get("https://api.search.brave.com/res/v1/web/search")
+            .header("X-Subscription-Token", &key)
+            .header("Accept", "application/json")
+            .query(&[("q", query.to_string()), ("count", num_results.to_string())])
+            .send()
+            .await;
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("brave_search: network error: {}", e);
+                return Ok(GENERIC_ERR.to_string());
+            }
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            // Read body for logs only (truncated) — NEVER returned to the LLM.
+            let body = resp.text().await.unwrap_or_default();
+            warn!(
+                "brave_search: non-2xx response status={} body={}",
+                status,
+                crate::str_utils::truncate_bytes_safe(&body, 200)
+            );
+            return Ok(GENERIC_ERR.to_string());
+        }
+
+        let body: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("brave_search: JSON parse failed: {}", e);
+                return Ok(GENERIC_ERR.to_string());
+            }
+        };
+
+        let results = match body["web"]["results"].as_array() {
+            Some(arr) if !arr.is_empty() => arr,
+            _ => return Ok(format!("Sin resultados para '{}'.", query)),
+        };
+
+        let mut out = format!("Resultados Brave Search para '{}':\n", query);
+        for item in results.iter().take(num_results) {
+            let title = item["title"].as_str().unwrap_or("(sin titulo)");
+            let url = item["url"].as_str().unwrap_or("");
+            let snippet_raw = item["description"].as_str().unwrap_or("");
+            let snippet = crate::str_utils::truncate_bytes_safe(snippet_raw, 200);
+            out.push_str(&format!("- {} | {} | {}\n", title, url, snippet));
+        }
+        Ok(out)
     }
 
     // -----------------------------------------------------------------------

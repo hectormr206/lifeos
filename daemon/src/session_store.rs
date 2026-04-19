@@ -77,6 +77,15 @@ impl SessionKey {
         Self::new("discord", "channel", channel_id)
     }
 
+    /// Create a session key for SimpleX.
+    ///
+    /// `contact_id` is the stable SimpleX contact identifier — typically the
+    /// `localDisplayName` from the CLI, which persists across daemon restarts.
+    /// One session per contact guarantees durable, isolated replay history.
+    pub fn simplex(contact_id: &str) -> Self {
+        Self::new("simplex", "dm", contact_id)
+    }
+
     /// Create a session key for CLI
     pub fn cli() -> Self {
         Self::new("cli", "local", "default")
@@ -91,9 +100,87 @@ impl SessionKey {
     }
 
     /// Generate a filesystem-safe session directory name.
+    ///
+    /// `peer_id` may be attacker-controlled (SimpleX `localDisplayName`,
+    /// WhatsApp phone alias, Matrix room alias, etc.) so we sanitize it
+    /// defensively: strip path separators, parent-dir traversal tokens,
+    /// NUL / control chars, and leading `-` (which could be mis-parsed as
+    /// a CLI flag by downstream tools). If sanitization meaningfully
+    /// changes the input OR leaves it empty, we fall back to a short
+    /// SHA-256 hex digest of the raw peer_id so the directory name is
+    /// still stable and unique per contact.
     pub fn dir_name(&self) -> String {
-        format!("{}_{}_{}", self.channel, self.scope, self.peer_id)
+        let sanitized = sanitize_peer_id(&self.peer_id);
+        format!("{}_{}_{}", self.channel, self.scope, sanitized)
     }
+}
+
+/// Sanitize a `peer_id` so it can safely be joined to a base directory.
+///
+/// Goals:
+/// - Preserve legitimate Unicode names (e.g. `"María García"`, `"田中"`, `"José"`)
+///   so SimpleX/Telegram display names don't silently collapse into opaque
+///   `sanitized_XXXX` hashes.
+/// - Still block path-traversal and filesystem-hostile patterns.
+///
+/// Rules:
+/// - Reject outright (→ hash fallback) if raw is empty, equal to `.`/`..`,
+///   contains `..`, starts with `-` (CLI-flag misparse), or starts with `.`
+///   (hidden dir). Raw containing `\0` or `/` / `\` characters still gets
+///   sanitized in-place (those chars are replaced with `_`).
+/// - Per-char allow predicate: `is_alphanumeric() && !is_control()` plus a
+///   small punctuation allowlist (`_ . + = : @`). Anything else (spaces,
+///   unusual punctuation) is replaced with `_`.
+/// - If the sanitized string ends up empty, fall back to a SHA-256 hash.
+pub(crate) fn sanitize_peer_id(raw: &str) -> String {
+    // Reject patterns we will never map to a filesystem name directly.
+    if raw.is_empty()
+        || raw == "."
+        || raw == ".."
+        || raw.contains("..")
+        || raw.starts_with('-')
+        || raw.starts_with('.')
+    {
+        return hash_fallback(raw);
+    }
+
+    // Per-char rewrite. Allow Unicode letters/digits from any script
+    // (Spanish accented letters, CJK, Cyrillic, etc.) plus a small
+    // punctuation allowlist. Everything else becomes `_`.
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        if c.is_control() || c == '/' || c == '\\' || c == '\0' {
+            out.push('_');
+        } else if c.is_alphanumeric() || matches!(c, '_' | '.' | '+' | '=' | ':' | '@') {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+
+    // Trim any leading `_` introduced by replacement (avoids awkward
+    // names like `_evil` when input started with a disallowed char).
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        return hash_fallback(raw);
+    }
+    trimmed
+}
+
+fn hash_fallback(raw: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    let digest = hasher.finalize();
+    use std::fmt::Write;
+    let hex = digest
+        .iter()
+        .take(8)
+        .fold(String::with_capacity(16), |mut acc, b| {
+            let _ = write!(acc, "{:02x}", b);
+            acc
+        });
+    format!("sanitized_{}", hex)
 }
 
 impl std::fmt::Display for SessionKey {
@@ -165,6 +252,16 @@ impl SessionStore {
         let mut dir = tokio::fs::read_dir(&self.base_dir).await?;
 
         while let Some(entry) = dir.next_entry().await? {
+            // Skip hidden directories (e.g. `.legacy_archive`) — they are
+            // sibling bookkeeping, not live sessions.
+            if entry
+                .file_name()
+                .to_str()
+                .map(|n| n.starts_with('.'))
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if entry.file_type().await?.is_dir() {
                 let meta_path = entry.path().join("metadata.json");
                 if let Ok(content) = tokio::fs::read_to_string(&meta_path).await {
@@ -344,6 +441,66 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Archive a legacy SimpleX session that was stored under the synthetic
+    /// telegram-dm magic chat_id.
+    ///
+    /// Historical note: a previous build stored ALL SimpleX conversations
+    /// under a single synthetic key derived from `SIMPLEX_CHAT_ID`. If the
+    /// user interacted with more than one SimpleX contact before upgrading,
+    /// that directory contains MIXED transcripts from multiple people.
+    /// Rebinding it to `last_known_contact()` would mis-attribute other
+    /// contacts' messages to whoever happened to be the most recent one —
+    /// a privacy bug.
+    ///
+    /// Instead, we move the legacy directory to
+    /// `<base>/.legacy_archive/simplex_telegram_dm_<magic>_<timestamp>/`
+    /// and drop it from the in-memory index. The user retains the data
+    /// (it's not deleted) but it's no longer replayed into any live
+    /// conversation. A Rioplatense info message is logged.
+    ///
+    /// Returns `Ok(true)` if an archive happened, `Ok(false)` otherwise.
+    pub async fn archive_simplex_legacy_session(&self, legacy_chat_id: i64) -> Result<bool> {
+        let legacy = SessionKey::new("telegram", "dm", &legacy_chat_id.to_string());
+        let legacy_dir = self.base_dir.join(legacy.dir_name());
+
+        if !legacy_dir.exists() {
+            return Ok(false);
+        }
+
+        let archive_root = self.base_dir.join(".legacy_archive");
+        tokio::fs::create_dir_all(&archive_root)
+            .await
+            .context("creating .legacy_archive dir")?;
+
+        let ts = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+        let dest = archive_root.join(format!("simplex_telegram_dm_{}_{}", legacy_chat_id, ts));
+
+        tokio::fs::rename(&legacy_dir, &dest)
+            .await
+            .with_context(|| {
+                format!(
+                    "archiving legacy simplex session {} -> {}",
+                    legacy_dir.display(),
+                    dest.display()
+                )
+            })?;
+
+        // Drop the legacy entry from the in-memory index so it doesn't get
+        // replayed into any live conversation.
+        let mut sessions = self.sessions.write().await;
+        sessions.remove(&legacy.as_canonical());
+        drop(sessions);
+
+        info!(
+            "[session_store] Archivé la sesión SimpleX previa (chat_id={}) en {}. \
+             La historia pre-upgrade tenía mensajes mezclados de varios contactos \
+             y no puedo atribuírsela a uno solo sin arriesgar tu privacidad, loco.",
+            legacy_chat_id,
+            dest.display()
+        );
+        Ok(true)
+    }
+
     /// Prune sessions older than TTL from the in-memory index.
     /// Transcript files on disk are kept for potential recovery;
     /// the `storage_housekeeping` module handles disk cleanup.
@@ -460,5 +617,106 @@ impl SessionStore {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir_name_with(peer: &str) -> String {
+        SessionKey::new("simplex", "dm", peer).dir_name()
+    }
+
+    #[test]
+    fn dir_name_rejects_path_traversal() {
+        let d = dir_name_with("../..");
+        assert!(!d.contains(".."), "must strip parent-dir tokens: {}", d);
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_absolute_and_slash() {
+        // Slash must be stripped. Input "/tmp/x" → sanitized "_tmp_x" →
+        // leading-underscore trimmed → "tmp_x".
+        let d = dir_name_with("/tmp/x");
+        assert!(!d.contains('/'), "must strip path separators: {}", d);
+        assert_eq!(d, "simplex_dm_tmp_x");
+    }
+
+    #[test]
+    fn dir_name_rejects_nul_byte() {
+        let d = dir_name_with("evil\0name");
+        assert!(!d.contains('\0'));
+        // NUL becomes `_` in place; no hash fallback needed.
+        assert_eq!(d, "simplex_dm_evil_name");
+    }
+
+    #[test]
+    fn dir_name_rejects_dot_dot() {
+        let d = dir_name_with("..");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_empty() {
+        let d = dir_name_with("");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_leading_dash() {
+        let d = dir_name_with("-rf");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_accepts_normal_contact() {
+        let d = dir_name_with("alice_42");
+        assert_eq!(d, "simplex_dm_alice_42");
+    }
+
+    #[test]
+    fn dir_name_accepts_numeric_chat_id() {
+        let d = SessionKey::telegram_dm(316014621).dir_name();
+        assert_eq!(d, "telegram_dm_316014621");
+    }
+
+    // -------------------------------------------------------------------
+    // Unicode-preservation tests (Round 2 regression fix).
+    // Legitimate Latin-with-diacritics and CJK names must survive intact
+    // instead of collapsing to an opaque `sanitized_XXXX` hash.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn dir_name_preserves_accented_name() {
+        let d = dir_name_with("María");
+        assert_eq!(d, "simplex_dm_María");
+    }
+
+    #[test]
+    fn dir_name_preserves_accented_name_with_space() {
+        // Space is not in the allowlist → replaced with `_`. The name
+        // still reads clearly.
+        let d = dir_name_with("María García");
+        assert_eq!(d, "simplex_dm_María_García");
+    }
+
+    #[test]
+    fn dir_name_preserves_cjk() {
+        let d = dir_name_with("田中");
+        assert_eq!(d, "simplex_dm_田中");
+    }
+
+    #[test]
+    fn dir_name_rejects_hidden_dir_prefix() {
+        let d = dir_name_with(".hidden");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_two_dots_prefix() {
+        let d = dir_name_with("..two-dots");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
     }
 }
