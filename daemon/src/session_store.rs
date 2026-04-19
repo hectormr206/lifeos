@@ -100,9 +100,55 @@ impl SessionKey {
     }
 
     /// Generate a filesystem-safe session directory name.
+    ///
+    /// `peer_id` may be attacker-controlled (SimpleX `localDisplayName`,
+    /// WhatsApp phone alias, Matrix room alias, etc.) so we sanitize it
+    /// defensively: strip path separators, parent-dir traversal tokens,
+    /// NUL / control chars, and leading `-` (which could be mis-parsed as
+    /// a CLI flag by downstream tools). If sanitization meaningfully
+    /// changes the input OR leaves it empty, we fall back to a short
+    /// SHA-256 hex digest of the raw peer_id so the directory name is
+    /// still stable and unique per contact.
     pub fn dir_name(&self) -> String {
-        format!("{}_{}_{}", self.channel, self.scope, self.peer_id)
+        let sanitized = sanitize_peer_id(&self.peer_id);
+        format!("{}_{}_{}", self.channel, self.scope, sanitized)
     }
+}
+
+/// Sanitize a `peer_id` so it can safely be joined to a base directory.
+///
+/// - Replaces any `/`, `\`, `\0`, or ASCII control char with `_`.
+/// - Rejects `.` / `..` components.
+/// - Strips leading `-` (defense against tools parsing it as a flag).
+/// - On any meaningful change OR empty result, returns a short SHA-256
+///   hex digest of the raw input so collisions are still rare.
+pub(crate) fn sanitize_peer_id(raw: &str) -> String {
+    // Fast path: known-safe chars only.
+    let safe = raw
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '+' | '=' | ':' | '@'))
+        && !raw.is_empty()
+        && raw != "."
+        && raw != ".."
+        && !raw.contains("..")
+        && !raw.starts_with('-');
+
+    if safe {
+        return raw.to_string();
+    }
+
+    // Unsafe — hash it. Short digest (first 16 hex chars = 64 bits) is
+    // plenty given the per-channel namespace.
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    let digest = hasher.finalize();
+    let hex: String = digest
+        .iter()
+        .take(8)
+        .map(|b| format!("{:02x}", b))
+        .collect();
+    format!("sanitized_{}", hex)
 }
 
 impl std::fmt::Display for SessionKey {
@@ -534,5 +580,65 @@ impl SessionStore {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir_name_with(peer: &str) -> String {
+        SessionKey::new("simplex", "dm", peer).dir_name()
+    }
+
+    #[test]
+    fn dir_name_rejects_path_traversal() {
+        let d = dir_name_with("../..");
+        assert!(!d.contains(".."), "must strip parent-dir tokens: {}", d);
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_absolute_and_slash() {
+        let d = dir_name_with("/tmp/x");
+        assert!(!d.contains('/'), "must strip path separators: {}", d);
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_nul_byte() {
+        let d = dir_name_with("evil\0name");
+        assert!(!d.contains('\0'));
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_dot_dot() {
+        let d = dir_name_with("..");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_empty() {
+        let d = dir_name_with("");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_leading_dash() {
+        let d = dir_name_with("-rf");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_accepts_normal_contact() {
+        let d = dir_name_with("alice_42");
+        assert_eq!(d, "simplex_dm_alice_42");
+    }
+
+    #[test]
+    fn dir_name_accepts_numeric_chat_id() {
+        let d = SessionKey::telegram_dm(316014621).dir_name();
+        assert_eq!(d, "telegram_dm_316014621");
     }
 }
