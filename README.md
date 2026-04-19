@@ -34,6 +34,7 @@ LifeOS is built in Mexico and developed in the open for users, contributors, and
 - **Nvidia GL extension auto-sync** (`validated on host`) - host driver version is detected on boot and the matching GL extension layer is applied automatically; no manual intervention after driver updates
 - **Automated maintenance cleanup** (`integrated in repo`) - scheduled cleanup of podman image layers, Rust build cache, and orphaned Flatpak runtimes to keep disk usage in check
 - **Speaker identification** (`experimental / partial`) - WeSpeaker ONNX model is integrated for speaker diarization; end-to-end product path is still being completed
+- **Web search tool** (`integrated in repo`) - Axi's `web_search` tool queries Brave Search (free tier, ~2,000 queries/month at <https://api.search.brave.com/app/subscriptions/subscribe>). Configure via env `BRAVE_SEARCH_API_KEY=<token>` or `/var/lib/lifeos/config-checkpoints/working/config.toml` under `[web_search] brave_api_key = "..."`. Works on all channels including SimpleX.
 
 ## Quick Start
 

@@ -196,6 +196,25 @@ management, system monitoring, memory plane queries, calendar, and so on.
 There is no feature difference at the tool layer between SimpleX and the
 dashboard.
 
+### Web search (Brave)
+
+Como SimpleX comparte el `ToolContext`, cualquier pedido que dispare la
+tool `web_search` también funciona acá. La tool usa la API de Brave
+Search (free tier, ~2.000 queries por mes).
+
+Configurá la clave con la variable `BRAVE_SEARCH_API_KEY` o en
+`/var/lib/lifeos/config-checkpoints/working/config.toml`:
+
+```toml
+[web_search]
+brave_api_key = "tu_token"
+```
+
+Obtené una clave gratis en
+<https://api.search.brave.com/app/subscriptions/subscribe>. Si no hay
+clave, Axi responde con un mensaje rioplatense explicando cómo setearla
+en lugar de fallar silenciosamente.
+
 ### Incoming calls
 
 SimpleX voice/video calls are not supported in headless CLI mode. If you
