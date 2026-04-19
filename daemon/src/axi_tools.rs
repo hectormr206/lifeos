@@ -2513,27 +2513,33 @@ REGLAS FIRMES:
                 }
             }
 
-            // Grab the memory handle, snapshot the Arc, and DROP the read
-            // guard immediately so long-running writers aren't starved
-            // across the concurrent query fan-out.
+            // Snapshot the Arc. Each concurrent query acquires its own
+            // short-lived read guard, calls search_entries, and drops the
+            // guard immediately — writers never see a guard held across
+            // `.await` boundaries between queries, so they aren't starved.
             let mem_handle: Arc<RwLock<MemoryPlaneManager>> = Arc::clone(memory);
 
             // Short-circuit + parallel fan-out. If the FIRST query (which
             // is always the user's message) errors or times out within the
-            // per-query slice of the budget, we treat the embedding service
-            // as down and skip the remaining queries — no point burning the
-            // turn budget on calls that won't succeed.
+            // total budget, we treat the embedding service as down and
+            // skip the remaining queries — no point burning the turn
+            // budget on calls that won't succeed.
             let total_budget =
                 std::time::Duration::from_millis(MEMORY_RECALL_BUDGET_MS);
 
             // Probe with the base query first (bounded by total budget).
+            // Acquire a read guard, run the one search, drop the guard.
             let base_query = recall_queries[0].clone();
             let probe_result = {
-                let mem_guard = mem_handle.read().await;
-                tokio::time::timeout(
-                    total_budget,
-                    mem_guard.search_entries(&base_query.0, base_query.1, None),
-                )
+                let mem_handle_probe = Arc::clone(&mem_handle);
+                let bq0 = base_query.0.clone();
+                let bq1 = base_query.1;
+                tokio::time::timeout(total_budget, async move {
+                    let g = mem_handle_probe.read().await;
+                    let res = g.search_entries(&bq0, bq1, None).await;
+                    drop(g);
+                    res
+                })
                 .await
             };
 
@@ -2555,22 +2561,22 @@ REGLAS FIRMES:
                 }
             };
 
-            // If the base probe worked, fire the rest concurrently under a
-            // single outer budget (reusing what remains is fine — we use
-            // the full budget again; embedding calls are the bottleneck and
-            // they're already warm now).
+            // Base probe succeeded → fire the rest concurrently. Each
+            // future acquires and releases its OWN read guard, so queries
+            // proceed independently without holding a single guard across
+            // the full join_all.
             let extra_results: Vec<Vec<crate::memory_plane::MemorySearchResult>> =
                 if base_results.is_some() && recall_queries.len() > 1 {
                     let rest: Vec<(String, usize)> = recall_queries[1..].to_vec();
                     let mem_handle_inner = Arc::clone(&mem_handle);
                     let fan_out = async move {
-                        let mem_guard = mem_handle_inner.read().await;
-                        let futs = rest.iter().map(|(q, lim)| {
-                            let q = q.clone();
-                            let lim = *lim;
-                            let mg = &mem_guard;
+                        let futs = rest.into_iter().map(|(q, lim)| {
+                            let handle = Arc::clone(&mem_handle_inner);
                             async move {
-                                (q.clone(), mg.search_entries(&q, lim, None).await)
+                                let g = handle.read().await;
+                                let res = g.search_entries(&q, lim, None).await;
+                                drop(g);
+                                (q, res)
                             }
                         });
                         futures_util::future::join_all(futs).await
