@@ -8421,31 +8421,60 @@ REGLAS FIRMES:
     /// 2. `web_search.brave_api_key` in the daemon config
     ///    (/var/lib/lifeos/config-checkpoints/working/config.toml)
     ///
-    /// Cached once per process via `tokio::sync::OnceCell` — config reloads
-    /// at runtime will NOT be picked up until the daemon restarts. This is
-    /// an intentional tradeoff to avoid blocking fs I/O on every tool call.
+    /// Cached with a short TTL so that keys configured from the dashboard
+    /// AFTER daemon start surface quickly (zero-manual-config requirement).
+    /// Hits are cached 60 s; misses are cached only 10 s so a newly-configured
+    /// key shows up fast.
     async fn brave_search_api_key() -> Option<String> {
-        static CACHED: tokio::sync::OnceCell<Option<String>> =
-            tokio::sync::OnceCell::const_new();
-        CACHED
-            .get_or_init(|| async {
-                if let Ok(k) = std::env::var("BRAVE_SEARCH_API_KEY") {
-                    if !k.trim().is_empty() {
-                        return Some(k);
+        use std::sync::OnceLock;
+        use tokio::sync::RwLock;
+        use tokio::time::{Duration, Instant};
+
+        // (cached_at, value). value=None means we observed a miss.
+        static CACHE: OnceLock<RwLock<Option<(Instant, Option<String>)>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| RwLock::new(None));
+
+        const HIT_TTL: Duration = Duration::from_secs(60);
+        const MISS_TTL: Duration = Duration::from_secs(10);
+
+        // Fast path: valid cache entry.
+        {
+            let guard = cache.read().await;
+            if let Some((stamped, val)) = guard.as_ref() {
+                let ttl = if val.is_some() { HIT_TTL } else { MISS_TTL };
+                if stamped.elapsed() < ttl {
+                    return val.clone();
+                }
+            }
+        }
+
+        // Slow path: re-read env + config.
+        let fresh: Option<String> = {
+            let mut found: Option<String> = None;
+            if let Ok(k) = std::env::var("BRAVE_SEARCH_API_KEY") {
+                if !k.trim().is_empty() {
+                    found = Some(k);
+                }
+            }
+            if found.is_none() {
+                let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
+                if let Ok(raw) = tokio::fs::read_to_string(path).await {
+                    if let Ok(parsed) = toml::from_str::<toml::Value>(&raw) {
+                        found = parsed
+                            .get("web_search")
+                            .and_then(|v| v.get("brave_api_key"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .filter(|s| !s.trim().is_empty());
                     }
                 }
-                let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
-                let raw = tokio::fs::read_to_string(path).await.ok()?;
-                let parsed: toml::Value = toml::from_str(&raw).ok()?;
-                parsed
-                    .get("web_search")
-                    .and_then(|v| v.get("brave_api_key"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .filter(|s| !s.trim().is_empty())
-            })
-            .await
-            .clone()
+            }
+            found
+        };
+
+        let mut w = cache.write().await;
+        *w = Some((Instant::now(), fresh.clone()));
+        fresh
     }
 
     /// Brave Search API — free tier web search.

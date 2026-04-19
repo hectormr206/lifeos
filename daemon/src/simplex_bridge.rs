@@ -574,24 +574,53 @@ mod inner {
     /// recent. Controlled by:
     /// - env `LIFEOS_SIMPLEX_FANOUT_REMINDERS` (1/true/yes/on), OR
     /// - `config.toml`: `[messaging.simplex] fanout_reminders_to_last_contact = true`
-    fn simplex_fanout_reminders_enabled() -> bool {
-        if let Ok(v) = std::env::var("LIFEOS_SIMPLEX_FANOUT_REMINDERS") {
-            let v = v.trim().to_ascii_lowercase();
-            return matches!(v.as_str(), "1" | "true" | "yes" | "on");
+    async fn simplex_fanout_reminders_enabled() -> bool {
+        use std::sync::OnceLock;
+        use tokio::sync::RwLock;
+        use tokio::time::{Duration, Instant};
+
+        // (cached_at, resolved_bool). Hits and misses share the same TTL
+        // since the value itself is always defined (default false).
+        static CACHE: OnceLock<RwLock<Option<(Instant, bool)>>> = OnceLock::new();
+        let cache = CACHE.get_or_init(|| RwLock::new(None));
+
+        // Short hit TTL so dashboard toggles surface quickly; short miss TTL
+        // so users enabling the flag after daemon start don't wait long.
+        const HIT_TTL: Duration = Duration::from_secs(60);
+        const MISS_TTL: Duration = Duration::from_secs(10);
+
+        {
+            let guard = cache.read().await;
+            if let Some((stamped, val)) = guard.as_ref() {
+                let ttl = if *val { HIT_TTL } else { MISS_TTL };
+                if stamped.elapsed() < ttl {
+                    return *val;
+                }
+            }
         }
-        let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
-        let Ok(raw) = std::fs::read_to_string(path) else {
-            return false;
+
+        let resolved: bool = if let Ok(v) = std::env::var("LIFEOS_SIMPLEX_FANOUT_REMINDERS") {
+            let v = v.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        } else {
+            let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
+            match tokio::fs::read_to_string(path).await {
+                Ok(raw) => match toml::from_str::<toml::Value>(&raw) {
+                    Ok(parsed) => parsed
+                        .get("messaging")
+                        .and_then(|v| v.get("simplex"))
+                        .and_then(|v| v.get("fanout_reminders_to_last_contact"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                    Err(_) => false,
+                },
+                Err(_) => false,
+            }
         };
-        let Ok(parsed) = toml::from_str::<toml::Value>(&raw) else {
-            return false;
-        };
-        parsed
-            .get("messaging")
-            .and_then(|v| v.get("simplex"))
-            .and_then(|v| v.get("fanout_reminders_to_last_contact"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
+
+        let mut w = cache.write().await;
+        *w = Some((Instant::now(), resolved));
+        resolved
     }
 
     /// Return the most recently seen contact display_name, if any.
@@ -1205,7 +1234,7 @@ mod inner {
                             // most recent. OFF by default; users who
                             // explicitly opt in via config or env accept
                             // the tradeoff.
-                            if !simplex_fanout_reminders_enabled() {
+                            if !simplex_fanout_reminders_enabled().await {
                                 log::warn!(
                                     "[simplex_bridge] Reminder '{}' no se entrega: \
                                      messaging.simplex.fanout_reminders_to_last_contact=false \
