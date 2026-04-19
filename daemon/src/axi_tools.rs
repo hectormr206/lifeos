@@ -8316,6 +8316,119 @@ REGLAS FIRMES:
     }
 
     // -----------------------------------------------------------------------
+    // NEW: Brave Search web_search tool
+    // -----------------------------------------------------------------------
+
+    /// Read the Brave Search API key from:
+    /// 1. Env var `BRAVE_SEARCH_API_KEY`
+    /// 2. `web_search.brave_api_key` in the daemon config
+    ///    (/var/lib/lifeos/config-checkpoints/working/config.toml)
+    fn brave_search_api_key() -> Option<String> {
+        if let Ok(k) = std::env::var("BRAVE_SEARCH_API_KEY") {
+            if !k.trim().is_empty() {
+                return Some(k);
+            }
+        }
+        let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
+        let raw = std::fs::read_to_string(path).ok()?;
+        let parsed: toml::Value = toml::from_str(&raw).ok()?;
+        parsed
+            .get("web_search")
+            .and_then(|v| v.get("brave_api_key"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .filter(|s| !s.trim().is_empty())
+    }
+
+    /// Brave Search API — free tier web search.
+    /// API reference: <https://api.search.brave.com/app/documentation/web-search/get-started>
+    ///
+    /// Single attempt, 10s timeout, no retry. Returns a compact
+    /// `titulo | url | snippet` list to the LLM (snippet truncated
+    /// to ~200 chars each).
+    async fn execute_web_search(args: &serde_json::Value) -> Result<String> {
+        let query = args["query"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'query'"))?;
+        if query.trim().is_empty() {
+            anyhow::bail!("'query' no puede estar vacio");
+        }
+        let num_results = args["num_results"].as_u64().unwrap_or(5).clamp(1, 20) as usize;
+
+        let key = match brave_search_api_key() {
+            Some(k) => k,
+            None => {
+                return Ok(
+                    "No hay API key de Brave Search configurada, che. Ponete las pilas: \
+                     exportate BRAVE_SEARCH_API_KEY=<tu_token> o agregala en \
+                     /var/lib/lifeos/config-checkpoints/working/config.toml bajo \
+                     [web_search] brave_api_key = \"...\" y volveme a pedir la busqueda."
+                        .to_string(),
+                );
+            }
+        };
+
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => return Ok(format!("No pude crear el cliente HTTP: {}", e)),
+        };
+
+        let resp = client
+            .get("https://api.search.brave.com/res/v1/web/search")
+            .header("X-Subscription-Token", &key)
+            .header("Accept", "application/json")
+            .query(&[
+                ("q", query.to_string()),
+                ("count", num_results.to_string()),
+            ])
+            .send()
+            .await;
+
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(format!(
+                    "No pude conectarme a Brave Search (timeout o red caida): {}",
+                    e
+                ));
+            }
+        };
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let snippet = crate::str_utils::truncate_bytes_safe(&body, 200);
+            return Ok(format!(
+                "Brave Search devolvio error HTTP {}: {}",
+                status, snippet
+            ));
+        }
+
+        let body: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => return Ok(format!("Respuesta de Brave no es JSON valido: {}", e)),
+        };
+
+        let results = match body["web"]["results"].as_array() {
+            Some(arr) if !arr.is_empty() => arr,
+            _ => return Ok(format!("Sin resultados para '{}'.", query)),
+        };
+
+        let mut out = format!("Resultados Brave Search para '{}':\n", query);
+        for item in results.iter().take(num_results) {
+            let title = item["title"].as_str().unwrap_or("(sin titulo)");
+            let url = item["url"].as_str().unwrap_or("");
+            let snippet_raw = item["description"].as_str().unwrap_or("");
+            let snippet = crate::str_utils::truncate_bytes_safe(snippet_raw, 200);
+            out.push_str(&format!("- {} | {} | {}\n", title, url, snippet));
+        }
+        Ok(out)
+    }
+
+    // -----------------------------------------------------------------------
     // NEW: Cron job management tools
     // -----------------------------------------------------------------------
 
