@@ -117,28 +117,57 @@ impl SessionKey {
 
 /// Sanitize a `peer_id` so it can safely be joined to a base directory.
 ///
-/// - Replaces any `/`, `\`, `\0`, or ASCII control char with `_`.
-/// - Rejects `.` / `..` components.
-/// - Strips leading `-` (defense against tools parsing it as a flag).
-/// - On any meaningful change OR empty result, returns a short SHA-256
-///   hex digest of the raw input so collisions are still rare.
+/// Goals:
+/// - Preserve legitimate Unicode names (e.g. `"María García"`, `"田中"`, `"José"`)
+///   so SimpleX/Telegram display names don't silently collapse into opaque
+///   `sanitized_XXXX` hashes.
+/// - Still block path-traversal and filesystem-hostile patterns.
+///
+/// Rules:
+/// - Reject outright (→ hash fallback) if raw is empty, equal to `.`/`..`,
+///   contains `..`, starts with `-` (CLI-flag misparse), or starts with `.`
+///   (hidden dir). Raw containing `\0` or `/` / `\` characters still gets
+///   sanitized in-place (those chars are replaced with `_`).
+/// - Per-char allow predicate: `is_alphanumeric() && !is_control()` plus a
+///   small punctuation allowlist (`_ . + = : @`). Anything else (spaces,
+///   unusual punctuation) is replaced with `_`.
+/// - If the sanitized string ends up empty, fall back to a SHA-256 hash.
 pub(crate) fn sanitize_peer_id(raw: &str) -> String {
-    // Fast path: known-safe chars only.
-    let safe = raw
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '+' | '=' | ':' | '@'))
-        && !raw.is_empty()
-        && raw != "."
-        && raw != ".."
-        && !raw.contains("..")
-        && !raw.starts_with('-');
-
-    if safe {
-        return raw.to_string();
+    // Reject patterns we will never map to a filesystem name directly.
+    if raw.is_empty()
+        || raw == "."
+        || raw == ".."
+        || raw.contains("..")
+        || raw.starts_with('-')
+        || raw.starts_with('.')
+    {
+        return hash_fallback(raw);
     }
 
-    // Unsafe — hash it. Short digest (first 16 hex chars = 64 bits) is
-    // plenty given the per-channel namespace.
+    // Per-char rewrite. Allow Unicode letters/digits from any script
+    // (Spanish accented letters, CJK, Cyrillic, etc.) plus a small
+    // punctuation allowlist. Everything else becomes `_`.
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        if c.is_control() || c == '/' || c == '\\' || c == '\0' {
+            out.push('_');
+        } else if c.is_alphanumeric() || matches!(c, '_' | '.' | '+' | '=' | ':' | '@') {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+
+    // Trim any leading `_` introduced by replacement (avoids awkward
+    // names like `_evil` when input started with a disallowed char).
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.is_empty() {
+        return hash_fallback(raw);
+    }
+    trimmed
+}
+
+fn hash_fallback(raw: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
@@ -598,16 +627,19 @@ mod tests {
 
     #[test]
     fn dir_name_rejects_absolute_and_slash() {
+        // Slash must be stripped. Input "/tmp/x" → sanitized "_tmp_x" →
+        // leading-underscore trimmed → "tmp_x".
         let d = dir_name_with("/tmp/x");
         assert!(!d.contains('/'), "must strip path separators: {}", d);
-        assert!(d.starts_with("simplex_dm_sanitized_"));
+        assert_eq!(d, "simplex_dm_tmp_x");
     }
 
     #[test]
     fn dir_name_rejects_nul_byte() {
         let d = dir_name_with("evil\0name");
         assert!(!d.contains('\0'));
-        assert!(d.starts_with("simplex_dm_sanitized_"));
+        // NUL becomes `_` in place; no hash fallback needed.
+        assert_eq!(d, "simplex_dm_evil_name");
     }
 
     #[test]
@@ -638,5 +670,43 @@ mod tests {
     fn dir_name_accepts_numeric_chat_id() {
         let d = SessionKey::telegram_dm(316014621).dir_name();
         assert_eq!(d, "telegram_dm_316014621");
+    }
+
+    // -------------------------------------------------------------------
+    // Unicode-preservation tests (Round 2 regression fix).
+    // Legitimate Latin-with-diacritics and CJK names must survive intact
+    // instead of collapsing to an opaque `sanitized_XXXX` hash.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn dir_name_preserves_accented_name() {
+        let d = dir_name_with("María");
+        assert_eq!(d, "simplex_dm_María");
+    }
+
+    #[test]
+    fn dir_name_preserves_accented_name_with_space() {
+        // Space is not in the allowlist → replaced with `_`. The name
+        // still reads clearly.
+        let d = dir_name_with("María García");
+        assert_eq!(d, "simplex_dm_María_García");
+    }
+
+    #[test]
+    fn dir_name_preserves_cjk() {
+        let d = dir_name_with("田中");
+        assert_eq!(d, "simplex_dm_田中");
+    }
+
+    #[test]
+    fn dir_name_rejects_hidden_dir_prefix() {
+        let d = dir_name_with(".hidden");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
+    }
+
+    #[test]
+    fn dir_name_rejects_two_dots_prefix() {
+        let d = dir_name_with("..two-dots");
+        assert!(d.starts_with("simplex_dm_sanitized_"));
     }
 }
