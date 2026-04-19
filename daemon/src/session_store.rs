@@ -399,69 +399,67 @@ impl SessionStore {
         Ok(())
     }
 
-    /// Migrate a legacy SimpleX session that was stored under a synthetic
-    /// telegram-dm key (magic chat_id) to a per-contact SimpleX session.
+    /// Archive a legacy SimpleX session that was stored under the synthetic
+    /// telegram-dm magic chat_id.
     ///
-    /// Called once at startup from the SimpleX bridge when `last_known_contact`
-    /// is available. If the legacy on-disk directory exists and the new
-    /// per-contact directory does NOT exist, the directory is renamed and
-    /// the metadata is rewritten in place.
+    /// Historical note: a previous build stored ALL SimpleX conversations
+    /// under a single synthetic key derived from `SIMPLEX_CHAT_ID`. If the
+    /// user interacted with more than one SimpleX contact before upgrading,
+    /// that directory contains MIXED transcripts from multiple people.
+    /// Rebinding it to `last_known_contact()` would mis-attribute other
+    /// contacts' messages to whoever happened to be the most recent one —
+    /// a privacy bug.
     ///
-    /// Returns `Ok(true)` if a migration happened, `Ok(false)` otherwise.
-    pub async fn migrate_simplex_legacy_session(
-        &self,
-        legacy_chat_id: i64,
-        contact_id: &str,
-    ) -> Result<bool> {
-        let legacy = Self::new_for_migration("telegram", "dm", &legacy_chat_id.to_string());
-        let new_key = SessionKey::simplex(contact_id);
+    /// Instead, we move the legacy directory to
+    /// `<base>/.legacy_archive/simplex_telegram_dm_<magic>_<timestamp>/`
+    /// and drop it from the in-memory index. The user retains the data
+    /// (it's not deleted) but it's no longer replayed into any live
+    /// conversation. A Rioplatense info message is logged.
+    ///
+    /// Returns `Ok(true)` if an archive happened, `Ok(false)` otherwise.
+    pub async fn archive_simplex_legacy_session(&self, legacy_chat_id: i64) -> Result<bool> {
+        let legacy = SessionKey::new("telegram", "dm", &legacy_chat_id.to_string());
         let legacy_dir = self.base_dir.join(legacy.dir_name());
-        let new_dir = self.base_dir.join(new_key.dir_name());
 
-        if !legacy_dir.exists() || new_dir.exists() {
+        if !legacy_dir.exists() {
             return Ok(false);
         }
 
-        tokio::fs::rename(&legacy_dir, &new_dir)
+        let archive_root = self.base_dir.join(".legacy_archive");
+        tokio::fs::create_dir_all(&archive_root)
+            .await
+            .context("creating .legacy_archive dir")?;
+
+        let ts = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+        let dest = archive_root.join(format!(
+            "simplex_telegram_dm_{}_{}",
+            legacy_chat_id, ts
+        ));
+
+        tokio::fs::rename(&legacy_dir, &dest)
             .await
             .with_context(|| {
                 format!(
-                    "renaming legacy simplex session {} -> {}",
+                    "archiving legacy simplex session {} -> {}",
                     legacy_dir.display(),
-                    new_dir.display()
+                    dest.display()
                 )
             })?;
 
-        // Rewrite metadata.json with the new session_key string.
-        let meta_path = new_dir.join("metadata.json");
-        if let Ok(raw) = tokio::fs::read_to_string(&meta_path).await {
-            if let Ok(mut meta) = serde_json::from_str::<SessionMetadata>(&raw) {
-                meta.session_key = new_key.as_canonical();
-                meta.last_channel = new_key.channel.clone();
-                meta.last_peer_id = new_key.peer_id.clone();
-                if let Ok(content) = serde_json::to_string_pretty(&meta) {
-                    let _ = tokio::fs::write(&meta_path, content).await;
-                    Self::set_file_permissions_0o600(&meta_path);
-                }
-                // Update in-memory index: drop legacy, insert new.
-                let mut sessions = self.sessions.write().await;
-                sessions.remove(&legacy.as_canonical());
-                sessions.insert(meta.session_key.clone(), meta);
-            }
-        }
+        // Drop the legacy entry from the in-memory index so it doesn't get
+        // replayed into any live conversation.
+        let mut sessions = self.sessions.write().await;
+        sessions.remove(&legacy.as_canonical());
+        drop(sessions);
 
         info!(
-            "[session_store] Migrated legacy SimpleX session (chat_id={}) to per-contact key {}",
-            legacy_chat_id, new_key
+            "[session_store] Archivé la sesión SimpleX previa (chat_id={}) en {}. \
+             La historia pre-upgrade tenía mensajes mezclados de varios contactos \
+             y no puedo atribuírsela a uno solo sin arriesgar tu privacidad, loco.",
+            legacy_chat_id,
+            dest.display()
         );
         Ok(true)
-    }
-
-    /// Internal constructor used for building migration references without
-    /// exposing raw `SessionKey::new` semantics for channels that already
-    /// have typed helpers.
-    fn new_for_migration(channel: &str, scope: &str, peer_id: &str) -> SessionKey {
-        SessionKey::new(channel, scope, peer_id)
     }
 
     /// Prune sessions older than TTL from the in-memory index.

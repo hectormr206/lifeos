@@ -1007,23 +1007,21 @@ mod inner {
 
         ensure_downloads_dir();
 
-        // One-shot legacy session migration: if a previous build stored
+        // One-shot legacy session archive: a previous build stored ALL
         // SimpleX turns under the synthetic telegram_dm(SIMPLEX_CHAT_ID)
-        // directory AND we remember exactly one contact, rebind that
-        // directory to SessionKey::simplex(contact). This preserves
-        // replay history across the magic-id → per-contact refactor.
-        if let (Some(ref store), Some(contact)) = (&session_store, last_known_contact()) {
-            match store
-                .migrate_simplex_legacy_session(SIMPLEX_CHAT_ID, &contact)
-                .await
-            {
+        // directory — mixing messages from every contact into a single
+        // transcript. We CANNOT safely rebind that to one contact, so we
+        // archive it under `.legacy_archive/` and start fresh per-contact.
+        if let Some(ref store) = session_store {
+            match store.archive_simplex_legacy_session(SIMPLEX_CHAT_ID).await {
                 Ok(true) => info!(
-                    "[simplex_bridge] Migré la sesión legacy de SimpleX a contacto={}",
-                    contact
+                    "[simplex_bridge] Archivé la sesión legacy de SimpleX \
+                     (historia mixta pre-upgrade, no se puede atribuir a un \
+                     solo contacto). Arrancamos de cero por contacto, dale."
                 ),
                 Ok(false) => {}
                 Err(e) => warn!(
-                    "[simplex_bridge] Falló la migración de la sesión legacy: {}",
+                    "[simplex_bridge] Falló el archivado de la sesión legacy: {}",
                     e
                 ),
             }
