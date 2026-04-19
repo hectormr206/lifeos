@@ -845,7 +845,7 @@ RUN dnf -y install cargo gcc ... && cargo build --release
 FROM quay.io/fedora/fedora-bootc:42
 RUN dnf -y install cosmic-desktop ...
 # + llama-server (binario pre-compilado o compilado desde fuente)
-# + Nvidia drivers (akmod-nvidia, supergfxctl)
+# + Nvidia drivers (lifeos-nvidia-drivers OCI image + supergfxctl)
 # + Herramientas del sistema (toolbox, podman, fish, bat, ripgrep...)
 COPY --from=builder life lifeosd  # Binarios Rust compilados
 ```
@@ -2251,7 +2251,12 @@ RUN dnf -y install cosmic-desktop cosmic-files cosmic-terminal \
     NetworkManager bluez pipewire wireplumber && dnf clean all
 
 # --- Nvidia Optimus (GPU hibrida) ---
-RUN dnf -y install akmod-nvidia xorg-x11-drv-nvidia-cuda supergfxctl && dnf clean all
+# NVIDIA driver RPMs provienen de hectormr206/lifeos-nvidia-drivers
+# (Production Branch, Blackwell-ready, actualizado semanalmente).
+FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:latest-f43-x86_64 AS nvidia-rpms
+# (en stage final)
+RUN --mount=type=bind,from=nvidia-rpms,source=/,target=/mnt/nvidia-rpms,ro \
+    dnf -y install /mnt/nvidia-rpms/*.rpm supergfxctl && dnf clean all
 
 # --- Steam/Proton (default via RPM Fusion) ---
 RUN dnf -y install steam steam-devices && dnf clean all
