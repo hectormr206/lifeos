@@ -584,16 +584,16 @@ mod inner {
         static CACHE: OnceLock<RwLock<Option<(Instant, bool)>>> = OnceLock::new();
         let cache = CACHE.get_or_init(|| RwLock::new(None));
 
-        // Short hit TTL so dashboard toggles surface quickly; short miss TTL
-        // so users enabling the flag after daemon start don't wait long.
-        const HIT_TTL: Duration = Duration::from_secs(60);
-        const MISS_TTL: Duration = Duration::from_secs(10);
+        // Config changes propagate within CACHE_TTL. Privacy-relevant flags
+        // use 30 s so turning them off takes effect quickly — flipping the
+        // fanout toggle from true to false now propagates within 30 s
+        // instead of up to 60 s.
+        const CACHE_TTL: Duration = Duration::from_secs(30);
 
         {
             let guard = cache.read().await;
             if let Some((stamped, val)) = guard.as_ref() {
-                let ttl = if *val { HIT_TTL } else { MISS_TTL };
-                if stamped.elapsed() < ttl {
+                if stamped.elapsed() < CACHE_TTL {
                     return *val;
                 }
             }

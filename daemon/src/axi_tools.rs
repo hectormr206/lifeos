@@ -8427,10 +8427,10 @@ REGLAS FIRMES:
     /// 2. `web_search.brave_api_key` in the daemon config
     ///    (/var/lib/lifeos/config-checkpoints/working/config.toml)
     ///
-    /// Cached with a short TTL so that keys configured from the dashboard
-    /// AFTER daemon start surface quickly (zero-manual-config requirement).
-    /// Hits are cached 60 s; misses are cached only 10 s so a newly-configured
-    /// key shows up fast.
+    /// Config changes propagate within CACHE_TTL. Privacy-relevant flags use
+    /// 30 s so turning them off takes effect quickly. Uniform TTL for hits
+    /// AND misses avoids re-reading the file every few seconds when the key
+    /// is absent, while keeping key rotation responsive.
     async fn brave_search_api_key() -> Option<String> {
         use std::sync::OnceLock;
         use tokio::sync::RwLock;
@@ -8440,15 +8440,13 @@ REGLAS FIRMES:
         static CACHE: OnceLock<RwLock<Option<(Instant, Option<String>)>>> = OnceLock::new();
         let cache = CACHE.get_or_init(|| RwLock::new(None));
 
-        const HIT_TTL: Duration = Duration::from_secs(60);
-        const MISS_TTL: Duration = Duration::from_secs(10);
+        const CACHE_TTL: Duration = Duration::from_secs(30);
 
         // Fast path: valid cache entry.
         {
             let guard = cache.read().await;
             if let Some((stamped, val)) = guard.as_ref() {
-                let ttl = if val.is_some() { HIT_TTL } else { MISS_TTL };
-                if stamped.elapsed() < ttl {
+                if stamped.elapsed() < CACHE_TTL {
                     return val.clone();
                 }
             }
