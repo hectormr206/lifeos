@@ -567,6 +567,33 @@ mod inner {
         let _ = std::fs::write(&path, display_name);
     }
 
+    /// Whether to fan out reminder events (which are not yet per-contact
+    /// addressable on SimpleX) to `last_known_contact()`. OFF by default —
+    /// flipping it on has privacy implications: reminders originally tied
+    /// to one context may reach whichever contact happened to be the most
+    /// recent. Controlled by:
+    /// - env `LIFEOS_SIMPLEX_FANOUT_REMINDERS` (1/true/yes/on), OR
+    /// - `config.toml`: `[messaging.simplex] fanout_reminders_to_last_contact = true`
+    fn simplex_fanout_reminders_enabled() -> bool {
+        if let Ok(v) = std::env::var("LIFEOS_SIMPLEX_FANOUT_REMINDERS") {
+            let v = v.trim().to_ascii_lowercase();
+            return matches!(v.as_str(), "1" | "true" | "yes" | "on");
+        }
+        let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return false;
+        };
+        let Ok(parsed) = toml::from_str::<toml::Value>(&raw) else {
+            return false;
+        };
+        parsed
+            .get("messaging")
+            .and_then(|v| v.get("simplex"))
+            .and_then(|v| v.get("fanout_reminders_to_last_contact"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
     /// Return the most recently seen contact display_name, if any.
     fn last_known_contact() -> Option<String> {
         let path = last_contact_path();
@@ -1171,10 +1198,23 @@ mod inner {
                         // Accept only our SimpleX magic chat_id (and also
                         // accept any unknown-high-magic id just in case).
                         if chat_id == SIMPLEX_CHAT_ID {
+                            // Privacy gate: the SimpleX CLI does not expose
+                            // per-chat_id contact mapping, so "fan out to
+                            // last_known_contact" would silently leak a
+                            // reminder to whichever contact happened to be
+                            // most recent. OFF by default; users who
+                            // explicitly opt in via config or env accept
+                            // the tradeoff.
+                            if !simplex_fanout_reminders_enabled() {
+                                log::warn!(
+                                    "[simplex_bridge] Reminder '{}' no se entrega: \
+                                     messaging.simplex.fanout_reminders_to_last_contact=false \
+                                     (default). Activalo explícito si querés fan-out.",
+                                    title
+                                );
+                                continue;
+                            }
                             let msg = format!("🔔 Recordatorio ({}): {}", start_time, title);
-                            // Target all contacts — simplex does not expose
-                            // a deterministic display_name per chat_id yet,
-                            // so we use the stored default contact.
                             let contact = last_known_contact();
                             if let Some(name) = contact {
                                 let _ = outbound.send((name, msg));
