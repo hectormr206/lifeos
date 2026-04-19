@@ -370,7 +370,13 @@ RUN dnf -y install --skip-unavailable \
 # akmod-wl / broadcom-wl (Broadcom proprietary WiFi) still comes from RPMFusion.
 # kernel-devel is installed temporarily for module signing below, then removed.
 RUN --mount=type=bind,from=nvidia-rpms,source=/,target=/mnt/nvidia-rpms,ro \
-    dnf -y install /mnt/nvidia-rpms/*.rpm && \
+    RPMS_TO_INSTALL=$(find /mnt/nvidia-rpms -maxdepth 1 -name '*.rpm' \
+        -not -name 'nvidia-container-*' \
+        -not -name 'libnvidia-container*' \
+        -not -name 'nvidia-container-toolkit*' \
+        | tr '\n' ' ') && \
+    echo "Installing NVIDIA RPMs: $(echo $RPMS_TO_INSTALL | tr ' ' '\n' | wc -l) files" && \
+    dnf -y install $RPMS_TO_INSTALL && \
     dnf -y install kernel-devel && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
         dnf -y install supergfxctl; \
