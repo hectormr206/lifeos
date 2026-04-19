@@ -2086,7 +2086,7 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
 
                                             // Early duration limit check.
                                             if let Some(d) = duration {
-                                                if d > VIDEO_MAX_DURATION_SECS {
+                                                if *d > VIDEO_MAX_DURATION_SECS {
                                                     let _ = send_message(
                                                         &mut sink,
                                                         &display_name,
@@ -2094,7 +2094,7 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                             "El video dura {}s y solo puedo \
                                                              analizar hasta {}s. Dale, mandame \
                                                              un clip más corto.",
-                                                            d, VIDEO_MAX_DURATION_SECS
+                                                            *d, VIDEO_MAX_DURATION_SECS
                                                         ),
                                                     )
                                                     .await;
@@ -2177,7 +2177,7 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                         PendingAction::ProcessVideo {
                                                             display_name: display_name.clone(),
                                                             caption: caption.clone(),
-                                                            duration,
+                                                            duration: *duration,
                                                         },
                                                     );
                                                     persist_pending_files(&guard).await;
