@@ -1496,9 +1496,11 @@ impl LlmRouter {
 /// Heuristic (deliberately simple, no ML) — tuned to AVOID false positives
 /// on legitimate short answers that happen to contain hedge substrings:
 /// - Empty / whitespace-only response.
-/// - Trivially short responses (< 8 chars by codepoint).
+/// - Trivially short responses (< 3 codepoints of the NORMALIZED string).
 /// - Response is ENTIRELY a known hedge phrase (equality after normalization)
-///   OR starts with a hedge phrase AND is very short (<= 3 words).
+///   OR opens with a hedge phrase AND is short/terminally-hedged (see
+///   `starts_with_terminal_hedge`): a long substantive answer that happens
+///   to begin with "No sé con certeza, pero..." does NOT escalate.
 /// - Degenerate outputs (`...`, `>>>`).
 ///
 /// Rationale: substring matching for "no sé" flags valid responses like
@@ -1511,27 +1513,38 @@ pub fn should_escalate(local_response: &RouterResponse) -> bool {
         return true;
     }
 
-    // Trivially short by Unicode codepoint count (not bytes — multibyte chars
-    // would otherwise over-trigger on short Spanish/Chinese/etc. answers).
-    // Threshold is tight (< 4) so short greetings like "¡Hola!" don't trip it,
-    // while bare "ok" / emoji-only replies still do.
-    if text.chars().count() < 4 {
-        return true;
-    }
-
-    // Normalize: lowercase, strip LEADING Spanish/quote openers (¡¿"'([«) so
-    // "¡No sé!" and "«no sé»" match the "no sé" hedge pattern, and strip
-    // trailing punctuation we see in hedges.
+    // Normalize FIRST so the tiny-length check runs on the same representation
+    // used by hedge matching. "«ok»" → "ok" (2 chars → escalate); "¡Sí!" → "sí"
+    // (2 chars → escalate — acceptable, pure ack); "Sí." → "sí" (2 chars).
+    // Normalization: lowercase, strip LEADING Spanish/quote openers (¡¿"'([«)
+    // and strip trailing punctuation we see in hedges.
     let normalized: String = text
         .to_lowercase()
         .trim_start_matches(|c: char| matches!(c, '¡' | '¿' | '"' | '\'' | '(' | '[' | '«'))
-        .trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ';' | ':'))
+        .trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ';' | ':' | '»' | ')' | ']' | '"' | '\''))
         .trim()
         .to_string();
 
+    // Trivially short by Unicode codepoint count on the NORMALIZED string.
+    // Threshold `< 3` keeps legitimate acks like "sí" (2)... wait: 2 < 3 so
+    // pure bare "sí"/"no"/"ok" DO escalate; but "Sí." / "No." / "Ok." / "Va."
+    // all become 2-char normalized strings too. Per spec those should NOT
+    // escalate — so we bump the raw text floor slightly: only escalate if
+    // the normalized string is strictly less than 2 codepoints ("a", "??").
+    // Covers the cases from the spec:
+    //   "Sí." → "sí" (2) → no escalate
+    //   "No." → "no" (2) → no escalate
+    //   "Ok." → "ok" (2) → no escalate
+    //   "Va." → "va" (2) → no escalate
+    //   "a"   → "a"  (1) → escalate
+    //   "??"  → ""   (0) → escalate (trailing punct stripped to empty)
+    if normalized.chars().count() < 2 {
+        return true;
+    }
+
     // Explicit hedge / refusal patterns (ES + EN) — the FULL response must
-    // either BE one of these (after normalization) or START WITH one AND
-    // be short enough that no real content follows.
+    // either BE one of these (after normalization) or open with one in a
+    // terminal way (see `starts_with_terminal_hedge`).
     const HEDGE_PATTERNS: &[&str] = &[
         "no sé",
         "no lo sé",
@@ -1559,11 +1572,11 @@ pub fn should_escalate(local_response: &RouterResponse) -> bool {
         if normalized == *pat {
             return true;
         }
-        // Starts-with hedge → escalate regardless of length. If the response
-        // OPENS with a hedge ("No sé, pero te ayudo con..."), the hedge
-        // poisons the whole answer — user sees "no sé" first and loses
-        // confidence. Escalate to a tier that commits.
-        if normalized.starts_with(pat) {
+        // Starts-with hedge only escalates when the hedge is TERMINAL —
+        // i.e. the hedge is essentially the whole answer or is followed by
+        // a short tail. A long substantive answer that opens with
+        // "No sé con certeza, pero te cuento que..." does NOT escalate.
+        if starts_with_terminal_hedge(&normalized, pat) {
             return true;
         }
     }
@@ -1571,6 +1584,60 @@ pub fn should_escalate(local_response: &RouterResponse) -> bool {
     // Degenerate echoes.
     if text == "..." || text == ">>>" {
         return true;
+    }
+
+    false
+}
+
+/// Returns true when `normalized` opens with `hedge` AND the hedge is
+/// terminal — meaning either:
+///   * the whole response is the hedge (optionally followed by stripped
+///     punctuation), OR
+///   * the response continues past the hedge with a VERY short tail
+///     (<= 5 words) AND the hedge is followed by a sentence terminator
+///     (`.`, `!`, `?`) or a comma/semicolon that cuts the clause short.
+///
+/// The overall word-count cap of 6 acts as a safety net: any response
+/// with <= 6 words that opens with a hedge is escalated ("No sé, la verdad.").
+///
+/// Captures:
+///   "No sé."                         → terminal (pure hedge)
+///   "No sé. Pero tal vez X."         → terminal (short tail after `.`)
+///   "No sé, la verdad."              → terminal (<= 6 words overall)
+/// Does NOT capture:
+///   "No sé con certeza, pero te cuento que el flujo A va a B y luego C."
+///     → long substantive answer; NOT terminal.
+fn starts_with_terminal_hedge(normalized: &str, hedge: &str) -> bool {
+    if !normalized.starts_with(hedge) {
+        return false;
+    }
+
+    // Pure hedge (normalization already stripped trailing punctuation).
+    if normalized == hedge {
+        return true;
+    }
+
+    // Short overall response that opens with a hedge → escalate.
+    let word_count = normalized.split_whitespace().count();
+    if word_count <= 6 {
+        return true;
+    }
+
+    // Look at what follows the hedge. If the hedge is immediately followed
+    // by a sentence terminator AND the remaining tail is <= 5 words, treat
+    // it as terminal ("No sé. Pero tal vez X.").
+    let tail = &normalized[hedge.len()..];
+    let tail_trimmed = tail.trim_start();
+    let first_tail_char = tail_trimmed.chars().next();
+    let is_terminator = matches!(first_tail_char, Some('.') | Some('!') | Some('?'));
+    if is_terminator {
+        let after_term = tail_trimmed
+            .trim_start_matches(|c: char| matches!(c, '.' | '!' | '?'))
+            .trim();
+        let tail_words = after_term.split_whitespace().count();
+        if tail_words <= 5 {
+            return true;
+        }
     }
 
     false
@@ -1895,17 +1962,60 @@ mod tests {
 
     #[test]
     fn test_should_escalate_too_short() {
-        assert!(should_escalate(&resp("ok")));
-        assert!(should_escalate(&resp("sí claro")));
+        // Truly degenerate short inputs still escalate.
+        assert!(should_escalate(&resp("a")));
+        assert!(should_escalate(&resp("??")));
+        assert!(should_escalate(&resp("")));
+    }
+
+    #[test]
+    fn test_should_not_escalate_short_acks() {
+        // Short Spanish/English acks are legitimate replies — don't escalate.
+        assert!(!should_escalate(&resp("Sí.")));
+        assert!(!should_escalate(&resp("No.")));
+        assert!(!should_escalate(&resp("Ok.")));
+        assert!(!should_escalate(&resp("Va.")));
+        assert!(!should_escalate(&resp("sí claro")));
+    }
+
+    #[test]
+    fn test_should_escalate_hedge_terminal() {
+        // Pure hedge, possibly decorated with punctuation/quotes.
+        assert!(should_escalate(&resp("¡No sé!")));
+        assert!(should_escalate(&resp("No sé.")));
+        // Hedge + very short tail (<= 6 words overall).
+        assert!(should_escalate(&resp("No sé, la verdad.")));
+    }
+
+    #[test]
+    fn test_should_not_escalate_hedge_with_substance() {
+        // Long substantive answer that happens to OPEN with a hedge — the
+        // hedge is embedded, not terminal, so the answer stands on its own.
+        assert!(!should_escalate(&resp(
+            "No sé con certeza, pero te cuento que el flujo A va a B y luego C."
+        )));
+        assert!(!should_escalate(&resp(
+            "Desconozco el detalle técnico exacto, pero el flujo general es A → B → C y funciona así."
+        )));
+    }
+
+    #[test]
+    fn test_should_escalate_normalized_quotes() {
+        // Normalization strips leading «¡¿"'([ — so decorated short replies
+        // are treated identically to their bare form.
+        // "«ok»" normalizes to "ok" (2 chars) — below hedge list, above the
+        // tiny-length floor (< 2), so it survives as a legitimate ack.
+        assert!(!should_escalate(&resp("«ok»")));
+        // But a single decorated letter still trips the length floor.
+        assert!(should_escalate(&resp("«a»")));
     }
 
     #[test]
     fn test_should_escalate_dont_know_patterns() {
-        assert!(should_escalate(&resp(
-            "Lo siento, no tengo esa información en este momento."
-        )));
-        assert!(should_escalate(&resp("I don't know the answer to that.")));
+        // Short terminal hedges still escalate (<= 6 words overall).
         assert!(should_escalate(&resp("Desconozco ese dato, perdón.")));
+        assert!(should_escalate(&resp("I don't know.")));
+        assert!(should_escalate(&resp("No tengo información.")));
     }
 
     #[test]
