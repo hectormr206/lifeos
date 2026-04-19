@@ -173,10 +173,13 @@ fn hash_fallback(raw: &str) -> String {
     hasher.update(raw.as_bytes());
     let digest = hasher.finalize();
     use std::fmt::Write;
-    let hex = digest.iter().take(8).fold(String::with_capacity(16), |mut acc, b| {
-        let _ = write!(acc, "{:02x}", b);
-        acc
-    });
+    let hex = digest
+        .iter()
+        .take(8)
+        .fold(String::with_capacity(16), |mut acc, b| {
+            let _ = write!(acc, "{:02x}", b);
+            acc
+        });
     format!("sanitized_{}", hex)
 }
 
@@ -470,10 +473,7 @@ impl SessionStore {
             .context("creating .legacy_archive dir")?;
 
         let ts = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-        let dest = archive_root.join(format!(
-            "simplex_telegram_dm_{}_{}",
-            legacy_chat_id, ts
-        ));
+        let dest = archive_root.join(format!("simplex_telegram_dm_{}_{}", legacy_chat_id, ts));
 
         tokio::fs::rename(&legacy_dir, &dest)
             .await

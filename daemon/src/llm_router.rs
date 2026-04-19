@@ -472,11 +472,7 @@ impl LlmRouter {
     async fn chat_forced_free(&self, request: &RouterRequest) -> Result<RouterResponse> {
         let mut req = request.clone();
         // Pick first available Free-tier provider as the preferred target.
-        if let Some(free) = self
-            .providers
-            .iter()
-            .find(|p| p.tier == ProviderTier::Free)
-        {
+        if let Some(free) = self.providers.iter().find(|p| p.tier == ProviderTier::Free) {
             req.preferred_provider = Some(free.name.clone());
         } else {
             req.preferred_provider = None;
@@ -1631,9 +1627,7 @@ fn starts_with_terminal_hedge(normalized: &str, hedge: &str) -> bool {
     let first_tail_char = tail_trimmed.chars().next();
     let is_terminator = matches!(first_tail_char, Some('.') | Some('!') | Some('?'));
     if is_terminator {
-        let after_term = tail_trimmed
-            .trim_start_matches(['.', '!', '?'])
-            .trim();
+        let after_term = tail_trimmed.trim_start_matches(['.', '!', '?']).trim();
         let tail_words = after_term.split_whitespace().count();
         if tail_words <= 5 {
             return true;

@@ -2404,8 +2404,7 @@ REGLAS FIRMES:
         // routing per-contact), honour it; otherwise default to telegram_dm
         // keyed by chat_id (backwards compat for Telegram and callers that
         // never threaded a bridge-specific key).
-        let session_key =
-            session_key_override.unwrap_or_else(|| SessionKey::telegram_dm(chat_id));
+        let session_key = session_key_override.unwrap_or_else(|| SessionKey::telegram_dm(chat_id));
         let mut restored_turns: Vec<ChatMessage> = Vec::new();
         if let Some(ref store) = ctx.session_store {
             if let Ok(_meta) = store.get_or_create(&session_key).await {
@@ -2477,9 +2476,8 @@ REGLAS FIRMES:
                 "trabajo",
                 "perfil",
             ];
-            let broader_recall = is_new_session
-                || needs_memory_recall(user_text)
-                || is_identity_question;
+            let broader_recall =
+                is_new_session || needs_memory_recall(user_text) || is_identity_question;
 
             // Base: siempre el mensaje del usuario, top-3.
             // Broader: extendemos con session_summary y, si es identidad,
@@ -2511,8 +2509,7 @@ REGLAS FIRMES:
             // total budget, we treat the embedding service as down and
             // skip the remaining queries — no point burning the turn
             // budget on calls that won't succeed.
-            let total_budget =
-                std::time::Duration::from_millis(MEMORY_RECALL_BUDGET_MS);
+            let total_budget = std::time::Duration::from_millis(MEMORY_RECALL_BUDGET_MS);
 
             // Probe with the base query first (bounded by total budget).
             // Acquire a read guard, run the one search, drop the guard.
@@ -2574,10 +2571,7 @@ REGLAS FIRMES:
                             .filter_map(|(q, res)| match res {
                                 Ok(r) => Some(r),
                                 Err(e) => {
-                                    warn!(
-                                        "[memory] recall falló para query '{}': {}",
-                                        q, e
-                                    );
+                                    warn!("[memory] recall falló para query '{}': {}", q, e);
                                     None
                                 }
                             })
@@ -2594,13 +2588,10 @@ REGLAS FIRMES:
                     Vec::new()
                 };
 
-            let mut seen_ids: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
             let mut context_block = String::new();
 
-            let all_batches = base_results
-                .into_iter()
-                .chain(extra_results.into_iter());
+            let all_batches = base_results.into_iter().chain(extra_results.into_iter());
 
             for results in all_batches {
                 for r in &results {
@@ -8518,10 +8509,7 @@ REGLAS FIRMES:
             .get("https://api.search.brave.com/res/v1/web/search")
             .header("X-Subscription-Token", &key)
             .header("Accept", "application/json")
-            .query(&[
-                ("q", query.to_string()),
-                ("count", num_results.to_string()),
-            ])
+            .query(&[("q", query.to_string()), ("count", num_results.to_string())])
             .send()
             .await;
 

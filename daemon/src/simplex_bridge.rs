@@ -425,8 +425,8 @@ mod inner {
             Ok(r) => r,
             Err(_) => return,
         };
-        let cutoff = std::time::SystemTime::now()
-            .checked_sub(std::time::Duration::from_secs(24 * 3600));
+        let cutoff =
+            std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(24 * 3600));
         while let Ok(Some(entry)) = rd.next_entry().await {
             let path = entry.path();
             let name = match path.file_name().and_then(|n| n.to_str()) {
@@ -824,7 +824,10 @@ mod inner {
         let safe_input = match sanitize_ffmpeg_path(std::path::Path::new(video_path)) {
             Ok(p) => p,
             Err(e) => {
-                warn!("[simplex_bridge] extract_video_keyframes rejected path: {}", e);
+                warn!(
+                    "[simplex_bridge] extract_video_keyframes rejected path: {}",
+                    e
+                );
                 return Vec::new();
             }
         };
@@ -848,11 +851,8 @@ mod inner {
             kf_pattern.to_string_lossy().as_ref(),
         ])
         .kill_on_drop(true);
-        let _ = tokio::time::timeout(
-            Duration::from_secs(VIDEO_FFMPEG_TIMEOUT_SECS),
-            cmd.output(),
-        )
-        .await;
+        let _ = tokio::time::timeout(Duration::from_secs(VIDEO_FFMPEG_TIMEOUT_SECS), cmd.output())
+            .await;
 
         let mut frames = collect_frames(out_dir, "kf_").await;
         if frames.len() as u32 >= n {
@@ -901,10 +901,7 @@ mod inner {
     }
 
     /// List extracted frame files with the given prefix, sorted by name.
-    async fn collect_frames(
-        out_dir: &std::path::Path,
-        prefix: &str,
-    ) -> Vec<std::path::PathBuf> {
+    async fn collect_frames(out_dir: &std::path::Path, prefix: &str) -> Vec<std::path::PathBuf> {
         let mut out = Vec::new();
         if let Ok(mut rd) = tokio::fs::read_dir(out_dir).await {
             while let Ok(Some(entry)) = rd.next_entry().await {
@@ -946,11 +943,9 @@ mod inner {
             wav.to_string_lossy().as_ref(),
         ])
         .kill_on_drop(true);
-        let out = tokio::time::timeout(
-            Duration::from_secs(VIDEO_FFMPEG_TIMEOUT_SECS),
-            cmd.output(),
-        )
-        .await;
+        let out =
+            tokio::time::timeout(Duration::from_secs(VIDEO_FFMPEG_TIMEOUT_SECS), cmd.output())
+                .await;
         match out {
             Ok(Ok(o)) if o.status.success() && wav.exists() => {
                 Some(wav.to_string_lossy().into_owned())
@@ -1591,15 +1586,16 @@ mod inner {
                                                 } else {
                                                     caption
                                                 };
-                                                let (reply, _) = axi_tools::agentic_chat_with_session(
-                                                    &tool_ctx,
-                                                    SIMPLEX_CHAT_ID,
-                                                    &prompt,
-                                                    Some(&b64),
-                                                    None,
-                                                    Some(SessionKey::simplex(&display_name)),
-                                                )
-                                                .await;
+                                                let (reply, _) =
+                                                    axi_tools::agentic_chat_with_session(
+                                                        &tool_ctx,
+                                                        SIMPLEX_CHAT_ID,
+                                                        &prompt,
+                                                        Some(&b64),
+                                                        None,
+                                                        Some(SessionKey::simplex(&display_name)),
+                                                    )
+                                                    .await;
                                                 let _ =
                                                     send_message(&mut sink, &display_name, &reply)
                                                         .await;
@@ -1733,12 +1729,8 @@ mod inner {
                                                 Some(SessionKey::simplex(&display_name)),
                                             )
                                             .await;
-                                            let _ = send_message(
-                                                &mut sink,
-                                                &display_name,
-                                                &reply,
-                                            )
-                                            .await;
+                                            let _ = send_message(&mut sink, &display_name, &reply)
+                                                .await;
 
                                             // Cleanup — `work_tmp` drops here and recursively
                                             // removes the scratch dir. We still explicitly unlink
@@ -1938,15 +1930,16 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                 continue;
                                             }
 
-                                            let (reply, _audio) = axi_tools::agentic_chat_with_session(
-                                                &tool_ctx,
-                                                SIMPLEX_CHAT_ID,
-                                                msg_text,
-                                                None,
-                                                None,
-                                                Some(SessionKey::simplex(&display_name)),
-                                            )
-                                            .await;
+                                            let (reply, _audio) =
+                                                axi_tools::agentic_chat_with_session(
+                                                    &tool_ctx,
+                                                    SIMPLEX_CHAT_ID,
+                                                    msg_text,
+                                                    None,
+                                                    None,
+                                                    Some(SessionKey::simplex(&display_name)),
+                                                )
+                                                .await;
 
                                             match send_message(&mut sink, &display_name, &reply)
                                                 .await
@@ -1987,15 +1980,18 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                         } else {
                                                             caption.clone()
                                                         };
-                                                        let (reply, _) = axi_tools::agentic_chat_with_session(
-                                                            &tool_ctx,
-                                                            SIMPLEX_CHAT_ID,
-                                                            &prompt,
-                                                            Some(&b64),
-                                                            None,
-                                                            Some(SessionKey::simplex(&display_name)),
-                                                        )
-                                                        .await;
+                                                        let (reply, _) =
+                                                            axi_tools::agentic_chat_with_session(
+                                                                &tool_ctx,
+                                                                SIMPLEX_CHAT_ID,
+                                                                &prompt,
+                                                                Some(&b64),
+                                                                None,
+                                                                Some(SessionKey::simplex(
+                                                                    &display_name,
+                                                                )),
+                                                            )
+                                                            .await;
                                                         let _ = send_message(
                                                             &mut sink,
                                                             &display_name,
@@ -2111,8 +2107,7 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                 duration.unwrap_or(0)
                                             );
 
-                                            let caption =
-                                                text.as_deref().unwrap_or("").to_string();
+                                            let caption = text.as_deref().unwrap_or("").to_string();
 
                                             // Early duration limit check.
                                             if let Some(d) = duration {
@@ -2190,7 +2185,8 @@ Podés hablar conmigo en lenguaje natural o usar estos atajos:
                                                     }
                                                     // Cleanup the inline thumbnail — we'll
                                                     // re-extract real frames from the full file.
-                                                    let _ = tokio::fs::remove_file(&thumb_path).await;
+                                                    let _ =
+                                                        tokio::fs::remove_file(&thumb_path).await;
                                                 }
                                             }
 
