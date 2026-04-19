@@ -2429,56 +2429,116 @@ REGLAS FIRMES:
                 || l.contains("who am i")
                 || l.contains("tell me about me")
         };
-        if is_new_session || needs_memory_recall(user_text) {
-            if let Some(memory) = &ctx.memory {
-                let mem = memory.read().await;
-                // For identity questions, broaden the recall to pull in
-                // everything we've ever learned about the user — not just
-                // what matches their current sentence.
-                let identity_queries: &[&str] = &[
-                    "usuario",
-                    "preferencias",
-                    "Hector",
-                    "proyectos",
-                    "discovery",
-                    "preference",
-                    "trabajo",
-                    "perfil",
-                ];
-                let recall_queries: Vec<&str> = if is_identity_question {
-                    let mut v = vec![user_text, "session_summary"];
-                    v.extend_from_slice(identity_queries);
-                    v
-                } else {
-                    vec![user_text, "session_summary"]
-                };
-                let mut context_block = String::new();
-                for query in &recall_queries {
-                    if let Ok(results) = mem.search_entries(query, 3, None).await {
-                        for r in &results {
-                            let snippet = if r.entry.content.len() > 300 {
-                                format!(
-                                    "{}...",
-                                    crate::str_utils::truncate_bytes_safe(&r.entry.content, 300)
-                                )
-                            } else {
-                                r.entry.content.clone()
-                            };
-                            context_block.push_str(&format!(
-                                "- [{}] ({}): {}\n",
-                                r.entry.kind,
-                                r.entry.created_at.format("%Y-%m-%d %H:%M"),
-                                snippet
-                            ));
-                        }
+        // Memoria siempre-on: consultamos la memoria persistente en TODOS los
+        // turnos (SimpleX, Telegram, CLI). La búsqueda base usa el mensaje del
+        // usuario como query (top-3). Si la consulta dispara los heurísticos
+        // de "broader recall" (palabras tipo "recuerdas", pregunta de identidad
+        // o sesión nueva), extendemos con queries adicionales (session_summary
+        // y, para preguntas de identidad, queries de perfil).
+        //
+        // Filtramos resultados débiles por score (ver MEMORY_RECALL_MIN_SCORE)
+        // para no contaminar el prompt con ruido. Deduplicamos por entry_id
+        // entre los distintos queries, y envolvemos la búsqueda en un timeout
+        // para no bloquear la latencia del turno si la memoria se traba.
+        const MEMORY_RECALL_MIN_SCORE: f64 = 0.5;
+        const MEMORY_RECALL_TIMEOUT_MS: u64 = 500;
+
+        if let Some(memory) = &ctx.memory {
+            let mem = memory.read().await;
+
+            // Identity questions pull everything we've ever learned about the
+            // user — not just what matches their current sentence.
+            let identity_queries: &[&str] = &[
+                "usuario",
+                "preferencias",
+                "Hector",
+                "proyectos",
+                "discovery",
+                "preference",
+                "trabajo",
+                "perfil",
+            ];
+            let broader_recall = is_new_session
+                || needs_memory_recall(user_text)
+                || is_identity_question;
+
+            // Base: siempre el mensaje del usuario, top-3.
+            // Broader: extendemos con session_summary y, si es identidad,
+            // con las identity_queries. Cada query trae top-5 cuando estamos
+            // en modo broader, top-3 en base.
+            let base_limit: usize = 3;
+            let broader_limit: usize = 5;
+
+            // (query, limit) tuples. El primero es la base siempre-on.
+            let mut recall_queries: Vec<(&str, usize)> =
+                vec![(user_text, base_limit)];
+            if broader_recall {
+                recall_queries.push(("session_summary", broader_limit));
+                if is_identity_question {
+                    for q in identity_queries {
+                        recall_queries.push((*q, broader_limit));
                     }
                 }
-                if !context_block.is_empty() {
-                    system_prompt.push_str(&format!(
-                        "\n\n[Contexto recuperado de tu memoria persistente]:\n{}",
-                        context_block
+            }
+
+            let mut seen_ids: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut context_block = String::new();
+
+            for (query, limit) in &recall_queries {
+                let fut = mem.search_entries(query, *limit, None);
+                let timed = tokio::time::timeout(
+                    std::time::Duration::from_millis(MEMORY_RECALL_TIMEOUT_MS),
+                    fut,
+                )
+                .await;
+                let results = match timed {
+                    Ok(Ok(r)) => r,
+                    Ok(Err(e)) => {
+                        warn!(
+                            "[memory] recall falló para query '{}': {}",
+                            query, e
+                        );
+                        continue;
+                    }
+                    Err(_) => {
+                        warn!(
+                            "[memory] recall superó {}ms para query '{}', se omite (no bloqueante)",
+                            MEMORY_RECALL_TIMEOUT_MS, query
+                        );
+                        continue;
+                    }
+                };
+
+                for r in &results {
+                    if r.score < MEMORY_RECALL_MIN_SCORE {
+                        continue;
+                    }
+                    if !seen_ids.insert(r.entry.entry_id.clone()) {
+                        continue;
+                    }
+                    let snippet = if r.entry.content.len() > 300 {
+                        format!(
+                            "{}...",
+                            crate::str_utils::truncate_bytes_safe(&r.entry.content, 300)
+                        )
+                    } else {
+                        r.entry.content.clone()
+                    };
+                    context_block.push_str(&format!(
+                        "- [{}] ({}): {}\n",
+                        r.entry.kind,
+                        r.entry.created_at.format("%Y-%m-%d %H:%M"),
+                        snippet
                     ));
                 }
+            }
+
+            if !context_block.is_empty() {
+                system_prompt.push_str(&format!(
+                    "\n\n[Contexto recuperado de tu memoria persistente]:\n{}",
+                    context_block
+                ));
             }
         }
 
