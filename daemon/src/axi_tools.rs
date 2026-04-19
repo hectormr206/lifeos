@@ -2291,7 +2291,7 @@ REGLAS FIRMES:
         user_text: &str,
         image_b64: Option<&str>,
     ) -> (String, Option<String>) {
-        agentic_chat_inner(ctx, chat_id, user_text, image_b64, None).await
+        agentic_chat_inner(ctx, chat_id, user_text, image_b64, None, None).await
     }
 
     /// `force_sensitivity` variant — callers that know the message is
@@ -2304,7 +2304,31 @@ REGLAS FIRMES:
         image_b64: Option<&str>,
         force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
     ) -> (String, Option<String>) {
-        agentic_chat_inner(ctx, chat_id, user_text, image_b64, force_sensitivity).await
+        agentic_chat_inner(ctx, chat_id, user_text, image_b64, force_sensitivity, None).await
+    }
+
+    /// Full variant: explicit `SessionKey` override for bridges whose
+    /// durable session identity does NOT derive from `chat_id` (e.g.,
+    /// SimpleX, where one in-memory chat_id fans out to many per-contact
+    /// sessions). When `None`, the default `SessionKey::telegram_dm(chat_id)`
+    /// is used (backwards compat for Telegram and any legacy caller).
+    pub async fn agentic_chat_with_session(
+        ctx: &ToolContext,
+        chat_id: i64,
+        user_text: &str,
+        image_b64: Option<&str>,
+        force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
+        session_key: Option<SessionKey>,
+    ) -> (String, Option<String>) {
+        agentic_chat_inner(
+            ctx,
+            chat_id,
+            user_text,
+            image_b64,
+            force_sensitivity,
+            session_key,
+        )
+        .await
     }
 
     async fn agentic_chat_inner(
@@ -2313,6 +2337,7 @@ REGLAS FIRMES:
         user_text: &str,
         image_b64: Option<&str>,
         force_sensitivity: Option<crate::privacy_filter::SensitivityLevel>,
+        session_key_override: Option<SessionKey>,
     ) -> (String, Option<String>) {
         // AQ.3 — Detect implicit preference feedback and update user model
         if let Some(ref um_arc) = ctx.user_model {
@@ -2387,8 +2412,13 @@ REGLAS FIRMES:
         let history = ctx.history.get(chat_id).await;
         let is_new_session = history.is_empty();
 
-        // Collect session store turns (for restoring context after restart)
-        let session_key = SessionKey::telegram_dm(chat_id);
+        // Collect session store turns (for restoring context after restart).
+        // If the caller supplied an explicit SessionKey (e.g., SimpleX bridge
+        // routing per-contact), honour it; otherwise default to telegram_dm
+        // keyed by chat_id (backwards compat for Telegram and callers that
+        // never threaded a bridge-specific key).
+        let session_key =
+            session_key_override.unwrap_or_else(|| SessionKey::telegram_dm(chat_id));
         let mut restored_turns: Vec<ChatMessage> = Vec::new();
         if let Some(ref store) = ctx.session_store {
             if let Ok(_meta) = store.get_or_create(&session_key).await {
@@ -2685,6 +2715,7 @@ REGLAS FIRMES:
                 if let Some(ref store) = ctx.session_store {
                     let store = store.clone();
                     let sk = session_key.clone();
+                    let channel_label = sk.channel.clone();
                     let user_content = user_text.to_string();
                     let assistant_content = final_text.clone();
                     let router = ctx.router.clone();
@@ -2697,7 +2728,7 @@ REGLAS FIRMES:
                                 TranscriptTurn {
                                     role: "user".into(),
                                     content: user_content,
-                                    channel: "telegram".into(),
+                                    channel: channel_label.clone(),
                                     timestamp: now,
                                     tool_name: None,
                                     tool_result: None,
@@ -2714,7 +2745,7 @@ REGLAS FIRMES:
                                 TranscriptTurn {
                                     role: "assistant".into(),
                                     content: assistant_content,
-                                    channel: "telegram".into(),
+                                    channel: channel_label.clone(),
                                     timestamp: now,
                                     tool_name: None,
                                     tool_result: None,
