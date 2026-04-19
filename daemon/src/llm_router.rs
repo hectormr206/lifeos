@@ -409,16 +409,19 @@ impl LlmRouter {
             return self.chat(request).await;
         }
 
-        // Round 1: force local tier.
+        // Round 1: force local tier — but ONLY if the caller didn't already
+        // pin a provider. Respect explicit caller intent; escalation still
+        // triggers on weakness below.
         let mut local_req = request.clone();
-        // We hint local by setting preferred_provider to the first local provider if present.
-        let local_name = self
-            .providers
-            .iter()
-            .find(|p| p.tier == ProviderTier::Local)
-            .map(|p| p.name.clone());
-        if let Some(ref name) = local_name {
-            local_req.preferred_provider = Some(name.clone());
+        if local_req.preferred_provider.is_none() {
+            let local_name = self
+                .providers
+                .iter()
+                .find(|p| p.tier == ProviderTier::Local)
+                .map(|p| p.name.clone());
+            if let Some(ref name) = local_name {
+                local_req.preferred_provider = Some(name.clone());
+            }
         }
 
         let local_resp = match self.chat(&local_req).await {
@@ -1490,12 +1493,17 @@ impl LlmRouter {
 
 /// Decide whether a local response should trigger escalation to the next tier.
 ///
-/// Heuristic (tune here — deliberately simple, no ML):
+/// Heuristic (deliberately simple, no ML) — tuned to AVOID false positives
+/// on legitimate short answers that happen to contain hedge substrings:
 /// - Empty / whitespace-only response.
-/// - Very short responses for non-trivial prompts (<12 chars).
-/// - Explicit "I don't know" patterns in ES/EN.
-/// - Pure hedging / refusal without content (e.g. "no tengo esa información").
-/// - Degenerate outputs (response equals only the think-tag residue cue).
+/// - Trivially short responses (< 8 chars by codepoint).
+/// - Response is ENTIRELY a known hedge phrase (equality after normalization)
+///   OR starts with a hedge phrase AND is very short (<= 3 words).
+/// - Degenerate outputs (`...`, `>>>`).
+///
+/// Rationale: substring matching for "no sé" flags valid responses like
+/// "no sé si te conviene X, pero..." which is actually a useful answer.
+/// We only escalate when the model is truly punting.
 pub fn should_escalate(local_response: &RouterResponse) -> bool {
     let text = local_response.text.trim();
 
@@ -1503,18 +1511,26 @@ pub fn should_escalate(local_response: &RouterResponse) -> bool {
         return true;
     }
 
-    // Extremely short answers from local are often "ok" / "sí" to non-trivial prompts.
-    // Threshold is conservative — only flag truly tiny outputs.
-    if text.len() < 12 {
+    // Trivially short by Unicode codepoint count (not bytes — multibyte chars
+    // would otherwise over-trigger on short Spanish/Chinese/etc. answers).
+    if text.chars().count() < 8 {
         return true;
     }
 
-    let lower = text.to_lowercase();
+    // Normalize: lowercase, strip trailing punctuation we see in hedges.
+    let normalized: String = text
+        .to_lowercase()
+        .trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ';' | ':'))
+        .trim()
+        .to_string();
 
-    // Explicit unknown / refusal patterns (ES + EN).
-    const UNKNOWN_PATTERNS: &[&str] = &[
+    // Explicit hedge / refusal patterns (ES + EN) — the FULL response must
+    // either BE one of these (after normalization) or START WITH one AND
+    // be short enough that no real content follows.
+    const HEDGE_PATTERNS: &[&str] = &[
         "no sé",
-        "no se ",
+        "no lo sé",
+        "no lo se",
         "no tengo esa información",
         "no tengo esa informacion",
         "no tengo información",
@@ -1522,8 +1538,6 @@ pub fn should_escalate(local_response: &RouterResponse) -> bool {
         "no puedo responder",
         "no estoy seguro",
         "desconozco",
-        "no lo sé",
-        "no lo se",
         "i don't know",
         "i do not know",
         "i'm not sure",
@@ -1535,14 +1549,21 @@ pub fn should_escalate(local_response: &RouterResponse) -> bool {
         "i do not have that information",
     ];
 
-    for pat in UNKNOWN_PATTERNS {
-        if lower.contains(pat) {
+    let word_count = text.split_whitespace().count();
+
+    for pat in HEDGE_PATTERNS {
+        // Exact-match hedge → escalate.
+        if normalized == *pat {
+            return true;
+        }
+        // Starts-with hedge AND the whole response is ≤ 3 words — means
+        // the model said "no sé." and nothing useful.
+        if word_count <= 3 && normalized.starts_with(pat) {
             return true;
         }
     }
 
-    // Heuristic: chained-tool prompts where Qwen historically fails —
-    // detect the telltale "..." / ellipsis-only response or ">>>" style echoes.
+    // Degenerate echoes.
     if text == "..." || text == ">>>" {
         return true;
     }
