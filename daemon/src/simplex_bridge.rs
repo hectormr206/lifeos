@@ -396,6 +396,59 @@ mod inner {
         let _ = std::fs::create_dir_all(DOWNLOADS_DIR);
     }
 
+    /// Defense-in-depth: sanitize a path before handing it to ffmpeg/ffprobe.
+    ///
+    /// ffmpeg treats any argument starting with `-` as a flag. A malicious
+    /// (or just unusual) filename like `-i.mp4` could be mis-parsed. We:
+    /// 1. Reject relative paths.
+    /// 2. Reject paths whose filename begins with `-`.
+    /// Returns the validated `PathBuf` on success.
+    fn sanitize_ffmpeg_path(p: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
+        if !p.is_absolute() {
+            anyhow::bail!("ffmpeg path must be absolute: {}", p.display());
+        }
+        if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with('-') {
+                anyhow::bail!("ffmpeg path filename begins with '-': {}", p.display());
+            }
+        }
+        Ok(p.to_path_buf())
+    }
+
+    /// Startup defense-in-depth: remove stale `video-*` scratch dirs older
+    /// than 24h under the downloads root. `TempDir` Drop handles the normal
+    /// case; this sweep covers crash-before-drop scenarios.
+    async fn sweep_stale_video_scratch() {
+        let root = std::path::Path::new(DOWNLOADS_DIR);
+        let mut rd = match tokio::fs::read_dir(root).await {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        let cutoff = std::time::SystemTime::now()
+            .checked_sub(std::time::Duration::from_secs(24 * 3600));
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if !name.starts_with("video-") {
+                continue;
+            }
+            let is_old = match (entry.metadata().await, cutoff) {
+                (Ok(md), Some(c)) => md.modified().map(|m| m < c).unwrap_or(false),
+                _ => false,
+            };
+            if is_old {
+                let _ = tokio::fs::remove_dir_all(&path).await;
+                info!(
+                    "[simplex_bridge] Sweep: borré scratch dir viejo {}",
+                    path.display()
+                );
+            }
+        }
+    }
+
     /// Set the Axi profile (display name, description, avatar) on SimpleX.
     /// Runs on every connect to ensure the profile is always correct.
     async fn ensure_axi_profile(ws: &mut WsSink) {
@@ -550,12 +603,30 @@ mod inner {
 
         // Convert to WAV first (voice notes may be OGG/OPUS)
         let wav_path = format!("{}.wav", path);
-        let ffmpeg = Command::new("ffmpeg")
-            .args([
-                "-y", "-i", path, "-ar", "16000", "-ac", "1", "-f", "wav", &wav_path,
-            ])
-            .output()
-            .await;
+        let safe_voice_input = sanitize_ffmpeg_path(std::path::Path::new(path));
+        let ffmpeg = match safe_voice_input {
+            Ok(safe) => {
+                Command::new("ffmpeg")
+                    .args([
+                        "-y",
+                        "-i",
+                        safe.to_string_lossy().as_ref(),
+                        "-ar",
+                        "16000",
+                        "-ac",
+                        "1",
+                        "-f",
+                        "wav",
+                        &wav_path,
+                    ])
+                    .output()
+                    .await
+            }
+            Err(e) => {
+                warn!("[simplex_bridge] voice ffmpeg rejected path: {}", e);
+                return None;
+            }
+        };
 
         let input_path = if ffmpeg.map(|o| o.status.success()).unwrap_or(false) {
             &wav_path
@@ -639,6 +710,13 @@ mod inner {
 
     /// Run `ffprobe` to obtain the duration of a media file in seconds.
     async fn probe_video_duration(path: &str) -> Option<f64> {
+        let safe_path = match sanitize_ffmpeg_path(std::path::Path::new(path)) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("[simplex_bridge] ffprobe rejected path: {}", e);
+                return None;
+            }
+        };
         let mut cmd = Command::new("ffprobe");
         cmd.args([
             "-v",
@@ -647,7 +725,7 @@ mod inner {
             "format=duration",
             "-of",
             "csv=p=0",
-            path,
+            safe_path.to_string_lossy().as_ref(),
         ])
         .kill_on_drop(true);
         let output = match tokio::time::timeout(
@@ -686,6 +764,15 @@ mod inner {
     ) -> Vec<std::path::PathBuf> {
         let _ = tokio::fs::create_dir_all(out_dir).await;
 
+        let safe_input = match sanitize_ffmpeg_path(std::path::Path::new(video_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("[simplex_bridge] extract_video_keyframes rejected path: {}", e);
+                return Vec::new();
+            }
+        };
+        let safe_input_str = safe_input.to_string_lossy().into_owned();
+
         // Attempt 1 — keyframe selection. ffmpeg's `thumbnail` filter picks the
         // most representative frame per scene; `eq(pict_type,I)` restricts to
         // I-frames. `-vsync vfr` avoids duplicate padding.
@@ -694,7 +781,7 @@ mod inner {
         cmd.args([
             "-y",
             "-i",
-            video_path,
+            safe_input_str.as_str(),
             "-vf",
             "select='eq(pict_type,I)',thumbnail,scale=-1:480",
             "-frames:v",
@@ -734,7 +821,7 @@ mod inner {
                     "-ss",
                     &format!("{:.3}", t),
                     "-i",
-                    video_path,
+                    safe_input_str.as_str(),
                     "-frames:v",
                     "1",
                     "-vf",
@@ -779,12 +866,19 @@ mod inner {
     /// Extract the audio track of a video to a WAV file suitable for
     /// `transcribe_audio`. Returns the WAV path on success.
     async fn extract_video_audio(video_path: &str, out_dir: &std::path::Path) -> Option<String> {
+        let safe_input = match sanitize_ffmpeg_path(std::path::Path::new(video_path)) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("[simplex_bridge] extract_video_audio rejected path: {}", e);
+                return None;
+            }
+        };
         let wav = out_dir.join("audio.wav");
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
             "-y",
             "-i",
-            video_path,
+            safe_input.to_string_lossy().as_ref(),
             "-vn",
             "-ar",
             "16000",
@@ -1006,6 +1100,7 @@ mod inner {
         );
 
         ensure_downloads_dir();
+        sweep_stale_video_scratch().await;
 
         // One-shot legacy session archive: a previous build stored ALL
         // SimpleX turns under the synthetic telegram_dm(SIMPLEX_CHAT_ID)
@@ -1485,12 +1580,23 @@ mod inner {
                                                 }
                                             }
 
-                                            // Scratch dir for frames + extracted audio.
-                                            let work_dir = std::path::PathBuf::from(format!(
-                                                "/var/lib/lifeos/simplex-downloads/video-{}",
-                                                uuid::Uuid::new_v4()
-                                            ));
-                                            let _ = tokio::fs::create_dir_all(&work_dir).await;
+                                            // Scratch dir for frames + extracted audio. `TempDir`
+                                            // cleans up on ALL paths (success, error, panic) via Drop.
+                                            let work_tmp = match tempfile::Builder::new()
+                                                .prefix("video-")
+                                                .tempdir_in(DOWNLOADS_DIR)
+                                            {
+                                                Ok(t) => t,
+                                                Err(e) => {
+                                                    warn!(
+                                                        "[simplex_bridge] No pude crear scratch dir: {}",
+                                                        e
+                                                    );
+                                                    let _ = tokio::fs::remove_file(&path).await;
+                                                    continue;
+                                                }
+                                            };
+                                            let work_dir = work_tmp.path().to_path_buf();
 
                                             let frames = extract_video_keyframes(
                                                 &path,
@@ -1512,7 +1618,7 @@ mod inner {
                                                      Fijate si podés reenviarlo.",
                                                 )
                                                 .await;
-                                                let _ = tokio::fs::remove_dir_all(&work_dir).await;
+                                                // work_tmp drops here, cleans up.
                                                 let _ = tokio::fs::remove_file(&path).await;
                                                 continue;
                                             }
@@ -1564,8 +1670,11 @@ mod inner {
                                             )
                                             .await;
 
-                                            // Cleanup — scratch dir and the downloaded video.
-                                            let _ = tokio::fs::remove_dir_all(&work_dir).await;
+                                            // Cleanup — `work_tmp` drops here and recursively
+                                            // removes the scratch dir. We still explicitly unlink
+                                            // the downloaded video since it lives in DOWNLOADS_DIR,
+                                            // not inside the scratch tempdir.
+                                            drop(work_tmp);
                                             let _ = tokio::fs::remove_file(&path).await;
                                         }
                                     }
