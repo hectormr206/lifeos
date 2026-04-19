@@ -8420,21 +8420,32 @@ REGLAS FIRMES:
     /// 1. Env var `BRAVE_SEARCH_API_KEY`
     /// 2. `web_search.brave_api_key` in the daemon config
     ///    (/var/lib/lifeos/config-checkpoints/working/config.toml)
-    fn brave_search_api_key() -> Option<String> {
-        if let Ok(k) = std::env::var("BRAVE_SEARCH_API_KEY") {
-            if !k.trim().is_empty() {
-                return Some(k);
-            }
-        }
-        let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
-        let raw = std::fs::read_to_string(path).ok()?;
-        let parsed: toml::Value = toml::from_str(&raw).ok()?;
-        parsed
-            .get("web_search")
-            .and_then(|v| v.get("brave_api_key"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .filter(|s| !s.trim().is_empty())
+    ///
+    /// Cached once per process via `tokio::sync::OnceCell` — config reloads
+    /// at runtime will NOT be picked up until the daemon restarts. This is
+    /// an intentional tradeoff to avoid blocking fs I/O on every tool call.
+    async fn brave_search_api_key() -> Option<String> {
+        static CACHED: tokio::sync::OnceCell<Option<String>> =
+            tokio::sync::OnceCell::const_new();
+        CACHED
+            .get_or_init(|| async {
+                if let Ok(k) = std::env::var("BRAVE_SEARCH_API_KEY") {
+                    if !k.trim().is_empty() {
+                        return Some(k);
+                    }
+                }
+                let path = "/var/lib/lifeos/config-checkpoints/working/config.toml";
+                let raw = tokio::fs::read_to_string(path).await.ok()?;
+                let parsed: toml::Value = toml::from_str(&raw).ok()?;
+                parsed
+                    .get("web_search")
+                    .and_then(|v| v.get("brave_api_key"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .filter(|s| !s.trim().is_empty())
+            })
+            .await
+            .clone()
     }
 
     /// Brave Search API — free tier web search.
@@ -8452,7 +8463,7 @@ REGLAS FIRMES:
         }
         let num_results = args["num_results"].as_u64().unwrap_or(5).clamp(1, 20) as usize;
 
-        let key = match brave_search_api_key() {
+        let key = match brave_search_api_key().await {
             Some(k) => k,
             None => {
                 return Ok(
@@ -8465,12 +8476,21 @@ REGLAS FIRMES:
             }
         };
 
+        // Rioplatense generic error — we never echo raw reqwest errors or
+        // API bodies to the LLM, they may include URLs, HTML, or (in the
+        // worst case) echoed headers. Raw detail goes to tracing only.
+        const GENERIC_ERR: &str =
+            "No pude consultar Brave Search ahora. Revisá tu clave o probá más tarde.";
+
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
         {
             Ok(c) => c,
-            Err(e) => return Ok(format!("No pude crear el cliente HTTP: {}", e)),
+            Err(e) => {
+                log::warn!("brave_search: HTTP client build failed: {}", e);
+                return Ok(GENERIC_ERR.to_string());
+            }
         };
 
         let resp = client
@@ -8487,26 +8507,29 @@ REGLAS FIRMES:
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {
-                return Ok(format!(
-                    "No pude conectarme a Brave Search (timeout o red caida): {}",
-                    e
-                ));
+                log::warn!("brave_search: network error: {}", e);
+                return Ok(GENERIC_ERR.to_string());
             }
         };
 
         if !resp.status().is_success() {
             let status = resp.status();
+            // Read body for logs only (truncated) — NEVER returned to the LLM.
             let body = resp.text().await.unwrap_or_default();
-            let snippet = crate::str_utils::truncate_bytes_safe(&body, 200);
-            return Ok(format!(
-                "Brave Search devolvio error HTTP {}: {}",
-                status, snippet
-            ));
+            log::warn!(
+                "brave_search: non-2xx response status={} body={}",
+                status,
+                crate::str_utils::truncate_bytes_safe(&body, 200)
+            );
+            return Ok(GENERIC_ERR.to_string());
         }
 
         let body: serde_json::Value = match resp.json().await {
             Ok(v) => v,
-            Err(e) => return Ok(format!("Respuesta de Brave no es JSON valido: {}", e)),
+            Err(e) => {
+                log::warn!("brave_search: JSON parse failed: {}", e);
+                return Ok(GENERIC_ERR.to_string());
+            }
         };
 
         let results = match body["web"]["results"].as_array() {
