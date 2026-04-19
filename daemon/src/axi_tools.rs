@@ -2677,7 +2677,7 @@ REGLAS FIRMES:
             };
 
             let router = ctx.router.read().await;
-            let response = match router.chat(&request).await {
+            let response = match router.chat_with_escalation(&request).await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!("[axi_tools] LLM call failed round {}: {}", round, e);

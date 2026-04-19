@@ -384,6 +384,103 @@ impl LlmRouter {
         }
     }
 
+    /// Route a chat request with **local-first escalation**.
+    ///
+    /// Flow:
+    /// 1. If sensitivity is `Critical` → local-only (no escalation).
+    /// 2. Otherwise → try Local tier first. If `should_escalate()` flags the
+    ///    response as weak/unknown/unsuitable, re-run once forcing `Free` tier.
+    /// 3. Capped at ONE escalation step (local → free) to avoid cost cascades.
+    ///
+    /// Toggle via env `LIFEOS_LLM_ESCALATION_ENABLED=false` to disable (default: true).
+    pub async fn chat_with_escalation(&self, request: &RouterRequest) -> Result<RouterResponse> {
+        let enabled = std::env::var("LIFEOS_LLM_ESCALATION_ENABLED")
+            .map(|v| !matches!(v.as_str(), "0" | "false" | "no"))
+            .unwrap_or(true);
+        if !enabled {
+            return self.chat(request).await;
+        }
+
+        let sensitivity = request.sensitivity.unwrap_or(SensitivityLevel::Low);
+
+        // Voice / privacy-critical → never escalate. Local tier only.
+        if matches!(sensitivity, SensitivityLevel::Critical) {
+            info!("[llm_router] escalation skipped (sensitivity=Critical) — me quedo local");
+            return self.chat(request).await;
+        }
+
+        // Round 1: force local tier.
+        let mut local_req = request.clone();
+        // We hint local by setting preferred_provider to the first local provider if present.
+        let local_name = self
+            .providers
+            .iter()
+            .find(|p| p.tier == ProviderTier::Local)
+            .map(|p| p.name.clone());
+        if let Some(ref name) = local_name {
+            local_req.preferred_provider = Some(name.clone());
+        }
+
+        let local_resp = match self.chat(&local_req).await {
+            Ok(r) => r,
+            Err(e) => {
+                // Local unavailable — escalate directly to Free tier.
+                info!(
+                    "[llm_router] escalación: local cayó ({}) — voy directo al tier Free, dale",
+                    e
+                );
+                return self.chat_forced_free(request).await;
+            }
+        };
+
+        // Only consider escalation if we actually hit a Local-tier provider.
+        let hit_local = self
+            .providers
+            .iter()
+            .any(|p| p.name == local_resp.provider && p.tier == ProviderTier::Local);
+
+        if !hit_local {
+            return Ok(local_resp);
+        }
+
+        if should_escalate(&local_resp) {
+            info!(
+                "[llm_router] escalando a Free: local respondió flojito (len={}, provider={}). \
+                 Locura cósmica, pedimos refuerzo.",
+                local_resp.text.len(),
+                local_resp.provider
+            );
+            match self.chat_forced_free(request).await {
+                Ok(r) => Ok(r),
+                Err(e) => {
+                    warn!(
+                        "[llm_router] Free también falló ({}). Me quedo con la respuesta local, aunque sea débil.",
+                        e
+                    );
+                    Ok(local_resp)
+                }
+            }
+        } else {
+            Ok(local_resp)
+        }
+    }
+
+    /// Retry the request, but bias toward the Free tier by excluding Local preference.
+    async fn chat_forced_free(&self, request: &RouterRequest) -> Result<RouterResponse> {
+        let mut req = request.clone();
+        // Pick first available Free-tier provider as the preferred target.
+        if let Some(free) = self
+            .providers
+            .iter()
+            .find(|p| p.tier == ProviderTier::Free)
+        {
+            req.preferred_provider = Some(free.name.clone());
+        } else {
+            req.preferred_provider = None;
+        }
+        self.chat(&req).await
+    }
+
     /// Route a chat request to the best available provider.
     pub async fn chat(&self, request: &RouterRequest) -> Result<RouterResponse> {
         let complexity = request.complexity.unwrap_or(TaskComplexity::Medium);
@@ -1391,6 +1488,68 @@ impl LlmRouter {
     }
 }
 
+/// Decide whether a local response should trigger escalation to the next tier.
+///
+/// Heuristic (tune here — deliberately simple, no ML):
+/// - Empty / whitespace-only response.
+/// - Very short responses for non-trivial prompts (<12 chars).
+/// - Explicit "I don't know" patterns in ES/EN.
+/// - Pure hedging / refusal without content (e.g. "no tengo esa información").
+/// - Degenerate outputs (response equals only the think-tag residue cue).
+pub fn should_escalate(local_response: &RouterResponse) -> bool {
+    let text = local_response.text.trim();
+
+    if text.is_empty() {
+        return true;
+    }
+
+    // Extremely short answers from local are often "ok" / "sí" to non-trivial prompts.
+    // Threshold is conservative — only flag truly tiny outputs.
+    if text.len() < 12 {
+        return true;
+    }
+
+    let lower = text.to_lowercase();
+
+    // Explicit unknown / refusal patterns (ES + EN).
+    const UNKNOWN_PATTERNS: &[&str] = &[
+        "no sé",
+        "no se ",
+        "no tengo esa información",
+        "no tengo esa informacion",
+        "no tengo información",
+        "no tengo informacion",
+        "no puedo responder",
+        "no estoy seguro",
+        "desconozco",
+        "no lo sé",
+        "no lo se",
+        "i don't know",
+        "i do not know",
+        "i'm not sure",
+        "i am not sure",
+        "i cannot answer",
+        "i can't answer",
+        "as an ai, i cannot",
+        "i don't have that information",
+        "i do not have that information",
+    ];
+
+    for pat in UNKNOWN_PATTERNS {
+        if lower.contains(pat) {
+            return true;
+        }
+    }
+
+    // Heuristic: chained-tool prompts where Qwen historically fails —
+    // detect the telltale "..." / ellipsis-only response or ">>>" style echoes.
+    if text == "..." || text == ">>>" {
+        return true;
+    }
+
+    false
+}
+
 /// Strip `<think>...</think>` blocks from LLM responses (Qwen3, DeepSeek, etc.).
 /// These models include chain-of-thought reasoning that shouldn't be shown to users.
 pub fn strip_think_tags(text: &str) -> String {
@@ -1689,6 +1848,45 @@ mod tests {
             privacy: "low".into(),
         };
         assert_eq!(task_type_bonus(&provider, TaskType::LongContext), 50);
+    }
+
+    fn resp(text: &str) -> RouterResponse {
+        RouterResponse {
+            text: text.into(),
+            provider: "local".into(),
+            model: "local".into(),
+            tokens_used: None,
+            latency_ms: 0,
+            cached: false,
+        }
+    }
+
+    #[test]
+    fn test_should_escalate_empty() {
+        assert!(should_escalate(&resp("")));
+        assert!(should_escalate(&resp("   \n  ")));
+    }
+
+    #[test]
+    fn test_should_escalate_too_short() {
+        assert!(should_escalate(&resp("ok")));
+        assert!(should_escalate(&resp("sí claro")));
+    }
+
+    #[test]
+    fn test_should_escalate_dont_know_patterns() {
+        assert!(should_escalate(&resp(
+            "Lo siento, no tengo esa información en este momento."
+        )));
+        assert!(should_escalate(&resp("I don't know the answer to that.")));
+        assert!(should_escalate(&resp("Desconozco ese dato, perdón.")));
+    }
+
+    #[test]
+    fn test_should_not_escalate_normal_answer() {
+        assert!(!should_escalate(&resp(
+            "La capital de Argentina es Buenos Aires, una ciudad cosmopolita y hermosa."
+        )));
     }
 
     #[test]
