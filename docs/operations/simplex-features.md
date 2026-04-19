@@ -149,8 +149,29 @@ messages.
 
 ### Video
 
-The thumbnail frame is extracted and analyzed by the multimodal LLM. Full
-video playback/analysis is not yet supported.
+Full-frame video analysis:
+
+- **Inline thumbnail (fast path)**: if the message carries an inline thumbnail,
+  Axi sends a quick one-line preview reply using it as frame 0 while the full
+  file is still downloading.
+- **Full file (XFTP)**: auto-accepted in the background. Once landed, `ffmpeg`
+  extracts up to 4 keyframes (`select='eq(pict_type,I)',thumbnail,scale=-1:480`);
+  if keyframe selection returns fewer frames than requested, a time-based
+  fallback picks evenly spaced timestamps across the clip.
+- **Duration**: reported by `ffprobe` and included in the LLM prompt.
+- **Audio track (optional)**: when `LIFEOS_VIDEO_TRANSCRIBE_AUDIO` is unset or
+  truthy (default), the audio is extracted to WAV and transcribed with the
+  same Whisper helper used for voice notes. The transcript is appended to the
+  prompt. Set to `0` / `false` / `no` / `off` to disable.
+- **Multimodal dispatch**: frame 0 is passed as the image part to
+  `agentic_chat`; remaining frames are announced in the prompt (multi-image
+  dispatch is the next extension point).
+- **Limits**: max 120s duration, max 50 MB. Exceeding either triggers a
+  Rioplatense reply explaining the limit.
+- **Timeouts**: every `ffmpeg`/`ffprobe` invocation is bounded to 60s with
+  `kill_on_drop(true)` so orphaned processes never leak.
+- **Cleanup**: extracted frames, WAV audio and the downloaded video are
+  removed once the reply is sent.
 
 ### Files
 
