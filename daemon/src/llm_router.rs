@@ -1513,13 +1513,18 @@ pub fn should_escalate(local_response: &RouterResponse) -> bool {
 
     // Trivially short by Unicode codepoint count (not bytes — multibyte chars
     // would otherwise over-trigger on short Spanish/Chinese/etc. answers).
-    if text.chars().count() < 8 {
+    // Threshold is tight (< 4) so short greetings like "¡Hola!" don't trip it,
+    // while bare "ok" / emoji-only replies still do.
+    if text.chars().count() < 4 {
         return true;
     }
 
-    // Normalize: lowercase, strip trailing punctuation we see in hedges.
+    // Normalize: lowercase, strip LEADING Spanish/quote openers (¡¿"'([«) so
+    // "¡No sé!" and "«no sé»" match the "no sé" hedge pattern, and strip
+    // trailing punctuation we see in hedges.
     let normalized: String = text
         .to_lowercase()
+        .trim_start_matches(|c: char| matches!(c, '¡' | '¿' | '"' | '\'' | '(' | '[' | '«'))
         .trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ';' | ':'))
         .trim()
         .to_string();
@@ -1549,16 +1554,16 @@ pub fn should_escalate(local_response: &RouterResponse) -> bool {
         "i do not have that information",
     ];
 
-    let word_count = text.split_whitespace().count();
-
     for pat in HEDGE_PATTERNS {
         // Exact-match hedge → escalate.
         if normalized == *pat {
             return true;
         }
-        // Starts-with hedge AND the whole response is ≤ 3 words — means
-        // the model said "no sé." and nothing useful.
-        if word_count <= 3 && normalized.starts_with(pat) {
+        // Starts-with hedge → escalate regardless of length. If the response
+        // OPENS with a hedge ("No sé, pero te ayudo con..."), the hedge
+        // poisons the whole answer — user sees "no sé" first and loses
+        // confidence. Escalate to a tier that commits.
+        if normalized.starts_with(pat) {
             return true;
         }
     }
