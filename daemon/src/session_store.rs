@@ -249,6 +249,16 @@ impl SessionStore {
         let mut dir = tokio::fs::read_dir(&self.base_dir).await?;
 
         while let Some(entry) = dir.next_entry().await? {
+            // Skip hidden directories (e.g. `.legacy_archive`) — they are
+            // sibling bookkeeping, not live sessions.
+            if entry
+                .file_name()
+                .to_str()
+                .map(|n| n.starts_with('.'))
+                .unwrap_or(false)
+            {
+                continue;
+            }
             if entry.file_type().await?.is_dir() {
                 let meta_path = entry.path().join("metadata.json");
                 if let Ok(content) = tokio::fs::read_to_string(&meta_path).await {
