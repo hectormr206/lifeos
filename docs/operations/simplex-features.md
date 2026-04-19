@@ -215,6 +215,53 @@ Obtené una clave gratis en
 clave, Axi responde con un mensaje rioplatense explicando cómo setearla
 en lugar de fallar silenciosamente.
 
+### Reminders fan-out
+
+> **Default: OFF.** Reminder events do not reach SimpleX contacts unless you opt in.
+
+Cuando se dispara un recordatorio (`lifeos reminder ...`), el daemon no tiene
+forma de saber a qué contacto de SimpleX pertenecía el contexto original — la
+CLI de SimpleX no expone un mapeo `chat_id → contacto`. Históricamente el
+bridge hacía *fan-out* al último contacto conocido (`last_known_contact()`),
+pero eso puede filtrar un recordatorio a quien justo te escribió último, que
+no necesariamente es la persona con la que estabas hablando cuando lo creaste.
+
+Por privacidad, ahora el fan-out está **desactivado por defecto**. Si lo
+querés activar explícitamente (asumiendo el tradeoff), tenés dos opciones:
+
+**Opción 1 — Variable de entorno** (útil para probar):
+
+```bash
+export LIFEOS_SIMPLEX_FANOUT_REMINDERS=1
+```
+
+Valores aceptados: `1`, `true`, `yes`, `on` (case-insensitive). Cualquier
+otro valor, o la ausencia de la variable, deja el fan-out apagado.
+
+**Opción 2 — Config persistente** (recomendada):
+
+En `/var/lib/lifeos/config-checkpoints/working/config.toml`:
+
+```toml
+[messaging.simplex]
+fanout_reminders_to_last_contact = true
+```
+
+El daemon relee el archivo cada ~60 segundos (cache TTL corta para que los
+cambios desde el dashboard surjan rápido), así que no hace falta reiniciar
+`lifeosd` después de togglear el flag.
+
+**¿Por qué cambió el default?** Originalmente el fan-out estaba implícito
+("ON"), lo que podía resultar en que un recordatorio sobre X le llegara al
+contacto Y solo porque Y fue el último que te escribió. Esto no es un leak
+de datos, pero sí es ruido y contexto cruzado indeseado. Moverlo a opt-in
+respeta el principio de mínima sorpresa.
+
+Cuando el flag está apagado y se dispara un recordatorio que solo tiene
+canal SimpleX, el daemon lo registra con `warn!` (`messaging.simplex.fanout_reminders_to_last_contact=false (default). Activalo explícito si querés fan-out.`)
+y no envía nada. No se pierde el recordatorio — queda en el storage local
+de reminders, solo no se reenvía por SimpleX.
+
 ### Incoming calls
 
 SimpleX voice/video calls are not supported in headless CLI mode. If you
