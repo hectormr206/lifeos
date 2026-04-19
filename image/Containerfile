@@ -405,15 +405,17 @@ RUN for modules_dir in /usr/lib/modules/*; do \
         echo "=== Building akmod-nvidia for kernel ${kernel_ver} ==="; \
         akmods --force --kernels "${kernel_ver}"; \
     done && \
-    NVIDIA_FOUND=0; \
-    for d in /usr/lib/modules/*/extra/nvidia/nvidia.ko; do \
-        [ -f "$d" ] && NVIDIA_FOUND=1 && break; \
-    done; \
-    if [ "$NVIDIA_FOUND" -eq 0 ]; then \
-        echo "ERROR: akmods completed but no nvidia.ko produced"; \
+    echo "=== Locating built nvidia.ko files ===" && \
+    NVIDIA_KO_LIST="$(find /usr/lib/modules -name 'nvidia.ko' -o -name 'nvidia.ko.xz' -o -name 'nvidia.ko.zst' 2>/dev/null)" && \
+    if [ -z "${NVIDIA_KO_LIST}" ]; then \
+        echo "ERROR: akmods completed but no nvidia.ko produced anywhere under /usr/lib/modules/"; \
+        echo "=== DEBUG: akmods results ==="; \
+        ls -la /var/cache/akmods/ 2>/dev/null || true; \
+        find /usr -name 'nvidia*.ko*' 2>/dev/null | head -20 || true; \
         exit 1; \
     fi; \
-    echo "INFO: NVIDIA kernel modules built successfully"
+    echo "INFO: Found NVIDIA kernel modules at:"; \
+    echo "${NVIDIA_KO_LIST}"
 
 # Regenerate module dependency maps for every kernel present.
 RUN for modules_dir in /usr/lib/modules/*; do \
