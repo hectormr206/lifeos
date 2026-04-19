@@ -44,6 +44,36 @@ make test       # Run repository test suite
 make lint       # Clippy + fmt
 ```
 
+### AI Tools
+
+Axi ships with an agentic tool set that works across all channels (dashboard,
+SimpleX, Telegram). A few highlights you'll likely want on from day one:
+
+- **`web_search`** — live web results via Brave Search (free tier,
+  ~2,000 queries/month). Requires an API key; grab one at
+  <https://api.search.brave.com/app/subscriptions/subscribe> and set it
+  with either:
+
+  ```bash
+  export BRAVE_SEARCH_API_KEY=<tu_token>
+  ```
+
+  or in `/var/lib/lifeos/config-checkpoints/working/config.toml`:
+
+  ```toml
+  [web_search]
+  brave_api_key = "<tu_token>"
+  ```
+
+  The daemon reloads the key with a short TTL (≈60 s), so dashboard
+  updates surface without a restart.
+
+- **`screenshot`**, **`run_command`**, **`browser_navigate`**, **`cron`**,
+  and ~15 more — see `daemon/src/axi_tools.rs` for the full list.
+
+See the full feature matrix above and the operations docs under
+[`docs/operations/`](docs/operations/) for per-channel behavior.
+
 ## Repository Layout
 
 ```
