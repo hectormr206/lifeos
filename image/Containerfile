@@ -377,7 +377,7 @@ RUN --mount=type=bind,from=nvidia-rpms,source=/,target=/mnt/nvidia-rpms,ro \
         | tr '\n' ' ') && \
     echo "Installing NVIDIA RPMs: $(echo $RPMS_TO_INSTALL | tr ' ' '\n' | wc -l) files" && \
     dnf -y install $RPMS_TO_INSTALL && \
-    dnf -y install kernel-devel && \
+    dnf -y install kernel-devel akmods gcc && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
         dnf -y install supergfxctl; \
     else \
@@ -389,6 +389,31 @@ RUN --mount=type=bind,from=nvidia-rpms,source=/,target=/mnt/nvidia-rpms,ro \
         echo "INFO: broadcom-wl/akmod-wl not available; continuing without Broadcom proprietary module"; \
     fi && \
     dnf clean all
+
+# Compile NVIDIA kernel modules for EVERY kernel installed in the final image.
+# akmod-nvidia ships the SOURCE; per-kernel .ko files must be produced here so
+# the signing step has something to sign and the installed kmods match the
+# booted kernel. If this fails for any kernel, fail the build loudly — no more
+# silent WARNINGS like the 0.8.0 regression.
+RUN for modules_dir in /usr/lib/modules/*; do \
+        [ -d "${modules_dir}" ] || continue; \
+        kernel_ver="$(basename "${modules_dir}")"; \
+        if [ ! -d "/usr/src/kernels/${kernel_ver}" ]; then \
+            echo "ERROR: kernel-devel missing for ${kernel_ver}"; \
+            exit 1; \
+        fi; \
+        echo "=== Building akmod-nvidia for kernel ${kernel_ver} ==="; \
+        akmods --force --kernels "${kernel_ver}"; \
+    done && \
+    NVIDIA_FOUND=0; \
+    for d in /usr/lib/modules/*/extra/nvidia/nvidia.ko; do \
+        [ -f "$d" ] && NVIDIA_FOUND=1 && break; \
+    done; \
+    if [ "$NVIDIA_FOUND" -eq 0 ]; then \
+        echo "ERROR: akmods completed but no nvidia.ko produced"; \
+        exit 1; \
+    fi; \
+    echo "INFO: NVIDIA kernel modules built successfully"
 
 # Regenerate module dependency maps for every kernel present.
 RUN for modules_dir in /usr/lib/modules/*; do \
