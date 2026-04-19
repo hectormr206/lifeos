@@ -2591,7 +2591,7 @@ dependencies = [
 
 [[package]]
 name = "life"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "lifeos-integration-tests"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "life",
  "serde_json",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "lifeosd"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "aes-gcm-siv",
  "anyhow",

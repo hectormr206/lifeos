@@ -36,7 +36,7 @@ ARG LIFEOS_PRELOAD_MODEL=false
 #                        nvidia-persistenced enabled. Backwards
 #                        compatible with the pre-split build.
 #   "amd"             — lean image for AMD / Intel / ARM hosts.
-#                       Skips the nvidia-kmod-builder stage inputs,
+#                       Skips the nvidia-rpms stage inputs,
 #                       skips nvidia-persistenced enablement, and
 #                       does not install the NVIDIA userspace packages.
 #                       (Full skip wiring is tracked as follow-up; this
@@ -287,46 +287,18 @@ RUN set -eux && \
     dnf clean all
 
 # ============================================================================
-# Stage 6a: Pre-build NVIDIA kernel modules (isolated — pattern from UBlue)
+# Stage 6a: NVIDIA driver RPMs from lifeos-nvidia-drivers upstream
 # ============================================================================
-# This stage compiles NVIDIA akmods against the exact kernel in fedora-bootc.
-# Pre-built RPMs are COPYed into the final stage, keeping the main build fast
-# and cacheable when only non-kernel layers change.
-FROM quay.io/fedora/fedora-bootc:${FEDORA_MAJOR} AS nvidia-kmod-builder
-
-RUN dnf -y install dnf5-plugins && \
-    dnf -y install distribution-gpg-keys && \
-    rpm --import \
-      /usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-free-fedora-2020 \
-      /usr/share/distribution-gpg-keys/rpmfusion/RPM-GPG-KEY-rpmfusion-nonfree-fedora-2020 && \
-    dnf -y --setopt=localpkg_gpgcheck=1 install \
-      "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
-      "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" && \
-    dnf -y install \
-        kernel-devel akmod-nvidia xorg-x11-drv-nvidia-cuda \
-        xorg-x11-drv-nvidia-power nvidia-settings nvidia-modprobe \
-        akmods gcc && \
-    if dnf -q repoquery --available --qf '%{name}' akmod-wl 2>/dev/null | grep -Fxq akmod-wl; then \
-        dnf -y install broadcom-wl akmod-wl; \
-    fi && \
-    for modules_dir in /usr/lib/modules/*; do \
-        [ -d "${modules_dir}" ] || continue; \
-        kernel_ver="$(basename "${modules_dir}")"; \
-        if [ ! -d "/usr/src/kernels/${kernel_ver}" ]; then \
-            echo "WARNING: kernel-devel missing for ${kernel_ver}; skipping"; \
-            continue; \
-        fi; \
-        akmods --force --kernels "${kernel_ver}" || \
-            echo "WARNING: akmods failed for ${kernel_ver}"; \
-    done && \
-    NVIDIA_FOUND=0; \
-    for d in /usr/lib/modules/*/extra/nvidia/nvidia.ko; do \
-        [ -f "$d" ] && NVIDIA_FOUND=1 && break; \
-    done; \
-    if [ "$NVIDIA_FOUND" -eq 0 ]; then \
-        echo "WARNING: No nvidia.ko modules found after akmods build (expected in CI without GPU headers)"; \
-    fi && \
-    dnf clean all
+# Pre-built NVIDIA proprietary driver RPMs (Production Branch — currently
+# 595.58.03, Blackwell-ready), packaged by hectormr206/lifeos-nvidia-drivers
+# via GitHub Actions mock builds. Replaces the previous RPMFusion akmod-nvidia
+# compile stage which lagged 1-2 NVIDIA branches behind upstream.
+#
+# Includes: nvidia-driver, nvidia-kmod (pre-compiled .ko for Fedora's shipping
+# kernel), nvidia-kmod-common, nvidia-modprobe, nvidia-settings,
+# nvidia-persistenced, nvidia-driver-selinux, nvidia-container-toolkit,
+# libnvidia-container.
+FROM ghcr.io/hectormr206/lifeos-nvidia-drivers:latest-f43-x86_64 AS nvidia-rpms
 
 # ============================================================================
 # Stage 6: Sistema Final
@@ -388,13 +360,18 @@ RUN dnf -y install --skip-unavailable \
     fwupd \
     && dnf clean all
 
-# --- Soporte Nvidia Optimus (pre-built kmods from Stage 6a) ---
-# Install NVIDIA userspace packages, then COPY the pre-compiled kernel
-# modules from the nvidia-kmod-builder stage. This avoids compiling
-# akmods in the final image and makes the build cacheable.
-RUN dnf -y install --skip-unavailable \
-        xorg-x11-drv-nvidia-cuda xorg-x11-drv-nvidia-power \
-        nvidia-settings nvidia-modprobe && \
+# --- NVIDIA driver (userspace + pre-built kmods) from nvidia-rpms ---
+# All NVIDIA packages come from the lifeos-nvidia-drivers upstream image —
+# a Bazzite-pattern fork pinned to the NVIDIA Production Branch. The kernel
+# modules are pre-compiled against Fedora's shipping kernel inside the
+# nvidia-rpms build pipeline.
+#
+# supergfxctl (Optimus hybrid-switch helper) still comes from RPMFusion.
+# akmod-wl / broadcom-wl (Broadcom proprietary WiFi) still comes from RPMFusion.
+# kernel-devel is installed temporarily for module signing below, then removed.
+RUN --mount=type=bind,from=nvidia-rpms,source=/,target=/mnt/nvidia-rpms,ro \
+    dnf -y install /mnt/nvidia-rpms/*.rpm && \
+    dnf -y install kernel-devel && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
         dnf -y install supergfxctl; \
     else \
@@ -406,10 +383,6 @@ RUN dnf -y install --skip-unavailable \
         echo "INFO: broadcom-wl/akmod-wl not available; continuing without Broadcom proprietary module"; \
     fi && \
     dnf clean all
-
-# Copy pre-built NVIDIA kernel modules and kernel-devel headers (for Secure Boot signing) from the builder stage.
-COPY --from=nvidia-kmod-builder /usr/lib/modules/ /usr/lib/modules/
-COPY --from=nvidia-kmod-builder /usr/src/kernels/ /usr/src/kernels/
 
 # Regenerate module dependency maps for every kernel present.
 RUN for modules_dir in /usr/lib/modules/*; do \
