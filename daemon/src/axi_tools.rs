@@ -2475,11 +2475,9 @@ REGLAS FIRMES:
         // entre los distintos queries, y envolvemos la búsqueda en un timeout
         // para no bloquear la latencia del turno si la memoria se traba.
         const MEMORY_RECALL_MIN_SCORE: f64 = 0.5;
-        const MEMORY_RECALL_TIMEOUT_MS: u64 = 500;
+        const MEMORY_RECALL_BUDGET_MS: u64 = 800;
 
         if let Some(memory) = &ctx.memory {
-            let mem = memory.read().await;
-
             // Identity questions pull everything we've ever learned about the
             // user — not just what matches their current sentence.
             let identity_queries: &[&str] = &[
@@ -2504,46 +2502,114 @@ REGLAS FIRMES:
             let broader_limit: usize = 5;
 
             // (query, limit) tuples. El primero es la base siempre-on.
-            let mut recall_queries: Vec<(&str, usize)> =
-                vec![(user_text, base_limit)];
+            let mut recall_queries: Vec<(String, usize)> =
+                vec![(user_text.to_string(), base_limit)];
             if broader_recall {
-                recall_queries.push(("session_summary", broader_limit));
+                recall_queries.push(("session_summary".to_string(), broader_limit));
                 if is_identity_question {
                     for q in identity_queries {
-                        recall_queries.push((*q, broader_limit));
+                        recall_queries.push(((*q).to_string(), broader_limit));
                     }
                 }
             }
+
+            // Grab the memory handle, snapshot the Arc, and DROP the read
+            // guard immediately so long-running writers aren't starved
+            // across the concurrent query fan-out.
+            let mem_handle: Arc<RwLock<MemoryPlaneManager>> = Arc::clone(memory);
+
+            // Short-circuit + parallel fan-out. If the FIRST query (which
+            // is always the user's message) errors or times out within the
+            // per-query slice of the budget, we treat the embedding service
+            // as down and skip the remaining queries — no point burning the
+            // turn budget on calls that won't succeed.
+            let total_budget =
+                std::time::Duration::from_millis(MEMORY_RECALL_BUDGET_MS);
+
+            // Probe with the base query first (bounded by total budget).
+            let base_query = recall_queries[0].clone();
+            let probe_result = {
+                let mem_guard = mem_handle.read().await;
+                tokio::time::timeout(
+                    total_budget,
+                    mem_guard.search_entries(&base_query.0, base_query.1, None),
+                )
+                .await
+            };
+
+            let base_results = match probe_result {
+                Ok(Ok(r)) => Some(r),
+                Ok(Err(e)) => {
+                    warn!(
+                        "[memory] recall base falló ('{}'): {} — corto circuito, no pido más",
+                        base_query.0, e
+                    );
+                    None
+                }
+                Err(_) => {
+                    warn!(
+                        "[memory] recall base superó {}ms — embedding service tardo, corto circuito",
+                        MEMORY_RECALL_BUDGET_MS
+                    );
+                    None
+                }
+            };
+
+            // If the base probe worked, fire the rest concurrently under a
+            // single outer budget (reusing what remains is fine — we use
+            // the full budget again; embedding calls are the bottleneck and
+            // they're already warm now).
+            let extra_results: Vec<Vec<crate::memory_plane::MemorySearchResult>> =
+                if base_results.is_some() && recall_queries.len() > 1 {
+                    let rest: Vec<(String, usize)> = recall_queries[1..].to_vec();
+                    let mem_handle_inner = Arc::clone(&mem_handle);
+                    let fan_out = async move {
+                        let mem_guard = mem_handle_inner.read().await;
+                        let futs = rest.iter().map(|(q, lim)| {
+                            let q = q.clone();
+                            let lim = *lim;
+                            let mg = &mem_guard;
+                            async move {
+                                (q.clone(), mg.search_entries(&q, lim, None).await)
+                            }
+                        });
+                        futures_util::future::join_all(futs).await
+                    };
+                    match tokio::time::timeout(total_budget, fan_out).await {
+                        Ok(rows) => rows
+                            .into_iter()
+                            .filter_map(|(q, res)| match res {
+                                Ok(r) => Some(r),
+                                Err(e) => {
+                                    warn!(
+                                        "[memory] recall falló para query '{}': {}",
+                                        q, e
+                                    );
+                                    None
+                                }
+                            })
+                            .collect(),
+                        Err(_) => {
+                            warn!(
+                                "[memory] fan-out de recall superó {}ms, uso solo resultados base",
+                                MEMORY_RECALL_BUDGET_MS
+                            );
+                            Vec::new()
+                        }
+                    }
+                } else {
+                    Vec::new()
+                };
 
             let mut seen_ids: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
             let mut context_block = String::new();
 
-            for (query, limit) in &recall_queries {
-                let fut = mem.search_entries(query, *limit, None);
-                let timed = tokio::time::timeout(
-                    std::time::Duration::from_millis(MEMORY_RECALL_TIMEOUT_MS),
-                    fut,
-                )
-                .await;
-                let results = match timed {
-                    Ok(Ok(r)) => r,
-                    Ok(Err(e)) => {
-                        warn!(
-                            "[memory] recall falló para query '{}': {}",
-                            query, e
-                        );
-                        continue;
-                    }
-                    Err(_) => {
-                        warn!(
-                            "[memory] recall superó {}ms para query '{}', se omite (no bloqueante)",
-                            MEMORY_RECALL_TIMEOUT_MS, query
-                        );
-                        continue;
-                    }
-                };
+            let all_batches = base_results
+                .into_iter()
+                .chain(extra_results.into_iter());
 
+            for results in all_batches {
                 for r in &results {
                     if r.score < MEMORY_RECALL_MIN_SCORE {
                         continue;
