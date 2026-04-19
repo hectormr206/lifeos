@@ -793,6 +793,9 @@ REGLAS FIRMES:
 17. **browser_navigate** — Navega a una URL con el navegador y captura screenshot para analisis visual.
     args: {"url": "https://example.com", "analyze": "describe lo que ves en la pagina"}
 
+17b. **web_search** — Busca en internet via Brave Search API (BYOK). Devuelve una lista compacta `titulo | url | snippet`. Requiere BRAVE_SEARCH_API_KEY configurada. Usala para preguntas factuales / noticias / referencias rapidas cuando no necesitas abrir el navegador.
+    args: {"query": "precio dolar hoy", "num_results": 5}
+
 18. **cron_add** — Programa una tarea recurrente con expresion cron.
     args: {"name": "briefing matutino", "cron": "0 7 * * *", "action": "Revisa emails y calendario, dame un resumen"}
 
@@ -2201,6 +2204,7 @@ REGLAS FIRMES:
             "notify" => execute_notify(&call.args).await,
             "task_status" => execute_task_status(ctx).await,
             "browser_navigate" => execute_browser_navigate(&call.args, ctx).await,
+            "web_search" => execute_web_search(&call.args).await,
             "cron_add" => execute_cron_add(&call.args, ctx).await,
             "cron_list" => execute_cron_list(ctx).await,
             "cron_remove" => execute_cron_remove(&call.args, ctx).await,

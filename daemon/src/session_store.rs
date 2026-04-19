@@ -77,6 +77,15 @@ impl SessionKey {
         Self::new("discord", "channel", channel_id)
     }
 
+    /// Create a session key for SimpleX.
+    ///
+    /// `contact_id` is the stable SimpleX contact identifier — typically the
+    /// `localDisplayName` from the CLI, which persists across daemon restarts.
+    /// One session per contact guarantees durable, isolated replay history.
+    pub fn simplex(contact_id: &str) -> Self {
+        Self::new("simplex", "dm", contact_id)
+    }
+
     /// Create a session key for CLI
     pub fn cli() -> Self {
         Self::new("cli", "local", "default")
@@ -342,6 +351,71 @@ impl SessionStore {
         }
 
         Ok(())
+    }
+
+    /// Migrate a legacy SimpleX session that was stored under a synthetic
+    /// telegram-dm key (magic chat_id) to a per-contact SimpleX session.
+    ///
+    /// Called once at startup from the SimpleX bridge when `last_known_contact`
+    /// is available. If the legacy on-disk directory exists and the new
+    /// per-contact directory does NOT exist, the directory is renamed and
+    /// the metadata is rewritten in place.
+    ///
+    /// Returns `Ok(true)` if a migration happened, `Ok(false)` otherwise.
+    pub async fn migrate_simplex_legacy_session(
+        &self,
+        legacy_chat_id: i64,
+        contact_id: &str,
+    ) -> Result<bool> {
+        let legacy = Self::new_for_migration("telegram", "dm", &legacy_chat_id.to_string());
+        let new_key = SessionKey::simplex(contact_id);
+        let legacy_dir = self.base_dir.join(legacy.dir_name());
+        let new_dir = self.base_dir.join(new_key.dir_name());
+
+        if !legacy_dir.exists() || new_dir.exists() {
+            return Ok(false);
+        }
+
+        tokio::fs::rename(&legacy_dir, &new_dir)
+            .await
+            .with_context(|| {
+                format!(
+                    "renaming legacy simplex session {} -> {}",
+                    legacy_dir.display(),
+                    new_dir.display()
+                )
+            })?;
+
+        // Rewrite metadata.json with the new session_key string.
+        let meta_path = new_dir.join("metadata.json");
+        if let Ok(raw) = tokio::fs::read_to_string(&meta_path).await {
+            if let Ok(mut meta) = serde_json::from_str::<SessionMetadata>(&raw) {
+                meta.session_key = new_key.as_canonical();
+                meta.last_channel = new_key.channel.clone();
+                meta.last_peer_id = new_key.peer_id.clone();
+                if let Ok(content) = serde_json::to_string_pretty(&meta) {
+                    let _ = tokio::fs::write(&meta_path, content).await;
+                    Self::set_file_permissions_0o600(&meta_path);
+                }
+                // Update in-memory index: drop legacy, insert new.
+                let mut sessions = self.sessions.write().await;
+                sessions.remove(&legacy.as_canonical());
+                sessions.insert(meta.session_key.clone(), meta);
+            }
+        }
+
+        info!(
+            "[session_store] Migrated legacy SimpleX session (chat_id={}) to per-contact key {}",
+            legacy_chat_id, new_key
+        );
+        Ok(true)
+    }
+
+    /// Internal constructor used for building migration references without
+    /// exposing raw `SessionKey::new` semantics for channels that already
+    /// have typed helpers.
+    fn new_for_migration(channel: &str, scope: &str, peer_id: &str) -> SessionKey {
+        SessionKey::new(channel, scope, peer_id)
     }
 
     /// Prune sessions older than TTL from the in-memory index.
