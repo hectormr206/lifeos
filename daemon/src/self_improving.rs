@@ -73,10 +73,7 @@ fn validate_actions(actions: &[RecordedAction]) -> Result<()> {
             );
         }
         if a.context.len() > MAX_CONTEXT_LEN {
-            anyhow::bail!(
-                "action[{i}] context exceeds {} bytes",
-                MAX_CONTEXT_LEN
-            );
+            anyhow::bail!("action[{i}] context exceeds {} bytes", MAX_CONTEXT_LEN);
         }
     }
     Ok(())
@@ -111,9 +108,8 @@ fn load_or_create_hmac_key() -> Result<Vec<u8>> {
     }
 
     let secrets_dir = Path::new(SECRETS_DIR);
-    fs::create_dir_all(secrets_dir).with_context(|| {
-        format!("creating secrets dir {}", secrets_dir.display())
-    })?;
+    fs::create_dir_all(secrets_dir)
+        .with_context(|| format!("creating secrets dir {}", secrets_dir.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -122,9 +118,8 @@ fn load_or_create_hmac_key() -> Result<Vec<u8>> {
 
     let mut key = vec![0u8; 32];
     rand::thread_rng().fill_bytes(&mut key);
-    fs::write(key_path, &key).with_context(|| {
-        format!("writing HMAC key {}", key_path.display())
-    })?;
+    fs::write(key_path, &key)
+        .with_context(|| format!("writing HMAC key {}", key_path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -485,9 +480,7 @@ impl WorkflowLearner {
         let actions: Vec<RecordedAction> = match serde_json::from_str(&content) {
             Ok(a) => a,
             Err(e) => {
-                warn!(
-                    "self_improving: workflow_actions.json failed to parse ({e}); ignoring file"
-                );
+                warn!("self_improving: workflow_actions.json failed to parse ({e}); ignoring file");
                 return Vec::new();
             }
         };
@@ -525,9 +518,7 @@ impl WorkflowLearner {
         // Validate at the recording boundary so an upstream caller passing a
         // shell-metachar action name fails fast instead of being persisted.
         if !is_valid_action_name(action) {
-            anyhow::bail!(
-                "action name {action:?} fails allowlist {ACTION_NAME_ALLOWED}"
-            );
+            anyhow::bail!("action name {action:?} fails allowlist {ACTION_NAME_ALLOWED}");
         }
         if context.len() > MAX_CONTEXT_LEN {
             anyhow::bail!("context exceeds {MAX_CONTEXT_LEN} bytes");
@@ -1126,10 +1117,22 @@ mod tests {
     }
 
     // ---------- New hardening tests (PR 2/3 of P1) ----------
+    //
+    // Tests below mutate process-global env vars. Cargo runs them in
+    // parallel by default, so we serialise the env-var-touching ones
+    // with a mutex to avoid one test leaking state into another.
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn action_name_allowlist_accepts_typical() {
-        for name in ["a", "open-editor", "save_file", "run-tests-2", "x".repeat(64).as_str()] {
+        for name in [
+            "a",
+            "open-editor",
+            "save_file",
+            "run-tests-2",
+            "x".repeat(64).as_str(),
+        ] {
             assert!(is_valid_action_name(name), "should accept: {name:?}");
         }
     }
@@ -1165,6 +1168,7 @@ mod tests {
 
     #[test]
     fn check_auto_trigger_off_by_default() {
+        let _g = ENV_LOCK.lock().unwrap();
         let tmp = TmpDir::new("trigger-off");
         std::env::remove_var("LIFEOS_AUTO_TRIGGER_ENABLE");
         let wl = WorkflowLearner::with_files(
@@ -1185,6 +1189,7 @@ mod tests {
 
     #[test]
     fn check_auto_trigger_on_when_enabled() {
+        let _g = ENV_LOCK.lock().unwrap();
         let tmp = TmpDir::new("trigger-on");
         std::env::set_var("LIFEOS_AUTO_TRIGGER_ENABLE", "1");
         let wl = WorkflowLearner::with_files(
@@ -1253,11 +1258,8 @@ mod tests {
         let actions_path = tmp.path().join("wa.json");
         let hmac_path = tmp.path().join("wa.json.hmac");
 
-        let wl = WorkflowLearner::with_files(
-            actions_path.clone(),
-            hmac_path.clone(),
-            Some(key.clone()),
-        );
+        let wl =
+            WorkflowLearner::with_files(actions_path.clone(), hmac_path.clone(), Some(key.clone()));
 
         // Legitimate write produces valid signature.
         wl.record_action("good-action", "ctx").unwrap();
@@ -1304,7 +1306,10 @@ mod tests {
 
         // The symlink target must still exist — symlink_metadata + is_file()
         // skips symlinks (they report as not-a-file under symlink_metadata).
-        assert!(outside.exists(), "outside target must not be deleted via symlink");
+        assert!(
+            outside.exists(),
+            "outside target must not be deleted via symlink"
+        );
         // We don't assert removed == 0 because some platforms could vary;
         // the critical invariant is the target survived.
         let _ = removed;
