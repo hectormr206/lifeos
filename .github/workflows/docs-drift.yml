@@ -3,6 +3,11 @@ name: Docs Drift Check
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
   check-docs-drift:
@@ -13,37 +18,50 @@ jobs:
           fetch-depth: 0
 
       - name: Check for documentation drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          BASE="${{ github.event.pull_request.base.sha }}"
-          HEAD="${{ github.event.pull_request.head.sha }}"
+          set -euo pipefail
 
           CODE_PATTERNS="^daemon/src/|^cli/src/|^image/Containerfile|^image/files/etc/systemd/|^image/files/usr/local/bin/"
           DOC_PATTERNS="^docs/|^README.md"
 
-          changed_files=$(git diff --name-only "$BASE" "$HEAD")
+          changed_files=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
 
           code_changed=$(echo "$changed_files" | grep -cE "$CODE_PATTERNS" || true)
           docs_changed=$(echo "$changed_files" | grep -cE "$DOC_PATTERNS" || true)
 
           if [ "$code_changed" -gt 0 ] && [ "$docs_changed" -eq 0 ]; then
             echo "::warning::Code changed ($code_changed files) without documentation updates."
-            echo ""
-            echo "## ⚠️ Documentation Drift Detected" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "This PR changes **$code_changed code files** but no documentation." >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "### Code files changed:" >> "$GITHUB_STEP_SUMMARY"
-            echo "$changed_files" | grep -E "$CODE_PATTERNS" | head -20 | while read -r f; do
-              echo "- \`$f\`" >> "$GITHUB_STEP_SUMMARY"
-            done
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Consider updating:** \`docs/user/\`, \`docs/operations/\`, \`README.md\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "If docs are intentionally unchanged, add \`docs-ok\` label to this PR." >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "## ⚠️ Documentation Drift Detected"
+              echo ""
+              echo "This PR changes **$code_changed code files** but no documentation."
+              echo ""
+              echo "### Code files changed:"
+              echo "$changed_files" | grep -E "$CODE_PATTERNS" | head -20 | while read -r f; do
+                echo "- \`$f\`"
+              done
+              echo ""
+              echo "**Consider updating:** \`docs/user/\`, \`docs/operations/\`, \`README.md\`"
+              echo ""
+              echo "If docs are intentionally unchanged, add \`docs-ok\` label to this PR."
+            } >> "$GITHUB_STEP_SUMMARY"
 
-            # Check for docs-ok label to allow bypass
-            if [ "${{ contains(github.event.pull_request.labels.*.name, 'docs-ok') }}" = "true" ]; then
+            # Query labels live from the API (event payload may be stale or
+            # missing when the workflow renders, which previously caused the
+            # contains() expression to bake "false" into the script).
+            labels_json=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq '[.[].name]')
+            echo "Current PR labels: ${labels_json}"
+
+            if echo "${labels_json}" | grep -q '"docs-ok"'; then
               echo "docs-ok label found — skipping enforcement"
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "_Bypass: \`docs-ok\` label is present._" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
 
