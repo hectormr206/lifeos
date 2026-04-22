@@ -374,7 +374,14 @@ RUN dnf -y install --skip-unavailable \
 # fails against scratch stages in rootless buildah ("openat2 mnt: No such file
 # or directory"), so we COPY the RPMs into a temp dir, install, then remove.
 COPY --from=nvidia-rpms / /tmp/nvidia-rpms/
-RUN dnf -y install /tmp/nvidia-rpms/*.rpm && \
+# Skip nvidia-container-toolkit + libnvidia-container — they target Bazzite/uBlue
+# bases (require `libseccomp2` compat shim that fedora-bootc doesn't ship) and
+# enable GPU-in-container workloads that LifeOS does not use (llama-server runs
+# natively, not under podman/docker --gpus). Install everything else.
+RUN find /tmp/nvidia-rpms -maxdepth 1 -name '*.rpm' \
+        ! -name 'nvidia-container-toolkit*' \
+        ! -name 'libnvidia-container*' \
+        -print0 | xargs -0 dnf -y install && \
     rm -rf /tmp/nvidia-rpms && \
     dnf -y install kernel-devel && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
