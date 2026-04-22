@@ -38,6 +38,18 @@ pub struct SkillManifest {
     pub last_used: Option<String>,
     pub use_count: u32,
     pub success_rate: f64,
+    /// True for auto-generated skills until a human approves them. Existing
+    /// manifests on disk that pre-date this field default to `false` (treated
+    /// as approved) so prior installs do not regress to "needs review".
+    /// Auto-generated manifests written via `generate_from_task` ALWAYS set
+    /// this to true regardless of what the task tuple contains.
+    #[serde(default)]
+    pub requires_review: bool,
+    /// RFC3339 timestamp when a human approved an auto-generated skill.
+    /// Approval is granted by either setting this field via the dashboard or
+    /// touching a sibling `approved` file in the skill directory.
+    #[serde(default)]
+    pub approved_at: Option<String>,
 }
 
 /// Check if auto-execution of generated skills is opt-in enabled.
@@ -49,6 +61,115 @@ fn skills_autoexec_enabled() -> bool {
     std::env::var("LIFEOS_SKILLS_AUTOEXEC_ENABLE")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(false)
+}
+
+/// Hard cap for any skill source file (`SKILL.md`, `manifest.json`, `run.sh`)
+/// read into memory. 4 MiB is plenty for legitimate skill content and stops
+/// a hostile or accidentally-huge file from triggering an OOM in the daemon.
+const MAX_SKILL_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Read a file, refusing if it exceeds [`MAX_SKILL_FILE_BYTES`]. Returns the
+/// content or an io::Error so callers can keep their existing `?` chains.
+async fn read_skill_file_capped(path: &std::path::Path) -> std::io::Result<String> {
+    let meta = fs::metadata(path).await?;
+    if meta.len() > MAX_SKILL_FILE_BYTES {
+        log::warn!(
+            "[skill_gen] refusing to read {} ({} bytes > {} cap)",
+            path.display(),
+            meta.len(),
+            MAX_SKILL_FILE_BYTES
+        );
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("skill file exceeds {MAX_SKILL_FILE_BYTES}-byte cap"),
+        ));
+    }
+    fs::read_to_string(path).await
+}
+
+/// A skill is APPROVED if either:
+///   1. its `manifest.requires_review` is false, OR
+///   2. a sibling file named `approved` exists in `skill_dir`, OR
+///   3. its `manifest.approved_at` is a non-empty string.
+///
+/// Approval does NOT bypass the autoexec gate — both must pass.
+fn skill_is_approved(skill_dir: &std::path::Path, manifest: &SkillManifest) -> bool {
+    if !manifest.requires_review {
+        return true;
+    }
+    if manifest
+        .approved_at
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty())
+    {
+        return true;
+    }
+    skill_dir.join("approved").exists()
+}
+
+/// Best-effort sandbox wrapper using `systemd-run --user --scope`. Returns
+/// the wrapper command and arguments to prepend to the actual exec, OR
+/// `None` if `systemd-run` is not available (e.g. test environments,
+/// containers without systemd-user). When `None`, the caller logs a
+/// `warn!` and runs unconfined — the operator already opted in by setting
+/// `LIFEOS_SKILLS_AUTOEXEC_ENABLE=1`, but no sandbox available is a real
+/// risk that we surface in the log.
+///
+/// Sandbox properties (intentional defaults):
+///   - PrivateNetwork=yes       no outbound network from the skill
+///   - ProtectHome=read-only    can read $HOME but not write to it
+///   - NoNewPrivileges=yes      cannot escalate via setuid binaries
+///   - ProtectSystem=strict     cannot write under /usr, /boot, /efi
+///   - PrivateTmp=yes           private /tmp namespace
+///   - MemoryMax=256M           OOM-kill before consuming the daemon's RAM
+///   - TasksMax=64              cap fork-bomb damage
+///   - RuntimeMaxSec=60         hard wall-clock kill in addition to caller's
+fn sandbox_wrapper() -> Option<Vec<String>> {
+    if !std::path::Path::new("/usr/bin/systemd-run").exists()
+        && !std::path::Path::new("/bin/systemd-run").exists()
+    {
+        return None;
+    }
+    Some(vec![
+        "systemd-run".to_string(),
+        "--user".to_string(),
+        "--scope".to_string(),
+        "--quiet".to_string(),
+        "--collect".to_string(),
+        "--property=PrivateNetwork=yes".to_string(),
+        "--property=ProtectHome=read-only".to_string(),
+        "--property=NoNewPrivileges=yes".to_string(),
+        "--property=ProtectSystem=strict".to_string(),
+        "--property=PrivateTmp=yes".to_string(),
+        "--property=MemoryMax=256M".to_string(),
+        "--property=TasksMax=64".to_string(),
+        "--property=RuntimeMaxSec=60".to_string(),
+    ])
+}
+
+/// Atomically replace a file by writing to a tempfile in the same directory
+/// and renaming. Avoids torn writes from concurrent updates of small JSON
+/// state (see `SkillGenerator::update_skill_stats`).
+async fn write_atomic(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let dir = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "atomic write: path has no parent",
+        )
+    })?;
+    let pid = std::process::id();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let tmp = dir.join(format!(
+        ".{}.tmp-{pid}-{nonce}",
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("manifest")
+    ));
+    fs::write(&tmp, contents).await?;
+    fs::rename(&tmp, path).await
 }
 
 pub struct SkillGenerator {
@@ -121,6 +242,11 @@ impl SkillGenerator {
             last_used: None,
             use_count: 0,
             success_rate: 1.0,
+            // Auto-generated content always needs human approval before
+            // execution. The user approves by either editing
+            // `manifest.json` to set `approved_at` or `touch <skill_dir>/approved`.
+            requires_review: true,
+            approved_at: None,
         };
 
         // Write manifest
@@ -209,12 +335,58 @@ impl SkillGenerator {
             );
         }
 
+        // Approval gate: auto-generated skills must be approved by a human
+        // before they execute, even with autoexec on. See `skill_is_approved`.
+        let manifest_path = skill_dir.join("manifest.json");
+        if let Ok(json) = read_skill_file_capped(&manifest_path).await {
+            if let Ok(manifest) = serde_json::from_str::<SkillManifest>(&json) {
+                if !skill_is_approved(skill_dir, &manifest) {
+                    log::warn!(
+                        "[skill_gen] execute_skill blocked — manifest requires_review and not approved: {}",
+                        skill_dir.display()
+                    );
+                    anyhow::bail!(
+                        "Skill {} requires human approval. Either set \
+                         `approved_at` in manifest.json (RFC3339 timestamp) \
+                         or `touch {}/approved` after reviewing run.sh.",
+                        manifest.name,
+                        skill_dir.display()
+                    );
+                }
+            }
+        }
+
+        // Wrap in systemd-run --user --scope sandbox when available.
+        // Falls back to unconfined exec if systemd-run is missing — the
+        // operator already opted in to autoexec, but we surface the missing
+        // sandbox loudly so it cannot be silently ignored.
+        let (cmd, args, sandboxed): (String, Vec<String>, bool) = match sandbox_wrapper() {
+            Some(mut wrapper) => {
+                let bin = wrapper.remove(0);
+                wrapper.push("bash".to_string());
+                wrapper.push(script.display().to_string());
+                (bin, wrapper, true)
+            }
+            None => {
+                log::warn!(
+                    "[skill_gen] systemd-run not available, executing UNSANDBOXED: {}",
+                    script.display()
+                );
+                (
+                    "bash".to_string(),
+                    vec![script.display().to_string()],
+                    false,
+                )
+            }
+        };
+
         log::warn!(
-            "[skill_gen] EXECUTING skill (auto-exec opt-in): {}",
+            "[skill_gen] EXECUTING skill (auto-exec opt-in, sandbox={}): {}",
+            sandboxed,
             script.display()
         );
 
-        let exec = tokio::process::Command::new("bash").arg(&script).output();
+        let exec = tokio::process::Command::new(&cmd).args(&args).output();
         let output = match tokio::time::timeout(std::time::Duration::from_secs(60), exec).await {
             Ok(Ok(o)) => o,
             Ok(Err(e)) => return Err(anyhow::Error::from(e).context("Failed to execute skill")),
@@ -249,19 +421,42 @@ impl SkillGenerator {
     }
 
     /// Update skill usage statistics after execution.
+    ///
+    /// Read-modify-write of a small JSON file. Two concurrent skill
+    /// executions racing on this could produce a torn write under the
+    /// previous direct `fs::write`; we now stage to a tempfile in the same
+    /// directory and `rename(2)` into place. rename is atomic per POSIX
+    /// when source and destination are on the same filesystem, which is
+    /// guaranteed here because the tempfile lives next to the manifest.
     async fn update_skill_stats(&self, manifest_path: &std::path::Path, success: bool) {
-        if let Ok(content) = fs::read_to_string(manifest_path).await {
-            if let Ok(mut manifest) = serde_json::from_str::<SkillManifest>(&content) {
-                manifest.use_count += 1;
-                manifest.last_used = Some(chrono::Utc::now().to_rfc3339());
-                // Running average of success rate
-                let total = manifest.use_count as f64;
-                let prev_successes = manifest.success_rate * (total - 1.0);
-                manifest.success_rate = (prev_successes + if success { 1.0 } else { 0.0 }) / total;
+        let Ok(content) = read_skill_file_capped(manifest_path).await else {
+            return;
+        };
+        let mut manifest: SkillManifest = match serde_json::from_str(&content) {
+            Ok(m) => m,
+            Err(e) => {
+                log::warn!(
+                    "[skill_gen] update_skill_stats: failed to parse {}: {}",
+                    manifest_path.display(),
+                    e
+                );
+                return;
+            }
+        };
+        manifest.use_count += 1;
+        manifest.last_used = Some(chrono::Utc::now().to_rfc3339());
+        // Running average of success rate
+        let total = manifest.use_count as f64;
+        let prev_successes = manifest.success_rate * (total - 1.0);
+        manifest.success_rate = (prev_successes + if success { 1.0 } else { 0.0 }) / total;
 
-                if let Ok(json) = serde_json::to_string_pretty(&manifest) {
-                    let _ = fs::write(manifest_path, json).await;
-                }
+        if let Ok(json) = serde_json::to_string_pretty(&manifest) {
+            if let Err(e) = write_atomic(manifest_path, &json).await {
+                log::warn!(
+                    "[skill_gen] update_skill_stats: atomic write failed for {}: {}",
+                    manifest_path.display(),
+                    e
+                );
             }
         }
     }
@@ -432,18 +627,45 @@ impl SkillRegistry {
     }
 
     async fn load_manifest_json(path: &std::path::Path) -> Option<SkillManifest> {
-        let content = fs::read_to_string(path).await.ok()?;
-        serde_json::from_str::<SkillManifest>(&content).ok()
+        let content = read_skill_file_capped(path).await.ok()?;
+        match serde_json::from_str::<SkillManifest>(&content) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                warn!(
+                    "[skill_registry] manifest.json at {} failed to parse: {e}",
+                    path.display()
+                );
+                None
+            }
+        }
     }
 
     async fn load_standalone_json(path: &std::path::Path) -> Option<SkillManifest> {
-        let content = fs::read_to_string(path).await.ok()?;
-        serde_json::from_str::<SkillManifest>(&content).ok()
+        let content = read_skill_file_capped(path).await.ok()?;
+        match serde_json::from_str::<SkillManifest>(&content) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                warn!(
+                    "[skill_registry] {} failed to parse as JSON skill: {e}",
+                    path.display()
+                );
+                None
+            }
+        }
     }
 
     async fn load_standalone_toml(path: &std::path::Path) -> Option<SkillManifest> {
-        let content = fs::read_to_string(path).await.ok()?;
-        toml::from_str::<SkillManifest>(&content).ok()
+        let content = read_skill_file_capped(path).await.ok()?;
+        match toml::from_str::<SkillManifest>(&content) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                warn!(
+                    "[skill_registry] {} failed to parse as TOML skill: {e}",
+                    path.display()
+                );
+                None
+            }
+        }
     }
 
     /// Load a SKILL.md file (axi_tools format) and convert to SkillManifest.
@@ -451,7 +673,7 @@ impl SkillRegistry {
         skill_md: &std::path::Path,
         skill_dir: &std::path::Path,
     ) -> Option<SkillManifest> {
-        let content = fs::read_to_string(skill_md).await.ok()?;
+        let content = read_skill_file_capped(skill_md).await.ok()?;
         let name = skill_dir
             .file_name()
             .and_then(|n| n.to_str())
@@ -476,6 +698,10 @@ impl SkillRegistry {
             last_used: None,
             use_count: 0,
             success_rate: 0.0,
+            // SKILL.md-style skills are user-installed plugins, not
+            // auto-generated. Default approved.
+            requires_review: false,
+            approved_at: None,
         })
     }
 
@@ -529,7 +755,22 @@ impl SkillRegistry {
                 );
             }
 
-            let content = fs::read_to_string(&skill_md).await?;
+            // Approval gate, same as run.sh path.
+            if !skill_is_approved(&skill_dir, &manifest) {
+                log::warn!(
+                    "[skill_registry] SKILL.md command blocked — manifest requires_review and not approved: {}",
+                    skill_md.display()
+                );
+                anyhow::bail!(
+                    "Skill {} requires human approval. Either set \
+                     `approved_at` in manifest.json (RFC3339 timestamp) \
+                     or `touch {}/approved` after reviewing SKILL.md.",
+                    manifest.name,
+                    skill_dir.display()
+                );
+            }
+
+            let content = read_skill_file_capped(&skill_md).await?;
             let command = content
                 .lines()
                 .find(|l| l.to_lowercase().starts_with("command:"))
@@ -537,15 +778,39 @@ impl SkillRegistry {
                 .map(|s| s.trim().to_string())
                 .ok_or_else(|| anyhow::anyhow!("SKILL.md has no command: line"))?;
 
+            // Build sandboxed exec for the sh -c invocation. The wrapper
+            // applies the same defence-in-depth properties as the run.sh
+            // path (PrivateNetwork, ProtectHome=read-only, MemoryMax, etc).
+            let (cmd, args, sandboxed): (String, Vec<String>, bool) = match sandbox_wrapper() {
+                Some(mut wrapper) => {
+                    let bin = wrapper.remove(0);
+                    wrapper.push("sh".to_string());
+                    wrapper.push("-c".to_string());
+                    wrapper.push(command.clone());
+                    (bin, wrapper, true)
+                }
+                None => {
+                    log::warn!(
+                        "[skill_registry] systemd-run not available, executing UNSANDBOXED SKILL.md cmd: {}",
+                        skill_md.display()
+                    );
+                    (
+                        "sh".to_string(),
+                        vec!["-c".to_string(), command.clone()],
+                        false,
+                    )
+                }
+            };
+
             log::warn!(
-                "[skill_registry] EXECUTING SKILL.md command from {}: {}",
+                "[skill_registry] EXECUTING SKILL.md command (sandbox={}) from {}: {}",
+                sandboxed,
                 skill_md.display(),
                 command.chars().take(200).collect::<String>()
             );
 
-            let exec = tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(&command)
+            let exec = tokio::process::Command::new(&cmd)
+                .args(&args)
                 .current_dir(&skill_dir)
                 .output();
             let output = match tokio::time::timeout(std::time::Duration::from_secs(60), exec).await
@@ -729,4 +994,192 @@ fn extract_trigger_patterns(objective: &str) -> Vec<String> {
     patterns.push(objective.to_lowercase());
 
     patterns
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmpdir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "lifeos-skill-test-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn manifest_with_review(name: &str, requires_review: bool) -> SkillManifest {
+        SkillManifest {
+            name: name.to_string(),
+            description: "test".into(),
+            version: "1.0.0".into(),
+            trigger_patterns: vec![],
+            risk_level: "low".into(),
+            created_at: "t".into(),
+            last_used: None,
+            use_count: 0,
+            success_rate: 0.0,
+            requires_review,
+            approved_at: None,
+        }
+    }
+
+    #[test]
+    fn skill_is_approved_when_requires_review_false() {
+        let dir = tmpdir("approved-default");
+        let m = manifest_with_review("x", false);
+        assert!(skill_is_approved(&dir, &m));
+    }
+
+    #[test]
+    fn skill_blocked_when_requires_review_and_no_marker() {
+        let dir = tmpdir("approved-blocked");
+        let m = manifest_with_review("x", true);
+        assert!(!skill_is_approved(&dir, &m));
+    }
+
+    #[test]
+    fn skill_approved_via_marker_file() {
+        let dir = tmpdir("approved-marker");
+        std::fs::write(dir.join("approved"), "").unwrap();
+        let m = manifest_with_review("x", true);
+        assert!(skill_is_approved(&dir, &m));
+    }
+
+    #[test]
+    fn skill_approved_via_manifest_field() {
+        let dir = tmpdir("approved-manifest");
+        let mut m = manifest_with_review("x", true);
+        m.approved_at = Some("2026-04-22T11:00:00Z".to_string());
+        assert!(skill_is_approved(&dir, &m));
+    }
+
+    #[test]
+    fn skill_not_approved_via_empty_field() {
+        let dir = tmpdir("approved-empty");
+        let mut m = manifest_with_review("x", true);
+        m.approved_at = Some("   ".to_string());
+        assert!(!skill_is_approved(&dir, &m));
+    }
+
+    #[tokio::test]
+    async fn read_capped_rejects_oversized() {
+        let dir = tmpdir("cap-reject");
+        let path = dir.join("big.md");
+        let big = vec![b'x'; (MAX_SKILL_FILE_BYTES + 1) as usize];
+        std::fs::write(&path, &big).unwrap();
+        let res = read_skill_file_capped(&path).await;
+        assert!(res.is_err(), "expected error on oversized file");
+    }
+
+    #[tokio::test]
+    async fn read_capped_accepts_normal() {
+        let dir = tmpdir("cap-ok");
+        let path = dir.join("ok.md");
+        std::fs::write(&path, b"hello world").unwrap();
+        let res = read_skill_file_capped(&path).await;
+        assert_eq!(res.unwrap(), "hello world");
+    }
+
+    #[tokio::test]
+    async fn write_atomic_replaces_file() {
+        let dir = tmpdir("atomic-replace");
+        let path = dir.join("manifest.json");
+        std::fs::write(&path, "old contents").unwrap();
+        write_atomic(&path, "new contents").await.unwrap();
+        let read_back = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(read_back, "new contents");
+        // No leftover tempfiles in the dir.
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|s| s.starts_with(".manifest.json.tmp"))
+            })
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "tempfile leftover after atomic write: {leftovers:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn generated_skill_is_marked_for_review() {
+        let dir = tmpdir("gen-review");
+        let gen = SkillGenerator::new(&dir);
+        let manifest = gen
+            .generate_from_task(
+                "open editor and save",
+                &[
+                    ("open".into(), "code .".into()),
+                    ("save".into(), "echo saved".into()),
+                ],
+                true,
+            )
+            .await
+            .unwrap()
+            .expect("generated manifest");
+        assert!(
+            manifest.requires_review,
+            "generated skills must default to requires_review=true"
+        );
+        assert!(manifest.approved_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn execute_skill_blocks_when_review_required() {
+        let dir = tmpdir("exec-blocked");
+        std::env::set_var("LIFEOS_SKILLS_AUTOEXEC_ENABLE", "1");
+        let gen = SkillGenerator::new(&dir);
+        let _m = gen
+            .generate_from_task(
+                "test task here",
+                &[("a".into(), "true".into()), ("b".into(), "true".into())],
+                true,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        // The generator slugs the task name.
+        let skill_dir = dir.join("skills").join(slugify("test task here"));
+        let result = gen.execute_skill(&skill_dir).await;
+        std::env::remove_var("LIFEOS_SKILLS_AUTOEXEC_ENABLE");
+        let err = result.expect_err("must refuse unapproved auto-generated skill");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("requires human approval") || msg.contains("requires_review"),
+            "expected approval error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn manifest_default_requires_review_is_false_for_legacy_files() {
+        // Older manifests on disk lack `requires_review`. Serde defaults
+        // must give them `false` so existing approved skills keep working.
+        let json = r#"{
+            "name": "legacy",
+            "description": "old skill",
+            "version": "1.0.0",
+            "trigger_patterns": [],
+            "risk_level": "low",
+            "created_at": "t",
+            "last_used": null,
+            "use_count": 0,
+            "success_rate": 0.0
+        }"#;
+        let m: SkillManifest = serde_json::from_str(json).unwrap();
+        assert!(!m.requires_review);
+        assert!(m.approved_at.is_none());
+    }
 }
