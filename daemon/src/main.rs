@@ -2104,6 +2104,20 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(not(feature = "messaging"))]
     let _simplex_handle: Option<tokio::task::JoinHandle<()>> = None;
 
+    // Shared async-worker pool — surfaced via the REST `/workers` endpoints
+    // so the dashboard can list and cancel in-flight LLM tasks. The pool also
+    // emits lifecycle events through the shared event bus, so any future
+    // bridge that registers workers will automatically light up the UI.
+    let shared_worker_pool = Arc::new(async_workers::WorkerPool::with_event_bus(
+        state.event_bus.clone(),
+    ));
+    {
+        let pool = (*shared_worker_pool).clone();
+        tokio::spawn(async move {
+            async_workers::cleanup_loop(pool).await;
+        });
+    }
+
     // Start API server if enabled (must be after shared variables are initialized)
     let api_handle = if config.enable_api {
         info!("Starting REST API server on {}", config.api_bind_address);
@@ -2114,6 +2128,7 @@ async fn main() -> anyhow::Result<()> {
             conversation_history: shared_history.clone(),
             #[cfg(feature = "messaging")]
             cron_store: shared_cron_store.clone(),
+            worker_pool: shared_worker_pool.clone(),
         };
         Some(tokio::spawn(start_api_server(state.clone(), bridge_state)))
     } else {
@@ -2229,6 +2244,7 @@ struct SharedBridgeState {
     conversation_history: Arc<axi_tools::ConversationHistory>,
     #[cfg(feature = "messaging")]
     cron_store: Arc<axi_tools::CronStore>,
+    worker_pool: Arc<async_workers::WorkerPool>,
 }
 
 /// Start REST API server
@@ -2279,6 +2295,7 @@ async fn start_api_server(state: Arc<DaemonState>, shared: SharedBridgeState) {
         #[cfg(feature = "messaging")]
         meeting_assistant: Some(shared.meeting_assistant.clone()),
         security_alert_buffer: state.security_alert_buffer.clone(),
+        worker_pool: shared.worker_pool.clone(),
     };
 
     // Perform initial skill registry load and start file watcher

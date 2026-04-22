@@ -6,8 +6,11 @@
 //! - Push notifications
 //! - System management
 
+mod conversations;
 mod lab;
+mod providers;
 mod vida_plena;
+mod workers;
 
 use axum::{
     body::Body,
@@ -194,6 +197,8 @@ pub struct ApiState {
     pub session_store: Arc<crate::session_store::SessionStore>,
     #[cfg(feature = "messaging")]
     pub meeting_assistant: Option<Arc<RwLock<crate::meeting_assistant::MeetingAssistant>>>,
+    /// Pool of in-flight async LLM workers (used by `/api/v1/workers`).
+    pub worker_pool: Arc<crate::async_workers::WorkerPool>,
 }
 
 #[derive(Clone, Debug)]
@@ -1595,6 +1600,17 @@ pub fn create_router(state: ApiState) -> Router {
         // Lab endpoints
         .nest("/lab", lab::lab_routes())
         .nest("/vida-plena", vida_plena::vida_plena_routes())
+        // Workers CRUD (BB.dashboard) — list and cancel async LLM workers.
+        .nest("/workers", workers::workers_routes())
+        // Conversations CRUD — unified message-history view across bridges.
+        .nest("/conversations", conversations::conversations_routes())
+        // LLM provider mutations (add / toggle / delete). The GET list lives
+        // above at /llm/providers; here we add the write side.
+        .nest("/llm/providers", providers::providers_routes())
+        // Alias: dashboard expects POST /system/mode but the canonical route
+        // is /mode/set. Keep the alias so existing UI buttons work, and so
+        // anyone wiring system-level scripts has a stable path.
+        .route("/system/mode", post(set_mode))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bootstrap_token,

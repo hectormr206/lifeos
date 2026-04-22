@@ -1649,6 +1649,7 @@ async function refreshProviders() {
             <span class="slider"></span>
           </label>
           <button class="provider-test-btn" onclick="testProvider('${escapeHtml(n)}')">Test</button>
+          <button class="provider-test-btn" onclick="deleteProvider('${escapeHtml(n)}')" title="Eliminar entrada del TOML de usuario">X</button>
         </div>
       </div>`;
     }).join('');
@@ -1663,8 +1664,25 @@ async function refreshProviders() {
 
 // --- Provider actions ---
 window.toggleProvider = async (name, enabled) => {
-  // TODO: POST /llm/providers/:name/toggle not yet implemented in backend
-  addFeedItem('&#9888;', `Toggle de proveedores no disponible aun. Usa Telegram: /provider toggle ${name}`);
+  try {
+    const result = await api('POST', `/llm/providers/${encodeURIComponent(name)}/toggle`, {});
+    addFeedItem('&#9989;', `Proveedor ${name}: ${result.state} (${result.provider_count} activos)`);
+    await refreshProviders();
+  } catch (err) {
+    addFeedItem('&#10060;', `Toggle ${name} fallo: ${err.message}`);
+    await refreshProviders();
+  }
+};
+
+window.deleteProvider = async (name) => {
+  if (!confirm(`Eliminar el proveedor "${name}"? Esta accion borra la entrada del TOML.`)) return;
+  try {
+    const result = await api('DELETE', `/llm/providers/${encodeURIComponent(name)}`);
+    addFeedItem('&#9989;', `Proveedor ${name} eliminado (${result.provider_count} restantes)`);
+    await refreshProviders();
+  } catch (err) {
+    addFeedItem('&#10060;', `Eliminar ${name} fallo: ${err.message}`);
+  }
 };
 
 window.testProvider = async (name) => {
@@ -1721,9 +1739,25 @@ window.addProvider = async () => {
     return;
   }
 
-  // TODO: POST /llm/providers not yet implemented in backend
-  if (hint) hint.textContent = `Agregar proveedores via dashboard no disponible aun. Usa Telegram: /provider add ${name}`;
-  addFeedItem('&#9888;', `Agregar proveedor via dashboard no disponible aun. Usa Telegram.`);
+  if (hint) hint.textContent = 'Guardando...';
+  try {
+    const result = await api('POST', '/llm/providers', {
+      name,
+      api_base: base,
+      model,
+      api_key_env: keyEnv,
+      tier,
+      privacy,
+    });
+    if (hint) hint.textContent = `Proveedor "${name}" agregado (${result.provider_count} activos).`;
+    addFeedItem('&#9989;', `Proveedor ${name} agregado`);
+    ['#new-provider-name', '#new-provider-base', '#new-provider-model', '#new-provider-key-env']
+      .forEach(sel => { const el = $(sel); if (el) el.value = ''; });
+    await refreshProviders();
+  } catch (err) {
+    if (hint) hint.textContent = `Error: ${err.message}`;
+    addFeedItem('&#10060;', `Agregar ${name} fallo: ${err.message}`);
+  }
 };
 
 const addProviderBtn = document.getElementById('add-provider-btn');
@@ -2060,8 +2094,12 @@ if (schedAddBtn) {
 
 // --- OS Actions ---
 window.setOsMode = async (mode) => {
-  // TODO: POST /system/mode not yet implemented in backend
-  addFeedItem('&#9888;', `Cambio de modo del sistema no disponible aun (backend pending)`);
+  try {
+    const result = await api('POST', '/system/mode', { mode });
+    addFeedItem('&#9989;', `Modo de sistema: ${result.mode || mode}`);
+  } catch (err) {
+    addFeedItem('&#10060;', `Cambio de modo fallo: ${err.message}`);
+  }
 };
 
 window.triggerSystemAction = async (action) => {
@@ -2190,13 +2228,36 @@ function markWorkerFailed(data) {
 
 window.cancelWorker = async (id) => {
   if (!id) return;
-  // TODO: POST /workers/:id/cancel not yet implemented in backend
-  addFeedItem('&#9888;', `Worker cancel no disponible aun (backend pending)`);
+  try {
+    await api('POST', `/workers/${encodeURIComponent(id)}/cancel`, {});
+    addFeedItem('&#9989;', `Worker ${id} cancelado`);
+    const w = activeWorkers.get(id);
+    if (w) { w.status = 'failed'; renderWorkers(); }
+  } catch (err) {
+    addFeedItem('&#10060;', `Cancelar worker ${id} fallo: ${err.message}`);
+  }
 };
 
-// Workers are tracked locally via WS events. GET /workers is not yet
-// implemented in the backend, so we only render what we already know.
+// Workers stream lifecycle events over WebSocket; GET /workers reconciles
+// the local map after a page reload (or whenever the WS gets out of sync).
 async function refreshWorkers() {
+  try {
+    const res = await fetch(`${API}/workers`, { headers: apiHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      (data.workers || []).forEach(w => {
+        if (!activeWorkers.has(w.id)) {
+          activeWorkers.set(w.id, {
+            id: w.id,
+            task: w.task,
+            chat_id: w.chat_id,
+            status: w.status,
+            started_at: w.started_at,
+          });
+        }
+      });
+    }
+  } catch (e) { /* silent — fall back to WS-only state */ }
   renderWorkers();
   if (activeWorkers.size > 0) startWorkerElapsedTimer();
 }
@@ -3248,16 +3309,41 @@ if (mdExportBtn) {
 // ==================== CONVERSATION HISTORY ====================
 const conversationList = $('#conversation-list');
 
-// Conversation history is per-chat inside telegram_tools::ConversationHistory
-// and persisted to ~/.local/share/lifeos/conversation_history.json. Surfacing
-// it through a unified /conversations endpoint requires merging Telegram,
-// SimpleX, and Matrix bridges into a common format — tracked as item #5
-// (dashboard CRUD) in docs/operations/pending-items-roadmap.md.
+// Unified conversation history. Backend reads
+// ~/.local/share/lifeos/conversation_history.json and tags each entry
+// with the inferred source (telegram | simplex). The UI lists them and
+// fetches the full message thread on click.
 async function refreshConversations() {
-  if (conversationList) {
-    conversationList.innerHTML =
-      '<p class="task-empty">Historial unificado en desarrollo. '
-      + 'Usa <code>/telegram history</code> o <code>/simplex history</code> por ahora.</p>';
+  if (!conversationList) return;
+  try {
+    const res = await fetch(`${API}/conversations?limit=20`, { headers: apiHeaders() });
+    if (!res.ok) {
+      conversationList.innerHTML = '<p class="task-empty">No se pudo cargar el historial.</p>';
+      return;
+    }
+    const data = await res.json();
+    const convos = (data.conversations || []).map(c => ({
+      id: c.chat_id,
+      source: c.source,
+      preview: c.preview,
+      message_count: c.message_count,
+      updated_at: c.last_active,
+      messages: [],
+    }));
+    renderConversations(convos);
+    conversationList.querySelectorAll('.conversation-item').forEach((item, idx) => {
+      item.addEventListener('click', async () => {
+        const conv = convos[idx];
+        if (!conv || conv.messages.length > 0) return;
+        try {
+          const detail = await api('GET', `/conversations/${conv.id}`);
+          conv.messages = detail.messages || [];
+          renderConversations(convos);
+        } catch (e) { /* silent */ }
+      }, { once: true });
+    });
+  } catch (e) {
+    conversationList.innerHTML = `<p class="task-empty">Error: ${e.message}</p>`;
   }
 }
 
