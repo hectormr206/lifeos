@@ -18,6 +18,63 @@
 
 #![allow(dead_code)]
 
+// ---------------------------------------------------------------------------
+// Security gates
+// ---------------------------------------------------------------------------
+//
+// Every tool that can read user-controlled state from outside the daemon
+// (clipboard, accessibility tree of other apps, generic shell) is opt-in.
+// Defaults are OFF so a compromised or jailbroken MCP client cannot reach
+// these surfaces silently. Enabling each gate is an explicit operator
+// decision and is logged on every invocation.
+//
+// See `docs/operations/mcp-server-security.md` for the threat model.
+
+const MAX_TEXT_OUTPUT_BYTES: usize = 64 * 1024;
+
+fn env_flag(key: &str) -> bool {
+    std::env::var(key)
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn a11y_enabled() -> bool {
+    env_flag("LIFEOS_MCP_A11Y_ENABLE")
+}
+
+fn clipboard_enabled() -> bool {
+    env_flag("LIFEOS_MCP_CLIPBOARD_ENABLE")
+}
+
+/// Validate a launchable app name. Allows alphanumerics, dot, underscore,
+/// and dash. Rejects path separators, shell metacharacters, whitespace,
+/// and anything outside ASCII.
+///
+/// This is intentionally narrow — `tokio::process::Command::new(name)` will
+/// still resolve `name` against `$PATH`, but we limit the shape so an MCP
+/// caller cannot pass `../../bin/sh`, `;evil`, embedded newlines, or names
+/// the user would not recognise from a desktop entry.
+fn is_valid_app_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 64 {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Truncate a text output to MAX_TEXT_OUTPUT_BYTES, breaking on a UTF-8
+/// boundary. Returns the truncated text and a flag indicating truncation.
+fn truncate_output(text: &str) -> (String, bool) {
+    if text.len() <= MAX_TEXT_OUTPUT_BYTES {
+        return (text.to_string(), false);
+    }
+    let mut end = MAX_TEXT_OUTPUT_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (text[..end].to_string(), true)
+}
+
 /// Process an MCP tool call and return the result.
 /// This is a dispatcher — actual execution delegates to the appropriate module.
 ///
@@ -289,10 +346,16 @@ pub async fn call_tool(
                     .await;
                 cmd_result(output, "Launch app via gtk-launch")
             } else if let Some(app) = arguments.get("app").and_then(|v| v.as_str()) {
-                // Validate app name to prevent command injection
-                if app.contains('/') || app.contains(';') || app.contains('&') || app.contains('|')
-                {
-                    return Err("Invalid app name".into());
+                // Tight allowlist of name shape: alphanumerics + . _ -.
+                // No path separators, no shell metacharacters, no whitespace,
+                // no embedded newlines, no Unicode tricks. tokio::Command
+                // uses execvp so this is the only place we can constrain
+                // what binary the caller can launch via $PATH lookup.
+                if !is_valid_app_name(app) {
+                    return Err(format!(
+                        "Invalid app name '{}'. Allowed shape: 1-64 chars of [A-Za-z0-9._-]",
+                        app.chars().take(40).collect::<String>()
+                    ));
                 }
                 let _child = tokio::process::Command::new(app)
                     .spawn()
@@ -304,25 +367,43 @@ pub async fn call_tool(
         }
 
         "lifeos_apps_list_installed" => {
-            let output = tokio::process::Command::new("sh")
-                .args([
-                    "-c",
-                    r#"for f in /usr/share/applications/*.desktop ~/.local/share/applications/*.desktop /var/lib/flatpak/exports/share/applications/*.desktop; do [ -f "$f" ] && grep -m1 '^Name=' "$f" | cut -d= -f2; done | sort -u"#,
-                ])
-                .output()
-                .await;
-            match output {
-                Ok(o) if o.status.success() => {
-                    let raw = String::from_utf8_lossy(&o.stdout);
-                    let apps: Vec<&str> = raw.lines().filter(|l| !l.is_empty()).collect();
-                    Ok(serde_json::json!({ "installed_apps": apps, "count": apps.len() }))
+            // Walk the standard XDG desktop-entry directories directly in
+            // Rust instead of shelling out to `sh -c`. The previous shell
+            // version was safe because the command string was static, but
+            // it leaves a foot-gun for any future refactor that splices
+            // user input into the same string.
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/home/lifeos".into());
+            let dirs: [std::path::PathBuf; 3] = [
+                std::path::PathBuf::from("/usr/share/applications"),
+                std::path::PathBuf::from(&home).join(".local/share/applications"),
+                std::path::PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+            ];
+            let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for dir in &dirs {
+                let Ok(entries) = std::fs::read_dir(dir) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+                        continue;
+                    }
+                    let Ok(content) = std::fs::read_to_string(&path) else {
+                        continue;
+                    };
+                    if let Some(name) = content
+                        .lines()
+                        .find_map(|l| l.strip_prefix("Name="))
+                        .map(|s| s.trim().to_string())
+                    {
+                        if !name.is_empty() {
+                            names.insert(name);
+                        }
+                    }
                 }
-                Ok(o) => Err(format!(
-                    "Failed to list apps: {}",
-                    String::from_utf8_lossy(&o.stderr)
-                )),
-                Err(e) => Err(format!("Command failed: {}", e)),
             }
+            let apps: Vec<String> = names.into_iter().collect();
+            Ok(serde_json::json!({ "installed_apps": apps, "count": apps.len() }))
         }
 
         "lifeos_apps_running" => {
@@ -381,6 +462,14 @@ pub async fn call_tool(
         }
 
         "lifeos_clipboard_get" => {
+            // Gate: the clipboard frequently holds passwords, 2FA codes,
+            // session tokens and freshly copied secrets. A jailbroken MCP
+            // client could exfiltrate them silently otherwise.
+            if !clipboard_enabled() {
+                log::warn!("[mcp_server] lifeos_clipboard_get blocked — set LIFEOS_MCP_CLIPBOARD_ENABLE=1 to opt in");
+                return Err("lifeos_clipboard_get is disabled. Set LIFEOS_MCP_CLIPBOARD_ENABLE=1 to opt in. The clipboard often contains passwords and 2FA codes; enabling this lets any MCP caller read them.".into());
+            }
+            log::warn!("[mcp_server] lifeos_clipboard_get EXEC (opt-in)");
             let output = tokio::process::Command::new("wl-paste")
                 .arg("--no-newline")
                 .output()
@@ -399,6 +488,14 @@ pub async fn call_tool(
         }
 
         "lifeos_clipboard_set" => {
+            // Gate: writing the clipboard lets a malicious caller plant
+            // commands the user might paste into a terminal. Treat as
+            // privileged.
+            if !clipboard_enabled() {
+                log::warn!("[mcp_server] lifeos_clipboard_set blocked — set LIFEOS_MCP_CLIPBOARD_ENABLE=1 to opt in");
+                return Err("lifeos_clipboard_set is disabled. Set LIFEOS_MCP_CLIPBOARD_ENABLE=1 to opt in. Writing the clipboard can plant commands the user pastes into a terminal.".into());
+            }
+            log::warn!("[mcp_server] lifeos_clipboard_set EXEC (opt-in)");
             let content = arguments
                 .get("content")
                 .and_then(|v| v.as_str())
@@ -699,12 +796,14 @@ pub async fn call_tool(
             ));
             match ba.fetch_html(url).await {
                 Ok(html) => {
-                    // Strip HTML tags for a rough text extraction
                     let text = strip_html_tags(&html);
+                    let original_len = text.len();
+                    let (text, truncated) = truncate_output(&text);
                     Ok(serde_json::json!({
                         "url": url,
                         "text": text,
-                        "length": text.len(),
+                        "length": original_len,
+                        "truncated": truncated,
                     }))
                 }
                 Err(e) => Err(format!("Text extraction failed: {}", e)),
@@ -1087,7 +1186,19 @@ pub async fn call_tool(
         }
 
         // ----- AT-SPI2 Accessibility Layer (AY.4) -----
+        // Every a11y_* tool is gated. AT-SPI exposes the live text content
+        // and actionable controls of every accessible app on the desktop —
+        // browser tabs, email clients, terminals, password managers. A
+        // jailbroken MCP caller could read banking pages, chat history,
+        // 1Password, then exfiltrate via its response channel. The gate is
+        // defence in depth alongside any per-app permission the user has
+        // granted to AT-SPI itself.
         "lifeos_a11y_tree" => {
+            if !a11y_enabled() {
+                log::warn!("[mcp_server] lifeos_a11y_tree blocked — set LIFEOS_MCP_A11Y_ENABLE=1 to opt in");
+                return Err("lifeos_a11y_tree is disabled. Set LIFEOS_MCP_A11Y_ENABLE=1 to opt in. AT-SPI exposes live text from every accessible app (browser, email, terminal, password manager).".into());
+            }
+            log::warn!("[mcp_server] lifeos_a11y_tree EXEC (opt-in)");
             let app = arguments
                 .get("app")
                 .and_then(|v| v.as_str())
@@ -1105,6 +1216,13 @@ pub async fn call_tool(
         }
 
         "lifeos_a11y_find" => {
+            if !a11y_enabled() {
+                log::warn!("[mcp_server] lifeos_a11y_find blocked — set LIFEOS_MCP_A11Y_ENABLE=1 to opt in");
+                return Err(
+                    "lifeos_a11y_find is disabled. Set LIFEOS_MCP_A11Y_ENABLE=1 to opt in.".into(),
+                );
+            }
+            log::warn!("[mcp_server] lifeos_a11y_find EXEC (opt-in)");
             let app = arguments
                 .get("app")
                 .and_then(|v| v.as_str())
@@ -1122,6 +1240,11 @@ pub async fn call_tool(
         }
 
         "lifeos_a11y_activate" => {
+            if !a11y_enabled() {
+                log::warn!("[mcp_server] lifeos_a11y_activate blocked — set LIFEOS_MCP_A11Y_ENABLE=1 to opt in");
+                return Err("lifeos_a11y_activate is disabled. Set LIFEOS_MCP_A11Y_ENABLE=1 to opt in. Activating arbitrary controls in other apps can submit forms, send messages, click confirmation dialogs.".into());
+            }
+            log::warn!("[mcp_server] lifeos_a11y_activate EXEC (opt-in)");
             let bus = arguments
                 .get("bus_name")
                 .and_then(|v| v.as_str())
@@ -1141,6 +1264,11 @@ pub async fn call_tool(
         }
 
         "lifeos_a11y_get_text" => {
+            if !a11y_enabled() {
+                log::warn!("[mcp_server] lifeos_a11y_get_text blocked — set LIFEOS_MCP_A11Y_ENABLE=1 to opt in");
+                return Err("lifeos_a11y_get_text is disabled. Set LIFEOS_MCP_A11Y_ENABLE=1 to opt in. This reads live text from any accessible app — banking, email, password manager.".into());
+            }
+            log::warn!("[mcp_server] lifeos_a11y_get_text EXEC (opt-in)");
             let bus = arguments
                 .get("bus_name")
                 .and_then(|v| v.as_str())
@@ -1150,17 +1278,27 @@ pub async fn call_tool(
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'path' parameter")?;
             match crate::atspi_layer::get_text(bus, path).await {
-                Ok(text) => Ok(serde_json::json!({
-                    "bus_name": bus,
-                    "path": path,
-                    "text": text,
-                    "length": text.len(),
-                })),
+                Ok(text) => {
+                    let (text, truncated) = truncate_output(&text);
+                    let total_len = text.len();
+                    Ok(serde_json::json!({
+                        "bus_name": bus,
+                        "path": path,
+                        "text": text,
+                        "length": total_len,
+                        "truncated": truncated,
+                    }))
+                }
                 Err(e) => Err(format!("AT-SPI2 get_text failed: {}", e)),
             }
         }
 
         "lifeos_a11y_set_text" => {
+            if !a11y_enabled() {
+                log::warn!("[mcp_server] lifeos_a11y_set_text blocked — set LIFEOS_MCP_A11Y_ENABLE=1 to opt in");
+                return Err("lifeos_a11y_set_text is disabled. Set LIFEOS_MCP_A11Y_ENABLE=1 to opt in. Writing into other apps can submit forms with attacker text.".into());
+            }
+            log::warn!("[mcp_server] lifeos_a11y_set_text EXEC (opt-in)");
             let bus = arguments
                 .get("bus_name")
                 .and_then(|v| v.as_str())
@@ -1356,5 +1494,133 @@ fn collect_windows(node: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
         for child in nodes {
             collect_windows(child, out);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_name_accepts_typical_binaries() {
+        assert!(is_valid_app_name("firefox"));
+        assert!(is_valid_app_name("cosmic-term"));
+        assert!(is_valid_app_name("LibreOffice"));
+        assert!(is_valid_app_name("app_v2.1"));
+        assert!(is_valid_app_name("a"));
+    }
+
+    #[test]
+    fn app_name_rejects_path_traversal() {
+        assert!(!is_valid_app_name("/usr/bin/sh"));
+        assert!(!is_valid_app_name("../bin/sh"));
+        assert!(!is_valid_app_name("./evil"));
+    }
+
+    #[test]
+    fn app_name_rejects_shell_metachars() {
+        for bad in [";rm", "&background", "a|b", "$(curl)", "`whoami`", "a\nb"] {
+            assert!(!is_valid_app_name(bad), "should reject: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn app_name_rejects_whitespace_and_unicode() {
+        assert!(!is_valid_app_name(""));
+        assert!(!is_valid_app_name("with space"));
+        assert!(!is_valid_app_name("café"));
+        assert!(!is_valid_app_name(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn truncate_output_passes_through_short() {
+        let (out, truncated) = truncate_output("hello");
+        assert_eq!(out, "hello");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn truncate_output_caps_oversized() {
+        let big = "a".repeat(MAX_TEXT_OUTPUT_BYTES + 100);
+        let (out, truncated) = truncate_output(&big);
+        assert_eq!(out.len(), MAX_TEXT_OUTPUT_BYTES);
+        assert!(truncated);
+    }
+
+    #[test]
+    fn truncate_output_respects_utf8_boundary() {
+        // 4-byte char ('🦀') straddling the cap. Trim to a valid boundary.
+        let mut s = "a".repeat(MAX_TEXT_OUTPUT_BYTES - 1);
+        s.push('🦀');
+        let (out, truncated) = truncate_output(&s);
+        assert!(truncated);
+        assert!(out.is_char_boundary(out.len()));
+        assert!(out.len() <= MAX_TEXT_OUTPUT_BYTES);
+    }
+
+    #[test]
+    fn env_flag_truthy_values() {
+        // Use a unique env var name so parallel tests don't collide.
+        let key = "LIFEOS_TEST_ENV_FLAG_TRUTHY";
+        for v in ["1", "true", "yes", "on"] {
+            std::env::set_var(key, v);
+            assert!(env_flag(key), "should be true for {v}");
+        }
+        std::env::remove_var(key);
+    }
+
+    #[test]
+    fn env_flag_falsy_values() {
+        let key = "LIFEOS_TEST_ENV_FLAG_FALSY";
+        for v in ["", "0", "false", "no", "off", "TRUE", "YES"] {
+            std::env::set_var(key, v);
+            assert!(!env_flag(key), "should be false for {v:?}");
+        }
+        std::env::remove_var(key);
+        assert!(!env_flag(key), "should be false when unset");
+    }
+
+    #[tokio::test]
+    async fn clipboard_get_blocked_by_default() {
+        // Ensure the gate is off (some other test may have toggled it).
+        std::env::remove_var("LIFEOS_MCP_CLIPBOARD_ENABLE");
+        let result = call_tool("lifeos_clipboard_get", &serde_json::json!({}), None).await;
+        let err = result.expect_err("clipboard_get must be gated by default");
+        assert!(
+            err.contains("LIFEOS_MCP_CLIPBOARD_ENABLE"),
+            "error must name the opt-in env var: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a11y_get_text_blocked_by_default() {
+        std::env::remove_var("LIFEOS_MCP_A11Y_ENABLE");
+        let result = call_tool(
+            "lifeos_a11y_get_text",
+            &serde_json::json!({"bus_name": "x", "path": "y"}),
+            None,
+        )
+        .await;
+        let err = result.expect_err("a11y_get_text must be gated by default");
+        assert!(
+            err.contains("LIFEOS_MCP_A11Y_ENABLE"),
+            "error must name the opt-in env var: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apps_launch_rejects_path_in_app_name() {
+        let result = call_tool(
+            "lifeos_apps_launch",
+            &serde_json::json!({"app": "/usr/bin/sh"}),
+            None,
+        )
+        .await;
+        let err = result.expect_err("must reject path-shaped app names");
+        assert!(err.contains("Invalid app name"), "got: {err}");
     }
 }
