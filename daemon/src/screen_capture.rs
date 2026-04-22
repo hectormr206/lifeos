@@ -461,16 +461,7 @@ impl ScreenCapture {
             .await
             .with_context(|| format!("Failed to read temporary capture {}", source.display()))?;
 
-        // Future: encrypt screenshot bytes at rest (AES-256-GCM-SIV pattern
-        // from memory_plane.rs). Requires changing all read sites to decrypt.
-        //   3. Update ALL read sites: list_screenshots(), cleanup_old/by_count/by_size(),
-        //      get_image_resolution(), and any external consumer that reads via `path`.
-        //   4. Add a decrypt_screenshot() helper that reads nonce + ciphertext, decrypts,
-        //      and returns the original JPEG/PNG bytes.
-        // This is deferred because it touches every read path across the screenshot
-        // lifecycle. File permissions (0o600) provide baseline protection meanwhile.
-
-        fs::write(dest, bytes)
+        fs::write(dest, &bytes)
             .await
             .with_context(|| format!("Failed to write final capture {}", dest.display()))?;
         // Restrict to owner-only so other users cannot read screenshots.
@@ -479,6 +470,30 @@ impl ScreenCapture {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(dest, std::fs::Permissions::from_mode(0o600));
         }
+
+        // Write encrypted sidecar at `<dest>.enc` for at-rest protection
+        // (AES-256-GCM-SIV — see screenshot_crypt module). The plaintext
+        // file remains because in-tree consumers (sensory_pipeline,
+        // overlay) hand the path to external binaries (identify, llava)
+        // that cannot read ciphertext. Plaintext lifetime is bounded by
+        // the cleanup paths (cleanup_old/by_count/by_size below); the
+        // .enc sidecar provides at-rest defence for stolen-disk and
+        // backup-leak scenarios. End-to-end encryption (no plaintext on
+        // disk) requires refactoring sensory_pipeline.rs to consume
+        // bytes via decrypt_from_file — tracked as a follow-up.
+        let dest_owned = dest.to_path_buf();
+        let bytes_for_crypt = bytes.clone();
+        let enc_result = tokio::task::spawn_blocking(move || {
+            let enc_path = crate::screenshot_crypt::encrypted_path_for(&dest_owned);
+            crate::screenshot_crypt::encrypt_to_file(&enc_path, &bytes_for_crypt)
+        })
+        .await;
+        match enc_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => log::warn!("screenshot at-rest encryption failed: {}", e),
+            Err(e) => log::warn!("screenshot encryption task panicked: {}", e),
+        }
+
         let _ = fs::remove_file(source).await;
         Ok(())
     }
@@ -1016,6 +1031,13 @@ impl ScreenCapture {
             if path.is_file() {
                 if let Some(filename) = path.file_name() {
                     if let Some(name) = filename.to_str() {
+                        // Skip encrypted sidecars — list_screenshots()
+                        // returns the plaintext entries; consumers that
+                        // want the encrypted blob can derive the path via
+                        // screenshot_crypt::encrypted_path_for().
+                        if name.ends_with(".enc") {
+                            continue;
+                        }
                         if name.starts_with("lifeos_screenshot_") {
                             if let Ok(metadata) = fs::metadata(&path).await {
                                 let size_bytes = metadata.len();
@@ -1071,6 +1093,18 @@ impl ScreenCapture {
         fs::remove_file(&path)
             .await
             .context("Failed to delete screenshot")?;
+
+        // Also remove the encrypted sidecar if it exists.
+        let enc_path = crate::screenshot_crypt::encrypted_path_for(&path);
+        if enc_path.exists() {
+            if let Err(e) = fs::remove_file(&enc_path).await {
+                log::warn!(
+                    "failed to delete encrypted sidecar {}: {}",
+                    enc_path.display(),
+                    e
+                );
+            }
+        }
 
         log::info!("Deleted screenshot: {}", filename);
         Ok(true)

@@ -80,6 +80,7 @@ mod reliability;
 mod safe_mode;
 mod scheduled_tasks;
 mod screen_capture;
+mod screenshot_crypt;
 mod security_ai;
 mod self_improving;
 mod sensory_memory;
@@ -722,6 +723,19 @@ async fn main() -> anyhow::Result<()> {
     let shared_session_store = Arc::new(session_store::SessionStore::new(&data_dir));
     if let Err(e) = shared_session_store.init().await {
         warn!("Failed to initialize SessionStore: {}", e);
+    }
+
+    // Screenshot at-rest crypto: validate the key + round-trip on
+    // every boot so a corrupt key file or an unwritable secrets dir is
+    // surfaced before the first capture rather than silently degrading
+    // the .enc sidecar to "missing". See
+    // docs/operations/screenshot-encryption.md for the threat model.
+    // Logged-and-ignored: a failure here means new captures will skip
+    // the .enc sidecar (plaintext still written), which is the same
+    // fail-open behaviour as before this PR.
+    match screenshot_crypt::self_test_at_startup() {
+        Ok(()) => info!("screenshot_crypt: self-test OK"),
+        Err(e) => warn!("screenshot_crypt self-test failed: {}", e),
     }
 
     // Initialize state
