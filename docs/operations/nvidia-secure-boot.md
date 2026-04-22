@@ -103,3 +103,16 @@ life status
 
 If `nvidia.ko signer` is empty, the image was built without module signing and must be rebuilt with signing secrets.
 If `LifeOS MOK cert` is missing, the image did not include signing cert material and `enroll` cannot fix it; pull/update to a signed image build first.
+
+## Driver source: lifeos-nvidia-drivers (since v0.8.0)
+
+NVIDIA driver RPMs ship from the upstream [`lifeos-nvidia-drivers`](https://github.com/hectormr206/lifeos-nvidia-drivers) image (Production Branch, currently 595.58.03), pulled in as the `nvidia-rpms` stage and consumed via `COPY --from=nvidia-rpms / /tmp/nvidia-rpms/` in `image/Containerfile`.
+
+Two upstream packages are intentionally excluded from the install set:
+
+- `libnvidia-container*`
+- `nvidia-container-toolkit*`
+
+These exist for GPU-in-container workloads (`podman --gpus`, `nvidia-ctk`) which LifeOS does not use — `llama-server` runs natively against the kernel module. Including them fails on plain `fedora-bootc` because they pull `libseccomp2`, a Bazzite/uBlue compat shim absent from the upstream Fedora base.
+
+If a future feature genuinely needs GPU-in-container, revisit the exclusion in the same `RUN` block and either ship a `libseccomp2` compat package in the LifeOS image, or request the upstream `lifeos-nvidia-drivers` build to drop the `libseccomp2` dependency for the `fedora-bootc` flavor.

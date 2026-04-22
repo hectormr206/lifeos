@@ -369,9 +369,21 @@ RUN dnf -y install --skip-unavailable \
 # supergfxctl (Optimus hybrid-switch helper) still comes from RPMFusion.
 # akmod-wl / broadcom-wl (Broadcom proprietary WiFi) still comes from RPMFusion.
 # kernel-devel is installed temporarily for module signing below, then removed.
-RUN --mount=type=bind,from=nvidia-rpms,source=/,target=/mnt/nvidia-rpms,ro \
-    dnf -y install /mnt/nvidia-rpms/*.rpm && \
-    dnf -y install kernel-devel && \
+# Stage `nvidia-rpms` is built `FROM scratch` upstream and contains only RPM
+# blobs at `/` — no shell, no `/mnt`, no filesystem layout. `RUN --mount=type=bind`
+# fails against scratch stages in rootless buildah ("openat2 mnt: No such file
+# or directory"), so we COPY the RPMs into a temp dir, install, then remove.
+COPY --from=nvidia-rpms / /tmp/nvidia-rpms/
+# Skip nvidia-container-toolkit + libnvidia-container — they target Bazzite/uBlue
+# bases (require `libseccomp2` compat shim that fedora-bootc doesn't ship) and
+# enable GPU-in-container workloads that LifeOS does not use (llama-server runs
+# natively, not under podman/docker --gpus). Install everything else.
+RUN find /tmp/nvidia-rpms -maxdepth 1 -name '*.rpm' \
+        ! -name 'nvidia-container-toolkit*' \
+        ! -name 'libnvidia-container*' \
+        -print0 | xargs -0 dnf -y install && \
+    rm -rf /tmp/nvidia-rpms && \
+    dnf -y install kernel-devel akmods gcc gcc-c++ kmodtool elfutils-libelf-devel && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
         dnf -y install supergfxctl; \
     else \
@@ -383,6 +395,58 @@ RUN --mount=type=bind,from=nvidia-rpms,source=/,target=/mnt/nvidia-rpms,ro \
         echo "INFO: broadcom-wl/akmod-wl not available; continuing without Broadcom proprietary module"; \
     fi && \
     dnf clean all
+
+# Compile NVIDIA kernel modules against the kernel(s) shipped in this image.
+# The lifeos-nvidia-drivers upstream installs akmod source (akmod-nvidia /
+# kmod-nvidia source RPMs), not pre-built `.ko` files. akmods turns the source
+# into kmod-nvidia-<kernel>.rpm and lays the modules under
+# /usr/lib/modules/<kernel>/extra/nvidia/ where the signing step finds them.
+# This mirrors what produced the verified working stack on the dev laptop
+# (NVRM 595.58.03, akmods@buildkitsandbox signature).
+RUN NVIDIA_BUILT=0; \
+    for modules_dir in /usr/lib/modules/*; do \
+        [ -d "${modules_dir}" ] || continue; \
+        kernel_ver="$(basename "${modules_dir}")"; \
+        if [ ! -d "/usr/src/kernels/${kernel_ver}" ]; then \
+            echo "WARNING: kernel-devel missing for ${kernel_ver}; skipping"; \
+            continue; \
+        fi; \
+        echo "=== building NVIDIA kmod for ${kernel_ver} ==="; \
+        if ! akmods --force --kernels "${kernel_ver}" --akmod nvidia; then \
+            echo "ERROR: akmods --akmod nvidia failed for ${kernel_ver}"; \
+            find /var/cache/akmods -type f -name '*.log' -exec sh -c 'echo "=== $1 ==="; cat "$1"' _ {} \; 2>&1 | tail -100; \
+            exit 1; \
+        fi; \
+        # akmods builds an RPM but does not install it. Find and install the
+        # kmod-nvidia-<ver>-<kernel>.rpm it produced under /var/cache/akmods/.
+        BUILT_RPM="$(find /var/cache/akmods/nvidia -maxdepth 2 -type f \
+            -name "kmod-nvidia-*${kernel_ver}*.rpm" | head -1)"; \
+        if [ -z "${BUILT_RPM}" ]; then \
+            echo "ERROR: akmods reported success but produced no RPM for ${kernel_ver}"; \
+            find /var/cache/akmods -type f 2>&1 | head -20; \
+            exit 1; \
+        fi; \
+        echo "INFO: installing ${BUILT_RPM}"; \
+        dnf -y install "${BUILT_RPM}"; \
+        # Modules ship as .ko.xz from the RPM (Fedora default). Decompress in
+        # place so the secure-boot signing step (which globs *.ko) can sign
+        # them; sign-file does not handle xz wrappers.
+        find "${modules_dir}/extra/nvidia" -type f -name '*.ko.xz' \
+            -exec xz --decompress --force {} \; 2>/dev/null || true; \
+        if [ -f "${modules_dir}/extra/nvidia/nvidia.ko" ]; then \
+            NVIDIA_BUILT=$((NVIDIA_BUILT + 1)); \
+            echo "INFO: nvidia.ko ready at ${modules_dir}/extra/nvidia/"; \
+        else \
+            echo "ERROR: nvidia.ko still missing after install + decompress"; \
+            ls -la "${modules_dir}/extra/nvidia/" 2>&1 | head; \
+            exit 1; \
+        fi; \
+    done && \
+    if [ "${NVIDIA_BUILT}" -eq 0 ]; then \
+        echo "ERROR: no nvidia.ko produced for any kernel in /usr/lib/modules/"; \
+        exit 1; \
+    fi && \
+    echo "INFO: nvidia.ko ready for ${NVIDIA_BUILT} kernel(s)"
 
 # Regenerate module dependency maps for every kernel present.
 RUN for modules_dir in /usr/lib/modules/*; do \
