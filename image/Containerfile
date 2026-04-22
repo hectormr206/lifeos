@@ -369,8 +369,13 @@ RUN dnf -y install --skip-unavailable \
 # supergfxctl (Optimus hybrid-switch helper) still comes from RPMFusion.
 # akmod-wl / broadcom-wl (Broadcom proprietary WiFi) still comes from RPMFusion.
 # kernel-devel is installed temporarily for module signing below, then removed.
-RUN --mount=type=bind,from=nvidia-rpms,source=/,target=/mnt/nvidia-rpms,ro \
-    dnf -y install /mnt/nvidia-rpms/*.rpm && \
+# Stage `nvidia-rpms` is built `FROM scratch` upstream and contains only RPM
+# blobs at `/` — no shell, no `/mnt`, no filesystem layout. `RUN --mount=type=bind`
+# fails against scratch stages in rootless buildah ("openat2 mnt: No such file
+# or directory"), so we COPY the RPMs into a temp dir, install, then remove.
+COPY --from=nvidia-rpms / /tmp/nvidia-rpms/
+RUN dnf -y install /tmp/nvidia-rpms/*.rpm && \
+    rm -rf /tmp/nvidia-rpms && \
     dnf -y install kernel-devel && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
         dnf -y install supergfxctl; \
