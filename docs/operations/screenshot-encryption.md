@@ -61,12 +61,13 @@ Si querés forzar la migración, podés:
 
 ```bash
 # Manual one-shot — solo en máquinas con LifeOS instalada
-sudo systemctl stop lifeosd
+# lifeosd corre en --user scope (no system scope).
+systemctl --user stop lifeosd
 # (no hay tooling oficial todavía; la opción más simple es borrar
 #  los archivos legacy, que se regenerarán cifrados al próximo uso)
 sudo find /var/lib/lifeos/screenshots -maxdepth 1 -type f \
     \( -name "*.png" -o -name "*.jpg" -o -name "*.webp" \) -delete
-sudo systemctl start lifeosd
+systemctl --user start lifeosd
 ```
 
 ## Tests
