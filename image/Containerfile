@@ -383,7 +383,7 @@ RUN find /tmp/nvidia-rpms -maxdepth 1 -name '*.rpm' \
         ! -name 'libnvidia-container*' \
         -print0 | xargs -0 dnf -y install && \
     rm -rf /tmp/nvidia-rpms && \
-    dnf -y install kernel-devel && \
+    dnf -y install kernel-devel akmods gcc && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
         dnf -y install supergfxctl; \
     else \
@@ -395,6 +395,33 @@ RUN find /tmp/nvidia-rpms -maxdepth 1 -name '*.rpm' \
         echo "INFO: broadcom-wl/akmod-wl not available; continuing without Broadcom proprietary module"; \
     fi && \
     dnf clean all
+
+# Compile NVIDIA kernel modules against the kernel(s) shipped in this image.
+# The lifeos-nvidia-drivers upstream installs akmod source (akmod-nvidia /
+# kmod-nvidia source RPMs), not pre-built `.ko` files. akmods turns the source
+# into kmod-nvidia-<kernel>.rpm and lays the modules under
+# /usr/lib/modules/<kernel>/extra/nvidia/ where the signing step finds them.
+# This mirrors what produced the verified working stack on the dev laptop
+# (NVRM 595.58.03, akmods@buildkitsandbox signature).
+RUN NVIDIA_BUILT=0 && \
+    for modules_dir in /usr/lib/modules/*; do \
+        [ -d "${modules_dir}" ] || continue; \
+        kernel_ver="$(basename "${modules_dir}")"; \
+        if [ ! -d "/usr/src/kernels/${kernel_ver}" ]; then \
+            echo "WARNING: kernel-devel missing for ${kernel_ver}; skipping akmods"; \
+            continue; \
+        fi; \
+        echo "INFO: building NVIDIA kmod for ${kernel_ver}"; \
+        akmods --force --kernels "${kernel_ver}"; \
+        if [ -f "${modules_dir}/extra/nvidia/nvidia.ko" ]; then \
+            NVIDIA_BUILT=$((NVIDIA_BUILT + 1)); \
+        fi; \
+    done && \
+    if [ "${NVIDIA_BUILT}" -eq 0 ]; then \
+        echo "ERROR: akmods produced no nvidia.ko for any kernel in /usr/lib/modules/"; \
+        exit 1; \
+    fi && \
+    echo "INFO: akmods built nvidia.ko for ${NVIDIA_BUILT} kernel(s)"
 
 # Regenerate module dependency maps for every kernel present.
 RUN for modules_dir in /usr/lib/modules/*; do \
