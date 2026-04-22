@@ -223,11 +223,11 @@ async fn delete_conversation(
     #[cfg(feature = "messaging")]
     {
         let cleared = state.conversation_history.clear(chat_id).await;
-        return Ok(Json(serde_json::json!({
+        Ok(Json(serde_json::json!({
             "cleared": true,
             "chat_id": chat_id,
             "removed_messages": cleared.len(),
-        })));
+        })))
     }
     #[cfg(not(feature = "messaging"))]
     {
