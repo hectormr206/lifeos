@@ -383,7 +383,7 @@ RUN find /tmp/nvidia-rpms -maxdepth 1 -name '*.rpm' \
         ! -name 'libnvidia-container*' \
         -print0 | xargs -0 dnf -y install && \
     rm -rf /tmp/nvidia-rpms && \
-    dnf -y install kernel-devel akmods gcc && \
+    dnf -y install kernel-devel akmods gcc gcc-c++ kmodtool elfutils-libelf-devel && \
     if dnf -q repoquery --available --qf '%{name}' supergfxctl 2>/dev/null | grep -Fxq supergfxctl; then \
         dnf -y install supergfxctl; \
     else \
@@ -403,22 +403,36 @@ RUN find /tmp/nvidia-rpms -maxdepth 1 -name '*.rpm' \
 # /usr/lib/modules/<kernel>/extra/nvidia/ where the signing step finds them.
 # This mirrors what produced the verified working stack on the dev laptop
 # (NVRM 595.58.03, akmods@buildkitsandbox signature).
-RUN NVIDIA_BUILT=0 && \
+RUN echo "=== akmods registered sources ===" && \
+    ls -la /usr/src/akmods/ 2>&1 | head -10 && \
+    echo "=== kernels present ===" && \
+    ls -la /usr/lib/modules/ 2>&1 | head -10 && \
+    NVIDIA_BUILT=0; \
     for modules_dir in /usr/lib/modules/*; do \
         [ -d "${modules_dir}" ] || continue; \
         kernel_ver="$(basename "${modules_dir}")"; \
         if [ ! -d "/usr/src/kernels/${kernel_ver}" ]; then \
-            echo "WARNING: kernel-devel missing for ${kernel_ver}; skipping akmods"; \
+            echo "WARNING: kernel-devel missing for ${kernel_ver}; skipping"; \
             continue; \
         fi; \
-        echo "INFO: building NVIDIA kmod for ${kernel_ver}"; \
-        akmods --force --kernels "${kernel_ver}"; \
+        echo "=== building NVIDIA kmod for ${kernel_ver} ==="; \
+        if ! akmods --force --kernels "${kernel_ver}" --akmod nvidia; then \
+            echo "ERROR: akmods --akmod nvidia failed for ${kernel_ver}"; \
+            echo "--- akmods log dump ---"; \
+            find /var/cache/akmods -type f -name '*.log' -exec sh -c 'echo "=== $1 ==="; cat "$1"' _ {} \; 2>&1 | tail -200; \
+            exit 1; \
+        fi; \
         if [ -f "${modules_dir}/extra/nvidia/nvidia.ko" ]; then \
             NVIDIA_BUILT=$((NVIDIA_BUILT + 1)); \
+            echo "INFO: nvidia.ko present at ${modules_dir}/extra/nvidia/"; \
+        else \
+            echo "WARNING: akmods exited 0 but nvidia.ko missing under ${modules_dir}/extra/nvidia/"; \
+            ls -la "${modules_dir}/extra/" 2>&1 | head; \
         fi; \
     done && \
     if [ "${NVIDIA_BUILT}" -eq 0 ]; then \
         echo "ERROR: akmods produced no nvidia.ko for any kernel in /usr/lib/modules/"; \
+        find /var/cache/akmods -type f -name '*.log' -exec sh -c 'echo "=== $1 ==="; cat "$1"' _ {} \; 2>&1 | tail -200; \
         exit 1; \
     fi && \
     echo "INFO: akmods built nvidia.ko for ${NVIDIA_BUILT} kernel(s)"
