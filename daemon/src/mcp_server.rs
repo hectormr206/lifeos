@@ -378,8 +378,7 @@ pub async fn call_tool(
                 std::path::PathBuf::from(&home).join(".local/share/applications"),
                 std::path::PathBuf::from("/var/lib/flatpak/exports/share/applications"),
             ];
-            let mut names: std::collections::BTreeSet<String> =
-                std::collections::BTreeSet::new();
+            let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
             for dir in &dirs {
                 let Ok(entries) = std::fs::read_dir(dir) else {
                     continue;
@@ -1219,7 +1218,9 @@ pub async fn call_tool(
         "lifeos_a11y_find" => {
             if !a11y_enabled() {
                 log::warn!("[mcp_server] lifeos_a11y_find blocked — set LIFEOS_MCP_A11Y_ENABLE=1 to opt in");
-                return Err("lifeos_a11y_find is disabled. Set LIFEOS_MCP_A11Y_ENABLE=1 to opt in.".into());
+                return Err(
+                    "lifeos_a11y_find is disabled. Set LIFEOS_MCP_A11Y_ENABLE=1 to opt in.".into(),
+                );
             }
             log::warn!("[mcp_server] lifeos_a11y_find EXEC (opt-in)");
             let app = arguments
@@ -1587,8 +1588,7 @@ mod tests {
     async fn clipboard_get_blocked_by_default() {
         // Ensure the gate is off (some other test may have toggled it).
         std::env::remove_var("LIFEOS_MCP_CLIPBOARD_ENABLE");
-        let result =
-            call_tool("lifeos_clipboard_get", &serde_json::json!({}), None).await;
+        let result = call_tool("lifeos_clipboard_get", &serde_json::json!({}), None).await;
         let err = result.expect_err("clipboard_get must be gated by default");
         assert!(
             err.contains("LIFEOS_MCP_CLIPBOARD_ENABLE"),
