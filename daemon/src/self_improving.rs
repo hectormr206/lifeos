@@ -14,12 +14,17 @@
 
 use anyhow::{Context, Result};
 use chrono::{Local, Timelike};
+use hmac::{Hmac, Mac};
 use log::{debug, info, warn};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+type HmacSha256 = Hmac<Sha256>;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -27,10 +32,151 @@ use std::time::SystemTime;
 
 const SUPERVISOR_AUDIT_LOG: &str = "/var/lib/lifeos/supervisor-audit.log";
 const PRESENCE_FILE: &str = "/var/lib/lifeos/presence_detected";
+const SECRETS_DIR: &str = "/var/lib/lifeos/secrets";
+const WORKFLOW_HMAC_KEY_FILE: &str = "/var/lib/lifeos/secrets/workflow-hmac.key";
 const MAX_AUDIT_ENTRIES: usize = 100;
 const SUCCESS_THRESHOLD: f64 = 0.70; // 70 %
 const MIN_PATTERN_LENGTH: usize = 3;
 const MIN_PATTERN_REPEATS: usize = 3;
+
+/// Per-action and per-sequence schema limits. A pattern that exceeds these
+/// is treated as adversarial and the entire workflow_actions.json is
+/// refused — see `validate_actions`.
+const MAX_ACTION_NAME_LEN: usize = 64;
+const MAX_CONTEXT_LEN: usize = 256;
+const MAX_RECORDED_ACTIONS: usize = 1000;
+const ACTION_NAME_ALLOWED: &str =
+    "[a-z0-9_-]+ (lowercase ascii, digits, underscore, dash; 1..=64 chars)";
+
+fn is_valid_action_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= MAX_ACTION_NAME_LEN
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-'))
+}
+
+fn validate_actions(actions: &[RecordedAction]) -> Result<()> {
+    if actions.len() > MAX_RECORDED_ACTIONS {
+        anyhow::bail!(
+            "workflow actions exceeds cap ({} > {})",
+            actions.len(),
+            MAX_RECORDED_ACTIONS
+        );
+    }
+    for (i, a) in actions.iter().enumerate() {
+        if !is_valid_action_name(&a.action) {
+            anyhow::bail!(
+                "action[{i}] name {:?} fails allowlist {}",
+                a.action,
+                ACTION_NAME_ALLOWED
+            );
+        }
+        if a.context.len() > MAX_CONTEXT_LEN {
+            anyhow::bail!("action[{i}] context exceeds {} bytes", MAX_CONTEXT_LEN);
+        }
+    }
+    Ok(())
+}
+
+/// Load (or generate on first run) the HMAC-SHA256 key used to sign
+/// `workflow_actions.json`.
+///
+/// THREAT MODEL — be honest about what this protects against:
+/// - YES: a process under a different UID, or a sandboxed payload (flatpak
+///   app, systemd-run scope) that can write into `/var/lib/lifeos/` but
+///   cannot read `/var/lib/lifeos/secrets/` (mode 0700).
+/// - YES: a backup-restore that brings stale or attacker-supplied state
+///   from another machine.
+/// - NO: a process running as the same UID as the daemon with full
+///   filesystem access. That threat already wins regardless.
+///
+/// The key is generated once with 32 bytes from the OS RNG and persisted
+/// at `/var/lib/lifeos/secrets/workflow-hmac.key` (mode 0600). The parent
+/// directory is created with mode 0700.
+fn load_or_create_hmac_key() -> Result<Vec<u8>> {
+    let key_path = Path::new(WORKFLOW_HMAC_KEY_FILE);
+    if let Ok(existing) = fs::read(key_path) {
+        if existing.len() >= 32 {
+            return Ok(existing);
+        }
+        warn!(
+            "self_improving: existing HMAC key at {} is too short ({} bytes), regenerating",
+            key_path.display(),
+            existing.len()
+        );
+    }
+
+    let secrets_dir = Path::new(SECRETS_DIR);
+    fs::create_dir_all(secrets_dir)
+        .with_context(|| format!("creating secrets dir {}", secrets_dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(secrets_dir, fs::Permissions::from_mode(0o700));
+    }
+
+    let mut key = vec![0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    fs::write(key_path, &key)
+        .with_context(|| format!("writing HMAC key {}", key_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(key_path, fs::Permissions::from_mode(0o600));
+    }
+    info!(
+        "self_improving: generated new workflow HMAC key at {}",
+        key_path.display()
+    );
+    Ok(key)
+}
+
+fn sign_payload(key: &[u8], payload: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(payload);
+    let bytes = mac.finalize().into_bytes();
+    hex_encode(&bytes)
+}
+
+fn verify_signature(key: &[u8], payload: &[u8], expected_hex: &str) -> bool {
+    let Some(expected) = hex_decode(expected_hex.trim()) else {
+        return false;
+    };
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(payload);
+    mac.verify_slice(&expected).is_ok()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let bytes = s.as_bytes();
+    for pair in bytes.chunks(2) {
+        let hi = (pair[0] as char).to_digit(16)?;
+        let lo = (pair[1] as char).to_digit(16)?;
+        out.push(((hi << 4) | lo) as u8);
+    }
+    Some(out)
+}
+
+fn auto_trigger_enabled() -> bool {
+    std::env::var("LIFEOS_AUTO_TRIGGER_ENABLE")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -257,30 +403,111 @@ impl PromptEvolution {
 
 pub struct WorkflowLearner {
     actions_file: PathBuf,
+    hmac_file: PathBuf,
+    /// HMAC key. When `None`, signing/verification is skipped — used in
+    /// tests that don't have permission to write `/var/lib/lifeos/secrets/`.
+    /// In production the key is loaded eagerly via `with_hmac_key`.
+    hmac_key: Option<Vec<u8>>,
 }
 
 impl WorkflowLearner {
+    /// Create a learner that signs and verifies its on-disk state with the
+    /// daemon's workflow HMAC key. Falls back to no-signing if the key
+    /// cannot be loaded (logged at warn!) — this is conservative: an old
+    /// install without `/var/lib/lifeos/secrets/` still works, just with
+    /// the previous trust level.
     pub fn new(data_dir: &Path) -> Self {
+        let hmac_key = match load_or_create_hmac_key() {
+            Ok(k) => Some(k),
+            Err(e) => {
+                warn!(
+                    "self_improving: HMAC key unavailable ({e}); workflow_actions.json \
+                     will be loaded without signature verification. Fix permissions \
+                     on {SECRETS_DIR} to enable defence in depth."
+                );
+                None
+            }
+        };
         Self {
             actions_file: data_dir.join("workflow_actions.json"),
+            hmac_file: data_dir.join("workflow_actions.json.hmac"),
+            hmac_key,
+        }
+    }
+
+    /// Test-only constructor that injects a known key and per-test paths.
+    /// Tests bypass `/var/lib/lifeos/secrets/` (not writable in CI sandboxes).
+    #[cfg(test)]
+    pub fn with_files(actions_file: PathBuf, hmac_file: PathBuf, key: Option<Vec<u8>>) -> Self {
+        Self {
+            actions_file,
+            hmac_file,
+            hmac_key: key,
         }
     }
 
     // -- helpers ----------------------------------------------------------
 
     fn load_actions(&self) -> Vec<RecordedAction> {
-        match fs::read_to_string(&self.actions_file) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-            Err(_) => Vec::new(),
+        let Ok(content) = fs::read_to_string(&self.actions_file) else {
+            return Vec::new();
+        };
+
+        // Verify HMAC if a key is available and a sidecar exists.
+        if let Some(ref key) = self.hmac_key {
+            match fs::read_to_string(&self.hmac_file) {
+                Ok(sig) if verify_signature(key, content.as_bytes(), &sig) => {}
+                Ok(_) => {
+                    warn!(
+                        "self_improving: HMAC mismatch for {}; refusing to load (file may have \
+                         been tampered with or restored from another machine)",
+                        self.actions_file.display()
+                    );
+                    return Vec::new();
+                }
+                Err(_) => {
+                    warn!(
+                        "self_improving: HMAC sidecar missing for {}; refusing to load. \
+                         Delete the actions file to start fresh, or run a write to regenerate \
+                         the signature.",
+                        self.actions_file.display()
+                    );
+                    return Vec::new();
+                }
+            }
         }
+
+        let actions: Vec<RecordedAction> = match serde_json::from_str(&content) {
+            Ok(a) => a,
+            Err(e) => {
+                warn!("self_improving: workflow_actions.json failed to parse ({e}); ignoring file");
+                return Vec::new();
+            }
+        };
+
+        if let Err(e) = validate_actions(&actions) {
+            warn!(
+                "self_improving: workflow_actions.json failed schema validation ({e}); ignoring \
+                 file. This protects against pattern injection — if the file legitimately \
+                 contained these entries, fix the recorder to emit names matching {ACTION_NAME_ALLOWED}."
+            );
+            return Vec::new();
+        }
+
+        actions
     }
 
     fn save_actions(&self, actions: &[RecordedAction]) -> Result<()> {
+        validate_actions(actions)?;
         if let Some(parent) = self.actions_file.parent() {
             fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(actions)?;
-        fs::write(&self.actions_file, json)?;
+        fs::write(&self.actions_file, &json)?;
+        if let Some(ref key) = self.hmac_key {
+            let sig = sign_payload(key, json.as_bytes());
+            fs::write(&self.hmac_file, sig)?;
+        }
         Ok(())
     }
 
@@ -288,6 +515,15 @@ impl WorkflowLearner {
 
     /// Record an action with its surrounding context.
     pub fn record_action(&self, action: &str, context: &str) -> Result<()> {
+        // Validate at the recording boundary so an upstream caller passing a
+        // shell-metachar action name fails fast instead of being persisted.
+        if !is_valid_action_name(action) {
+            anyhow::bail!("action name {action:?} fails allowlist {ACTION_NAME_ALLOWED}");
+        }
+        if context.len() > MAX_CONTEXT_LEN {
+            anyhow::bail!("context exceeds {MAX_CONTEXT_LEN} bytes");
+        }
+
         let mut actions = self.load_actions();
         actions.push(RecordedAction {
             action: action.to_string(),
@@ -295,9 +531,9 @@ impl WorkflowLearner {
             timestamp: Local::now().to_rfc3339(),
         });
 
-        // Keep a rolling window of the last 1000 actions.
-        if actions.len() > 1000 {
-            let start = actions.len() - 1000;
+        // Keep a rolling window of the last MAX_RECORDED_ACTIONS entries.
+        if actions.len() > MAX_RECORDED_ACTIONS {
+            let start = actions.len() - MAX_RECORDED_ACTIONS;
             actions = actions[start..].to_vec();
         }
 
@@ -353,11 +589,22 @@ impl WorkflowLearner {
 
     /// Check if any learned pattern matches the current action context.
     /// Returns the matching procedure name and steps if found.
+    ///
+    /// SECURITY: This function is the bridge between persisted patterns
+    /// (potentially attacker-controlled if `workflow_actions.json` was
+    /// tampered with despite HMAC) and the supervisor that may execute the
+    /// returned sequence. It defaults OFF — set
+    /// `LIFEOS_AUTO_TRIGGER_ENABLE=1` to opt in to having the daemon
+    /// propose learned procedures back to the supervisor without an
+    /// explicit human approval step.
     pub fn check_auto_trigger(
         &self,
         current_action: &str,
         _current_context: &str,
     ) -> Option<(String, Vec<String>)> {
+        if !auto_trigger_enabled() {
+            return None;
+        }
         let actions = self.load_actions();
         let patterns = self.detect_patterns_from(&actions);
 
@@ -419,28 +666,35 @@ impl NightlyOptimizer {
     }
 
     /// Returns `true` when the current hour is between 2–5 AM **and** the
-    /// user appears idle (presence file older than 30 minutes or missing).
+    /// user appears idle (presence file present and older than 30 minutes).
+    ///
+    /// SECURITY: this fails CLOSED. Previously, a missing or unreadable
+    /// presence file was treated as "user is idle, run cleanup" — which
+    /// meant any local attacker could make the nightly optimiser run
+    /// while the user was active by deleting the file. We now require the
+    /// presence file to exist *and* be old. If it is missing the daemon
+    /// assumes the user might be active and skips. Cost: on a fresh
+    /// install nightly does not run until `presence_detected` has been
+    /// touched at least once; the sensory pipeline does this on first
+    /// detection, and an installer can pre-create it.
     pub fn should_run(&self) -> bool {
         let hour = Local::now().hour();
         if !(2..=5).contains(&hour) {
             return false;
         }
 
-        // Check presence file age.
         let presence = Path::new(PRESENCE_FILE);
-        if !presence.exists() {
-            return true; // no presence info → assume idle
-        }
-
-        match fs::metadata(presence).and_then(|m| m.modified()) {
-            Ok(modified) => {
-                let age = SystemTime::now()
-                    .duration_since(modified)
-                    .unwrap_or_default();
-                age.as_secs() > 30 * 60 // idle for >30 min
-            }
-            Err(_) => true,
-        }
+        let Ok(meta) = fs::metadata(presence) else {
+            // File missing or unreadable. Fail closed — do not run.
+            return false;
+        };
+        let Ok(modified) = meta.modified() else {
+            return false;
+        };
+        let Ok(age) = SystemTime::now().duration_since(modified) else {
+            return false;
+        };
+        age.as_secs() > 30 * 60 // idle for >30 min
     }
 
     /// Execute a full nightly optimization cycle.
@@ -535,9 +789,15 @@ impl NightlyOptimizer {
 
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
-            let metadata = entry.metadata()?;
+            // symlink_metadata does NOT follow symlinks. Without this guard
+            // a symlink in journals/ pointing at e.g. ~/important-old.txt
+            // would be deleted as if it were our journal file.
+            let metadata = match fs::symlink_metadata(entry.path()) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
             if !metadata.is_file() {
-                continue;
+                continue; // skip dirs, symlinks, sockets, fifos, etc.
             }
             if let Ok(modified) = metadata.modified() {
                 let age = SystemTime::now()
@@ -854,5 +1114,204 @@ mod tests {
         // Should serialize without error.
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"last_tick\":\"never\""));
+    }
+
+    // ---------- New hardening tests (PR 2/3 of P1) ----------
+    //
+    // Tests below mutate process-global env vars. Cargo runs them in
+    // parallel by default, so we serialise the env-var-touching ones
+    // with a mutex to avoid one test leaking state into another.
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn action_name_allowlist_accepts_typical() {
+        for name in [
+            "a",
+            "open-editor",
+            "save_file",
+            "run-tests-2",
+            "x".repeat(64).as_str(),
+        ] {
+            assert!(is_valid_action_name(name), "should accept: {name:?}");
+        }
+    }
+
+    #[test]
+    fn action_name_allowlist_rejects_dangerous() {
+        for bad in [
+            "",
+            "Open-Editor",
+            "open editor",
+            "open;rm",
+            "open$(curl)",
+            "open\nfoo",
+            "../escape",
+            "café",
+            &"x".repeat(65),
+        ] {
+            assert!(!is_valid_action_name(bad), "should reject: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn record_action_rejects_invalid_name() {
+        let tmp = TmpDir::new("record-invalid");
+        let wl = WorkflowLearner::with_files(
+            tmp.path().join("wa.json"),
+            tmp.path().join("wa.json.hmac"),
+            None,
+        );
+        assert!(wl.record_action("BAD; rm -rf /", "ctx").is_err());
+        assert!(wl.record_action("ok-name", "ctx").is_ok());
+    }
+
+    #[test]
+    fn check_auto_trigger_off_by_default() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let tmp = TmpDir::new("trigger-off");
+        std::env::remove_var("LIFEOS_AUTO_TRIGGER_ENABLE");
+        let wl = WorkflowLearner::with_files(
+            tmp.path().join("wa.json"),
+            tmp.path().join("wa.json.hmac"),
+            None,
+        );
+        for _ in 0..4 {
+            wl.record_action("a", "").unwrap();
+            wl.record_action("b", "").unwrap();
+            wl.record_action("c", "").unwrap();
+        }
+        assert!(
+            wl.check_auto_trigger("a", "").is_none(),
+            "should refuse to propose patterns without explicit opt-in"
+        );
+    }
+
+    #[test]
+    fn check_auto_trigger_on_when_enabled() {
+        let _g = ENV_LOCK.lock().unwrap();
+        let tmp = TmpDir::new("trigger-on");
+        std::env::set_var("LIFEOS_AUTO_TRIGGER_ENABLE", "1");
+        let wl = WorkflowLearner::with_files(
+            tmp.path().join("wa.json"),
+            tmp.path().join("wa.json.hmac"),
+            None,
+        );
+        for _ in 0..4 {
+            wl.record_action("a", "").unwrap();
+            wl.record_action("b", "").unwrap();
+            wl.record_action("c", "").unwrap();
+        }
+        let trig = wl.check_auto_trigger("a", "");
+        std::env::remove_var("LIFEOS_AUTO_TRIGGER_ENABLE");
+        let (_name, seq) = trig.expect("should fire when opt-in is set");
+        assert!(seq.starts_with(&["a".to_string()]));
+    }
+
+    #[test]
+    fn hmac_round_trip() {
+        let key = vec![0x42u8; 32];
+        let payload = b"hello world";
+        let sig = sign_payload(&key, payload);
+        assert!(verify_signature(&key, payload, &sig));
+        // Tamper detection
+        assert!(!verify_signature(&key, b"hello world!", &sig));
+        let mut bad_sig = sig.clone();
+        bad_sig.replace_range(0..2, "00");
+        assert!(!verify_signature(&key, payload, &bad_sig));
+    }
+
+    #[test]
+    fn hex_round_trip() {
+        let bytes = vec![0x00, 0x01, 0xfe, 0xff, 0xab];
+        let hex = hex_encode(&bytes);
+        assert_eq!(hex, "0001feffab");
+        assert_eq!(hex_decode(&hex), Some(bytes));
+        assert!(hex_decode("zz").is_none());
+        assert!(hex_decode("0").is_none()); // odd length
+    }
+
+    #[test]
+    fn workflow_actions_load_refuses_missing_signature() {
+        let tmp = TmpDir::new("hmac-no-sidecar");
+        let key = vec![0x99u8; 32];
+        let actions_path = tmp.path().join("wa.json");
+        let hmac_path = tmp.path().join("wa.json.hmac");
+
+        // Write actions file directly without sidecar.
+        let bogus = vec![RecordedAction {
+            action: "evil-action".to_string(),
+            context: String::new(),
+            timestamp: "t".to_string(),
+        }];
+        fs::write(&actions_path, serde_json::to_string(&bogus).unwrap()).unwrap();
+
+        let wl = WorkflowLearner::with_files(actions_path, hmac_path, Some(key));
+        // Loading should refuse and return empty.
+        assert!(wl.load_actions().is_empty());
+    }
+
+    #[test]
+    fn workflow_actions_load_refuses_tampered_content() {
+        let tmp = TmpDir::new("hmac-tamper");
+        let key = vec![0x77u8; 32];
+        let actions_path = tmp.path().join("wa.json");
+        let hmac_path = tmp.path().join("wa.json.hmac");
+
+        let wl =
+            WorkflowLearner::with_files(actions_path.clone(), hmac_path.clone(), Some(key.clone()));
+
+        // Legitimate write produces valid signature.
+        wl.record_action("good-action", "ctx").unwrap();
+        assert_eq!(wl.load_actions().len(), 1);
+
+        // Tamper with the JSON content; signature no longer matches.
+        let mut content = fs::read_to_string(&actions_path).unwrap();
+        content = content.replace("good-action", "evil-action");
+        fs::write(&actions_path, content).unwrap();
+
+        // Load must refuse.
+        assert!(wl.load_actions().is_empty());
+    }
+
+    #[test]
+    fn workflow_actions_schema_rejects_overlong_list() {
+        let huge: Vec<RecordedAction> = (0..MAX_RECORDED_ACTIONS + 10)
+            .map(|i| RecordedAction {
+                action: format!("act{i}"),
+                context: String::new(),
+                timestamp: "t".to_string(),
+            })
+            .collect();
+        assert!(validate_actions(&huge).is_err());
+    }
+
+    #[test]
+    fn cleanup_skips_symlinks() {
+        let tmp = TmpDir::new("cleanup-symlink");
+        let dir = tmp.path().join("journals");
+        fs::create_dir_all(&dir).unwrap();
+
+        // Create a target file outside the dir, mark it old.
+        let outside = tmp.path().join("important.txt");
+        fs::write(&outside, b"do not delete me").unwrap();
+
+        // Create a symlink inside the cleanup dir pointing to the outside file.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, dir.join("link.txt")).unwrap();
+
+        let no = NightlyOptimizer::new(tmp.path());
+        // Force max_age_days = 0 so any normal file would be deleted.
+        let removed = no.cleanup_old_files(&dir, 0).unwrap();
+
+        // The symlink target must still exist — symlink_metadata + is_file()
+        // skips symlinks (they report as not-a-file under symlink_metadata).
+        assert!(
+            outside.exists(),
+            "outside target must not be deleted via symlink"
+        );
+        // We don't assert removed == 0 because some platforms could vary;
+        // the critical invariant is the target survived.
+        let _ = removed;
     }
 }
