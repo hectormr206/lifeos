@@ -621,6 +621,11 @@ pub mod inner {
                             tray.kill_switch = kill_switch;
                         });
                     }
+                    Ok(DaemonEvent::PrivacyModeChanged { enabled }) => {
+                        handle.update(|tray: &mut AxiTray| {
+                            tray.privacy_mode = enabled;
+                        });
+                    }
                     Ok(_) => {}
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         log::warn!("[tray] Lagged {} events", n);

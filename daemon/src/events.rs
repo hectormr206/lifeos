@@ -130,4 +130,10 @@ pub enum DaemonEvent {
         task: String,
         error: String,
     },
+    /// Privacy Mode toggle changed. Emitted from the dashboard POST handler
+    /// and the tray click handler so both surfaces stay in sync.
+    /// JSON shape: `{"type": "privacy_mode_changed", "data": {"enabled": true}}`.
+    PrivacyModeChanged {
+        enabled: bool,
+    },
 }

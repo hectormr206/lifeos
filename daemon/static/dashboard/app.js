@@ -564,6 +564,13 @@ function handleEvent(event) {
       if (event.data.kill_switch) addFeedItem('&#9888;', 'Kill switch activado');
       else if (wasKillSwitchActive) addFeedItem('&#9989;', 'Kill switch liberado');
       break;
+    case 'privacy_mode_changed':
+      // Sync the toggle UI when the change originated from another surface
+      // (tray menu, CLI). source is unknown here so we omit it and let the
+      // tooltip stay as-is.
+      renderPrivacyMode(Boolean(event.data?.enabled));
+      addFeedItem('&#128274;', `Modo Privacidad ${event.data?.enabled ? 'activado' : 'desactivado'}`);
+      break;
     case 'feedback_update':
       dashboardState.lastSignal = `Feedback ${event.data.stage || 'actualizado'}`;
       dashboardState.lastSignalAt = new Date().toISOString();
@@ -4232,8 +4239,7 @@ async function loadTtsVoiceSelector() {
 // Persistido en ~/.config/lifeos/privacy-mode (override por env LIFEOS_PRIVACY_MODE).
 async function loadPrivacyMode() {
   const btn = document.getElementById('privacy-mode-toggle');
-  const stateEl = document.getElementById('privacy-state');
-  if (!btn || !stateEl) return;
+  if (!btn) return;
   try {
     const data = await api('GET', '/privacy-mode');
     renderPrivacyMode(Boolean(data?.enabled), data?.source);
@@ -4244,16 +4250,19 @@ async function loadPrivacyMode() {
 
 function renderPrivacyMode(enabled, source) {
   const btn = document.getElementById('privacy-mode-toggle');
-  const stateEl = document.getElementById('privacy-state');
-  if (!btn || !stateEl) return;
-  stateEl.textContent = enabled ? 'ON' : 'OFF';
+  if (!btn) return;
   btn.classList.toggle('privacy-on', enabled);
   btn.classList.toggle('privacy-off', !enabled);
   btn.dataset.enabled = enabled ? '1' : '0';
+  btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+  // Only overwrite the tooltip when we actually know the source. When the
+  // update comes from an SSE event (where source is unknown), keep whatever
+  // tooltip was set by the last load/toggle so the env-override warning
+  // sticks across re-renders.
   if (source === 'env') {
     btn.title = 'Modo Privacidad (forzado por env LIFEOS_PRIVACY_MODE — no editable desde aqui)';
-  } else {
-    btn.title = 'Modo Privacidad: cuando esta ON, el router solo usa modelos locales (sin nube)';
+  } else if (source === 'file' || source === 'default') {
+    btn.title = 'Modo Privacidad: cuando esta activo, el router solo usa modelos locales (sin nube)';
   }
 }
 
