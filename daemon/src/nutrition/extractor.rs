@@ -55,6 +55,12 @@ pub struct NutritionExtraction {
 /// Keyword set used by [`detect_food_intent`]. Extra keywords (e.g.
 /// regional dishes) can be appended by callers without touching the
 /// extractor itself.
+///
+/// Gated behind `messaging` because the only call site lives inside the
+/// `messaging`-gated `execute_nutrition_log_from_capture` in axi_tools.
+/// Without the gate, builds without `messaging` (default features) flag
+/// it as dead code and clippy `-D warnings` fails CI.
+#[cfg(feature = "messaging")]
 const FOOD_KEYWORDS: &[&str] = &[
     // Spanish — verbs
     "comi",
@@ -95,6 +101,9 @@ const FOOD_KEYWORDS: &[&str] = &[
 /// something they ate or drank. Cheap heuristic — meant to gate the
 /// optional auto-trigger path so we don't spend an LLM call on every
 /// utterance.
+///
+/// Gated behind `messaging` (see `FOOD_KEYWORDS` doc above).
+#[cfg(feature = "messaging")]
 pub fn detect_food_intent(text: &str) -> bool {
     let lower = text.to_lowercase();
     FOOD_KEYWORDS.iter().any(|kw| lower.contains(kw))
@@ -424,6 +433,7 @@ mod tests {
         validate_entries(&[e]).expect("None kcal is allowed");
     }
 
+    #[cfg(feature = "messaging")]
     #[test]
     fn detect_food_intent_spanish_verbs() {
         assert!(detect_food_intent("hace rato comi unos tacos"));
@@ -432,12 +442,14 @@ mod tests {
         assert!(detect_food_intent("cené sushi"));
     }
 
+    #[cfg(feature = "messaging")]
     #[test]
     fn detect_food_intent_english() {
         assert!(detect_food_intent("I ate a burger"));
         assert!(detect_food_intent("had lunch at noon"));
     }
 
+    #[cfg(feature = "messaging")]
     #[test]
     fn detect_food_intent_unrelated() {
         assert!(!detect_food_intent("recordame mañana la junta"));

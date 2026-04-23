@@ -24,6 +24,11 @@
 pub mod extractor;
 
 pub use extractor::{
-    detect_food_intent, extract_from_image, extract_from_voice_transcript, persist_extraction,
-    NutritionExtraction,
+    extract_from_image, extract_from_voice_transcript, persist_extraction, NutritionExtraction,
 };
+
+// `detect_food_intent` is only callable from the messaging-gated auto-trigger
+// in axi_tools. Re-export it under the same gate so non-messaging builds do
+// not flag the import as unused.
+#[cfg(feature = "messaging")]
+pub use extractor::detect_food_intent;
