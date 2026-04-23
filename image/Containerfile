@@ -419,10 +419,13 @@ RUN NVIDIA_BUILT=0; \
         fi; \
         # akmods builds an RPM but does not install it. Find and install the
         # kmod-nvidia-<ver>-<kernel>.rpm it produced under /var/cache/akmods/.
-        # Glob is anchored to "<kernel_ver>.x86_64.rpm" so a substring match
-        # against a future kernel variant cannot leak in.
+        # The kernel_ver appears as a substring of the produced RPM filename
+        # (akmods convention). The original glob used `head -1`; we now keep
+        # the substring match and instead error if more than one matches —
+        # that protects against future driver subpackages slipping in via
+        # a non-deterministic find ordering.
         BUILT_RPMS="$(find /var/cache/akmods/nvidia -maxdepth 2 -type f \
-            -name "kmod-nvidia-*-${kernel_ver}.x86_64.rpm")"; \
+            -name "kmod-nvidia-*${kernel_ver}*.rpm")"; \
         BUILT_COUNT="$(printf '%s\n' "${BUILT_RPMS}" | grep -c .)"; \
         if [ -z "${BUILT_RPMS}" ] || [ "${BUILT_COUNT}" -eq 0 ]; then \
             echo "ERROR: akmods reported success but produced no RPM for ${kernel_ver}"; \
