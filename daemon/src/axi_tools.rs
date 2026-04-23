@@ -290,6 +290,10 @@ LifeOS lleva el registro completo de lo que el usuario come, sus preferencias/al
 11d. **nutrition_log_recent** — Devuelve los registros recientes. limit por defecto 20. meal_type opcional para filtrar.
     args: {"limit": 30, "meal_type": "dinner"} o {} para los ultimos 20
 
+11d-bis. **nutrition_log_from_capture** — Pipeline BI.3: dada una foto de comida o un transcript de voz, extrae items estructurados (nombre, cantidad, unidad, kcal estimadas) via el modelo local multimodal y los persiste en `nutrition_log`. Una sola llamada, una entrada por item. `kind` debe ser `image` o `voice`. Para `image` pasa `capture_path` con ruta absoluta a la foto. Para `voice` pasa `transcript` con el texto ya transcripto (Whisper STT) o un texto libre.
+    args (image): {"kind": "image", "capture_path": "/tmp/lifeos-captures/meal-2026-04-22.jpg", "notes": "post-entreno"}
+    args (voice): {"kind": "voice", "transcript": "comi tres tacos al pastor con agua mineral", "notes": ""}
+
 11e. **nutrition_recipe_add** — Guarda una receta. ingredients es una lista de objetos {name, amount, unit, notes}. steps es una lista de strings. tags ayuda a filtrar despues.
     args: {"name": "Bowl de pollo y arroz", "ingredients": [{"name":"pechuga de pollo","amount":150,"unit":"g"},{"name":"arroz integral","amount":80,"unit":"g"}], "steps": ["Cocer el arroz","Sazonar y asar el pollo","Servir junto"], "prep_time_min": 10, "cook_time_min": 25, "servings": 1, "tags": ["alto_proteina","cena"]}
 
@@ -2072,6 +2076,9 @@ REGLAS FIRMES:
             "nutrition_pref_list" => execute_nutrition_pref_list(&call.args, ctx).await,
             "nutrition_log_meal" => execute_nutrition_log_meal(&call.args, ctx).await,
             "nutrition_log_recent" => execute_nutrition_log_recent(&call.args, ctx).await,
+            "nutrition_log_from_capture" => {
+                execute_nutrition_log_from_capture(&call.args, ctx).await
+            }
             "nutrition_recipe_add" => execute_nutrition_recipe_add(&call.args, ctx).await,
             "nutrition_recipe_list" => execute_nutrition_recipe_list(&call.args, ctx).await,
             "nutrition_plan_add" => execute_nutrition_plan_add(&call.args, ctx).await,
@@ -4495,6 +4502,94 @@ REGLAS FIRMES:
             })
             .collect();
         Ok(format!("Comidas recientes:\n{}", lines.join("\n")))
+    }
+
+    /// BI.3 — photo/voice → nutrition_log pipeline tool.
+    ///
+    /// Routes the capture through the local multimodal model (image)
+    /// or text model (voice transcript), validates the LLM JSON,
+    /// and writes one row per detected entry into `nutrition_log`.
+    async fn execute_nutrition_log_from_capture(
+        args: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> Result<String> {
+        let kind = args["kind"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Falta parametro 'kind' (image|voice)"))?
+            .trim()
+            .to_lowercase();
+        let notes = args["notes"].as_str().unwrap_or("");
+        let mem = require_memory(ctx).await?;
+        let ai = crate::ai::AiManager::new();
+
+        let extraction = match kind.as_str() {
+            "image" => {
+                let path = args["capture_path"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Falta 'capture_path' para kind=image"))?;
+                crate::nutrition::extract_from_image(&ai, path).await?
+            }
+            "voice" => {
+                let transcript = args["transcript"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Falta 'transcript' para kind=voice"))?;
+                // Cheap heuristic gate: if the transcript shows no food
+                // intent at all, skip the LLM call entirely. Saves a
+                // round-trip and prevents accidental writes when the
+                // tool is invoked on an unrelated utterance.
+                if !crate::nutrition::detect_food_intent(transcript) {
+                    return Ok(format!(
+                        "Transcript sin intencion de comida; nada registrado: \"{}\"",
+                        transcript.chars().take(120).collect::<String>()
+                    ));
+                }
+                crate::nutrition::extract_from_voice_transcript(&ai, transcript).await?
+            }
+            other => {
+                anyhow::bail!("kind invalido: '{}'. Usa 'image' o 'voice'.", other);
+            }
+        };
+
+        if extraction.entries.is_empty() {
+            return Ok(format!(
+                "No detecte comida en el capture (confianza {:.0}%). Nada registrado.",
+                extraction.confidence * 100.0
+            ));
+        }
+
+        let photo_id = if kind == "image" {
+            args["capture_path"].as_str()
+        } else {
+            None
+        };
+        let voice_id = if kind == "voice" {
+            args["voice_attachment_id"].as_str()
+        } else {
+            None
+        };
+
+        let logged =
+            crate::nutrition::persist_extraction(&mem, &extraction, photo_id, voice_id, notes)
+                .await?;
+        let summary = extraction
+            .entries
+            .iter()
+            .map(|e| {
+                let kcal = e
+                    .kcal_estimate
+                    .map(|k| format!(" (~{:.0} kcal)", k))
+                    .unwrap_or_default();
+                format!("- {} {} de {}{}", e.qty, e.unit, e.name, kcal)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(format!(
+            "Registre {} item(s) en nutrition_log [{}] (confianza {:.0}%):\n{}",
+            logged.len(),
+            extraction.meal_type,
+            extraction.confidence * 100.0,
+            summary
+        ))
     }
 
     async fn execute_nutrition_recipe_add(
