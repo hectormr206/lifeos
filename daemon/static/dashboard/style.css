@@ -2709,3 +2709,50 @@ details[open] .transcript-toggle::before { transform: rotate(90deg); }
   padding: 8px 12px;
   font-size: 0.85rem;
 }
+
+/* ==================================================================
+   Modo Privacidad — toggle prominente en el sidebar brand.
+   Verde cuando ON (modelo local forzado), gris cuando OFF.
+   ================================================================== */
+.privacy-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border, #333);
+  background: rgba(100, 110, 115, 0.18);
+  color: var(--text-secondary, #a6adc8);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.privacy-toggle:hover {
+  filter: brightness(1.15);
+}
+.privacy-toggle .privacy-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 0.7rem;
+}
+.privacy-toggle.privacy-off {
+  background: rgba(100, 110, 115, 0.18);
+  color: var(--text-secondary, #a6adc8);
+  border-color: rgba(100, 110, 115, 0.45);
+}
+.privacy-toggle.privacy-on {
+  background: rgba(46, 214, 115, 0.18);
+  color: #2ed673;
+  border-color: rgba(46, 214, 115, 0.55);
+}
+.privacy-toggle.privacy-on .privacy-icon {
+  background: rgba(46, 214, 115, 0.35);
+  color: #ffffff;
+}

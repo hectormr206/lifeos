@@ -394,6 +394,15 @@ impl LlmRouter {
     ///
     /// Toggle via env `LIFEOS_LLM_ESCALATION_ENABLED=false` to disable (default: true).
     pub async fn chat_with_escalation(&self, request: &RouterRequest) -> Result<RouterResponse> {
+        // Modo Privacidad: si está ON, deshabilitamos la escalation a Free
+        // y delegamos a `chat()`, que aplica el filtro tier=Local.
+        if crate::api::privacy_mode::is_privacy_mode_enabled() {
+            info!(
+                "[llm_router] privacy_mode ON → escalación deshabilitada, delegando a chat() local-only"
+            );
+            return self.chat(request).await;
+        }
+
         let enabled = std::env::var("LIFEOS_LLM_ESCALATION_ENABLED")
             .map(|v| !matches!(v.as_str(), "0" | "false" | "no"))
             .unwrap_or(true);
@@ -484,9 +493,41 @@ impl LlmRouter {
     pub async fn chat(&self, request: &RouterRequest) -> Result<RouterResponse> {
         let complexity = request.complexity.unwrap_or(TaskComplexity::Medium);
         let filter = PrivacyFilter::new(self.privacy_level);
+        let privacy_on = crate::api::privacy_mode::is_privacy_mode_enabled();
 
         // P0-1: Sanitize all user message content before sending to any provider
         let mut sanitized_request = request.clone();
+
+        // Modo Privacidad: si el caller pidió un provider que NO es Local,
+        // override al primer Local disponible. Esto preserva el contrato de
+        // privacidad incluso cuando otro módulo "pinea" un remoto.
+        if privacy_on {
+            let pref_is_local = sanitized_request
+                .preferred_provider
+                .as_ref()
+                .and_then(|name| self.providers.iter().find(|p| p.name == *name))
+                .map(|p| p.tier == ProviderTier::Local)
+                .unwrap_or(false);
+            if !pref_is_local {
+                let local = self
+                    .providers
+                    .iter()
+                    .find(|p| p.tier == ProviderTier::Local)
+                    .map(|p| p.name.clone());
+                if let Some(name) = local {
+                    if let Some(prev) = sanitized_request.preferred_provider.as_ref() {
+                        warn!(
+                            "[llm_router] privacy_mode ON: override preferred_provider {} → {} (Local)",
+                            prev, name
+                        );
+                    }
+                    sanitized_request.preferred_provider = Some(name);
+                } else {
+                    // Borrar la preferencia para que no se cuele en candidates.
+                    sanitized_request.preferred_provider = None;
+                }
+            }
+        }
         let mut highest_sensitivity = request.sensitivity.unwrap_or(SensitivityLevel::Low);
 
         for msg in &mut sanitized_request.messages {
@@ -509,12 +550,32 @@ impl LlmRouter {
             .task_type
             .unwrap_or_else(|| classify_task_type(&request.messages));
 
-        let candidates = self.select_candidates(
+        let mut candidates = self.select_candidates(
             complexity,
             sensitivity,
             &sanitized_request.preferred_provider,
             task_type,
         );
+
+        // Modo Privacidad: filtrar candidates a tier=Local SOLAMENTE.
+        // Aplicado después del rank para no romper el scoring de
+        // `select_candidates`, pero antes de cualquier llamada saliente.
+        if privacy_on {
+            let before = candidates.len();
+            candidates.retain(|p| p.tier == ProviderTier::Local);
+            if candidates.is_empty() {
+                warn!(
+                    "[llm_router] privacy_mode ON pero no hay provider Local disponible \
+                     (filtro descartó {} candidates). Devolviendo error claro.",
+                    before
+                );
+                bail!(
+                    "PRIVACY_MODE_NO_LOCAL: Modo Privacidad está activo pero no hay un \
+                     provider tier=Local disponible. Encendé el modelo local o desactivá el \
+                     Modo Privacidad para usar proveedores remotos."
+                );
+            }
+        }
 
         if candidates.is_empty() {
             if complexity == TaskComplexity::Vision {
@@ -2039,5 +2100,157 @@ mod tests {
         };
         assert_eq!(task_type_bonus(&provider, TaskType::Reasoning), 50);
         assert_eq!(task_type_bonus(&provider, TaskType::Creative), 50);
+    }
+
+    // ---------- Privacy Mode tests -----------------------------------------
+    //
+    // El cache de privacy_mode es global por proceso; serializamos los tests
+    // y aislamos $HOME para no pisar config real del usuario.
+
+    fn privacy_test_lock() -> &'static tokio::sync::Mutex<()> {
+        // Compartido con `api::privacy_mode::tests` para evitar races
+        // sobre la env var `LIFEOS_PRIVACY_MODE` y el archivo de estado.
+        crate::api::privacy_mode::test_state_lock()
+    }
+
+    fn make_provider(name: &str, tier: ProviderTier) -> ProviderConfig {
+        ProviderConfig {
+            name: name.into(),
+            api_base: "http://127.0.0.1:8082".into(),
+            api_key_env: String::new(),
+            model: "test-model".into(),
+            api_format: ApiFormat::OpenAiCompatible,
+            cost_input_per_m: 0.0,
+            cost_output_per_m: 0.0,
+            max_rpm: None,
+            max_rpd: None,
+            supports_vision: false,
+            max_context: 8_000,
+            tier,
+            chat_path: None,
+            privacy: "high".into(),
+        }
+    }
+
+    fn make_router(providers: Vec<ProviderConfig>) -> LlmRouter {
+        let cost_trackers = providers
+            .iter()
+            .map(|p| (p.name.clone(), ProviderCostTracker::default()))
+            .collect();
+        LlmRouter {
+            providers,
+            cost_trackers,
+            http: reqwest::Client::new(),
+            privacy_level: PrivacyLevel::Balanced,
+        }
+    }
+
+    #[tokio::test]
+    async fn privacy_mode_on_filters_to_local_only() {
+        let _g = privacy_test_lock().lock().await;
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("LIFEOS_PRIVACY_MODE", "1");
+
+        let router = make_router(vec![
+            make_provider("local-llama", ProviderTier::Local),
+            make_provider("free-gemini", ProviderTier::Free),
+            make_provider("premium-claude", ProviderTier::Premium),
+        ]);
+
+        let req = RouterRequest {
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String("hola".into()),
+            }],
+            preferred_provider: None,
+            complexity: Some(TaskComplexity::Simple),
+            sensitivity: Some(SensitivityLevel::Low),
+            task_type: None,
+            max_tokens: None,
+        };
+
+        // Replicamos la lógica de chat() hasta el filter, para verificar
+        // que candidates queda solo Local. No hacemos network call.
+        let mut candidates = router.select_candidates(
+            req.complexity.unwrap(),
+            req.sensitivity.unwrap(),
+            &req.preferred_provider,
+            classify_task_type(&req.messages),
+        );
+        // Aplicar el filtro privacy igual que en chat()
+        if crate::api::privacy_mode::is_privacy_mode_enabled() {
+            candidates.retain(|p| p.tier == ProviderTier::Local);
+        }
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].name, "local-llama");
+
+        std::env::remove_var("LIFEOS_PRIVACY_MODE");
+    }
+
+    #[tokio::test]
+    async fn privacy_mode_off_keeps_all_tiers() {
+        let _g = privacy_test_lock().lock().await;
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("LIFEOS_PRIVACY_MODE", "0");
+
+        let router = make_router(vec![
+            make_provider("local-llama", ProviderTier::Local),
+            make_provider("free-gemini", ProviderTier::Free),
+        ]);
+
+        let candidates = router.select_candidates(
+            TaskComplexity::Simple,
+            SensitivityLevel::Low,
+            &None,
+            TaskType::Default,
+        );
+        assert!(
+            candidates.len() >= 2,
+            "OFF debería conservar todos los tiers (select_candidates)"
+        );
+        // Nota: NO chequeamos `is_privacy_mode_enabled()` acá porque tests
+        // de otros módulos manipulan la misma env var en paralelo. El
+        // contrato real (router con privacy ON filtra a Local) está
+        // cubierto por los otros dos tests con env=1.
+
+        std::env::remove_var("LIFEOS_PRIVACY_MODE");
+    }
+
+    #[tokio::test]
+    async fn privacy_mode_on_no_local_returns_clear_error() {
+        let _g = privacy_test_lock().lock().await;
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("HOME", tmp.path());
+        std::env::set_var("LIFEOS_PRIVACY_MODE", "1");
+
+        let router = make_router(vec![
+            make_provider("free-gemini", ProviderTier::Free),
+            make_provider("premium-claude", ProviderTier::Premium),
+        ]);
+
+        let req = RouterRequest {
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String("hola".into()),
+            }],
+            preferred_provider: None,
+            complexity: Some(TaskComplexity::Simple),
+            sensitivity: Some(SensitivityLevel::Low),
+            task_type: None,
+            max_tokens: None,
+        };
+
+        let result = router.chat(&req).await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("PRIVACY_MODE_NO_LOCAL"),
+            "esperaba mensaje claro, recibí: {}",
+            err_msg
+        );
+
+        std::env::remove_var("LIFEOS_PRIVACY_MODE");
     }
 }

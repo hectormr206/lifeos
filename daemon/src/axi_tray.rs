@@ -228,6 +228,10 @@ pub mod inner {
         screen: bool,
         always_on: bool,
         tts: bool,
+        /// Toggle del recorder de reuniones (mismo backend que dashboard).
+        meeting_enabled: bool,
+        /// Modo Privacidad: fuerza al llm_router a usar SOLO providers tier=Local.
+        privacy_mode: bool,
         kill_switch: bool,
         dashboard_url: String,
         api_base: String,
@@ -305,6 +309,10 @@ pub mod inner {
             let tok_scr = self.api_token.clone();
             let api_ks = self.api_base.clone();
             let tok_ks = self.api_token.clone();
+            let api_meet = self.api_base.clone();
+            let tok_meet = self.api_token.clone();
+            let api_priv = self.api_base.clone();
+            let tok_priv = self.api_token.clone();
 
             let mut items: Vec<MenuItem<Self>> = vec![
                 // ---- Header ----
@@ -435,6 +443,53 @@ pub mod inner {
                 .into(),
             );
 
+            // "Grabar reuniones" — toggle del recorder de reuniones. Cuando
+            // se enciende también prende el master `enabled` del pipeline
+            // sensorial (mismo patrón que mic/camera/screen) — sin él, el
+            // AND gate del backend deja `meeting_enabled` en cero.
+            items.push(
+                CheckmarkItem {
+                    label: "Grabar reuniones".into(),
+                    checked: self.meeting_enabled,
+                    activate: Box::new(move |this: &mut Self| {
+                        this.meeting_enabled = !this.meeting_enabled;
+                        let mut body = serde_json::json!({
+                            "meeting_enabled": this.meeting_enabled
+                        });
+                        if this.meeting_enabled {
+                            body["enabled"] = serde_json::Value::Bool(true);
+                        }
+                        call_api(&api_meet, &tok_meet, "/runtime/sensory", body);
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+
+            items.push(MenuItem::Separator);
+
+            // Modo Privacidad — toggle independiente del pipeline sensorial.
+            // Fuerza al llm_router a usar SOLO providers tier=Local. NO toca
+            // el master gate de sensory (es ortogonal: podés grabar reuniones
+            // y procesarlas con modelo local en simultáneo).
+            items.push(
+                CheckmarkItem {
+                    label: "Modo Privacidad (solo modelo local)".into(),
+                    checked: self.privacy_mode,
+                    activate: Box::new(move |this: &mut Self| {
+                        this.privacy_mode = !this.privacy_mode;
+                        call_api(
+                            &api_priv,
+                            &tok_priv,
+                            "/privacy-mode",
+                            serde_json::json!({"enabled": this.privacy_mode}),
+                        );
+                    }),
+                    ..Default::default()
+                }
+                .into(),
+            );
+
             items.push(MenuItem::Separator);
 
             // Kill switch — master toggle
@@ -448,12 +503,14 @@ pub mod inner {
                     activate: Box::new(move |this: &mut Self| {
                         this.kill_switch = !this.kill_switch;
                         if this.kill_switch {
-                            // Disable all senses
+                            // Disable all senses (privacy_mode es ortogonal,
+                            // no se toca acá — vive en otro plano).
                             this.mic = false;
                             this.camera = false;
                             this.screen = false;
                             this.always_on = false;
                             this.tts = false;
+                            this.meeting_enabled = false;
                         } else {
                             // Re-enable all senses
                             this.mic = true;
@@ -461,6 +518,7 @@ pub mod inner {
                             this.screen = true;
                             this.always_on = true;
                             this.tts = true;
+                            this.meeting_enabled = true;
                         }
                         // API endpoint now toggles: activates or releases based on current state
                         call_api(
@@ -499,6 +557,8 @@ pub mod inner {
         pub screen: bool,
         pub always_on: bool,
         pub tts: bool,
+        pub meeting_enabled: bool,
+        pub privacy_mode: bool,
     }
 
     /// Spawn the system tray icon. Blocks until the tray exits.
@@ -520,6 +580,8 @@ pub mod inner {
             screen: sensors.screen,
             always_on: sensors.always_on,
             tts: sensors.tts,
+            meeting_enabled: sensors.meeting_enabled,
+            privacy_mode: sensors.privacy_mode,
             kill_switch: false,
             dashboard_url,
             api_base,

@@ -4227,10 +4227,58 @@ async function loadTtsVoiceSelector() {
 }
 
 // --- Boot ---
+// --- Modo Privacidad ---
+// Toggle global que fuerza al llm_router a usar SOLO providers tier=Local.
+// Persistido en ~/.config/lifeos/privacy-mode (override por env LIFEOS_PRIVACY_MODE).
+async function loadPrivacyMode() {
+  const btn = document.getElementById('privacy-mode-toggle');
+  const stateEl = document.getElementById('privacy-state');
+  if (!btn || !stateEl) return;
+  try {
+    const data = await api('GET', '/privacy-mode');
+    renderPrivacyMode(Boolean(data?.enabled), data?.source);
+  } catch (err) {
+    console.warn('privacy-mode load failed:', err);
+  }
+}
+
+function renderPrivacyMode(enabled, source) {
+  const btn = document.getElementById('privacy-mode-toggle');
+  const stateEl = document.getElementById('privacy-state');
+  if (!btn || !stateEl) return;
+  stateEl.textContent = enabled ? 'ON' : 'OFF';
+  btn.classList.toggle('privacy-on', enabled);
+  btn.classList.toggle('privacy-off', !enabled);
+  btn.dataset.enabled = enabled ? '1' : '0';
+  if (source === 'env') {
+    btn.title = 'Modo Privacidad (forzado por env LIFEOS_PRIVACY_MODE — no editable desde aqui)';
+  } else {
+    btn.title = 'Modo Privacidad: cuando esta ON, el router solo usa modelos locales (sin nube)';
+  }
+}
+
+async function togglePrivacyMode() {
+  const btn = document.getElementById('privacy-mode-toggle');
+  if (!btn) return;
+  const current = btn.dataset.enabled === '1';
+  try {
+    const data = await api('POST', '/privacy-mode', { enabled: !current });
+    renderPrivacyMode(Boolean(data?.enabled), data?.source);
+  } catch (err) {
+    console.error('privacy-mode toggle failed:', err);
+  }
+}
+
+(function wirePrivacyToggle() {
+  const btn = document.getElementById('privacy-mode-toggle');
+  if (btn) btn.addEventListener('click', togglePrivacyMode);
+})();
+
 (async () => {
   initTabs();
   await ensureBootstrapToken();
   await fetchInitialState();
+  loadPrivacyMode();
   connectSSE();
   connectWebSocket();
   checkSafeMode();

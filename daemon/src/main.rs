@@ -1106,12 +1106,16 @@ async fn main() -> anyhow::Result<()> {
                     let arm = tray_state.agent_runtime_manager.read().await;
                     let runtime = arm.sensory_capture_runtime().await;
                     let always_on = arm.always_on_runtime().await;
+                    // Modo Privacidad: leemos directo del módulo (env > archivo > default).
+                    let privacy_mode = crate::api::privacy_mode::is_privacy_mode_enabled();
                     axi_tray::InitialSensorState {
                         mic: runtime.audio_enabled,
                         camera: runtime.camera_enabled,
                         screen: runtime.screen_enabled,
                         always_on: always_on.enabled,
                         tts: runtime.tts_enabled,
+                        meeting_enabled: runtime.meeting_enabled,
+                        privacy_mode,
                     }
                 };
                 let tray_rx = tray_state.event_bus.subscribe();
