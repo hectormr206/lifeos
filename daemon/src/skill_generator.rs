@@ -120,6 +120,11 @@ const APPROVED_SKILLS_DIR: &str = "/var/lib/lifeos/secrets/approved-skills";
 ///      grants approval with `sudo touch /var/lib/lifeos/secrets/approved-skills/<name>`.
 ///
 /// Approval does NOT bypass the autoexec gate — both must pass.
+///
+/// Round 2 hardening (Judgment Day, 2026-04-23): name-shape validation
+/// before joining into APPROVED_SKILLS_DIR closes a path-traversal that
+/// would otherwise let an attacker plant `manifest.name = "../../etc/hostname"`
+/// and have `marker.exists()` return true.
 fn skill_is_approved(skill_dir: &std::path::Path, manifest: &SkillManifest) -> bool {
     if !manifest.requires_review {
         return true;
@@ -127,6 +132,12 @@ fn skill_is_approved(skill_dir: &std::path::Path, manifest: &SkillManifest) -> b
     // SB6: only accept RFC3339-parseable timestamps. An attacker that
     // tampered with manifest.json could write `approved_at: "yes"` and
     // bypass the previous "non-empty string" check.
+    //
+    // Round 2 hardening: standalone-loaded manifests have `approved_at`
+    // FORCED to None at load time (see load_standalone_json/toml), so this
+    // path only fires for daemon-generated manifests that the user has
+    // explicitly stamped via the dashboard. Planted standalone files cannot
+    // bypass via approved_at anymore.
     if let Some(raw) = manifest.approved_at.as_deref() {
         if chrono::DateTime::parse_from_rfc3339(raw.trim()).is_ok() {
             return true;
@@ -135,8 +146,34 @@ fn skill_is_approved(skill_dir: &std::path::Path, manifest: &SkillManifest) -> b
     // SB5: marker file MUST live in the daemon-protected secrets dir,
     // not in the (potentially attacker-writable) skill_dir.
     let _ = skill_dir; // kept in signature for callers; intentionally unused now
+    if !is_safe_skill_name(&manifest.name) {
+        return false;
+    }
     let marker = std::path::Path::new(APPROVED_SKILLS_DIR).join(&manifest.name);
     marker.exists()
+}
+
+/// Strict shape check for a skill name before it is joined into a
+/// privileged path. Allows ASCII alphanumerics + `.` `_` `-`, length 1..=64.
+/// Rejects `/`, `\`, `..`, NUL, control chars, anything non-ASCII.
+///
+/// This is the same allowlist shape used elsewhere in the daemon (see
+/// `mcp_server::is_valid_app_name`). The constraint is duplicated locally
+/// to avoid coupling these two unrelated security boundaries — if either
+/// loosens its policy, the other should not silently follow.
+fn is_safe_skill_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 64 {
+        return false;
+    }
+    // Reject path-component-meaningful names even though their characters
+    // are individually in the allowlist. `Path::join("..")` resolves to the
+    // parent dir; `Path::join(".")` is a no-op that would let the marker
+    // lookup land on APPROVED_SKILLS_DIR itself.
+    if matches!(name, "." | "..") {
+        return false;
+    }
+    name.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// Best-effort sandbox wrapper using `systemd-run --user --scope`. Returns
@@ -697,6 +734,14 @@ impl SkillRegistry {
                 // otherwise bypass the approval gate. Approval must come from
                 // an explicit marker in the daemon-protected secrets dir.
                 m.requires_review = true;
+                // Round 2 hardening (Judgment Day, 2026-04-23): also discard
+                // any `approved_at` baked into the standalone file. Without
+                // this, an attacker who plants the same manifest sets
+                // `approved_at: "2026-01-01T00:00:00Z"` (valid RFC3339) and
+                // bypasses the gate even though `requires_review` is true.
+                // Standalone manifests can ONLY be approved via the marker
+                // file in /var/lib/lifeos/secrets/approved-skills/.
+                m.approved_at = None;
                 Some(m)
             }
             Err(e) => {
@@ -715,6 +760,8 @@ impl SkillRegistry {
             Ok(mut m) => {
                 // SB8: see load_standalone_json above.
                 m.requires_review = true;
+                // Round 2 hardening: same approved_at discard as the JSON path.
+                m.approved_at = None;
                 Some(m)
             }
             Err(e) => {
@@ -1159,6 +1206,116 @@ mod tests {
         assert!(!skill_is_approved(&dir, &m));
         m.approved_at = Some("approved-by-attacker".to_string());
         assert!(!skill_is_approved(&dir, &m));
+    }
+
+    // ---------- Round 2 hardening tests (Judgment Day, 2026-04-23) ----------
+
+    #[test]
+    fn is_safe_skill_name_accepts_typical() {
+        for name in [
+            "weather-fetch",
+            "open-editor",
+            "save_file",
+            "skill.v1",
+            "a",
+            "x".repeat(64).as_str(),
+        ] {
+            assert!(is_safe_skill_name(name), "should accept: {name:?}");
+        }
+    }
+
+    #[test]
+    fn is_safe_skill_name_rejects_path_traversal() {
+        for bad in [
+            "../etc/hostname",
+            "../../etc/hostname",
+            "..",
+            "skill/run.sh",
+            "skill\\run.sh",
+            "/absolute",
+            "skill\0name",
+            "skill\nname",
+            "skill name",
+            "café",
+            "",
+            &"x".repeat(65),
+        ] {
+            assert!(!is_safe_skill_name(bad), "should reject: {bad:?}");
+        }
+    }
+
+    #[test]
+    fn skill_is_approved_rejects_unsafe_name_even_with_marker() {
+        // The marker file lookup MUST refuse names that would escape
+        // APPROVED_SKILLS_DIR. Without the name check, a planted manifest
+        // with `name: "../../etc/hostname"` would have the marker resolve
+        // to `/etc/hostname` (always exists) and bypass the gate.
+        let dir = tmpdir("approved-traversal");
+        let mut m = manifest_with_review("../../etc/hostname", true);
+        // approved_at also unset, but even if it were set we'd still need
+        // the name check to refuse.
+        m.approved_at = None;
+        assert!(!skill_is_approved(&dir, &m));
+    }
+
+    #[tokio::test]
+    async fn standalone_json_loader_discards_planted_approved_at() {
+        // Round 2: an attacker planting a JSON skill with both
+        // `requires_review: false` AND `approved_at: <valid RFC3339>`
+        // would otherwise bypass via path 2 of skill_is_approved. The
+        // loader must discard `approved_at` so only the marker file
+        // (in the daemon-protected secrets dir) can grant approval.
+        let dir = tmpdir("standalone-json-approved");
+        let path = dir.join("planted.json");
+        let bogus = serde_json::json!({
+            "name": "planted-skill",
+            "description": "planted by attacker",
+            "version": "1.0.0",
+            "trigger_patterns": [],
+            "risk_level": "low",
+            "created_at": "t",
+            "last_used": null,
+            "use_count": 0,
+            "success_rate": 0.0,
+            "requires_review": false,
+            "approved_at": "2026-04-23T00:00:00Z",
+        });
+        std::fs::write(&path, serde_json::to_string(&bogus).unwrap()).unwrap();
+        let m = SkillRegistry::load_standalone_json(&path)
+            .await
+            .expect("loader should accept the JSON");
+        assert!(
+            m.requires_review,
+            "standalone-loaded manifest must have requires_review forced to true"
+        );
+        assert!(
+            m.approved_at.is_none(),
+            "standalone-loaded manifest must have approved_at discarded"
+        );
+    }
+
+    #[tokio::test]
+    async fn standalone_toml_loader_discards_planted_approved_at() {
+        let dir = tmpdir("standalone-toml-approved");
+        let path = dir.join("planted.toml");
+        let toml_str = r#"
+name = "planted-skill"
+description = "planted by attacker"
+version = "1.0.0"
+trigger_patterns = []
+risk_level = "low"
+created_at = "t"
+use_count = 0
+success_rate = 0.0
+requires_review = false
+approved_at = "2026-04-23T00:00:00Z"
+"#;
+        std::fs::write(&path, toml_str).unwrap();
+        let m = SkillRegistry::load_standalone_toml(&path)
+            .await
+            .expect("loader should accept the TOML");
+        assert!(m.requires_review);
+        assert!(m.approved_at.is_none());
     }
 
     #[tokio::test]
