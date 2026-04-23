@@ -380,3 +380,24 @@ The local dashboard at `http://127.0.0.1:8081/dashboard` now manages three resou
 - **LLM Providers** — the *Proveedores* card lets you add a new provider (name + API base + model + env var holding the key), toggle existing user-defined providers on/off, and delete entries. Built-in providers shipped with the OS image are read-only because `/usr` is immutable on bootc. Edits are persisted to `~/.config/lifeos/llm-providers.toml` (active) and `~/.config/lifeos/llm-providers.disabled.toml` (stash for toggled-off entries). Backed by `POST /api/v1/llm/providers`, `POST /api/v1/llm/providers/:name/toggle`, and `DELETE /api/v1/llm/providers/:name`.
 
 All endpoints require the `x-bootstrap-token` header that the dashboard already injects automatically.
+
+---
+
+## Vida Plena: detail views, shopping lists, vault
+
+The *Vida Plena* section of the dashboard now exposes three interactive surfaces (no terminal needed):
+
+- **Per-pillar detail views** — every pilar card in the unified summary (Salud, Crecimiento, Ejercicio, Nutricion, Social, Sueno, Espiritual, Finanzas, Relaciones) is now clickable. Selecting a card opens a detail panel underneath that fetches the corresponding `GET /api/v1/vida-plena/<pillar>/summary` and renders the full structured payload (counts, recent entries, raw fields). Use the *Cerrar* button to dismiss.
+- **Shopping lists** — manage the live editable list end-to-end:
+  - *Recargar lista activa* refreshes from `GET /api/v1/vida-plena/shopping/active`.
+  - *Generar semanal* prompts for a name and calls `POST /api/v1/vida-plena/shopping/generate-weekly`.
+  - The inline form adds items via `POST /api/v1/vida-plena/shopping/lists/:id/items` (name + quantity + unit).
+  - Each row has a checkbox (toggles via `POST .../check-by-name`) and a delete button (`DELETE .../items/:idx`).
+  - *Quitar marcados* clears completed items via `POST .../clear-completed`.
+- **Vault control** — the encrypted vault that protects sensitive Vida Plena data is now driven from the UI:
+  - *Estado* fetches `GET /api/v1/vida-plena/vault/status` and shows configured/unlocked flags plus idle timeout.
+  - *Configurar* sets a passphrase (and optional idle-timeout-secs) via `POST .../vault/set-passphrase`.
+  - *Desbloquear* / *Bloquear* call `POST .../vault/unlock` and `POST .../vault/lock` respectively.
+  - *Reset* (with confirmation) calls `POST .../vault/reset` to clear the configured passphrase.
+
+All Vida Plena endpoints require the same `x-bootstrap-token` header. Vault errors map to `403` (locked / wrong passphrase) and `400` (missing/invalid input) so the UI surfaces the actual reason on failure.

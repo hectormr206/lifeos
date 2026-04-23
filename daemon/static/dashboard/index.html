@@ -675,9 +675,50 @@
         <section class="vida-plena-section" data-subsection="bienestar">
           <h2>Vida Plena</h2>
           <div id="vida-plena-summary" class="vida-plena-grid"><p class="task-empty">Cargando resumen...</p></div>
+          <div id="vida-plena-pillar-detail" class="vida-plena-pillar-detail" hidden>
+            <div class="vp-detail-header">
+              <h3 id="vp-detail-title">Pilar</h3>
+              <button type="button" class="quick-action-btn" id="vp-detail-close">Cerrar</button>
+            </div>
+            <div id="vp-detail-body"><p class="task-empty">Cargando...</p></div>
+          </div>
           <div id="vida-plena-pillars" class="vida-plena-pillars"></div>
           <div id="vida-plena-habits" class="vida-plena-habits"></div>
           <div id="vida-plena-mood" class="vida-plena-mood"></div>
+
+          <div class="vp-subsection" id="vp-shopping">
+            <h3>Listas de compras</h3>
+            <div class="vp-row">
+              <button type="button" class="quick-action-btn" id="vp-shopping-refresh">Recargar lista activa</button>
+              <button type="button" class="quick-action-btn" id="vp-shopping-generate">Generar semanal</button>
+              <button type="button" class="quick-action-btn" id="vp-shopping-clear">Quitar marcados</button>
+            </div>
+            <div class="vp-row">
+              <input type="text" id="vp-shopping-add-name" placeholder="Nuevo item (nombre)">
+              <input type="number" id="vp-shopping-add-qty" placeholder="Cant." min="0" step="any" style="max-width:90px">
+              <input type="text" id="vp-shopping-add-unit" placeholder="Unidad" style="max-width:90px">
+              <button type="button" class="quick-action-btn" id="vp-shopping-add">Agregar</button>
+            </div>
+            <div id="vp-shopping-status" class="vp-status"></div>
+            <div id="vp-shopping-list"><p class="task-empty">Sin lista activa.</p></div>
+          </div>
+
+          <div class="vp-subsection" id="vp-vault">
+            <h3>Vault cifrado</h3>
+            <div id="vp-vault-status" class="vp-status">Cargando...</div>
+            <div class="vp-row">
+              <button type="button" class="quick-action-btn" id="vp-vault-status-btn">Estado</button>
+              <button type="button" class="quick-action-btn" id="vp-vault-lock-btn">Bloquear</button>
+              <button type="button" class="quick-action-btn vp-danger" id="vp-vault-reset-btn">Reset</button>
+            </div>
+            <div class="vp-row">
+              <input type="password" id="vp-vault-passphrase" placeholder="Passphrase" autocomplete="off">
+              <input type="number" id="vp-vault-idle" placeholder="Idle (s)" min="0" style="max-width:110px">
+              <button type="button" class="quick-action-btn" id="vp-vault-set-btn">Configurar</button>
+              <button type="button" class="quick-action-btn" id="vp-vault-unlock-btn">Desbloquear</button>
+            </div>
+            <div id="vp-vault-msg" class="vp-status"></div>
+          </div>
         </section>
       </div>
     </main>
