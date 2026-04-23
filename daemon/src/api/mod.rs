@@ -2257,7 +2257,7 @@ async fn get_health_status(
         ((passed_checks * 100) / total_checks) as u8
     };
 
-    let checks: Vec<HealthCheck> = report
+    let mut checks: Vec<HealthCheck> = report
         .checks
         .iter()
         .map(|check| HealthCheck {
@@ -2270,6 +2270,22 @@ async fn get_health_status(
             message: Some(check.message.clone()),
         })
         .collect();
+
+    // Surface the running count of screenshot at-rest encryption failures
+    // so operators see "your .enc sidecars are silently broken" instead of
+    // grepping the journal for `warn!` lines (C7).
+    let enc_failures = crate::screenshot_crypt::encryption_failure_count();
+    checks.push(HealthCheck {
+        name: "screenshot_encryption".to_string(),
+        status: if enc_failures == 0 {
+            "ok".to_string()
+        } else {
+            "warning".to_string()
+        },
+        message: Some(format!(
+            "screenshot at-rest encryption failures since boot: {enc_failures}"
+        )),
+    });
 
     let response = HealthReport {
         healthy: report.healthy,

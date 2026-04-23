@@ -21,6 +21,17 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
+use tokio::sync::Mutex as AsyncMutex;
+
+/// C10: serialize all provider mutations across `create`, `delete`, `toggle`.
+/// Without this, two concurrent requests can race on the read-modify-write
+/// cycle — losing one mutation, splitting state across `active.toml` /
+/// `disabled.toml`, or producing torn writes.
+fn provider_mutation_lock() -> &'static AsyncMutex<()> {
+    static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| AsyncMutex::new(()))
+}
 
 pub fn providers_routes() -> Router<ApiState> {
     Router::new()
@@ -65,7 +76,27 @@ fn write_file(path: &std::path::Path, file: &ProvidersFile) -> std::io::Result<(
     let body = toml::to_string_pretty(file).map_err(|e| {
         std::io::Error::new(std::io::ErrorKind::Other, format!("toml serialise: {}", e))
     })?;
-    std::fs::write(path, body)
+    // C10: atomic-write pattern (tempfile + rename) so an interrupted
+    // mutation never leaves a partial TOML on disk.
+    let dir = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "atomic write: path has no parent",
+        )
+    })?;
+    let pid = std::process::id();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let tmp = dir.join(format!(
+        ".{}.tmp-{pid}-{nonce}",
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("providers")
+    ));
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, path)
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +148,73 @@ pub struct ProviderActionResponse {
     pub provider_count: usize,
 }
 
+/// SB15: env-var-name denylist. An attacker with a bootstrap token could
+/// otherwise set `api_key_env="HOME"` (or PATH, USER, ...), and the next
+/// outbound provider call would exfiltrate that variable as if it were
+/// the API key. Reject anything that doesn't match a sane env-var
+/// identifier and anything in this list.
+const FORBIDDEN_API_KEY_ENV: &[&str] = &[
+    "HOME",
+    "USER",
+    "PATH",
+    "PWD",
+    "OLDPWD",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+    "DISPLAY",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "MAIL",
+    "LOGNAME",
+    "HOSTNAME",
+];
+
+fn validate_api_key_env(s: &str) -> Result<(), (StatusCode, Json<ApiError>)> {
+    if s.is_empty() {
+        return Ok(()); // empty means "no api key required"; allowed.
+    }
+    let valid_shape = !s.is_empty()
+        && s.len() <= 64
+        && s.chars().enumerate().all(|(i, c)| {
+            if i == 0 {
+                c.is_ascii_uppercase() || c == '_'
+            } else {
+                c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'
+            }
+        });
+    if !valid_shape {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "invalid_api_key_env".into(),
+                message:
+                    "api_key_env must match POSIX env var name [A-Z_][A-Z0-9_]* (1..=64 chars)"
+                        .into(),
+                code: 400,
+            }),
+        ));
+    }
+    if FORBIDDEN_API_KEY_ENV
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(s))
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiError {
+                error: "forbidden_api_key_env".into(),
+                message: format!(
+                    "api_key_env '{}' is on the denylist (would leak environment to the provider)",
+                    s
+                ),
+                code: 400,
+            }),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_name(name: &str) -> Result<(), (StatusCode, Json<ApiError>)> {
     if name.is_empty() || name.len() > 64 {
         return Err((
@@ -148,7 +246,9 @@ async fn create_provider(
     State(state): State<ApiState>,
     Json(body): Json<CreateProviderRequest>,
 ) -> Result<Json<ProviderActionResponse>, (StatusCode, Json<ApiError>)> {
+    let _guard = provider_mutation_lock().lock().await;
     validate_name(&body.name)?;
+    validate_api_key_env(&body.api_key_env)?;
 
     let api_format = parse_api_format(&body.api_format).map_err(|m| {
         (
@@ -244,6 +344,7 @@ async fn toggle_provider(
     State(state): State<ApiState>,
     Path(name): Path<String>,
 ) -> Result<Json<ProviderActionResponse>, (StatusCode, Json<ApiError>)> {
+    let _guard = provider_mutation_lock().lock().await;
     validate_name(&name)?;
 
     let mut active = read_file(&active_path());
@@ -291,6 +392,7 @@ async fn delete_provider(
     State(state): State<ApiState>,
     Path(name): Path<String>,
 ) -> Result<Json<ProviderActionResponse>, (StatusCode, Json<ApiError>)> {
+    let _guard = provider_mutation_lock().lock().await;
     validate_name(&name)?;
 
     let mut active = read_file(&active_path());
@@ -374,6 +476,29 @@ mod tests {
         assert!(matches!(parse_tier("Cheap"), Ok(ProviderTier::Cheap)));
         assert!(matches!(parse_tier("premium"), Ok(ProviderTier::Premium)));
         assert!(parse_tier("ultra").is_err());
+    }
+
+    #[test]
+    fn validate_api_key_env_accepts_sane_names() {
+        assert!(validate_api_key_env("").is_ok());
+        assert!(validate_api_key_env("OPENAI_API_KEY").is_ok());
+        assert!(validate_api_key_env("LIFEOS_PROVIDER_KEY").is_ok());
+        assert!(validate_api_key_env("_INTERNAL").is_ok());
+    }
+
+    #[test]
+    fn validate_api_key_env_rejects_dangerous() {
+        // Denylisted names — would exfiltrate the user's environment.
+        assert!(validate_api_key_env("HOME").is_err());
+        assert!(validate_api_key_env("PATH").is_err());
+        assert!(validate_api_key_env("home").is_err()); // case-insensitive denylist
+                                                        // Lowercase / mixed identifiers (POSIX env name regex demands upper).
+        assert!(validate_api_key_env("openai_key").is_err());
+        // Shell metachars.
+        assert!(validate_api_key_env("FOO;rm -rf /").is_err());
+        assert!(validate_api_key_env("FOO BAR").is_err());
+        // Leading digit.
+        assert!(validate_api_key_env("1FOO").is_err());
     }
 
     #[test]

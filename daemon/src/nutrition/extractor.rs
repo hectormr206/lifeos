@@ -19,6 +19,76 @@ use crate::memory_plane::{MemoryPlaneManager, NutritionLogEntry};
 /// "5,000,000 kcal".
 pub const MAX_REASONABLE_KCAL: f64 = 5_000.0;
 
+/// SA14: maximum quantity for a single entry. 100_000 grams is one
+/// 100kg meal — comfortably above any human serving while rejecting
+/// LLM garbage like `qty: 1e308`. Same cap is applied to non-mass
+/// units (pieces, ml, etc.) since legitimate values never approach it.
+pub const MAX_REASONABLE_QTY: f64 = 100_000.0;
+
+/// SB21: hard cap on the number of entries in one extraction. Real meals
+/// have a handful of items; an LLM hallucinating 100 entries is either
+/// mis-extracting an ingredient list or being prompt-injected. Refuse.
+pub const MAX_ENTRIES_PER_EXTRACTION: usize = 30;
+
+/// C12: filesystem prefixes the multimodal extractor is allowed to read
+/// from. Anything outside these prefixes (after symlink resolution) is a
+/// path-traversal attempt and refused — otherwise an attacker who can
+/// pass an `image_path` (via API or SimpleX) gets daemon-level reads of
+/// arbitrary files (`/var/lib/lifeos/secrets/screenshot.key`,
+/// `~/.ssh/id_*`, `/etc/lifeos/llm-providers.toml`, ...) base64-encoded
+/// and shipped to the configured vision provider.
+const ALLOWED_IMAGE_PATH_PREFIXES: &[&str] =
+    &["/var/lib/lifeos/screenshots/", "/tmp/lifeos-captures/"];
+
+/// C12: validate a caller-supplied image path. Returns `Ok(canonical)`
+/// when the path:
+///   * has no `..` traversal segments (even pre-canonicalize)
+///   * canonicalizes to a real file inside `ALLOWED_IMAGE_PATH_PREFIXES`
+///   * begins with magic bytes for a real image format (PNG / JPEG / WebP)
+///
+/// Symlinks are followed via `fs::canonicalize` BEFORE the prefix check,
+/// so a symlink in `/var/lib/lifeos/screenshots/` pointing at
+/// `~/.ssh/id_ed25519` is rejected.
+fn validate_image_path(image_path: &str) -> Result<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    if image_path.split('/').any(|seg| seg == "..") {
+        bail!("image_path rejected: contains '..' traversal segment");
+    }
+
+    let canonical: PathBuf = std::fs::canonicalize(image_path)
+        .with_context(|| format!("image_path canonicalize failed for {image_path}"))?;
+    let canonical_str = canonical.to_string_lossy();
+    let allowed = ALLOWED_IMAGE_PATH_PREFIXES
+        .iter()
+        .any(|p| canonical_str.starts_with(p));
+    if !allowed {
+        bail!(
+            "image_path {} resolves to {} which is outside the allowed prefixes {:?}",
+            image_path,
+            canonical_str,
+            ALLOWED_IMAGE_PATH_PREFIXES
+        );
+    }
+
+    // Magic-byte check — refuse anything that isn't an actual image.
+    let mut header = [0u8; 12];
+    use std::io::Read;
+    let mut f = std::fs::File::open(&canonical)
+        .with_context(|| format!("opening {} for magic-byte check", canonical_str))?;
+    let n = f.read(&mut header).unwrap_or(0);
+    let is_png = n >= 8 && &header[..8] == b"\x89PNG\r\n\x1a\n";
+    let is_jpeg = n >= 3 && header[..3] == [0xff, 0xd8, 0xff];
+    let is_webp = n >= 12 && &header[..4] == b"RIFF" && &header[8..12] == b"WEBP";
+    if !(is_png || is_jpeg || is_webp) {
+        bail!(
+            "image_path {} does not start with PNG/JPEG/WebP magic bytes; refusing to forward to multimodal LLM",
+            canonical_str
+        );
+    }
+    Ok(canonical)
+}
+
 /// One structured food item extracted from an image or transcript.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NutritionEntry {
@@ -123,6 +193,16 @@ pub fn validate_entries(entries: &[NutritionEntry]) -> Result<()> {
     if entries.is_empty() {
         bail!("nutrition extraction must contain at least one entry");
     }
+    // SB21: cap entries per extraction. A single meal has at most a handful
+    // of distinct items; 30 is generous. LLM hallucinations / prompt
+    // injections that produce 100+ entries pollute nutrition_log.
+    if entries.len() > MAX_ENTRIES_PER_EXTRACTION {
+        bail!(
+            "extraction has {} entries (> {}); refusing — a single meal does not have that many distinct items",
+            entries.len(),
+            MAX_ENTRIES_PER_EXTRACTION
+        );
+    }
     for (idx, entry) in entries.iter().enumerate() {
         if entry.name.trim().is_empty() {
             bail!("entry #{idx} has empty name");
@@ -134,11 +214,25 @@ pub fn validate_entries(entries: &[NutritionEntry]) -> Result<()> {
                 entry.qty
             );
         }
+        // SA14: also reject implausibly large quantities (e.g. `1e308`).
+        if entry.qty > MAX_REASONABLE_QTY {
+            bail!(
+                "entry #{idx} ({}) has implausible qty {} (> {})",
+                entry.name,
+                entry.qty,
+                MAX_REASONABLE_QTY
+            );
+        }
         if entry.unit.trim().is_empty() {
             bail!("entry #{idx} ({}) has empty unit", entry.name);
         }
         if let Some(kcal) = entry.kcal_estimate {
-            if !kcal.is_finite() || kcal < 0.0 {
+            // C13: `-0.0 < 0.0` is false in IEEE-754, so the previous check
+            // (`kcal < 0.0`) accepted -0.0. `is_sign_negative()` is the
+            // only reliable way to catch -0.0 — it returns true for both
+            // -0.0 and any negative number. Positive zero (0.0) is still
+            // allowed because water and zero-kcal beverages are legitimate.
+            if !kcal.is_finite() || kcal.is_sign_negative() {
                 bail!(
                     "entry #{idx} ({}) has invalid kcal_estimate {}",
                     entry.name,
@@ -207,21 +301,31 @@ fn parse_extraction_json(text: &str) -> Result<NutritionExtraction> {
         .unwrap_or(trimmed);
     let trimmed = trimmed.strip_suffix("```").unwrap_or(trimmed).trim();
 
-    // Some models prepend prose. Find the first '{' and last '}' to
-    // recover the JSON envelope.
-    let start = trimmed
-        .find('{')
-        .ok_or_else(|| anyhow!("LLM response contains no JSON object: {trimmed}"))?;
-    let end = trimmed
-        .rfind('}')
-        .ok_or_else(|| anyhow!("LLM response has no closing '}}': {trimmed}"))?;
-    if end < start {
-        bail!("LLM response has malformed braces");
-    }
-    let json_slice = &trimmed[start..=end];
-
-    let mut value: NutritionExtraction = serde_json::from_str(json_slice)
-        .with_context(|| format!("LLM response is not valid extraction JSON: {json_slice}"))?;
+    // C14: try strict parse first. The previous implementation always
+    // sliced from first `{` to last `}`, which corrupts payloads where
+    // the prose itself contains braces (e.g. "the JSON below uses {x}
+    // notation"). Strict parse handles the common case; we only fall
+    // back to brace recovery on real parse failures.
+    let mut value: NutritionExtraction = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(strict_err) => {
+            let start = trimmed
+                .find('{')
+                .ok_or_else(|| anyhow!("LLM response contains no JSON object: {trimmed}"))?;
+            let end = trimmed
+                .rfind('}')
+                .ok_or_else(|| anyhow!("LLM response has no closing '}}': {trimmed}"))?;
+            if end < start {
+                bail!("LLM response has malformed braces");
+            }
+            let json_slice = &trimmed[start..=end];
+            serde_json::from_str(json_slice).with_context(|| {
+                format!(
+                    "LLM response is not valid extraction JSON (strict parse error: {strict_err}): {json_slice}"
+                )
+            })?
+        }
+    };
 
     value.meal_type = normalize_meal_type(&value.meal_type);
     // Clamp confidence to a sane range.
@@ -239,12 +343,18 @@ fn parse_extraction_json(text: &str) -> Result<NutritionExtraction> {
 /// the user has explicitly configured a remote vision provider in the
 /// router; this function uses the local llama-server multimodal slot).
 pub async fn extract_from_image(ai: &AiManager, image_path: &str) -> Result<NutritionExtraction> {
+    // C12: validate the path BEFORE handing it to the multimodal pipeline.
+    // Without this guard a caller could pass `/etc/lifeos/llm-providers.toml`
+    // or `/var/lib/lifeos/secrets/screenshot.key` and exfiltrate it as
+    // base64 to the configured vision provider.
+    let canonical = validate_image_path(image_path)?;
+    let canonical_str = canonical.to_string_lossy();
     let response = ai
         .chat_multimodal(
             None,
             Some("You are a precise nutrition extraction model. Output only JSON."),
             EXTRACTION_PROMPT,
-            image_path,
+            &canonical_str,
         )
         .await
         .context("multimodal extraction call failed")?;
@@ -431,6 +541,79 @@ mod tests {
         let mut e = sample_entry();
         e.kcal_estimate = None;
         validate_entries(&[e]).expect("None kcal is allowed");
+    }
+
+    #[test]
+    fn validate_rejects_negative_zero_kcal() {
+        // C13: the previous check `kcal < 0.0` accepted -0.0 because
+        // -0.0 is not strictly less than 0.0 in IEEE-754.
+        let mut e = sample_entry();
+        e.kcal_estimate = Some(-0.0);
+        let err = validate_entries(&[e]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid kcal_estimate") || msg.contains("signed-zero"),
+            "expected negative-zero rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_accepts_positive_zero_kcal() {
+        // Water / zero-kcal beverages must keep working.
+        let mut e = sample_entry();
+        e.kcal_estimate = Some(0.0);
+        validate_entries(&[e]).expect("+0.0 kcal must be accepted for water");
+    }
+
+    #[test]
+    fn validate_rejects_huge_qty() {
+        let mut e = sample_entry();
+        e.qty = 1e308;
+        let err = validate_entries(&[e]).unwrap_err();
+        assert!(err.to_string().contains("implausible qty"));
+    }
+
+    #[test]
+    fn validate_rejects_overlong_entry_list() {
+        let many: Vec<NutritionEntry> = (0..MAX_ENTRIES_PER_EXTRACTION + 1)
+            .map(|i| NutritionEntry {
+                name: format!("item{i}"),
+                qty: 1.0,
+                unit: "g".into(),
+                kcal_estimate: Some(1.0),
+            })
+            .collect();
+        let err = validate_entries(&many).unwrap_err();
+        assert!(err.to_string().contains("entries"));
+    }
+
+    #[test]
+    fn parse_ignores_embedded_braces_in_prose() {
+        // C14: strict-parse-first path. If the LLM wraps the JSON cleanly,
+        // prose elsewhere with `{foo}` notation must not break recovery.
+        let raw = r#"{"entries":[{"name":"agua","qty":500,"unit":"ml","kcal_estimate":0}],"confidence":0.9,"raw_description":"Agua","meal_type":"drink"}"#;
+        let extraction = parse_extraction_json(raw).unwrap();
+        assert_eq!(extraction.entries[0].name, "agua");
+    }
+
+    #[test]
+    fn validate_image_path_rejects_outside_allowed_prefixes() {
+        // Real system path that exists but isn't allow-listed.
+        let err = validate_image_path("/etc/hostname").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("outside the allowed prefixes")
+                || msg.contains("does not start with")
+                || msg.contains("canonicalize failed"),
+            "expected prefix rejection, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_image_path_rejects_dotdot() {
+        let err =
+            validate_image_path("/var/lib/lifeos/screenshots/../../../etc/passwd").unwrap_err();
+        assert!(err.to_string().contains("traversal"));
     }
 
     #[cfg(feature = "messaging")]
