@@ -8,6 +8,7 @@
 
 mod conversations;
 mod lab;
+pub mod privacy_mode;
 mod providers;
 mod vida_plena;
 mod workers;
@@ -1607,6 +1608,10 @@ pub fn create_router(state: ApiState) -> Router {
         // LLM provider mutations (add / toggle / delete). The GET list lives
         // above at /llm/providers; here we add the write side.
         .nest("/llm/providers", providers::providers_routes())
+        // Modo Privacidad — toggle global que fuerza al router a usar
+        // SOLO providers tier=Local. Persistido en
+        // ~/.config/lifeos/privacy-mode (override por env LIFEOS_PRIVACY_MODE).
+        .nest("/privacy-mode", privacy_mode::privacy_mode_routes())
         // Alias: dashboard expects POST /system/mode but the canonical route
         // is /mode/set. Keep the alias so existing UI buttons work, and so
         // anyone wiring system-level scripts has a stable path.
